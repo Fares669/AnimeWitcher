@@ -6,6 +6,7 @@ import 'package:html_unescape/html_unescape.dart';
 import '../../domain/entity/multimedia_item.dart';
 import '../../storage/settings_repository.dart';
 import '../base_provider.dart';
+import 'mediafire_utils.dart';
 
 /// Native AnimeWitcher implementation used during the JS-to-native migration.
 ///
@@ -2851,14 +2852,49 @@ class AnimeWitcherNativeProvider extends SkyStreamProvider {
     return '';
   }
 
+  String _responseCookieHeader(Headers headers) {
+    final cookies = <String>[];
+    for (final entry in headers.map.entries) {
+      if (entry.key.toLowerCase() != 'set-cookie') continue;
+      for (final value in entry.value) {
+        final cookie = value.split(';').first.trim();
+        if (cookie.isNotEmpty && cookie.contains('=')) cookies.add(cookie);
+      }
+    }
+    return cookies.join('; ');
+  }
+
+  List<StreamResult> _mediaFireStreams(
+    _ServerRecord server,
+    String rawUrl, {
+    required String baseUrl,
+    required String referrer,
+    Headers? responseHeaders,
+  }) {
+    final playable = _mediaFireCandidate(rawUrl, baseUrl);
+    if (playable.isEmpty) return const <StreamResult>[];
+    final headers = <String, String>{
+      'User-Agent': _userAgent,
+      'Referer': referrer,
+      'Origin': 'https://www.mediafire.com',
+      'Accept': '*/*',
+      'Accept-Encoding': 'identity',
+    };
+    if (responseHeaders != null) {
+      final cookie = _responseCookieHeader(responseHeaders);
+      if (cookie.isNotEmpty) headers['Cookie'] = cookie;
+    }
+    return <StreamResult>[
+      _serverStream(server, playable, headers: headers),
+    ];
+  }
+
   Future<List<StreamResult>> _extractMediaFire(_ServerRecord server) async {
-    final quick = RegExp(
-      r'mediafire\.com/(?:file|file_premium|download)/([a-z0-9]+)',
-      caseSensitive: false,
-    ).firstMatch(server.link)?.group(1);
-    final pageUrl = quick == null || quick.isEmpty
-        ? server.link
-        : 'https://www.mediafire.com/file/${Uri.encodeComponent(quick)}/file';
+    // Keep AnimeWitcher's MF2 `/file_premium/` route intact. Rewriting it to
+    // `/file/` requests a different page and can yield a successful HTML
+    // response instead of the premium download URL expected by the player.
+    final pageUrl = mediaFirePageRequestUrl(server.link);
+    if (pageUrl.isEmpty) return const <StreamResult>[];
     final response = await _getText(
       pageUrl,
       timeout: _mediaFireTimeout,
@@ -2916,18 +2952,14 @@ class AnimeWitcherNativeProvider extends SkyStreamProvider {
       }
     }
     if (playable.isEmpty) return const <StreamResult>[];
-    return <StreamResult>[
-      StreamResult(
-        url: playable,
-        source: server.name,
-        quality: _sourceQuality(server.quality),
-        headers: <String, String>{
-          'User-Agent': _userAgent,
-          'Referer': finalUrl.isEmpty ? pageUrl : finalUrl,
-          'Accept-Encoding': 'identity',
-        },
-      ),
-    ];
+    final shareReferrer = _isMediaFireSharePage(finalUrl) ? finalUrl : pageUrl;
+    return _mediaFireStreams(
+      server,
+      playable,
+      baseUrl: finalUrl.isEmpty ? pageUrl : finalUrl,
+      referrer: shareReferrer,
+      responseHeaders: response.headers,
+    );
   }
 
   bool _streamTapeNoiseMatches(String value, String canonical) {
@@ -3134,16 +3166,15 @@ class AnimeWitcherNativeProvider extends SkyStreamProvider {
           _betweenWords(secondResponse.data ?? '', words.word3, words.word4),
         );
         if (finalUrl.isEmpty) return const <StreamResult>[];
-        return <StreamResult>[
-          _serverStream(
-            server,
-            finalUrl,
-            headers: <String, String>{
-              'User-Agent': _userAgent,
-              'Referer': secondResponse.realUri.toString(),
-            },
-          ),
-        ];
+        final mediaFire = _mediaFireStreams(
+          server,
+          finalUrl,
+          baseUrl: secondResponse.realUri.toString(),
+          referrer: secondResponse.realUri.toString(),
+          responseHeaders: secondResponse.headers,
+        );
+        if (mediaFire.isNotEmpty) return mediaFire;
+        return const <StreamResult>[];
       }
 
       var finalUrl = _cleanServerExtract(
@@ -3170,6 +3201,33 @@ class AnimeWitcherNativeProvider extends SkyStreamProvider {
       }
 
       if (finalUrl.isEmpty) return const <StreamResult>[];
+
+      if (_serverFamily(server) == 'MF') {
+        final absolute = _absoluteUrl(finalUrl, response.realUri.toString());
+        final direct = _mediaFireStreams(
+          server,
+          absolute,
+          baseUrl: response.realUri.toString(),
+          referrer: response.realUri.toString(),
+          responseHeaders: response.headers,
+        );
+        if (direct.isNotEmpty) return direct;
+        if (_isMediaFireSharePage(absolute)) {
+          return _extractMediaFire(
+            _ServerRecord(
+              name: server.name,
+              link: absolute,
+              quality: server.quality,
+              originalLink: server.originalLink,
+              openBrowser: server.openBrowser,
+              directLink: false,
+              visible: server.visible,
+            ),
+          );
+        }
+        return const <StreamResult>[];
+      }
+
       return <StreamResult>[
         _serverStream(
           server,

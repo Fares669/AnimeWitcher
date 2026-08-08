@@ -25,6 +25,7 @@ import '../../library/presentation/history_provider.dart';
 import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/utils/app_utils.dart';
 import '../../../../core/utils/image_fallbacks.dart';
+import '../../../../core/utils/stream_response_validator.dart';
 import '../../settings/presentation/player_settings_provider.dart';
 import '../../settings/presentation/general_settings_provider.dart';
 import '../../../../core/providers/locale_provider.dart';
@@ -2408,7 +2409,16 @@ class PlayerController extends Notifier<PlayerState> {
       final resp = await http
           .head(uri, headers: headers)
           .timeout(const Duration(seconds: 3));
-      if (resp.statusCode < 400) return true;
+      final contentType = resp.headers['content-type'];
+      if (contentType != null &&
+          contentType.trim().isNotEmpty &&
+          isLikelyPlayableHttpResponse(
+            uri: uri,
+            statusCode: resp.statusCode,
+            contentType: contentType,
+          )) {
+        return true;
+      }
     } catch (_) {
       // Fall back to a ranged GET below.
     }
@@ -2417,13 +2427,24 @@ class PlayerController extends Notifier<PlayerState> {
     try {
       final request = http.Request('GET', uri);
       request.headers.addAll(headers);
-      request.headers.putIfAbsent('Range', () => 'bytes=0-0');
+      request.headers.putIfAbsent('Range', () => 'bytes=0-511');
       final resp = await client
           .send(request)
           .timeout(const Duration(seconds: 3));
-      final subscription = resp.stream.listen((_) {});
-      await subscription.cancel();
-      return resp.statusCode < 400 || resp.statusCode == 416;
+      final prefix = <int>[];
+      await for (final chunk in resp.stream) {
+        final remaining = 512 - prefix.length;
+        if (remaining > 0) {
+          prefix.addAll(chunk.take(remaining));
+        }
+        break;
+      }
+      return isLikelyPlayableHttpResponse(
+        uri: uri,
+        statusCode: resp.statusCode,
+        contentType: resp.headers['content-type'],
+        bodyPrefix: prefix,
+      );
     } catch (_) {
       return false;
     } finally {
