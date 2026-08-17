@@ -30,6 +30,7 @@ class _AnimeWitcherCommentsScreenState
   final TextEditingController _commentController = TextEditingController();
   final Set<String> _revealedSpoilers = <String>{};
   final Set<String> _pendingLikes = <String>{};
+  final Set<String> _pendingCommentActions = <String>{};
   late final ScrollController _scrollController;
 
   List<AnimeWitcherComment> _comments = <AnimeWitcherComment>[];
@@ -177,8 +178,7 @@ class _AnimeWitcherCommentsScreenState
       _showMessage(isArabic ? 'يجب تسجيل الدخول' : 'Sign in to like comments.');
       return;
     }
-    if (comment.userId == service.accountUid ||
-        comment.userId == service.snapshot.profile?.documentId) {
+    if (service.ownsComment(comment)) {
       return;
     }
 
@@ -219,6 +219,211 @@ class _AnimeWitcherCommentsScreenState
       _scrollController.jumpTo(0);
     }
     await _loadInitial();
+  }
+
+  Future<void> _handleOwnCommentAction(
+    AnimeWitcherComment comment,
+    _OwnCommentAction action,
+  ) async {
+    switch (action) {
+      case _OwnCommentAction.edit:
+        await _editOwnComment(comment);
+        return;
+      case _OwnCommentAction.delete:
+        await _deleteOwnComment(comment);
+        return;
+      case _OwnCommentAction.closeReplies:
+        await _closeOwnCommentReplies(comment);
+        return;
+    }
+  }
+
+  Future<void> _editOwnComment(AnimeWitcherComment comment) async {
+    final isArabic = _isArabic(context);
+    final controller = TextEditingController(text: comment.text);
+    var spoiler = comment.spoiler;
+    try {
+      final draft = await showDialog<_CommentEditDraft>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: Text(isArabic ? 'تعديل التعليق' : 'Edit comment'),
+            content: SizedBox(
+              width: 520,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    minLines: 3,
+                    maxLines: 7,
+                    maxLength: 500,
+                    textDirection:
+                        isArabic ? TextDirection.rtl : TextDirection.ltr,
+                    decoration: InputDecoration(
+                      hintText:
+                          isArabic ? 'اكتب التعليق...' : 'Write your comment...',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  CheckboxListTile(
+                    value: spoiler,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      isArabic ? 'يحتوي على حرق' : 'Contains spoilers',
+                    ),
+                    onChanged: (value) {
+                      setDialogState(() => spoiler = value == true);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: Text(isArabic ? 'إلغاء' : 'Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final text = controller.text.trim();
+                  if (text.isEmpty) return;
+                  Navigator.pop(
+                    dialogContext,
+                    _CommentEditDraft(text: text, spoiler: spoiler),
+                  );
+                },
+                child: Text(isArabic ? 'حفظ' : 'Save'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (draft == null || !mounted) return;
+      _setCommentActionPending(comment.path, true);
+      try {
+        final updated = await ref
+            .read(animeWitcherAccountServiceProvider)
+            .updateOwnComment(
+              comment,
+              draft.text,
+              spoiler: draft.spoiler,
+            );
+        if (!mounted) return;
+        _replaceComment(updated);
+        _showMessage(isArabic ? 'تم تعديل التعليق.' : 'Comment updated.');
+      } catch (error) {
+        if (mounted) _showMessage(_commentErrorText(error, isArabic));
+      } finally {
+        if (mounted) _setCommentActionPending(comment.path, false);
+      }
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<void> _deleteOwnComment(AnimeWitcherComment comment) async {
+    final isArabic = _isArabic(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(isArabic ? 'حذف التعليق؟' : 'Delete comment?'),
+        content: Text(
+          isArabic
+              ? 'هل أنت متأكد من حذف هذا التعليق؟'
+              : 'Are you sure you want to delete this comment?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(isArabic ? 'إلغاء' : 'Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+              foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(isArabic ? 'حذف' : 'Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    _setCommentActionPending(comment.path, true);
+    try {
+      await ref
+          .read(animeWitcherAccountServiceProvider)
+          .deleteOwnComment(comment);
+      if (!mounted) return;
+      setState(() {
+        _comments.removeWhere((item) => item.path == comment.path);
+      });
+      _showMessage(isArabic ? 'تم حذف التعليق.' : 'Comment deleted.');
+    } catch (error) {
+      if (mounted) _showMessage(_commentErrorText(error, isArabic));
+    } finally {
+      if (mounted) _setCommentActionPending(comment.path, false);
+    }
+  }
+
+  Future<void> _closeOwnCommentReplies(AnimeWitcherComment comment) async {
+    if (comment.repliesClosed) return;
+    final isArabic = _isArabic(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(isArabic ? 'منع الردود؟' : 'Disable replies?'),
+        content: Text(
+          isArabic
+              ? 'هل أنت متأكد من منع الردود على هذا التعليق؟'
+              : 'Are you sure you want to disable replies for this comment?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(isArabic ? 'إلغاء' : 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(isArabic ? 'منع' : 'Disable'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    _setCommentActionPending(comment.path, true);
+    try {
+      final updated = await ref
+          .read(animeWitcherAccountServiceProvider)
+          .closeOwnCommentReplies(comment);
+      if (!mounted) return;
+      _replaceComment(updated);
+      _showMessage(isArabic ? 'تم منع الردود.' : 'Replies disabled.');
+    } catch (error) {
+      if (mounted) _showMessage(_commentErrorText(error, isArabic));
+    } finally {
+      if (mounted) _setCommentActionPending(comment.path, false);
+    }
+  }
+
+  void _replaceComment(AnimeWitcherComment updated) {
+    final index = _comments.indexWhere((item) => item.path == updated.path);
+    if (index < 0) return;
+    setState(() => _comments[index] = updated);
+  }
+
+  void _setCommentActionPending(String path, bool pending) {
+    setState(() {
+      if (pending) {
+        _pendingCommentActions.add(path);
+      } else {
+        _pendingCommentActions.remove(path);
+      }
+    });
   }
 
   AnimeWitcherCommentSort _commentSortFromValue(String value) {
@@ -463,6 +668,10 @@ class _AnimeWitcherCommentsScreenState
     final photo = comment.userPhotoUrl?.trim() ?? '';
     final reveal = !comment.spoiler || _revealedSpoilers.contains(comment.path);
     final likePending = _pendingLikes.contains(comment.path);
+    final actionPending = _pendingCommentActions.contains(comment.path);
+    final ownsComment = ref
+        .read(animeWitcherAccountServiceProvider)
+        .ownsComment(comment);
 
     return Material(
       color: colors.surfaceContainerLow,
@@ -512,6 +721,53 @@ class _AnimeWitcherCommentsScreenState
                       ],
                     ),
                   ),
+                  if (ownsComment)
+                    actionPending
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox.square(
+                              dimension: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : PopupMenuButton<_OwnCommentAction>(
+                            tooltip: isArabic
+                                ? 'إدارة التعليق'
+                                : 'Manage comment',
+                            onSelected: (action) {
+                              _handleOwnCommentAction(comment, action);
+                            },
+                            itemBuilder: (context) => [
+                              PopupMenuItem<_OwnCommentAction>(
+                                value: _OwnCommentAction.edit,
+                                child: _commentActionRow(
+                                  Icons.edit_rounded,
+                                  isArabic ? 'تعديل' : 'Edit',
+                                ),
+                              ),
+                              PopupMenuItem<_OwnCommentAction>(
+                                value: _OwnCommentAction.delete,
+                                child: _commentActionRow(
+                                  Icons.delete_outline_rounded,
+                                  isArabic ? 'حذف' : 'Delete',
+                                ),
+                              ),
+                              PopupMenuItem<_OwnCommentAction>(
+                                value: _OwnCommentAction.closeReplies,
+                                enabled: !comment.repliesClosed,
+                                child: _commentActionRow(
+                                  Icons.block_rounded,
+                                  comment.repliesClosed
+                                      ? (isArabic
+                                            ? 'الردود متوقفة'
+                                            : 'Replies disabled')
+                                      : (isArabic
+                                            ? 'منع الردود'
+                                            : 'Disable replies'),
+                                ),
+                              ),
+                            ],
+                          ),
                 ],
               ),
             ),
@@ -570,6 +826,16 @@ class _AnimeWitcherCommentsScreenState
           ],
         ),
       ),
+    );
+  }
+
+  Widget _commentActionRow(IconData icon, String label) {
+    return Row(
+      children: [
+        Icon(icon, size: 20),
+        const SizedBox(width: 10),
+        Text(label),
+      ],
     );
   }
 
@@ -760,6 +1026,15 @@ class _CommentsLoadError extends StatelessWidget {
   }
 }
 
+enum _OwnCommentAction { edit, delete, closeReplies }
+
+class _CommentEditDraft {
+  const _CommentEditDraft({required this.text, required this.spoiler});
+
+  final String text;
+  final bool spoiler;
+}
+
 String _sortLabel(AnimeWitcherCommentSort sort, bool isArabic) {
   return switch (sort) {
     AnimeWitcherCommentSort.newest => isArabic ? 'الأحدث' : 'Newest',
@@ -798,6 +1073,9 @@ String _commentErrorText(Object error, bool isArabic) {
       'replies-closed' => isArabic
           ? 'تم إيقاف الردود على هذا التعليق.'
           : 'Replies are disabled for this comment.',
+      'permission-denied' => isArabic
+          ? 'لا يمكن تعديل هذا التعليق.'
+          : 'This comment cannot be modified.',
       _ => error.message,
     };
   }

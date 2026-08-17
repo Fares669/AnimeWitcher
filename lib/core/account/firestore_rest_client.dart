@@ -629,6 +629,7 @@ class FirestoreRestClient {
     Map<String, dynamic> fields,
     String idToken, {
     Set<String> deleteFields = const <String>{},
+    bool requireExisting = false,
   }) async {
     final overlap = fields.keys.toSet().intersection(deleteFields);
     if (overlap.isNotEmpty) {
@@ -646,6 +647,7 @@ class FirestoreRestClient {
         '$_documentsBase/${_encodedPath(path)}',
         queryParameters: <String, dynamic>{
           'updateMask.fieldPaths': fieldPaths,
+          if (requireExisting) 'currentDocument.exists': true,
         },
         data: <String, dynamic>{
           'fields': FirestoreValueCodec.encodeFields(fields),

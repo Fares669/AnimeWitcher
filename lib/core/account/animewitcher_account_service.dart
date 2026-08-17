@@ -68,6 +68,7 @@ class AnimeWitcherAccountService {
 
   final Map<String, Set<String>> _watchedEpisodeCache =
       <String, Set<String>>{};
+  final Set<String> _ownedProfileDocumentIds = <String>{};
   final Set<String> _allEpisodesWatchedAnime = <String>{};
   final Set<String> _loadedWatchedAnime = <String>{};
   final Map<String, int> _stopTimeCache = <String, int>{};
@@ -87,6 +88,20 @@ class AnimeWitcherAccountService {
 
   bool get isSignedIn => _session != null && _profile != null;
   String? get accountUid => _profile?.uid;
+
+  /// Whether [comment] belongs to the active AnimeWitcher account.
+  ///
+  /// Some legacy AnimeWitcher accounts have duplicate `users` documents for
+  /// the same Firebase UID. The official client warns about that condition,
+  /// but comments keep the concrete user document ID that created them. Keep
+  /// all verified aliases so those comments remain manageable.
+  bool ownsComment(AnimeWitcherComment comment) {
+    if (_session == null || _profile == null || comment.userId.isEmpty) {
+      return false;
+    }
+    return comment.userId == _profile!.documentId ||
+        _ownedProfileDocumentIds.contains(comment.userId);
+  }
 
   Future<AnimeWitcherAccountSnapshot> restoreSession() async {
     final rawSession = await _secureStorage.read(_sessionKey);
@@ -325,6 +340,7 @@ class AnimeWitcherAccountService {
 
     var avatarUrl = profile.photoUrl;
     var coverUrl = profile.coverUrl;
+    final nameChanged = normalizedName != (profile.userName?.trim() ?? '');
     await _authenticated((token) async {
       if (avatarBytes != null) {
         avatarUrl = await _cloudStorage.uploadAccountImage(
@@ -343,33 +359,41 @@ class AnimeWitcherAccountService {
         );
       }
 
-      final fields = <String, dynamic>{'user_name': normalizedName};
+      final fields = <String, dynamic>{};
       final deleteFields = <String>{};
-      void setOptional(String field, String value) {
+      if (nameChanged) fields['user_name'] = normalizedName;
+
+      void setOptional(String field, String value, String existing) {
+        if (value == existing) return;
         if (value.isEmpty) {
-          deleteFields.add(field);
+          if (existing.isNotEmpty) deleteFields.add(field);
         } else {
           fields[field] = value;
         }
       }
 
-      setOptional('bio', normalizedBio);
-      setOptional('country', normalizedCountry);
-      setOptional('birth_date', normalizedBirthYear);
-      if (avatarUrl != null) fields['pic_uri'] = avatarUrl;
-      if (coverUrl != null) fields['cover_uri'] = coverUrl;
-      await _firestore.patchDocument(
-        'users/${profile.documentId}',
-        fields,
-        token,
-        deleteFields: deleteFields,
+      setOptional('bio', normalizedBio, profile.bio?.trim() ?? '');
+      setOptional('country', normalizedCountry, profile.country?.trim() ?? '');
+      setOptional(
+        'birth_date',
+        normalizedBirthYear,
+        profile.birthYear?.trim() ?? '',
       );
-      if (normalizedName != (profile.userName?.trim() ?? '')) {
-        await _firestore.setDocumentWithServerTimestamps(
-          'users/${profile.documentId}/settings/user_data_update',
-          <String, dynamic>{'name': normalizedName},
+      if (avatarUrl != profile.photoUrl && avatarUrl != null) {
+        fields['pic_uri'] = avatarUrl;
+      }
+      if (coverUrl != profile.coverUrl && coverUrl != null) {
+        fields['cover_uri'] = coverUrl;
+      }
+      if (fields.isNotEmpty || deleteFields.isNotEmpty) {
+        await _firestore.patchDocument(
+          'users/${profile.documentId}',
+          fields,
           token,
-          serverTimestampFields: const <String>{'date'},
+          deleteFields: deleteFields,
+          // DocumentReference.update() in the official client never creates a
+          // missing user document. Match that precondition on the REST API.
+          requireExisting: true,
         );
       }
     });
@@ -391,6 +415,9 @@ class AnimeWitcherAccountService {
       clearCountry: normalizedCountry.isEmpty,
       clearBirthYear: normalizedBirthYear.isEmpty,
     );
+    if (nameChanged) {
+      _signalUserNameUpdateBestEffort(_profile!, normalizedName);
+    }
     await _persistSession();
     return snapshot;
   }
@@ -624,6 +651,33 @@ class AnimeWitcherAccountService {
     }());
   }
 
+  void _signalUserNameUpdateBestEffort(
+    AnimeWitcherProfile profile,
+    String userName,
+  ) {
+    unawaited(() async {
+      try {
+        await _authenticated(
+          (token) => _firestore.setDocumentWithServerTimestamps(
+            'users/${profile.documentId}/settings/user_data_update',
+            <String, dynamic>{'name': userName},
+            token,
+            serverTimestampFields: const <String>{'date'},
+          ),
+        );
+      } catch (error) {
+        // AnimeWitcher treats this document as a background propagation
+        // signal. A failure must not turn an already successful profile write
+        // into a visible save error.
+        if (kDebugMode) {
+          debugPrint(
+            '[AnimeWitcherAccount] User-name propagation deferred: $error',
+          );
+        }
+      }
+    }());
+  }
+
   Future<void> signOut() async {
     if (_googleInitialized) {
       try {
@@ -829,6 +883,7 @@ class AnimeWitcherAccountService {
         comment.path,
         <String, dynamic>{'comment': text, 'spoiler': spoiler},
         token,
+        requireExisting: true,
       );
     });
     return comment.copyWith(text: text, spoiler: spoiler);
@@ -851,6 +906,7 @@ class AnimeWitcherAccountService {
         comment.path,
         const <String, dynamic>{'replies_closed': true},
         token,
+        requireExisting: true,
       ),
     );
     return comment.copyWith(repliesClosed: true);
@@ -868,14 +924,15 @@ class AnimeWitcherAccountService {
         .split('/')
         .where((segment) => segment.isNotEmpty)
         .toList(growable: false);
-    if (comment.userId != profile.documentId ||
-        !pathSegments.contains('comments')) {
+    if (!ownsComment(comment) || !pathSegments.contains('comments')) {
       throw const AnimeWitcherAccountException(
         'permission-denied',
         'Only the comment author can modify this comment.',
       );
     }
-    return profile;
+    return comment.userId == profile.documentId
+        ? profile
+        : profile.copyWith(documentId: comment.userId);
   }
 
   Future<List<AnimeWitcherComment>> _hydrateCommentLikes(
@@ -886,7 +943,7 @@ class AnimeWitcherAccountService {
     return _authenticated((token) async {
       return Future.wait<AnimeWitcherComment>(
         comments.map((comment) async {
-          if (comment.userId == profile.documentId) return comment;
+          if (ownsComment(comment)) return comment;
           try {
             final like = await _firestore.getDocument(
               '${comment.path}/likes/${profile.documentId}',
@@ -914,7 +971,7 @@ class AnimeWitcherAccountService {
       );
     }
     // AnimeWitcher does not let a user like their own comment/reply.
-    if (comment.userId == profile.documentId) return comment;
+    if (ownsComment(comment)) return comment;
 
     final likePath = '${comment.path}/likes/${profile.documentId}';
     await _authenticated((token) async {
@@ -1352,20 +1409,13 @@ class AnimeWitcherAccountService {
         limit: 2,
       ),
     );
-    if (matches.length > 1 && kDebugMode) {
-      // Older AnimeWitcher releases could create more than one user document
-      // for the same Firebase UID. The official client warns about this, then
-      // lets the user continue with the first result. Keep that compatibility
-      // here instead of locking a legacy account out of all synced data.
-      debugPrint(
-        '[AnimeWitcherAccount] Multiple profiles found for ${session.uid}; '
-        'using ${matches.first.id}.',
-      );
-    }
+    _ownedProfileDocumentIds
+      ..clear()
+      ..addAll(matches.map((document) => document.id));
 
     FirestoreDocument document;
     if (matches.isNotEmpty) {
-      document = matches.first;
+      document = await _selectActiveProfileDocument(session, matches);
     } else {
       if (!createIfMissing) {
         throw const AnimeWitcherAccountException(
@@ -1388,6 +1438,16 @@ class AnimeWitcherAccountService {
               : null,
           serverTimestampFields: const <String>{'registration_date'},
         ),
+      );
+      _ownedProfileDocumentIds.add(document.id);
+    }
+    if (matches.length > 1 && kDebugMode) {
+      // The official client warns about this legacy condition. Continue with
+      // the document that owns the account's active data instead of locking
+      // the user out of profile and comment management.
+      debugPrint(
+        '[AnimeWitcherAccount] Multiple profiles found for ${session.uid}; '
+        'using ${document.id}.',
       );
     }
 
@@ -1423,6 +1483,63 @@ class AnimeWitcherAccountService {
             ]
           : session.providerIds,
     );
+  }
+
+  Future<FirestoreDocument> _selectActiveProfileDocument(
+    AnimeWitcherSession session,
+    List<FirestoreDocument> matches,
+  ) async {
+    if (matches.length == 1) return matches.first;
+
+    // A legacy duplicate can have the same Auth UID and email while only one
+    // document owns the account's real comments. Prefer the document with the
+    // latest activity; this also restores the same concrete ID that the
+    // official client keeps in `user_doc_id` on an already signed-in device.
+    final latestComments = await _authenticated(
+      (token) => Future.wait<FirestoreDocument?>(
+        matches.map((document) async {
+          try {
+            return await _firestore.latestCommentByUser(
+              userId: document.id,
+              idToken: token,
+            );
+          } catch (_) {
+            return null;
+          }
+        }),
+      ),
+    );
+    var activeIndex = -1;
+    DateTime? activeDate;
+    for (var index = 0; index < latestComments.length; index++) {
+      final date = _dateValue(latestComments[index]?.fields['date']);
+      if (date != null && (activeDate == null || date.isAfter(activeDate))) {
+        activeIndex = index;
+        activeDate = date;
+      }
+    }
+    if (activeIndex >= 0) return matches[activeIndex];
+
+    final cached = _profile;
+    if (cached != null && cached.uid == session.uid) {
+      for (final document in matches) {
+        if (document.id == cached.documentId) return document;
+      }
+    }
+
+    // With no social activity, the oldest profile is the best representation
+    // of the pre-duplication account. Fall back to Firestore's first result if
+    // legacy documents do not carry a registration timestamp.
+    FirestoreDocument? oldest;
+    DateTime? oldestDate;
+    for (final document in matches) {
+      final date = _dateValue(document.fields['registration_date']);
+      if (date != null && (oldestDate == null || date.isBefore(oldestDate))) {
+        oldest = document;
+        oldestDate = date;
+      }
+    }
+    return oldest ?? matches.first;
   }
 
   Map<String, dynamic> _newUserFields(
@@ -1566,6 +1683,7 @@ class AnimeWitcherAccountService {
     _sessionGeneration++;
     _session = null;
     _profile = null;
+    _ownedProfileDocumentIds.clear();
     _lastSyncAt = null;
     _refreshInFlight = null;
     _syncInFlight = null;
