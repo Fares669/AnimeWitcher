@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:skystream/shared/widgets/apple_liquid_glass.dart';
@@ -735,7 +737,9 @@ class _AnimeWitcherCommentsScreenState
                                 ? 'إدارة التعليق'
                                 : 'Manage comment',
                             onSelected: (action) {
-                              _handleOwnCommentAction(comment, action);
+                              unawaited(
+                                _handleOwnCommentAction(comment, action),
+                              );
                             },
                             itemBuilder: (context) => [
                               PopupMenuItem<_OwnCommentAction>(

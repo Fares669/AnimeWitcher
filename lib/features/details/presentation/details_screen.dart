@@ -229,7 +229,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
             arabic: 'التعليقات',
           ),
           icon: Icons.chat_bubble_outline_rounded,
-          color: colors.primary,
+          color: foregroundColor,
           onPressed: () => _openAnimeComments(context, commentTarget),
         ),
       AppleLiquidGlassToolbarButton(

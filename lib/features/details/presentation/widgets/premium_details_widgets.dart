@@ -370,11 +370,11 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
     final colors = Theme.of(context).colorScheme;
     return Expanded(
       child: Container(
-        constraints: const BoxConstraints(minHeight: 92),
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+        constraints: const BoxConstraints(minHeight: 72),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
         decoration: BoxDecoration(
           color: colors.surfaceContainerHighest.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.45)),
         ),
         child: Column(
@@ -390,7 +390,7 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
                 height: 1,
               ),
             ),
-            const SizedBox(height: 9),
+            const SizedBox(height: 6),
             Text(
               label,
               textAlign: TextAlign.center,
@@ -423,16 +423,7 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(
-          context,
-        ).colorScheme.primaryContainer.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-        ),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -446,7 +437,7 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           if (_remaining == Duration.zero)
             Text(
               _detailsText(context, english: 'Airing now', arabic: 'تُعرض الآن'),
