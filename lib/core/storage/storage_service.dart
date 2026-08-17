@@ -104,11 +104,58 @@ class StorageService {
     if (uri == null) return value;
     final host = uri.host.toLowerCase();
     if ((host == 'animewitcher.com' || host == 'www.animewitcher.com') &&
-        uri.pathSegments.isNotEmpty &&
+        uri.pathSegments.length >= 2 &&
         uri.pathSegments.first == 'watch') {
-      return uri.replace(query: '', fragment: '').toString();
+      final encodedId = uri.pathSegments[1].trim();
+      if (encodedId.isEmpty) return value;
+      String animeId;
+      try {
+        animeId = Uri.decodeComponent(encodedId).trim();
+      } catch (_) {
+        animeId = encodedId;
+      }
+      if (animeId.isEmpty) return value;
+      return Uri(
+        scheme: 'https',
+        host: 'animewitcher.com',
+        pathSegments: <String>['watch', animeId],
+      ).toString();
     }
     return value;
+  }
+
+  int _historyTimestamp(Map<dynamic, dynamic> raw) {
+    final value = raw['timestamp'];
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  bool _historyEntryMatchesUrl(
+    Map<dynamic, dynamic> raw,
+    String canonicalUrl,
+  ) {
+    final storedUrl = (raw['url'] ?? '').toString();
+    return storedUrl.isNotEmpty &&
+        _canonicalMediaUrl(storedUrl) == canonicalUrl;
+  }
+
+  Map<dynamic, dynamic>? _latestHistoryMainEntry(String canonicalUrl) {
+    Map<dynamic, dynamic>? latest;
+    var latestTimestamp = -1;
+    for (var i = 0; i < _historyBox.length; i++) {
+      final key = _historyBox.keyAt(i);
+      if (key is String && key.startsWith('EP_')) continue;
+      final raw = _historyBox.getAt(i);
+      if (raw is! Map || !_historyEntryMatchesUrl(raw, canonicalUrl)) {
+        continue;
+      }
+      final timestamp = _historyTimestamp(raw);
+      if (latest == null || timestamp > latestTimestamp) {
+        latest = Map<dynamic, dynamic>.from(raw);
+        latestTimestamp = timestamp;
+      }
+    }
+    return latest;
   }
 
   // --- Library (AnimeWitcher lists) ---
@@ -715,13 +762,18 @@ class StorageService {
     String? syncedAccountUid,
     int? syncedAt,
   }) async {
-    final existing = _historyBox.get(_getKey(item.url));
+    final canonicalUrl = _canonicalMediaUrl(item.url);
+    final canonicalKey = _getKey(canonicalUrl);
+    final existing = _historyBox.get(canonicalKey);
+    final legacy = existing is Map
+        ? null
+        : _latestHistoryMainEntry(canonicalUrl);
     final previous = existing is Map
         ? Map<dynamic, dynamic>.from(existing)
-        : const <dynamic, dynamic>{};
+        : legacy ?? const <dynamic, dynamic>{};
     final entry = {
       'title': item.title,
-      'url': item.url,
+      'url': canonicalUrl,
       'posterUrl': item.posterUrl,
       'bannerUrl': item.bannerUrl,
       'description': item.description,
@@ -748,8 +800,27 @@ class StorageService {
         'animeWitcherSyncedAt': previous['animeWitcherSyncedAt'],
     };
 
-    // Save main entry (keyed by series/movie URL)
-    await _historyBox.put(_getKey(item.url), entry);
+    // AnimeWitcher stores one last_watched document per anime. Collapse legacy
+    // URL variants before saving so opening a newer episode updates and moves
+    // the same anime card instead of creating a second card.
+    final staleMainKeys = <dynamic>[];
+    for (var i = 0; i < _historyBox.length; i++) {
+      final key = _historyBox.keyAt(i);
+      if (key == canonicalKey ||
+          (key is String && key.startsWith('EP_'))) {
+        continue;
+      }
+      final raw = _historyBox.getAt(i);
+      if (raw is Map && _historyEntryMatchesUrl(raw, canonicalUrl)) {
+        staleMainKeys.add(key);
+      }
+    }
+    if (staleMainKeys.isNotEmpty) {
+      await _historyBox.deleteAll(staleMainKeys);
+    }
+
+    // Save main entry (keyed by one canonical series/movie URL).
+    await _historyBox.put(canonicalKey, entry);
 
     // Save episode-specific progress for both series and anime.
     final isSeries =
@@ -772,7 +843,9 @@ class StorageService {
     String? episodeTitle,
     String? episodePosterUrl,
   }) async {
-    final mainRaw = _historyBox.get(_getKey(item.url));
+    final canonicalUrl = _canonicalMediaUrl(item.url);
+    final mainRaw = _historyBox.get(_getKey(canonicalUrl)) ??
+        _latestHistoryMainEntry(canonicalUrl);
     final main = mainRaw is Map
         ? Map<String, dynamic>.from(mainRaw)
         : <String, dynamic>{};
@@ -934,7 +1007,7 @@ class StorageService {
     required String accountUid,
     required int syncedAt,
   }) async {
-    final mainKey = _getKey(url);
+    final mainKey = _getKey(_canonicalMediaUrl(url));
     final raw = _historyBox.get(mainKey);
     if (raw is! Map) return;
     final entry = Map<String, dynamic>.from(raw);
@@ -957,24 +1030,19 @@ class StorageService {
   }
 
   Future<void> removeFromHistory(String url) async {
-    final mainKey = _getKey(url);
-    await _historyBox.delete(mainKey);
-
-    // Cascade delete: find and remove all EP_ entries for this series
-    final keysToDelete = <String>[];
+    final canonicalUrl = _canonicalMediaUrl(url);
+    final keysToDelete = <dynamic>{
+      _getKey(url),
+      _getKey(canonicalUrl),
+    };
     for (var i = 0; i < _historyBox.length; i++) {
-      final key = _historyBox.keyAt(i) as String;
-      if (key.startsWith("EP_")) {
-        final entry = _historyBox.get(key);
-        if (entry != null && entry['url'] == url) {
-          keysToDelete.add(key);
-        }
+      final key = _historyBox.keyAt(i);
+      final raw = _historyBox.getAt(i);
+      if (raw is Map && _historyEntryMatchesUrl(raw, canonicalUrl)) {
+        keysToDelete.add(key);
       }
     }
-
-    for (final k in keysToDelete) {
-      await _historyBox.delete(k);
-    }
+    await _historyBox.deleteAll(keysToDelete);
 
     _historyCacheDirty = true;
   }
@@ -985,12 +1053,31 @@ class StorageService {
     int timestamp,
     int position,
   ) async {
-    final mainKey = _getKey(url);
-    final entry = _historyBox.get(mainKey);
-    if (entry != null) {
-      final updatedEntry = Map<String, dynamic>.from(entry as Map);
+    final canonicalUrl = _canonicalMediaUrl(url);
+    final mainKey = _getKey(canonicalUrl);
+    final entry = _historyBox.get(mainKey) ??
+        _latestHistoryMainEntry(canonicalUrl);
+    if (entry is Map) {
+      final updatedEntry = Map<String, dynamic>.from(entry);
+      updatedEntry['url'] = canonicalUrl;
       updatedEntry['timestamp'] = timestamp;
       updatedEntry['position'] = position;
+
+      final staleMainKeys = <dynamic>[];
+      for (var i = 0; i < _historyBox.length; i++) {
+        final key = _historyBox.keyAt(i);
+        if (key == mainKey ||
+            (key is String && key.startsWith('EP_'))) {
+          continue;
+        }
+        final raw = _historyBox.getAt(i);
+        if (raw is Map && _historyEntryMatchesUrl(raw, canonicalUrl)) {
+          staleMainKeys.add(key);
+        }
+      }
+      if (staleMainKeys.isNotEmpty) {
+        await _historyBox.deleteAll(staleMainKeys);
+      }
       await _historyBox.put(mainKey, updatedEntry);
 
       if (lastEpisodeUrl != null) {
@@ -998,6 +1085,7 @@ class StorageService {
         final epEntry = _historyBox.get(episodeKey);
         if (epEntry != null) {
           final updatedEpEntry = Map<String, dynamic>.from(epEntry as Map);
+          updatedEpEntry['url'] = canonicalUrl;
           updatedEpEntry['timestamp'] = timestamp;
           updatedEpEntry['position'] = position;
           await _historyBox.put(episodeKey, updatedEpEntry);
@@ -1017,18 +1105,31 @@ class StorageService {
       return _cachedHistory!;
     }
 
-    final items = <Map<String, dynamic>>[];
+    final newestByAnime = <String, Map<String, dynamic>>{};
     for (var i = 0; i < _historyBox.length; i++) {
-      final key = _historyBox.keyAt(i) as String;
+      final key = _historyBox.keyAt(i);
       // Filter out episode-specific entries from the main history list
-      if (key.startsWith("EP_")) continue;
+      if (key is String && key.startsWith('EP_')) continue;
 
-      final map = Map<String, dynamic>.from(_historyBox.get(key) as Map);
-      items.add(map);
+      final raw = _historyBox.getAt(i);
+      if (raw is! Map) continue;
+      final map = Map<String, dynamic>.from(raw);
+      final rawUrl = (map['url'] ?? '').toString();
+      final canonicalUrl = _canonicalMediaUrl(rawUrl);
+      if (canonicalUrl.isNotEmpty) map['url'] = canonicalUrl;
+      final identity = canonicalUrl.isEmpty
+          ? 'legacy-history-${key.toString()}'
+          : canonicalUrl;
+      final previous = newestByAnime[identity];
+      if (previous == null ||
+          _historyTimestamp(map) > _historyTimestamp(previous)) {
+        newestByAnime[identity] = map;
+      }
     }
+    final items = newestByAnime.values.toList(growable: false);
     // Sort by timestamp descending (newest first)
     items.sort(
-      (a, b) => (b['timestamp'] as int).compareTo(a['timestamp'] as int),
+      (a, b) => _historyTimestamp(b).compareTo(_historyTimestamp(a)),
     );
 
     _cachedHistory = items;

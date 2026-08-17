@@ -68,7 +68,6 @@ class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
         onRefresh: _refreshFromServer,
         child: _RecentWatchedGrid(
           items: history,
-          isArabic: isArabic,
           onRemove: (historyItem) {
             HapticFeedback.mediumImpact();
             unawaited(
@@ -126,12 +125,10 @@ class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
 class _RecentWatchedGrid extends StatelessWidget {
   const _RecentWatchedGrid({
     required this.items,
-    required this.isArabic,
     required this.onRemove,
   });
 
   final List<HistoryItem> items;
-  final bool isArabic;
   final ValueChanged<HistoryItem> onRemove;
 
   @override
@@ -150,15 +147,10 @@ class _RecentWatchedGrid extends StatelessWidget {
       itemBuilder: (context, index) {
         final history = items[index];
         final item = history.item;
-        final episode = history.episode;
-        final badge = episode != null && episode > 0
-            ? (isArabic ? 'حلقة $episode' : 'Episode $episode')
-            : null;
         return MultimediaCard(
           key: ValueKey('recent-${item.url}'),
           imageUrl: item.posterImageUrl,
           title: item.title,
-          episodeBadge: badge,
           heroTag: 'recent-${item.id}-$index',
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
