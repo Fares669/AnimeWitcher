@@ -110,6 +110,9 @@ jobs:
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
 
+      - name: Prepare media_kit iOS Headers
+        run: bash scripts/prepare_media_kit_ios_headers.sh
+
       - name: Generate dart-defines file
         shell: bash
         run: |
