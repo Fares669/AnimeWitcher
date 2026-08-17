@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/account/account_providers.dart';
+import '../../../core/account/animewitcher_account_models.dart';
+import '../../settings/presentation/account_screen.dart';
 import '../../settings/presentation/settings_screen.dart';
 import 'broadcast_schedule_screen.dart';
 import 'coming_soon_screen.dart';
@@ -7,17 +11,20 @@ import 'global_statistics_screen.dart';
 import 'recent_watched_screen.dart';
 import 'seasons_screen.dart';
 
-class MoreScreen extends StatelessWidget {
+class MoreScreen extends ConsumerWidget {
   const MoreScreen({super.key});
 
   bool _isArabic(BuildContext context) =>
       Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isArabic = _isArabic(context);
     final theme = Theme.of(context);
     final bottomPadding = MediaQuery.viewPaddingOf(context).bottom + 88;
+    final accountState = ref.watch(animeWitcherAccountControllerProvider);
+    final accountProfile = accountState.asData?.value.profile;
+    final accountPhotoUrl = accountProfile?.photoUrl?.trim() ?? '';
 
     return Scaffold(
       appBar: AppBar(
@@ -27,6 +34,51 @@ class MoreScreen extends StatelessWidget {
       body: ListView(
         padding: EdgeInsets.fromLTRB(16, 12, 16, bottomPadding),
         children: [
+          _MoreTile(
+            icon: accountProfile == null
+                ? Icons.account_circle_rounded
+                : Icons.cloud_done_rounded,
+            leading: accountPhotoUrl.isEmpty
+                ? null
+                : CircleAvatar(
+                    radius: 24,
+                    backgroundColor: theme.colorScheme.primaryContainer,
+                    foregroundImage: NetworkImage(accountPhotoUrl),
+                    onForegroundImageError: (_, _) {},
+                    child: Icon(
+                      Icons.person_rounded,
+                      color: theme.colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+            title: accountProfile == null
+                ? (isArabic
+                      ? 'تسجيل الدخول أو إنشاء حساب'
+                      : 'Sign in or create an account')
+                : _accountDisplayName(accountProfile),
+            subtitle: accountState.isLoading
+                ? (isArabic ? 'جارٍ التحقق من الحساب...' : 'Checking account...')
+                : accountProfile == null
+                ? (isArabic
+                      ? 'مزامنة القوائم والحلقات المشاهدة '
+                            'وتقدم التشغيل'
+                      : 'Sync lists, watched episodes, and playback progress')
+                : accountProfile.email ??
+                      (isArabic
+                          ? 'المزامنة مفعلة'
+                          : 'Synchronization enabled'),
+            trailing: accountState.isLoading
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : null,
+            onTap: () => Navigator.of(context, rootNavigator: true).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const AnimeWitcherAccountScreen(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           _MoreTile(
             icon: Icons.history_rounded,
             title: isArabic ? 'آخر المشاهدات' : 'Recently watched',
@@ -98,8 +150,8 @@ class MoreScreen extends StatelessWidget {
             icon: Icons.settings_rounded,
             title: isArabic ? 'الإعدادات' : 'Settings',
             subtitle: isArabic
-                ? 'إعدادات التطبيق والحساب والمشغل'
-                : 'App, account, and player settings',
+                ? 'إعدادات التطبيق والمشغل'
+                : 'App and player settings',
             onTap: () => Navigator.of(context, rootNavigator: true).push(
               MaterialPageRoute<void>(
                 builder: (_) => const SettingsScreen(),
@@ -114,14 +166,18 @@ class MoreScreen extends StatelessWidget {
 
 class _MoreTile extends StatelessWidget {
   final IconData icon;
+  final Widget? leading;
   final String title;
   final String subtitle;
+  final Widget? trailing;
   final VoidCallback onTap;
 
   const _MoreTile({
     required this.icon,
+    this.leading,
     required this.title,
     required this.subtitle,
+    this.trailing,
     required this.onTap,
   });
 
@@ -138,15 +194,16 @@ class _MoreTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Row(
             children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: colors.primary.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(icon, color: colors.primary),
-              ),
+              leading ??
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: colors.primary.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(icon, color: colors.primary),
+                  ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -169,11 +226,22 @@ class _MoreTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Icon(Icons.chevron_right_rounded, color: colors.onSurfaceVariant),
+              trailing ??
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: colors.onSurfaceVariant,
+                  ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+String _accountDisplayName(AnimeWitcherProfile profile) {
+  final userName = profile.userName?.trim() ?? '';
+  if (userName.isNotEmpty) return userName;
+  final email = profile.email?.trim() ?? '';
+  return email.isEmpty ? 'AnimeWitcher' : email;
 }

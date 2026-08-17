@@ -8,10 +8,7 @@ import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../core/providers/device_info_provider.dart';
 import '../../../core/providers/anime_data_source_settings_provider.dart';
 import '../../../core/theme/theme_provider.dart';
-import '../../../core/account/account_providers.dart';
-import '../../../core/account/animewitcher_account_models.dart';
 
-import 'account_screen.dart';
 import 'widgets/settings_widgets.dart';
 import 'widgets/settings_dialogs.dart';
 import 'widgets/taskbar_customization_dialog.dart';
@@ -101,9 +98,6 @@ class SettingsScreen extends ConsumerWidget {
     final themeMode = ref.watch(appThemeModeProvider);
     final generalSettings = ref.watch(generalSettingsProvider);
     final animeDataSettings = ref.watch(animeDataSourceSettingsProvider);
-    final accountState = ref.watch(animeWitcherAccountControllerProvider);
-    final accountProfile = accountState.asData?.value.profile;
-    final accountPhotoUrl = accountProfile?.photoUrl?.trim() ?? '';
 
     final playerSettings =
         ref.watch(playerSettingsProvider).asData?.value ??
@@ -120,76 +114,6 @@ class SettingsScreen extends ConsumerWidget {
           padding: const EdgeInsets.only(bottom: 100),
           children: [
             const SizedBox(height: LayoutConstants.spacingXs),
-            SettingsGroup(
-              title: appText(
-                context,
-                english: 'AnimeWitcher account',
-                arabic: 'حساب AnimeWitcher',
-              ),
-              children: [
-                SettingsTile(
-                  icon: accountProfile == null
-                      ? Icons.account_circle_rounded
-                      : Icons.cloud_done_rounded,
-                  leading: accountPhotoUrl.isEmpty
-                      ? null
-                      : CircleAvatar(
-                          radius: 20,
-                          backgroundColor: Theme.of(
-                            context,
-                          ).colorScheme.primaryContainer,
-                          foregroundImage: NetworkImage(accountPhotoUrl),
-                          onForegroundImageError: (_, _) {},
-                          child: Icon(
-                            Icons.person_rounded,
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onPrimaryContainer,
-                          ),
-                        ),
-                  title: accountProfile == null
-                      ? appText(
-                          context,
-                          english: 'Sign in or create an account',
-                          arabic: 'تسجيل الدخول أو إنشاء حساب',
-                        )
-                      : _accountDisplayName(accountProfile),
-                  subtitle: accountState.isLoading
-                      ? appText(
-                          context,
-                          english: 'Checking account...',
-                          arabic: 'جارٍ التحقق من الحساب...',
-                        )
-                      : accountProfile == null
-                      ? appText(
-                          context,
-                          english:
-                              'Sync lists, watched episodes, and playback progress',
-                          arabic:
-                              'مزامنة القوائم والحلقات المشاهدة وتقدم التشغيل',
-                        )
-                      : accountProfile.email ??
-                            appText(
-                              context,
-                              english: 'Synchronization enabled',
-                              arabic: 'المزامنة مفعلة',
-                            ),
-                  trailing: accountState.isLoading
-                      ? const SizedBox.square(
-                          dimension: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.chevron_right_rounded),
-                  isLast: true,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const AnimeWitcherAccountScreen(),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: LayoutConstants.spacingLg),
             SettingsGroup(
               title: l10n.general,
               children: [
@@ -447,13 +371,6 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
   }
-}
-
-String _accountDisplayName(AnimeWitcherProfile profile) {
-  final userName = profile.userName?.trim() ?? '';
-  if (userName.isNotEmpty) return userName;
-  final email = profile.email?.trim() ?? '';
-  return email.isEmpty ? 'AnimeWitcher' : email;
 }
 
 String _formatBytes(int bytes) {
