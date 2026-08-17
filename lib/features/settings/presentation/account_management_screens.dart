@@ -1,16 +1,15 @@
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image/image.dart' as img;
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
+import 'account_image_crop_screen.dart';
 import 'account_ui_helpers.dart';
 
 class AnimeWitcherProfileEditScreen extends ConsumerStatefulWidget {
@@ -379,10 +378,13 @@ class _AnimeWitcherProfileEditScreenState
           'Choose an image smaller than 20 MB.',
         );
       }
-      final prepared = await compute(_prepareAccountImage, <String, Object>{
-        'bytes': raw,
-        'kind': kind.name,
-      });
+      if (!mounted) return;
+      final prepared = await showAnimeWitcherAccountImageCropper(
+        context,
+        bytes: raw,
+        kind: kind,
+      );
+      if (prepared == null) return;
       if (!mounted) return;
       setState(() {
         if (kind == AnimeWitcherProfileImageKind.avatar) {
@@ -856,49 +858,4 @@ class _AccountInfoCard extends StatelessWidget {
       ),
     );
   }
-}
-
-Uint8List _prepareAccountImage(Map<String, Object> request) {
-  final raw = request['bytes'];
-  final kind = request['kind']?.toString();
-  if (raw is! Uint8List) throw const FormatException('Missing image bytes.');
-  final decoded = img.decodeImage(raw);
-  if (decoded == null) throw const FormatException('Invalid image.');
-  final oriented = img.bakeOrientation(decoded);
-  final isAvatar = kind == AnimeWitcherProfileImageKind.avatar.name;
-  final targetWidth = isAvatar ? 720 : 1400;
-  final targetHeight = isAvatar ? 720 : 800;
-  final targetAspect = targetWidth / targetHeight;
-  final sourceAspect = oriented.width / oriented.height;
-
-  late final int cropWidth;
-  late final int cropHeight;
-  late final int cropX;
-  late final int cropY;
-  if (sourceAspect > targetAspect) {
-    cropHeight = oriented.height;
-    cropWidth = (cropHeight * targetAspect).round();
-    cropX = (oriented.width - cropWidth) ~/ 2;
-    cropY = 0;
-  } else {
-    cropWidth = oriented.width;
-    cropHeight = (cropWidth / targetAspect).round();
-    cropX = 0;
-    cropY = (oriented.height - cropHeight) ~/ 2;
-  }
-
-  final cropped = img.copyCrop(
-    oriented,
-    x: cropX,
-    y: cropY,
-    width: cropWidth,
-    height: cropHeight,
-  );
-  final resized = img.copyResize(
-    cropped,
-    width: targetWidth,
-    height: targetHeight,
-    interpolation: img.Interpolation.average,
-  );
-  return img.encodeJpg(resized, quality: isAvatar ? 84 : 82);
 }
