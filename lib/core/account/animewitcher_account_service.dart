@@ -717,11 +717,9 @@ class AnimeWitcherAccountService {
     return snapshot;
   }
 
-  /// Resolves AnimeWitcher's numeric relation IDs with the same single
-  /// authenticated Firestore `whereIn("mal_id", ...)` request used by the
-  /// official app. Firestore rules reject this root collection query for an
-  /// unauthenticated REST client, so it intentionally goes through the active
-  /// AnimeWitcher session.
+  /// Resolves AnimeWitcher's numeric relation IDs with the same single public
+  /// Firestore `whereIn("mal_id", ...)` request used by the official app.
+  /// Catalog reads must not depend on account restoration or sign-in.
   Future<List<Map<String, dynamic>>> resolveAnimeByMalIds(
     Iterable<int> malIds,
   ) async {
@@ -732,13 +730,10 @@ class AnimeWitcherAccountService {
         .toList(growable: false);
     if (ids.isEmpty) return const <Map<String, dynamic>>[];
 
-    final documents = await _authenticated(
-      (token) => _firestore.queryByStringValues(
-        collectionId: 'anime_list',
-        field: 'mal_id',
-        values: ids.map((id) => '$id'),
-        idToken: token,
-      ),
+    final documents = await _firestore.queryByStringValues(
+      collectionId: 'anime_list',
+      field: 'mal_id',
+      values: ids.map((id) => '$id'),
     );
     return documents.map((document) {
       final hit = Map<String, dynamic>.from(document.fields);

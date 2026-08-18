@@ -712,6 +712,7 @@ class DetailsController extends _$DetailsController {
       );
     } catch (error, stackTrace) {
       if (!ref.mounted || generation != _loadGeneration) return;
+      _relatedLoadStarted = false;
       state = state.copyWith(
         related: AsyncError<List<MultimediaItem>>(error, stackTrace),
       );

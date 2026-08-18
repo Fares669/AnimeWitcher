@@ -254,7 +254,6 @@ class FirestoreRestClient {
     required String collectionId,
     required String field,
     required Iterable<String> values,
-    required String idToken,
   }) async {
     final normalizedValues = values
         .map((value) => value.trim())
@@ -281,10 +280,9 @@ class FirestoreRestClient {
                 'value': FirestoreValueCodec.encode(normalizedValues),
               },
             },
-            'limit': normalizedValues.length,
           },
         },
-        options: _options(idToken),
+        options: _publicOptions(),
       );
       return _decodeRunQueryDocuments(response.data);
     } on DioException catch (error) {
@@ -849,10 +847,10 @@ class FirestoreRestClient {
   }
 
   Options _publicOptions() {
-    if (!AnimeWitcherAccountConfig.firebaseConfigured) {
+    if (!AnimeWitcherAccountConfig.firestoreConfigured) {
       throw const AnimeWitcherAccountException(
         'not-configured',
-        'AnimeWitcher account services are not configured.',
+        'AnimeWitcher Firestore is not configured.',
       );
     }
     return Options(

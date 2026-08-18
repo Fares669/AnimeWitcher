@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:skystream/shared/widgets/apple_liquid_glass.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -210,7 +212,7 @@ class _BroadcastScheduleScreenState
   }
 }
 
-class _DayTabs extends StatelessWidget {
+class _DayTabs extends StatefulWidget {
   final int selectedIndex;
   final bool isArabic;
   final ValueChanged<int> onSelected;
@@ -220,6 +222,77 @@ class _DayTabs extends StatelessWidget {
     required this.isArabic,
     required this.onSelected,
   });
+
+  @override
+  State<_DayTabs> createState() => _DayTabsState();
+}
+
+class _DayTabsState extends State<_DayTabs> {
+  final GlobalKey _viewportKey = GlobalKey();
+  late final List<GlobalKey> _dayKeys = List<GlobalKey>.generate(
+    animeWitcherBroadcastDays.length,
+    (_) => GlobalKey(),
+  );
+  bool _visibilityCheckScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleSelectedDayVisibility();
+  }
+
+  @override
+  void didUpdateWidget(covariant _DayTabs oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedIndex != widget.selectedIndex ||
+        oldWidget.isArabic != widget.isArabic) {
+      _scheduleSelectedDayVisibility();
+    }
+  }
+
+  void _scheduleSelectedDayVisibility() {
+    if (_visibilityCheckScheduled) return;
+    _visibilityCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _visibilityCheckScheduled = false;
+      if (!mounted) return;
+      _revealSelectedDayIfNeeded();
+    });
+  }
+
+  void _revealSelectedDayIfNeeded() {
+    final index = widget.selectedIndex;
+    if (index < 0 || index >= _dayKeys.length) return;
+
+    final viewportContext = _viewportKey.currentContext;
+    final dayContext = _dayKeys[index].currentContext;
+    final viewportBox = viewportContext?.findRenderObject();
+    final dayBox = dayContext?.findRenderObject();
+    if (viewportBox is! RenderBox ||
+        dayBox is! RenderBox ||
+        !viewportBox.hasSize ||
+        !dayBox.hasSize ||
+        dayContext == null) {
+      return;
+    }
+
+    final viewportOrigin = viewportBox.localToGlobal(Offset.zero);
+    final dayOrigin = dayBox.localToGlobal(Offset.zero);
+    final viewportLeft = viewportOrigin.dx + 4;
+    final viewportRight = viewportOrigin.dx + viewportBox.size.width - 4;
+    final dayLeft = dayOrigin.dx;
+    final dayRight = dayOrigin.dx + dayBox.size.width;
+    if (dayLeft >= viewportLeft && dayRight <= viewportRight) return;
+
+    unawaited(
+      Scrollable.ensureVisible(
+        dayContext,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -234,31 +307,35 @@ class _DayTabs extends StatelessWidget {
     ];
     final colors = Theme.of(context).colorScheme;
     return SingleChildScrollView(
+      key: _viewportKey,
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       child: Row(
         children: [
           for (var i = 0; i < animeWitcherBroadcastDays.length; i++) ...[
             Material(
-              color: selectedIndex == i
+              key: _dayKeys[i],
+              color: widget.selectedIndex == i
                   ? colors.primary
                   : colors.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(24),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
-                onTap: () => onSelected(i),
+                onTap: () => widget.onSelected(i),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 18,
                     vertical: 11,
                   ),
                   child: Text(
-                    isArabic ? animeWitcherBroadcastDays[i] : english[i],
+                    widget.isArabic
+                        ? animeWitcherBroadcastDays[i]
+                        : english[i],
                     style: TextStyle(
-                      color: selectedIndex == i
+                      color: widget.selectedIndex == i
                           ? colors.onPrimary
                           : colors.onSurface,
-                      fontWeight: selectedIndex == i
+                      fontWeight: widget.selectedIndex == i
                           ? FontWeight.w700
                           : FontWeight.w500,
                     ),

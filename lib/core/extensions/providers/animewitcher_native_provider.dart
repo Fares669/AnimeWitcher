@@ -2075,16 +2075,11 @@ class AnimeWitcherNativeProvider extends SkyStreamProvider {
     final resolver = _resolveAnimeByMalIds;
     if (requestedIds.isEmpty || resolver == null) return;
 
-    // This is one authenticated Firestore IN request for all ten related MAL
-    // IDs, matching AnimeWitcher's RelatedAnimeFragment. Do not replace it
+    // This is one public Firestore IN request for all ten related MAL IDs,
+    // matching AnimeWitcher's RelatedAnimeFragment. Do not replace it
     // with an Algolia browse loop: mal_id is neither searchable nor facetable
     // in AnimeWitcher's index, so browsing turns one lookup into many pages.
-    final List<Map<String, dynamic>> hits;
-    try {
-      hits = await resolver(requestedIds);
-    } catch (_) {
-      return;
-    }
+    final hits = await resolver(requestedIds);
 
     final expiresAt = DateTime.now().add(_relatedDataTtl);
     for (final hit in hits) {

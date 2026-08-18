@@ -1520,6 +1520,41 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     );
   }
 
+  Widget _relatedErrorPlaceholder(
+    BuildContext context, {
+    required String title,
+    required bool isArabic,
+    required VoidCallback onRetry,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            isArabic
+                ? 'تعذر تحميل الأنميات ذات الصلة'
+                : 'Could not load related anime',
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+          const SizedBox(height: 10),
+          FilledButton.tonalIcon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
   List<Widget> _buildIndependentDetailSections(
     BuildContext context,
     MultimediaItem item,
@@ -1608,6 +1643,16 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       }
       if (relatedState.isLoading) {
         return _sectionLoadingPlaceholder(context, l10n.relatedAnime);
+      }
+      if (relatedState.hasError) {
+        return _relatedErrorPlaceholder(
+          context,
+          title: l10n.relatedAnime,
+          isArabic: isArabic,
+          onRetry: () {
+            controller.loadRelatedIfNeeded();
+          },
+        );
       }
       return const SizedBox.shrink();
     }

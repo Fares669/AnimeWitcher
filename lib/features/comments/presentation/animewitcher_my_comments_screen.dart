@@ -6,7 +6,10 @@ import 'package:skystream/shared/widgets/apple_liquid_glass.dart';
 import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../../core/account/animewitcher_comment_models.dart';
+import '../../../core/account/animewitcher_sync_ids.dart';
 import '../../../core/account/firestore_rest_client.dart';
+import '../../../core/domain/entity/multimedia_item.dart';
+import '../../details/presentation/details_screen.dart';
 import 'animewitcher_replies_screen.dart';
 
 class AnimeWitcherMyCommentsScreen extends ConsumerStatefulWidget {
@@ -332,6 +335,25 @@ class _AnimeWitcherMyCommentsScreenState
       ),
     );
     if (mounted) await _loadInitial();
+  }
+
+  void _openAnime(AnimeWitcherComment comment) {
+    final animeId = comment.animeId?.trim();
+    if (animeId == null || animeId.isEmpty) return;
+
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => DetailsScreen(
+          item: MultimediaItem(
+            title: animeId,
+            url: AnimeWitcherSyncIds.mainUrl(animeId),
+            posterUrl: '',
+            contentType: MultimediaContentType.anime,
+            provider: animeWitcherNativeProviderId,
+          ),
+        ),
+      ),
+    );
   }
 
   void _replaceComment(AnimeWitcherComment updated) {
@@ -669,7 +691,13 @@ class _AnimeWitcherMyCommentsScreenState
   List<Widget> _commentTags(AnimeWitcherComment comment) {
     final tags = <Widget>[];
     if (comment.animeId?.isNotEmpty == true) {
-      tags.add(_tag(Icons.movie_outlined, comment.animeId!));
+      tags.add(
+        _tag(
+          Icons.movie_outlined,
+          comment.animeId!,
+          onTap: () => _openAnime(comment),
+        ),
+      );
     } else if (comment.characterName?.isNotEmpty == true) {
       tags.add(_tag(Icons.person_search_rounded, comment.characterName!));
     }
@@ -682,27 +710,42 @@ class _AnimeWitcherMyCommentsScreenState
     return tags;
   }
 
-  Widget _tag(IconData icon, String label) {
+  Widget _tag(IconData icon, String label, {VoidCallback? onTap}) {
     final colors = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
+    final radius = BorderRadius.circular(10);
+    return Semantics(
+      button: onTap != null,
+      label: label,
+      child: Material(
         color: colors.primaryContainer,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: colors.onPrimaryContainer),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: colors.onPrimaryContainer,
-              fontWeight: FontWeight.w700,
+        borderRadius: radius,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: radius,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 14, color: colors.onPrimaryContainer),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: colors.onPrimaryContainer,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

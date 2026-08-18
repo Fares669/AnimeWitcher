@@ -15,10 +15,16 @@ class AnimeWitcherAccountConfig {
     'yahoo.com',
   };
 
-  static const String projectId = String.fromEnvironment(
+  static const String _projectIdOverride = String.fromEnvironment(
     'ANIMEWITCHER_FIREBASE_PROJECT_ID',
-    defaultValue: 'animewitcher-1c66d',
   );
+
+  /// GitHub preview workflows always emit the define, even when the matching
+  /// secret is absent. Preserve AnimeWitcher's known public project in that
+  /// empty-override case instead of producing an invalid Firestore URL.
+  static const String projectId = _projectIdOverride == ''
+      ? 'animewitcher-1c66d'
+      : _projectIdOverride;
 
   static const String apiKey = String.fromEnvironment(
     'ANIMEWITCHER_FIREBASE_API_KEY',
@@ -51,6 +57,10 @@ class AnimeWitcherAccountConfig {
   /// Credentials sufficient for the proven Firebase REST endpoints.
   static bool get firebaseConfigured =>
       projectId.trim().isNotEmpty && apiKey.trim().isNotEmpty;
+
+  /// Public Firestore catalog reads only need the Firebase project id. The
+  /// API key is used by Firebase Auth, not as authorization for Firestore.
+  static bool get firestoreConfigured => projectId.trim().isNotEmpty;
 
   static bool get storageConfigured =>
       firebaseConfigured && storageBucket.trim().isNotEmpty;
