@@ -7,6 +7,7 @@ import 'package:skystream/shared/widgets/apple_liquid_glass.dart';
 
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
+import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 import '../../library/presentation/history_provider.dart';
@@ -49,7 +50,7 @@ class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
 
     Widget body;
     if (_initialSyncRunning && history.isEmpty) {
-      body = const Center(child: CircularProgressIndicator());
+      body = const AnimeCatalogShimmer();
     } else if (history.isEmpty) {
       body = RefreshIndicator(
         onRefresh: _refreshFromServer,

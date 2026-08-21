@@ -9,6 +9,7 @@ import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
+import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 
@@ -316,7 +317,7 @@ class _RankingPageState extends State<_RankingPage>
   Widget build(BuildContext context) {
     super.build(context);
     if (_initialLoading && _items.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      return const AnimeCatalogShimmer();
     }
     if (_initialError != null && _items.isEmpty) {
       return _RankingError(
@@ -532,13 +533,7 @@ class _RankingGrid extends StatelessWidget {
         itemBuilder: (context, index) {
           if (index >= items.length) {
             if (loadingMore) {
-              return const Center(
-                child: SizedBox(
-                  width: 26,
-                  height: 26,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-              );
+              return const AnimePosterShimmer();
             }
             return Center(
               child: TextButton.icon(

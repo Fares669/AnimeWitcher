@@ -6,6 +6,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
+import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 
@@ -117,7 +118,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen> {
         future: _bootstrapFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
+            return const AnimeCatalogShimmer();
           }
           if (snapshot.hasError || !snapshot.hasData) {
             return _LoadError(
@@ -577,13 +578,7 @@ class _SeasonGridState extends State<_SeasonGrid>
   Widget build(BuildContext context) {
     super.build(context);
     if (_items.isEmpty && _loading) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: const [
-          SizedBox(height: 180),
-          Center(child: CircularProgressIndicator()),
-        ],
-      );
+      return const AnimeCatalogShimmer();
     }
     if (_items.isEmpty && _error != null) {
       return ListView(
@@ -625,7 +620,7 @@ class _SeasonGridState extends State<_SeasonGrid>
               icon: const Icon(Icons.refresh_rounded),
             );
           }
-          return const Center(child: CircularProgressIndicator());
+          return const AnimePosterShimmer();
         }
         final item = _items[index];
         return MultimediaCard(

@@ -13,7 +13,7 @@ import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/utils/image_fallbacks.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
-import '../../../../shared/widgets/loading_indicator.dart';
+import '../../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 import '../../../search/presentation/search_provider.dart';
 import '../widgets/provider_search_filter_dialog.dart';
@@ -432,11 +432,7 @@ class _HomeSearchSuggestionsState
     final suggestions = searchState.suggestions;
 
     if (isLoading) {
-      return Center(
-        child: AppLoadingIndicator(
-          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
-        ),
-      );
+      return const AnimeCatalogShimmer();
     }
 
     if (suggestions.isEmpty) {
@@ -638,7 +634,7 @@ class _HomeSearchResultsState extends ConsumerState<_HomeSearchResults> {
   @override
   Widget build(BuildContext context) {
     if (_isInitialLoading && _items.isEmpty) {
-      return const Center(child: AppLoadingIndicator());
+      return const AnimeCatalogShimmer();
     }
 
     if (_items.isEmpty && !_hasMore) {
@@ -692,7 +688,7 @@ class _HomeSearchResultsState extends ConsumerState<_HomeSearchResults> {
       itemCount: _items.length + footerCount,
       itemBuilder: (context, index) {
         if (index >= _items.length) {
-          return const Center(child: AppLoadingIndicator());
+          return const AnimePosterShimmer();
         }
 
         final item = _items[index];

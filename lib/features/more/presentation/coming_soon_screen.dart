@@ -6,6 +6,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
+import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 
@@ -145,7 +146,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
 
   Widget _buildBody(bool isArabic) {
     if (_items.isEmpty && _loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const AnimeCatalogShimmer();
     }
     if (_items.isEmpty && _error != null) {
       return _LoadError(
@@ -186,7 +187,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
                 icon: const Icon(Icons.refresh_rounded),
               );
             }
-            return const Center(child: CircularProgressIndicator());
+            return const AnimePosterShimmer();
           }
           final item = _items[index];
           return MultimediaCard(

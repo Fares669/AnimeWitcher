@@ -16,6 +16,7 @@ import 'widgets/search_header_bar.dart';
 import 'widgets/search_sort_dialog.dart';
 import 'widgets/bouncy_entry_animation.dart';
 import '../../../shared/widgets/loading_indicator.dart';
+import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 
 import 'package:skystream/core/utils/localized_text.dart';
@@ -837,12 +838,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Widget _buildLoadingIndicator(BuildContext context) {
-    return Center(
-      child: AppLoadingIndicator(
-        color: Theme.of(context).colorScheme.primary,
-        constraints: BoxConstraints.tight(const Size(32, 32)),
-      ),
-    );
+    return const AnimeCatalogShimmer();
   }
 
   Widget _buildSuggestionsView(
