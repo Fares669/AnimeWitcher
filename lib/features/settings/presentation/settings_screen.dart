@@ -285,32 +285,6 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: LayoutConstants.spacingLg),
             SettingsGroup(
-              title: l10n.downloads,
-              children: [
-                SettingsTile(
-                  icon: Icons.folder_copy_rounded,
-                  title: appText(
-                    context,
-                    english: 'Download settings',
-                    arabic: 'إعدادات التحميل',
-                  ),
-                  subtitle: generalSettings.downloadDirectory ??
-                      appText(
-                        context,
-                        english: 'Queue, segments, and save location',
-                        arabic: 'الطابور، الأجزاء، ومجلد الحفظ',
-                      ),
-                  onTap: () => showDownloadSettingsDialog(
-                    context,
-                    ref,
-                    generalSettings,
-                  ),
-                  isLast: true,
-                ),
-              ],
-            ),
-            const SizedBox(height: LayoutConstants.spacingLg),
-            SettingsGroup(
               title: l10n.appData,
               children: [
                 if (!kIsWeb)

@@ -1,81 +1,24 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/network/link_probe_service.dart';
-import '../../../core/utils/source_text.dart';
 
 Future<StreamResult?> showStreamSourcePicker(
   BuildContext context,
   List<StreamResult> sources, {
   required bool forDownload,
 }) {
+  final isArabic =
+      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+  final rows = _buildSourcePickerRows(sources);
+
   return showModalBottomSheet<StreamResult>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (sheetContext) => _SourcePickerSheet(
-      sources: sources,
-      forDownload: forDownload,
-    ),
-  );
-}
-
-class _SourcePickerSheet extends ConsumerStatefulWidget {
-  final List<StreamResult> sources;
-  final bool forDownload;
-
-  const _SourcePickerSheet({
-    required this.sources,
-    required this.forDownload,
-  });
-
-  @override
-  ConsumerState<_SourcePickerSheet> createState() => _SourcePickerSheetState();
-}
-
-class _SourcePickerSheetState extends ConsumerState<_SourcePickerSheet> {
-  final Map<String, LinkProbeResult> _probes = {};
-  final Set<String> _probing = {};
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _probeVisible());
-  }
-
-  Future<void> _probeVisible() async {
-    final service = ref.read(linkProbeServiceProvider);
-    for (final source in widget.sources) {
-      final url = source.url.trim();
-      if (url.isEmpty || _probes.containsKey(url) || _probing.contains(url)) {
-        continue;
-      }
-      setState(() => _probing.add(url));
-      try {
-        final result = await service.probe(url, headers: source.headers);
-        if (!mounted) return;
-        setState(() {
-          _probes[url] = result;
-          _probing.remove(url);
-        });
-      } catch (_) {
-        if (!mounted) return;
-        setState(() => _probing.remove(url));
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final rows = _buildSourcePickerRows(widget.sources);
-
-    return SafeArea(
+    builder: (sheetContext) => SafeArea(
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.72,
+          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.72,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -102,45 +45,21 @@ class _SourcePickerSheetState extends ConsumerState<_SourcePickerSheet> {
                   }
 
                   final source = row.source!;
-                  final url = source.url.trim();
-                  final probe = _probes[url];
-                  final probing = _probing.contains(url);
-                  final title = cleanSourceText(source.source);
-                  final detail = buildSourceDetail([
-                    probe?.resolutionLabel,
-                    probe?.sizeLabel,
-                    source.quality,
-                  ]);
-
                   return ListTile(
                     contentPadding: const EdgeInsetsDirectional.only(
                       start: 36,
                       end: 20,
                     ),
                     leading: Icon(
-                      widget.forDownload
+                      forDownload
                           ? Icons.file_download_outlined
                           : Icons.play_circle_outline,
                     ),
                     title: Text(
-                      title.isEmpty ? source.source : title,
+                      source.source,
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    subtitle: detail.isEmpty && !probing && probe == null
-                        ? null
-                        : Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (detail.isNotEmpty) Text(detail),
-                              const SizedBox(height: 2),
-                              _ProbeStatus(
-                                probe: probe,
-                                probing: probing,
-                                isArabic: isArabic,
-                              ),
-                            ],
-                          ),
-                    onTap: () => Navigator.of(context).pop(source),
+                    onTap: () => Navigator.of(sheetContext).pop(source),
                   );
                 },
               ),
@@ -148,81 +67,8 @@ class _SourcePickerSheetState extends ConsumerState<_SourcePickerSheet> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _ProbeStatus extends StatelessWidget {
-  final LinkProbeResult? probe;
-  final bool probing;
-  final bool isArabic;
-
-  const _ProbeStatus({
-    required this.probe,
-    required this.probing,
-    required this.isArabic,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
-    if (probing) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 10,
-            height: 10,
-            child: CircularProgressIndicator(
-              strokeWidth: 1.5,
-              color: cs.primary,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            isArabic ? 'جاري الفحص…' : 'Checking…',
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: cs.onSurfaceVariant,
-            ),
-          ),
-        ],
-      );
-    }
-
-    final result = probe;
-    if (result == null) return const SizedBox.shrink();
-
-    if (result.reachable) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.verified_rounded, size: 14, color: Colors.green),
-          const SizedBox(width: 4),
-          Text(
-            isArabic ? 'يعمل' : 'Working',
-            style: theme.textTheme.labelSmall?.copyWith(color: Colors.green),
-          ),
-        ],
-      );
-    }
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.error_outline_rounded, size: 14, color: cs.error),
-        const SizedBox(width: 4),
-        Flexible(
-          child: Text(
-            result.failureReason ??
-                (isArabic ? 'رابط معطل' : 'Dead link'),
-            style: theme.textTheme.labelSmall?.copyWith(color: cs.error),
-          ),
-        ),
-      ],
-    );
-  }
+    ),
+  );
 }
 
 List<_SourcePickerRow> _buildSourcePickerRows(List<StreamResult> sources) {

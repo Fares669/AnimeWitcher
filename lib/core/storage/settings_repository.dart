@@ -37,21 +37,6 @@ class SettingsRepository {
     return _storageService.getDefaultHomeScreen();
   }
 
-  Future<void> setDownloadDirectory(String? path) =>
-      _storageService.setDownloadDirectory(path);
-
-  String? getDownloadDirectory() => _storageService.getDownloadDirectory();
-
-  Future<void> setDownloadConcurrency(int value) =>
-      _storageService.setDownloadConcurrency(value);
-
-  int getDownloadConcurrency() => _storageService.getDownloadConcurrency();
-
-  Future<void> setDownloadChunks(int value) =>
-      _storageService.setDownloadChunks(value);
-
-  int getDownloadChunks() => _storageService.getDownloadChunks();
-
   Future<void> setTaskbarOrder(List<String> order) =>
       _storageService.setTaskbarOrder(order);
 

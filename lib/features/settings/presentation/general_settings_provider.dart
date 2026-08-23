@@ -10,18 +10,12 @@ class GeneralSettings {
   final bool alwaysOnTop;
   final List<String> taskbarOrder;
   final Set<String> hiddenTaskbarItems;
-  final String? downloadDirectory;
-  final int downloadConcurrency;
-  final int downloadChunks;
 
   const GeneralSettings({
     this.defaultHomeScreen = '/home',
     this.alwaysOnTop = false,
     this.taskbarOrder = defaultTaskbarOrderIds,
     this.hiddenTaskbarItems = const <String>{},
-    this.downloadDirectory,
-    this.downloadConcurrency = 3,
-    this.downloadChunks = 1,
   });
 
   GeneralSettings copyWith({
@@ -29,22 +23,12 @@ class GeneralSettings {
     bool? alwaysOnTop,
     List<String>? taskbarOrder,
     Set<String>? hiddenTaskbarItems,
-    String? downloadDirectory,
-    bool clearDownloadDirectory = false,
-    int? downloadConcurrency,
-    int? downloadChunks,
   }) {
     return GeneralSettings(
       defaultHomeScreen: defaultHomeScreen ?? this.defaultHomeScreen,
       alwaysOnTop: alwaysOnTop ?? this.alwaysOnTop,
       taskbarOrder: taskbarOrder ?? this.taskbarOrder,
       hiddenTaskbarItems: hiddenTaskbarItems ?? this.hiddenTaskbarItems,
-      downloadDirectory: clearDownloadDirectory
-          ? null
-          : (downloadDirectory ?? this.downloadDirectory),
-      downloadConcurrency:
-          downloadConcurrency ?? this.downloadConcurrency,
-      downloadChunks: downloadChunks ?? this.downloadChunks,
     );
   }
 }
@@ -70,9 +54,6 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
       alwaysOnTop: repository.isAlwaysOnTop(),
       taskbarOrder: order,
       hiddenTaskbarItems: hidden,
-      downloadDirectory: repository.getDownloadDirectory(),
-      downloadConcurrency: repository.getDownloadConcurrency(),
-      downloadChunks: repository.getDownloadChunks(),
     );
   }
 
@@ -121,26 +102,6 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
     final repository = ref.read(settingsRepositoryProvider);
     await repository.setAlwaysOnTop(enabled);
     state = state.copyWith(alwaysOnTop: enabled);
-  }
-
-  Future<void> setDownloadDirectory(String? path) async {
-    final repository = ref.read(settingsRepositoryProvider);
-    await repository.setDownloadDirectory(path);
-    state = path == null
-        ? state.copyWith(clearDownloadDirectory: true)
-        : state.copyWith(downloadDirectory: path);
-  }
-
-  Future<void> setDownloadConcurrency(int value) async {
-    final repository = ref.read(settingsRepositoryProvider);
-    await repository.setDownloadConcurrency(value);
-    state = state.copyWith(downloadConcurrency: value);
-  }
-
-  Future<void> setDownloadChunks(int value) async {
-    final repository = ref.read(settingsRepositoryProvider);
-    await repository.setDownloadChunks(value);
-    state = state.copyWith(downloadChunks: value);
   }
 
 }

@@ -191,18 +191,4 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   Future<void> resumeDownload(String taskId) async {
     await ref.read(downloadServiceProvider).resumeDownload(taskId);
   }
-
-  Future<void> pauseAll() async {
-    await ref.read(downloadServiceProvider).pauseAllDownloads();
-  }
-
-  Future<void> resumeAll() async {
-    await ref.read(downloadServiceProvider).resumeAllDownloads();
-  }
-
-  Future<void> deleteSelected(Set<String> ids) async {
-    final items = state.value ?? const <DownloadItem>[];
-    final selected = items.where((item) => ids.contains(item.id)).toList();
-    await removeDownloads(selected);
-  }
 }

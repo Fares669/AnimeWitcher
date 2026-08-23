@@ -77,7 +77,7 @@ dependencies:
   path: ^1.9.1
   http: ^1.6.0
   html_unescape: ^2.0.0
-  background_downloader: ^9.5.8
+  background_downloader: ^9.5.4
   flutter_hooks: ^0.21.3+1
   talker_flutter: ^5.1.16
   visibility_detector: ^0.4.0+2
