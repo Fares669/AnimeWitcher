@@ -579,7 +579,10 @@ class _DownloadItemTile extends ConsumerWidget {
     AppLocalizations l10n,
   ) async {
     final downloadService = ref.read(downloadServiceProvider);
-    final File? file = await downloadService.getDownloadedFile(
+    // Prefer the task's recorded path — it is the exact file that was saved,
+    // including quality suffix and OS Unicode form (NFC/NFD).
+    File? file = await downloadService.getDownloadedFileForTask(item.task);
+    file ??= await downloadService.getDownloadedFile(
       item.item,
       episode: item.episode,
     );
@@ -596,16 +599,14 @@ class _DownloadItemTile extends ConsumerWidget {
     }
 
     if (context.mounted) {
-      final episodeUrl = item.episode?.url.trim() ?? '';
-      final playbackIdentityUrl = episodeUrl.isNotEmpty
-          ? episodeUrl
-          : item.item.url;
+      // Pass the absolute file path so playback does not depend on reconstructing
+      // the filename (والأخيرة / quality / Unicode form) a second time.
       unawaited(
         ref
             .read(playbackLauncherProvider)
             .play(
               context,
-              playbackIdentityUrl,
+              file.path,
               baseItem: item.item,
               episode: item.episode,
             ),

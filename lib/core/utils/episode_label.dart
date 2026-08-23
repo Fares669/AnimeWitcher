@@ -187,9 +187,19 @@ String formatEpisodeLabel({
 /// Characters that break or get rewritten on common mobile filesystems.
 final RegExp _illegalDownloadFileChars = RegExp(r'[\\/:*?"<>|]');
 
+/// Compose common Arabic NFD sequences (e.g. ا + ٔ → أ) so filenames match
+/// across iOS (often NFD) and Android/Linux (often NFC).
+String normalizeDownloadText(String value) {
+  return value
+      .replaceAll('\u0627\u0654', '\u0623') // ا + hamza above → أ
+      .replaceAll('\u0648\u0654', '\u0624') // و + hamza above → ؤ
+      .replaceAll('\u064A\u0654', '\u0626') // ي + hamza above → ئ
+      .replaceAll('\u0627\u0655', '\u0625'); // ا + hamza below → إ
+}
+
 /// Sanitize a display label into a stable on-disk filename stem.
 String sanitizeDownloadFileName(String name) {
-  return name
+  return normalizeDownloadText(name)
       .replaceAll(_illegalDownloadFileChars, '_')
       .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
@@ -279,9 +289,10 @@ bool isDownloadedEpisodeFileName(
   const qualitySuffix = r'(?:\s*\(\d{3,4}p\))?$';
 
   if (episode > 0) {
+    // Accept composed أ and decomposed أ inside والأخيرة.
     final pattern = RegExp(
       '^حلقة\\s*$episode'
-      r'(?:\s+(?:والأخيرة|والاخيرة))?'
+      r'(?:\s+(?:والأ|والأ|والا)خيرة)?'
       r'(?:[:_].*?)?'
       '$qualitySuffix',
       caseSensitive: false,

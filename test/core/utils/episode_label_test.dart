@@ -379,6 +379,26 @@ void main() {
         isFalse,
       );
     });
+
+    test('normalizes NFD Arabic hamza so والأخيرة filenames match', () {
+      // iOS often stores أ as ا + combining hamza (NFD).
+      const nfdName =
+          'حلقة 16 والأخيرة_ نتيجة معركة بريستيلا (480p).mp4';
+      expect(
+        isDownloadedEpisodeFileName(nfdName, 16),
+        isTrue,
+      );
+      expect(
+        sanitizeDownloadFileName(
+          'حلقة 16 والأخيرة_ نتيجة معركة بريستيلا (480p)',
+        ),
+        'حلقة 16 والأخيرة_ نتيجة معركة بريستيلا (480p)',
+      );
+      expect(
+        normalizeDownloadText('والأخيرة'),
+        'والأخيرة',
+      );
+    });
   });
 
   group('episodeTitleForStorage', () {

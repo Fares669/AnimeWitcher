@@ -762,39 +762,54 @@ class DownloadService {
       baseName = sanitizedTitle;
     }
 
-    // Check common extensions. Quality is part of the new filename, so an
-    // exact-name lookup is followed by a quality-suffixed prefix lookup.
+    // Prefer directory listing with normalized stems. Exact File(path) checks
+    // fail when the OS stored Arabic as NFD (common on iOS) while we look up
+    // NFC, even though the names look identical.
     final extensions = ['.mp4', '.mkv', '.webm', '.avi'];
-    for (final ext in extensions) {
-      final file = File(p.join(directoryPath, '$baseName$ext'));
-      if (await file.exists() && await file.length() > 0) return file;
-    }
-    if (useEpisodeName) {
-      final prefix = '$baseName (';
-      File? episodeMatch;
-      await for (final entity in directory.list()) {
-        if (entity is! File) continue;
-        final name = p.basename(entity.path);
-        if (!extensions.any(name.toLowerCase().endsWith)) continue;
-        if (await entity.length() <= 0) continue;
-        // Quality suffix is always "({height}p)" — trailing p separates it
-        // from the episode number / standalone name in the base name.
-        if (name.startsWith(prefix) &&
-            RegExp(r'\(\d{3,4}p\)\.[^.]+$', caseSensitive: false)
-                .hasMatch(name)) {
-          return entity;
-        }
-        if (episodeMatch == null &&
-            isDownloadedEpisodeFileName(
-              name,
-              episodeData.episode,
-              title: episodeData.name,
-              serverName: episodeData.serverName,
-            )) {
-          episodeMatch = entity;
-        }
+    File? qualityMatch;
+    File? episodeMatch;
+    await for (final entity in directory.list()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      final lower = name.toLowerCase();
+      if (!extensions.any(lower.endsWith)) continue;
+      if (await entity.length() <= 0) continue;
+
+      final stem = sanitizeDownloadFileName(p.basenameWithoutExtension(name));
+      if (stem == baseName) return entity;
+      if (stem.startsWith('$baseName (') &&
+          RegExp(r'\(\d{3,4}p\)$', caseSensitive: false).hasMatch(stem)) {
+        qualityMatch ??= entity;
+        continue;
       }
-      if (episodeMatch != null) return episodeMatch;
+      if (useEpisodeName &&
+          episodeMatch == null &&
+          isDownloadedEpisodeFileName(
+            name,
+            episodeData.episode,
+            title: episodeData.name,
+            serverName: episodeData.serverName,
+          )) {
+        episodeMatch = entity;
+      }
+    }
+    return qualityMatch ?? episodeMatch;
+  }
+
+  /// Resolve the on-disk file for a completed download task.
+  ///
+  /// Uses the task's own filename/path first so playback does not depend on
+  /// reconstructing labels that may differ by Unicode form or quality suffix.
+  Future<File?> getDownloadedFileForTask(Task task) async {
+    try {
+      final path = await task.filePath();
+      if (path.isEmpty) return null;
+      final file = File(path);
+      if (await file.exists() && await file.length() > 0) return file;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[DownloadService] task.filePath failed: $e');
+      }
     }
     return null;
   }
