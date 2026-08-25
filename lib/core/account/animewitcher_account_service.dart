@@ -1833,7 +1833,7 @@ class AnimeWitcherAccountService {
       final local = localByAnimeId[entry.key];
       if (local == null) {
         final item =
-            _itemFromCompact(remote.document.fields['skystream_item']) ??
+            _itemFromCompact(remote.document.fields['animewitcher_item']) ??
             await _itemForAnimeId(entry.key);
         if (item != null && _isCurrentProfile(profile)) {
           await _storage.addToLibrary(
@@ -1870,7 +1870,7 @@ class AnimeWitcherAccountService {
       }
 
       final remoteItem =
-          _itemFromCompact(remote.document.fields['skystream_item']) ?? local;
+          _itemFromCompact(remote.document.fields['animewitcher_item']) ?? local;
       await _storage.addToLibrary(
         remoteItem,
         category: remote.category?.storageKey,
@@ -1968,7 +1968,7 @@ class AnimeWitcherAccountService {
             'doc_ref': 'anime_list/$animeId',
             'type': _cloudType(category),
             'views': 0,
-            'skystream_item': compact,
+            'animewitcher_item': compact,
           },
           token,
           serverTimestampFields: const <String>{'date'},
@@ -1983,7 +1983,7 @@ class AnimeWitcherAccountService {
           <String, dynamic>{
             'anime_doc_id': 'anime_list/$animeId',
             'views': 0,
-            'skystream_item': compact,
+            'animewitcher_item': compact,
           },
           token,
           serverTimestampFields: const <String>{'date'},
@@ -2588,7 +2588,7 @@ class AnimeWitcherAccountService {
                 'episode_number': episodeNumber ?? 0,
                 'banner': item.bannerUrl ?? '',
                 'provider': item.provider ?? animeWitcherProvider,
-                'skystream_item': _compactItem(item),
+                'animewitcher_item': _compactItem(item),
               },
               token,
               serverTimestampFields: const <String>{'date_updated'},
@@ -2811,7 +2811,7 @@ class AnimeWitcherAccountService {
     required DateTime? remoteDate,
   }) async {
     final item =
-        _itemFromCompact(fields['skystream_item']) ??
+        _itemFromCompact(fields['animewitcher_item']) ??
         await _itemForAnimeId(animeId);
     if (item == null || !_isCurrentProfile(profile)) return;
     final episodeId = _optionalString(fields['episode_id']);
@@ -2909,7 +2909,7 @@ class AnimeWitcherAccountService {
       (token) => _firestore.getDocument('anime_list/$animeId', token),
     );
     if (document == null) return null;
-    final own = _itemFromCompact(document.fields['skystream_item']);
+    final own = _itemFromCompact(document.fields['animewitcher_item']);
     if (own != null) return own;
     final source = document.fields;
     final details = _map(source['details']);
