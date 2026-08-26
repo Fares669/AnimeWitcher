@@ -181,6 +181,14 @@ String _primaryLine({
   );
 }
 
+/// Latest-episodes poster badge: the server episode name, unchanged.
+///
+/// Examples: `الفيلم`, `حلقة 5`, `حلقة 12 والأخيرة`, `مترجم`, `مدبلج`.
+String? latestEpisodesPosterBadge(String? episodeName) {
+  final value = (episodeName ?? '').trim();
+  return value.isEmpty ? null : value;
+}
+
 /// Primary line only — episode rows, poster badges and player headers.
 String formatEpisodePrimaryLabel({
   required int episode,

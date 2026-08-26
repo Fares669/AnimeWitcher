@@ -80,21 +80,17 @@ void main() {
     });
   });
 
-  group('poster badges', () {
-    test('keeps والأخيرة on latest-episodes poster badges', () {
-      expect(
-        formatEpisodePrimaryLabel(
-          episode: 10,
-          isArabic: true,
-          serverName: 'الحلقة 10 والأخيرة',
-        ),
-        'حلقة 10 والأخيرة',
-      );
-      expect(
-        formatEpisodePrimaryLabel(episode: 10, isArabic: true, isFinal: true),
-        'حلقة 10 والأخيرة',
-      );
-      expect(formatEpisodePrimaryLabel(episode: 10, isArabic: true), 'حلقة 10');
+  group('latest-episodes poster badges', () {
+    test('shows the server episode name unchanged', () {
+      expect(latestEpisodesPosterBadge('الفيلم'), 'الفيلم');
+      expect(latestEpisodesPosterBadge('الفلم'), 'الفلم');
+      expect(latestEpisodesPosterBadge('حلقة 5'), 'حلقة 5');
+      expect(latestEpisodesPosterBadge('حلقة 12 والأخيرة'), 'حلقة 12 والأخيرة');
+      expect(latestEpisodesPosterBadge('الحلقة 10 والأخيرة'), 'الحلقة 10 والأخيرة');
+      expect(latestEpisodesPosterBadge('مترجم'), 'مترجم');
+      expect(latestEpisodesPosterBadge('مدبلج'), 'مدبلج');
+      expect(latestEpisodesPosterBadge('  '), isNull);
+      expect(latestEpisodesPosterBadge(null), isNull);
     });
   });
 
