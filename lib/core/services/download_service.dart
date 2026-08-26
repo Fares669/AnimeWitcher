@@ -887,6 +887,7 @@ class DownloadService {
             episodeData.episode,
             title: episodeData.name,
             serverName: episodeData.serverName,
+            isFinal: episodeData.isFinal,
           )) {
         episodeMatch = entity;
       }

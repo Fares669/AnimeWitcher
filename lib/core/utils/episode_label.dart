@@ -119,11 +119,10 @@ class EpisodeLabel {
 
 /// The single place that decides how an episode is named.
 ///
-/// AnimeWitcher's `name` field ([serverName]) owns the primary line: catalog
-/// labels such as `مترجم` or `الحلقة الخاصة` are shown exactly as written, while
-/// placeholders like `الحلقة 12` are rebuilt as "حلقة 12" from the number they
-/// carry. [title] only ever contributes a creative title. Every display,
-/// download-name and history helper below is a view on this result.
+/// AnimeWitcher's `name` field ([serverName]) owns the primary line and is
+/// shown exactly as the server sent it (`الفيلم`, `حلقة 5`, `الحلقة 12
+/// والأخيرة`, `مترجم`, …). [title] only ever contributes a creative title.
+/// A number is turned into "حلقة N" only when the server sent no name.
 EpisodeLabel resolveEpisodeLabel({
   required int episode,
   required bool isArabic,
@@ -161,21 +160,10 @@ String _primaryLine({
   required String catalogLabel,
   required bool isFinal,
 }) {
-  if (catalogLabel.isNotEmpty && !isGenericEpisodeTitle(catalogLabel)) {
-    return catalogLabel;
-  }
-
-  var number = episode;
-  if (number <= 0 && catalogLabel.isNotEmpty) {
-    final match = RegExp(
-      r'\d+',
-    ).firstMatch(_normalizeEpisodeDigits(catalogLabel));
-    number = match == null ? 0 : (int.tryParse(match.group(0)!) ?? 0);
-  }
-  if (number <= 0) return catalogLabel;
-
+  if (catalogLabel.isNotEmpty) return catalogLabel;
+  if (episode <= 0) return '';
   return formatEpisodeNumberLabel(
-    episode: number,
+    episode: episode,
     isArabic: isArabic,
     isFinal: isFinal,
   );
@@ -316,52 +304,33 @@ bool usesEpisodeDownloadFileName({
 
 /// True when [fileName] is a downloaded file for this episode identity.
 ///
-/// Numbered episodes:
-/// `حلقة {n}[ والأخيرة][_|: title][ ({height}p)].ext`
-///
-/// Numberless rows (specials / movies / مترجم / مدبلج):
-/// `{name}[_ title][ ({height}p)].ext`
-///
-/// Quality is always `(\d{3,4}p)` — the trailing `p` separates it from numbers.
+/// The stem must be the server name as written (`الفيلم`, `حلقة 5`,
+/// `الحلقة 12 والأخيرة`, `مترجم`, …), plus an optional creative title and
+/// `({height}p)` quality suffix. There is no rewritten-name fallback.
 bool isDownloadedEpisodeFileName(
   String fileName,
   int episode, {
   String? title,
   String? serverName,
+  bool isFinal = false,
 }) {
   final stem = sanitizeDownloadFileName(
     fileName.contains('.')
         ? fileName.substring(0, fileName.lastIndexOf('.'))
         : fileName,
   );
-  const qualitySuffix = r'(?:\s*\(\d{3,4}p\))?$';
-
-  if (episode > 0) {
-    // Accept composed أ and decomposed أ inside والأخيرة.
-    final pattern = RegExp(
-      '^حلقة\\s*$episode'
-      r'(?:\s+(?:والأ|والأ|والا)خيرة)?'
-      r'(?:[:_].*?)?'
-      '$qualitySuffix',
-      caseSensitive: false,
-    );
-    return pattern.hasMatch(stem);
-  }
-
   final label = sanitizeDownloadFileName(
-    resolveEpisodeLabel(
-      episode: 0,
-      isArabic: true,
+    formatEpisodeFileName(
+      episode: episode,
       title: title,
+      isFinal: isFinal,
       serverName: serverName,
-    ).full,
+    ),
   );
   if (label.isEmpty) return false;
-
-  return RegExp(
-    '^${RegExp.escape(label)}$qualitySuffix',
-    caseSensitive: false,
-  ).hasMatch(stem);
+  if (stem.toLowerCase() == label.toLowerCase()) return true;
+  return stem.toLowerCase().startsWith('${label.toLowerCase()} (') &&
+      RegExp(r'\(\d{3,4}p\)$', caseSensitive: false).hasMatch(stem);
 }
 
 /// Title persisted in watch history / sync. Keeps a final-episode marker when
