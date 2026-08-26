@@ -18,6 +18,8 @@ import '../../../core/providers/anime_data_source_settings_provider.dart';
 import '../../../core/services/anizip_service.dart';
 import 'downloaded_file_provider.dart';
 import 'details_item_merge.dart';
+import '../../../core/network/next_airing_timeout.dart';
+import '../../../core/utils/app_utils.dart';
 
 part 'details_controller.g.dart';
 
@@ -112,6 +114,11 @@ class DetailsState {
       nextAiringResolved: nextAiringResolved ?? this.nextAiringResolved,
     );
   }
+
+  /// The details shell (including downloaded playback) must not wait for
+  /// [nextAiringResolved]. That fetch is optional countdown UI and can hang
+  /// while the device is offline.
+  bool get isShellReady => basicDetailsResolved;
 }
 
 @riverpod
@@ -728,7 +735,7 @@ class DetailsController extends _$DetailsController {
     int generation,
   ) async {
     try {
-      final value = await provider.getNextAiring(url);
+      final value = await awaitWithTimeout(provider.getNextAiring(url));
       if (!ref.mounted || generation != _loadGeneration || value == null) {
         return;
       }
@@ -1040,18 +1047,45 @@ class DetailsController extends _$DetailsController {
     return normalizedEpisodesChanged ? normalizedEpisodes : episodes;
   }
 
+  Future<bool> _canPlayDownloadedWithoutCatalog({
+    required MultimediaItem details,
+    Episode? specificEpisode,
+    String? overrideUrl,
+  }) async {
+    if (overrideUrl != null && AppUtils.isLocalFile(overrideUrl)) {
+      return true;
+    }
+    final episode = specificEpisode ?? state.targetEpisode;
+    final file = await ref.read(downloadServiceProvider).getDownloadedFile(
+      details,
+      episode: episode,
+    );
+    return file != null;
+  }
+
   Future<void> handlePlayPress(
     BuildContext context,
     MultimediaItem details, {
     Episode? specificEpisode,
     String? overrideUrl,
   }) async {
-    if (!_episodesRequested) {
-      await loadEpisodesOnDemand();
-      if (!ref.mounted) return;
-    } else if (state.episodes.isLoading && _episodesLoadFuture != null) {
-      await _episodesLoadFuture;
-      if (!ref.mounted) return;
+    final playLocalWithoutCatalog = await _canPlayDownloadedWithoutCatalog(
+      details: details,
+      specificEpisode: specificEpisode,
+      overrideUrl: overrideUrl,
+    );
+    if (!ref.mounted) return;
+
+    // Downloaded files are already playable. Do not wait for the episode
+    // catalog (or next-airing) round trip while the device is offline.
+    if (!playLocalWithoutCatalog) {
+      if (!_episodesRequested) {
+        await loadEpisodesOnDemand();
+        if (!ref.mounted) return;
+      } else if (state.episodes.isLoading && _episodesLoadFuture != null) {
+        await _episodesLoadFuture;
+        if (!ref.mounted) return;
+      }
     }
 
     details = state.details.asData?.value ?? details;

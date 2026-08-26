@@ -6,6 +6,7 @@ import 'package:html_unescape/html_unescape.dart';
 
 import '../../domain/entity/multimedia_item.dart';
 import '../../network/bounded_batch_scheduler.dart';
+import '../../network/next_airing_timeout.dart';
 import '../../storage/settings_repository.dart';
 import '../../utils/episode_label.dart';
 import '../../utils/safe_uri.dart';
@@ -2702,7 +2703,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
   @override
   Future<NextAiring?> getNextAiring(String url) async {
-    final source = await _detailSource(url);
+    final source = await awaitWithTimeout(_detailSource(url));
+    if (source == null || source.isEmpty) return null;
     if (_statusFromHit(source) == ShowStatus.completed) return null;
     final unixTime = _nextEpisodeTimestamp(source);
     if (unixTime <= 0) return null;

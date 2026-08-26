@@ -927,9 +927,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       detailsControllerProvider(widget.item.url).select((s) => s.item),
     );
     final initialPageReady = ref.watch(
-      detailsControllerProvider(
-        widget.item.url,
-      ).select((s) => s.basicDetailsResolved && s.nextAiringResolved),
+      detailsControllerProvider(widget.item.url).select((s) => s.isShellReady),
     );
     // Movies and one-episode anime share the exact same mobile layout, so
     // iPhone/iPad-small pages must not rebuild just because isMovie resolves.
