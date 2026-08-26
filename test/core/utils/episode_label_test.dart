@@ -86,7 +86,10 @@ void main() {
       expect(latestEpisodesPosterBadge('الفلم'), 'الفلم');
       expect(latestEpisodesPosterBadge('حلقة 5'), 'حلقة 5');
       expect(latestEpisodesPosterBadge('حلقة 12 والأخيرة'), 'حلقة 12 والأخيرة');
-      expect(latestEpisodesPosterBadge('الحلقة 10 والأخيرة'), 'الحلقة 10 والأخيرة');
+      expect(
+        latestEpisodesPosterBadge('الحلقة 10 والأخيرة'),
+        'الحلقة 10 والأخيرة',
+      );
       expect(latestEpisodesPosterBadge('مترجم'), 'مترجم');
       expect(latestEpisodesPosterBadge('مدبلج'), 'مدبلج');
       expect(latestEpisodesPosterBadge('  '), isNull);
@@ -306,7 +309,11 @@ void main() {
         isTrue,
       );
       expect(
-        isDownloadedEpisodeFileName('حلقة 5 (1080p).mp4', 5, serverName: 'حلقة 5'),
+        isDownloadedEpisodeFileName(
+          'حلقة 5 (1080p).mp4',
+          5,
+          serverName: 'حلقة 5',
+        ),
         isTrue,
       );
       expect(
@@ -356,7 +363,11 @@ void main() {
         isFalse,
       );
       expect(
-        isDownloadedEpisodeFileName('الحلقة 1.mp4', 12, serverName: 'الحلقة 12'),
+        isDownloadedEpisodeFileName(
+          'الحلقة 1.mp4',
+          12,
+          serverName: 'الحلقة 12',
+        ),
         isFalse,
       );
       expect(
