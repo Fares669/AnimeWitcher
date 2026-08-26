@@ -369,11 +369,13 @@ void main() {
       );
 
       // Trailing p marks quality — never treated as the episode number.
+      expect(isDownloadedEpisodeFileName('حلقة 12 (720p).mp4', 720), isFalse);
+      expect(isDownloadedEpisodeFileName('حلقة 12 (1080p).mp4', 1080), isFalse);
       expect(
         isDownloadedEpisodeFileName(
           'الحلقة 12 (720p).mp4',
           720,
-          serverName: 'الحلقة 12',
+          serverName: 'الحلقة 720',
         ),
         isFalse,
       );
@@ -381,7 +383,7 @@ void main() {
         isDownloadedEpisodeFileName(
           'الحلقة 12 (1080p).mp4',
           1080,
-          serverName: 'الحلقة 12',
+          serverName: 'الحلقة 1080',
         ),
         isFalse,
       );
