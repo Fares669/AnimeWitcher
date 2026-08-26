@@ -415,9 +415,21 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
   int _generation = 0;
   String _query = '';
   ProviderSearchFilters _filters = const ProviderSearchFilters();
+  CancelToken? _activePageToken;
+
+  void _cancelActivePageRequest(String reason) {
+    final token = _activePageToken;
+    _activePageToken = null;
+    if (token != null && !token.isCancelled) {
+      token.cancel(reason);
+    }
+  }
 
   @override
   SearchAggregateState build() {
+    ref.onDispose(() {
+      _cancelActivePageRequest('Paged search disposed');
+    });
     ref.listen(searchQueryProvider, (_, next) {
       _query = next;
       _reload();
@@ -450,6 +462,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
   Future<ProviderMediaPage> _loadPage(
     AnimeWitcherProvider provider,
     int offset,
+    CancelToken cancelToken,
   ) {
     final pageSize = provider.searchPageSize;
     // The unified Search page owns its own catalog. Do not route an empty
@@ -461,11 +474,13 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       _filters,
       offset: offset,
       limit: pageSize,
+      cancelToken: cancelToken,
     );
   }
 
   Future<void> _reload() async {
     final generation = ++_generation;
+    _cancelActivePageRequest('Search query or filters changed');
     // Keep the current cards visible while the next query is loading.
     // This prevents a fast scroll or slow connection from exposing a blank
     // skeleton-to-black transition.
@@ -483,8 +498,12 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       return;
     }
 
+    final token = CancelToken();
+    _activePageToken = token;
+
     try {
-      final page = await _loadPage(provider, 0);
+      final page = await _loadPage(provider, 0, token);
+      if (token.isCancelled) return;
       if (generation != _generation) return;
       state = SearchAggregateState(
         results: page.items.isEmpty
@@ -501,6 +520,9 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         nextOffset: page.nextOffset,
       );
     } catch (e) {
+      if (token.isCancelled || (e is DioException && e.type == DioExceptionType.cancel)) {
+        return;
+      }
       debugPrint('[SEARCH PAGE] initial load failed: $e');
       if (generation == _generation) {
         // Keep the last rendered cards on transient network failures.
@@ -510,6 +532,10 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
           hasMore: false,
         );
       }
+    } finally {
+      if (identical(_activePageToken, token)) {
+        _activePageToken = null;
+      }
     }
   }
 
@@ -518,10 +544,14 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     final provider = _provider();
     if (provider == null) return;
     final generation = _generation;
+    _cancelActivePageRequest('A newer search page was requested');
+    final token = CancelToken();
+    _activePageToken = token;
     state = state.copyWith(isLoadingMore: true);
 
     try {
-      final page = await _loadPage(provider, state.nextOffset);
+      final page = await _loadPage(provider, state.nextOffset, token);
+      if (token.isCancelled) return;
       if (generation != _generation) return;
       final current = state.results.isEmpty
           ? const <MultimediaItem>[]
@@ -550,9 +580,16 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         nextOffset: page.nextOffset,
       );
     } catch (e) {
+      if (token.isCancelled || (e is DioException && e.type == DioExceptionType.cancel)) {
+        return;
+      }
       debugPrint('[SEARCH PAGE] load more failed: $e');
       if (generation == _generation) {
         state = state.copyWith(isLoadingMore: false);
+      }
+    } finally {
+      if (identical(_activePageToken, token)) {
+        _activePageToken = null;
       }
     }
   }
@@ -615,17 +652,29 @@ class SearchSuggestionState {
 @riverpod
 class SearchSuggestionController extends _$SearchSuggestionController {
   Timer? _debounce;
+  CancelToken? _activeRequestToken;
+
+  void _cancelActiveRequest(String reason) {
+    final token = _activeRequestToken;
+    _activeRequestToken = null;
+    if (token != null && !token.isCancelled) {
+      token.cancel(reason);
+    }
+  }
 
   @override
   SearchSuggestionState build() {
     ref.onDispose(() {
       _debounce?.cancel();
+      _cancelActiveRequest('Search suggestions disposed');
     });
     return const SearchSuggestionState();
   }
 
   void onQueryChanged(String query) {
     if (query == state.query) return;
+
+    _cancelActiveRequest('Suggestion query changed');
 
     final trimmed = query.trim();
     if (trimmed.length < 2) {
@@ -642,12 +691,15 @@ class SearchSuggestionController extends _$SearchSuggestionController {
 
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 350), () async {
+      final token = CancelToken();
+      _activeRequestToken = token;
       try {
         final manager = ref.read(extensionManagerProvider.notifier);
         final providers = manager.getAllProviders();
         final results = providers.isEmpty
             ? const <MultimediaItem>[]
-            : await providers.first.search(query);
+            : await providers.first.search(query, cancelToken: token);
+        if (token.isCancelled) return;
         final suggestions = results
             .map((item) => item.title.trim())
             .where((title) => title.isNotEmpty)
@@ -657,9 +709,17 @@ class SearchSuggestionController extends _$SearchSuggestionController {
         if (state.query == query) {
           state = state.copyWith(suggestions: suggestions, isLoading: false);
         }
-      } catch (_) {
+      } catch (error) {
+        if (token.isCancelled ||
+            (error is DioException && error.type == DioExceptionType.cancel)) {
+          return;
+        }
         if (state.query == query) {
           state = state.copyWith(suggestions: const [], isLoading: false);
+        }
+      } finally {
+        if (identical(_activeRequestToken, token)) {
+          _activeRequestToken = null;
         }
       }
     });
@@ -667,6 +727,7 @@ class SearchSuggestionController extends _$SearchSuggestionController {
 
   void clear() {
     _debounce?.cancel();
+    _cancelActiveRequest('Search suggestions cleared');
     state = const SearchSuggestionState();
   }
 }

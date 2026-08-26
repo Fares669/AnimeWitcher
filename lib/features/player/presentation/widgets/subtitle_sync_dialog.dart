@@ -148,6 +148,8 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
   String? _errorMessage;
 
   int _offsetMs = 0;
+  CancelToken? _subtitleDownloadToken;
+  static const Duration _subtitleDownloadTimeout = Duration(seconds: 15);
   late final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
@@ -320,12 +322,13 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
     );
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadSubtitles();
+      if (mounted) _loadSubtitles();
     });
   }
 
   @override
   void dispose() {
+    _subtitleDownloadToken?.cancel('Subtitle sync dialog disposed');
     _inputController.dispose();
     _scrollController.dispose();
     _timeNotifier.dispose();
@@ -374,6 +377,7 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
   Future<void> _loadSubtitles() async {
     final subtitleUrl = _getSubtitleUrl();
     if (subtitleUrl == null) {
+      if (!mounted) return;
       setState(() {
         _cues = [];
         _errorMessage = appText(
@@ -384,6 +388,9 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
       });
       return;
     }
+    _subtitleDownloadToken?.cancel('Subtitle source changed');
+    final token = CancelToken();
+    _subtitleDownloadToken = token;
 
     setState(() {
       _loadingCues = true;
@@ -396,8 +403,14 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
           subtitleUrl.startsWith('https://')) {
         final response = await Dio().get<List<int>>(
           subtitleUrl,
-          options: Options(responseType: ResponseType.bytes),
+          cancelToken: token,
+          options: Options(
+            responseType: ResponseType.bytes,
+            receiveTimeout: _subtitleDownloadTimeout,
+            sendTimeout: _subtitleDownloadTimeout,
+          ),
         );
+        if (token.isCancelled || !mounted) return;
         final bytes = response.data ?? [];
         try {
           content = utf8.decode(bytes);
@@ -423,6 +436,7 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
       }
 
       final parsed = parseSubtitle(content);
+      if (token.isCancelled || !mounted) return;
       setState(() {
         _cues = parsed;
         _loadingCues = false;
@@ -436,10 +450,15 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
       );
       _scrollToPosition(firstSubtitleIndex);
     } catch (e) {
+      if (token.isCancelled || !mounted) return;
       setState(() {
         _loadingCues = false;
         _errorMessage = 'تعذر تحميل نصوص الترجمة: $e';
       });
+    } finally {
+      if (identical(_subtitleDownloadToken, token)) {
+        _subtitleDownloadToken = null;
+      }
     }
   }
 
