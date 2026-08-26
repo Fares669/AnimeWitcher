@@ -383,6 +383,10 @@ class PlayerController extends Notifier<PlayerState> {
   // Track last saved position for threshold-based saving.
   Duration _lastSavedPosition = Duration.zero;
   static const double _saveThresholdPercent = 0.05; // 5% of video
+  // These requests bypass the provider-level Dio client. Bound their total
+  // wait time so a stalled playlist or ClearKey server cannot hold playback
+  // preparation indefinitely.
+  static const Duration _auxiliaryHttpTimeout = Duration(seconds: 12);
 
   // Keep the last valid local/native engine timeline. Some engines clear
   // position/duration just before a file is closed; using these values prevents
@@ -3795,7 +3799,9 @@ class PlayerController extends Notifier<PlayerState> {
     // (set to 2 s for HLS below); worst case N tracks × 2 s = manageable startup.
 
     try {
-      final response = await http.get(Uri.parse(masterUrl), headers: headers);
+      final response = await http
+          .get(Uri.parse(masterUrl), headers: headers)
+          .timeout(_auxiliaryHttpTimeout);
       if (response.statusCode < 200 || response.statusCode >= 300) return null;
 
       final baseUri = Uri.parse(masterUrl);
@@ -3910,7 +3916,9 @@ class PlayerController extends Notifier<PlayerState> {
       if (kDebugMode) {
         debugPrint('[DRM] Fetching ClearKey license from $licenseUrl');
       }
-      final response = await http.get(Uri.parse(licenseUrl), headers: headers);
+      final response = await http
+          .get(Uri.parse(licenseUrl), headers: headers)
+          .timeout(_auxiliaryHttpTimeout);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         if (kDebugMode) {
