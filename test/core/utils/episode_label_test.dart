@@ -95,7 +95,7 @@ void main() {
   });
 
   group('formatEpisodePrimaryLabel', () {
-    test('builds Arabic number and final suffix from generic server names', () {
+    test('shows the server episode name unchanged', () {
       expect(
         formatEpisodePrimaryLabel(
           episode: 12,
@@ -103,7 +103,7 @@ void main() {
           serverName: 'الحلقة 12 والأخيرة',
           isFinal: true,
         ),
-        'حلقة 12 والأخيرة',
+        'الحلقة 12 والأخيرة',
       );
       expect(
         formatEpisodePrimaryLabel(
@@ -111,7 +111,23 @@ void main() {
           isArabic: true,
           serverName: 'الحلقة 11',
         ),
-        'حلقة 11',
+        'الحلقة 11',
+      );
+      expect(
+        formatEpisodePrimaryLabel(
+          episode: 1,
+          isArabic: true,
+          serverName: 'الفيلم',
+        ),
+        'الفيلم',
+      );
+      expect(
+        formatEpisodePrimaryLabel(
+          episode: 5,
+          isArabic: true,
+          serverName: 'حلقة 5',
+        ),
+        'حلقة 5',
       );
     });
 
@@ -153,7 +169,7 @@ void main() {
     test('omits generic title', () {
       expect(
         formatEpisodeLabel(episode: 2, isArabic: true, title: 'الحلقة 2'),
-        'حلقة 2',
+        'الحلقة 2',
       );
       expect(
         formatEpisodeLabel(
@@ -162,7 +178,7 @@ void main() {
           title: 'الحلقة 12 والأخيرة',
           serverName: 'الحلقة 12 والأخيرة',
         ),
-        'حلقة 12 والأخيرة',
+        'الحلقة 12 والأخيرة',
       );
     });
 
@@ -228,7 +244,7 @@ void main() {
             serverName: 'الحلقة 12 والأخيرة',
             isFinal: true,
           ),
-          'حلقة 12 والأخيرة',
+          'الحلقة 12 والأخيرة',
         );
         expect(
           formatEpisodeFileName(
@@ -238,7 +254,7 @@ void main() {
             isFinal: true,
             quality: '720',
           ),
-          'حلقة 12 والأخيرة (720p)',
+          'الحلقة 12 والأخيرة (720p)',
         );
         expect(
           formatEpisodeFileName(episode: 12, isFinal: true),
@@ -248,7 +264,7 @@ void main() {
         // isFinal/serverName were not passed through.
         expect(
           formatEpisodeFileName(episode: 12, title: 'الحلقة 12 والأخيرة'),
-          'حلقة 12 والأخيرة',
+          'الحلقة 12 والأخيرة',
         );
         expect(
           sanitizeDownloadFileName(
@@ -264,38 +280,127 @@ void main() {
       },
     );
 
-    test('isDownloadedEpisodeFileName matches final and quality variants', () {
-      expect(isDownloadedEpisodeFileName('حلقة 12.mp4', 12), isTrue);
-      expect(isDownloadedEpisodeFileName('حلقة 12 والأخيرة.mp4', 12), isTrue);
+    test('isDownloadedEpisodeFileName matches the server name as-is', () {
       expect(
-        isDownloadedEpisodeFileName('حلقة 12 والأخيرة (720p).mkv', 12),
-        isTrue,
-      );
-      expect(isDownloadedEpisodeFileName('حلقة 12 (1080p).mp4', 12), isTrue);
-      expect(
-        isDownloadedEpisodeFileName('حلقة 12 والأخيرة_ نهاية الرحلة.mp4', 12),
+        isDownloadedEpisodeFileName(
+          'الحلقة 12.mp4',
+          12,
+          serverName: 'الحلقة 12',
+        ),
         isTrue,
       );
       expect(
         isDownloadedEpisodeFileName(
-          'حلقة 12 والأخيرة_ نهاية الرحلة (720p).mp4',
+          'الحلقة 12 والأخيرة.mp4',
           12,
+          serverName: 'الحلقة 12 والأخيرة',
+        ),
+        isTrue,
+      );
+      expect(
+        isDownloadedEpisodeFileName(
+          'الحلقة 12 والأخيرة (720p).mkv',
+          12,
+          serverName: 'الحلقة 12 والأخيرة',
+        ),
+        isTrue,
+      );
+      expect(
+        isDownloadedEpisodeFileName('حلقة 5 (1080p).mp4', 5, serverName: 'حلقة 5'),
+        isTrue,
+      );
+      expect(
+        isDownloadedEpisodeFileName('الفيلم.mp4', 1, serverName: 'الفيلم'),
+        isTrue,
+      );
+      expect(
+        isDownloadedEpisodeFileName(
+          'الحلقة 12 والأخيرة_ نهاية الرحلة.mp4',
+          12,
+          serverName: 'الحلقة 12 والأخيرة',
+          title: 'نهاية الرحلة',
+        ),
+        isTrue,
+      );
+      expect(
+        isDownloadedEpisodeFileName(
+          'الحلقة 12 والأخيرة_ نهاية الرحلة (720p).mp4',
+          12,
+          serverName: 'الحلقة 12 والأخيرة',
+          title: 'نهاية الرحلة',
         ),
         isTrue,
       );
 
-      // Episode boundary: 12 must not match 120 / 1 / 2.
-      expect(isDownloadedEpisodeFileName('حلقة 120.mp4', 12), isFalse);
-      expect(isDownloadedEpisodeFileName('حلقة 1.mp4', 12), isFalse);
-      expect(isDownloadedEpisodeFileName('حلقة 11 والأخيرة.mp4', 12), isFalse);
+      // No rewritten-name fallback: الحلقة ≠ حلقة, and الفيلم ≠ حلقة 1.
+      expect(
+        isDownloadedEpisodeFileName('حلقة 12.mp4', 12, serverName: 'الحلقة 12'),
+        isFalse,
+      );
+      expect(
+        isDownloadedEpisodeFileName('الحلقة 12.mp4', 12, serverName: 'حلقة 12'),
+        isFalse,
+      );
+      expect(
+        isDownloadedEpisodeFileName('حلقة 1.mp4', 1, serverName: 'الفيلم'),
+        isFalse,
+      );
+
+      // Episode boundary: الحلقة 12 must not match 120 / 1 / 11.
+      expect(
+        isDownloadedEpisodeFileName(
+          'الحلقة 120.mp4',
+          12,
+          serverName: 'الحلقة 12',
+        ),
+        isFalse,
+      );
+      expect(
+        isDownloadedEpisodeFileName('الحلقة 1.mp4', 12, serverName: 'الحلقة 12'),
+        isFalse,
+      );
+      expect(
+        isDownloadedEpisodeFileName(
+          'الحلقة 11 والأخيرة.mp4',
+          12,
+          serverName: 'الحلقة 12 والأخيرة',
+        ),
+        isFalse,
+      );
 
       // Trailing p marks quality — never treated as the episode number.
-      expect(isDownloadedEpisodeFileName('حلقة 12 (720p).mp4', 720), isFalse);
-      expect(isDownloadedEpisodeFileName('حلقة 12 (1080p).mp4', 1080), isFalse);
-      expect(isDownloadedEpisodeFileName('حلقة 12 (720p).mp4', 7), isFalse);
-      expect(isDownloadedEpisodeFileName('حلقة 12 (720p).mp4', 20), isFalse);
+      expect(
+        isDownloadedEpisodeFileName(
+          'الحلقة 12 (720p).mp4',
+          720,
+          serverName: 'الحلقة 12',
+        ),
+        isFalse,
+      );
+      expect(
+        isDownloadedEpisodeFileName(
+          'الحلقة 12 (1080p).mp4',
+          1080,
+          serverName: 'الحلقة 12',
+        ),
+        isFalse,
+      );
       // Bare parentheses without trailing p are not a quality marker.
-      expect(isDownloadedEpisodeFileName('حلقة 12 (1080).mp4', 12), isFalse);
+      expect(
+        isDownloadedEpisodeFileName(
+          'الحلقة 12 (1080).mp4',
+          12,
+          serverName: 'الحلقة 12',
+        ),
+        isFalse,
+      );
+    });
+
+    test('without a server name only the exact synthesized file matches', () {
+      expect(isDownloadedEpisodeFileName('حلقة 12.mp4', 12), isTrue);
+      expect(isDownloadedEpisodeFileName('حلقة 12 (1080p).mp4', 12), isTrue);
+      expect(isDownloadedEpisodeFileName('حلقة 12 والأخيرة.mp4', 12), isFalse);
+      expect(isDownloadedEpisodeFileName('الحلقة 12.mp4', 12), isFalse);
     });
 
     test('names numberless specials after their own label', () {
@@ -433,7 +538,15 @@ void main() {
     test('normalizes NFD Arabic hamza so والأخيرة filenames match', () {
       // iOS often stores أ as ا + combining hamza (NFD).
       const nfdName = 'حلقة 16 والأخيرة_ نتيجة معركة بريستيلا (480p).mp4';
-      expect(isDownloadedEpisodeFileName(nfdName, 16), isTrue);
+      expect(
+        isDownloadedEpisodeFileName(
+          nfdName,
+          16,
+          serverName: 'حلقة 16 والأخيرة',
+          title: 'نتيجة معركة بريستيلا',
+        ),
+        isTrue,
+      );
       expect(
         sanitizeDownloadFileName(
           'حلقة 16 والأخيرة_ نتيجة معركة بريستيلا (480p)',
@@ -471,9 +584,9 @@ void main() {
         title: 'نهاية الرحلة',
         serverName: 'الحلقة 12 والأخيرة',
       );
-      expect(label.primary, 'حلقة 12 والأخيرة');
+      expect(label.primary, 'الحلقة 12 والأخيرة');
       expect(label.secondary, 'نهاية الرحلة');
-      expect(label.full, 'حلقة 12 والأخيرة: نهاية الرحلة');
+      expect(label.full, 'الحلقة 12 والأخيرة: نهاية الرحلة');
       expect(label.isEmpty, isFalse);
     });
 
@@ -485,7 +598,7 @@ void main() {
           serverName: 'الحلقة 12 والأخيرة',
           isFinal: true,
         ),
-        'حلقة 12 والأخيرة',
+        'الحلقة 12 والأخيرة',
       );
       expect(
         formatEpisodeLabel(episode: 5, isArabic: true, title: 'رفقاء جدد'),
@@ -524,7 +637,7 @@ void main() {
           isFinal: true,
           serverName: 'الحلقة 12 والأخيرة',
         ),
-        'حلقة 12 والأخيرة',
+        'الحلقة 12 والأخيرة',
       );
       expect(episodeTitleForStorage(episode: 1, serverName: 'مترجم'), 'مترجم');
       expect(episodeTitleForStorage(episode: 11, title: 'الحلقة 11'), '');
@@ -574,7 +687,7 @@ void main() {
           isFinal: enriched.single.isFinal,
           serverName: enriched.single.serverName,
         ),
-        'حلقة 12 والأخيرة',
+        'الحلقة 12 والأخيرة',
       );
     });
   });
@@ -624,7 +737,7 @@ void main() {
           episodeTitle: 'تتطور الزنزانة',
           episodeServerName: 'الحلقة 12 والأخيرة',
         ),
-        'حلقة 12 والأخيرة',
+        'الحلقة 12 والأخيرة',
       );
       expect(
         continueWatchingSecondaryTitle(
