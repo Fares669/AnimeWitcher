@@ -26,7 +26,8 @@ import '../../../../core/storage/episode_watch_repository.dart';
 import '../../library/presentation/history_provider.dart';
 import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/utils/app_utils.dart';
-import '../../../../core/utils/episode_label.dart';
+import '../../../core/utils/episode_label.dart';
+import 'episode_navigation.dart';
 import '../../../../core/utils/image_fallbacks.dart';
 import '../../../../core/utils/stream_response_validator.dart';
 import '../../settings/presentation/player_settings_provider.dart';
@@ -662,21 +663,21 @@ class PlayerController extends Notifier<PlayerState> {
   Episode? get currentEpisode => _episode ?? _resolveCurrentEpisode();
 
   Episode? get nextEpisode {
-    if (!isSeries) return null;
-    final currentEp = currentEpisode;
-    var episodes = _item.episodes;
-    if (currentEp != null && currentEp.dubStatus != DubStatus.none) {
-      episodes = episodes
-          ?.where((e) => e.dubStatus == currentEp.dubStatus)
-          .toList();
-    }
-    if (episodes == null || episodes.isEmpty) return null;
+    return _adjacentEpisode(1);
+  }
 
-    final currentIndex = currentEp != null
-        ? episodes.indexWhere((e) => e.url == currentEp.url)
-        : episodes.indexWhere((e) => e.url == _videoUrl);
-    if (currentIndex < 0 || currentIndex >= episodes.length - 1) return null;
-    return episodes[currentIndex + 1];
+  Episode? get previousEpisode {
+    return _adjacentEpisode(-1);
+  }
+
+  Episode? _adjacentEpisode(int offset) {
+    if (!isSeries) return null;
+    return adjacentEpisode(
+      episodes: _item.episodes,
+      currentEpisode: currentEpisode,
+      currentEpisodeUrl: _videoUrl,
+      offset: offset,
+    );
   }
 
   /// `{series} - {episode}`, where the episode part is its number label or, for

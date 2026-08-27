@@ -18,6 +18,7 @@ import '../../../settings/presentation/player_settings_provider.dart';
 import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../core/utils/episode_label.dart';
+import '../../../../core/utils/localized_text.dart';
 import 'player_stream_widgets.dart';
 import 'player_control_components.dart';
 import 'next_episode_overlay.dart';
@@ -513,6 +514,20 @@ class AnimeWitcherPlayerControlsState
     if (selected == null || !mounted) return;
 
     await controller.playNextEpisode(selectedSource: selected);
+  }
+
+  Future<void> _playPreviousEpisodeWithSourcePicker() async {
+    final controller = ref.read(playerControllerProvider.notifier);
+    final episode = controller.previousEpisode;
+    final item = controller.multimediaItem;
+    if (episode == null || item == null) return;
+
+    final selected = await ref
+        .read(playbackLauncherProvider)
+        .chooseSourceForItem(context, item, episode.url, episode: episode);
+    if (selected == null || !mounted) return;
+
+    await controller.loadEpisode(episode, selectedSource: selected);
   }
 
   Future<void> toggleFullscreen() async {
@@ -1025,6 +1040,8 @@ class AnimeWitcherPlayerControlsState
       playerControllerProvider.select((s) => s.maxPlaybackSpeed),
     );
     final isSeries = playerNotifier.isSeries;
+    final previousEpisode = playerNotifier.previousEpisode;
+    final nextEpisode = playerNotifier.nextEpisode;
     final hasEpisodePicker = playerNotifier.hasEpisodePicker;
     // Movie variants (مترجم / مدبلج) and specials also have a name to show.
     final episodeLabel = _buildEpisodeLine(
@@ -1121,6 +1138,8 @@ class AnimeWitcherPlayerControlsState
                     externalSubtitles: externalSubtitles,
                     showEpisodeList: showEpisodeList,
                     isSeries: isSeries,
+                    hasPreviousEpisode: previousEpisode != null,
+                    hasNextEpisode: nextEpisode != null,
                     hasEpisodePicker: hasEpisodePicker,
                     supportsPlaybackSpeed: supportsPlaybackSpeed,
                     playbackSpeed: playbackSpeed,
@@ -1332,6 +1351,8 @@ class AnimeWitcherPlayerControlsState
     List<SubtitleFile>? externalSubtitles,
     required bool showEpisodeList,
     required bool isSeries,
+    required bool hasPreviousEpisode,
+    required bool hasNextEpisode,
     required bool hasEpisodePicker,
     required bool supportsPlaybackSpeed,
     required double playbackSpeed,
@@ -1357,7 +1378,7 @@ class AnimeWitcherPlayerControlsState
       showBufferingSpinner: false,
     );
 
-    // Left cluster: play/pause (non-touch), lock (touch only), next episode
+    // Left cluster: play/pause (non-touch), lock (touch only), adjacent episodes.
     final leading = <Widget>[
       if (!isTouch) playPause,
       if (isTouch)
@@ -1368,7 +1389,14 @@ class AnimeWitcherPlayerControlsState
           isTv: _isTv,
           highlight: _isLocked,
         ),
-      if (isSeries)
+      if (isSeries && hasPreviousEpisode)
+        PlayerIconButton(
+          icon: Icons.skip_previous_rounded,
+          tooltip: appText(context, english: 'Previous', arabic: 'السابق'),
+          onPressed: () => unawaited(_playPreviousEpisodeWithSourcePicker()),
+          isTv: _isTv,
+        ),
+      if (isSeries && hasNextEpisode)
         PlayerIconButton(
           icon: Icons.skip_next_rounded,
           tooltip: l10n.next,
