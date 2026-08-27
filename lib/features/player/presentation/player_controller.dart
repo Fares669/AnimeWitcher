@@ -4145,43 +4145,57 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     final local = localPosition();
-    if (!_hasRefreshedCloudProgress &&
-        PlaybackResume.shouldHoldUntilSeeked(local)) {
-      _hasRefreshedCloudProgress = true;
-      unawaited(_syncContinueWatchingInBackground());
+    // Downloaded files are already on disk. Do not wait for Auth/Firestore
+    // resume: offline those requests hang until connect timeout, so the
+    // episode never starts. Streaming keeps the original cloud lookup.
+    if (AppUtils.isLocalFile(_videoUrl)) {
+      return local;
     }
-    return PlaybackResume.resolveStartupPosition(
-      localPositionMs: local,
-      cloudPositionMs: () async {
+
+    if (PlaybackResume.shouldHoldUntilSeeked(local)) {
+      if (!_hasRefreshedCloudProgress) {
         _hasRefreshedCloudProgress = true;
+        unawaited(_syncContinueWatchingInBackground());
+      }
+      return local;
+    }
+
+    if (!_hasRefreshedCloudProgress) {
+      _hasRefreshedCloudProgress = true;
+      try {
+        await ref
+            .read(animeWitcherAccountServiceProvider)
+            .syncContinueWatchingItem(_item.url);
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint('[Player] Cloud progress sync deferred: $error');
+        }
+      }
+      final afterSync = localPosition();
+      if (PlaybackResume.shouldHoldUntilSeeked(afterSync)) {
+        return afterSync;
+      }
+    }
+
+    if (isSeries) {
+      final ep = _resolveCurrentEpisode();
+      if (ep != null) {
         try {
-          await ref
+          return await ref
               .read(animeWitcherAccountServiceProvider)
-              .syncContinueWatchingItem(_item.url);
+              .remoteEpisodePosition(
+                mainUrl: _item.url,
+                episodeUrl: _currentProgressUrl,
+                refresh: true,
+              );
         } catch (error) {
           if (kDebugMode) {
-            debugPrint('[Player] Cloud progress sync deferred: $error');
+            debugPrint('[Player] Cloud resume lookup deferred: $error');
           }
         }
-        final afterSync = localPosition();
-        if (PlaybackResume.shouldHoldUntilSeeked(afterSync)) {
-          return afterSync;
-        }
-        if (isSeries) {
-          final ep = _resolveCurrentEpisode();
-          if (ep != null) {
-            return ref
-                .read(animeWitcherAccountServiceProvider)
-                .remoteEpisodePosition(
-                  mainUrl: _item.url,
-                  episodeUrl: _currentProgressUrl,
-                  refresh: true,
-                );
-          }
-        }
-        return afterSync;
-      },
-    );
+      }
+    }
+    return 0;
   }
 
   Future<void> _syncContinueWatchingInBackground() async {
