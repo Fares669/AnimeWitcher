@@ -30,6 +30,7 @@ class _BroadcastScheduleDayState {
     this.nextOffset = 0,
     this.hasMore = true,
     this.loading = false,
+    this.loaded = false,
     this.error,
   });
 
@@ -37,6 +38,7 @@ class _BroadcastScheduleDayState {
   final int nextOffset;
   final bool hasMore;
   final bool loading;
+  final bool loaded;
   final Object? error;
 }
 
@@ -114,7 +116,7 @@ class _BroadcastScheduleScreenState
 
   Future<void> _loadDay(String day, {required bool refresh}) async {
     final previous = _dayStates[day] ?? const _BroadcastScheduleDayState();
-    if (previous.loading || (!refresh && !previous.hasMore)) return;
+    if (!refresh && (previous.loading || !previous.hasMore)) return;
     final provider = _provider();
     if (provider == null) {
       if (!mounted) return;
@@ -136,10 +138,11 @@ class _BroadcastScheduleScreenState
     if (mounted) {
       setState(() {
         _dayStates[day] = _BroadcastScheduleDayState(
-          items: refresh ? previous.items : previous.items,
+          items: previous.items,
           nextOffset: offset,
           hasMore: refresh ? true : previous.hasMore,
           loading: true,
+          loaded: previous.loaded,
         );
       });
     }
@@ -164,6 +167,7 @@ class _BroadcastScheduleScreenState
           items: deduped,
           nextOffset: page.nextOffset,
           hasMore: page.hasMore,
+          loaded: true,
         );
       });
     } on DioException catch (error) {
@@ -173,6 +177,7 @@ class _BroadcastScheduleScreenState
           items: previous.items,
           nextOffset: previous.nextOffset,
           hasMore: previous.hasMore,
+          loaded: previous.loaded,
           error: error,
         );
       });
@@ -183,6 +188,7 @@ class _BroadcastScheduleScreenState
           items: previous.items,
           nextOffset: previous.nextOffset,
           hasMore: previous.hasMore,
+          loaded: previous.loaded,
           error: error,
         );
       });
@@ -212,9 +218,13 @@ class _BroadcastScheduleScreenState
               enabled: Navigator.of(context).canPop(),
               onBack: () => Navigator.of(context).pop(),
               child: Align(
-                alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: isArabic
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
                 child: Directionality(
-                  textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
                   child: Text(isArabic ? 'جدول البث' : 'Broadcast schedule'),
                 ),
               ),
@@ -238,7 +248,8 @@ class _BroadcastScheduleScreenState
                 for (final day in animeWitcherBroadcastDays)
                   _ScheduleDayBody(
                     day: day,
-                    state: _dayStates[day] ?? const _BroadcastScheduleDayState(),
+                    state:
+                        _dayStates[day] ?? const _BroadcastScheduleDayState(),
                     isArabic: isArabic,
                     onRefresh: () => _loadDay(day, refresh: true),
                     onLoadMore: () => _loadDay(day, refresh: false),
@@ -261,13 +272,21 @@ class _DayTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const english = <String>[
-      'Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
+      'Saturday',
+      'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
     ];
     return FilterStyleTabBar(
       controller: controller,
       tabs: [
         for (var i = 0; i < animeWitcherBroadcastDays.length; i++)
-          FilterStyleTab(label: isArabic ? animeWitcherBroadcastDays[i] : english[i]),
+          FilterStyleTab(
+            label: isArabic ? animeWitcherBroadcastDays[i] : english[i],
+          ),
       ],
     );
   }
@@ -290,7 +309,11 @@ class _ScheduleDayBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (state.loading && state.items.isEmpty) return const AnimeCatalogShimmer();
+    if ((state.loading || !state.loaded) &&
+        state.items.isEmpty &&
+        state.error == null) {
+      return const AnimeCatalogShimmer();
+    }
     if (state.error != null && state.items.isEmpty) {
       return Center(
         child: Padding(
@@ -301,7 +324,9 @@ class _ScheduleDayBody extends StatelessWidget {
               const Icon(Icons.cloud_off_rounded, size: 42),
               const SizedBox(height: 12),
               Text(
-                isArabic ? 'تعذر تحميل جدول البث' : 'Could not load the broadcast schedule',
+                isArabic
+                    ? 'تعذر تحميل جدول البث'
+                    : 'Could not load the broadcast schedule',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 12),
@@ -323,7 +348,9 @@ class _ScheduleDayBody extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(24, 120, 24, 110),
           children: [
             Text(
-              isArabic ? 'لا يوجد بث مجدول لهذا اليوم' : 'No broadcasts scheduled for this day',
+              isArabic
+                  ? 'لا يوجد بث مجدول لهذا اليوم'
+                  : 'No broadcasts scheduled for this day',
               textAlign: TextAlign.center,
             ),
           ],
@@ -363,7 +390,10 @@ class _ScheduleGrid extends StatelessWidget {
     final isDesktop = context.isDesktop;
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
-        if (hasMore && !isLoadingMore && notification.metrics.extentAfter < 360) {
+        if (notification.depth == 0 &&
+            hasMore &&
+            !isLoadingMore &&
+            notification.metrics.extentAfter < 360) {
           unawaited(onLoadMore());
         }
         return false;
@@ -391,7 +421,9 @@ class _ScheduleGrid extends StatelessWidget {
             title: item.title,
             heroTag: 'broadcast-$day-${item.id}-$index',
             onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => DetailsScreen(item: item)),
+              MaterialPageRoute<void>(
+                builder: (_) => DetailsScreen(item: item),
+              ),
             ),
           );
         },

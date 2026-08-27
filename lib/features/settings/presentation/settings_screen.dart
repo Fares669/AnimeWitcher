@@ -364,12 +364,8 @@ class SettingsScreen extends ConsumerWidget {
                   ),
                   subtitle: 'animewitcher1@gmail.com',
                   onTap: () => launchUrl(
-                    Uri(
-                      scheme: 'mailto',
-                      path: 'animewitcher1@gmail.com',
-                      queryParameters: const <String, String>{
-                        'subject': 'AnimeWitcher Support',
-                      },
+                    Uri.parse(
+                      'mailto:animewitcher1@gmail.com?subject=${Uri.encodeComponent('AnimeWitcher Support')}',
                     ),
                     mode: LaunchMode.externalApplication,
                   ),
