@@ -327,8 +327,6 @@ class EpisodeCard extends HookConsumerWidget {
                       displayedProgress,
                       statusBadge,
                       isWatched: isWatched,
-                      isSelectionMode: isSelectionMode,
-                      isSelected: isSelected,
                     ),
                     const SizedBox(width: LayoutConstants.spacingMd),
                     Expanded(
@@ -613,8 +611,6 @@ class EpisodeCard extends HookConsumerWidget {
     double progress,
     String? statusBadge, {
     required bool isWatched,
-    required bool isSelectionMode,
-    required bool isSelected,
   }) {
     final episodePosterUrl = AppImageFallbacks.optional(episode.posterUrl);
     // Prefer the episode still (AniZip). Falling back through CachedNetworkImage
@@ -716,26 +712,6 @@ class EpisodeCard extends HookConsumerWidget {
               ),
             ),
           ),
-        Positioned.fill(
-          child: Center(
-            child: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.6),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                isSelectionMode
-                    ? isSelected
-                          ? Icons.check_rounded
-                          : Icons.add_rounded
-                    : Icons.play_arrow_rounded,
-                color: Colors.white,
-                size: 24,
-              ),
-            ),
-          ),
-        ),
       ],
     );
   }
