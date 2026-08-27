@@ -679,16 +679,9 @@ class PlayerController extends Notifier<PlayerState> {
     return episodes[currentIndex + 1];
   }
 
-  /// `{series} - {episode}`, using the primary label sent by the server.
-  String _titleWithEpisode(Episode episode) {
-    final label = formatEpisodePrimaryLabel(
-      episode: episode.episode,
-      isArabic: true,
-      isFinal: episode.isFinal,
-      serverName: episode.serverName,
-    );
-    return label.isEmpty ? _item.title : '${_item.title} - $label';
-  }
+  /// The player header keeps the series title on its primary line. The player
+  /// controls render the active episode's label and creative title beneath it.
+  String _titleWithEpisode(Episode _) => _item.title;
 
   Future<void> init({
     required Player player,

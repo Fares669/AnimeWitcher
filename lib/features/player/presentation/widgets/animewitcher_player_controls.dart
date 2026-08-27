@@ -903,6 +903,19 @@ class AnimeWitcherPlayerControlsState
     return "$minutes:${twoDigits(seconds)}";
   }
 
+  String? _buildEpisodeLine(BuildContext context, Episode? episode) {
+    if (episode == null) return null;
+    final label = formatEpisodeLabel(
+      episode: episode.episode,
+      isArabic:
+          Localizations.localeOf(context).languageCode.toLowerCase() == 'ar',
+      title: episode.name,
+      isFinal: episode.isFinal,
+      serverName: episode.serverName,
+    );
+    return label.isEmpty ? null : label;
+  }
+
   Widget _buildKickAnimation() {
     final seconds =
         ref.watch(playerSettingsProvider).asData?.value.seekDuration ?? 10;
@@ -1012,9 +1025,9 @@ class AnimeWitcherPlayerControlsState
     );
     final isSeries = playerNotifier.isSeries;
     final hasEpisodePicker = playerNotifier.hasEpisodePicker;
-    // Creative title only. The primary server label already lives in [title].
-    final episodeLabel = playerHeaderSubtitle(
-      playerNotifier.currentEpisode?.name,
+    final episodeLabel = _buildEpisodeLine(
+      context,
+      playerNotifier.currentEpisode,
     );
     final skipSegments = ref.watch(
       playerControllerProvider.select((s) => s.skipSegments),
