@@ -1,4 +1,5 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import '../../../../core/account/account_providers.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -12,6 +13,9 @@ part 'home_provider.g.dart';
 class HomeData extends _$HomeData {
   @override
   HomeState build() {
+    // Rebuild after a saved account content preference so the provider applies
+    // its current ecchi filter to newly loaded cards.
+    ref.watch(accountDataRevisionProvider);
     final activeProvider = ref.watch(activeProviderProvider);
     if (activeProvider == null) {
       return const HomeNoProvider();

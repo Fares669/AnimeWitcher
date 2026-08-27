@@ -97,11 +97,14 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     this._dio,
     this._settings, {
     AnimeWitcherMalIdResolver? resolveAnimeByMalIds,
-  }) : _resolveAnimeByMalIds = resolveAnimeByMalIds;
+    bool Function()? isEcchiHidden,
+  }) : _resolveAnimeByMalIds = resolveAnimeByMalIds,
+       _isEcchiHidden = isEcchiHidden ?? _ecchiIsVisible;
 
   final Dio _dio;
   final SettingsRepository _settings;
   final AnimeWitcherMalIdResolver? _resolveAnimeByMalIds;
+  final bool Function() _isEcchiHidden;
   final HtmlUnescape _unescape = HtmlUnescape();
 
   static const String _baseUrl = 'https://animewitcher.com';
@@ -173,6 +176,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   static const int _previewSize = 10;
   static const int _maxRelatedItems = 10;
   static const int _maxRecommendations = 10;
+
+  static bool _ecchiIsVisible() => false;
 
 
   bool get _useAniZipEpisodeImages =>
@@ -1114,6 +1119,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   Future<List<MultimediaItem>> _dedupeHits(
     Iterable<dynamic> hits, {
     bool recent = false,
+    bool applyEcchiFilter = true,
   }) async {
     final maps = hits.map(_map).where((hit) => hit.isNotEmpty).toList();
     await _fillLargePosters(maps);
@@ -1125,7 +1131,31 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       if (!seen.add(item.url)) continue;
       output.add(item);
     }
-    return output;
+    return applyEcchiFilter ? _filterEcchiItems(output) : output;
+  }
+
+  /// Applies the account-level content preference only to discovery results.
+  /// A precise tag match is intentional: title/description matching would
+  /// hide unrelated anime and `isAdult` is broader than AnimeWitcher's ecchi
+  /// category.
+  List<MultimediaItem> _filterEcchiItems(Iterable<MultimediaItem> items) {
+    if (!_isEcchiHidden()) return items.toList(growable: false);
+    return items
+        .where((item) => !(item.tags ?? const <String>[]).any(_isEcchiTag))
+        .toList(growable: false);
+  }
+
+  bool _isEcchiTag(String value) {
+    final normalized = value
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '')
+        .replaceAll('إ', 'ا')
+        .replaceAll('أ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll('ى', 'ي')
+        .replaceAll(RegExp(r'[\s_-]+'), '');
+    return normalized == 'ecchi' || normalized == 'ايتشي';
   }
 
   String _quotedFilterValue(String value) => jsonEncode(value);
@@ -1300,7 +1330,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (!refresh &&
         cached != null &&
         _broadcastScheduleExpiresAt.isAfter(now)) {
-      return cached;
+      return _filterBroadcastSchedule(cached);
     }
     final inFlight = _broadcastScheduleRequest;
     if (!refresh && inFlight != null) return inFlight;
@@ -1311,7 +1341,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       final schedule = await request;
       _broadcastScheduleCache = schedule;
       _broadcastScheduleExpiresAt = DateTime.now().add(_broadcastScheduleTtl);
-      return schedule;
+      return _filterBroadcastSchedule(schedule);
     } finally {
       if (identical(_broadcastScheduleRequest, request)) {
         _broadcastScheduleRequest = null;
@@ -1390,12 +1420,21 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
     final lists = await Future.wait(
       animeWitcherBroadcastDays.map(
-        (day) => _dedupeHits(grouped[day]!),
+        (day) => _dedupeHits(grouped[day]!, applyEcchiFilter: false),
       ),
     );
-    return <String, List<MultimediaItem>>{
+    return _filterBroadcastSchedule(<String, List<MultimediaItem>>{
       for (var i = 0; i < animeWitcherBroadcastDays.length; i++)
         animeWitcherBroadcastDays[i]: lists[i],
+    });
+  }
+
+  Map<String, List<MultimediaItem>> _filterBroadcastSchedule(
+    Map<String, List<MultimediaItem>> schedule,
+  ) {
+    return <String, List<MultimediaItem>>{
+      for (final entry in schedule.entries)
+        entry.key: _filterEcchiItems(entry.value),
     };
   }
 

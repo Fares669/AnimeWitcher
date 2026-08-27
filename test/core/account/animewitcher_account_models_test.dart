@@ -56,4 +56,39 @@ void main() {
     expect(restored.hasGoogleProvider, isTrue);
     expect(restored.hasPasswordProvider, isTrue);
   });
+
+  test('privacy settings preserve documented values through profile storage', () {
+    const privacy = AnimeWitcherPrivacySettings(
+      showFavoritesToUsers: false,
+      showCommentsToUsers: false,
+      showReviewsToUsers: false,
+      hideEcchiAnime: true,
+    );
+    const profile = AnimeWitcherProfile(
+      documentId: 'profile-1',
+      uid: 'uid-1',
+      signInMethod: AnimeWitcherSignInMethod.email,
+      privacySettings: privacy,
+    );
+
+    final restored = AnimeWitcherProfile.fromJson(profile.toJson());
+
+    expect(restored.privacySettings.showFavoritesToUsers, isFalse);
+    expect(restored.privacySettings.showCommentsToUsers, isFalse);
+    expect(restored.privacySettings.showReviewsToUsers, isFalse);
+    expect(restored.privacySettings.hideEcchiAnime, isTrue);
+  });
+
+  test('legacy profiles keep AnimeWitcher privacy defaults', () {
+    final profile = AnimeWitcherProfile.fromJson(<String, dynamic>{
+      'documentId': 'legacy-profile',
+      'uid': 'uid-legacy',
+      'signInMethod': 'email',
+    });
+
+    expect(profile.privacySettings.showFavoritesToUsers, isTrue);
+    expect(profile.privacySettings.showCommentsToUsers, isTrue);
+    expect(profile.privacySettings.showReviewsToUsers, isTrue);
+    expect(profile.privacySettings.hideEcchiAnime, isFalse);
+  });
 }

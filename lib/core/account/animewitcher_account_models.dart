@@ -2,6 +2,67 @@ enum AnimeWitcherSignInMethod { email, google }
 
 enum AnimeWitcherProfileImageKind { avatar, cover }
 
+/// Account-owned visibility and content preferences stored in
+/// `users/{id}.settings` by AnimeWitcher.
+///
+/// Missing fields deliberately keep the source application's historical
+/// defaults so old profiles neither lose visibility nor hide catalog entries.
+class AnimeWitcherPrivacySettings {
+  const AnimeWitcherPrivacySettings({
+    this.showFavoritesToUsers = true,
+    this.showCommentsToUsers = true,
+    this.showReviewsToUsers = true,
+    this.hideEcchiAnime = false,
+  });
+
+  final bool showFavoritesToUsers;
+  final bool showCommentsToUsers;
+  final bool showReviewsToUsers;
+  final bool hideEcchiAnime;
+
+  AnimeWitcherPrivacySettings copyWith({
+    bool? showFavoritesToUsers,
+    bool? showCommentsToUsers,
+    bool? showReviewsToUsers,
+    bool? hideEcchiAnime,
+  }) {
+    return AnimeWitcherPrivacySettings(
+      showFavoritesToUsers:
+          showFavoritesToUsers ?? this.showFavoritesToUsers,
+      showCommentsToUsers: showCommentsToUsers ?? this.showCommentsToUsers,
+      showReviewsToUsers: showReviewsToUsers ?? this.showReviewsToUsers,
+      hideEcchiAnime: hideEcchiAnime ?? this.hideEcchiAnime,
+    );
+  }
+
+  /// Keys match the public AnimeWitcher Firestore profile schema exactly.
+  Map<String, dynamic> toFirestoreJson() => <String, dynamic>{
+        'show_fav_to_users': showFavoritesToUsers,
+        'show_comments_to_users': showCommentsToUsers,
+        'show_reviews_to_users': showReviewsToUsers,
+        'hide_ecchi_anime': hideEcchiAnime,
+      };
+
+  Map<String, dynamic> toJson() => toFirestoreJson();
+
+  factory AnimeWitcherPrivacySettings.fromJson(dynamic raw) {
+    if (raw is! Map) return const AnimeWitcherPrivacySettings();
+    final values = raw.map<String, dynamic>(
+      (key, value) => MapEntry(key.toString(), value),
+    );
+    bool read(String key, bool fallback) {
+      final value = values[key];
+      return value is bool ? value : fallback;
+    }
+    return AnimeWitcherPrivacySettings(
+      showFavoritesToUsers: read('show_fav_to_users', true),
+      showCommentsToUsers: read('show_comments_to_users', true),
+      showReviewsToUsers: read('show_reviews_to_users', true),
+      hideEcchiAnime: read('hide_ecchi_anime', false),
+    );
+  }
+}
+
 class AnimeWitcherSession {
   const AnimeWitcherSession({
     required this.uid,
@@ -97,6 +158,7 @@ class AnimeWitcherProfile {
     this.country,
     this.birthYear,
     this.providerIds = const <String>[],
+    this.privacySettings = const AnimeWitcherPrivacySettings(),
   });
 
   final String documentId;
@@ -110,6 +172,7 @@ class AnimeWitcherProfile {
   final String? country;
   final String? birthYear;
   final List<String> providerIds;
+  final AnimeWitcherPrivacySettings privacySettings;
 
   bool get hasPasswordProvider => providerIds.contains('password');
   bool get hasGoogleProvider => providerIds.contains('google.com');
@@ -126,6 +189,7 @@ class AnimeWitcherProfile {
     String? country,
     String? birthYear,
     List<String>? providerIds,
+    AnimeWitcherPrivacySettings? privacySettings,
     bool clearPhotoUrl = false,
     bool clearCoverUrl = false,
     bool clearBio = false,
@@ -144,6 +208,7 @@ class AnimeWitcherProfile {
       country: clearCountry ? null : (country ?? this.country),
       birthYear: clearBirthYear ? null : (birthYear ?? this.birthYear),
       providerIds: providerIds ?? this.providerIds,
+      privacySettings: privacySettings ?? this.privacySettings,
     );
   }
 
@@ -157,8 +222,9 @@ class AnimeWitcherProfile {
     'coverUrl': coverUrl,
     'bio': bio,
     'country': country,
-    'birthYear': birthYear,
-    'providerIds': providerIds,
+      'birthYear': birthYear,
+      'providerIds': providerIds,
+      'privacySettings': privacySettings.toJson(),
   };
 
   factory AnimeWitcherProfile.fromJson(Map<String, dynamic> json) {
@@ -177,6 +243,9 @@ class AnimeWitcherProfile {
       country: _optionalString(json['country']),
       birthYear: _optionalString(json['birthYear']),
       providerIds: _stringList(json['providerIds']),
+      privacySettings: AnimeWitcherPrivacySettings.fromJson(
+        json['privacySettings'] ?? json['settings'],
+      ),
     );
   }
 }

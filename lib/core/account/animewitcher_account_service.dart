@@ -423,6 +423,41 @@ class AnimeWitcherAccountService {
     return snapshot;
   }
 
+  /// Updates only the documented visibility/content keys. Each key uses a
+  /// nested update mask, so unrelated notification and playback preferences in
+  /// the remote `settings` map are preserved.
+  Future<AnimeWitcherAccountSnapshot> updatePrivacySettings(
+    AnimeWitcherPrivacySettings settings,
+  ) async {
+    final profile = _profile;
+    if (profile == null || _session == null) {
+      throw const AnimeWitcherAccountException(
+        'not-signed-in',
+        'Sign in before updating privacy settings.',
+      );
+    }
+    await _authenticated(
+      (token) => _firestore.patchDocument(
+        'users/${profile.documentId}',
+        <String, dynamic>{
+          for (final entry in settings.toFirestoreJson().entries)
+            'settings.${entry.key}': entry.value,
+        },
+        token,
+        requireExisting: true,
+      ),
+    );
+    if (!_isCurrentProfile(profile)) {
+      throw const AnimeWitcherAccountException(
+        'session-changed',
+        'The active account changed while updating privacy settings.',
+      );
+    }
+    _profile = profile.copyWith(privacySettings: settings);
+    await _persistSession();
+    return snapshot;
+  }
+
   Future<AnimeWitcherAccountSnapshot> changePassword({
     required String currentPassword,
     required String newPassword,
@@ -1471,6 +1506,7 @@ class AnimeWitcherAccountService {
       bio: _optionalString(fields['bio']),
       country: _optionalString(fields['country']),
       birthYear: _optionalString(fields['birth_date']),
+      privacySettings: AnimeWitcherPrivacySettings.fromJson(fields['settings']),
       providerIds: session.providerIds.isEmpty
           ? <String>[
               session.signInMethod == AnimeWitcherSignInMethod.google

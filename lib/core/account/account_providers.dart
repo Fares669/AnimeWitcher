@@ -115,6 +115,12 @@ class AnimeWitcherAccountController
     );
   }
 
+  Future<void> updatePrivacySettings(
+    AnimeWitcherPrivacySettings settings,
+  ) async {
+    await _run(() => _service.updatePrivacySettings(settings));
+  }
+
   Future<void> changePassword({
     required String currentPassword,
     required String newPassword,

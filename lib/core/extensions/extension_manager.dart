@@ -20,6 +20,14 @@ class ExtensionManager extends _$ExtensionManager {
         resolveAnimeByMalIds: ref
             .watch(animeWitcherAccountServiceProvider)
             .resolveAnimeByMalIds,
+        isEcchiHidden: () =>
+            ref
+                .read(animeWitcherAccountServiceProvider)
+                .snapshot
+                .profile
+                ?.privacySettings
+                .hideEcchiAnime ??
+            false,
       ),
     ];
   }

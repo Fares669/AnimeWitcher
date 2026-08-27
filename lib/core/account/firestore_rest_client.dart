@@ -718,13 +718,55 @@ class FirestoreRestClient {
           if (requireExisting) 'currentDocument.exists': true,
         },
         data: <String, dynamic>{
-          'fields': FirestoreValueCodec.encodeFields(fields),
+          'fields': FirestoreValueCodec.encodeFields(
+            _nestedFieldsForPaths(fields),
+          ),
         },
         options: _options(idToken),
       );
     } on DioException catch (error) {
       throw _firestoreException(error);
     }
+  }
+
+  /// Firestore REST expects a nested field map even when updateMask uses a
+  /// dotted path. Encoding `settings.hide_ecchi_anime` as a literal field
+  /// name would update the wrong key (or fail validation).
+  Map<String, dynamic> _nestedFieldsForPaths(Map<String, dynamic> fields) {
+    final nested = <String, dynamic>{};
+    for (final entry in fields.entries) {
+      final parts = entry.key
+          .split('.')
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty)
+          .toList(growable: false);
+      if (parts.isEmpty) {
+        throw ArgumentError.value(entry.key, 'fields', 'Field path is empty.');
+      }
+      Map<String, dynamic> cursor = nested;
+      for (var index = 0; index < parts.length - 1; index++) {
+        final part = parts[index];
+        final child = cursor.putIfAbsent(part, () => <String, dynamic>{});
+        if (child is! Map<String, dynamic>) {
+          throw ArgumentError.value(
+            entry.key,
+            'fields',
+            'Field path conflicts with an existing value.',
+          );
+        }
+        cursor = child;
+      }
+      final leaf = parts.last;
+      if (cursor.containsKey(leaf) && parts.length > 1) {
+        throw ArgumentError.value(
+          entry.key,
+          'fields',
+          'A field path cannot be written more than once.',
+        );
+      }
+      cursor[leaf] = entry.value;
+    }
+    return nested;
   }
 
   /// Writes ordinary fields and lets Firestore assign authoritative server

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:dio/dio.dart';
+import '../../../../core/account/account_providers.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -426,6 +427,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       _filters = next;
       _reload();
     });
+    ref.listen(accountDataRevisionProvider, (_, __) => _reload());
     _query = ref.read(searchQueryProvider);
     _filters = ref.read(searchProviderFiltersProvider);
     Future.microtask(_reload);
@@ -565,6 +567,7 @@ final searchPagedResultsProvider =
 
 @Riverpod(keepAlive: true)
 Stream<SearchAggregateState> searchResults(Ref ref) {
+  ref.watch(accountDataRevisionProvider);
   final query = ref.watch(searchQueryProvider);
   final filter = ref.watch(searchFilterProvider);
   final providerFilters = ref.watch(searchProviderFiltersProvider);

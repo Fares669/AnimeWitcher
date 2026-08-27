@@ -11,6 +11,7 @@ import '../../../core/utils/layout_constants.dart';
 import '../../../shared/widgets/custom_widgets.dart';
 import '../../comments/presentation/animewitcher_my_comments_screen.dart';
 import 'account_management_screens.dart';
+import 'account_privacy_settings_screen.dart';
 import 'account_ui_helpers.dart';
 import 'widgets/settings_widgets.dart';
 
@@ -538,6 +539,20 @@ class _AnimeWitcherAccountScreenState
               onTap: busy ? null : () => _openProfileEditor(profile),
             ),
             SettingsTile(
+              icon: Icons.privacy_tip_outlined,
+              title: appText(
+                context,
+                english: 'Privacy and content',
+                arabic: 'الخصوصية والمحتوى',
+              ),
+              subtitle: appText(
+                context,
+                english: 'Profile visibility and ecchi content filtering',
+                arabic: 'ظهور الملف الشخصي وفلترة محتوى الإيتشي',
+              ),
+              onTap: busy ? null : () => _openPrivacySettings(profile),
+            ),
+            SettingsTile(
               icon: Icons.forum_rounded,
               title: appText(
                 context,
@@ -654,6 +669,25 @@ class _AnimeWitcherAccountScreenState
         builder: (_) => const AnimeWitcherMyCommentsScreen(),
       ),
     );
+  }
+
+  Future<void> _openPrivacySettings(AnimeWitcherProfile profile) async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => AnimeWitcherPrivacySettingsScreen(
+          initialSettings: profile.privacySettings,
+        ),
+      ),
+    );
+    if (saved == true && mounted) {
+      _showMessage(
+        appText(
+          context,
+          english: 'Privacy and content preferences were updated.',
+          arabic: 'تم تحديث تفضيلات الخصوصية والمحتوى.',
+        ),
+      );
+    }
   }
 
   Future<void> _openEmailEditor(AnimeWitcherProfile profile) async {
