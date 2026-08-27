@@ -6,6 +6,7 @@ Future<StreamResult?> showStreamSourcePicker(
   BuildContext context,
   List<StreamResult> sources, {
   required bool forDownload,
+  String? episodeLabel,
 }) {
   final isArabic =
       Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
@@ -26,7 +27,7 @@ Future<StreamResult?> showStreamSourcePicker(
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
               child: Text(
-                isArabic ? 'اختر المصدر' : 'Choose source',
+                sourcePickerHeader(episodeLabel, isArabic: isArabic),
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
@@ -69,6 +70,14 @@ Future<StreamResult?> showStreamSourcePicker(
       ),
     ),
   );
+}
+
+/// Uses the server-provided episode label as the picker title when available.
+/// The generic title remains the safe fallback for non-episode content.
+String sourcePickerHeader(String? episodeLabel, {required bool isArabic}) {
+  final label = episodeLabel?.trim() ?? '';
+  if (label.isNotEmpty) return label;
+  return isArabic ? 'اختر المصدر' : 'Choose source';
 }
 
 List<_SourcePickerRow> _buildSourcePickerRows(List<StreamResult> sources) {

@@ -680,13 +680,11 @@ class PlayerController extends Notifier<PlayerState> {
     );
   }
 
-  /// `{series} - {episode}`, where the episode part is its number label or, for
-  /// numberless rows (specials, OVAs, مترجم/مدبلج), the name the server gave.
+  /// `{series} - {episode}`, using the primary label sent by the server.
   String _titleWithEpisode(Episode episode) {
-    final label = formatEpisodeLabel(
+    final label = formatEpisodePrimaryLabel(
       episode: episode.episode,
       isArabic: true,
-      title: episode.name,
       isFinal: episode.isFinal,
       serverName: episode.serverName,
     );
@@ -740,11 +738,10 @@ class PlayerController extends Notifier<PlayerState> {
     _item = item;
 
     String initialTitle = item.title;
-    // Resolve Episode Title if Series
-    if ((item.episodes?.length ?? 0) > 1) {
-      final ep =
-          episode ?? item.episodes!.firstWhereOrNull((e) => e.url == videoUrl);
-      if (ep != null) initialTitle = _titleWithEpisode(ep);
+    final activeEpisode =
+        episode ?? item.episodes?.firstWhereOrNull((e) => e.url == videoUrl);
+    if (activeEpisode != null) {
+      initialTitle = _titleWithEpisode(activeEpisode);
     }
 
     final imdbId =

@@ -41,6 +41,8 @@ class DownloadLauncher {
     final l10n = AppLocalizations.of(context)!;
     final resolveUrl = episodeUrl ?? episode?.url ?? item.url;
     if (resolveUrl.isEmpty) return;
+    final resolvedEpisode =
+        episode ?? item.episodes?.firstWhereOrNull((e) => e.url == resolveUrl);
 
     final manager = _ref.read(extensionManagerProvider.notifier);
     AnimeWitcherProvider? provider;
@@ -92,6 +94,14 @@ class DownloadLauncher {
         context,
         sources,
         forDownload: true,
+        episodeLabel: resolvedEpisode == null
+            ? null
+            : formatEpisodePrimaryLabel(
+                episode: resolvedEpisode.episode,
+                isArabic: true,
+                isFinal: resolvedEpisode.isFinal,
+                serverName: resolvedEpisode.serverName,
+              ),
       );
       if (selected == null || !context.mounted) return;
 
@@ -126,7 +136,7 @@ class DownloadLauncher {
         stream,
         item,
         resolveUrl,
-        episode: episode,
+        episode: resolvedEpisode,
       );
     } catch (e) {
       if (!context.mounted) return;

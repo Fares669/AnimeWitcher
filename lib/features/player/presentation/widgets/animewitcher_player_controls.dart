@@ -984,9 +984,9 @@ class AnimeWitcherPlayerControlsState
     final controllerTitle = ref.watch(
       playerControllerProvider.select((s) => s.playerTitle),
     );
-    final title =
-        playerNotifier.multimediaItem?.title ??
-        (controllerTitle.isEmpty ? (widget.title ?? "") : controllerTitle);
+    final title = controllerTitle.isEmpty
+        ? (playerNotifier.multimediaItem?.title ?? (widget.title ?? ''))
+        : controllerTitle;
 
     final streams = ref.watch(
       playerControllerProvider.select((s) => s.streams),
@@ -1132,7 +1132,7 @@ class AnimeWitcherPlayerControlsState
                 else
                   _buildUnlockedUI(
                     title: title,
-                    episodeLabel: episodeLabel,
+                    episodeLabel: null,
                     streams: streams,
                     currentStream: currentStream,
                     externalSubtitles: externalSubtitles,

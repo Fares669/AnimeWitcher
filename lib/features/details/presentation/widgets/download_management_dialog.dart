@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_service.dart';
+import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:animewitcher/shared/widgets/custom_widgets.dart';
 import 'package:collection/collection.dart';
 import '../../../library/presentation/downloads_provider.dart';
@@ -43,9 +44,17 @@ class DownloadManagementDialog extends HookConsumerWidget {
     final detailsState = ref.watch(detailsControllerProvider(item.url));
     final currentItem = detailsState.item ?? item;
 
-    final title = episode != null
-        ? '${currentItem.title} - ${episode!.name}'
-        : currentItem.title;
+    final episodeLabel = episode == null
+        ? ''
+        : formatEpisodePrimaryLabel(
+            episode: episode!.episode,
+            isArabic: true,
+            isFinal: episode!.isFinal,
+            serverName: episode!.serverName,
+          );
+    final title = episodeLabel.isEmpty
+        ? currentItem.title
+        : '${currentItem.title} - $episodeLabel';
 
     final downloads = ref.watch(downloadsProvider).value ?? [];
     final matchingItem = downloads.firstWhereOrNull(
@@ -56,6 +65,8 @@ class DownloadManagementDialog extends HookConsumerWidget {
       surfaceTintColor: Colors.transparent,
       title: Text(title),
       content: Text(l10n.videoAlreadyDownloadedPrompt),
+      actionsAlignment: MainAxisAlignment.start,
+      actionsOverflowAlignment: OverflowBarAlignment.start,
       actions: [
         CustomButton(
           isPrimary: false,

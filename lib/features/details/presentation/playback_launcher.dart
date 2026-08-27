@@ -52,8 +52,9 @@ class PlaybackLauncher {
   Future<StreamResult?> _chooseSource(
     BuildContext context,
     AnimeWitcherProvider provider,
-    String episodeDataUrl,
-  ) async {
+    String episodeDataUrl, {
+    Episode? episode,
+  }) async {
     bool isCanceled = false;
     bool dialogDismissed = false;
     unawaited(
@@ -80,7 +81,12 @@ class PlaybackLauncher {
             .showError('لم يتم العثور على مصادر تشغيل.');
         return null;
       }
-      return showStreamSourcePicker(context, sources, forDownload: false);
+      return showStreamSourcePicker(
+        context,
+        sources,
+        forDownload: false,
+        episodeLabel: _episodeSourceLabel(episode),
+      );
     } catch (e) {
       if (context.mounted && !isCanceled && !dialogDismissed) {
         Navigator.of(context).pop();
@@ -126,7 +132,18 @@ class PlaybackLauncher {
       return null;
     }
 
-    return _chooseSource(context, provider, episodeDataUrl);
+    return _chooseSource(context, provider, episodeDataUrl, episode: episode);
+  }
+
+  String? _episodeSourceLabel(Episode? episode) {
+    if (episode == null) return null;
+    final label = formatEpisodePrimaryLabel(
+      episode: episode.episode,
+      isArabic: true,
+      isFinal: episode.isFinal,
+      serverName: episode.serverName,
+    );
+    return label.isEmpty ? null : label;
   }
 
   Future<StreamResult?> _resolveSelectedSource(
@@ -267,7 +284,12 @@ class PlaybackLauncher {
     // Use the same quality/server picker for internal playback and downloads.
     // The selected source is carried into the player so it is not silently
     // replaced by saved-source or automatic quality preferences.
-    final selected = await _chooseSource(context, provider, localOrEpisodeUrl);
+    final selected = await _chooseSource(
+      context,
+      provider,
+      localOrEpisodeUrl,
+      episode: resolvedEpisode,
+    );
     if (selected == null || !context.mounted) return;
 
     if (settings.preferredPlayer == null) {
