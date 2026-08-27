@@ -422,6 +422,83 @@ class DetailsController extends _$DetailsController {
     }
   }
 
+  /// Reloads details, episodes, and already-visible sections from the server.
+  /// Keeps the current page on screen so pull-to-refresh matches Home / lists.
+  Future<void> refreshDetails() async {
+    final item = state.item;
+    if (item == null) return;
+    if (item.provider == 'Local' || item.provider == 'Remote') return;
+
+    final manager = ref.read(extensionManagerProvider.notifier);
+    AnimeWitcherProvider? provider;
+    if (item.provider != null) {
+      try {
+        provider = manager.getAllProviders().firstWhere(
+          (candidate) =>
+              candidate.packageName == item.provider ||
+              candidate.name == item.provider,
+        );
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint('DetailsController.refreshDetails: $error');
+        }
+      }
+    }
+    provider ??= _lastEpisodesProvider ?? ref.read(activeProviderProvider);
+    if (provider == null) return;
+
+    provider.invalidateDetailCaches(item.url);
+
+    _episodesLoadFuture = null;
+    _episodesRequested = false;
+    _episodesFetched = false;
+
+    final reloadCast = state.cast.hasValue;
+    final reloadRelated = state.related.hasValue;
+    final reloadRecommendations = state.recommendations.hasValue;
+    _castLoadStarted = reloadCast;
+    _relatedLoadStarted = reloadRelated;
+    _recommendationsLoadStarted = reloadRecommendations;
+
+    final generation = ++_loadGeneration;
+    _loadStarted = true;
+    _lastEpisodesProvider = provider;
+    _lastEpisodesUrl = item.url;
+
+    final tasks = <Future<void>>[
+      _loadBasicDetails(provider, item, generation),
+      loadEpisodesOnDemand(forceReload: true),
+    ];
+    if (provider.supportsIndependentDetailSections) {
+      tasks.add(
+        _loadTrailersInBackground(provider, item.url, item, generation),
+      );
+      tasks.add(
+        _loadNextAiringInBackground(provider, item.url, item, generation),
+      );
+      if (reloadCast) {
+        tasks.add(_loadCastInBackground(provider, item.url, item, generation));
+      }
+      if (reloadRelated) {
+        tasks.add(
+          _loadRelatedInBackground(provider, item.url, item, generation),
+        );
+      }
+      if (reloadRecommendations) {
+        tasks.add(
+          _loadRecommendationsInBackground(
+            provider,
+            item.url,
+            item,
+            generation,
+          ),
+        );
+      }
+    }
+
+    await Future.wait(tasks);
+  }
+
   Future<void> _loadBasicDetails(
     AnimeWitcherProvider provider,
     MultimediaItem initialItem,
@@ -930,8 +1007,12 @@ class DetailsController extends _$DetailsController {
     final currentItem = state.item;
     if (provider == null || url == null || currentItem == null) return;
 
-
-    state = state.copyWith(episodes: const AsyncLoading());
+    final keepExistingEpisodes =
+        forceReload &&
+        (state.episodes.asData?.value.isNotEmpty ?? false);
+    if (!keepExistingEpisodes) {
+      state = state.copyWith(episodes: const AsyncLoading());
+    }
     final generation = _loadGeneration;
     _episodesLoadFuture = _loadEpisodesInBackground(
       provider,

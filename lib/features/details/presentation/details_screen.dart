@@ -37,25 +37,6 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
 
-/// Keeps the native pull-to-stretch reaction while making it deliberately
-/// subtle on the details artwork.
-class _GentleTopOverscrollPhysics extends BouncingScrollPhysics {
-  const _GentleTopOverscrollPhysics({super.parent});
-
-  @override
-  _GentleTopOverscrollPhysics applyTo(ScrollPhysics? ancestor) {
-    return _GentleTopOverscrollPhysics(parent: buildParent(ancestor));
-  }
-
-  @override
-  double applyPhysicsToUserOffset(ScrollMetrics position, double offset) {
-    final appliedOffset = super.applyPhysicsToUserOffset(position, offset);
-    final isPullingPastTop =
-        position.pixels <= position.minScrollExtent && offset > 0;
-    return isPullingPastTop ? appliedOffset * 0.16 : appliedOffset;
-  }
-}
-
 /// Keeps a details tab's scrollable (and its poster Image states) alive
 /// while the other tab is showing. This matches View All, which stays
 /// mounted under the details route instead of rebuilding every thumbnail.
@@ -815,6 +796,12 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     });
   }
 
+  Future<void> _refreshDetails() {
+    return ref
+        .read(detailsControllerProvider(widget.item.url).notifier)
+        .refreshDetails();
+  }
+
   @override
   void dispose() {
     applePersistentGlassHeaderController.hide(this);
@@ -1027,31 +1014,36 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
               controller: _detailsTabController,
               children: [
                 _KeepAliveDetailsTab(
-                  child: CustomScrollView(
-                    key: const PageStorageKey<String>('details-info-tab'),
-                    physics: const _GentleTopOverscrollPhysics(
-                      parent: AlwaysScrollableScrollPhysics(),
-                    ),
-                    slivers: _buildMobileDetailsTabSlivers(
-                      context,
-                      item,
-                      detailsAsync,
-                      castAsync,
-                      trailersAsync,
-                      relatedAsync,
-                      recommendationsAsync,
-                      l10n,
-                      mobileHeaderHeight,
+                  child: RefreshIndicator(
+                    onRefresh: _refreshDetails,
+                    child: CustomScrollView(
+                      key: const PageStorageKey<String>('details-info-tab'),
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      slivers: _buildMobileDetailsTabSlivers(
+                        context,
+                        item,
+                        detailsAsync,
+                        castAsync,
+                        trailersAsync,
+                        relatedAsync,
+                        recommendationsAsync,
+                        l10n,
+                        mobileHeaderHeight,
+                      ),
                     ),
                   ),
                 ),
                 _KeepAliveDetailsTab(
-                  child: CustomScrollView(
-                    key: const PageStorageKey<String>('details-episodes-tab'),
-                    slivers: _buildMobileEpisodesTabSlivers(
-                      context,
-                      item,
-                      episodesAsync,
+                  child: RefreshIndicator(
+                    onRefresh: _refreshDetails,
+                    child: CustomScrollView(
+                      key: const PageStorageKey<String>('details-episodes-tab'),
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      slivers: _buildMobileEpisodesTabSlivers(
+                        context,
+                        item,
+                        episodesAsync,
+                      ),
                     ),
                   ),
                 ),
@@ -1599,6 +1591,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
           detailsState: detailsState,
           isMovie: isMovie,
           itemUrl: widget.item.url,
+          onRefresh: _refreshDetails,
           child: _buildDesktopContentBelow(
             context,
             item,

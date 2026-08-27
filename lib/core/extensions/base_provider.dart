@@ -228,10 +228,7 @@ abstract class AnimeWitcherProvider {
   }
 
   /// Loads the full provider news list.
-  Future<ProviderNewsPage> getNewsPage({
-    int offset = 0,
-    int limit = 20,
-  }) {
+  Future<ProviderNewsPage> getNewsPage({int offset = 0, int limit = 20}) {
     return getHomeNewsPage(offset: offset, limit: limit);
   }
 
@@ -269,6 +266,10 @@ abstract class AnimeWitcherProvider {
   }
 
   Future<MultimediaItem> getDetails(String url);
+
+  /// Drops in-memory detail/episode caches for [url] so the next fetch hits
+  /// the server. Used by pull-to-refresh on the anime details page.
+  void invalidateDetailCaches(String url) {}
 
   /// Whether this provider exposes optional detail sections through separate
   /// requests. Controllers can then render every section as soon as it arrives.

@@ -2152,6 +2152,22 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     }
   }
 
+
+  @override
+  void invalidateDetailCaches(String url) {
+    final key = _parseAnimeUrl(url).animeId.trim();
+    if (key.isEmpty) return;
+    _detailSourceCache.remove(key);
+    _detailSourceExpiresAt.remove(key);
+    _detailSourceRequests.remove(key);
+    _animeDocumentCache.remove(key);
+    _animeDocumentExpiresAt.remove(key);
+    _animeDocumentRequests.remove(key);
+    _episodeRecordCache.remove(key);
+    _episodeRecordExpiresAt.remove(key);
+    _episodeRecordRequests.remove(key);
+  }
+
   double? _scoreFromHit(Map<String, dynamic> source) {
     final details = _map(source['details']);
     final rating = _map(source['rating']);

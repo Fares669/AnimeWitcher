@@ -28,6 +28,7 @@ class DetailsDesktopHero extends ConsumerWidget {
     required this.isMovie,
     required this.itemUrl,
     required this.child,
+    required this.onRefresh,
   });
 
   /// The resolved item for display (details ?? widget.item).
@@ -47,6 +48,9 @@ class DetailsDesktopHero extends ConsumerWidget {
 
   /// Content rendered below the hero section (episodes, cast, etc.).
   final Widget child;
+
+  /// Pull-to-refresh, matching Home and the other catalog lists.
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -168,118 +172,124 @@ class DetailsDesktopHero extends ConsumerWidget {
 
         // ── Layer 4: Scrollable content ──
         Positioned.fill(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 60),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Hero content: poster + metadata ──
-                Directionality(
-                  textDirection: TextDirection.ltr,
-                  child: SizedBox(
-                    width: MediaQuery.sizeOf(context).width * 0.68,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (posterUrl != null && posterUrl.isNotEmpty) ...[
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(14),
-                            child: SizedBox(
-                              width: 180,
-                              height: 270,
-                              child: ArtworkDecode(
-                                paintedWidth: 180,
-                                builder:
-                                    (BuildContext context, int? decodeWidth) =>
-                                        CachedNetworkImage(
-                                          imageUrl: posterUrl,
-                                          fit: BoxFit.cover,
-                                          memCacheWidth: decodeWidth,
-                                          filterQuality: FilterQuality.medium,
-                                          placeholder: (_, _) => ColoredBox(
-                                            color: theme
-                                                .colorScheme
-                                                .surfaceContainerHighest,
-                                          ),
-                                          errorWidget: (_, _, _) =>
-                                              ThumbnailErrorPlaceholder(
-                                                label: displayItem.title,
-                                              ),
+          child: RefreshIndicator(
+            onRefresh: onRefresh,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 60),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── Hero content: poster + metadata ──
+                  Directionality(
+                    textDirection: TextDirection.ltr,
+                    child: SizedBox(
+                      width: MediaQuery.sizeOf(context).width * 0.68,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (posterUrl != null && posterUrl.isNotEmpty) ...[
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(14),
+                              child: SizedBox(
+                                width: 180,
+                                height: 270,
+                                child: ArtworkDecode(
+                                  paintedWidth: 180,
+                                  builder:
+                                      (
+                                        BuildContext context,
+                                        int? decodeWidth,
+                                      ) => CachedNetworkImage(
+                                        imageUrl: posterUrl,
+                                        fit: BoxFit.cover,
+                                        memCacheWidth: decodeWidth,
+                                        filterQuality: FilterQuality.medium,
+                                        placeholder: (_, _) => ColoredBox(
+                                          color: theme
+                                              .colorScheme
+                                              .surfaceContainerHighest,
                                         ),
+                                        errorWidget: (_, _, _) =>
+                                            ThumbnailErrorPlaceholder(
+                                              label: displayItem.title,
+                                            ),
+                                      ),
+                                ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 28),
-                        ],
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Logo or Title
-                              GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onLongPress: () => _copyAnimeTitle(context),
-                                child: displayItem.logoUrl != null
-                                    ? ArtworkDecode(
-                                        paintedWidth: 400,
-                                        builder:
-                                            (
-                                              BuildContext context,
-                                              int? decodeWidth,
-                                            ) => CachedNetworkImage(
-                                              imageUrl: displayItem.logoUrl!,
-                                              height: 200,
-                                              alignment: Alignment.centerLeft,
-                                              fit: BoxFit.contain,
-                                              memCacheWidth: decodeWidth,
-                                              placeholder: (_, _) =>
-                                                  _buildTitle(textColor),
-                                              errorWidget: (_, _, _) =>
-                                                  _buildTitle(textColor),
-                                            ),
-                                      )
-                                    : _buildTitle(textColor),
-                              ),
+                            const SizedBox(width: 28),
+                          ],
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Logo or Title
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onLongPress: () => _copyAnimeTitle(context),
+                                  child: displayItem.logoUrl != null
+                                      ? ArtworkDecode(
+                                          paintedWidth: 400,
+                                          builder:
+                                              (
+                                                BuildContext context,
+                                                int? decodeWidth,
+                                              ) => CachedNetworkImage(
+                                                imageUrl: displayItem.logoUrl!,
+                                                height: 200,
+                                                alignment: Alignment.centerLeft,
+                                                fit: BoxFit.contain,
+                                                memCacheWidth: decodeWidth,
+                                                placeholder: (_, _) =>
+                                                    _buildTitle(textColor),
+                                                errorWidget: (_, _, _) =>
+                                                    _buildTitle(textColor),
+                                              ),
+                                        )
+                                      : _buildTitle(textColor),
+                                ),
 
-                              const SizedBox(height: 16),
+                                const SizedBox(height: 16),
 
-                              MetadataBar(
-                                item: displayItem,
-                                isLoading: detailsState is AsyncLoading,
-                              ),
+                                MetadataBar(
+                                  item: displayItem,
+                                  isLoading: detailsState is AsyncLoading,
+                                ),
 
-                              if (displayItem.nextAiring != null) ...[
-                                const SizedBox(height: 20),
-                                NextAiringWidget(
-                                  nextAiring: displayItem.nextAiring!,
+                                if (displayItem.nextAiring != null) ...[
+                                  const SizedBox(height: 20),
+                                  NextAiringWidget(
+                                    nextAiring: displayItem.nextAiring!,
+                                  ),
+                                ],
+
+                                const SizedBox(height: 32),
+
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 400,
+                                  ),
+                                  child: DetailsActionButtons(
+                                    item: baseItem,
+                                    details: details,
+                                    itemUrl: itemUrl,
+                                  ),
                                 ),
                               ],
-
-                              const SizedBox(height: 32),
-
-                              ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 400,
-                                ),
-                                child: DetailsActionButtons(
-                                  item: baseItem,
-                                  details: details,
-                                  itemUrl: itemUrl,
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
 
-                const SizedBox(height: 60),
+                  const SizedBox(height: 60),
 
-                // ── Content below hero (full width) ──
-                child,
-              ],
+                  // ── Content below hero (full width) ──
+                  child,
+                ],
+              ),
             ),
           ),
         ),
