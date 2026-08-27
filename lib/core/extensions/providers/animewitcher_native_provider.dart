@@ -1440,10 +1440,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         (day) => _dedupeHits(grouped[day]!, applyEcchiFilter: false),
       ),
     );
-    return _filterBroadcastSchedule(<String, List<MultimediaItem>>{
+    return <String, List<MultimediaItem>>{
       for (var i = 0; i < animeWitcherBroadcastDays.length; i++)
         animeWitcherBroadcastDays[i]: lists[i],
-    });
+    };
   }
 
   Map<String, List<MultimediaItem>> _filterBroadcastSchedule(

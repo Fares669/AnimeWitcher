@@ -26,6 +26,7 @@ void main() {
     await client.patchDocument(
       'users/profile-1',
       const <String, dynamic>{
+        'user_name': 'Updated user',
         'settings.show_fav_to_users': false,
         'settings.show_comments_to_users': false,
         'settings.show_reviews_to_users': false,
@@ -43,6 +44,7 @@ void main() {
       'settings.show_comments_to_users',
       'settings.show_fav_to_users',
       'settings.show_reviews_to_users',
+      'user_name',
     ]);
     final payload = Map<String, dynamic>.from(request.data as Map);
     expect(payload['fields'], <String, dynamic>{
@@ -60,6 +62,7 @@ void main() {
           },
         },
       },
+      'user_name': <String, dynamic>{'stringValue': 'Updated user'},
     });
   });
 }
