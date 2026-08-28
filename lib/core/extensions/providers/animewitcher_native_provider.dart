@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:html_unescape/html_unescape.dart';
 
+import '../../account/animewitcher_character_models.dart';
 import '../../domain/entity/multimedia_item.dart';
 import '../../network/bounded_batch_scheduler.dart';
 import '../../network/next_airing_timeout.dart';
@@ -541,29 +542,48 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     }
   }
 
-  String _algoliaUrl(String index) {
-    return 'https://$_algoliaAppId-dsn.algolia.net/1/indexes/'
-        '${Uri.encodeComponent(index)}/query';
-  }
-
-  Map<String, String> get _algoliaHeaders => <String, String>{
-        'X-Algolia-Application-Id': _algoliaAppId,
-        'X-Algolia-API-Key': _algoliaApiKey,
-        'X-Algolia-Agent': 'Algolia for JavaScript (4.x); AnimeWitcher',
-        'User-Agent': 'Algolia for Android (3.27.0); Android (13)',
-      };
-
   Future<Map<String, dynamic>> _algoliaQuery(
     String index, {
     String query = '',
     int page = 0,
     int hitsPerPage = 30,
+    int maxHitsPerPage = 100,
     String filters = '',
     List<String>? attributes,
     CancelToken? cancelToken,
     bool throwOnFailure = false,
   }) async {
     await _refreshRemoteConstants();
+    return _algoliaIndexRequest(
+      index: index,
+      operation: 'query',
+      appId: _algoliaAppId,
+      apiKey: _algoliaApiKey,
+      query: query,
+      page: page,
+      hitsPerPage: hitsPerPage,
+      maxHitsPerPage: maxHitsPerPage,
+      filters: filters,
+      attributes: attributes,
+      cancelToken: cancelToken,
+      throwOnFailure: throwOnFailure,
+    );
+  }
+
+  Future<Map<String, dynamic>> _algoliaIndexRequest({
+    required String index,
+    required String operation,
+    required String appId,
+    required String apiKey,
+    String query = '',
+    int page = 0,
+    int hitsPerPage = 30,
+    int maxHitsPerPage = 100,
+    String filters = '',
+    List<String>? attributes,
+    CancelToken? cancelToken,
+    bool throwOnFailure = false,
+  }) async {
     final params = <String>[];
     void append(String key, Object? value) {
       if (value == null || value.toString().isEmpty) return;
@@ -574,18 +594,26 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     }
 
     append('query', query);
-    append('hitsPerPage', hitsPerPage.clamp(1, 100));
+    append('hitsPerPage', hitsPerPage.clamp(1, maxHitsPerPage));
     append('page', page < 0 ? 0 : page);
     if (attributes != null && attributes.isNotEmpty) {
       append('attributesToRetrieve', jsonEncode(attributes));
     }
     if (filters.isNotEmpty) append('filters', filters);
 
+    final url =
+        'https://$appId-dsn.algolia.net/1/indexes/'
+        '${Uri.encodeComponent(index)}/$operation';
     final payload = await _postJson(
-      _algoliaUrl(index),
+      url,
       <String, dynamic>{'params': params.join('&')},
       cancelToken: cancelToken,
-      headers: _algoliaHeaders,
+      headers: <String, String>{
+        'X-Algolia-Application-Id': appId,
+        'X-Algolia-API-Key': apiKey,
+        'X-Algolia-Agent': 'Algolia for JavaScript (4.x); AnimeWitcher',
+        'User-Agent': 'Algolia for Android (3.27.0); Android (13)',
+      },
     );
     if (payload == null || payload['hits'] is! List) {
       if (throwOnFailure) {
@@ -598,6 +626,140 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       };
     }
     return payload;
+  }
+
+  Future<AnimeWitcherSearchServiceSettings> _loadSearchService() async {
+    final fields = await _firestoreDocumentFields(animeWitcherSearchServicePath);
+    return AnimeWitcherSearchServiceSettings.fromFields(fields);
+  }
+
+  Future<AnimeWitcherCharacterPage> getCharactersPage({
+    int page = 0,
+    int hitsPerPage = animeWitcherCharacterBrowseHitsPerPage,
+  }) async {
+    final settings = await _loadSearchService();
+    if (!settings.isSearchActive) {
+      throw AnimeWitcherSearchDisabledException(
+        settings.errorMessage.isEmpty ? 'لا يوجد بيانات' : settings.errorMessage,
+      );
+    }
+    if (settings.appId.isEmpty || settings.browseApiKey.isEmpty) {
+      throw StateError('AnimeWitcher catalog request failed.');
+    }
+    final safePage = page < 0 ? 0 : page;
+    final payload = await _algoliaIndexRequest(
+      index: animeWitcherCharactersAlgoliaIndex,
+      operation: 'browse',
+      appId: settings.appId,
+      apiKey: settings.browseApiKey,
+      page: safePage,
+      hitsPerPage: hitsPerPage,
+      maxHitsPerPage: hitsPerPage < 20 ? 20 : hitsPerPage,
+      attributes: animeWitcherCharacterAlgoliaAttributes,
+      throwOnFailure: true,
+    );
+    return _characterPageFromAlgolia(payload, requestedPage: safePage);
+  }
+
+  Future<AnimeWitcherCharacterPage> searchCharacters(String query) async {
+    final text = query.trim();
+    if (text.isEmpty) {
+      return getCharactersPage();
+    }
+    final settings = await _loadSearchService();
+    if (!settings.isSearchActive) {
+      throw AnimeWitcherSearchDisabledException(
+        settings.errorMessage.isEmpty ? 'لا يوجد بيانات' : settings.errorMessage,
+      );
+    }
+    final payload = await _algoliaQuery(
+      animeWitcherCharactersAlgoliaIndex,
+      query: text,
+      page: 0,
+      hitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+      maxHitsPerPage: animeWitcherCharacterSearchHitsPerPage,
+      attributes: animeWitcherCharacterAlgoliaAttributes,
+      throwOnFailure: true,
+    );
+    return _characterPageFromAlgolia(payload, requestedPage: 0, isSearch: true);
+  }
+
+  AnimeWitcherCharacterPage _characterPageFromAlgolia(
+    Map<String, dynamic> payload, {
+    required int requestedPage,
+    bool isSearch = false,
+  }) {
+    final rawHits = _list(payload['hits']);
+    final items = rawHits
+        .map(AnimeWitcherCharacterHit.fromAlgolia)
+        .where((hit) => hit.id.isNotEmpty && hit.name.isNotEmpty)
+        .toList(growable: false);
+    final nbPages = int.tryParse(_text(payload['nbPages'])) ?? 0;
+    final page = int.tryParse(_text(payload['page'])) ?? requestedPage;
+    final pageSize = isSearch
+        ? animeWitcherCharacterSearchHitsPerPage
+        : animeWitcherCharacterBrowseHitsPerPage;
+    final hasMore = isSearch
+        ? false
+        : nbPages > 0
+            ? page + 1 < nbPages
+            : items.length >= pageSize;
+    return AnimeWitcherCharacterPage(
+      items: items,
+      page: page,
+      hasMore: hasMore,
+    );
+  }
+
+  Future<AnimeWitcherCharacterDocument?> getCharacterDocument(
+    String characterId,
+  ) async {
+    final id = characterId.trim();
+    if (id.isEmpty) return null;
+    final fields = await _firestoreDocumentFields(
+      animeWitcherCharactersListPath(id),
+    );
+    if (fields.isEmpty) return null;
+    final document = AnimeWitcherCharacterDocument.fromFields(id, fields);
+    if (document.name.isEmpty) return null;
+    return document;
+  }
+
+  Future<List<AnimeWitcherCharacterShow>> getCharacterAnimes(
+    AnimeWitcherCharacterDocument character,
+  ) async {
+    final shows = <AnimeWitcherCharacterShow>[];
+    final seen = <String>{};
+    for (final reference in character.animes) {
+      final raw = await _firestoreRestRunQuery(
+        <String, dynamic>{
+          'from': const <Map<String, dynamic>>[
+            <String, dynamic>{'collectionId': 'anime_list'},
+          ],
+          'where': <String, dynamic>{
+            'fieldFilter': <String, dynamic>{
+              'field': const <String, dynamic>{'fieldPath': 'mal_id'},
+              'op': 'EQUAL',
+              'value': <String, dynamic>{'stringValue': reference.malId},
+            },
+          },
+          'limit': 1,
+        },
+      );
+      if (raw.isEmpty) continue;
+      final hit = _firestoreDocumentHit(_map(raw.first)['document']);
+      if (hit.isEmpty) continue;
+      final item = _mapHit(hit);
+      if (item.title.trim().isEmpty || item.url.trim().isEmpty) continue;
+      if (!seen.add(item.url)) continue;
+      shows.add(AnimeWitcherCharacterShow(item: item, role: reference.role));
+    }
+    return _filterEcchiItems(shows.map((show) => show.item))
+        .map((item) {
+          final match = shows.firstWhere((show) => show.item.url == item.url);
+          return AnimeWitcherCharacterShow(item: item, role: match.role);
+        })
+        .toList(growable: false);
   }
 
   static const List<String> _searchAttributes = <String>[
@@ -2419,7 +2581,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   Future<List<_AnimeWitcherCharacterRef>>
-      _animeWitcherCharacterRefsForRole(String animeId, String role) async {
+      _animeWitcherCharacterRefsForRole(
+    String animeId,
+    String role, {
+    int limit = animeWitcherAnimeCastStripLimit,
+  }) async {
 
     final raw = await _firestoreRestRunQuery(
       <String, dynamic>{
@@ -2433,7 +2599,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
             'value': <String, dynamic>{'stringValue': role},
           },
         },
-        'limit': 10,
+        'limit': limit,
       },
       parent: 'anime_list/$animeId',
     );
@@ -2449,13 +2615,14 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   Future<List<_AnimeWitcherCharacterRef>> _animeWitcherCharacterRefs(
-    String animeId,
-  ) async {
+    String animeId, {
+    int limit = animeWitcherAnimeCastStripLimit,
+  }) async {
     final cleanId = animeId.trim();
     if (cleanId.isEmpty) return const <_AnimeWitcherCharacterRef>[];
     final groups = await Future.wait(<Future<List<_AnimeWitcherCharacterRef>>>[
-      _animeWitcherCharacterRefsForRole(cleanId, 'Main'),
-      _animeWitcherCharacterRefsForRole(cleanId, 'Supporting'),
+      _animeWitcherCharacterRefsForRole(cleanId, 'Main', limit: limit),
+      _animeWitcherCharacterRefsForRole(cleanId, 'Supporting', limit: limit),
     ]);
     return <_AnimeWitcherCharacterRef>[...groups[0], ...groups[1]];
   }
@@ -2488,6 +2655,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
     return _AnimeWitcherCharacter(
       actor: Actor(
+        id: reference.id,
         name: name,
         image: image.isEmpty ? null : image,
         role: _characterRole(reference.role),
@@ -2498,9 +2666,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   Future<List<Actor>> _animeWitcherServerCast(
-    String animeId,
-  ) async {
-    final references = await _animeWitcherCharacterRefs(animeId);
+    String animeId, {
+    int limit = animeWitcherAnimeCastStripLimit,
+  }) async {
+    final references = await _animeWitcherCharacterRefs(
+      animeId,
+      limit: limit,
+    );
     if (references.isEmpty) return const <Actor>[];
 
     final characters = await Future.wait(
@@ -2521,6 +2693,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       ...supporting.map((item) => item.actor),
     ];
     return output;
+  }
+
+  Future<List<Actor>> getAnimeCharacters(
+    String animeId, {
+    int limit = 50,
+  }) async {
+    return _animeWitcherServerCast(animeId, limit: limit);
   }
 
   @override

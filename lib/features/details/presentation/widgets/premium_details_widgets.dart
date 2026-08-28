@@ -511,10 +511,19 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
 
 class CastCarousel extends StatelessWidget {
   final List<Actor> cast;
-  const CastCarousel({super.key, required this.cast});
+  final void Function(Actor actor)? onActorTap;
+  final VoidCallback? onShowMore;
+
+  const CastCarousel({
+    super.key,
+    required this.cast,
+    this.onActorTap,
+    this.onShowMore,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final extra = onShowMore == null ? 0 : 1;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -531,46 +540,90 @@ class CastCarousel extends StatelessWidget {
           height: 160,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            itemCount: cast.length,
+            itemCount: cast.length + extra,
             separatorBuilder: (_, _) => const SizedBox(width: 16),
             itemBuilder: (context, index) {
-              final actor = cast[index];
-              return SizedBox(
-                width: 80,
-                child: Column(
-                  children: [
-                    CircleAvatar(
-                      radius: 35,
-                      backgroundImage: actor.image != null
-                          ? CachedNetworkImageProvider(actor.image!)
-                          : null,
-                      child: actor.image == null
-                          ? const Icon(Icons.person)
-                          : null,
+              if (index >= cast.length) {
+                return SizedBox(
+                  width: 80,
+                  child: InkWell(
+                    onTap: onShowMore,
+                    borderRadius: BorderRadius.circular(40),
+                    child: Column(
+                      children: [
+                        CircleAvatar(
+                          radius: 35,
+                          backgroundColor: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.16),
+                          child: Icon(
+                            Icons.more_horiz_rounded,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _detailsText(
+                            context,
+                            english: 'More',
+                            arabic: 'المزيد',
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 8),
+                  ),
+                );
+              }
+              final actor = cast[index];
+              final content = Column(
+                children: [
+                  CircleAvatar(
+                    radius: 35,
+                    backgroundImage: actor.image != null
+                        ? CachedNetworkImageProvider(actor.image!)
+                        : null,
+                    child: actor.image == null
+                        ? const Icon(Icons.person)
+                        : null,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    actor.name,
+                    textDirection: TextDirection.ltr,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (actor.role != null)
                     Text(
-                      actor.name,
-                      textDirection: TextDirection.ltr,
+                      actor.role!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        fontWeight: FontWeight.bold,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).hintColor,
                       ),
                     ),
-                    if (actor.role != null)
-                      Text(
-                        actor.role!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Theme.of(context).hintColor,
-                        ),
+                ],
+              );
+              return SizedBox(
+                width: 80,
+                child: onActorTap == null
+                    ? content
+                    : InkWell(
+                        onTap: () => onActorTap!(actor),
+                        borderRadius: BorderRadius.circular(12),
+                        child: content,
                       ),
-                  ],
-                ),
               );
             },
           ),

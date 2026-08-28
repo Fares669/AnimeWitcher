@@ -9,6 +9,8 @@ import '../../home/presentation/view_all_screen.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/account/animewitcher_comment_models.dart';
+import '../../characters/presentation/anime_characters_screen.dart';
+import '../../characters/presentation/character_details_screen.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../core/utils/artwork_quality.dart';
 import '../../../core/utils/image_fallbacks.dart';
@@ -1485,10 +1487,38 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
     Widget castSection() {
       if (cast.isNotEmpty) {
+        final animeId = animeWitcherAnimeCommentTarget(item)?.animeId;
         return Column(
           children: [
             const SizedBox(height: 32),
-            CastCarousel(cast: cast),
+            CastCarousel(
+              cast: cast,
+              onActorTap: (actor) {
+                final id = actor.id?.trim() ?? '';
+                if (id.isEmpty) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => CharacterDetailsScreen(
+                      characterId: id,
+                      initialName: actor.name,
+                      initialImageUrl: actor.image,
+                    ),
+                  ),
+                );
+              },
+              onShowMore: animeId == null || animeId.isEmpty
+                  ? null
+                  : () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => AnimeCharactersScreen(
+                            animeId: animeId,
+                            animeTitle: item.title,
+                          ),
+                        ),
+                      );
+                    },
+            ),
           ],
         );
       }
@@ -1498,7 +1528,23 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
           isArabic ? 'طاقم الشخصيات' : 'Cast',
         );
       }
-      return const SizedBox.shrink();
+      if (castState.hasError) {
+        return const SizedBox.shrink();
+      }
+      if (!isAnimeWitcherCommentItem(item)) {
+        return const SizedBox.shrink();
+      }
+      return Padding(
+        padding: const EdgeInsets.only(top: 32),
+        child: Text(
+          isArabic
+              ? 'لم يتم اضافة الشخصيات حتي الان'
+              : 'No characters have been added yet',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+        ),
+      );
     }
 
     Widget recommendationsSection() {

@@ -37,6 +37,8 @@ class AnimeWitcherCommentTarget {
     this.episodeId,
     this.episodeName,
     this.newsId,
+    this.characterId,
+    this.characterName,
   });
 
   final String collectionPath;
@@ -46,12 +48,16 @@ class AnimeWitcherCommentTarget {
   final String? episodeId;
   final String? episodeName;
   final String? newsId;
+  final String? characterId;
+  final String? characterName;
 
   Map<String, dynamic> get publishFields => <String, dynamic>{
         if (animeId?.isNotEmpty == true) 'anime_id': animeId,
         if (episodeId?.isNotEmpty == true) 'episode_id': episodeId,
         if (episodeName?.isNotEmpty == true) 'episode_name': episodeName,
         if (newsId?.isNotEmpty == true) 'new_id': newsId,
+        if (characterId?.isNotEmpty == true) 'character_id': characterId,
+        if (characterName?.isNotEmpty == true) 'character_name': characterName,
       };
 }
 

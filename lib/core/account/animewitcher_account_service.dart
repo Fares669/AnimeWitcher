@@ -12,6 +12,7 @@ import '../storage/storage_service.dart';
 import '../utils/episode_label.dart';
 import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
+import 'animewitcher_character_models.dart';
 import 'animewitcher_comment_models.dart';
 import 'animewitcher_sync_conflict.dart';
 import 'animewitcher_sync_ids.dart';
@@ -1235,6 +1236,126 @@ class AnimeWitcherAccountService {
         token,
       );
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Favorite characters
+  // -------------------------------------------------------------------------
+
+  Future<bool> isFavoriteCharacter(String characterId) async {
+    final id = characterId.trim();
+    final profile = _profile;
+    if (id.isEmpty || profile == null || _session == null) return false;
+    final document = await _authenticated(
+      (token) => _firestore.getDocument(
+        animeWitcherFavCharacterPath(profile.documentId, id),
+        token,
+      ),
+    );
+    return document != null;
+  }
+
+  Future<bool> toggleFavoriteCharacter(String characterId) async {
+    final id = characterId.trim();
+    final profile = _requireCharacterFavoriteProfile();
+    if (id.isEmpty) {
+      throw const AnimeWitcherAccountException(
+        'invalid-character',
+        'Character id is missing.',
+      );
+    }
+    final path = animeWitcherFavCharacterPath(profile.documentId, id);
+    return _authenticated((token) async {
+      final existing = await _firestore.getDocument(path, token);
+      if (existing != null) {
+        await _firestore.deleteDocument(path, token);
+        return false;
+      }
+      await _firestore.setDocumentWithServerTimestamps(
+        path,
+        animeWitcherFavoriteCharacterWriteFields(id),
+        token,
+        serverTimestampFields: const <String>{'date'},
+        merge: true,
+      );
+      return true;
+    });
+  }
+
+  Future<AnimeWitcherFavoriteCharacterPage> loadFavoriteCharacters({
+    FirestoreDocument? cursor,
+    int limit = animeWitcherFavoriteCharactersPageSize,
+  }) async {
+    final profile = _requireCharacterFavoriteProfile();
+    return _authenticated((token) async {
+      final documents = await _firestore.queryOrderedDocumentsPage(
+        animeWitcherFavCharactersCollectionPath(profile.documentId),
+        token,
+        startAfter: cursor,
+        limit: limit,
+      );
+      final items = <AnimeWitcherFavoriteCharacter>[];
+      for (final document in documents) {
+        var favorite = AnimeWitcherFavoriteCharacter.fromFields(
+          document.id,
+          document.fields,
+        );
+        if (favorite.needsDenorm) {
+          favorite = await _hydrateFavoriteCharacter(
+            favorite,
+            token: token,
+            userId: profile.documentId,
+          );
+        }
+        items.add(favorite);
+      }
+      return AnimeWitcherFavoriteCharacterPage(
+        items: items,
+        cursor: documents.isEmpty ? cursor : documents.last,
+        hasMore: documents.length >= limit,
+      );
+    });
+  }
+
+  Future<AnimeWitcherFavoriteCharacter> _hydrateFavoriteCharacter(
+    AnimeWitcherFavoriteCharacter favorite, {
+    required String token,
+    required String userId,
+  }) async {
+    final character = await _firestore.getDocument(
+      animeWitcherCharactersListPath(favorite.malId),
+      token,
+    );
+    var hydrated = favorite;
+    if (character != null) {
+      final parsed = AnimeWitcherCharacterDocument.fromFields(
+        favorite.malId,
+        character.fields,
+      );
+      hydrated = favorite.copyWith(
+        name: parsed.name.isNotEmpty ? parsed.name : favorite.name,
+        imageUrl: parsed.imageUrl ?? favorite.imageUrl,
+        likes: parsed.likes > 0 ? parsed.likes : favorite.likes,
+        needsDenorm: false,
+      );
+    }
+    await _firestore.patchDocument(
+      animeWitcherFavCharacterPath(userId, favorite.malId),
+      Map<String, dynamic>.from(animeWitcherFavoriteCharacterDenormTrigger),
+      token,
+    );
+    return hydrated;
+  }
+
+  AnimeWitcherProfile _requireCharacterFavoriteProfile() {
+    final profile = _profile;
+    if (profile == null || _session == null) {
+      throw const AnimeWitcherAccountException(
+        'not-signed-in',
+        'Sign in to AnimeWitcher before managing favorite characters.',
+      );
+    }
+    return profile;
   }
 
   /// Refreshes the Recently Watched list from AnimeWitcher's cloud data.

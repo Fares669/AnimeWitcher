@@ -12,8 +12,15 @@ class Actor {
   final String? image;
   final String? role;
   final Actor? voiceActor;
+  final String? id;
 
-  Actor({required this.name, this.image, this.role, this.voiceActor});
+  Actor({
+    required this.name,
+    this.image,
+    this.role,
+    this.voiceActor,
+    this.id,
+  });
 
   factory Actor.fromJson(Map<String, dynamic> json) {
     return Actor(
@@ -23,6 +30,7 @@ class Actor {
       voiceActor: json['voiceActor'] != null
           ? Actor.fromJson(Map<String, dynamic>.from(json['voiceActor'] as Map))
           : null,
+      id: (json['id'] as String?) ?? (json['characterId'] as String?),
     );
   }
 
@@ -32,6 +40,7 @@ class Actor {
       'image': image,
       'role': role,
       'voiceActor': voiceActor?.toJson(),
+      'id': id,
     };
   }
 }

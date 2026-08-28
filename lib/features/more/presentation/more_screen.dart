@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_models.dart';
+import '../../characters/presentation/characters_screen.dart';
 import '../../settings/presentation/account_screen.dart';
 import '../../settings/presentation/settings_screen.dart';
 import 'broadcast_schedule_screen.dart';
@@ -88,6 +89,19 @@ class MoreScreen extends ConsumerWidget {
             onTap: () => Navigator.of(context, rootNavigator: true).push(
               MaterialPageRoute<void>(
                 builder: (_) => const RecentWatchedScreen(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _MoreTile(
+            icon: Icons.groups_rounded,
+            title: isArabic ? 'الشخصيات' : 'Characters',
+            subtitle: isArabic
+                ? 'تصفح الشخصيات وابحث عنها وأدر المفضلة'
+                : 'Browse, search, and favorite characters',
+            onTap: () => Navigator.of(context, rootNavigator: true).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const CharactersScreen(),
               ),
             ),
           ),

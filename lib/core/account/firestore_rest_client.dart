@@ -273,6 +273,62 @@ class FirestoreRestClient {
     return output;
   }
 
+  /// One page of an ordered collection, matching Android `orderBy + startAfter`.
+  Future<List<FirestoreDocument>> queryOrderedDocumentsPage(
+    String collectionPath,
+    String idToken, {
+    String orderField = 'date',
+    bool descending = true,
+    FirestoreDocument? startAfter,
+    int limit = 12,
+  }) async {
+    final normalized = collectionPath.replaceFirst(RegExp(r'/+$'), '');
+    final segments = normalized
+        .split('/')
+        .where((segment) => segment.isNotEmpty)
+        .toList();
+    if (segments.isEmpty) return const <FirestoreDocument>[];
+    final collectionId = segments.removeLast();
+    final parentPath = segments.join('/');
+    final endpoint = parentPath.isEmpty
+        ? '$_documentsBase:runQuery'
+        : '$_documentsBase/${_encodedPath(parentPath)}:runQuery';
+    final structuredQuery = <String, dynamic>{
+      'from': <Map<String, dynamic>>[
+        <String, dynamic>{'collectionId': collectionId},
+      ],
+      'orderBy': <Map<String, dynamic>>[
+        <String, dynamic>{
+          'field': <String, dynamic>{'fieldPath': orderField},
+          'direction': descending ? 'DESCENDING' : 'ASCENDING',
+        },
+        <String, dynamic>{
+          'field': <String, dynamic>{'fieldPath': '__name__'},
+          'direction': descending ? 'DESCENDING' : 'ASCENDING',
+        },
+      ],
+      if (startAfter != null)
+        'startAt': <String, dynamic>{
+          'values': <Map<String, dynamic>>[
+            FirestoreValueCodec.encode(startAfter.fields[orderField]),
+            FirestoreValueCodec.encode(FirestoreReference(startAfter.path)),
+          ],
+          'before': false,
+        },
+      'limit': limit.clamp(1, 100),
+    };
+    try {
+      final response = await _dio.post<dynamic>(
+        endpoint,
+        data: <String, dynamic>{'structuredQuery': structuredQuery},
+        options: _options(idToken),
+      );
+      return _decodeRunQueryDocuments(response.data);
+    } on DioException catch (error) {
+      throw _firestoreException(error);
+    }
+  }
+
   Future<List<FirestoreDocument>> queryByStringField({
     required String collectionId,
     required String field,
