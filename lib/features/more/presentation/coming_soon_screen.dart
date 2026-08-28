@@ -72,7 +72,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
       _error = null;
     });
     try {
-      final page = await provider.getUpcomingPage(offset: _offset, limit: 30);
+      final page = await provider.getUpcomingPage(offset: _offset);
       if (!mounted) return;
       setState(() {
         for (final item in page.items) {
