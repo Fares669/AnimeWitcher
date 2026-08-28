@@ -168,14 +168,19 @@ class MultimediaCard extends StatelessWidget {
 
     final titleSize = effectiveCompact ? 12.0 : (isDesktop ? 15.0 : 13.0);
     final subtitleSize = effectiveCompact ? 10.0 : (isDesktop ? 12.0 : 11.0);
+    final isLight = Theme.of(context).brightness == Brightness.light;
     final titleTextStyle = TextStyle(
-      color: Colors.white.withValues(alpha: 0.92),
+      color: isLight
+          ? const Color(0xFF111111)
+          : Colors.white.withValues(alpha: 0.92),
       fontSize: titleSize,
       fontWeight: FontWeight.w600,
       height: 1.2,
     );
     final subtitleTextStyle = TextStyle(
-      color: Colors.white.withValues(alpha: 0.45),
+      color: isLight
+          ? const Color(0xFF1A1A1A)
+          : Colors.white.withValues(alpha: 0.45),
       fontSize: subtitleSize,
       fontWeight: FontWeight.w500,
       height: 1.2,
@@ -342,28 +347,32 @@ class MultimediaCard extends StatelessWidget {
   }) {
     return Padding(
       padding: const EdgeInsetsDirectional.only(top: 6, start: 2, end: 2),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textDirection: TextDirection.ltr,
-            textAlign: TextAlign.end,
-            style: titleTextStyle,
-          ),
-          if (caption != null) ...[
-            const SizedBox(height: 2),
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             Text(
-              caption,
+              title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.start,
-              style: subtitleTextStyle,
+              textDirection: TextDirection.ltr,
+              textAlign: TextAlign.left,
+              style: titleTextStyle,
             ),
+            if (caption != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                caption,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textDirection: TextDirection.ltr,
+                textAlign: TextAlign.left,
+                style: subtitleTextStyle,
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
