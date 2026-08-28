@@ -299,17 +299,19 @@ class AnimeWitcherCharacterShow {
 List<AnimeWitcherCharacterAnimeRef> parseAnimeWitcherCharacterAnimes(
   dynamic raw,
 ) {
-  if (raw is! Iterable) return const <AnimeWitcherCharacterAnimeRef>[];
+  final entries = _characterAnimeEntries(raw);
+  if (entries.isEmpty) return const <AnimeWitcherCharacterAnimeRef>[];
   final output = <AnimeWitcherCharacterAnimeRef>[];
   final seen = <String>{};
-  for (final entry in raw) {
+  for (final entry in entries) {
     final row = _map(entry);
     final anime = _map(row['anime']);
-    final malId = _text(
+    final malId = _digits(
       anime['mal_id'] ??
           anime['malId'] ??
           row['mal_id'] ??
-          row['malId'],
+          row['malId'] ??
+          entry,
     );
     if (malId.isEmpty || !seen.add(malId)) continue;
     output.add(
@@ -320,6 +322,34 @@ List<AnimeWitcherCharacterAnimeRef> parseAnimeWitcherCharacterAnimes(
     );
   }
   return output;
+}
+
+List<dynamic> _characterAnimeEntries(dynamic raw) {
+  if (raw is Iterable && raw is! String) {
+    return raw.map<dynamic>((entry) => entry).toList(growable: false);
+  }
+  final map = _map(raw);
+  if (map.isEmpty) return const <dynamic>[];
+  final nested = map['arrayValue'] ?? map['values'] ?? map['anime'];
+  if (nested is Iterable && nested is! String) {
+    return nested.map<dynamic>((entry) => entry).toList(growable: false);
+  }
+  final values = _map(map['arrayValue'])['values'];
+  if (values is Iterable && values is! String) {
+    return values.map<dynamic>((entry) => entry).toList(growable: false);
+  }
+  if (map.containsKey('mal_id') ||
+      map.containsKey('malId') ||
+      map.containsKey('anime') ||
+      map.containsKey('role')) {
+    return <dynamic>[map];
+  }
+  return const <dynamic>[];
+}
+
+String _digits(dynamic raw) {
+  final match = RegExp(r'\d+').firstMatch(_text(raw));
+  return match?.group(0) ?? '';
 }
 
 AnimeWitcherCommentTarget animeWitcherCharacterCommentTarget({

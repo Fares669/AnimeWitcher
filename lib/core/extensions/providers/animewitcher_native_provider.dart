@@ -853,13 +853,57 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return document;
   }
 
+  /// Resolves `characters_list.data.anime[].anime.mal_id` against `anime_list`.
+  ///
+  /// Live AnimeWitcher rules allow a public `mal_id IN` list (the same path as
+  /// Related titles) but deny `EQUAL` and unconstrained collection scans.
+  /// Jikan stores those ids as numbers; `anime_list.mal_id` is a string, so
+  /// every id is sent as `stringValue`.
   Future<List<AnimeWitcherCharacterShow>> getCharacterAnimes(
     AnimeWitcherCharacterDocument character,
   ) async {
+    if (character.animes.isEmpty) {
+      return const <AnimeWitcherCharacterShow>[];
+    }
+    final hitsByMalId = await _animeListHitsByMalIds(
+      character.animes.map((reference) => reference.malId),
+    );
     final shows = <AnimeWitcherCharacterShow>[];
     final seen = <String>{};
     for (final reference in character.animes) {
-      final raw = await _firestoreRestRunQuery(
+      final hit = hitsByMalId[reference.malId];
+      if (hit == null) continue;
+      final item = _mapHit(hit);
+      if (item.title.trim().isEmpty || item.url.trim().isEmpty) continue;
+      if (!seen.add(item.url)) continue;
+      shows.add(AnimeWitcherCharacterShow(item: item, role: reference.role));
+    }
+    final visibleUrls = _filterEcchiItems(shows.map((show) => show.item))
+        .map((item) => item.url)
+        .toSet();
+    return shows
+        .where((show) => visibleUrls.contains(show.item.url))
+        .toList(growable: false);
+  }
+
+  Future<Map<String, Map<String, dynamic>>> _animeListHitsByMalIds(
+    Iterable<String> rawIds,
+  ) async {
+    final ids = <String>[];
+    final seen = <String>{};
+    for (final raw in rawIds) {
+      final id = raw.trim();
+      if (id.isEmpty || !seen.add(id)) continue;
+      ids.add(id);
+    }
+    if (ids.isEmpty) return const <String, Map<String, dynamic>>{};
+
+    final hitsByMalId = <String, Map<String, dynamic>>{};
+    const batchSize = 10;
+    for (var start = 0; start < ids.length; start += batchSize) {
+      final end = start + batchSize > ids.length ? ids.length : start + batchSize;
+      final batch = ids.sublist(start, end);
+      final raw = await _firestoreRestRunQueryOrThrow(
         <String, dynamic>{
           'from': const <Map<String, dynamic>>[
             <String, dynamic>{'collectionId': 'anime_list'},
@@ -867,27 +911,66 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
           'where': <String, dynamic>{
             'fieldFilter': <String, dynamic>{
               'field': const <String, dynamic>{'fieldPath': 'mal_id'},
-              'op': 'EQUAL',
-              'value': <String, dynamic>{'stringValue': reference.malId},
+              'op': 'IN',
+              'value': <String, dynamic>{
+                'arrayValue': <String, dynamic>{
+                  'values': <Map<String, dynamic>>[
+                    for (final id in batch)
+                      <String, dynamic>{'stringValue': id},
+                  ],
+                },
+              },
             },
           },
-          'limit': 1,
         },
       );
-      if (raw.isEmpty) continue;
-      final hit = _firestoreDocumentHit(_map(raw.first)['document']);
-      if (hit.isEmpty) continue;
-      final item = _mapHit(hit);
-      if (item.title.trim().isEmpty || item.url.trim().isEmpty) continue;
-      if (!seen.add(item.url)) continue;
-      shows.add(AnimeWitcherCharacterShow(item: item, role: reference.role));
+      for (final row in raw) {
+        final hit = _firestoreDocumentHit(_map(row)['document']);
+        if (hit.isEmpty) continue;
+        final malId = _text(hit['mal_id'] ?? hit['malId']);
+        final numeric = _malId(hit);
+        if (malId.isNotEmpty) {
+          hitsByMalId.putIfAbsent(malId, () => hit);
+        }
+        if (numeric > 0) {
+          hitsByMalId.putIfAbsent('$numeric', () => hit);
+        }
+      }
     }
-    return _filterEcchiItems(shows.map((show) => show.item))
-        .map((item) {
-          final match = shows.firstWhere((show) => show.item.url == item.url);
-          return AnimeWitcherCharacterShow(item: item, role: match.role);
-        })
-        .toList(growable: false);
+    return hitsByMalId;
+  }
+
+  Future<List<dynamic>> _firestoreRestRunQueryOrThrow(
+    Map<String, dynamic> structuredQuery, {
+    String parent = '',
+    Duration timeout = _httpTimeout,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _dio.post<dynamic>(
+        _firestoreRunQueryUrl(parent),
+        data: <String, dynamic>{'structuredQuery': structuredQuery},
+        cancelToken: cancelToken,
+        options: _jsonOptions(timeout: timeout),
+      );
+      final status = response.statusCode ?? 0;
+      if (status < 200 || status >= 300) {
+        throw StateError('AnimeWitcher catalog request failed.');
+      }
+      final raw = _list(response.data);
+      for (final row in raw) {
+        final error = _map(_map(row)['error']);
+        if (error.isEmpty) continue;
+        final message = _text(error['message']);
+        throw StateError(
+          message.isEmpty ? 'AnimeWitcher catalog request failed.' : message,
+        );
+      }
+      return raw;
+    } on DioException catch (error) {
+      if (CancelToken.isCancel(error)) rethrow;
+      throw StateError('AnimeWitcher catalog request failed.');
+    }
   }
 
   static const List<String> _searchAttributes = <String>[

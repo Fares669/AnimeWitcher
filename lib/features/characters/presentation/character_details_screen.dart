@@ -44,6 +44,7 @@ class _CharacterDetailsScreenState
   AnimeWitcherCharacterDocument? _document;
   List<AnimeWitcherCharacterShow> _animes = const <AnimeWitcherCharacterShow>[];
   Object? _error;
+  Object? _animesError;
   bool _loading = true;
   bool _favorite = false;
   bool _favoriteBusy = false;
@@ -107,6 +108,8 @@ class _CharacterDetailsScreenState
         _document = document;
         _favorite = favorite;
         _loading = false;
+        _animes = const <AnimeWitcherCharacterShow>[];
+        _animesError = null;
         _animesLoading = true;
       });
       unawaited(_loadAnimes(provider, document));
@@ -128,11 +131,15 @@ class _CharacterDetailsScreenState
       if (!mounted) return;
       setState(() {
         _animes = animes;
+        _animesError = null;
         _animesLoading = false;
       });
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
-      setState(() => _animesLoading = false);
+      setState(() {
+        _animesError = error;
+        _animesLoading = false;
+      });
     }
   }
 
@@ -403,6 +410,53 @@ class _CharacterDetailsScreenState
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 24),
                           child: Center(child: AppLoadingIndicator()),
+                        )
+                      else if (_animesError != null)
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isArabic ? 'الأنميات' : 'Anime',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              isArabic
+                                  ? 'تعذر تحميل الأنميات'
+                                  : 'Could not load anime',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
+                            ),
+                            const SizedBox(height: 12),
+                            FilledButton.tonalIcon(
+                              onPressed: () {
+                                final current = _document;
+                                final provider = _resolveProvider();
+                                if (current == null || provider == null) {
+                                  unawaited(_load());
+                                  return;
+                                }
+                                setState(() {
+                                  _animesError = null;
+                                  _animesLoading = true;
+                                });
+                                unawaited(_loadAnimes(provider, current));
+                              },
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: Text(
+                                isArabic ? 'إعادة المحاولة' : 'Retry',
+                              ),
+                            ),
+                          ],
                         )
                       else if (_animes.isEmpty)
                         Column(

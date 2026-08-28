@@ -77,6 +77,24 @@ void main() {
       expect(document.animes.last.roleLabel, 'شخصية ثانوية');
       expect(document.commentsCollectionPath, 'characters_list/417/comments');
     });
+
+    test('parses leftover Firestore arrayValue anime lists', () {
+      final refs = parseAnimeWitcherCharacterAnimes(
+        <String, dynamic>{
+          'arrayValue': <String, dynamic>{
+            'values': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'role': 'Main',
+                'anime': <String, dynamic>{'mal_id': 16498},
+              },
+            ],
+          },
+        },
+      );
+      expect(refs, hasLength(1));
+      expect(refs.single.malId, '16498');
+      expect(refs.single.roleLabel, 'شخصية رئيسية');
+    });
   });
 
   test('favorite write fields match the APK merge payload', () {
