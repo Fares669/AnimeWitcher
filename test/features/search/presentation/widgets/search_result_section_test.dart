@@ -134,8 +134,12 @@ void main() {
 
     await tester.pump();
 
-    final first = tester.getTopLeft(find.text('First'));
-    final third = tester.getTopLeft(find.text('Third'));
+    final first = tester.getTopLeft(
+      find.byKey(const ValueKey('https://example.test/first')),
+    );
+    final third = tester.getTopLeft(
+      find.byKey(const ValueKey('https://example.test/third')),
+    );
     expect(first.dx, lessThan(third.dx));
   });
 }
