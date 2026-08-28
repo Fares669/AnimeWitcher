@@ -612,18 +612,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
-  String _algoliaUrl(String index) {
-    return 'https://$_algoliaAppId-dsn.algolia.net/1/indexes/'
-        '${Uri.encodeComponent(index)}/query';
-  }
-
-  Map<String, String> get _algoliaHeaders => <String, String>{
-        'X-Algolia-Application-Id': _algoliaAppId,
-        'X-Algolia-API-Key': _algoliaApiKey,
-        'X-Algolia-Agent': 'Algolia for JavaScript (4.x); AnimeWitcher',
-        'User-Agent': 'Algolia for Android (3.27.0); Android (13)',
-      };
-
   Map<String, String> _algoliaAuthHeaders(String appId, String apiKey) {
     return <String, String>{
       'X-Algolia-Application-Id': appId,
