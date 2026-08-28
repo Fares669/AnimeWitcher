@@ -79,7 +79,7 @@ class HomeSectionHeader extends StatelessWidget {
   }
 }
 
-/// "عرض الكل <" — label then a chevron pointing left, pinned to the
+/// "عرض الكل" with the chevron on the left of the label, pinned to the
 /// left of the home section header.
 class HomeViewAllButton extends StatelessWidget {
   const HomeViewAllButton({super.key, required this.onTap});
@@ -109,6 +109,13 @@ class HomeViewAllButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Icon(
+                Icons.arrow_forward_ios,
+                size: 10,
+                color: color,
+                textDirection: TextDirection.ltr,
+              ),
+              const SizedBox(width: 4),
               Text(
                 l10n.viewAll,
                 style: TextStyle(
@@ -116,13 +123,6 @@ class HomeViewAllButton extends StatelessWidget {
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
                 ),
-              ),
-              const SizedBox(width: 4),
-              Icon(
-                Icons.arrow_back_ios_new,
-                size: 10,
-                color: color,
-                textDirection: TextDirection.ltr,
               ),
             ],
           ),
