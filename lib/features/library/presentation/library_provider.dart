@@ -4,6 +4,7 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
 
+import './library_auth.dart';
 import './library_state.dart';
 
 part 'library_provider.g.dart';
@@ -43,6 +44,7 @@ class Library extends _$Library {
     MultimediaItem item, {
     LibraryCategory? category,
   }) async {
+    _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
     await repository.addToLibrary(
       item,
@@ -52,15 +54,23 @@ class Library extends _$Library {
   }
 
   Future<void> clearItemCategory(String url) async {
+    _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
     await repository.clearCategory(url);
     refresh();
   }
 
   Future<void> setFavorite(MultimediaItem item, bool favorite) async {
+    _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
     await repository.setFavorite(item, favorite);
     refresh();
+  }
+
+  void _requireSignedIn() {
+    requireLibrarySignIn(
+      ref.read(animeWitcherAccountServiceProvider).isSignedIn,
+    );
   }
 
   bool isFavorite(String url) {

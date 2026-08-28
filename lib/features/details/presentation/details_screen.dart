@@ -22,7 +22,10 @@ import 'package:animewitcher/shared/widgets/custom_widgets.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 
 import '../../library/presentation/library_provider.dart';
+import '../../library/presentation/library_auth.dart';
 import '../../../core/storage/library_category.dart';
+import '../../../core/account/account_providers.dart';
+import '../../settings/presentation/account_screen.dart';
 
 import 'details_controller.dart';
 import "widgets/details_layout_widgets.dart";
@@ -304,7 +307,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
             ? Icons.favorite_rounded
             : Icons.favorite_border_rounded,
         color: isFavorite ? favoriteRed : foregroundColor,
-        onPressed: () => libraryNotifier.setFavorite(item, !isFavorite),
+        onPressed: () async {
+          if (!await _ensureSignedInForLibrary(context)) return;
+          await libraryNotifier.setFavorite(item, !isFavorite);
+        },
       ),
       AppleLiquidGlassToolbarButton(
         tooltip: appText(context, english: 'Choose list', arabic: 'اختر قائمة'),
@@ -433,6 +439,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     MultimediaItem item,
     String value,
   ) async {
+    if (!await _ensureSignedInForLibrary(context)) return;
     final notifier = ref.read(libraryProvider.notifier);
     if (value == _removeLibraryAction) {
       await notifier.clearItemCategory(item.url);
@@ -448,6 +455,25 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     if (category != null) {
       await notifier.addItem(item, category: category);
     }
+  }
+
+  Future<bool> _ensureSignedInForLibrary(BuildContext context) async {
+    if (ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
+      return true;
+    }
+    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
+    ref.read(notificationServiceProvider).showInfo(
+      librarySignInRequiredMessage(isArabic: isArabic),
+      icon: Icons.lock_outline_rounded,
+      duration: const Duration(seconds: 3),
+    );
+    if (!context.mounted) return false;
+    await Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const AnimeWitcherAccountScreen(),
+      ),
+    );
+    return ref.read(animeWitcherAccountServiceProvider).isSignedIn;
   }
 
   void _loadEpisodesIfNeeded(int tab) {
