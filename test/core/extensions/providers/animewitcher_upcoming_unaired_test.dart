@@ -239,7 +239,10 @@ void main() {
     expect(query.method, 'GET');
     expect(query.data, isNull);
     expect(query.uri.path, contains('/indexes/series/browse'));
-    expect(query.uri.host, '$_browseAppId-dsn.algolia.net');
+    expect(
+      query.uri.host.toLowerCase(),
+      '${_browseAppId.toLowerCase()}-dsn.algolia.net',
+    );
     expect(_header(query, 'X-Algolia-Application-Id'), _browseAppId);
     expect(_header(query, 'X-Algolia-API-Key'), _browseApiKey);
     expect(_header(query, 'X-Algolia-API-Key'), isNot(_searchApiKey));
@@ -369,7 +372,8 @@ void main() {
     );
     expect(constants.method, 'GET');
     expect(constants.data, isNull);
-    expect(constants.uri.host, '$_fallbackAppId-dsn.algolia.net');
+    expect(constants.uri.host.toLowerCase(),
+        '${_fallbackAppId.toLowerCase()}-dsn.algolia.net');
     expect(constants.uri.path, contains('/indexes/Settings/constants'));
     expect(_header(constants, 'X-Algolia-Application-Id'), _fallbackAppId);
     expect(_header(constants, 'X-Algolia-API-Key'), _fallbackApiKey);

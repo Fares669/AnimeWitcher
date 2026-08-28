@@ -2007,7 +2007,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }) async {
     const unairedStatus = 'لم يتم بثه بعد';
     final safeOffset = offset < 0 ? 0 : offset;
-    final hitsPerPage = _comingSoonHitsPerPage;
+    const hitsPerPage = _comingSoonHitsPerPage;
     final pageNumber = safeOffset ~/ hitsPerPage;
     await _refreshRemoteConstants();
     if (_algoliaBrowseApiKey.isEmpty) {
