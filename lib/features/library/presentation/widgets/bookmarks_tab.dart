@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../core/account/account_providers.dart';
 import '../../../../core/utils/localized_text.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/utils/layout_constants.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
+import '../../../settings/presentation/account_screen.dart';
+import '../library_auth.dart';
 import '../library_provider.dart';
 
 import '../library_state.dart';
@@ -64,25 +67,58 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
   }
 
   Widget _buildEmpty(BuildContext context) {
+    final signedIn =
+        ref.watch(animeWitcherAccountControllerProvider).asData?.value.isSignedIn ??
+        false;
+    final colors = Theme.of(context).colorScheme;
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.bookmark_outline_rounded,
-            size: 64,
-            color: Theme.of(context).dividerColor,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            appText(
-              context,
-              english: 'No titles in this list yet',
-              arabic: 'لا توجد أعمال في هذه القائمة بعد',
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              signedIn
+                  ? Icons.bookmark_outline_rounded
+                  : Icons.lock_outline_rounded,
+              size: 64,
+              color: Theme.of(context).dividerColor,
             ),
-            style: Theme.of(context).textTheme.bodyLarge,
-          ),
-        ],
+            const SizedBox(height: 16),
+            Text(
+              signedIn
+                  ? appText(
+                      context,
+                      english: 'No titles in this list yet',
+                      arabic: 'لا توجد أعمال في هذه القائمة بعد',
+                    )
+                  : librarySignInRequiredMessage(isArabic: true),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
+            if (!signedIn) ...[
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () => Navigator.of(context, rootNavigator: true).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AnimeWitcherAccountScreen(),
+                  ),
+                ),
+                style: FilledButton.styleFrom(
+                  backgroundColor: colors.primary,
+                  foregroundColor: colors.onPrimary,
+                ),
+                child: Text(
+                  appText(
+                    context,
+                    english: 'Sign in',
+                    arabic: 'تسجيل الدخول',
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
