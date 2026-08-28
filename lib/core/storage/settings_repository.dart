@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'storage_service.dart';
 
@@ -135,6 +137,51 @@ class SettingsRepository {
     return _storageService.getPlayerSetting<T>(key, defaultValue: defaultValue);
   }
 
+  /// Cached AnimeWitcher `Settings/constants.search_settings`.
+  ///
+  /// The official Android client persists these in SharedPreferences so Algolia
+  /// still works when Firestore Settings is down.
+  static const String _kAnimeWitcherSearchSettings =
+      'animewitcher_search_settings_json';
+  static const String _kAnimeWitcherSearchSettings2 =
+      'animewitcher_search_settings2_json';
+
+  Future<void> saveAnimeWitcherSearchSettings(Map<String, dynamic> value) =>
+      _writeJsonMap(_kAnimeWitcherSearchSettings, value);
+
+  Map<String, dynamic> getAnimeWitcherSearchSettings() =>
+      _readJsonMap(_kAnimeWitcherSearchSettings);
+
+  Future<void> saveAnimeWitcherSearchSettings2(Map<String, dynamic> value) =>
+      _writeJsonMap(_kAnimeWitcherSearchSettings2, value);
+
+  Map<String, dynamic> getAnimeWitcherSearchSettings2() =>
+      _readJsonMap(_kAnimeWitcherSearchSettings2);
+
+  Map<String, dynamic> _readJsonMap(String key) {
+    try {
+      final raw = _storageService.getString(key);
+      if (raw == null || raw.trim().isEmpty) {
+        return const <String, dynamic>{};
+      }
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const <String, dynamic>{};
+      return decoded.map<String, dynamic>(
+        (dynamic nestedKey, dynamic nestedValue) => MapEntry<String, dynamic>(
+          nestedKey.toString(),
+          nestedValue,
+        ),
+      );
+    } catch (_) {
+      return const <String, dynamic>{};
+    }
+  }
+
+  Future<void> _writeJsonMap(String key, Map<String, dynamic> value) async {
+    try {
+      await _storageService.setString(key, jsonEncode(value));
+    } catch (_) {}
+  }
 
   Future<void> deleteAllData() async {
     await _storageService.deleteAllData();

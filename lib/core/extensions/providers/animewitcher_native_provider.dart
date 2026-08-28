@@ -117,6 +117,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
   String _algoliaAppId = _defaultAlgoliaAppId;
   String _algoliaApiKey = _defaultAlgoliaApiKey;
+  String _algoliaBrowseApiKey = '';
+  Map<String, dynamic> _searchSettings2 = <String, dynamic>{};
   String _serverLoadType = '';
   final Map<String, Map<String, dynamic>> _animeDocumentCache =
       <String, Map<String, dynamic>>{};
@@ -160,6 +162,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       'Chrome/131.0.0.0 Safari/537.36';
 
   static const Duration _httpTimeout = Duration(seconds: 15);
+  static const Duration _algoliaConnectTimeout = Duration(milliseconds: 2000);
+  static const Duration _algoliaReadTimeout = Duration(milliseconds: 5000);
+  static const int _comingSoonHitsPerPage = 100;
   static const Duration _serverTimeout = Duration(seconds: 6);
   static const Duration _streamTimeout = Duration(seconds: 12);
   static const Duration _mediaFireTimeout = Duration(seconds: 30);
@@ -509,27 +514,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (inFlight != null) return inFlight;
 
     final request = () async {
-      final fields = await _firestoreDocumentFields('Settings/constants');
-      final settings = _map(fields['search_settings']);
-      final appId = _text(
-        settings['app_id_v3'] ?? settings['app_id'] ?? settings['application_id'],
-      );
-      final apiKey = _text(settings['api_key'] ?? settings['search_api_key']);
-      if (appId.isNotEmpty) _algoliaAppId = appId;
-      if (apiKey.isNotEmpty) _algoliaApiKey = apiKey;
-      final serverLoadType = _text(fields['load_servers_type']).toLowerCase();
-      if (serverLoadType.isNotEmpty) _serverLoadType = serverLoadType;
-
-      final seasons = _map(fields['seasons']);
-      final past = _text(seasons['past']);
-      final current = _text(seasons['current']);
-      final next = _text(seasons['next']);
-      if (past.isNotEmpty) _seasonPast = past;
-      if (current.isNotEmpty) _seasonCurrent = current;
-      if (next.isNotEmpty) _seasonNext = next;
-
+      var fields = await _firestoreConstantsFields();
+      if (fields.isEmpty) {
+        fields = await _loadConstantsFromAlgoliaFallback();
+      }
       if (fields.isEmpty) return;
-      _remoteConstantsExpiresAt = now.add(_remoteConstantsTtl);
+      await _applyRemoteConstants(fields);
+      _remoteConstantsExpiresAt = DateTime.now().add(_remoteConstantsTtl);
     }();
     _remoteConstantsRequest = request;
     try {
@@ -539,6 +530,85 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         _remoteConstantsRequest = null;
       }
     }
+  }
+
+  Future<Map<String, dynamic>> _firestoreConstantsFields() async {
+    final result = await _getJsonResult(_firestoreUrl('Settings/constants'));
+    if (!result.reachedServer) return const <String, dynamic>{};
+    return _firestoreFields(result.json['fields']);
+  }
+
+  Future<Map<String, dynamic>> _loadConstantsFromAlgoliaFallback() async {
+    if (_searchSettings2.isEmpty) {
+      _searchSettings2 = _settings.getAnimeWitcherSearchSettings2();
+    }
+    final appId = _searchSettings2AppId(_searchSettings2);
+    final apiKey = _searchSettings2ApiKey(_searchSettings2);
+    if (appId.isEmpty || apiKey.isEmpty) return const <String, dynamic>{};
+    final payload = await _algoliaSdkGet(
+      appId: appId,
+      apiKey: apiKey,
+      path: '/1/indexes/Settings/constants',
+    );
+    if (payload == null) return const <String, dynamic>{};
+    if (payload['fields'] is Map) {
+      final fields = _firestoreFields(payload['fields']);
+      if (fields.isNotEmpty) return fields;
+    }
+    return payload;
+  }
+
+  Future<void> _applyRemoteConstants(Map<String, dynamic> fields) async {
+    final settings = _map(fields['search_settings']);
+    final settings2 = _map(fields['search_settings2']);
+    final appId = _text(
+      settings['app_id_v3'] ?? settings['app_id'] ?? settings['application_id'],
+    );
+    final apiKey = _text(settings['api_key'] ?? settings['search_api_key']);
+    final browseKey = _text(
+      settings['browse_api_key'] ?? settings['browseApiKey'],
+    );
+    if (appId.isNotEmpty) _algoliaAppId = appId;
+    if (apiKey.isNotEmpty) _algoliaApiKey = apiKey;
+    if (browseKey.isNotEmpty) _algoliaBrowseApiKey = browseKey;
+    if (settings2.isNotEmpty) {
+      _searchSettings2 = Map<String, dynamic>.from(settings2);
+    }
+
+    final serverLoadType = _text(fields['load_servers_type']).toLowerCase();
+    if (serverLoadType.isNotEmpty) _serverLoadType = serverLoadType;
+
+    final seasons = _map(fields['seasons']);
+    final past = _text(seasons['past']);
+    final current = _text(seasons['current']);
+    final next = _text(seasons['next']);
+    if (past.isNotEmpty) _seasonPast = past;
+    if (current.isNotEmpty) _seasonCurrent = current;
+    if (next.isNotEmpty) _seasonNext = next;
+
+    if (settings.isNotEmpty) {
+      await _settings.saveAnimeWitcherSearchSettings(settings);
+    }
+    if (settings2.isNotEmpty) {
+      await _settings.saveAnimeWitcherSearchSettings2(settings2);
+    }
+  }
+
+  String _searchSettings2AppId(Map<String, dynamic> settings2) {
+    return _text(
+      settings2['algolia_app_id2'] ??
+          settings2['app_id_v3'] ??
+          settings2['app_id'] ??
+          settings2['application_id'],
+    );
+  }
+
+  String _searchSettings2ApiKey(Map<String, dynamic> settings2) {
+    return _text(
+      settings2['algolia_api_key2'] ??
+          settings2['api_key'] ??
+          settings2['search_api_key'],
+    );
   }
 
   String _algoliaUrl(String index) {
@@ -552,6 +622,64 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         'X-Algolia-Agent': 'Algolia for JavaScript (4.x); AnimeWitcher',
         'User-Agent': 'Algolia for Android (3.27.0); Android (13)',
       };
+
+  Map<String, String> _algoliaAuthHeaders(String appId, String apiKey) {
+    return <String, String>{
+      'X-Algolia-Application-Id': appId,
+      'X-Algolia-API-Key': apiKey,
+      'X-Algolia-Agent': 'Algolia for Android (3.27.0); Android (13)',
+      'User-Agent': 'Algolia for Android (3.27.0); Android (13)',
+    };
+  }
+
+  List<String> _algoliaHosts(String appId) {
+    return <String>[
+      '$appId-dsn.algolia.net',
+      '$appId-1.algolianet.com',
+      '$appId-2.algolianet.com',
+      '$appId-3.algolianet.com',
+    ];
+  }
+
+  /// GET helper matching Algolia Android SDK host fallback and timeouts.
+  Future<Map<String, dynamic>?> _algoliaSdkGet({
+    required String appId,
+    required String apiKey,
+    required String path,
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    final headers = _algoliaAuthHeaders(appId, apiKey);
+    for (final host in _algoliaHosts(appId)) {
+      try {
+        final response = await _dio.get<dynamic>(
+          'https://$host$path',
+          queryParameters: queryParameters,
+          options: Options(
+            headers: <String, String>{
+              'Accept': 'application/json',
+              ...headers,
+            },
+            sendTimeout: _algoliaConnectTimeout,
+            receiveTimeout: _algoliaReadTimeout,
+            connectTimeout: _algoliaConnectTimeout,
+            validateStatus: (status) =>
+                status != null && status >= 200 && status < 500,
+          ),
+        );
+        final status = response.statusCode ?? 0;
+        if (status >= 200 && status < 300) {
+          final json = _map(response.data);
+          return json.isEmpty ? null : json;
+        }
+        if (status >= 400 && status < 500 && status != 429) {
+          return null;
+        }
+      } on DioException {
+        continue;
+      }
+    }
+    return null;
+  }
 
   Future<Map<String, dynamic>> _algoliaQuery(
     String index, {
@@ -618,6 +746,22 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     'poster',
     'cover_uri',
     'show_time',
+  ];
+
+  /// Attributes retrieved by the official Android `Index.browse` coming-soon
+  /// drawer (`MainAnimeListFragment` with status "لم يتم بثه بعد").
+  static const List<String> _comingSoonBrowseAttributes = <String>[
+    'objectID',
+    'name',
+    'tags',
+    'poster_uri',
+    'order',
+    'path',
+    'type',
+    'poster',
+    'aniList_poster',
+    'details',
+    'dubbed',
   ];
 
   static const List<String> _similarAttributes = <String>[
@@ -1855,37 +1999,48 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
 
   /// Coming soon lists titles whose AnimeWitcher status is "not yet aired",
-  /// not the next-season catalog used by the Seasons screen.
+  /// matching the official Android drawer item "قادم قريبا":
+  /// `Index.browse` on `series` with `details.state:"لم يتم بثه بعد"`.
+  /// There is no Firestore fallback when browse fails.
   Future<ProviderMediaPage> getUpcomingPage({
     int offset = 0,
-    int limit = 30,
   }) async {
     const unairedStatus = 'لم يتم بثه بعد';
     final safeOffset = offset < 0 ? 0 : offset;
-    final safeLimit = limit.clamp(10, 50).toInt();
-    final pageNumber = safeOffset ~/ safeLimit;
-    final payload = await _algoliaQuery(
-      'series',
-      query: '',
-      page: pageNumber,
-      hitsPerPage: safeLimit,
-      filters: _filterGroup(
-        'details.state',
-        const <String>[unairedStatus],
-        'OR',
-      ),
-      attributes: _searchAttributes,
-      throwOnFailure: true,
+    final hitsPerPage = _comingSoonHitsPerPage;
+    final pageNumber = safeOffset ~/ hitsPerPage;
+    await _refreshRemoteConstants();
+    if (_algoliaBrowseApiKey.isEmpty) {
+      throw StateError('AnimeWitcher catalog request failed.');
+    }
+    final filters = _filterGroup(
+      'details.state',
+      const <String>[unairedStatus],
+      'OR',
     );
+    final payload = await _algoliaSdkGet(
+      appId: _algoliaAppId,
+      apiKey: _algoliaBrowseApiKey,
+      path: '/1/indexes/series/browse',
+      queryParameters: <String, dynamic>{
+        'filters': filters,
+        'hitsPerPage': '$hitsPerPage',
+        'page': '$pageNumber',
+        'attributesToRetrieve': jsonEncode(_comingSoonBrowseAttributes),
+      },
+    );
+    if (payload == null || payload['hits'] is! List) {
+      throw StateError('AnimeWitcher catalog request failed.');
+    }
     final rawHits = _list(payload['hits']);
     final items = await _dedupeHits(rawHits);
     final nbPages = int.tryParse(_text(payload['nbPages'])) ?? 0;
     final hasMore = nbPages > 0
         ? pageNumber + 1 < nbPages
-        : rawHits.length >= safeLimit;
+        : rawHits.length >= hitsPerPage;
     return ProviderMediaPage(
       items: items,
-      nextOffset: (pageNumber + 1) * safeLimit,
+      nextOffset: (pageNumber + 1) * hitsPerPage,
       hasMore: hasMore,
     );
   }
