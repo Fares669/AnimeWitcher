@@ -119,6 +119,8 @@ void main() {
     ]);
     expect(jsonEncode(payload), isNot(contains('increment')));
   });
+
+  test('removing a favorite character deletes the fav doc', () async {
     final requests = <RequestOptions>[];
     final dio = Dio();
     dio.interceptors.add(

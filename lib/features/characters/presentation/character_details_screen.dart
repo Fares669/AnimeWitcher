@@ -340,7 +340,7 @@ class _CharacterDetailsScreenState
                                     fit: BoxFit.cover,
                                     memCacheWidth: decodeWidth,
                                     placeholder: (_, _) =>
-                                        const ShimmerPlaceholder(
+                                        ShimmerPlaceholder(
                                       borderRadius: 18,
                                     ),
                                     errorWidget: (_, _, _) =>

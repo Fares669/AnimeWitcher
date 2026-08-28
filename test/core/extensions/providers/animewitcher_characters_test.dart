@@ -214,7 +214,7 @@ void main() {
       (request) => request.uri.host.contains('algolia.net'),
     );
     expect(browse.uri.path, endsWith('/indexes/characters/browse'));
-    expect(browse.uri.host, startsWith('TESTAPPID-dsn.algolia.net'));
+    expect(browse.uri.host, startsWith('testappid-dsn.algolia.net'));
     expect(browse.headers['X-Algolia-API-Key'], 'browse-key');
     final params = Uri.splitQueryString(_paramsOf(browse), encoding: utf8);
     expect(params['hitsPerPage'], '20');
@@ -232,7 +232,7 @@ void main() {
           request.uri.host.contains('algolia.net') &&
           request.uri.path.endsWith('/indexes/characters/query'),
     );
-    expect(search.uri.host, startsWith('SEARCHAPP-dsn.algolia.net'));
+    expect(search.uri.host, startsWith('searchapp-dsn.algolia.net'));
     expect(search.headers['X-Algolia-API-Key'], 'search-key');
     final params = Uri.splitQueryString(_paramsOf(search), encoding: utf8);
     expect(params['query'], 'lelouch');
