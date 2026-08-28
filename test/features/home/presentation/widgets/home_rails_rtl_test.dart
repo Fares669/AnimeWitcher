@@ -143,6 +143,40 @@ void main() {
         lessThan(labelLeft + 1),
         reason: 'chevron sits to the left of عرض الكل',
       );
+
+      final artifacts = Directory('/opt/cursor/artifacts');
+      if (artifacts.existsSync()) {
+        await tester.runAsync(_loadWalkthroughFonts);
+        await tester.pumpWidget(
+          _rtlApp(
+            theme: _homeTheme(),
+            child: ColoredBox(
+              color: Colors.black,
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: RepaintBoundary(
+                    key: const ValueKey('view-all-closeup'),
+                    child: HomeViewAllButton(onTap: () {}),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.runAsync(() async {
+          final boundary = tester.renderObject<RenderRepaintBoundary>(
+            find.byKey(const ValueKey('view-all-closeup')),
+          );
+          final image = await boundary.toImage(pixelRatio: 4);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          File(
+            '${artifacts.path}/view_all_button_closeup.png',
+          ).writeAsBytesSync(bytes!.buffer.asUint8List());
+        });
+      }
     },
   );
 
