@@ -14,6 +14,7 @@ import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
+import '../../../shared/widgets/catalog_ltr.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 
@@ -414,37 +415,39 @@ class _ScheduleGrid extends StatelessWidget {
         }
         return false;
       },
-      child: GridView.builder(
-        key: PageStorageKey<String>('broadcast-$day'),
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
-        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-          context,
-          maxCrossAxisExtent: isDesktop ? 240 : 150,
-          childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-            isPortrait: true,
-            isDesktop: isDesktop,
-          ),
-          crossAxisSpacing: 16,
-          mainAxisSpacing: 16,
-        ),
-        itemCount: items.length + (isLoadingMore ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index >= items.length) {
-            return const Center(child: CircularProgressIndicator.adaptive());
-          }
-          final item = items[index];
-          return MultimediaCard.fromItem(
-            key: ValueKey('broadcast-$day-${item.url}'),
-            item: item,
-            heroTag: 'broadcast-$day-${item.id}-$index',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => DetailsScreen(item: item),
-              ),
+      child: CatalogLtr(
+        child: GridView.builder(
+          key: PageStorageKey<String>('broadcast-$day'),
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+            context,
+            maxCrossAxisExtent: isDesktop ? 240 : 150,
+            childAspectRatio: MultimediaCardLayout.gridAspectRatio(
+              isPortrait: true,
+              isDesktop: isDesktop,
             ),
-          );
-        },
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
+          ),
+          itemCount: items.length + (isLoadingMore ? 1 : 0),
+          itemBuilder: (context, index) {
+            if (index >= items.length) {
+              return const Center(child: CircularProgressIndicator.adaptive());
+            }
+            final item = items[index];
+            return MultimediaCard.fromItem(
+              key: ValueKey('broadcast-$day-${item.url}'),
+              item: item,
+              heroTag: 'broadcast-$day-${item.id}-$index',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => DetailsScreen(item: item),
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

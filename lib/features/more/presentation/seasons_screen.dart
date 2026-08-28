@@ -11,6 +11,7 @@ import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
+import '../../../shared/widgets/catalog_ltr.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 
@@ -109,11 +110,13 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
               enabled: Navigator.of(context).canPop(),
               onBack: () => Navigator.of(context).pop(),
               child: Align(
-                alignment:
-                    isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: isArabic
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
                 child: Directionality(
-                  textDirection:
-                      isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
                   child: Text(isArabic ? 'المواسم' : 'Seasons'),
                 ),
               ),
@@ -147,10 +150,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           final data = snapshot.data!;
           return Column(
             children: [
-              _SeasonTabs(
-                controller: _tabController,
-                isArabic: isArabic,
-              ),
+              _SeasonTabs(controller: _tabController, isArabic: isArabic),
               Expanded(
                 child: TabBarView(
                   controller: _tabController,
@@ -230,10 +230,7 @@ class _SeasonTabs extends StatelessWidget {
   final TabController controller;
   final bool isArabic;
 
-  const _SeasonTabs({
-    required this.controller,
-    required this.isArabic,
-  });
+  const _SeasonTabs({required this.controller, required this.isArabic});
 
   @override
   Widget build(BuildContext context) {
@@ -323,8 +320,8 @@ class _OtherSeasonsList extends StatelessWidget {
               Text(
                 '$year',
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
+                  fontWeight: FontWeight.w800,
+                ),
               ),
               const SizedBox(height: 14),
               Row(
@@ -382,13 +379,12 @@ class _SeasonYearButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 13),
         backgroundColor: colors.primary,
         disabledBackgroundColor: colors.surfaceContainerHighest,
-        disabledForegroundColor: colors.onSurfaceVariant.withValues(alpha: 0.35),
+        disabledForegroundColor: colors.onSurfaceVariant.withValues(
+          alpha: 0.35,
+        ),
         shape: const StadiumBorder(),
       ),
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Text(label, maxLines: 1),
-      ),
+      child: FittedBox(fit: BoxFit.scaleDown, child: Text(label, maxLines: 1)),
     );
   }
 }
@@ -397,10 +393,7 @@ class _SeasonResultsScreen extends StatelessWidget {
   final AnimeWitcherNativeProvider provider;
   final String season;
 
-  const _SeasonResultsScreen({
-    required this.provider,
-    required this.season,
-  });
+  const _SeasonResultsScreen({required this.provider, required this.season});
 
   @override
   Widget build(BuildContext context) {
@@ -419,11 +412,13 @@ class _SeasonResultsScreen extends StatelessWidget {
               enabled: Navigator.of(context).canPop(),
               onBack: () => Navigator.of(context).pop(),
               child: Align(
-                alignment:
-                    isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: isArabic
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
                 child: Directionality(
-                  textDirection:
-                      isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
                   child: Text(season),
                 ),
               ),
@@ -522,7 +517,9 @@ class _SeasonGridState extends State<_SeasonGrid>
       if (!mounted) return;
       setState(() {
         for (final item in page.items) {
-          final key = item.url.trim().isEmpty ? '${item.id}|${item.title}' : item.url;
+          final key = item.url.trim().isEmpty
+              ? '${item.id}|${item.title}'
+              : item.url;
           if (_seen.add(key)) _items.add(item);
         }
         _offset = page.nextOffset;
@@ -556,9 +553,7 @@ class _SeasonGridState extends State<_SeasonGrid>
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.only(top: 120),
-        children: [
-          _LoadError(message: widget.emptyLabel, onRetry: _loadNext),
-        ],
+        children: [_LoadError(message: widget.emptyLabel, onRetry: _loadNext)],
       );
     }
     if (_items.isEmpty) {
@@ -571,44 +566,46 @@ class _SeasonGridState extends State<_SeasonGrid>
 
     final isDesktop = context.isDesktop;
     final extra = _loading || (_error != null && _hasMore) ? 1 : 0;
-    return GridView.builder(
-      controller: _controller,
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
-      gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-        context,
-        maxCrossAxisExtent: isDesktop ? 240 : 150,
-        childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-          isPortrait: true,
-          isDesktop: isDesktop,
-        ),
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-      ),
-      itemCount: _items.length + extra,
-      itemBuilder: (context, index) {
-        if (index >= _items.length) {
-          if (_error != null) {
-            return IconButton(
-              tooltip: 'إعادة المحاولة',
-              onPressed: _loadNext,
-              icon: const Icon(Icons.refresh_rounded),
-            );
-          }
-          return const AnimePosterShimmer();
-        }
-        final item = _items[index];
-        return MultimediaCard.fromItem(
-          key: ValueKey('season-${widget.season}-${item.url}'),
-          item: item,
-          heroTag: 'season-${widget.season}-${item.id}-$index',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => DetailsScreen(item: item),
-            ),
+    return CatalogLtr(
+      child: GridView.builder(
+        controller: _controller,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+          context,
+          maxCrossAxisExtent: isDesktop ? 240 : 150,
+          childAspectRatio: MultimediaCardLayout.gridAspectRatio(
+            isPortrait: true,
+            isDesktop: isDesktop,
           ),
-        );
-      },
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+        ),
+        itemCount: _items.length + extra,
+        itemBuilder: (context, index) {
+          if (index >= _items.length) {
+            if (_error != null) {
+              return IconButton(
+                tooltip: 'إعادة المحاولة',
+                onPressed: _loadNext,
+                icon: const Icon(Icons.refresh_rounded),
+              );
+            }
+            return const AnimePosterShimmer();
+          }
+          final item = _items[index];
+          return MultimediaCard.fromItem(
+            key: ValueKey('season-${widget.season}-${item.url}'),
+            item: item,
+            heroTag: 'season-${widget.season}-${item.id}-$index',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => DetailsScreen(item: item),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }

@@ -12,14 +12,16 @@ import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
+import '../../../shared/widgets/catalog_ltr.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 
-typedef _RankingPageLoader = Future<ProviderMediaPage> Function(
-  AnimeWitcherGlobalRanking ranking, {
-  required int offset,
-  required int limit,
-});
+typedef _RankingPageLoader =
+    Future<ProviderMediaPage> Function(
+      AnimeWitcherGlobalRanking ranking, {
+      required int offset,
+      required int limit,
+    });
 
 class GlobalStatisticsScreen extends ConsumerStatefulWidget {
   const GlobalStatisticsScreen({super.key});
@@ -29,8 +31,7 @@ class GlobalStatisticsScreen extends ConsumerStatefulWidget {
       _GlobalStatisticsScreenState();
 }
 
-class _GlobalStatisticsScreenState
-    extends ConsumerState<GlobalStatisticsScreen>
+class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
 
@@ -69,11 +70,7 @@ class _GlobalStatisticsScreenState
         StateError('AnimeWitcher Native provider is unavailable'),
       );
     }
-    return provider.getGlobalRankingPage(
-      ranking,
-      offset: offset,
-      limit: limit,
-    );
+    return provider.getGlobalRankingPage(ranking, offset: offset, limit: limit);
   }
 
   bool _isArabic(BuildContext context) =>
@@ -96,11 +93,13 @@ class _GlobalStatisticsScreenState
               enabled: Navigator.of(context).canPop(),
               onBack: () => Navigator.of(context).pop(),
               child: Align(
-                alignment:
-                    isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: isArabic
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
                 child: Directionality(
-                  textDirection:
-                      isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
                   child: Text(
                     isArabic ? 'الإحصائيات العالمية' : 'Global statistics',
                   ),
@@ -118,17 +117,16 @@ class _GlobalStatisticsScreenState
       ),
       body: Column(
         children: [
-          _RankingTabs(
-            controller: _tabController,
-            isArabic: isArabic,
-          ),
+          _RankingTabs(controller: _tabController, isArabic: isArabic),
           Expanded(
             child: TabBarView(
               controller: _tabController,
               children: [
-                for (var index = 0;
-                    index < AnimeWitcherGlobalRanking.values.length;
-                    index++)
+                for (
+                  var index = 0;
+                  index < AnimeWitcherGlobalRanking.values.length;
+                  index++
+                )
                   LazyTabChild(
                     controller: _tabController,
                     index: index,
@@ -313,10 +311,7 @@ class _RankingPageState extends State<_RankingPage>
       return const AnimeCatalogShimmer();
     }
     if (_initialError != null && _items.isEmpty) {
-      return _RankingError(
-        isArabic: widget.isArabic,
-        onRetry: _loadInitial,
-      );
+      return _RankingError(isArabic: widget.isArabic, onRetry: _loadInitial);
     }
     if (_items.isEmpty) {
       return RefreshIndicator(
@@ -353,10 +348,7 @@ class _RankingPageState extends State<_RankingPage>
 }
 
 class _RankingTabs extends StatelessWidget {
-  const _RankingTabs({
-    required this.controller,
-    required this.isArabic,
-  });
+  const _RankingTabs({required this.controller, required this.isArabic});
 
   final TabController controller;
   final bool isArabic;
@@ -403,47 +395,49 @@ class _RankingGrid extends StatelessWidget {
     final hasFooter = loadingMore || loadMoreError;
     return RefreshIndicator(
       onRefresh: onRefresh,
-      child: GridView.builder(
-        key: PageStorageKey<String>('global-ranking-${ranking.queryType}'),
-        controller: controller,
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
-        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-          context,
-          maxCrossAxisExtent: isDesktop ? 240 : 150,
-          childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-            isPortrait: true,
-            isDesktop: isDesktop,
+      child: CatalogLtr(
+        child: GridView.builder(
+          key: PageStorageKey<String>('global-ranking-${ranking.queryType}'),
+          controller: controller,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+            context,
+            maxCrossAxisExtent: isDesktop ? 240 : 150,
+            childAspectRatio: MultimediaCardLayout.gridAspectRatio(
+              isPortrait: true,
+              isDesktop: isDesktop,
+            ),
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
           ),
-          crossAxisSpacing: 16,
-          mainAxisSpacing: 16,
-        ),
-        itemCount: items.length + (hasFooter ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index >= items.length) {
-            if (loadingMore) {
-              return const AnimePosterShimmer();
+          itemCount: items.length + (hasFooter ? 1 : 0),
+          itemBuilder: (context, index) {
+            if (index >= items.length) {
+              if (loadingMore) {
+                return const AnimePosterShimmer();
+              }
+              return Center(
+                child: TextButton.icon(
+                  onPressed: () => onLoadMoreRetry(),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+                ),
+              );
             }
-            return Center(
-              child: TextButton.icon(
-                onPressed: () => onLoadMoreRetry(),
-                icon: const Icon(Icons.refresh_rounded),
-                label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+            final item = items[index];
+            return MultimediaCard.fromItem(
+              key: ValueKey('${ranking.queryType}-${item.url}'),
+              item: item,
+              heroTag: 'global-ranking-${ranking.queryType}-${item.id}-$index',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => DetailsScreen(item: item),
+                ),
               ),
             );
-          }
-          final item = items[index];
-          return MultimediaCard.fromItem(
-            key: ValueKey('${ranking.queryType}-${item.url}'),
-            item: item,
-            heroTag: 'global-ranking-${ranking.queryType}-${item.id}-$index',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => DetailsScreen(item: item),
-              ),
-            ),
-          );
-        },
+          },
+        ),
       ),
     );
   }

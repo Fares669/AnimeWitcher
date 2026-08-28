@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/utils/responsive_breakpoints.dart';
+import 'catalog_ltr.dart';
 import 'multimedia_card.dart';
 import 'shimmer_placeholder.dart';
 
@@ -31,21 +32,23 @@ class AnimeCatalogShimmer extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDesktop = context.isDesktop;
     final count = itemCount ?? (isDesktop ? 18 : 12);
-    return GridView.builder(
-      physics: physics,
-      padding: padding,
-      gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-        context,
-        maxCrossAxisExtent: isDesktop ? 240 : 150,
-        childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-          isPortrait: true,
-          isDesktop: isDesktop,
+    return CatalogLtr(
+      child: GridView.builder(
+        physics: physics,
+        padding: padding,
+        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+          context,
+          maxCrossAxisExtent: isDesktop ? 240 : 150,
+          childAspectRatio: MultimediaCardLayout.gridAspectRatio(
+            isPortrait: true,
+            isDesktop: isDesktop,
+          ),
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
         ),
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
+        itemCount: count,
+        itemBuilder: (context, index) => const AnimePosterShimmer(),
       ),
-      itemCount: count,
-      itemBuilder: (context, index) => const AnimePosterShimmer(),
     );
   }
 }

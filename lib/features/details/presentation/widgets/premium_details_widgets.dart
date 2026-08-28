@@ -7,6 +7,7 @@ import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/shared/widgets/cards_wrapper.dart';
 import 'package:animewitcher/shared/widgets/shimmer_placeholder.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:animewitcher/shared/widgets/catalog_ltr.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'countdown_unit_visibility.dart';
@@ -764,19 +765,21 @@ class RecommendationsCarousel extends StatelessWidget {
             cardWidth,
             isPortrait: true,
           ),
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: items.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 12),
-            itemBuilder: (context, index) {
-              final item = items[index];
-              return MultimediaCard.fromItem(
-                item: item,
-                heroTag: 'related_${item.url}_$index',
-                showRelationBadge: showRelationBadge,
-                onTap: () => onItemTap(item),
-              );
-            },
+          child: CatalogLtr(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: items.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 12),
+              itemBuilder: (context, index) {
+                final item = items[index];
+                return MultimediaCard.fromItem(
+                  item: item,
+                  heroTag: 'related_${item.url}_$index',
+                  showRelationBadge: showRelationBadge,
+                  onTap: () => onItemTap(item),
+                );
+              },
+            ),
           ),
         ),
       ],

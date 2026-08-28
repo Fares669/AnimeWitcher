@@ -10,6 +10,7 @@ import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
+import '../../../shared/widgets/catalog_ltr.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 
@@ -75,7 +76,9 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
       if (!mounted) return;
       setState(() {
         for (final item in page.items) {
-          final key = item.url.trim().isEmpty ? '${item.id}|${item.title}' : item.url;
+          final key = item.url.trim().isEmpty
+              ? '${item.id}|${item.title}'
+              : item.url;
           if (_seen.add(key)) _items.add(item);
         }
         _offset = page.nextOffset;
@@ -131,9 +134,13 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
               enabled: Navigator.of(context).canPop(),
               onBack: () => Navigator.of(context).pop(),
               child: Align(
-                alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: isArabic
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
                 child: Directionality(
-                  textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
                   child: Text(isArabic ? 'القادم قريبًا' : 'Coming soon'),
                 ),
               ),
@@ -165,7 +172,9 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     }
     if (_items.isEmpty) {
       return Center(
-        child: Text(isArabic ? 'لا توجد أعمال قادمة حاليًا' : 'No upcoming titles'),
+        child: Text(
+          isArabic ? 'لا توجد أعمال قادمة حاليًا' : 'No upcoming titles',
+        ),
       );
     }
 
@@ -173,44 +182,46 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     final extra = _loading || (_error != null && _hasMore) ? 1 : 0;
     return RefreshIndicator(
       onRefresh: _refresh,
-      child: GridView.builder(
-        controller: _controller,
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
-        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-          context,
-          maxCrossAxisExtent: isDesktop ? 240 : 150,
-          childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-            isPortrait: true,
-            isDesktop: isDesktop,
-          ),
-          crossAxisSpacing: 16,
-          mainAxisSpacing: 16,
-        ),
-        itemCount: _items.length + extra,
-        itemBuilder: (context, index) {
-          if (index >= _items.length) {
-            if (_error != null) {
-              return IconButton(
-                tooltip: isArabic ? 'إعادة المحاولة' : 'Retry',
-                onPressed: _loadNext,
-                icon: const Icon(Icons.refresh_rounded),
-              );
-            }
-            return const AnimePosterShimmer();
-          }
-          final item = _items[index];
-          return MultimediaCard.fromItem(
-            key: ValueKey('coming-${item.url}'),
-            item: item,
-            heroTag: 'coming-${item.id}-$index',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => DetailsScreen(item: item),
-              ),
+      child: CatalogLtr(
+        child: GridView.builder(
+          controller: _controller,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+            context,
+            maxCrossAxisExtent: isDesktop ? 240 : 150,
+            childAspectRatio: MultimediaCardLayout.gridAspectRatio(
+              isPortrait: true,
+              isDesktop: isDesktop,
             ),
-          );
-        },
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
+          ),
+          itemCount: _items.length + extra,
+          itemBuilder: (context, index) {
+            if (index >= _items.length) {
+              if (_error != null) {
+                return IconButton(
+                  tooltip: isArabic ? 'إعادة المحاولة' : 'Retry',
+                  onPressed: _loadNext,
+                  icon: const Icon(Icons.refresh_rounded),
+                );
+              }
+              return const AnimePosterShimmer();
+            }
+            final item = _items[index];
+            return MultimediaCard.fromItem(
+              key: ValueKey('coming-${item.url}'),
+              item: item,
+              heroTag: 'coming-${item.id}-$index',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => DetailsScreen(item: item),
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

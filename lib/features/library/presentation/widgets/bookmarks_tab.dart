@@ -5,6 +5,7 @@ import '../../../../core/utils/localized_text.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/utils/layout_constants.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
+import '../../../../shared/widgets/catalog_ltr.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 import '../../../settings/presentation/account_screen.dart';
 import '../library_auth.dart';
@@ -36,39 +37,45 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
       LibraryLoading() => const Center(child: AppLoadingIndicator()),
       LibraryError(message: final msg) => Center(child: Text(msg)),
       LibraryEmpty() => _buildEmpty(context),
-      LibrarySuccess(items: final items) => GridView.builder(
-        padding: const EdgeInsets.fromLTRB(
-          LayoutConstants.spacingMd,
-          LayoutConstants.spacingMd,
-          LayoutConstants.spacingMd,
-          100,
+      LibrarySuccess(items: final items) => CatalogLtr(
+        child: GridView.builder(
+          padding: const EdgeInsets.fromLTRB(
+            LayoutConstants.spacingMd,
+            LayoutConstants.spacingMd,
+            LayoutConstants.spacingMd,
+            100,
+          ),
+          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+            context,
+            maxCrossAxisExtent: totalHeight,
+            childAspectRatio: MultimediaCardLayout.portraitGridAspectRatio,
+            crossAxisSpacing: LayoutConstants.spacingMd,
+            mainAxisSpacing: LayoutConstants.spacingMd,
+          ),
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final item = items[index];
+            return MultimediaCard.fromItem(
+              key: ValueKey(item.url),
+              item: item,
+              heroTag: 'lib_bookmark_${item.url}_$index',
+              onTap: () => DetailsRoute(
+                $extra: DetailsRouteExtra(item: item),
+              ).push<void>(context),
+            );
+          },
         ),
-        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-          context,
-          maxCrossAxisExtent: totalHeight,
-          childAspectRatio: MultimediaCardLayout.portraitGridAspectRatio,
-          crossAxisSpacing: LayoutConstants.spacingMd,
-          mainAxisSpacing: LayoutConstants.spacingMd,
-        ),
-        itemCount: items.length,
-        itemBuilder: (context, index) {
-          final item = items[index];
-          return MultimediaCard.fromItem(
-            key: ValueKey(item.url),
-            item: item,
-            heroTag: 'lib_bookmark_${item.url}_$index',
-            onTap: () => DetailsRoute(
-              $extra: DetailsRouteExtra(item: item),
-            ).push<void>(context),
-          );
-        },
       ),
     };
   }
 
   Widget _buildEmpty(BuildContext context) {
     final signedIn =
-        ref.watch(animeWitcherAccountControllerProvider).asData?.value.isSignedIn ??
+        ref
+            .watch(animeWitcherAccountControllerProvider)
+            .asData
+            ?.value
+            .isSignedIn ??
         false;
     final colors = Theme.of(context).colorScheme;
     return Center(
@@ -99,21 +106,18 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
             if (!signedIn) ...[
               const SizedBox(height: 16),
               FilledButton(
-                onPressed: () => Navigator.of(context, rootNavigator: true).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const AnimeWitcherAccountScreen(),
-                  ),
-                ),
+                onPressed: () =>
+                    Navigator.of(context, rootNavigator: true).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const AnimeWitcherAccountScreen(),
+                      ),
+                    ),
                 style: FilledButton.styleFrom(
                   backgroundColor: colors.primary,
                   foregroundColor: colors.onPrimary,
                 ),
                 child: Text(
-                  appText(
-                    context,
-                    english: 'Sign in',
-                    arabic: 'تسجيل الدخول',
-                  ),
+                  appText(context, english: 'Sign in', arabic: 'تسجيل الدخول'),
                 ),
               ),
             ],

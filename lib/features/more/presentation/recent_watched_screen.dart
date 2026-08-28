@@ -8,6 +8,7 @@ import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
+import '../../../shared/widgets/catalog_ltr.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 import '../../library/presentation/history_provider.dart';
@@ -16,7 +17,8 @@ class RecentWatchedScreen extends ConsumerStatefulWidget {
   const RecentWatchedScreen({super.key});
 
   @override
-  ConsumerState<RecentWatchedScreen> createState() => _RecentWatchedScreenState();
+  ConsumerState<RecentWatchedScreen> createState() =>
+      _RecentWatchedScreenState();
 }
 
 class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
@@ -76,13 +78,15 @@ class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
                   .read(watchHistoryProvider.notifier)
                   .removeFromHistory(historyItem.item.url)
                   .then((_) {
-                if (!context.mounted) return;
-                ref.read(notificationServiceProvider).showSuccess(
-                      isArabic
-                          ? 'تم حذف ${historyItem.item.title} من آخر المشاهدات'
-                          : '${historyItem.item.title} removed from recent history',
-                    );
-              }),
+                    if (!context.mounted) return;
+                    ref
+                        .read(notificationServiceProvider)
+                        .showSuccess(
+                          isArabic
+                              ? 'تم حذف ${historyItem.item.title} من آخر المشاهدات'
+                              : '${historyItem.item.title} removed from recent history',
+                        );
+                  }),
             );
           },
         ),
@@ -102,9 +106,13 @@ class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
               enabled: Navigator.of(context).canPop(),
               onBack: () => Navigator.of(context).pop(),
               child: Align(
-                alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: isArabic
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
                 child: Directionality(
-                  textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
                   child: Text(isArabic ? 'آخر المشاهدات' : 'Recently watched'),
                 ),
               ),
@@ -124,10 +132,7 @@ class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
 }
 
 class _RecentWatchedGrid extends StatelessWidget {
-  const _RecentWatchedGrid({
-    required this.items,
-    required this.onRemove,
-  });
+  const _RecentWatchedGrid({required this.items, required this.onRemove});
 
   final List<HistoryItem> items;
   final ValueChanged<HistoryItem> onRemove;
@@ -135,34 +140,36 @@ class _RecentWatchedGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDesktop = context.isDesktop;
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
-      gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-        context,
-        maxCrossAxisExtent: isDesktop ? 240 : 150,
-        childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-          isPortrait: true,
-          isDesktop: isDesktop,
-        ),
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-      ),
-      itemCount: items.length,
-      itemBuilder: (context, index) {
-        final history = items[index];
-        final item = history.item;
-        return MultimediaCard.fromItem(
-          key: ValueKey('recent-${item.url}'),
-          item: item,
-          heroTag: 'recent-${item.id}-$index',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => DetailsScreen(item: item),
-            ),
+    return CatalogLtr(
+      child: GridView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+          context,
+          maxCrossAxisExtent: isDesktop ? 240 : 150,
+          childAspectRatio: MultimediaCardLayout.gridAspectRatio(
+            isPortrait: true,
+            isDesktop: isDesktop,
           ),
-          onLongPress: () => onRemove(history),
-        );
-      },
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+        ),
+        itemCount: items.length,
+        itemBuilder: (context, index) {
+          final history = items[index];
+          final item = history.item;
+          return MultimediaCard.fromItem(
+            key: ValueKey('recent-${item.url}'),
+            item: item,
+            heroTag: 'recent-${item.id}-$index',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => DetailsScreen(item: item),
+              ),
+            ),
+            onLongPress: () => onRemove(history),
+          );
+        },
+      ),
     );
   }
 }

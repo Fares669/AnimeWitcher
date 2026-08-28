@@ -7,6 +7,7 @@ import 'package:animewitcher/features/details/presentation/details_screen.dart';
 import '../../../core/utils/image_utils.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
+import '../../../shared/widgets/catalog_ltr.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../shared/widgets/shimmer_placeholder.dart';
 
@@ -136,7 +137,8 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
         _providerOffset = page.nextOffset > requestedOffset
             ? page.nextOffset
             : requestedOffset + fallbackAdvance;
-        _providerHasMore = page.hasMore &&
+        _providerHasMore =
+            page.hasMore &&
             (page.nextOffset > requestedOffset || page.items.isNotEmpty);
         _providerLoading = false;
         _providerLoadError = null;
@@ -228,11 +230,13 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
               branchIndex: _persistentHeaderBranchIndex,
               onBack: () => Navigator.of(context).maybePop(),
               child: Align(
-                alignment:
-                    isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: isArabic
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
                 child: Directionality(
-                  textDirection:
-                      isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
                   child: Text(
                     widget.title,
                     style: const TextStyle(fontWeight: FontWeight.bold),
@@ -243,7 +247,9 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
             leading: appleUsesPersistentLiquidGlassHeader
                 ? null
                 : IconButton(
-                    tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                    tooltip: MaterialLocalizations.of(
+                      context,
+                    ).backButtonTooltip,
                     icon: const Icon(Icons.arrow_back_ios_new_rounded),
                     onPressed: () => Navigator.of(context).maybePop(),
                   ),
@@ -277,55 +283,58 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                   ],
                 ),
               )
-            : GridView.builder(
-          controller: _scrollController,
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(16),
-          gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-            context,
-            maxCrossAxisExtent: maxExtent,
-            childAspectRatio: childAspectRatio,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
-          ),
-          itemCount: items.length +
-              (isLoading
-                  ? crossAxisCount
-                  : (hasProviderLoadError ? 1 : 0)),
-          itemBuilder: (context, index) {
-            if (index >= items.length) {
-              if (hasProviderLoadError) {
-                return _ProviderPageLoadError(
-                  compact: true,
-                  onRetry: _loadNextProviderPage,
-                );
-              }
-              return ShimmerPlaceholder(borderRadius: 12);
-            }
+            : CatalogLtr(
+                child: GridView.builder(
+                  controller: _scrollController,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.all(16),
+                  gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+                    context,
+                    maxCrossAxisExtent: maxExtent,
+                    childAspectRatio: childAspectRatio,
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                  ),
+                  itemCount:
+                      items.length +
+                      (isLoading
+                          ? crossAxisCount
+                          : (hasProviderLoadError ? 1 : 0)),
+                  itemBuilder: (context, index) {
+                    if (index >= items.length) {
+                      if (hasProviderLoadError) {
+                        return _ProviderPageLoadError(
+                          compact: true,
+                          onRetry: _loadNextProviderPage,
+                        );
+                      }
+                      return ShimmerPlaceholder(borderRadius: 12);
+                    }
 
-            final item = items[index];
-            final uniqueTag =
-                'view_all_${widget.category.name}_${item.id}_$index';
+                    final item = items[index];
+                    final uniqueTag =
+                        'view_all_${widget.category.name}_${item.id}_$index';
 
-            return MultimediaCard.fromItem(
-              key: ValueKey(_itemKey(item)),
-              item: item,
-              heroTag: uniqueTag,
-              isPortrait: _isPortrait,
-              onTap: () {
-                if (widget.onTap != null) {
-                  widget.onTap!(item);
-                } else {
-                  Navigator.of(context).push<void>(
-                    MaterialPageRoute<void>(
-                      builder: (_) => DetailsScreen(item: item),
-                    ),
-                  );
-                }
-              },
-            );
-          },
-        ),
+                    return MultimediaCard.fromItem(
+                      key: ValueKey(_itemKey(item)),
+                      item: item,
+                      heroTag: uniqueTag,
+                      isPortrait: _isPortrait,
+                      onTap: () {
+                        if (widget.onTap != null) {
+                          widget.onTap!(item);
+                        } else {
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) => DetailsScreen(item: item),
+                            ),
+                          );
+                        }
+                      },
+                    );
+                  },
+                ),
+              ),
       ),
     );
   }

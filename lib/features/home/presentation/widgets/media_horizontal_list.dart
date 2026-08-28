@@ -31,7 +31,7 @@ class MediaHorizontalList extends StatefulWidget {
     required this.category,
     this.onTap,
     this.showViewAll = true,
-    this.fixedPhysicalDirection = false,
+    this.fixedPhysicalDirection = true,
     this.heroTagPrefix,
     this.loadViewAllPage,
     this.forcePortrait = false,
