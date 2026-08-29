@@ -1390,42 +1390,24 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       detailsControllerProvider(widget.item.url).notifier,
     );
     switch (index) {
-      case 1:
-        controller.loadRelatedIfNeeded();
-      case 2:
+      case detailsExtraCharactersTabIndex:
         controller.loadCastIfNeeded();
+      case detailsExtraRelatedTabIndex:
+        controller.loadRelatedIfNeeded();
       default:
         controller.loadRecommendationsIfNeeded();
     }
   }
 
-  List<Widget> _buildIndependentDetailSections(
+  List<Widget> _buildTrailerSections(
     BuildContext context,
     MultimediaItem item,
-    AppLocalizations l10n,
-    AsyncValue<List<Actor>> castState,
     AsyncValue<List<Trailer>> trailersState,
-    AsyncValue<List<MultimediaItem>> relatedState,
-    AsyncValue<List<MultimediaItem>> recommendationsState,
   ) {
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final trailers =
         trailersState.asData?.value ?? item.trailers ?? const <Trailer>[];
-    final related = _uniqueMediaItems(
-      relatedState.asData?.value ?? item.related,
-    );
-    final similarState = recommendationsState.whenData(
-      (value) => _recommendationsWithoutRelatedLists(value, related),
-    );
-    final relatedHasMore = ref.watch(
-      detailsControllerProvider(
-        widget.item.url,
-      ).select((state) => state.relatedHasMore),
-    );
-    final controller = ref.read(
-      detailsControllerProvider(widget.item.url).notifier,
-    );
     final widgets = <Widget>[];
 
     if (trailers.isNotEmpty) {
@@ -1441,36 +1423,58 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         ),
       );
     }
-
-    widgets.add(const SizedBox(height: 24));
-    widgets.add(
-      DetailsExtraTabs(
-        similar: similarState,
-        related: relatedState.hasValue
-            ? AsyncData<List<MultimediaItem>>(related)
-            : relatedState,
-        relatedHasMore: relatedHasMore,
-        cast: castState,
-        onTabBecameVisible: _onExtraTabBecameVisible,
-        onAnimeTap: (child) => _openExtraAnime(item, child),
-        onCharacterTap: _openCharacter,
-        onShowMoreRelated: () {
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => RelatedAnimeScreen(source: item),
-            ),
-          );
-        },
-        onShowMoreCharacters: (role) {
-          _openAnimeCharacters(item, characterType: role);
-        },
-        onRetrySimilar: controller.loadRecommendationsIfNeeded,
-        onRetryRelated: controller.loadRelatedIfNeeded,
-        onRetryCast: controller.loadCastIfNeeded,
-      ),
-    );
-
     return widgets;
+  }
+
+  Widget _buildDetailsExtraTabs(
+    BuildContext context,
+    MultimediaItem item,
+    AsyncValue<List<Actor>> castState,
+    AsyncValue<List<MultimediaItem>> relatedState,
+    AsyncValue<List<MultimediaItem>> recommendationsState, {
+    EdgeInsetsGeometry contentPadding = const EdgeInsets.symmetric(
+      horizontal: 16,
+    ),
+  }) {
+    final related = _uniqueMediaItems(
+      relatedState.asData?.value ?? item.related,
+    );
+    final similarState = recommendationsState.whenData(
+      (value) => _recommendationsWithoutRelatedLists(value, related),
+    );
+    final relatedHasMore = ref.watch(
+      detailsControllerProvider(
+        widget.item.url,
+      ).select((state) => state.relatedHasMore),
+    );
+    final controller = ref.read(
+      detailsControllerProvider(widget.item.url).notifier,
+    );
+    return DetailsExtraTabs(
+      similar: similarState,
+      related: relatedState.hasValue
+          ? AsyncData<List<MultimediaItem>>(related)
+          : relatedState,
+      relatedHasMore: relatedHasMore,
+      cast: castState,
+      contentPadding: contentPadding,
+      onTabBecameVisible: _onExtraTabBecameVisible,
+      onAnimeTap: (child) => _openExtraAnime(item, child),
+      onCharacterTap: _openCharacter,
+      onShowMoreRelated: () {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => RelatedAnimeScreen(source: item),
+          ),
+        );
+      },
+      onShowMoreCharacters: (role) {
+        _openAnimeCharacters(item, characterType: role);
+      },
+      onRetrySimilar: controller.loadRecommendationsIfNeeded,
+      onRetryRelated: controller.loadRelatedIfNeeded,
+      onRetryCast: controller.loadCastIfNeeded,
+    );
   }
 
   PreferredSizeWidget _buildPinnedDetailsAppBar(
@@ -1854,14 +1858,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                   _buildSynopsisAndGenres(context, item, l10n),
                   const SizedBox(height: 28),
                   AnimeInformationSection(item: item),
-                  ..._buildIndependentDetailSections(
+                  ..._buildTrailerSections(context, item, trailersState),
+                  const SizedBox(height: 24),
+                  _buildDetailsExtraTabs(
                     context,
                     item,
-                    l10n,
                     castState,
-                    trailersState,
                     relatedState,
                     recommendationsState,
+                    contentPadding: EdgeInsets.zero,
                   ),
                 ]
         : <Widget>[
@@ -1958,30 +1963,35 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         ),
       ),
       SliverToBoxAdapter(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (item.nextAiring != null) ...[
-                NextAiringWidget(nextAiring: item.nextAiring!),
-                const SizedBox(height: 8),
-              ],
-              _buildSynopsisAndGenres(context, item, l10n),
-              const SizedBox(height: 28),
-              AnimeInformationSection(item: item),
-              ..._buildIndependentDetailSections(
-                context,
-                item,
-                l10n,
-                castState,
-                trailersState,
-                relatedState,
-                recommendationsState,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (item.nextAiring != null) ...[
+                    NextAiringWidget(nextAiring: item.nextAiring!),
+                    const SizedBox(height: 8),
+                  ],
+                  _buildSynopsisAndGenres(context, item, l10n),
+                  const SizedBox(height: 28),
+                  AnimeInformationSection(item: item),
+                  ..._buildTrailerSections(context, item, trailersState),
+                ],
               ),
-              const SizedBox(height: 40),
-            ],
-          ),
+            ),
+            const SizedBox(height: 24),
+            _buildDetailsExtraTabs(
+              context,
+              item,
+              castState,
+              relatedState,
+              recommendationsState,
+            ),
+            const SizedBox(height: 40),
+          ],
         ),
       ),
     ];
