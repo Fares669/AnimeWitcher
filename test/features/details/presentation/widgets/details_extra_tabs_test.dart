@@ -303,10 +303,6 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.text(animeWitcherShowMoreLabel, skipOffstage: false),
-      findsOneWidget,
-    );
-    expect(
       find.byWidgetPredicate(
         (widget) => widget is ListView && widget.scrollDirection == Axis.horizontal,
       ),
@@ -331,6 +327,16 @@ void main() {
           .first,
     );
     expect(directionality.textDirection, TextDirection.rtl);
+
+    await tester.scrollUntilVisible(
+      find.text(animeWitcherShowMoreLabel),
+      120,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('details-character-rail-Main')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(find.text(animeWitcherShowMoreLabel), findsOneWidget);
 
     final artifacts = Directory('/opt/cursor/artifacts');
     if (!artifacts.existsSync()) return;
