@@ -23,6 +23,23 @@ const int animeWitcherCharacterSearchHitsPerPage = 500;
 const int animeWitcherFavoriteCharactersPageSize = 12;
 const int animeWitcherAnimeCastStripLimit = 10;
 
+/// APK `AnimeDetailsActivity.setUpViewPager` extra-tab labels.
+const String animeWitcherSimilarTabLabel = 'أنميات مشابهة';
+const String animeWitcherRelatedTabLabel = 'ذات صلة';
+const String animeWitcherCharactersTabLabel = 'الشخصيات';
+const String animeWitcherMainCharactersHeader = 'الشخصيات الرئيسية';
+const String animeWitcherSupportingCharactersHeader = 'الشخصيات المساعدة';
+const String animeWitcherShowMoreLabel = 'المزيد';
+const String animeWitcherSimilarSearchDisabledMessage =
+    'خطأ في تحميل البيانات! سوف تعود خدمة اقتراح الأنميات في أسرع وقت.';
+const String animeWitcherSimilarEmptyMessage = 'لا يوجد بيانات!';
+const String animeWitcherRelatedEmptyMessage = 'لا توجد أنميات ذات صلة.';
+const String animeWitcherRelatedErrorMessage = 'حدث خطأ أثناء تحميل الأنميات.';
+const String animeWitcherCharactersEmptyMessage =
+    'لم يتم اضافة الشخصيات حتي الان.';
+const String animeWitcherCharactersDataEmptyMessage =
+    'لم يتم اضافة بيانات الشخصيات حتي الان.';
+
 String animeWitcherCharactersListPath(String characterId) =>
     '$animeWitcherCharactersListCollection/${characterId.trim()}';
 

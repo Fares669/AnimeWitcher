@@ -13,6 +13,7 @@ class Actor {
   final String? role;
   final Actor? voiceActor;
   final String? id;
+  final int likes;
 
   Actor({
     required this.name,
@@ -20,6 +21,7 @@ class Actor {
     this.role,
     this.voiceActor,
     this.id,
+    this.likes = 0,
   });
 
   factory Actor.fromJson(Map<String, dynamic> json) {
@@ -31,6 +33,7 @@ class Actor {
           ? Actor.fromJson(Map<String, dynamic>.from(json['voiceActor'] as Map))
           : null,
       id: (json['id'] as String?) ?? (json['characterId'] as String?),
+      likes: (json['likes'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -41,8 +44,20 @@ class Actor {
       'role': role,
       'voiceActor': voiceActor?.toJson(),
       'id': id,
+      'likes': likes,
     };
   }
+}
+
+/// First page of franchise-related titles from `related_anime_ids`.
+class RelatedAnimePage {
+  const RelatedAnimePage({
+    required this.items,
+    this.hasMore = false,
+  });
+
+  final List<MultimediaItem> items;
+  final bool hasMore;
 }
 
 class Trailer {

@@ -39,6 +39,7 @@ class DetailsState {
   final AsyncValue<List<Actor>> cast;
   final AsyncValue<List<Trailer>> trailers;
   final AsyncValue<List<MultimediaItem>> related;
+  final bool relatedHasMore;
   final AsyncValue<List<MultimediaItem>> recommendations;
   final Map<int, List<Episode>> seasonMap;
   final int selectedSeason;
@@ -59,6 +60,7 @@ class DetailsState {
     this.cast = const AsyncLoading(),
     this.trailers = const AsyncLoading(),
     this.related = const AsyncLoading(),
+    this.relatedHasMore = false,
     this.recommendations = const AsyncLoading(),
     this.seasonMap = const {},
     this.selectedSeason = 1,
@@ -80,6 +82,7 @@ class DetailsState {
     AsyncValue<List<Actor>>? cast,
     AsyncValue<List<Trailer>>? trailers,
     AsyncValue<List<MultimediaItem>>? related,
+    bool? relatedHasMore,
     AsyncValue<List<MultimediaItem>>? recommendations,
     Map<int, List<Episode>>? seasonMap,
     int? selectedSeason,
@@ -100,6 +103,7 @@ class DetailsState {
       cast: cast ?? this.cast,
       trailers: trailers ?? this.trailers,
       related: related ?? this.related,
+      relatedHasMore: relatedHasMore ?? this.relatedHasMore,
       recommendations: recommendations ?? this.recommendations,
       seasonMap: seasonMap ?? this.seasonMap,
       selectedSeason: selectedSeason ?? this.selectedSeason,
@@ -719,7 +723,10 @@ class DetailsController extends _$DetailsController {
       return;
     }
     _relatedLoadStarted = true;
-    state = state.copyWith(related: const AsyncLoading());
+    state = state.copyWith(
+      related: const AsyncLoading(),
+      relatedHasMore: false,
+    );
     await _loadRelatedInBackground(provider, url, currentItem, _loadGeneration);
   }
 
@@ -791,6 +798,7 @@ class DetailsController extends _$DetailsController {
       );
     } catch (error, stackTrace) {
       if (!ref.mounted || generation != _loadGeneration) return;
+      _castLoadStarted = false;
       state = state.copyWith(cast: AsyncError<List<Actor>>(error, stackTrace));
     }
   }
@@ -825,11 +833,13 @@ class DetailsController extends _$DetailsController {
     int generation,
   ) async {
     try {
-      final value = await provider.getRelated(url);
+      final page = await provider.getRelatedPage(url);
       if (!ref.mounted || generation != _loadGeneration) return;
+      final value = page.items;
       final updated = (state.item ?? contextItem).copyWith(related: value);
       state = state.copyWith(
         related: AsyncData(value),
+        relatedHasMore: page.hasMore,
         details: state.details.hasValue ? AsyncData(updated) : null,
         item: updated,
       );
@@ -838,6 +848,7 @@ class DetailsController extends _$DetailsController {
       _relatedLoadStarted = false;
       state = state.copyWith(
         related: AsyncError<List<MultimediaItem>>(error, stackTrace),
+        relatedHasMore: false,
       );
     }
   }
@@ -894,6 +905,7 @@ class DetailsController extends _$DetailsController {
       );
     } catch (error, stackTrace) {
       if (!ref.mounted || generation != _loadGeneration) return;
+      _recommendationsLoadStarted = false;
       state = state.copyWith(
         recommendations: AsyncError<List<MultimediaItem>>(error, stackTrace),
       );

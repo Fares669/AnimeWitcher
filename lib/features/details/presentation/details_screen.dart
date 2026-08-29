@@ -11,6 +11,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/account/animewitcher_comment_models.dart';
 import '../../characters/presentation/anime_characters_screen.dart';
 import '../../characters/presentation/character_details_screen.dart';
+import 'related_anime_screen.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../core/utils/artwork_quality.dart';
 import '../../../core/utils/image_fallbacks.dart';
@@ -33,6 +34,7 @@ import 'details_controller.dart';
 import "widgets/details_layout_widgets.dart";
 import "widgets/details_desktop_hero.dart";
 import "widgets/premium_details_widgets.dart";
+import "widgets/details_extra_tabs.dart";
 import "widgets/anime_information_section.dart";
 import "../../../shared/widgets/expandable_text.dart";
 import "../../../shared/widgets/loading_indicator.dart";
@@ -156,82 +158,6 @@ class _DetailsLoadFailureState extends State<_DetailsLoadFailure> {
         ],
       ),
     );
-  }
-}
-
-class _DeferredDetailSection extends StatefulWidget {
-  const _DeferredDetailSection({
-    required this.enabled,
-    required this.placeholderHeight,
-    required this.onVisible,
-    required this.child,
-  });
-
-  final bool enabled;
-  final double placeholderHeight;
-  final Future<void> Function() onVisible;
-  final Widget child;
-
-  @override
-  State<_DeferredDetailSection> createState() => _DeferredDetailSectionState();
-}
-
-class _DeferredDetailSectionState extends State<_DeferredDetailSection> {
-  // Do not prefetch lower detail sections off-screen. Their network request
-  // starts only when the section itself reaches the viewport.
-  static const double _preloadExtent = 0;
-  ScrollPosition? _position;
-  bool _activated = false;
-  bool _checkScheduled = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final next = Scrollable.maybeOf(context)?.position;
-    if (!identical(next, _position)) {
-      _position?.removeListener(_scheduleVisibilityCheck);
-      _position = next;
-      _position?.addListener(_scheduleVisibilityCheck);
-    }
-    _scheduleVisibilityCheck();
-  }
-
-  @override
-  void didUpdateWidget(covariant _DeferredDetailSection oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _scheduleVisibilityCheck();
-  }
-
-  void _scheduleVisibilityCheck() {
-    if (!widget.enabled || _activated || _checkScheduled || !mounted) return;
-    _checkScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkScheduled = false;
-      if (!mounted || !widget.enabled || _activated) return;
-      final renderObject = context.findRenderObject();
-      if (renderObject is! RenderBox || !renderObject.hasSize) return;
-      final top = renderObject.localToGlobal(Offset.zero).dy;
-      final bottom = top + renderObject.size.height;
-      final viewportHeight = MediaQuery.sizeOf(context).height;
-      if (top <= viewportHeight + _preloadExtent && bottom >= -_preloadExtent) {
-        setState(() => _activated = true);
-        widget.onVisible();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _position?.removeListener(_scheduleVisibilityCheck);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_activated) {
-      return SizedBox(height: widget.placeholderHeight);
-    }
-    return widget.child;
   }
 }
 
@@ -1424,39 +1350,53 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     );
   }
 
-  Widget _relatedErrorPlaceholder(
-    BuildContext context, {
-    required String title,
-    required bool isArabic,
-    required VoidCallback onRetry,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            isArabic
-                ? 'تعذر تحميل الأنميات ذات الصلة'
-                : 'Could not load related anime',
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-          ),
-          const SizedBox(height: 10),
-          FilledButton.tonalIcon(
-            onPressed: onRetry,
-            icon: const Icon(Icons.refresh_rounded),
-            label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
-          ),
-        ],
+  void _openExtraAnime(MultimediaItem parent, MultimediaItem child) {
+    final target = _inheritProvider(parent, child);
+    DetailsRoute(
+      $extra: DetailsRouteExtra(item: target),
+    ).push<void>(context);
+  }
+
+  void _openCharacter(Actor actor) {
+    final id = actor.id?.trim() ?? '';
+    if (id.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => CharacterDetailsScreen(
+          characterId: id,
+          initialName: actor.name,
+          initialImageUrl: actor.image,
+        ),
       ),
     );
+  }
+
+  void _openAnimeCharacters(MultimediaItem item, {String? characterType}) {
+    final animeId = animeWitcherAnimeCommentTarget(item)?.animeId;
+    if (animeId == null || animeId.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AnimeCharactersScreen(
+          animeId: animeId,
+          animeTitle: item.title,
+          characterType: characterType,
+        ),
+      ),
+    );
+  }
+
+  void _onExtraTabBecameVisible(int index) {
+    final controller = ref.read(
+      detailsControllerProvider(widget.item.url).notifier,
+    );
+    switch (index) {
+      case 1:
+        controller.loadRelatedIfNeeded();
+      case 2:
+        controller.loadCastIfNeeded();
+      default:
+        controller.loadRecommendationsIfNeeded();
+    }
   }
 
   List<Widget> _buildIndependentDetailSections(
@@ -1470,131 +1410,24 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   ) {
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final cast = castState.asData?.value ?? item.cast ?? const <Actor>[];
     final trailers =
         trailersState.asData?.value ?? item.trailers ?? const <Trailer>[];
     final related = _uniqueMediaItems(
       relatedState.asData?.value ?? item.related,
     );
-    final recommendations = _recommendationsWithoutRelatedLists(
-      recommendationsState.asData?.value ?? item.recommendations,
-      related,
+    final similarState = recommendationsState.whenData(
+      (value) => _recommendationsWithoutRelatedLists(value, related),
+    );
+    final relatedHasMore = ref.watch(
+      detailsControllerProvider(
+        widget.item.url,
+      ).select((state) => state.relatedHasMore),
     );
     final controller = ref.read(
       detailsControllerProvider(widget.item.url).notifier,
     );
     final widgets = <Widget>[];
 
-    Widget castSection() {
-      if (cast.isNotEmpty) {
-        final animeId = animeWitcherAnimeCommentTarget(item)?.animeId;
-        return Column(
-          children: [
-            const SizedBox(height: 32),
-            CastCarousel(
-              cast: cast,
-              onActorTap: (actor) {
-                final id = actor.id?.trim() ?? '';
-                if (id.isEmpty) return;
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => CharacterDetailsScreen(
-                      characterId: id,
-                      initialName: actor.name,
-                      initialImageUrl: actor.image,
-                    ),
-                  ),
-                );
-              },
-              onShowMore: animeId == null || animeId.isEmpty
-                  ? null
-                  : () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => AnimeCharactersScreen(
-                            animeId: animeId,
-                            animeTitle: item.title,
-                          ),
-                        ),
-                      );
-                    },
-            ),
-          ],
-        );
-      }
-      if (castState.isLoading) {
-        return _sectionLoadingPlaceholder(
-          context,
-          isArabic ? 'طاقم الشخصيات' : 'Cast',
-        );
-      }
-      return const SizedBox.shrink();
-    }
-
-    Widget recommendationsSection() {
-      if (recommendations.isNotEmpty) {
-        return Column(
-          children: [
-            const SizedBox(height: 32),
-            RecommendationsCarousel(
-              items: recommendations,
-              onItemTap: (recommendation) {
-                final target = _inheritProvider(item, recommendation);
-                DetailsRoute(
-                  $extra: DetailsRouteExtra(item: target),
-                ).push<void>(context);
-              },
-            ),
-          ],
-        );
-      }
-      if (recommendationsState.isLoading) {
-        return _sectionLoadingPlaceholder(
-          context,
-          isArabic ? 'المزيد مثل هذا' : 'More Like This',
-        );
-      }
-      return const SizedBox.shrink();
-    }
-
-    Widget relatedSection() {
-      if (related.isNotEmpty) {
-        return Column(
-          children: [
-            const SizedBox(height: 32),
-            RecommendationsCarousel(
-              title: l10n.relatedAnime,
-              items: related,
-              showRelationBadge: true,
-              onItemTap: (relatedItem) {
-                final target = _inheritProvider(item, relatedItem);
-                DetailsRoute(
-                  $extra: DetailsRouteExtra(item: target),
-                ).push<void>(context);
-              },
-            ),
-          ],
-        );
-      }
-      if (relatedState.isLoading) {
-        return _sectionLoadingPlaceholder(context, l10n.relatedAnime);
-      }
-      if (relatedState.hasError) {
-        return _relatedErrorPlaceholder(
-          context,
-          title: l10n.relatedAnime,
-          isArabic: isArabic,
-          onRetry: () {
-            controller.loadRelatedIfNeeded();
-          },
-        );
-      }
-      return const SizedBox.shrink();
-    }
-
-    // Lower-page order: trailer -> related -> recommendations -> cast.
-    // Related, recommendations and cast stay completely deferred until their
-    // own placeholder reaches the viewport on the Details tab.
     if (trailers.isNotEmpty) {
       widgets.addAll([
         const SizedBox(height: 32),
@@ -1609,28 +1442,31 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       );
     }
 
+    widgets.add(const SizedBox(height: 24));
     widgets.add(
-      _DeferredDetailSection(
-        enabled: _selectedDetailsTab == 0,
-        placeholderHeight: 230,
-        onVisible: controller.loadRelatedIfNeeded,
-        child: relatedSection(),
-      ),
-    );
-    widgets.add(
-      _DeferredDetailSection(
-        enabled: _selectedDetailsTab == 0,
-        placeholderHeight: 230,
-        onVisible: controller.loadRecommendationsIfNeeded,
-        child: recommendationsSection(),
-      ),
-    );
-    widgets.add(
-      _DeferredDetailSection(
-        enabled: _selectedDetailsTab == 0,
-        placeholderHeight: 210,
-        onVisible: controller.loadCastIfNeeded,
-        child: castSection(),
+      DetailsExtraTabs(
+        similar: similarState,
+        related: relatedState.hasValue
+            ? AsyncData<List<MultimediaItem>>(related)
+            : relatedState,
+        relatedHasMore: relatedHasMore,
+        cast: castState,
+        onTabBecameVisible: _onExtraTabBecameVisible,
+        onAnimeTap: (child) => _openExtraAnime(item, child),
+        onCharacterTap: _openCharacter,
+        onShowMoreRelated: () {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => RelatedAnimeScreen(source: item),
+            ),
+          );
+        },
+        onShowMoreCharacters: (role) {
+          _openAnimeCharacters(item, characterType: role);
+        },
+        onRetrySimilar: controller.loadRecommendationsIfNeeded,
+        onRetryRelated: controller.loadRelatedIfNeeded,
+        onRetryCast: controller.loadCastIfNeeded,
       ),
     );
 

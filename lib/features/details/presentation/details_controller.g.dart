@@ -58,7 +58,7 @@ final class DetailsControllerProvider
   }
 }
 
-String _$detailsControllerHash() => r'c45a8d2bc9d23a2a3a1ad9d81df330e37eb2c8ca';
+String _$detailsControllerHash() => r'7b704e48a89e84f636d4c3c5ba1935891f677eb4';
 
 final class DetailsControllerFamily extends $Family
     with

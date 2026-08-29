@@ -19,10 +19,13 @@ class AnimeCharactersScreen extends ConsumerStatefulWidget {
     super.key,
     required this.animeId,
     this.animeTitle,
+    this.characterType,
   });
 
   final String animeId;
   final String? animeTitle;
+  /// APK `CharactersByIds` role filter: `Main` or `Supporting`.
+  final String? characterType;
 
   @override
   ConsumerState<AnimeCharactersScreen> createState() =>
@@ -71,7 +74,10 @@ class _AnimeCharactersScreenState
       _error = null;
     });
     try {
-      final cast = await provider.getAnimeCharacters(widget.animeId);
+      final role = widget.characterType?.trim();
+      final cast = role == null || role.isEmpty
+          ? await provider.getAnimeCharacters(widget.animeId)
+          : await provider.getAnimeCharactersByRole(widget.animeId, role);
       if (!mounted) return;
       setState(() {
         _cast
@@ -91,9 +97,14 @@ class _AnimeCharactersScreenState
   @override
   Widget build(BuildContext context) {
     final isArabic = _isArabic(context);
-    final title = widget.animeTitle?.trim().isNotEmpty == true
-        ? widget.animeTitle!
-        : (isArabic ? 'الشخصيات' : 'Characters');
+    final role = widget.characterType?.trim();
+    final title = role == 'Main'
+        ? animeWitcherMainCharactersHeader
+        : role == 'Supporting'
+            ? animeWitcherSupportingCharactersHeader
+            : (widget.animeTitle?.trim().isNotEmpty == true
+                ? widget.animeTitle!
+                : (isArabic ? 'الشخصيات' : 'Characters'));
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(kToolbarHeight),
@@ -141,7 +152,7 @@ class _AnimeCharactersScreenState
                   ? Center(
                       child: Text(
                         isArabic
-                            ? 'لم يتم اضافة الشخصيات حتي الان'
+                            ? animeWitcherCharactersEmptyMessage
                             : 'No characters have been added yet',
                       ),
                     )
@@ -169,6 +180,7 @@ class _AnimeCharactersScreenState
                                 id: id,
                                 name: actor.name,
                                 imageUrl: actor.image,
+                                likes: actor.likes,
                               ),
                               onTap: id.isEmpty
                                   ? () {}

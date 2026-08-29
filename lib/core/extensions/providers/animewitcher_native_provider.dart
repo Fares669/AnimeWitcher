@@ -3006,7 +3006,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       _animeWitcherCharacterRefsForRole(
     String animeId,
     String role, {
-    int limit = animeWitcherAnimeCastStripLimit,
+    int? limit = animeWitcherAnimeCastStripLimit,
   }) async {
 
     final raw = await _firestoreRestRunQuery(
@@ -3021,7 +3021,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
             'value': <String, dynamic>{'stringValue': role},
           },
         },
-        'limit': limit,
+        'limit': ?limit,
       },
       parent: 'anime_list/$animeId',
     );
@@ -3081,6 +3081,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         name: name,
         image: image.isEmpty ? null : image,
         role: _characterRole(reference.role),
+        likes: _positiveInt(fields['likes']),
       ),
       role: reference.role,
       likes: _positiveInt(fields['likes']),
@@ -3120,8 +3121,45 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   Future<List<Actor>> getAnimeCharacters(
     String animeId, {
     int limit = 50,
+    String? role,
   }) async {
+    final characterType = role?.trim();
+    if (characterType != null && characterType.isNotEmpty) {
+      return _animeWitcherServerCastForRole(
+        animeId,
+        characterType,
+        limit: limit,
+      );
+    }
     return _animeWitcherServerCast(animeId, limit: limit);
+  }
+
+  Future<List<Actor>> getAnimeCharactersByRole(
+    String animeId,
+    String role,
+  ) async {
+    return _animeWitcherServerCastForRole(animeId, role);
+  }
+
+  Future<List<Actor>> _animeWitcherServerCastForRole(
+    String animeId,
+    String role, {
+    int? limit,
+  }) async {
+    final cleanId = animeId.trim();
+    if (cleanId.isEmpty) return const <Actor>[];
+    final references = await _animeWitcherCharacterRefsForRole(
+      cleanId,
+      role,
+      limit: limit,
+    );
+    if (references.isEmpty) return const <Actor>[];
+    final characters = await Future.wait(
+      references.map(_animeWitcherCharacter),
+    );
+    final output = characters.whereType<_AnimeWitcherCharacter>().toList()
+      ..sort((a, b) => b.likes.compareTo(a.likes));
+    return output.map((item) => item.actor).toList(growable: false);
   }
 
   @override
@@ -3258,9 +3296,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       'ADAPTATION': 'اقتباس',
       'CHARACTER': 'عمل مرتبط بالشخصيات',
       'SOURCE': 'المصدر',
-      'OTHER': 'أخرى',
+      'OTHER': 'اخري',
     };
-    return labels[type] ?? 'عمل مرتبط';
+    return labels[type] ?? 'اخري';
   }
 
   int _relationPriority(String type) {
@@ -3315,7 +3353,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       output.add(_RelatedCandidate(id, type, _relationLabel(type)));
     }
     output.sort((a, b) => _relationPriority(a.type).compareTo(_relationPriority(b.type)));
-    return output.take(_maxRelatedItems).toList(growable: false);
+    return output;
   }
 
   MultimediaItem _relatedItem(
@@ -3344,10 +3382,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
-  @override
-  Future<List<MultimediaItem>> getRelated(String url) async {
-    final source = await _detailSource(url);
-    final relations = _officialRelations(source);
+  Future<List<MultimediaItem>> _relatedItemsFrom(
+    List<_RelatedCandidate> relations,
+  ) async {
     if (relations.isEmpty) return const <MultimediaItem>[];
     final resolved = await _resolveMalIds(relations.map((item) => item.malId));
     final output = <MultimediaItem>[];
@@ -3363,6 +3400,31 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return _filterEcchiItems(output);
   }
 
+  @override
+  Future<RelatedAnimePage> getRelatedPage(
+    String url, {
+    bool includeAll = false,
+  }) async {
+    final source = await _detailSource(url);
+    final relations = _officialRelations(source);
+    if (relations.isEmpty) {
+      return const RelatedAnimePage(items: <MultimediaItem>[]);
+    }
+    final preview = includeAll
+        ? relations
+        : relations.take(_maxRelatedItems).toList(growable: false);
+    final items = await _relatedItemsFrom(preview);
+    return RelatedAnimePage(
+      items: items,
+      hasMore: !includeAll && relations.length > _maxRelatedItems,
+    );
+  }
+
+  @override
+  Future<List<MultimediaItem>> getRelated(String url) async {
+    return (await getRelatedPage(url)).items;
+  }
+
   Future<List<MultimediaItem>> _animeWitcherRecommendations(
     String animeId,
     Map<String, dynamic> source,
@@ -3373,7 +3435,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final tags = _stringList(source['tags']);
     if (tags.isEmpty) return const <MultimediaItem>[];
     await _refreshRemoteConstants();
-    if (!_isSearchActive) return const <MultimediaItem>[];
+    if (!_isSearchActive) {
+      throw const AnimeWitcherSearchDisabledException(
+        animeWitcherSimilarSearchDisabledMessage,
+      );
+    }
     final hideEcchi = _isEcchiHidden();
     final payload = await _algoliaQuery(
       'series_similar',

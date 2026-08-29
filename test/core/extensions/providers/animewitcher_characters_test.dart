@@ -422,6 +422,7 @@ void main() {
 
     expect(cast, isNotEmpty);
     expect(cast.first.id, '417');
+    expect(cast.first.likes, 42);
     expect(
       cast.map((actor) => actor.role),
       containsAll(<String>['شخصية رئيسية', 'شخصية ثانوية']),
@@ -548,5 +549,29 @@ void main() {
       ),
       <String>['11', '12'],
     );
+  });
+
+  test('full Main character list omits the strip limit of 10', () async {
+    final stub = _stubDio();
+    await _provider(stub.dio).getAnimeCharactersByRole('code-geass', 'Main');
+
+    final queries = stub.requests.where(
+      (request) => request.uri.path.contains('anime_list/code-geass:runQuery'),
+    );
+    expect(queries, isNotEmpty);
+    for (final request in queries) {
+      final payload = Map<String, dynamic>.from(request.data as Map);
+      final query = Map<String, dynamic>.from(
+        payload['structuredQuery'] as Map,
+      );
+      expect(query.containsKey('limit'), isFalse);
+      final filter = Map<String, dynamic>.from(
+        (query['where'] as Map)['fieldFilter'] as Map,
+      );
+      expect(
+        filter['value'],
+        <String, dynamic>{'stringValue': 'Main'},
+      );
+    }
   });
 }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:animewitcher/core/account/animewitcher_character_models.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
@@ -508,11 +509,16 @@ void main() {
     final stub = _stubDio(searchActive: false);
     final provider = _provider(stub.dio);
     await provider.getDetails('https://animewitcher.com/watch/naruto');
-    final similar = await provider.getRecommendations(
-      'https://animewitcher.com/watch/naruto',
+    await expectLater(
+      provider.getRecommendations('https://animewitcher.com/watch/naruto'),
+      throwsA(
+        isA<AnimeWitcherSearchDisabledException>().having(
+          (error) => error.message,
+          'message',
+          animeWitcherSimilarSearchDisabledMessage,
+        ),
+      ),
     );
-
-    expect(similar, isEmpty);
     expect(
       stub.requests.any(
         (request) => request.uri.path.contains('series_similar'),

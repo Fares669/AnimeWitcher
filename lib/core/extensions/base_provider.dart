@@ -297,6 +297,17 @@ abstract class AnimeWitcherProvider {
     return details.related ?? const <MultimediaItem>[];
   }
 
+  /// Related titles plus whether a المزيد tile should open the full list.
+  ///
+  /// [includeAll] resolves every `related_anime_ids` entry; the details tab
+  /// preview only hydrates the first 10 Firestore IN values.
+  Future<RelatedAnimePage> getRelatedPage(
+    String url, {
+    bool includeAll = false,
+  }) async {
+    return RelatedAnimePage(items: await getRelated(url));
+  }
+
   /// Loads similar recommendations independently.
   Future<List<MultimediaItem>> getRecommendations(String url) async {
     final details = await getDetails(url);
