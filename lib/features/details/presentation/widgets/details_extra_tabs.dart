@@ -83,7 +83,6 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
       children: [
         FilterStyleTabBar(
           controller: _tabController,
-          isScrollable: false,
           tabs: const [
             FilterStyleTab(label: animeWitcherSimilarTabLabel),
             FilterStyleTab(label: animeWitcherRelatedTabLabel),

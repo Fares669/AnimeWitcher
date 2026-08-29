@@ -117,6 +117,7 @@ void main() {
     expect(find.text(animeWitcherSimilarTabLabel), findsOneWidget);
     expect(find.text(animeWitcherRelatedTabLabel), findsOneWidget);
     expect(find.text(animeWitcherCharactersTabLabel), findsOneWidget);
+    expect(tester.takeException(), isNull);
     expect(find.text('المزيد مثل هذا'), findsNothing);
     expect(find.text('طاقم الشخصيات'), findsNothing);
     expect(visited, contains(0));
@@ -187,6 +188,7 @@ void main() {
   testWidgets('related tab wraps 3 posters and appends المزيد', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 920));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.runAsync(_loadWalkthroughFonts);
 
     var showMore = 0;
     await tester.pumpWidget(
@@ -213,8 +215,11 @@ void main() {
       ),
     );
     await tester.pump();
+    expect(tester.takeException(), isNull);
     await tester.tap(find.text(animeWitcherRelatedTabLabel));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(tester.takeException(), isNull);
 
     expect(find.byKey(const ValueKey('related-0')), findsOneWidget);
     expect(find.byKey(const ValueKey('related-more')), findsOneWidget);
