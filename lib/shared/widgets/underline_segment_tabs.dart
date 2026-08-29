@@ -8,6 +8,7 @@ class FilterStyleTab extends StatelessWidget {
     this.icon,
     this.leading,
     this.showDot = false,
+    this.maxWidth,
   });
 
   final String label;
@@ -15,32 +16,46 @@ class FilterStyleTab extends StatelessWidget {
   final Widget? leading;
   final bool showDot;
 
+  /// When set, the label fills this width (equal-width [TabBar] tabs)
+  /// and ellipsizes instead of overflowing.
+  final double? maxWidth;
+
   @override
   Widget build(BuildContext context) {
-    return Tab(
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (leading != null || icon != null)
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                leading ?? Icon(icon, size: 20),
-                if (showDot)
-                  const Positioned(
-                    right: -3,
-                    top: -3,
-                    child: CircleAvatar(
-                      radius: 4,
-                      backgroundColor: Colors.redAccent,
-                    ),
+    final labelText = Text(
+      label,
+      maxLines: 1,
+      overflow: maxWidth == null ? TextOverflow.visible : TextOverflow.ellipsis,
+      textAlign: TextAlign.center,
+    );
+    final row = Row(
+      mainAxisSize: maxWidth == null ? MainAxisSize.min : MainAxisSize.max,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (leading != null || icon != null)
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              leading ?? Icon(icon, size: 20),
+              if (showDot)
+                const Positioned(
+                  right: -3,
+                  top: -3,
+                  child: CircleAvatar(
+                    radius: 4,
+                    backgroundColor: Colors.redAccent,
                   ),
-              ],
-            ),
-          if (leading != null || icon != null) const SizedBox(width: 7),
-          Text(label),
-        ],
-      ),
+                ),
+            ],
+          ),
+        if (leading != null || icon != null) const SizedBox(width: 7),
+        if (maxWidth == null) labelText else Flexible(child: labelText),
+      ],
+    );
+    return Tab(
+      child: maxWidth == null
+          ? row
+          : SizedBox(width: maxWidth, child: row),
     );
   }
 }
@@ -53,12 +68,18 @@ class FilterStyleTabBar extends StatelessWidget implements PreferredSizeWidget {
     required this.controller,
     required this.tabs,
     this.isScrollable = true,
+    this.padding,
+    this.labelPadding,
+    this.indicatorSize,
     this.onTap,
   });
 
   final TabController controller;
   final List<Widget> tabs;
   final bool isScrollable;
+  final EdgeInsetsGeometry? padding;
+  final EdgeInsetsGeometry? labelPadding;
+  final TabBarIndicatorSize? indicatorSize;
   final ValueChanged<int>? onTap;
 
   @override
@@ -71,6 +92,9 @@ class FilterStyleTabBar extends StatelessWidget implements PreferredSizeWidget {
       controller: controller,
       isScrollable: isScrollable,
       tabAlignment: isScrollable ? TabAlignment.start : TabAlignment.fill,
+      padding: padding,
+      labelPadding: labelPadding,
+      indicatorSize: indicatorSize,
       indicatorColor: colors.primary,
       labelColor: colors.primary,
       unselectedLabelColor: colors.onSurfaceVariant,

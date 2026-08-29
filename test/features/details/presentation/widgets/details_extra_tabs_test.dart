@@ -91,7 +91,6 @@ void main() {
     await tester.pumpWidget(
       _app(
         ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
             DetailsExtraTabs(
               similar: AsyncData(<MultimediaItem>[
@@ -120,7 +119,28 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('المزيد مثل هذا'), findsNothing);
     expect(find.text('طاقم الشخصيات'), findsNothing);
-    expect(visited, contains(0));
+    expect(visited, contains(detailsExtraSimilarTabIndex));
+
+    final tabBar = tester.getRect(find.byType(TabBar));
+    expect(tabBar.left, closeTo(0, 0.5));
+    expect(tabBar.width, closeTo(390, 0.5));
+    final tabRects = tester.widgetList<Tab>(find.byType(Tab)).map((tab) {
+      return tester.getRect(find.byWidget(tab));
+    }).toList();
+    expect(tabRects, hasLength(3));
+    expect((tabRects[0].width - tabRects[1].width).abs(), lessThan(1));
+    expect((tabRects[1].width - tabRects[2].width).abs(), lessThan(1));
+    expect(tabRects[0].width, closeTo(390 / 3, 1));
+    expect(tabRects[0].center.dx, greaterThan(tabRects[1].center.dx));
+    expect(tabRects[1].center.dx, greaterThan(tabRects[2].center.dx));
+    expect(
+      tester.getCenter(find.text(animeWitcherCharactersTabLabel)).dx,
+      greaterThan(tester.getCenter(find.text(animeWitcherRelatedTabLabel)).dx),
+    );
+    expect(
+      tester.getCenter(find.text(animeWitcherRelatedTabLabel)).dx,
+      greaterThan(tester.getCenter(find.text(animeWitcherSimilarTabLabel)).dx),
+    );
 
     final first = tester.getRect(find.byKey(const ValueKey('similar-0')));
     final second = tester.getRect(find.byKey(const ValueKey('similar-1')));
@@ -128,8 +148,8 @@ void main() {
     final fourth = tester.getRect(find.byKey(const ValueKey('similar-3')));
     expect((first.top - second.top).abs(), lessThan(1));
     expect((second.top - third.top).abs(), lessThan(1));
-    expect(first.left, lessThan(second.left));
-    expect(second.left, lessThan(third.left));
+    expect(first.left, greaterThan(second.left));
+    expect(second.left, greaterThan(third.left));
     expect(fourth.top, greaterThan(first.bottom - 1));
     expect(find.text('مسلسل'), findsWidgets);
     expect(find.text('2024'), findsWidgets);
@@ -137,7 +157,7 @@ void main() {
     await tester.tap(find.text(animeWitcherRelatedTabLabel));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
-    expect(visited, contains(1));
+    expect(visited, contains(detailsExtraRelatedTabIndex));
     expect(find.text(animeWitcherRelatedEmptyMessage), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsWidgets);
 
@@ -150,7 +170,6 @@ void main() {
           child: ColoredBox(
             color: Colors.black,
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
               children: [
                 DetailsExtraTabs(
                   similar: AsyncData(<MultimediaItem>[
@@ -225,6 +244,14 @@ void main() {
     expect(find.byKey(const ValueKey('related-more')), findsOneWidget);
     expect(find.text(animeWitcherShowMoreLabel), findsOneWidget);
     expect(find.text('السابق'), findsOneWidget);
+
+    final first = tester.getRect(find.byKey(const ValueKey('related-0')));
+    final second = tester.getRect(find.byKey(const ValueKey('related-1')));
+    final third = tester.getRect(find.byKey(const ValueKey('related-2')));
+    expect((first.top - second.top).abs(), lessThan(1));
+    expect(first.left, greaterThan(second.left));
+    expect(second.left, greaterThan(third.left));
+
     await tester.tap(find.byKey(const ValueKey('related-more')));
     expect(showMore, 1);
   });
@@ -281,13 +308,29 @@ void main() {
     );
     expect(
       find.byWidgetPredicate(
-        (widget) =>
-            widget is SingleChildScrollView &&
-            widget.scrollDirection == Axis.horizontal,
+        (widget) => widget is ListView && widget.scrollDirection == Axis.horizontal,
       ),
       findsNWidgets(2),
     );
     expect(find.byType(GridView), findsNothing);
+
+    final mainFirst = tester.getRect(
+      find.byKey(const ValueKey('details-character-Main-0')),
+    );
+    final mainSecond = tester.getRect(
+      find.byKey(const ValueKey('details-character-Main-1')),
+    );
+    expect(mainFirst.left, greaterThan(mainSecond.left));
+
+    final directionality = tester.widget<Directionality>(
+      find
+          .ancestor(
+            of: find.byKey(const ValueKey('details-character-rail-Main')),
+            matching: find.byType(Directionality),
+          )
+          .first,
+    );
+    expect(directionality.textDirection, TextDirection.rtl);
 
     final artifacts = Directory('/opt/cursor/artifacts');
     if (!artifacts.existsSync()) return;

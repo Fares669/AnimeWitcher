@@ -4,7 +4,6 @@ import '../../../../core/account/animewitcher_character_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../shared/widgets/cards_wrapper.dart';
-import '../../../../shared/widgets/catalog_ltr.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 
 class DetailsPosterGrid extends StatelessWidget {
@@ -29,7 +28,8 @@ class DetailsPosterGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDesktop = context.isDesktop;
     final extra = hasMore && onShowMore != null ? 1 : 0;
-    return CatalogLtr(
+    return Directionality(
+      textDirection: TextDirection.rtl,
       child: GridView.builder(
         key: ValueKey('$keyPrefix-grid'),
         shrinkWrap: true,

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/account/animewitcher_character_models.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
-import '../../../../shared/widgets/catalog_ltr.dart';
 import '../../../characters/presentation/character_card.dart';
 import 'details_poster_grid.dart';
 
@@ -101,45 +100,42 @@ class _CharacterRoleRail extends StatelessWidget {
         ),
         SizedBox(
           height: rowHeight,
-          child: CatalogLtr(
-            child: SingleChildScrollView(
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: ListView.separated(
               key: ValueKey('details-character-rail-$role'),
               scrollDirection: Axis.horizontal,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (var index = 0; index < characters.length; index++) ...[
-                    if (index > 0) const SizedBox(width: 12),
-                    SizedBox(
-                      width: cardWidth,
-                      height: rowHeight,
-                      child: CharacterPosterCard(
-                        key: ValueKey('details-character-$role-$index'),
-                        character: AnimeWitcherCharacterHit(
-                          id: characters[index].id?.trim() ?? '',
-                          name: characters[index].name,
-                          imageUrl: characters[index].image,
-                          likes: characters[index].likes,
-                        ),
-                        onTap: (characters[index].id?.trim() ?? '').isEmpty
-                            ? () {}
-                            : () => onCharacterTap(characters[index]),
-                      ),
+              padding: EdgeInsets.zero,
+              itemCount: characters.length + (showMore ? 1 : 0),
+              separatorBuilder: (_, _) => const SizedBox(width: 12),
+              itemBuilder: (context, index) {
+                if (showMore && index >= characters.length) {
+                  return SizedBox(
+                    width: cardWidth,
+                    height: rowHeight,
+                    child: DetailsShowMoreTile(
+                      compact: true,
+                      onTap: () => onShowMore!(role),
                     ),
-                  ],
-                  if (showMore) ...[
-                    const SizedBox(width: 12),
-                    SizedBox(
-                      width: cardWidth,
-                      height: rowHeight,
-                      child: DetailsShowMoreTile(
-                        compact: true,
-                        onTap: () => onShowMore!(role),
-                      ),
+                  );
+                }
+                return SizedBox(
+                  width: cardWidth,
+                  height: rowHeight,
+                  child: CharacterPosterCard(
+                    key: ValueKey('details-character-$role-$index'),
+                    character: AnimeWitcherCharacterHit(
+                      id: characters[index].id?.trim() ?? '',
+                      name: characters[index].name,
+                      imageUrl: characters[index].image,
+                      likes: characters[index].likes,
                     ),
-                  ],
-                ],
-              ),
+                    onTap: (characters[index].id?.trim() ?? '').isEmpty
+                        ? () {}
+                        : () => onCharacterTap(characters[index]),
+                  ),
+                );
+              },
             ),
           ),
         ),

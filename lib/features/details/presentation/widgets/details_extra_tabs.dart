@@ -8,6 +8,11 @@ import '../../../../shared/widgets/underline_segment_tabs.dart';
 import 'details_character_rails.dart';
 import 'details_poster_grid.dart';
 
+/// Visual RTL order: الشخصيات (right), ذات صلة (center), أنميات مشابهة (left).
+const int detailsExtraCharactersTabIndex = 0;
+const int detailsExtraRelatedTabIndex = 1;
+const int detailsExtraSimilarTabIndex = 2;
+
 class DetailsExtraTabs extends StatefulWidget {
   const DetailsExtraTabs({
     super.key,
@@ -23,6 +28,7 @@ class DetailsExtraTabs extends StatefulWidget {
     this.onRetrySimilar,
     this.onRetryRelated,
     this.onRetryCast,
+    this.contentPadding = const EdgeInsets.symmetric(horizontal: 16),
   });
 
   final AsyncValue<List<MultimediaItem>> similar;
@@ -37,6 +43,7 @@ class DetailsExtraTabs extends StatefulWidget {
   final VoidCallback? onRetrySimilar;
   final VoidCallback? onRetryRelated;
   final VoidCallback? onRetryCast;
+  final EdgeInsetsGeometry contentPadding;
 
   @override
   State<DetailsExtraTabs> createState() => _DetailsExtraTabsState();
@@ -45,16 +52,19 @@ class DetailsExtraTabs extends StatefulWidget {
 class _DetailsExtraTabsState extends State<DetailsExtraTabs>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
-  final Set<int> _visited = <int>{0};
+  final Set<int> _visited = <int>{detailsExtraSimilarTabIndex};
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this)
-      ..addListener(_handleTabTick);
+    _tabController = TabController(
+      length: 3,
+      vsync: this,
+      initialIndex: detailsExtraSimilarTabIndex,
+    )..addListener(_handleTabTick);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      widget.onTabBecameVisible(0);
+      widget.onTabBecameVisible(detailsExtraSimilarTabIndex);
     });
   }
 
@@ -81,36 +91,57 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        FilterStyleTabBar(
-          controller: _tabController,
-          tabs: const [
-            FilterStyleTab(label: animeWitcherSimilarTabLabel),
-            FilterStyleTab(label: animeWitcherRelatedTabLabel),
-            FilterStyleTab(label: animeWitcherCharactersTabLabel),
-          ],
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final tabWidth = constraints.maxWidth / 3;
+            return FilterStyleTabBar(
+              controller: _tabController,
+              isScrollable: false,
+              padding: EdgeInsets.zero,
+              labelPadding: EdgeInsets.zero,
+              indicatorSize: TabBarIndicatorSize.tab,
+              tabs: [
+                FilterStyleTab(
+                  label: animeWitcherCharactersTabLabel,
+                  maxWidth: tabWidth,
+                ),
+                FilterStyleTab(
+                  label: animeWitcherRelatedTabLabel,
+                  maxWidth: tabWidth,
+                ),
+                FilterStyleTab(
+                  label: animeWitcherSimilarTabLabel,
+                  maxWidth: tabWidth,
+                ),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 16),
-        _buildBody(),
+        Padding(
+          padding: widget.contentPadding,
+          child: _buildBody(),
+        ),
       ],
     );
   }
 
   Widget _buildBody() {
     switch (_tabController.index) {
-      case 1:
+      case detailsExtraCharactersTabIndex:
+        return _CharactersTab(
+          state: widget.cast,
+          onCharacterTap: widget.onCharacterTap,
+          onShowMore: widget.onShowMoreCharacters,
+          onRetry: widget.onRetryCast,
+        );
+      case detailsExtraRelatedTabIndex:
         return _RelatedTab(
           state: widget.related,
           hasMore: widget.relatedHasMore,
           onItemTap: widget.onAnimeTap,
           onShowMore: widget.onShowMoreRelated,
           onRetry: widget.onRetryRelated,
-        );
-      case 2:
-        return _CharactersTab(
-          state: widget.cast,
-          onCharacterTap: widget.onCharacterTap,
-          onShowMore: widget.onShowMoreCharacters,
-          onRetry: widget.onRetryCast,
         );
       default:
         return _SimilarTab(
