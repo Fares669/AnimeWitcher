@@ -1,5 +1,4 @@
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -36,6 +35,7 @@ import "widgets/details_layout_widgets.dart";
 import "widgets/details_desktop_hero.dart";
 import "widgets/premium_details_widgets.dart";
 import "widgets/details_extra_tabs.dart";
+import "widgets/details_tab_swipe.dart";
 import "widgets/anime_information_section.dart";
 import "../../../shared/widgets/expandable_text.dart";
 import "../../../shared/widgets/loading_indicator.dart";
@@ -44,19 +44,6 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
-
-class _DetailsEpisodesSwipeGestureRecognizer
-    extends HorizontalDragGestureRecognizer {
-  _DetailsEpisodesSwipeGestureRecognizer({required this.shouldIgnore});
-
-  final bool Function(Offset globalPosition) shouldIgnore;
-
-  @override
-  void addPointer(PointerDownEvent event) {
-    if (shouldIgnore(event.position)) return;
-    super.addPointer(event);
-  }
-}
 
 /// Keeps a details tab's scrollable (and its poster Image states) alive
 /// while the other tab is showing. This matches View All, which stays
@@ -405,11 +392,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       return true;
     }
     final isArabic = Localizations.localeOf(context).languageCode == 'ar';
-    ref.read(notificationServiceProvider).showInfo(
-      librarySignInRequiredMessage(isArabic: isArabic),
-      icon: Icons.lock_outline_rounded,
-      duration: const Duration(seconds: 3),
-    );
+    ref
+        .read(notificationServiceProvider)
+        .showInfo(
+          librarySignInRequiredMessage(isArabic: isArabic),
+          icon: Icons.lock_outline_rounded,
+          duration: const Duration(seconds: 3),
+        );
     if (!context.mounted) return false;
     await Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute<void>(
@@ -458,6 +447,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   bool _isPointerInExtraTabs(Offset globalPosition) {
+    return ignoreDetailsEpisodesSwipe(
+      selectedDetailsTab: _detailsTabController.index,
+      pointerInExtraTabsBounds: _extraTabsContainsGlobalPoint(globalPosition),
+    );
+  }
+
+  bool _extraTabsContainsGlobalPoint(Offset globalPosition) {
     final extraContext = _extraTabsKey.currentContext;
     if (extraContext == null) return false;
     final box = extraContext.findRenderObject();
@@ -478,14 +474,14 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     return RawGestureDetector(
       behavior: HitTestBehavior.translucent,
       gestures: <Type, GestureRecognizerFactory>{
-        _DetailsEpisodesSwipeGestureRecognizer:
+        DetailsEpisodesSwipeGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<
-              _DetailsEpisodesSwipeGestureRecognizer
+              DetailsEpisodesSwipeGestureRecognizer
             >(
-              () => _DetailsEpisodesSwipeGestureRecognizer(
+              () => DetailsEpisodesSwipeGestureRecognizer(
                 shouldIgnore: _isPointerInExtraTabs,
               ),
-              (_DetailsEpisodesSwipeGestureRecognizer instance) {
+              (DetailsEpisodesSwipeGestureRecognizer instance) {
                 instance
                   ..onStart = (details) {
                     _tabSwipeDistance = 0;
@@ -596,12 +592,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                         imageUrl: previewUrl,
                         fit: BoxFit.contain,
                         filterQuality: FilterQuality.medium,
-                        placeholder: (_, _) => const Center(
-                          child: CircularProgressIndicator(),
-                        ),
-                        errorWidget: (_, _, _) => const Center(
-                          child: CircularProgressIndicator(),
-                        ),
+                        placeholder: (_, _) =>
+                            const Center(child: CircularProgressIndicator()),
+                        errorWidget: (_, _, _) =>
+                            const Center(child: CircularProgressIndicator()),
                       );
                     }
                     return const Center(child: CircularProgressIndicator());
@@ -1128,44 +1122,46 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                 controller: _detailsTabController,
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
-                _KeepAliveDetailsTab(
-                  child: RefreshIndicator(
-                    onRefresh: _refreshDetails,
-                    child: CustomScrollView(
-                      key: const PageStorageKey<String>('details-info-tab'),
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      slivers: _buildMobileDetailsTabSlivers(
-                        context,
-                        item,
-                        detailsAsync,
-                        castAsync,
-                        trailersAsync,
-                        relatedAsync,
-                        recommendationsAsync,
-                        l10n,
-                        mobileHeaderHeight,
+                  _KeepAliveDetailsTab(
+                    child: RefreshIndicator(
+                      onRefresh: _refreshDetails,
+                      child: CustomScrollView(
+                        key: const PageStorageKey<String>('details-info-tab'),
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        slivers: _buildMobileDetailsTabSlivers(
+                          context,
+                          item,
+                          detailsAsync,
+                          castAsync,
+                          trailersAsync,
+                          relatedAsync,
+                          recommendationsAsync,
+                          l10n,
+                          mobileHeaderHeight,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                _KeepAliveDetailsTab(
-                  child: RefreshIndicator(
-                    onRefresh: _refreshDetails,
-                    child: CustomScrollView(
-                      key: const PageStorageKey<String>('details-episodes-tab'),
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      slivers: _buildMobileEpisodesTabSlivers(
-                        context,
-                        item,
-                        episodesAsync,
+                  _KeepAliveDetailsTab(
+                    child: RefreshIndicator(
+                      onRefresh: _refreshDetails,
+                      child: CustomScrollView(
+                        key: const PageStorageKey<String>(
+                          'details-episodes-tab',
+                        ),
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        slivers: _buildMobileEpisodesTabSlivers(
+                          context,
+                          item,
+                          episodesAsync,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
         ],
       ),
     );
@@ -1395,9 +1391,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   void _openExtraAnime(MultimediaItem parent, MultimediaItem child) {
     final target = _inheritProvider(parent, child);
-    DetailsRoute(
-      $extra: DetailsRouteExtra(item: target),
-    ).push<void>(context);
+    DetailsRoute($extra: DetailsRouteExtra(item: target)).push<void>(context);
   }
 
   void _openCharacter(Actor actor) {
@@ -1920,9 +1914,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                   LayoutBuilder(
                     builder: (context, constraints) {
                       final isWide = constraints.maxWidth >= 900;
-                      final infoColumn = [
-                        AnimeInformationSection(item: item),
-                      ];
+                      final infoColumn = [AnimeInformationSection(item: item)];
                       final synopsisColumn = [
                         _buildSynopsisAndGenres(context, item, l10n),
                       ];
@@ -1936,8 +1928,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                               Expanded(
                                 flex: 5,
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: infoColumn,
                                 ),
                               ),
@@ -1946,8 +1937,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                               Expanded(
                                 flex: 6,
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: synopsisColumn,
                                 ),
                               ),
