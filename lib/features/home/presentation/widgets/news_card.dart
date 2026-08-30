@@ -12,12 +12,14 @@ class NewsCard extends StatelessWidget {
     super.key,
     required this.item,
     this.compact = true,
+    this.expandToFill = false,
     this.onOpen,
     this.onAnimeTap,
   });
 
   final NewsItem item;
   final bool compact;
+  final bool expandToFill;
   final VoidCallback? onOpen;
   final VoidCallback? onAnimeTap;
 
@@ -25,10 +27,64 @@ class NewsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final compact = this.compact;
-    final isLandscape =
-        MediaQuery.orientationOf(context) == Orientation.landscape;
+    final expandToFill = this.expandToFill;
     final width = compact ? 200.0 : double.infinity;
-    final imageHeight = compact ? 100.0 : (isLandscape ? 112.0 : 210.0);
+    final imageHeight = compact ? 100.0 : 210.0;
+
+    final image = Stack(
+      fit: StackFit.expand,
+      children: [
+        _buildImage(context),
+        Positioned.fill(
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.88),
+                  ],
+                  stops: const [0.42, 1],
+                ),
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          left: compact ? 7 : 10,
+          bottom: compact ? 6 : 8,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (item.hasAnimeLink) ...[
+                _NewsActionIcon(
+                  icon: Icons.link_rounded,
+                  onTap: onAnimeTap,
+                  size: compact ? 20 : 28,
+                ),
+                SizedBox(width: compact ? 7 : 10),
+              ],
+              _NewsActionIcon(
+                icon: Icons.chat_bubble_outline_rounded,
+                onTap: () {
+                  final target = animeWitcherNewsCommentTarget(item);
+                  pushOverTaskbar<void>(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          AnimeWitcherCommentsScreen(target: target),
+                    ),
+                  );
+                },
+                size: compact ? 20 : 28,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
 
     return SizedBox(
       width: width,
@@ -43,69 +99,13 @@ class NewsCard extends StatelessWidget {
         child: InkWell(
           onTap: onOpen,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: expandToFill ? MainAxisSize.max : MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              SizedBox(
-                height: imageHeight,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    _buildImage(context),
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.transparent,
-                                Colors.black.withValues(alpha: 0.88),
-                              ],
-                              stops: const [0.42, 1],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      left: compact ? 7 : 10,
-                      bottom: compact ? 6 : 8,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (item.hasAnimeLink) ...[
-                            _NewsActionIcon(
-                              icon: Icons.link_rounded,
-                              onTap: onAnimeTap,
-                              size: compact ? 20 : 28,
-                            ),
-                            SizedBox(width: compact ? 7 : 10),
-                          ],
-                          _NewsActionIcon(
-                            icon: Icons.chat_bubble_outline_rounded,
-                            onTap: () {
-                              final target = animeWitcherNewsCommentTarget(
-                                item,
-                              );
-                              pushOverTaskbar<void>(
-                                context,
-                                MaterialPageRoute<void>(
-                                  builder: (_) => AnimeWitcherCommentsScreen(
-                                    target: target,
-                                  ),
-                                ),
-                              );
-                            },
-                            size: compact ? 20 : 28,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              if (expandToFill)
+                Expanded(child: image)
+              else
+                SizedBox(height: imageHeight, child: image),
               Padding(
                 padding: EdgeInsets.fromLTRB(
                   compact ? 10 : 12,

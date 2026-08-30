@@ -95,7 +95,12 @@ class _NewsListScreenState extends State<NewsListScreen> {
   @override
   Widget build(BuildContext context) {
     final isArabic = Localizations.localeOf(context).languageCode == 'ar';
-    final columns = newsListColumnCount(MediaQuery.sizeOf(context));
+    final size = MediaQuery.sizeOf(context);
+    final columns = newsListColumnCount(size);
+    final landscapeExtent = newsListLandscapeMainAxisExtent(
+      size: size,
+      padding: MediaQuery.paddingOf(context),
+    );
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(kToolbarHeight),
@@ -145,26 +150,32 @@ class _NewsListScreenState extends State<NewsListScreen> {
                     return const SizedBox.shrink();
                   return const SizedBox(height: 12);
                 },
-                itemBuilder: (context, index) => _newsItem(context, index),
+                itemBuilder: (context, index) =>
+                    _newsItem(context, index, expandToFill: false),
               )
             : GridView.builder(
                 controller: _scrollController,
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
                 physics: const AlwaysScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 2,
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
-                  mainAxisExtent: 220,
+                  mainAxisExtent: landscapeExtent,
                 ),
                 itemCount: _items.length + (_isLoading ? 1 : 0),
-                itemBuilder: (context, index) => _newsItem(context, index),
+                itemBuilder: (context, index) =>
+                    _newsItem(context, index, expandToFill: true),
               ),
       ),
     );
   }
 
-  Widget _newsItem(BuildContext context, int index) {
+  Widget _newsItem(
+    BuildContext context,
+    int index, {
+    required bool expandToFill,
+  }) {
     if (index >= _items.length) {
       return const Padding(
         padding: EdgeInsets.all(16),
@@ -183,6 +194,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
     return NewsCard(
       item: item,
       compact: false,
+      expandToFill: expandToFill,
       onOpen: onOpen,
       onAnimeTap: widget.onAnimeTap == null
           ? null

@@ -9,6 +9,19 @@ int newsListColumnCount(Size size) {
   return size.width > size.height ? 2 : 1;
 }
 
+/// Card height so two landscape tiles fill the viewport, like the
+/// current full-width card but side by side.
+double newsListLandscapeMainAxisExtent({
+  required Size size,
+  required EdgeInsets padding,
+  double toolbarHeight = kToolbarHeight,
+}) {
+  const verticalGridPadding = 12.0 + 28.0;
+  final available =
+      size.height - padding.vertical - toolbarHeight - verticalGridPadding;
+  return available.clamp(188.0, 420.0);
+}
+
 Future<void> openNewsUrl(NewsItem item) async {
   final rawUrl = item.newsUrl?.trim();
   if (rawUrl == null || rawUrl.isEmpty) return;
