@@ -415,16 +415,29 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         .loadEpisodesOnDemand();
   }
 
+  void _handleDetailsTabAnimation() {
+    final value =
+        _detailsTabController.animation?.value ??
+        _detailsTabController.index.toDouble();
+    if (value >= 0.2) {
+      _loadEpisodesIfNeeded(1);
+    }
+  }
+
   void _handleDetailsTabControllerTick() {
     final index = _detailsTabController.index;
     _loadEpisodesIfNeeded(index);
     if (index == _selectedDetailsTab) return;
 
-    final isRtl = Directionality.of(context) == TextDirection.rtl;
-    final entersFromLeft = isRtl ? index == 1 : index == 0;
-    _tabSlideFrom = Offset(entersFromLeft ? -0.16 : 0.16, 0);
+    // Desktop still cross-fades tab bodies. Mobile uses a native TabBarView
+    // so the pages track the finger; skip the fade there.
+    if (context.isTabletOrLarger) {
+      final isRtl = Directionality.of(context) == TextDirection.rtl;
+      final entersFromLeft = isRtl ? index == 1 : index == 0;
+      _tabSlideFrom = Offset(entersFromLeft ? -0.16 : 0.16, 0);
+      _tabTransitionController.forward(from: 0);
+    }
     setState(() => _selectedDetailsTab = index);
-    _tabTransitionController.forward(from: 0);
   }
 
   void _switchDetailsTab(int targetTab) {
@@ -894,7 +907,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       length: 2,
       vsync: this,
       initialIndex: _selectedDetailsTab,
-    )..addListener(_handleDetailsTabControllerTick);
+    );
+    _detailsTabController
+      ..addListener(_handleDetailsTabControllerTick)
+      ..animation!.addListener(_handleDetailsTabAnimation);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref
           .read(detailsControllerProvider(widget.item.url).notifier)
@@ -911,6 +927,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   @override
   void dispose() {
     applePersistentGlassHeaderController.hide(this);
+    _detailsTabController.animation?.removeListener(_handleDetailsTabAnimation);
     _detailsTabController
       ..removeListener(_handleDetailsTabControllerTick)
       ..dispose();
@@ -1116,11 +1133,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         children: [
           _buildDetailsPageTabs(context, episodesAsync),
           Expanded(
-            child: _buildDetailsTabSwipeRegion(
-              enabled: true,
+            child: Directionality(
+              textDirection: _detailsTabsTextDirection(context),
               child: TabBarView(
                 controller: _detailsTabController,
-                physics: const NeverScrollableScrollPhysics(),
                 children: [
                   _KeepAliveDetailsTab(
                     child: RefreshIndicator(
@@ -1165,6 +1181,12 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         ],
       ),
     );
+  }
+
+  TextDirection _detailsTabsTextDirection(BuildContext context) {
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    return isArabic ? TextDirection.rtl : TextDirection.ltr;
   }
 
   Widget _buildEpisodeSelectionBar(BuildContext context, int selectedCount) {
@@ -1688,19 +1710,23 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         ? 'الحلقات'
         : 'Episodes';
 
-    return FilterStyleTabBar(
-      controller: _detailsTabController,
-      isScrollable: false,
-      tabs: [
-        FilterStyleTab(
-          icon: Icons.info_outline_rounded,
-          label: isArabic ? 'التفاصيل' : 'Details',
-        ),
-        FilterStyleTab(
-          icon: Icons.play_circle_outline_rounded,
-          label: episodeLabel,
-        ),
-      ],
+    // Arabic RTL: Details on the right (index 0), Episodes on the left (index 1).
+    return Directionality(
+      textDirection: _detailsTabsTextDirection(context),
+      child: FilterStyleTabBar(
+        controller: _detailsTabController,
+        isScrollable: false,
+        tabs: [
+          FilterStyleTab(
+            icon: Icons.info_outline_rounded,
+            label: isArabic ? 'التفاصيل' : 'Details',
+          ),
+          FilterStyleTab(
+            icon: Icons.play_circle_outline_rounded,
+            label: episodeLabel,
+          ),
+        ],
+      ),
     );
   }
 

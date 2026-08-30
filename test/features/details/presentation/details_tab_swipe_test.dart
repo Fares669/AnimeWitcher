@@ -23,6 +23,57 @@ class _KeepAlivePageState extends State<_KeepAlivePage>
   }
 }
 
+Future<void> _pumpRtlDetailsPager(
+  WidgetTester tester, {
+  required TabController controller,
+  Widget? detailsChild,
+}) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      locale: const Locale('ar'),
+      home: Directionality(
+        textDirection: TextDirection.rtl,
+        child: Scaffold(
+          body: Column(
+            children: [
+              TabBar(
+                controller: controller,
+                isScrollable: false,
+                tabs: const [
+                  Tab(text: 'التفاصيل'),
+                  Tab(text: 'الحلقات'),
+                ],
+              ),
+              Expanded(
+                child: TabBarView(
+                  controller: controller,
+                  children: [
+                    _KeepAlivePage(
+                      child:
+                          detailsChild ??
+                          const ColoredBox(
+                            color: Colors.black,
+                            child: Center(child: Text('تفاصيل الأنمي')),
+                          ),
+                    ),
+                    const _KeepAlivePage(
+                      child: ColoredBox(
+                        color: Colors.black,
+                        child: Center(child: Text('قائمة الحلقات')),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pump();
+}
+
 void main() {
   test('extra-tabs swipe is ignored only while the details tab is showing', () {
     expect(
@@ -48,6 +99,67 @@ void main() {
     );
   });
 
+  testWidgets('Arabic details tabs keep Details on the right of Episodes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final controller = TabController(length: 2, vsync: tester);
+    addTearDown(controller.dispose);
+    await _pumpRtlDetailsPager(tester, controller: controller);
+
+    expect(
+      tester.getCenter(find.text('التفاصيل')).dx,
+      greaterThan(tester.getCenter(find.text('الحلقات')).dx),
+    );
+    expect(controller.index, 0);
+  });
+
+  testWidgets('details TabBarView follows the finger in both RTL directions', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final controller = TabController(length: 2, vsync: tester);
+    addTearDown(controller.dispose);
+    await _pumpRtlDetailsPager(tester, controller: controller);
+
+    expect(controller.index, 0);
+    expect(controller.offset, 0);
+
+    final Size screen = tester.getSize(find.byType(MaterialApp));
+    final TestGesture gesture = await tester.startGesture(
+      Offset(screen.width * 0.5, screen.height * 0.55),
+    );
+    await gesture.moveBy(const Offset(110, 0));
+    await tester.pump();
+
+    // Native pager tracks the drag instead of jumping after pointer up.
+    expect(controller.animation!.value, greaterThan(0.08));
+    expect(controller.animation!.value, lessThan(0.95));
+    expect(find.text('تفاصيل الأنمي'), findsOneWidget);
+    expect(find.text('قائمة الحلقات'), findsOneWidget);
+
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(controller.index, 1);
+    expect(find.text('قائمة الحلقات'), findsOneWidget);
+
+    final TestGesture back = await tester.startGesture(
+      Offset(screen.width * 0.5, screen.height * 0.55),
+    );
+    await back.moveBy(const Offset(-110, 0));
+    await tester.pump();
+    expect(controller.animation!.value, greaterThan(0.05));
+    expect(controller.animation!.value, lessThan(0.95));
+
+    await back.up();
+    await tester.pumpAndSettle();
+    expect(controller.index, 0);
+  });
+
   testWidgets(
     'RTL swipe on episodes returns to details even if extra-tabs stays mounted',
     (tester) async {
@@ -57,109 +169,26 @@ void main() {
       final extraTabsKey = GlobalKey();
       final controller = TabController(length: 2, vsync: tester);
       addTearDown(controller.dispose);
-      var swipeDistance = 0.0;
-      var startedAtBackEdge = false;
 
-      await tester.pumpWidget(
-        MaterialApp(
-          locale: const Locale('ar'),
-          home: Directionality(
-            textDirection: TextDirection.rtl,
-            child: Scaffold(
-              body: RawGestureDetector(
-                behavior: HitTestBehavior.translucent,
-                gestures: <Type, GestureRecognizerFactory>{
-                  DetailsEpisodesSwipeGestureRecognizer:
-                      GestureRecognizerFactoryWithHandlers<
-                        DetailsEpisodesSwipeGestureRecognizer
-                      >(
-                        () => DetailsEpisodesSwipeGestureRecognizer(
-                          shouldIgnore: (position) {
-                            final extraContext = extraTabsKey.currentContext;
-                            var inExtraTabs = false;
-                            if (extraContext != null) {
-                              final box = extraContext.findRenderObject();
-                              if (box is RenderBox && box.hasSize) {
-                                final local = box.globalToLocal(position);
-                                inExtraTabs =
-                                    local.dx >= 0 &&
-                                    local.dy >= 0 &&
-                                    local.dx <= box.size.width &&
-                                    local.dy <= box.size.height;
-                              }
-                            }
-                            return ignoreDetailsEpisodesSwipe(
-                              selectedDetailsTab: controller.index,
-                              pointerInExtraTabsBounds: inExtraTabs,
-                            );
-                          },
-                        ),
-                        (instance) {
-                          instance
-                            ..onStart = (details) {
-                              swipeDistance = 0;
-                              startedAtBackEdge =
-                                  details.globalPosition.dx <= 24;
-                            }
-                            ..onUpdate = (details) {
-                              if (startedAtBackEdge) return;
-                              swipeDistance += details.primaryDelta ?? 0;
-                            }
-                            ..onEnd = (details) {
-                              final distance = swipeDistance;
-                              final velocity = details.primaryVelocity ?? 0;
-                              final ignored = startedAtBackEdge;
-                              swipeDistance = 0;
-                              startedAtBackEdge = false;
-                              if (ignored) return;
-                              final swipeLeft =
-                                  distance <= -72 || velocity <= -650;
-                              final swipeRight =
-                                  distance >= 72 || velocity >= 650;
-                              if (swipeRight && controller.index != 1) {
-                                controller.index = 1;
-                              } else if (swipeLeft && controller.index != 0) {
-                                controller.index = 0;
-                              }
-                            };
-                        },
-                      ),
-                },
-                child: TabBarView(
-                  controller: controller,
-                  physics: const NeverScrollableScrollPhysics(),
-                  children: [
-                    _KeepAlivePage(
-                      child: ColoredBox(
-                        color: Colors.black,
-                        child: Align(
-                          alignment: Alignment.bottomCenter,
-                          child: SizedBox(
-                            key: extraTabsKey,
-                            height: 520,
-                            width: 390,
-                            child: const ColoredBox(
-                              color: Colors.red,
-                              child: Center(child: Text('extra-tabs')),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const _KeepAlivePage(
-                      child: ColoredBox(
-                        color: Colors.black,
-                        child: Center(child: Text('episodes-page')),
-                      ),
-                    ),
-                  ],
-                ),
+      await _pumpRtlDetailsPager(
+        tester,
+        controller: controller,
+        detailsChild: ColoredBox(
+          color: Colors.black,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              key: extraTabsKey,
+              height: 520,
+              width: 390,
+              child: const ColoredBox(
+                color: Colors.red,
+                child: Center(child: Text('extra-tabs')),
               ),
             ),
           ),
         ),
       );
-      await tester.pump();
 
       expect(controller.index, 0);
       await tester.timedDragFrom(
@@ -169,10 +198,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(controller.index, 1);
-      expect(find.text('episodes-page'), findsOneWidget);
+      expect(find.text('قائمة الحلقات'), findsOneWidget);
 
-      // Drag over the stale extra-tabs rectangle (lower half). Without the
-      // selected-tab guard this swipe would be ignored and we'd stay on 1.
+      // Drag over the stale extra-tabs rectangle (lower half). Native
+      // TabBarView should still return to details.
       await tester.timedDragFrom(
         const Offset(200, 620),
         const Offset(-140, 0),
