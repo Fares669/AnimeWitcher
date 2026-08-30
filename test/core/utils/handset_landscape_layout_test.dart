@@ -321,7 +321,7 @@ void main() {
     expect(second.top, greaterThan(first.bottom - 1));
   });
 
-  testWidgets('search filter dialog lays out in a short landscape box', (
+  testWidgets('search filter dialog uses landscape height to show more chips', (
     tester,
   ) async {
     await _setPhoneSurface(tester, size: _phoneLandscape);
@@ -337,6 +337,10 @@ void main() {
         'رعب',
         'رياضة',
         'غموض',
+        'حربي',
+        'مدرسي',
+        'رومانسي',
+        'تاريخي',
       ],
       types: <String>['مسلسل', 'فيلم', 'أوفا'],
       statuses: <String>['يعرض الآن', 'مكتمل'],
@@ -395,16 +399,23 @@ void main() {
     expect(find.text('الحالة'), findsOneWidget);
     expect(find.text('اكشن'), findsOneWidget);
     expect(find.text('غموض'), findsOneWidget);
+    expect(find.text('تاريخي'), findsOneWidget);
     expect(
       tester.getRect(find.text('غموض')).bottom,
+      lessThan(tester.getRect(find.text('تطبيق')).top),
+    );
+    // 12 chips / 5 landscape columns => a third row. The taller sheet must
+    // keep that row fully above the apply button instead of clipping it.
+    expect(
+      tester.getRect(find.text('تاريخي')).bottom,
       lessThan(tester.getRect(find.text('تطبيق')).top),
     );
 
     final dialog = tester.getRect(find.byType(Dialog));
     final panel = tester.getRect(find.byType(AppleLiquidGlassSurface));
     expect(dialog.height, lessThanOrEqualTo(360));
-    expect(panel.height, lessThan(300));
-    expect(panel.height, greaterThan(200));
+    expect(panel.height, greaterThan(300));
+    expect(panel.height, lessThanOrEqualTo(360));
     expect(panel.width, greaterThan(600));
     expect(find.text('تطبيق'), findsOneWidget);
     expect(tester.getRect(find.text('تطبيق')).bottom, lessThan(360));

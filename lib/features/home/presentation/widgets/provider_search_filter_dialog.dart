@@ -333,12 +333,15 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
     final viewport = MediaQuery.sizeOf(context);
     final isHandsetLandscape = context.isHandsetLandscape;
     final insetH = isHandsetLandscape ? 12.0 : 16.0;
-    final insetV = isHandsetLandscape ? 8.0 : 28.0;
+    // Landscape phones have little vertical room; use a tight inset so the
+    // sheet can grow into the empty bands above and below instead of sitting
+    // as a short strip in the middle.
+    final insetV = isHandsetLandscape ? 4.0 : 28.0;
     final availableHeight = (viewport.height - insetV * 2)
         .clamp(160.0, 720.0)
         .toDouble();
     final dialogHeight = isHandsetLandscape
-        ? (viewport.height * 0.70).clamp(200.0, availableHeight).toDouble()
+        ? availableHeight
         : (viewport.height * 0.82).clamp(180.0, availableHeight).toDouble();
     final maxWidth = isHandsetLandscape
         ? (viewport.width - insetH * 2).clamp(280.0, 840.0)
