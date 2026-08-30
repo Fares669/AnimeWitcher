@@ -8,6 +8,55 @@ import '../../../../shared/widgets/paged_rail.dart';
 import '../../../characters/presentation/character_card.dart';
 import 'details_poster_grid.dart';
 
+const double detailsCharacterRailRowHeight = 198;
+const double detailsCharacterRailCardWidth = 110;
+const double detailsCharacterRailTitleVerticalPadding = 8;
+const double detailsCharacterRailSectionGap = 18;
+
+double detailsCharacterRailTitleBlockHeight(
+  BuildContext context,
+  String title,
+) {
+  final style = Theme.of(
+    context,
+  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800);
+  final painter = TextPainter(
+    text: TextSpan(text: title, style: style),
+    textDirection: Directionality.maybeOf(context) ?? TextDirection.rtl,
+    textScaler: MediaQuery.textScalerOf(context),
+    maxLines: 1,
+  )..layout();
+  return detailsCharacterRailTitleVerticalPadding * 2 + painter.height;
+}
+
+/// Intrinsic height of [DetailsCharacterRails] so extra-tabs can size the
+/// nested [TabBarView] instead of giving characters their own vertical scroll.
+double detailsCharacterRailsHeight(
+  BuildContext context, {
+  required bool hasMain,
+  required bool hasSupporting,
+}) {
+  var height = 0.0;
+  if (hasMain) {
+    height += detailsCharacterRailTitleBlockHeight(
+      context,
+      animeWitcherMainCharactersHeader,
+    );
+    height += detailsCharacterRailRowHeight;
+  }
+  if (hasMain && hasSupporting) {
+    height += detailsCharacterRailSectionGap;
+  }
+  if (hasSupporting) {
+    height += detailsCharacterRailTitleBlockHeight(
+      context,
+      animeWitcherSupportingCharactersHeader,
+    );
+    height += detailsCharacterRailRowHeight;
+  }
+  return height;
+}
+
 class DetailsCharacterRails extends StatelessWidget {
   const DetailsCharacterRails({
     super.key,
@@ -52,7 +101,7 @@ class DetailsCharacterRails extends StatelessWidget {
             onShowMore: onShowMore,
           ),
         if (main.isNotEmpty && supporting.isNotEmpty)
-          const SizedBox(height: 18),
+          const SizedBox(height: detailsCharacterRailSectionGap),
         if (supporting.isNotEmpty)
           _CharacterRoleRail(
             title: animeWitcherSupportingCharactersHeader,
@@ -146,19 +195,21 @@ class _CharacterRoleRailState extends State<_CharacterRoleRail> {
     final visibleCount = animeWitcherCastStripVisibleCount(
       widget.characters.length,
     );
-    const cardWidth = 110.0;
-    const rowHeight = 198.0;
+    const cardWidth = detailsCharacterRailCardWidth;
+    const rowHeight = detailsCharacterRailRowHeight;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(
+            vertical: detailsCharacterRailTitleVerticalPadding,
+          ),
           child: Text(
             widget.title,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w800,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
           ),
         ),
         SizedBox(
@@ -178,9 +229,7 @@ class _CharacterRoleRailState extends State<_CharacterRoleRail> {
               itemBuilder: (context, index) {
                 if (showMore && index >= visibleCount) {
                   return SizedBox(
-                    key: ValueKey(
-                      'details-character-${widget.role}-more',
-                    ),
+                    key: ValueKey('details-character-${widget.role}-more'),
                     width: cardWidth,
                     height: rowHeight,
                     child: DetailsShowMoreTile(
@@ -193,9 +242,7 @@ class _CharacterRoleRailState extends State<_CharacterRoleRail> {
                   width: cardWidth,
                   height: rowHeight,
                   child: CharacterPosterCard(
-                    key: ValueKey(
-                      'details-character-${widget.role}-$index',
-                    ),
+                    key: ValueKey('details-character-${widget.role}-$index'),
                     character: AnimeWitcherCharacterHit(
                       id: widget.characters[index].id?.trim() ?? '',
                       name: widget.characters[index].name,

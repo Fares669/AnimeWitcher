@@ -61,8 +61,9 @@ Future<void> _writeShot(WidgetTester tester, String filename, Key key) async {
     );
     final image = await boundary.toImage(pixelRatio: 2);
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    File('${artifacts.path}/$filename')
-        .writeAsBytesSync(bytes!.buffer.asUint8List());
+    File(
+      '${artifacts.path}/$filename',
+    ).writeAsBytesSync(bytes!.buffer.asUint8List());
   });
 }
 
@@ -232,8 +233,9 @@ void main() {
       );
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File('${artifacts.path}/details_extra_tabs_similar_grid.png')
-          .writeAsBytesSync(bytes!.buffer.asUint8List());
+      File(
+        '${artifacts.path}/details_extra_tabs_similar_grid.png',
+      ).writeAsBytesSync(bytes!.buffer.asUint8List());
     });
   });
 
@@ -687,8 +689,9 @@ void main() {
         );
         final image = await boundary.toImage(pixelRatio: 2);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        File('${artifacts.path}/details_extra_tabs_related_empty.png')
-            .writeAsBytesSync(bytes!.buffer.asUint8List());
+        File(
+          '${artifacts.path}/details_extra_tabs_related_empty.png',
+        ).writeAsBytesSync(bytes!.buffer.asUint8List());
       });
     },
   );
@@ -935,5 +938,137 @@ void main() {
           find.text(animeWitcherCharactersEmptyMessage).evaluate().isNotEmpty,
       isTrue,
     );
+  });
+
+  testWidgets(
+    'characters tab has no nested vertical scroll and both rails stay in view',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 920));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.runAsync(_loadWalkthroughFonts);
+
+      await tester.pumpWidget(
+        _app(
+          ListView(
+            children: [
+              DetailsExtraTabs(
+                similar: AsyncData(<MultimediaItem>[_item('SimilarOne', 's1')]),
+                related: const AsyncData(<MultimediaItem>[]),
+                relatedHasMore: false,
+                cast: AsyncData(<Actor>[
+                  ..._mainActors(11),
+                  _actor(
+                    id: 's1',
+                    name: 'Support One',
+                    role: 'شخصية ثانوية',
+                    likes: 9,
+                  ),
+                  _actor(
+                    id: 's2',
+                    name: 'Support Two',
+                    role: 'شخصية ثانوية',
+                    likes: 4,
+                  ),
+                ]),
+                onTabBecameVisible: (_) {},
+                onAnimeTap: (_) {},
+                onCharacterTap: (_) {},
+                onShowMoreCharacters: (_) {},
+              ),
+            ],
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text(animeWitcherCharactersTabLabel));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      await _settleCharacterRails(tester);
+
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('details-extra-tab-view')),
+          matching: find.byWidgetPredicate((widget) {
+            return widget is Scrollable &&
+                (widget.axisDirection == AxisDirection.down ||
+                    widget.axisDirection == AxisDirection.up);
+          }),
+        ),
+        findsNothing,
+      );
+
+      final tabView = tester.getRect(
+        find.byKey(const ValueKey('details-extra-tab-view')),
+      );
+      final mainHeader = tester.getRect(
+        find.text(animeWitcherMainCharactersHeader),
+      );
+      final supportHeader = tester.getRect(
+        find.text(animeWitcherSupportingCharactersHeader),
+      );
+      final supportRail = tester.getRect(
+        find.byKey(const ValueKey('details-character-rail-Supporting')),
+      );
+      expect(mainHeader.top, greaterThanOrEqualTo(tabView.top - 0.5));
+      expect(supportHeader.top, greaterThan(mainHeader.bottom));
+      expect(supportRail.bottom, lessThanOrEqualTo(tabView.bottom + 1));
+    },
+  );
+
+  testWidgets('vertical drag on characters scrolls the parent details page', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 920));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.runAsync(_loadWalkthroughFonts);
+
+    await tester.pumpWidget(
+      _app(
+        ListView(
+          children: [
+            const SizedBox(
+              height: 360,
+              child: Center(child: Text('above-extra')),
+            ),
+            DetailsExtraTabs(
+              similar: AsyncData(<MultimediaItem>[_item('SimilarOne', 's1')]),
+              related: const AsyncData(<MultimediaItem>[]),
+              relatedHasMore: false,
+              cast: AsyncData(_mainActors(11)),
+              onTabBecameVisible: (_) {},
+              onAnimeTap: (_) {},
+              onCharacterTap: (_) {},
+              onShowMoreCharacters: (_) {},
+            ),
+            const SizedBox(
+              height: 1400,
+              child: Center(child: Text('below-extra')),
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text(animeWitcherCharactersTabLabel));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await _settleCharacterRails(tester);
+
+    final parent = tester.state<ScrollableState>(
+      find.byWidgetPredicate((widget) {
+        return widget is Scrollable &&
+            widget.axisDirection == AxisDirection.down;
+      }).first,
+    );
+    expect(parent.position.pixels, 0);
+
+    await tester.timedDrag(
+      find.text(animeWitcherMainCharactersHeader),
+      const Offset(0, -220),
+      const Duration(milliseconds: 280),
+    );
+    await tester.pumpAndSettle();
+
+      expect(parent.position.pixels, greaterThan(80));
   });
 }
