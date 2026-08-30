@@ -13,19 +13,30 @@ const double detailsCharacterRailCardWidth = 110;
 const double detailsCharacterRailTitleVerticalPadding = 8;
 const double detailsCharacterRailSectionGap = 18;
 
+/// Absorbs strut / leading differences between [TextPainter] and the
+/// rendered [Text] so the extra-tab [TabBarView] is never a few pixels short.
+const double detailsCharacterRailsHeightSlack = 16;
+
 double detailsCharacterRailTitleBlockHeight(
   BuildContext context,
-  String title,
-) {
+  String title, {
+  double maxWidth = double.infinity,
+}) {
   final style = Theme.of(
     context,
   ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800);
-  final painter = TextPainter(
-    text: TextSpan(text: title, style: style),
-    textDirection: Directionality.maybeOf(context) ?? TextDirection.rtl,
-    textScaler: MediaQuery.textScalerOf(context),
-    maxLines: 1,
-  )..layout();
+  final painter =
+      TextPainter(
+        text: TextSpan(text: title, style: style),
+        textDirection: Directionality.maybeOf(context) ?? TextDirection.rtl,
+        textScaler: MediaQuery.textScalerOf(context),
+        locale: Localizations.maybeLocaleOf(context),
+        maxLines: 2,
+      )..layout(
+        maxWidth: maxWidth.isFinite && maxWidth > 0
+            ? maxWidth
+            : double.infinity,
+      );
   return detailsCharacterRailTitleVerticalPadding * 2 + painter.height;
 }
 
@@ -35,12 +46,14 @@ double detailsCharacterRailsHeight(
   BuildContext context, {
   required bool hasMain,
   required bool hasSupporting,
+  double maxWidth = double.infinity,
 }) {
   var height = 0.0;
   if (hasMain) {
     height += detailsCharacterRailTitleBlockHeight(
       context,
       animeWitcherMainCharactersHeader,
+      maxWidth: maxWidth,
     );
     height += detailsCharacterRailRowHeight;
   }
@@ -51,9 +64,11 @@ double detailsCharacterRailsHeight(
     height += detailsCharacterRailTitleBlockHeight(
       context,
       animeWitcherSupportingCharactersHeader,
+      maxWidth: maxWidth,
     );
     height += detailsCharacterRailRowHeight;
   }
+  if (height > 0) height += detailsCharacterRailsHeightSlack;
   return height;
 }
 
@@ -207,6 +222,8 @@ class _CharacterRoleRailState extends State<_CharacterRoleRail> {
           ),
           child: Text(
             widget.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: Theme.of(
               context,
             ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),

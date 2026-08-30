@@ -93,7 +93,11 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
   /// Characters rails can be taller than the 6-poster similar/related grid.
   /// Size the shared [TabBarView] to the taller tab so characters never get
   /// their own vertical scroll inside the details page.
-  double _charactersTabBodyHeight(BuildContext context, double gridHeight) {
+  double _charactersTabBodyHeight(
+    BuildContext context,
+    double gridHeight, {
+    required double maxWidth,
+  }) {
     final cast = widget.cast.asData?.value;
     if (cast == null || cast.isEmpty) return gridHeight;
     final hasMain = DetailsCharacterRails.mainCast(cast).isNotEmpty;
@@ -103,6 +107,7 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
       context,
       hasMain: hasMain,
       hasSupporting: hasSupporting,
+      maxWidth: maxWidth,
     );
   }
 
@@ -121,7 +126,7 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
         final gridHeight = detailsExtraTabBodyHeight(context, bodyWidth);
         final bodyHeight = math.max(
           gridHeight,
-          _charactersTabBodyHeight(context, gridHeight),
+          _charactersTabBodyHeight(context, gridHeight, maxWidth: bodyWidth),
         );
         return Column(
           mainAxisSize: MainAxisSize.min,
