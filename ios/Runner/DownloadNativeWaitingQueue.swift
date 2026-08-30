@@ -248,26 +248,38 @@ enum DownloadNativeWaitingQueue {
     saveLocked(state)
   }
 
+  /// `DownloadContinuedProcessingManager` is `@MainActor`. URLSession
+  /// callbacks are not. Xcode 26 (Build Preview) rejects a direct call from a
+  /// synchronous nonisolated context (`ActorIsolatedCall`). Hop to the main
+  /// actor synchronously so ep2's overlay still starts before `completionHandler()`.
+  private static func runOnMainActor<T: Sendable>(
+    _ work: @escaping @MainActor @Sendable () -> T
+  ) -> T {
+    if Thread.isMainThread {
+      return MainActor.assumeIsolated(work)
+    }
+    return DispatchQueue.main.sync {
+      MainActor.assumeIsolated(work)
+    }
+  }
+
   private static func startLiveActivity(for waiter: Waiter) {
-    let work = {
+    let taskId = waiter.taskId
+    let displayName = waiter.displayName
+    runOnMainActor {
       if #available(iOS 26.0, *) {
         _ = try? DownloadContinuedProcessingManager.shared.start(
-          taskId: waiter.taskId,
-          displayName: waiter.displayName,
+          taskId: taskId,
+          displayName: displayName,
           progress: 0,
           totalBytes: -1
         )
       }
     }
-    if Thread.isMainThread {
-      work()
-    } else {
-      DispatchQueue.main.sync(execute: work)
-    }
   }
 
   private static func finishLiveActivity(taskId: String, success: Bool) {
-    let work = {
+    runOnMainActor {
       if #available(iOS 26.0, *) {
         DownloadContinuedProcessingManager.shared.finish(
           taskId: taskId,
@@ -275,11 +287,6 @@ enum DownloadNativeWaitingQueue {
           status: success ? "completed" : "failed"
         )
       }
-    }
-    if Thread.isMainThread {
-      work()
-    } else {
-      DispatchQueue.main.sync(execute: work)
     }
   }
 
