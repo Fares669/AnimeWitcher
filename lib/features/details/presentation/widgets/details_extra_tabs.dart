@@ -10,10 +10,10 @@ import '../../../../shared/widgets/underline_segment_tabs.dart';
 import 'details_character_rails.dart';
 import 'details_poster_grid.dart';
 
-/// Visual RTL order: الشخصيات (right), ذات صلة (center), أنميات مشابهة (left).
-const int detailsExtraCharactersTabIndex = 0;
+/// Visual RTL order: أنميات مشابهة (right), ذات صلة (center), الشخصيات (left).
+const int detailsExtraSimilarTabIndex = 0;
 const int detailsExtraRelatedTabIndex = 1;
-const int detailsExtraSimilarTabIndex = 2;
+const int detailsExtraCharactersTabIndex = 2;
 
 class DetailsExtraTabs extends StatefulWidget {
   const DetailsExtraTabs({
@@ -128,67 +128,70 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
           gridHeight,
           _charactersTabBodyHeight(context, gridHeight, maxWidth: bodyWidth),
         );
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            FilterStyleTabBar(
-              controller: _tabController,
-              isScrollable: false,
-              padding: EdgeInsets.zero,
-              labelPadding: EdgeInsets.zero,
-              indicatorSize: TabBarIndicatorSize.tab,
-              tabs: [
-                FilterStyleTab(
-                  label: animeWitcherCharactersTabLabel,
-                  maxWidth: tabWidth,
-                ),
-                FilterStyleTab(
-                  label: animeWitcherRelatedTabLabel,
-                  maxWidth: tabWidth,
-                ),
-                FilterStyleTab(
-                  label: animeWitcherSimilarTabLabel,
-                  maxWidth: tabWidth,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: widget.contentPadding,
-              child: SizedBox(
-                height: bodyHeight,
-                child: _NestedExtraTabPager(
-                  child: TabBarView(
-                    key: const ValueKey('details-extra-tab-view'),
-                    controller: _tabController,
-                    children: [
-                      _CharactersTab(
-                        state: widget.cast,
-                        onCharacterTap: widget.onCharacterTap,
-                        onShowMore: widget.onShowMoreCharacters,
-                        onRetry: widget.onRetryCast,
-                      ),
-                      _RelatedTab(
-                        state: widget.related,
-                        hasMore: widget.relatedHasMore,
-                        onItemTap: widget.onAnimeTap,
-                        onShowMore: widget.onShowMoreRelated,
-                        onRetry: widget.onRetryRelated,
-                      ),
-                      _SimilarTab(
-                        state: widget.similar,
-                        hasMore: widget.similarHasMore,
-                        onItemTap: widget.onAnimeTap,
-                        onShowMore: widget.onShowMoreSimilar,
-                        onRetry: widget.onRetrySimilar,
-                      ),
-                    ],
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilterStyleTabBar(
+                controller: _tabController,
+                isScrollable: false,
+                padding: EdgeInsets.zero,
+                labelPadding: EdgeInsets.zero,
+                indicatorSize: TabBarIndicatorSize.tab,
+                tabs: [
+                  FilterStyleTab(
+                    label: animeWitcherSimilarTabLabel,
+                    maxWidth: tabWidth,
+                  ),
+                  FilterStyleTab(
+                    label: animeWitcherRelatedTabLabel,
+                    maxWidth: tabWidth,
+                  ),
+                  FilterStyleTab(
+                    label: animeWitcherCharactersTabLabel,
+                    maxWidth: tabWidth,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Padding(
+                padding: widget.contentPadding,
+                child: SizedBox(
+                  height: bodyHeight,
+                  child: _NestedExtraTabPager(
+                    child: TabBarView(
+                      key: const ValueKey('details-extra-tab-view'),
+                      controller: _tabController,
+                      children: [
+                        _SimilarTab(
+                          state: widget.similar,
+                          hasMore: widget.similarHasMore,
+                          onItemTap: widget.onAnimeTap,
+                          onShowMore: widget.onShowMoreSimilar,
+                          onRetry: widget.onRetrySimilar,
+                        ),
+                        _RelatedTab(
+                          state: widget.related,
+                          hasMore: widget.relatedHasMore,
+                          onItemTap: widget.onAnimeTap,
+                          onShowMore: widget.onShowMoreRelated,
+                          onRetry: widget.onRetryRelated,
+                        ),
+                        _CharactersTab(
+                          state: widget.cast,
+                          onCharacterTap: widget.onCharacterTap,
+                          onShowMore: widget.onShowMoreCharacters,
+                          onRetry: widget.onRetryCast,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         );
       },
     );

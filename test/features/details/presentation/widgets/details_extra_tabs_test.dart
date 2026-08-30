@@ -169,12 +169,14 @@ void main() {
     expect(tabRects[0].center.dx, greaterThan(tabRects[1].center.dx));
     expect(tabRects[1].center.dx, greaterThan(tabRects[2].center.dx));
     expect(
-      tester.getCenter(find.text(animeWitcherCharactersTabLabel)).dx,
+      tester.getCenter(find.text(animeWitcherSimilarTabLabel)).dx,
       greaterThan(tester.getCenter(find.text(animeWitcherRelatedTabLabel)).dx),
     );
     expect(
       tester.getCenter(find.text(animeWitcherRelatedTabLabel)).dx,
-      greaterThan(tester.getCenter(find.text(animeWitcherSimilarTabLabel)).dx),
+      greaterThan(
+        tester.getCenter(find.text(animeWitcherCharactersTabLabel)).dx,
+      ),
     );
 
     final first = tester.getRect(find.byKey(const ValueKey('similar-0')));
@@ -880,7 +882,6 @@ void main() {
               child: TabBarView(
                 key: const ValueKey('parent-details-pager'),
                 controller: parentController,
-                physics: const NeverScrollableScrollPhysics(),
                 children: [
                   ListView(
                     children: [
@@ -1069,6 +1070,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-      expect(parent.position.pixels, greaterThan(80));
+    expect(parent.position.pixels, greaterThan(80));
   });
 }
