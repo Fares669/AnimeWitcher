@@ -95,6 +95,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
   @override
   Widget build(BuildContext context) {
     final isArabic = Localizations.localeOf(context).languageCode == 'ar';
+    final columns = newsListColumnCount(MediaQuery.sizeOf(context));
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(kToolbarHeight),
@@ -108,11 +109,13 @@ class _NewsListScreenState extends State<NewsListScreen> {
               enabled: Navigator.of(context).canPop(),
               onBack: () => Navigator.of(context).maybePop(),
               child: Align(
-                alignment:
-                    isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: isArabic
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
                 child: Directionality(
-                  textDirection:
-                      isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
                   child: Text(
                     isArabic ? 'الأخبار' : 'News',
                     style: const TextStyle(fontWeight: FontWeight.bold),
@@ -131,42 +134,59 @@ class _NewsListScreenState extends State<NewsListScreen> {
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
-        child: ListView.separated(
-          controller: _scrollController,
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
-          physics: const AlwaysScrollableScrollPhysics(),
-          itemCount: _items.length + (_isLoading ? 1 : 0),
-          separatorBuilder: (_, index) {
-            if (index >= _items.length - 1) return const SizedBox.shrink();
-            return const SizedBox(height: 12);
-          },
-          itemBuilder: (context, index) {
-            if (index >= _items.length) {
-              return const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-
-            final item = _items[index];
-            final onOpen = widget.onOpen == null
-                ? () {
-                    openNewsUrl(item);
-                  }
-                : () {
-                    widget.onOpen!(item);
-                  };
-            return NewsCard(
-              item: item,
-              compact: false,
-              onOpen: onOpen,
-              onAnimeTap: widget.onAnimeTap == null
-                  ? null
-                  : () => widget.onAnimeTap!(item),
-            );
-          },
-        ),
+        child: columns == 1
+            ? ListView.separated(
+                controller: _scrollController,
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: _items.length + (_isLoading ? 1 : 0),
+                separatorBuilder: (_, index) {
+                  if (index >= _items.length - 1)
+                    return const SizedBox.shrink();
+                  return const SizedBox(height: 12);
+                },
+                itemBuilder: (context, index) => _newsItem(context, index),
+              )
+            : GridView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
+                physics: const AlwaysScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  mainAxisExtent: 220,
+                ),
+                itemCount: _items.length + (_isLoading ? 1 : 0),
+                itemBuilder: (context, index) => _newsItem(context, index),
+              ),
       ),
+    );
+  }
+
+  Widget _newsItem(BuildContext context, int index) {
+    if (index >= _items.length) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final item = _items[index];
+    final onOpen = widget.onOpen == null
+        ? () {
+            openNewsUrl(item);
+          }
+        : () {
+            widget.onOpen!(item);
+          };
+    return NewsCard(
+      item: item,
+      compact: false,
+      onOpen: onOpen,
+      onAnimeTap: widget.onAnimeTap == null
+          ? null
+          : () => widget.onAnimeTap!(item),
     );
   }
 }

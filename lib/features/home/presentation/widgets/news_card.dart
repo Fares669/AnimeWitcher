@@ -24,8 +24,11 @@ class NewsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final compact = this.compact;
+    final isLandscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
     final width = compact ? 200.0 : double.infinity;
-    final imageHeight = compact ? 100.0 : 210.0;
+    final imageHeight = compact ? 100.0 : (isLandscape ? 112.0 : 210.0);
 
     return SizedBox(
       width: width,
