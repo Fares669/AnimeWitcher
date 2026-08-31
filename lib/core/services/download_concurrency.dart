@@ -83,11 +83,16 @@ bool occupiesDownloadSlot({
 
 /// Waiting rows may be stored paused (legacy Dart park) so the Downloads tab
 /// must keep the existing **في الانتظار...** (`enqueued`) label. Native
-/// holding-queue waiters are already [TaskStatus.enqueued].
+/// holding-queue waiters are already [TaskStatus.enqueued]. A live transfer
+/// always wins: `queueWaiting` must not hide **جارٍ التنزيل...**.
 TaskStatus displayDownloadStatus({
   required TaskStatus persisted,
   required bool queueWaiting,
 }) {
+  if (persisted == TaskStatus.running ||
+      persisted == TaskStatus.waitingToRetry) {
+    return persisted;
+  }
   if (queueWaiting) return TaskStatus.enqueued;
   return persisted;
 }
@@ -119,9 +124,74 @@ bool isNativeWaitingSnapshotWaiter({
   return queueWaiting || status == TaskStatus.enqueued;
 }
 
+/// Plugin `allTasks` / `taskForId` membership: HQ waiter or URLSession task.
+bool isLiveNativeDownloadStatus(TaskStatus status) {
+  switch (status) {
+    case TaskStatus.running:
+    case TaskStatus.enqueued:
+    case TaskStatus.waitingToRetry:
+      return true;
+    case TaskStatus.paused:
+    case TaskStatus.complete:
+    case TaskStatus.canceled:
+    case TaskStatus.failed:
+    case TaskStatus.notFound:
+      return false;
+  }
+}
+
+class LiveNativeDownload {
+  const LiveNativeDownload({required this.taskId, required this.trackingUrl});
+
+  final String taskId;
+  final String trackingUrl;
+}
+
+/// One native task per episode. If this taskId or trackingUrl is already in
+/// FileDownloader's live set, Dart must attach — never enqueue a second copy.
+bool shouldAttachToLiveNativeTask({
+  required String taskId,
+  required String trackingUrl,
+  required Iterable<LiveNativeDownload> live,
+}) {
+  for (final item in live) {
+    if (item.taskId == taskId) return true;
+    if (trackingUrl.isNotEmpty && item.trackingUrl == trackingUrl) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool shouldStartSecondTransfer({required bool liveNativeOwnsEpisode}) =>
+    !liveNativeOwnsEpisode;
+
+/// Bytes on the wire: a waiter that is actually transferring must show
+/// **جارٍ التنزيل...**, not stay frozen at في الانتظار.
+bool progressMeansNativeTransfer(double progress) => progress > 0;
+
+/// A 0.1MB stub must not notify **مكتمل**. Trust complete only when the
+/// file is essentially whole, or when we have no contradictory progress.
+bool isCompleteDownloadCredible({
+  double? progress,
+  int expectedBytes = -1,
+  int? fileBytes,
+}) {
+  final p = progress ?? -1;
+  if (p >= 0.99) return true;
+  if (expectedBytes > 0 && fileBytes != null) {
+    return fileBytes >= (expectedBytes * 0.9).round();
+  }
+  if (p > 0 && p < 0.99) return false;
+  return true;
+}
+
 /// Full payload Swift needs to create the next `URLSessionDownloadTask`
 /// without Dart reconstructing the `DownloadTask`.
-Map<String, Object> nativeWaitingPayload(DownloadTask task) {
+Map<String, Object> nativeWaitingPayload(
+  DownloadTask task, {
+  String? notificationConfigJson,
+}) {
   return <String, Object>{
     'taskId': task.taskId,
     'taskJson': jsonEncode(task.toJson()),
@@ -133,6 +203,8 @@ Map<String, Object> nativeWaitingPayload(DownloadTask task) {
     'httpRequestMethod': task.httpRequestMethod,
     'group': task.group,
     'metaData': task.metaData,
+    if (notificationConfigJson != null && notificationConfigJson.isNotEmpty)
+      'notificationConfigJson': notificationConfigJson,
   };
 }
 
@@ -214,9 +286,10 @@ class DownloadQueuePlan {
   int get freeSlots => (maxConcurrent - occupiedCount).clamp(0, maxConcurrent);
 }
 
-/// FIFO re-enqueue of leftover Dart-parked waiters. Occupying URLSession
-/// tasks are never detached: pulling them off native re-breaks background
-/// promotion when the Flutter isolate is suspended.
+/// FIFO re-enqueue of leftover Dart-parked waiters only. Native holding-queue
+/// `enqueued` rows already have a live FileDownloader task — promoting them
+/// starts a second transfer of the same episode (Rivera: 0.1MB ghost complete
+/// then restart from 0). Occupying URLSession tasks are never detached.
 DownloadQueuePlan planDownloadQueue({
   required int maxConcurrent,
   required Iterable<DownloadQueueEntry> entries,
@@ -238,11 +311,16 @@ DownloadQueuePlan planDownloadQueue({
           )
           .toList()
         ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+  final leftoverParked = entries.where((entry) => entry.queueWaiting).toList()
+    ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
   final waitingFifoIds = waiting.map((e) => e.taskId).toList();
   final occupiedCount = occupying.length;
   final freeSlots = (n - occupiedCount).clamp(0, n);
-  final idsToPromote = waitingFifoIds.take(freeSlots).toList();
+  final idsToPromote = leftoverParked
+      .map((e) => e.taskId)
+      .take(freeSlots)
+      .toList();
 
   return DownloadQueuePlan(
     maxConcurrent: n,

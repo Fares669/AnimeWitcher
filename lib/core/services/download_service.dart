@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:dio/dio.dart';
@@ -202,21 +203,12 @@ class DownloadService {
         return;
       }
 
-      // Leftover Dart-parked waiters (pre-always-enqueue) may still emit
-      // canceled/failed if native later drops them. Keep في الانتظار.
-      if (_queueWaitingIds.contains(update.task.taskId) &&
-          update is TaskStatusUpdate &&
-          (update.status == TaskStatus.canceled ||
-              update.status == TaskStatus.failed)) {
-        return;
-      }
-
-      // Network / system failures must never wipe the download. Convert to a
-      // paused record first, then notify listeners with paused (not failed).
+      // Ghost cancel/fail from HQ dequeue while URLSession still owns this
+      // episode: attach, do not park as paused.
       if (update is TaskStatusUpdate &&
           (update.status == TaskStatus.failed ||
               update.status == TaskStatus.canceled)) {
-        unawaited(_preserveDownloadAsPaused(update, trackingUrl));
+        unawaited(_retainLiveNativeOrPause(update, trackingUrl));
         return;
       }
 
@@ -226,13 +218,6 @@ class DownloadService {
         case TaskProgressUpdate():
           final current = _ref.read(downloadProgressProvider)[trackingUrl];
 
-          // Holding-queue waiters stay في الانتظار. A 0% progress event must
-          // not flip them to "running" or the island/row shows Downloading 0%.
-          if (_queueWaitingIds.contains(update.task.taskId) ||
-              current?.status == TaskStatus.enqueued) {
-            return;
-          }
-
           // Ignore completion and negative sentinel progress (-1 failed, -2
           // canceled, -5 paused, etc.) so we never clobber a paused download
           // back to "running" after a failure.
@@ -240,6 +225,15 @@ class DownloadService {
             return;
           }
           if (update.progress < 0 || update.progress > 1) {
+            return;
+          }
+
+          // Bytes on the wire mean native is transferring. Never keep the row
+          // frozen at في الانتظار while Speed: 1.9MB/s (Rivera case 1).
+          if (progressMeansNativeTransfer(update.progress)) {
+            _queueWaitingIds.remove(update.task.taskId);
+          } else if (_queueWaitingIds.contains(update.task.taskId) ||
+              current?.status == TaskStatus.enqueued) {
             return;
           }
 
@@ -272,6 +266,14 @@ class DownloadService {
                 totalBytes: progressData.totalSize,
               ),
             );
+          } else if (progressMeansNativeTransfer(progressData.progress)) {
+            unawaited(
+              _ensureLiveActivity(
+                update.task,
+                progress: progressData.progress,
+                totalBytes: progressData.totalSize,
+              ),
+            );
           }
 
         case TaskStatusUpdate():
@@ -281,6 +283,20 @@ class DownloadService {
             );
           }
           final current = _ref.read(downloadProgressProvider)[trackingUrl];
+          if (update.status == TaskStatus.complete &&
+              !isCompleteDownloadCredible(
+                progress: current?.progress,
+                expectedBytes: current?.totalSize ?? -1,
+              )) {
+            if (kDebugMode) {
+              debugPrint(
+                '[DownloadService] Ignoring stub complete for $trackingUrl '
+                '(progress=${current?.progress})',
+              );
+            }
+            unawaited(_attachUiToLiveNativeTasks());
+            return;
+          }
           final uiStatus = displayDownloadStatus(
             persisted: update.status,
             queueWaiting: _queueWaitingIds.contains(update.task.taskId),
@@ -333,7 +349,7 @@ class DownloadService {
               // Waiting rows stay في الانتظار. Never create or keep a Live
               // Activity / "Downloading 0%" system task.
               if (update.task is DownloadTask) {
-                _waitingPayloads[update.task.taskId] = nativeWaitingPayload(
+                _waitingPayloads[update.task.taskId] = _waitingPayloadFor(
                   update.task as DownloadTask,
                 );
               }
@@ -430,7 +446,7 @@ class DownloadService {
       final queueWaiting = isQueueWaitingMetadata(metadata);
       if (queueWaiting) {
         _queueWaitingIds.add(task.taskId);
-        _waitingPayloads[task.taskId] = nativeWaitingPayload(task);
+        _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
       }
 
       final isFailed =
@@ -466,7 +482,7 @@ class DownloadService {
       );
       if (shouldReenqueue) {
         _queueWaitingIds.add(task.taskId);
-        _waitingPayloads[task.taskId] = nativeWaitingPayload(task);
+        _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
         await storage.patchDownloadMetadata(task.taskId, queueWaiting: true);
       }
 
@@ -558,9 +574,9 @@ class DownloadService {
       entries: await _queueEntries(records),
     );
 
-    // Always promote leftover waiters while the isolate is alive.
-    // Native HoldingQueue is the primary background path; this is the
-    // in-app / leftover safety net (same resume/enqueue as user unpause).
+    // Always promote leftover parked waiters while the isolate is alive.
+    // Native HoldingQueue already owns OS-enqueued waiters — do not enqueue
+    // a second copy of the same episode.
     for (final taskId in plan.idsToPromote) {
       if (_occupiedSlotCount(await FileDownloader().database.allRecords()) >=
           max) {
@@ -573,11 +589,15 @@ class DownloadService {
     await _persistNativeWaitingSnapshot();
   }
 
-  /// Attach Live Activities to running transfers and promote leftover
-  /// **في الانتظار** waiters if a slot is free.
+  /// Attach Live Activities to running transfers. Never park a live
+  /// URLSession task. Promote leftover parked waiters only if native does
+  /// not already own that episode.
   Future<void> onAppForegrounded() async {
     if (!_isInitialized) return;
-    await _serializeQueue(_syncQueueToCapUnlocked);
+    await _serializeQueue(() async {
+      await _attachUiToLiveNativeTasks();
+      await _syncQueueToCapUnlocked();
+    });
     await _attachLiveActivitiesToRunningTasks();
   }
 
@@ -601,7 +621,10 @@ class DownloadService {
     required int totalBytes,
   }) async {
     if (!shouldStartDownloadLiveActivity(TaskStatus.running)) return;
-    if (_queueWaitingIds.contains(task.taskId)) return;
+    if (_queueWaitingIds.contains(task.taskId)) {
+      if (!progressMeansNativeTransfer(progress)) return;
+      _queueWaitingIds.remove(task.taskId);
+    }
     var storedProgress = progress;
     if (storedProgress < 0 || storedProgress > 1) storedProgress = 0.0;
     await _continuedProcessing.start(
@@ -637,9 +660,7 @@ class DownloadService {
         queueWaiting: leftoverWaiting,
         userPaused: userPaused,
       )) {
-        waiters.add(
-          _waitingPayloads[task.taskId] ?? nativeWaitingPayload(task),
-        );
+        waiters.add(_waitingPayloads[task.taskId] ?? _waitingPayloadFor(task));
         waiterIds.add(task.taskId);
         continue;
       }
@@ -667,18 +688,164 @@ class DownloadService {
     );
   }
 
-  Future<bool> _promoteWaitingTask(DownloadTask task) async {
-    final record = await FileDownloader().database.recordForId(task.taskId);
-    final live = await FileDownloader().taskForId(task.taskId);
+  String? _notificationConfigJson(DownloadTask task) {
+    try {
+      // ignore: invalid_use_of_visible_for_testing_member
+      final config = FileDownloader().downloaderForTesting
+          .notificationConfigForTask(task);
+      if (config == null) return null;
+      return jsonEncode(config.toJson());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<String, Object> _waitingPayloadFor(DownloadTask task) {
+    return nativeWaitingPayload(
+      task,
+      notificationConfigJson: _notificationConfigJson(task),
+    );
+  }
+
+  Future<List<LiveNativeDownload>> _liveNativeDownloads() async {
+    final live = <LiveNativeDownload>[];
+    for (final task in await FileDownloader().allTasks(allGroups: true)) {
+      if (task is! DownloadTask) continue;
+      live.add(
+        LiveNativeDownload(
+          taskId: task.taskId,
+          trackingUrl: downloadTrackingUrl(task),
+        ),
+      );
+    }
+    return live;
+  }
+
+  Future<DownloadTask?> _liveNativeTaskFor({
+    required String taskId,
+    String? trackingUrl,
+  }) async {
+    final byId = await FileDownloader().taskForId(taskId);
+    if (byId is DownloadTask) return byId;
+    final track = trackingUrl ?? '';
+    for (final task in await FileDownloader().allTasks(allGroups: true)) {
+      if (task is! DownloadTask) continue;
+      if (task.taskId == taskId) return task;
+      if (track.isNotEmpty && downloadTrackingUrl(task) == track) {
+        return task;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _attachToLiveNativeTask(
+    DownloadTask task, {
+    DownloadTask? live,
+  }) async {
+    final attached = live ?? task;
+    _queueWaitingIds.remove(task.taskId);
+    _waitingPayloads.remove(task.taskId);
+    await _ref
+        .read(storageServiceProvider)
+        .patchDownloadMetadata(task.taskId, queueWaiting: false);
+    final record = await FileDownloader().database.recordForId(attached.taskId);
+    final trackingUrl = downloadTrackingUrl(attached);
+    var progress = record?.progress ?? 0.0;
+    if (progress < 0 || progress > 1) progress = 0.0;
+    final totalSize = record?.expectedFileSize ?? -1;
     final transferring =
         record?.status == TaskStatus.running ||
-        record?.status == TaskStatus.waitingToRetry;
-    if (live != null && transferring) {
+        record?.status == TaskStatus.waitingToRetry ||
+        progressMeansNativeTransfer(progress);
+    final status = transferring
+        ? TaskStatus.running
+        : (record?.status ?? TaskStatus.enqueued);
+    _publishProgress(
+      trackingUrl: trackingUrl,
+      taskId: attached.taskId,
+      progress: progress,
+      totalSize: totalSize,
+      status: displayDownloadStatus(persisted: status, queueWaiting: false),
+    );
+    if (transferring) {
+      await _ensureLiveActivity(
+        attached,
+        progress: progress,
+        totalBytes: totalSize,
+      );
+    }
+  }
+
+  Future<void> _attachUiToLiveNativeTasks() async {
+    final records = await FileDownloader().database.allRecords();
+    final byId = <String, TaskRecord>{
+      for (final record in records) record.task.taskId: record,
+    };
+    for (final task in await FileDownloader().allTasks(allGroups: true)) {
+      if (task is! DownloadTask) continue;
       _queueWaitingIds.remove(task.taskId);
-      _waitingPayloads.remove(task.taskId);
       await _ref
           .read(storageServiceProvider)
           .patchDownloadMetadata(task.taskId, queueWaiting: false);
+      final record = byId[task.taskId];
+      var progress = record?.progress ?? 0.0;
+      if (progress < 0 || progress > 1) progress = 0.0;
+      final totalSize = record?.expectedFileSize ?? -1;
+      final transferring =
+          record?.status == TaskStatus.running ||
+          record?.status == TaskStatus.waitingToRetry ||
+          progressMeansNativeTransfer(progress);
+      _publishProgress(
+        trackingUrl: downloadTrackingUrl(task),
+        taskId: task.taskId,
+        progress: progress,
+        totalSize: totalSize,
+        status: transferring
+            ? TaskStatus.running
+            : (record?.status ?? TaskStatus.enqueued),
+      );
+      if (transferring) {
+        await _ensureLiveActivity(
+          task,
+          progress: progress,
+          totalBytes: totalSize,
+        );
+      }
+    }
+  }
+
+  Future<void> _retainLiveNativeOrPause(
+    TaskStatusUpdate update,
+    String trackingUrl,
+  ) async {
+    if (update.task is DownloadTask) {
+      final live = await _liveNativeTaskFor(
+        taskId: update.task.taskId,
+        trackingUrl: trackingUrl,
+      );
+      if (live != null) {
+        await _attachToLiveNativeTask(update.task as DownloadTask, live: live);
+        return;
+      }
+    }
+    if (_queueWaitingIds.contains(update.task.taskId)) {
+      return;
+    }
+    await _preserveDownloadAsPaused(update, trackingUrl);
+  }
+
+  Future<bool> _promoteWaitingTask(DownloadTask task) async {
+    final live = await _liveNativeTaskFor(
+      taskId: task.taskId,
+      trackingUrl: downloadTrackingUrl(task),
+    );
+    if (live != null ||
+        shouldAttachToLiveNativeTask(
+          taskId: task.taskId,
+          trackingUrl: downloadTrackingUrl(task),
+          live: await _liveNativeDownloads(),
+        )) {
+      await _attachToLiveNativeTask(task, live: live);
       return true;
     }
     _queueWaitingIds.remove(task.taskId);
@@ -741,7 +908,12 @@ class DownloadService {
     if (update.status == TaskStatus.complete) {
       _ref.read(activeDownloadsProvider.notifier).remove(trackingUrl);
       _ref.read(downloadProgressProvider.notifier).remove(trackingUrl);
-      unawaited(_serializeQueue(_syncQueueToCapUnlocked));
+      unawaited(
+        _serializeQueue(() async {
+          await _attachUiToLiveNativeTasks();
+          await _syncQueueToCapUnlocked();
+        }),
+      );
       return;
     }
     if (update.status == TaskStatus.failed ||
@@ -814,11 +986,8 @@ class DownloadService {
   /// iOS continued-processing expiration / system cancel — treat as pause,
   /// not as a user delete. Network drops often surface through this path.
   Future<void> _cancelFromSystemUI(String taskId) async {
-    DownloadTask? downloadTask;
-    final liveTask = await FileDownloader().taskForId(taskId);
-    if (liveTask is DownloadTask) {
-      downloadTask = liveTask;
-    } else {
+    DownloadTask? downloadTask = await _liveNativeTaskFor(taskId: taskId);
+    if (downloadTask == null) {
       final record = await FileDownloader().database.recordForId(taskId);
       if (record?.task is DownloadTask) {
         downloadTask = record!.task as DownloadTask;
@@ -858,7 +1027,14 @@ class DownloadService {
       await _serializeQueue(() async {
         _queueWaitingIds.remove(taskId);
         _waitingPayloads.remove(taskId);
-        await FileDownloader().cancelTasksWithIds([taskId]);
+        final ids = <String>{taskId};
+        for (final task in await FileDownloader().allTasks(allGroups: true)) {
+          if (task.taskId == taskId ||
+              downloadTrackingUrl(task) == trackingUrl) {
+            ids.add(task.taskId);
+          }
+        }
+        await FileDownloader().cancelTasksWithIds(ids.toList());
         _ref.read(activeDownloadsProvider.notifier).remove(trackingUrl);
         _ref.read(downloadProgressProvider.notifier).remove(trackingUrl);
         if (notifyContinuedProcessing) {
@@ -890,15 +1066,16 @@ class DownloadService {
           .read(storageServiceProvider)
           .patchDownloadMetadata(taskId, queueWaiting: false);
 
-      DownloadTask? downloadTask;
-      final liveTask = await FileDownloader().taskForId(taskId);
-      if (liveTask is DownloadTask) {
-        downloadTask = liveTask;
-      } else {
-        final record = await FileDownloader().database.recordForId(taskId);
-        if (record?.task is DownloadTask) {
-          downloadTask = record!.task as DownloadTask;
-        }
+      final recordForId = await FileDownloader().database.recordForId(taskId);
+      final tracking = recordForId != null
+          ? downloadTrackingUrl(recordForId.task)
+          : null;
+      DownloadTask? downloadTask = await _liveNativeTaskFor(
+        taskId: taskId,
+        trackingUrl: tracking,
+      );
+      if (downloadTask == null && recordForId?.task is DownloadTask) {
+        downloadTask = recordForId!.task as DownloadTask;
       }
 
       if (downloadTask != null) {
@@ -937,11 +1114,8 @@ class DownloadService {
 
   Future<void> resumeDownload(String taskId) async {
     await _serializeQueue(() async {
-      DownloadTask? downloadTask;
-      final liveTask = await FileDownloader().taskForId(taskId);
-      if (liveTask is DownloadTask) {
-        downloadTask = liveTask;
-      } else {
+      DownloadTask? downloadTask = await _liveNativeTaskFor(taskId: taskId);
+      if (downloadTask == null) {
         final record = await FileDownloader().database.recordForId(taskId);
         if (record?.task is DownloadTask) {
           downloadTask = record!.task as DownloadTask;
@@ -958,6 +1132,17 @@ class DownloadService {
   }
 
   Future<bool> _resumeDownloadTask(DownloadTask task) async {
+    final live = await _liveNativeTaskFor(
+      taskId: task.taskId,
+      trackingUrl: downloadTrackingUrl(task),
+    );
+    if (live != null) {
+      final record = await FileDownloader().database.recordForId(live.taskId);
+      if (record != null && isLiveNativeDownloadStatus(record.status)) {
+        await _attachToLiveNativeTask(task, live: live);
+        return true;
+      }
+    }
     final resumedOrRestarted = await resumeOrRestartDownload(
       canResume: () => FileDownloader().taskCanResume(task),
       resume: () => FileDownloader().resume(task),
@@ -1269,6 +1454,16 @@ class DownloadService {
           return false;
         }
         final existingTask = existingRecord.task as DownloadTask;
+        final live = await _liveNativeTaskFor(
+          taskId: existingTask.taskId,
+          trackingUrl: trackingUrl ?? url,
+        );
+        if (live != null &&
+            (occupying || isLiveNativeDownloadStatus(existingRecord.status))) {
+          await _attachToLiveNativeTask(existingTask, live: live);
+          _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);
+          return true;
+        }
         _queueWaitingIds.remove(existingTask.taskId);
         _waitingPayloads.remove(existingTask.taskId);
         await _ref
@@ -1394,7 +1589,7 @@ class DownloadService {
 
         if (success) {
           _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);
-          _waitingPayloads[task.taskId] = nativeWaitingPayload(task);
+          _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
           await _ref
               .read(storageServiceProvider)
               .saveDownloadMetadata(

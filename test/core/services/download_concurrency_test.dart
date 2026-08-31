@@ -130,6 +130,13 @@ void main() {
         ),
         TaskStatus.running,
       );
+      expect(
+        displayDownloadStatus(
+          persisted: TaskStatus.running,
+          queueWaiting: true,
+        ),
+        TaskStatus.running,
+      );
     });
 
     test('Live Activity starts only while a file is transferring', () {
@@ -267,7 +274,22 @@ void main() {
           ],
         );
         expect(afterEp1Finishes.occupiedCount, 0);
-        expect(afterEp1Finishes.idsToPromote, ['ep2']);
+        expect(afterEp1Finishes.waitingFifoIds, ['ep2']);
+        expect(afterEp1Finishes.idsToPromote, isEmpty);
+        expect(
+          shouldAttachToLiveNativeTask(
+            taskId: 'ep2',
+            trackingUrl: 'https://cdn.test/ep2',
+            live: const [
+              LiveNativeDownload(
+                taskId: 'ep2',
+                trackingUrl: 'https://cdn.test/ep2',
+              ),
+            ],
+          ),
+          isTrue,
+        );
+        expect(shouldStartSecondTransfer(liveNativeOwnsEpisode: true), isFalse);
         expect(shouldStartDownloadLiveActivity(TaskStatus.running), isTrue);
         expect(shouldStartDownloadLiveActivity(TaskStatus.enqueued), isFalse);
       },
@@ -379,6 +401,64 @@ void main() {
         );
         expect(twoWaiters.idsToPromote, ['ep3']);
         expect(twoWaiters.waitingFifoIds, ['ep3', 'ep4']);
+      },
+    );
+
+    test(
+      'never start a second transfer when native already owns the episode',
+      () {
+        expect(
+          shouldAttachToLiveNativeTask(
+            taskId: 'ep2',
+            trackingUrl: 'https://show/ep2',
+            live: const [
+              LiveNativeDownload(
+                taskId: 'ep2',
+                trackingUrl: 'https://show/ep2',
+              ),
+            ],
+          ),
+          isTrue,
+        );
+        expect(
+          shouldAttachToLiveNativeTask(
+            taskId: 'dart-parked',
+            trackingUrl: 'https://show/ep2',
+            live: const [
+              LiveNativeDownload(
+                taskId: 'native-ep2',
+                trackingUrl: 'https://show/ep2',
+              ),
+            ],
+          ),
+          isTrue,
+        );
+        expect(
+          shouldAttachToLiveNativeTask(
+            taskId: 'ep3',
+            trackingUrl: 'https://show/ep3',
+            live: const [
+              LiveNativeDownload(
+                taskId: 'ep2',
+                trackingUrl: 'https://show/ep2',
+              ),
+            ],
+          ),
+          isFalse,
+        );
+        expect(shouldStartSecondTransfer(liveNativeOwnsEpisode: true), isFalse);
+        expect(shouldStartSecondTransfer(liveNativeOwnsEpisode: false), isTrue);
+        expect(progressMeansNativeTransfer(0), isFalse);
+        expect(progressMeansNativeTransfer(0.01), isTrue);
+        expect(
+          isCompleteDownloadCredible(progress: 0.01, expectedBytes: 6100000),
+          isFalse,
+        );
+        expect(
+          isCompleteDownloadCredible(progress: 1.0, expectedBytes: 6100000),
+          isTrue,
+        );
+        expect(isCompleteDownloadCredible(), isTrue);
       },
     );
 

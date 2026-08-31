@@ -209,8 +209,22 @@ enum DownloadNativeWaitingQueue {
       }
       lock.unlock()
       guard let waiter else { return }
-      start(waiter, on: session)
+      startIfNotAlreadyNative(waiter, on: session)
     }
+  }
+
+  /// One URLSession task per episode. If HoldingQueue already submitted this
+  /// waiter, only attach the overlay — do not start a second download.
+  private static func startIfNotAlreadyNative(_ waiter: Waiter, on session: URLSession) {
+    #if canImport(background_downloader)
+    let stillInHoldingQueue = BDPlugin.holdingQueue?.taskForId(waiter.taskId) != nil
+    if !stillInHoldingQueue {
+      NSLog("[DownloadNativeWaitingQueue] already native %@", waiter.taskId)
+      startLiveActivity(taskId: waiter.taskId, displayName: waiter.displayName)
+      return
+    }
+    #endif
+    start(waiter, on: session)
   }
 
   private static func popWaiterLocked(_ state: inout State) -> Waiter? {
@@ -243,7 +257,6 @@ enum DownloadNativeWaitingQueue {
     let downloadTask = session.downloadTask(with: request)
     downloadTask.taskDescription = waiter.taskDescription
     downloadTask.resume()
-    startLiveActivity(for: waiter)
     NSLog("[DownloadNativeWaitingQueue] started %@", waiter.taskId)
   }
 
@@ -273,9 +286,21 @@ enum DownloadNativeWaitingQueue {
     }
   }
 
+  static func handleBytesWritten(_ downloadTask: URLSessionDownloadTask) {
+    guard let id = taskId(from: downloadTask) else { return }
+    let json = downloadTask.taskDescription?
+      .components(separatedBy: "***<<<|>>>***").first ?? ""
+    let display = stringFromTaskJson(json, key: "displayName")
+    let filename = stringFromTaskJson(json, key: "filename")
+    let name = display.isEmpty ? (filename.isEmpty ? id : filename) : display
+    startLiveActivity(taskId: id, displayName: name)
+  }
+
   private static func startLiveActivity(for waiter: Waiter) {
-    let taskId = waiter.taskId
-    let displayName = waiter.displayName
+    startLiveActivity(taskId: waiter.taskId, displayName: waiter.displayName)
+  }
+
+  private static func startLiveActivity(taskId: String, displayName: String) {
     runOnMainActor {
       if #available(iOS 26.0, *) {
         _ = try? DownloadContinuedProcessingManager.shared.start(
@@ -421,10 +446,14 @@ private enum DownloadUrlSessionHook {
   private static let finishEventsSelector = NSSelectorFromString(
     "urlSessionDidFinishEventsForBackgroundURLSession:"
   )
+  private static let writeSelector = NSSelectorFromString(
+    "urlSession:downloadTask:didWriteData:totalBytesWritten:totalBytesExpectedToWrite:"
+  )
 
   private static var originalComplete: IMP?
   private static var originalFinishDownload: IMP?
   private static var originalFinishEvents: IMP?
+  private static var originalWrite: IMP?
 
   static func install() -> Bool {
     #if canImport(background_downloader)
@@ -438,7 +467,8 @@ private enum DownloadUrlSessionHook {
     hookComplete(on: delegateClass)
     hookFinishDownload(on: delegateClass)
     hookFinishEvents(on: delegateClass)
-    let hooked = originalComplete != nil || originalFinishDownload != nil || originalFinishEvents != nil
+    hookWrite(on: delegateClass)
+    let hooked = originalComplete != nil || originalFinishDownload != nil || originalFinishEvents != nil || originalWrite != nil
     if hooked {
       NSLog("[DownloadNativeWaitingQueue] hooked UrlSessionDelegate %@", String(cString: class_getName(delegateClass)))
     }
@@ -496,6 +526,26 @@ private enum DownloadUrlSessionHook {
         task: downloadTask,
         error: nil
       )
+    }
+    method_setImplementation(method, imp_implementationWithBlock(block))
+  }
+
+  private static func hookWrite(on cls: AnyClass) {
+    guard let method = class_getInstanceMethod(cls, writeSelector) else { return }
+    originalWrite = method_getImplementation(method)
+    let block: @convention(block) (
+      AnyObject, URLSession, URLSessionDownloadTask, Int64, Int64, Int64
+    ) -> Void = { slf, session, downloadTask, bytesWritten, totalWritten, totalExpected in
+      if let original = DownloadUrlSessionHook.originalWrite {
+        let fn = unsafeBitCast(
+          original,
+          to: (@convention(c) (
+            AnyObject, Selector, URLSession, URLSessionDownloadTask, Int64, Int64, Int64
+          ) -> Void).self
+        )
+        fn(slf, writeSelector, session, downloadTask, bytesWritten, totalWritten, totalExpected)
+      }
+      DownloadNativeWaitingQueue.handleBytesWritten(downloadTask)
     }
     method_setImplementation(method, imp_implementationWithBlock(block))
   }
