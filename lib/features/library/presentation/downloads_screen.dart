@@ -54,8 +54,8 @@ class DownloadsScreen extends ConsumerWidget {
       );
     }
 
-    // AppBar chrome is LTR like المواسم / الإحصائيات. The body keeps the
-    // ambient RTL so tab swipe matches those screens.
+    // AppBar chrome is LTR like المواسم / الإحصائيات. Tab swipe is RTL;
+    // card layouts stay LTR (poster left).
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(kToolbarHeight),

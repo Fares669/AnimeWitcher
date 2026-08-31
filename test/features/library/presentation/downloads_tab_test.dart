@@ -625,6 +625,14 @@ void main() {
     expect(find.byType(ExpansionTile), findsOneWidget);
     expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
     expect(find.text('Bleach'), findsOneWidget);
+    expect(
+      Directionality.of(tester.element(find.byType(TabBarView))),
+      TextDirection.rtl,
+    );
+    expect(
+      Directionality.of(tester.element(find.byType(ExpansionTile))),
+      TextDirection.ltr,
+    );
 
     final artifacts = Directory('/opt/cursor/artifacts');
     if (artifacts.existsSync()) {
@@ -705,6 +713,109 @@ void main() {
     expect(find.text('الحلقة 9'), findsOneWidget);
     expect(find.text('مكتمل'), findsOneWidget);
     expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
+  });
+
+  testWidgets('completed grouped and single cards keep poster on the left', (
+    tester,
+  ) async {
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (call) async => '/tmp',
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        null,
+      ),
+    );
+
+    final bleach = MultimediaItem(
+      title: 'Bleach',
+      url: 'https://animewitcher.test/bleach',
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+      tmdbId: 7,
+    );
+    final kimi = MultimediaItem(
+      title: 'Kimi no Koto',
+      url: 'https://animewitcher.test/kimi',
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+      tmdbId: 8,
+    );
+    DownloadItem bleachEp(int n) {
+      return DownloadItem(
+        task: _task(
+          taskId: 'bleach-$n',
+          filename: 'الحلقة $n.mp4',
+          metaData: 'https://animewitcher.test/bleach/$n',
+        ),
+        status: TaskStatus.complete,
+        progress: 1,
+        item: bleach,
+        episode: Episode(
+          name: 'الحلقة $n',
+          url: 'https://animewitcher.test/bleach/$n',
+          episode: n,
+          serverName: 'الحلقة $n',
+        ),
+        timestamp: n,
+      );
+    }
+
+    final single = DownloadItem(
+      task: _task(
+        taskId: 'kimi-9',
+        filename: 'الحلقة 9.mp4',
+        metaData: 'https://animewitcher.test/kimi/9',
+      ),
+      status: TaskStatus.complete,
+      progress: 1,
+      item: kimi,
+      episode: Episode(
+        name: 'الحلقة 9',
+        url: 'https://animewitcher.test/kimi/9',
+        episode: 9,
+        serverName: 'الحلقة 9',
+      ),
+      timestamp: 90,
+    );
+
+    await tester.pumpWidget(
+      _downloadsApp([
+        single,
+        bleachEp(6),
+        bleachEp(5),
+      ], shellDirection: TextDirection.ltr),
+    );
+    await tester.pump();
+    await tester.tap(find.text('المكتملة'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ExpansionTile), findsOneWidget);
+    expect(find.text('Kimi no Koto'), findsOneWidget);
+    expect(find.text('Bleach'), findsOneWidget);
+
+    final singlePoster = tester.getTopLeft(find.text('Kimi no Koto'));
+    final groupPoster = tester.getTopLeft(find.text('Bleach'));
+    // Both titles sit to the right of their posters (LTR cards).
+    expect(singlePoster.dx, greaterThan(40));
+    expect(groupPoster.dx, greaterThan(40));
+    expect((singlePoster.dx - groupPoster.dx).abs(), lessThan(24));
+
+    final artifacts = Directory('/opt/cursor/artifacts');
+    if (artifacts.existsSync()) {
+      await tester.runAsync(() async {
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(const ValueKey('downloads-tab-root')),
+        );
+        final image = await boundary.toImage(pixelRatio: 2);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        File(
+          '${artifacts.path}/downloads_completed_cards_ltr.png',
+        ).writeAsBytesSync(bytes!.buffer.asUint8List());
+      });
+    }
   });
 
   test('active FIFO is oldest first until the user reorders', () {

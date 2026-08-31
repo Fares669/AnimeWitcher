@@ -69,14 +69,14 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
             .where((item) => !isActiveDownloadStatus(item.status))
             .toList();
 
-        // Same RTL pager as أنمي / المواسم / الإحصائيات: tab strip and
-        // TabBarView share one Directionality so swipe follows the tabs.
-        return Directionality(
-          textDirection: TextDirection.rtl,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              FilterStyleTabBar(
+        // RTL only for the tab strip + pager swipe (like المواسم). Each
+        // pane is LTR so cards stay poster-left — do not mirror the page.
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Directionality(
+              textDirection: TextDirection.rtl,
+              child: FilterStyleTabBar(
                 controller: _tabs,
                 isScrollable: false,
                 tabs: [
@@ -84,25 +84,34 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
                   FilterStyleTab(label: l10n.downloadsTabCompleted),
                 ],
               ),
-              Expanded(
+            ),
+            Expanded(
+              child: Directionality(
+                textDirection: TextDirection.rtl,
                 child: TabBarView(
                   controller: _tabs,
                   children: [
-                    _ActiveDownloadsList(
-                      items: active,
-                      activeProgress: activeProgress,
-                      emptyMessage: l10n.noDownloadsYet,
+                    Directionality(
+                      textDirection: TextDirection.ltr,
+                      child: _ActiveDownloadsList(
+                        items: active,
+                        activeProgress: activeProgress,
+                        emptyMessage: l10n.noDownloadsYet,
+                      ),
                     ),
-                    _CompletedDownloadsList(
-                      items: completed,
-                      activeProgress: activeProgress,
-                      emptyMessage: l10n.noCompletedDownloadsYet,
+                    Directionality(
+                      textDirection: TextDirection.ltr,
+                      child: _CompletedDownloadsList(
+                        items: completed,
+                        activeProgress: activeProgress,
+                        emptyMessage: l10n.noCompletedDownloadsYet,
+                      ),
                     ),
                   ],
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         );
       },
       loading: () => const Center(child: AppLoadingIndicator()),
@@ -231,38 +240,41 @@ class _CompletedDownloadsList extends StatelessWidget {
       grouped[key]!.add(item);
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-      itemCount: keys.length,
-      separatorBuilder: (context, index) => const SizedBox(height: 16),
-      itemBuilder: (context, index) {
-        final key = keys[index];
-        final groupItems = grouped[key]!;
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+        itemCount: keys.length,
+        separatorBuilder: (context, index) => const SizedBox(height: 16),
+        itemBuilder: (context, index) {
+          final key = keys[index];
+          final groupItems = grouped[key]!;
 
-        if (groupItems.length == 1) {
-          final download = groupItems.first;
-          final trackingUrl = download.task.metaData.isNotEmpty
-              ? download.task.metaData
-              : download.task.url;
-          final progressData = activeProgress[trackingUrl];
-          final double displayProgress =
-              progressData?.progress ?? download.progress;
-          final TaskStatus displayStatus =
-              progressData?.status ?? download.status;
+          if (groupItems.length == 1) {
+            final download = groupItems.first;
+            final trackingUrl = download.task.metaData.isNotEmpty
+                ? download.task.metaData
+                : download.task.url;
+            final progressData = activeProgress[trackingUrl];
+            final double displayProgress =
+                progressData?.progress ?? download.progress;
+            final TaskStatus displayStatus =
+                progressData?.status ?? download.status;
 
-          return _DownloadItemTile(
-            item: download,
-            progress: displayProgress,
-            status: displayStatus,
-            progressData: progressData,
+            return _DownloadItemTile(
+              item: download,
+              progress: displayProgress,
+              status: displayStatus,
+              progressData: progressData,
+            );
+          }
+
+          return _GroupedDownloadTile(
+            items: groupItems,
+            activeProgress: activeProgress,
           );
-        }
-
-        return _GroupedDownloadTile(
-          items: groupItems,
-          activeProgress: activeProgress,
-        );
-      },
+        },
+      ),
     );
   }
 }
@@ -310,6 +322,7 @@ class _GroupedDownloadTile extends ConsumerWidget {
           vertical: LayoutConstants.spacingXs,
         ),
         title: Row(
+          textDirection: TextDirection.ltr,
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
