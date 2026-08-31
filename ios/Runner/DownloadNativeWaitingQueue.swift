@@ -8,12 +8,8 @@ import background_downloader
 
 /// Full waiter payloads so Swift can start the next URLSession download when
 /// ep1 completes — without Flutter, and without reconstructing the task in Dart.
-///
-/// PR #115 only stored task IDs and then `invokeMethod` to Dart. That channel
-/// is a no-op while the engine is asleep; Rivera opening the app is what
-/// ran promotion. This store holds url/headers/filename/directory/task JSON
-/// so the plugin URLSession can start ep2 in the same native completion
-/// callback, before `completionHandler()`.
+/// Flutter method channels are a no-op while the engine is asleep, so this
+/// store holds url/headers/filename/directory/task JSON for the plugin session.
 enum DownloadNativeWaitingQueue {
   static let stateKey = "com.animewitcher.download.nativeWaitingQueue.v2"
 
@@ -142,8 +138,7 @@ enum DownloadNativeWaitingQueue {
   private static let lock = NSLock()
   private static var hookInstalled = false
   /// Task IDs that already have URLSession bytes (plugin HQ or our start).
-  /// Used instead of `BDPlugin.holdingQueue`, which is internal to the plugin
-  /// and fails Xcode 26 (`holdingQueue` / `taskForId` inaccessible).
+  /// Do not query plugin-internal HoldingQueue APIs.
   private static var seenTransferringIds = Set<String>()
   private static var lastWrite: WriteSample?
 
@@ -262,9 +257,13 @@ enum DownloadNativeWaitingQueue {
       if !state.completedTaskIds.contains(completedId) {
         state.completedTaskIds.append(completedId)
       }
-    }
-    saveLocked(state)
-    if let completedId {
+      state.sessionCompletedCount = max(
+        state.sessionCompletedCount,
+        state.completedTaskIds.count
+      )
+      if !state.sessionTaskIds.contains(completedId) {
+        state.sessionTaskIds.append(completedId)
+      }
       state.sessionBatchTotal = max(
         max(
           state.sessionBatchTotal,
@@ -272,20 +271,6 @@ enum DownloadNativeWaitingQueue {
         ),
         state.sessionTaskIds.count
       )
-      if !state.completedTaskIds.contains(completedId) {
-        state.sessionCompletedCount = max(
-          state.sessionCompletedCount + 1,
-          state.completedTaskIds.count
-        )
-      } else {
-        state.sessionCompletedCount = max(
-          state.sessionCompletedCount,
-          state.completedTaskIds.count
-        )
-      }
-      if !state.sessionTaskIds.contains(completedId) {
-        state.sessionTaskIds.append(completedId)
-      }
     }
     saveLocked(state)
     lock.unlock()
@@ -299,8 +284,8 @@ enum DownloadNativeWaitingQueue {
   static func promoteNext(on session: URLSession) {
     // In-app, Dart + plugin HoldingQueue own promotion. Starting a second
     // URLSession task here while the app is `.active` double-downloads.
-    // Background/suspended: HQ's async `taskFinished` often never runs
-    // (#115), so this callback must start the persisted waiter now.
+    // Background/suspended: HoldingQueue's async `taskFinished` often never
+    // runs, so this callback must start the persisted waiter now.
     let isActive = runOnMainActor {
       UIApplication.shared.applicationState == .active
     }
@@ -326,9 +311,8 @@ enum DownloadNativeWaitingQueue {
     }
   }
 
-  /// One URLSession task per episode. If this waiter is already transferring
-  /// (plugin HoldingQueue submitted it, or we already started it), only
-  /// attach the overlay. Do not touch plugin-internal `holdingQueue`.
+  /// One URLSession task per episode. If this waiter is already transferring,
+  /// only update the session overlay.
   private static func startIfNotAlreadyNative(_ waiter: Waiter, on session: URLSession) {
     lock.lock()
     let alreadyTransferring = seenTransferringIds.contains(waiter.taskId)
@@ -447,10 +431,6 @@ enum DownloadNativeWaitingQueue {
       transferredBytes: totalWritten,
       speedBytesPerSecond: speed
     )
-  }
-
-  private static func startLiveActivity(for waiter: Waiter) {
-    startLiveActivity(taskId: waiter.taskId, displayName: waiter.displayName)
   }
 
   private static func startLiveActivity(taskId: String, displayName: String) {

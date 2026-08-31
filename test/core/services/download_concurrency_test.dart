@@ -144,7 +144,6 @@ void main() {
       expect(shouldStartDownloadLiveActivity(TaskStatus.enqueued), isFalse);
       expect(shouldStartDownloadLiveActivity(TaskStatus.paused), isFalse);
       expect(shouldStartDownloadLiveActivity(TaskStatus.complete), isFalse);
-      expect(waitingEpisodeMayStartLiveActivityWhileQueued(), isFalse);
     });
 
     test(
@@ -164,14 +163,6 @@ void main() {
         );
         expect(
           shouldFinishDownloadSessionOverlay(runningCount: 0, waitingCount: 0),
-          isTrue,
-        );
-        expect(
-          shouldStartSecondDownloadLiveActivity(sessionAlreadyActive: true),
-          isFalse,
-        );
-        expect(
-          shouldStartSecondDownloadLiveActivity(sessionAlreadyActive: false),
           isTrue,
         );
       },
@@ -319,10 +310,6 @@ void main() {
         ),
         '12MB/400MB • 2 of 5',
       );
-      expect(
-        shouldStartSecondDownloadLiveActivity(sessionAlreadyActive: true),
-        isFalse,
-      );
 
       final allDone = planDownloadOverlaySession(
         entries: const [
@@ -345,21 +332,6 @@ void main() {
     });
 
     test('overflow is OS-enqueued; overlay starts only when running', () {
-      expect(shouldEnqueueOverflowToNativeHoldingQueue(), isTrue);
-      expect(shouldPromoteWaitingWhenIsolateAlive(), isTrue);
-      expect(shouldPromoteWaitingOnAppForeground(), isTrue);
-      expect(
-        admitDownload(occupiedSlots: 0, maxConcurrent: 1),
-        DownloadAdmission.enqueueToNativeHoldingQueue,
-      );
-      expect(
-        admitDownload(occupiedSlots: 1, maxConcurrent: 1),
-        DownloadAdmission.enqueueToNativeHoldingQueue,
-      );
-      expect(
-        admitDownload(occupiedSlots: 2, maxConcurrent: 3),
-        DownloadAdmission.enqueueToNativeHoldingQueue,
-      );
       expect(shouldStartDownloadLiveActivity(TaskStatus.enqueued), isFalse);
       expect(shouldStartDownloadLiveActivity(TaskStatus.running), isTrue);
     });
@@ -451,7 +423,6 @@ void main() {
         expect(whileEp1Transfers.occupiedCount, 1);
         expect(whileEp1Transfers.waitingFifoIds, ['ep2']);
         expect(whileEp1Transfers.idsToPromote, isEmpty);
-        expect(whileEp1Transfers.idsToPark, isEmpty);
         expect(shouldStartDownloadLiveActivity(TaskStatus.running), isTrue);
         expect(shouldStartDownloadLiveActivity(TaskStatus.enqueued), isFalse);
 
@@ -486,7 +457,6 @@ void main() {
           ),
           isTrue,
         );
-        expect(shouldStartSecondTransfer(liveNativeOwnsEpisode: true), isFalse);
         expect(shouldStartDownloadLiveActivity(TaskStatus.running), isTrue);
         expect(shouldStartDownloadLiveActivity(TaskStatus.enqueued), isFalse);
       },
@@ -517,7 +487,6 @@ void main() {
           ],
         );
         expect(planWhileRunning.occupiedCount, 1);
-        expect(planWhileRunning.idsToPark, isEmpty);
         expect(planWhileRunning.waitingFifoIds, ['ep4']);
         expect(planWhileRunning.idsToPromote, isEmpty);
         expect(shouldStartDownloadLiveActivity(TaskStatus.enqueued), isFalse);
@@ -552,7 +521,6 @@ void main() {
     test(
       'in-app complete starts the oldest waiter; user-paused stays paused',
       () {
-        expect(shouldPromoteWaitingWhenIsolateAlive(), isTrue);
         final stuckLikeRivera = planDownloadQueue(
           maxConcurrent: 1,
           entries: const [
@@ -643,8 +611,6 @@ void main() {
           ),
           isFalse,
         );
-        expect(shouldStartSecondTransfer(liveNativeOwnsEpisode: true), isFalse);
-        expect(shouldStartSecondTransfer(liveNativeOwnsEpisode: false), isTrue);
         expect(progressMeansNativeTransfer(0), isFalse);
         expect(progressMeansNativeTransfer(0.01), isTrue);
         expect(
@@ -675,7 +641,6 @@ void main() {
           ),
         ],
       );
-      expect(plan.idsToPark, isEmpty);
       expect(plan.idsToPromote, isEmpty);
       expect(plan.occupiedCount, 2);
     });

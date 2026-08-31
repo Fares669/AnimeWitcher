@@ -133,11 +133,6 @@ class DownloadContinuedProcessingService {
   }
 
   Future<dynamic> _handleNativeCall(MethodCall call) async {
-    if (call.method == 'promoteWaitingAfterBackgroundSession') {
-      // Native Swift starts the file. This channel is bookkeeping only.
-      return true;
-    }
-
     if (call.method != 'cancel') return false;
 
     final arguments = call.arguments;

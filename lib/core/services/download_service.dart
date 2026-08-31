@@ -588,9 +588,8 @@ class DownloadService {
       entries: await _queueEntries(records),
     );
 
-    // Always promote leftover parked waiters while the isolate is alive.
-    // Native HoldingQueue already owns OS-enqueued waiters — do not enqueue
-    // a second copy of the same episode.
+    // Promote leftover parked waiters. Native HoldingQueue already owns
+    // OS-enqueued waiters — do not enqueue a second copy.
     for (final taskId in plan.idsToPromote) {
       if (_occupiedSlotCount(await FileDownloader().database.allRecords()) >=
           max) {
@@ -603,9 +602,9 @@ class DownloadService {
     await _persistNativeWaitingSnapshot();
   }
 
-  /// Attach Live Activities to running transfers. Never park a live
-  /// URLSession task. Promote leftover parked waiters only if native does
-  /// not already own that episode.
+  /// Attach UI to live native tasks. Never detach a live URLSession task.
+  /// Promote leftover parked waiters only if native does not already own
+  /// that episode.
   Future<void> onAppForegrounded() async {
     if (!_isInitialized) return;
     await _serializeQueue(() async {
@@ -645,17 +644,7 @@ class DownloadService {
           leftoverWaiting ||
           record.status == TaskStatus.enqueued;
       if (!inSession) continue;
-      if (record.status == TaskStatus.complete) {
-        _rememberSessionTask(record.task.taskId);
-      }
-      if (occupiesDownloadSlot(
-            status: record.status,
-            queueWaiting: leftoverWaiting,
-          ) ||
-          leftoverWaiting ||
-          record.status == TaskStatus.enqueued) {
-        _rememberSessionTask(record.task.taskId);
-      }
+      _rememberSessionTask(record.task.taskId);
       final trackingUrl = downloadTrackingUrl(record.task);
       final live = liveProgress[trackingUrl];
       final isPreferred = preferTaskId == record.task.taskId;
@@ -741,27 +730,6 @@ class DownloadService {
     await _persistNativeWaitingSnapshot(overlay: session);
   }
 
-  Future<void> _ensureLiveActivity(
-    Task task, {
-    required double progress,
-    required int totalBytes,
-  }) async {
-    _rememberSessionTask(task.taskId);
-    if (_queueWaitingIds.contains(task.taskId)) {
-      if (!progressMeansNativeTransfer(progress)) return;
-      _queueWaitingIds.remove(task.taskId);
-    }
-    await _syncSessionOverlay(
-      preferTaskId: task.taskId,
-      progress: progress,
-      totalBytes: totalBytes,
-    );
-  }
-
-  Future<void> _stopLiveActivity(String taskId) async {
-    await _syncSessionOverlay(completedSuccess: false);
-  }
-
   Future<void> _persistNativeWaitingSnapshot({
     DownloadOverlaySession? overlay,
   }) async {
@@ -839,20 +807,6 @@ class DownloadService {
     );
   }
 
-  Future<List<LiveNativeDownload>> _liveNativeDownloads() async {
-    final live = <LiveNativeDownload>[];
-    for (final task in await FileDownloader().allTasks(allGroups: true)) {
-      if (task is! DownloadTask) continue;
-      live.add(
-        LiveNativeDownload(
-          taskId: task.taskId,
-          trackingUrl: downloadTrackingUrl(task),
-        ),
-      );
-    }
-    return live;
-  }
-
   Future<DownloadTask?> _liveNativeTaskFor({
     required String taskId,
     String? trackingUrl,
@@ -900,8 +854,8 @@ class DownloadService {
       status: displayDownloadStatus(persisted: status, queueWaiting: false),
     );
     if (transferring) {
-      await _ensureLiveActivity(
-        attached,
+      await _syncSessionOverlay(
+        preferTaskId: attached.taskId,
         progress: progress,
         totalBytes: totalSize,
       );
@@ -936,14 +890,8 @@ class DownloadService {
             ? TaskStatus.running
             : (record?.status ?? TaskStatus.enqueued),
       );
-      if (transferring) {
-        await _ensureLiveActivity(
-          task,
-          progress: progress,
-          totalBytes: totalSize,
-        );
-      }
     }
+    await _syncSessionOverlay();
   }
 
   Future<void> _retainLiveNativeOrPause(
@@ -971,12 +919,7 @@ class DownloadService {
       taskId: task.taskId,
       trackingUrl: downloadTrackingUrl(task),
     );
-    if (live != null ||
-        shouldAttachToLiveNativeTask(
-          taskId: task.taskId,
-          trackingUrl: downloadTrackingUrl(task),
-          live: await _liveNativeDownloads(),
-        )) {
+    if (live != null) {
       await _attachToLiveNativeTask(task, live: live);
       return true;
     }
@@ -1069,7 +1012,7 @@ class DownloadService {
     if (update.task is! DownloadTask) return;
     final task = update.task as DownloadTask;
 
-    unawaited(_stopLiveActivity(task.taskId));
+    unawaited(_syncSessionOverlay(completedSuccess: false));
 
     final current = _ref.read(downloadProgressProvider)[trackingUrl];
     final record = await FileDownloader().database.recordForId(task.taskId);
@@ -1139,7 +1082,7 @@ class DownloadService {
 
     final didPause = await FileDownloader().pause(downloadTask);
     if (didPause) {
-      await _stopLiveActivity(taskId);
+      await _syncSessionOverlay(completedSuccess: false);
       return;
     }
 
@@ -1232,7 +1175,7 @@ class DownloadService {
           TaskStatusUpdate(downloadTask, TaskStatus.paused),
         );
       }
-      await _stopLiveActivity(taskId);
+      await _syncSessionOverlay(completedSuccess: false);
       await _persistNativeWaitingSnapshot();
       if (!wasWaiting) {
         await _syncQueueToCapUnlocked();
@@ -1277,7 +1220,6 @@ class DownloadService {
       resumeFromPartial: () => _resumeUsingPartialFile(task),
       restart: () => FileDownloader().enqueue(task),
     );
-    // Live Activity starts only when native reports [TaskStatus.running].
     return resumedOrRestarted;
   }
 
@@ -1376,8 +1318,9 @@ class DownloadService {
       }
 
       await dest.parent.create(recursive: true);
-      await _ensureLiveActivity(
-        task,
+      _rememberSessionTask(task.taskId);
+      await _syncSessionOverlay(
+        preferTaskId: task.taskId,
         progress: existingBytes > 0 && expectedBytes > 0
             ? existingBytes / expectedBytes
             : 0,
@@ -1733,7 +1676,7 @@ class DownloadService {
         }
         return success;
       } catch (error) {
-        await _stopLiveActivity(task.taskId);
+        await _syncSessionOverlay(completedSuccess: false);
         if (kDebugMode) {
           debugPrint('[DownloadService] Failed to enqueue download: $error');
         }

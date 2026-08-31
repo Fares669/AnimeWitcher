@@ -49,17 +49,13 @@ final class DownloadContinuedProcessingManager {
   var cancellationHandler: ((String) -> Void)?
 
   private let scheduler = BGTaskScheduler.shared
-  private var activeTasks: [String: BGContinuedProcessingTask] = [:]
-  private var snapshots: [String: Snapshot] = [:]
-  private var identifiers: [String: String] = [:]
-  private var registeredIdentifiers = Set<String>()
+  private var activeTask: BGContinuedProcessingTask?
+  private var snapshot: Snapshot?
+  private var identifier: String?
+  private var didRegisterIdentifier = false
   private var currentEpisodeTaskId = ""
 
   private init() {}
-
-  var isSessionActive: Bool {
-    activeTasks[Self.sessionKey] != nil || identifiers[Self.sessionKey] != nil
-  }
 
   func start(
     taskId: String,
@@ -94,30 +90,30 @@ final class DownloadContinuedProcessingManager {
       speedBytesPerSecond: max(speedBytesPerSecond, 0),
       currentTaskId: currentEpisodeTaskId.isEmpty ? taskId : currentEpisodeTaskId
     )
-    snapshots[Self.sessionKey] = snapshot
+    self.snapshot = snapshot
 
-    if let active = activeTasks[Self.sessionKey] {
+    if let active = activeTask {
       apply(snapshot, to: active)
-      return identifiers[Self.sessionKey]
+      return identifier
     }
 
     // Request already submitted for this session — never start a second
     // Live Activity / continued-processing task when ep2 begins.
-    if let existingIdentifier = identifiers[Self.sessionKey] {
+    if let existingIdentifier = identifier {
       return existingIdentifier
     }
 
-    let identifier = try taskIdentifier(for: Self.sessionKey)
-    identifiers[Self.sessionKey] = identifier
+    let sessionId = try sessionIdentifier()
+    identifier = sessionId
 
-    guard isPermittedTaskIdentifier(identifier) else {
-      identifiers.removeValue(forKey: Self.sessionKey)
-      throw DownloadContinuedProcessingError.identifierNotPermitted(identifier)
+    guard isPermittedTaskIdentifier(sessionId) else {
+      identifier = nil
+      throw DownloadContinuedProcessingError.identifierNotPermitted(sessionId)
     }
 
-    if !registeredIdentifiers.contains(identifier) {
+    if !didRegisterIdentifier {
       let accepted = scheduler.register(
-        forTaskWithIdentifier: identifier,
+        forTaskWithIdentifier: sessionId,
         using: DispatchQueue.main
       ) { [weak self] task in
         guard let continuedTask = task as? BGContinuedProcessingTask else {
@@ -126,19 +122,19 @@ final class DownloadContinuedProcessingManager {
         }
 
         Task { @MainActor in
-          self?.attach(continuedTask, taskId: Self.sessionKey)
+          self?.attach(continuedTask)
         }
       }
 
       guard accepted else {
-        identifiers.removeValue(forKey: Self.sessionKey)
-        throw DownloadContinuedProcessingError.registrationRejected(identifier)
+        identifier = nil
+        throw DownloadContinuedProcessingError.registrationRejected(sessionId)
       }
-      registeredIdentifiers.insert(identifier)
+      didRegisterIdentifier = true
     }
 
     let request = BGContinuedProcessingTaskRequest(
-      identifier: identifier,
+      identifier: sessionId,
       title: title(for: snapshot),
       subtitle: subtitle(for: snapshot)
     )
@@ -146,10 +142,10 @@ final class DownloadContinuedProcessingManager {
     do {
       try scheduler.submit(request)
     } catch {
-      identifiers.removeValue(forKey: Self.sessionKey)
+      identifier = nil
       throw error
     }
-    return identifier
+    return sessionId
   }
 
   func update(
@@ -165,7 +161,7 @@ final class DownloadContinuedProcessingManager {
     if taskId != Self.sessionKey, !taskId.isEmpty {
       currentEpisodeTaskId = taskId
     }
-    guard var snapshot = snapshots[Self.sessionKey] else { return }
+    guard var snapshot = snapshot else { return }
 
     snapshot.progress = min(max(progress, 0.0), 1.0)
     if totalBytes > 0 {
@@ -192,9 +188,9 @@ final class DownloadContinuedProcessingManager {
       snapshot.displayName = displayName
     }
     snapshot.currentTaskId = currentEpisodeTaskId
-    snapshots[Self.sessionKey] = snapshot
+    self.snapshot = snapshot
 
-    if let task = activeTasks[Self.sessionKey] {
+    if let task = activeTask {
       apply(snapshot, to: task)
     }
   }
@@ -213,10 +209,10 @@ final class DownloadContinuedProcessingManager {
   }
 
   private func completeSession(success: Bool, status: String) {
-    cancelPendingRequest(for: Self.sessionKey)
+    cancelPendingRequest()
 
-    if let task = activeTasks.removeValue(forKey: Self.sessionKey) {
-      let snapshot = snapshots[Self.sessionKey]
+    if let task = activeTask {
+      activeTask = nil
       if success {
         if task.progress.totalUnitCount <= 0 {
           task.progress.totalUnitCount = 1000
@@ -236,16 +232,13 @@ final class DownloadContinuedProcessingManager {
       task.setTaskCompleted(success: success)
     }
 
-    snapshots.removeValue(forKey: Self.sessionKey)
-    identifiers.removeValue(forKey: Self.sessionKey)
+    snapshot = nil
+    identifier = nil
     currentEpisodeTaskId = ""
   }
 
-  private func attach(
-    _ task: BGContinuedProcessingTask,
-    taskId: String
-  ) {
-    activeTasks[Self.sessionKey] = task
+  private func attach(_ task: BGContinuedProcessingTask) {
+    activeTask = task
 
     task.expirationHandler = { [weak self, weak task] in
       Task { @MainActor in
@@ -255,14 +248,14 @@ final class DownloadContinuedProcessingManager {
           : self.currentEpisodeTaskId
         self.cancellationHandler?(cancelId)
         task?.setTaskCompleted(success: false)
-        self.activeTasks.removeValue(forKey: Self.sessionKey)
-        self.snapshots.removeValue(forKey: Self.sessionKey)
-        self.identifiers.removeValue(forKey: Self.sessionKey)
+        self.activeTask = nil
+        self.snapshot = nil
+        self.identifier = nil
         self.currentEpisodeTaskId = ""
       }
     }
 
-    if let snapshot = snapshots[Self.sessionKey] {
+    if let snapshot {
       apply(snapshot, to: task)
     } else {
       task.progress.totalUnitCount = 1000
@@ -301,12 +294,12 @@ final class DownloadContinuedProcessingManager {
     )
   }
 
-  private func cancelPendingRequest(for taskId: String) {
-    guard let identifier = identifiers[taskId] else { return }
+  private func cancelPendingRequest() {
+    guard let identifier else { return }
     scheduler.cancel(taskRequestWithIdentifier: identifier)
   }
 
-  private func taskIdentifier(for taskId: String) throws -> String {
+  private func sessionIdentifier() throws -> String {
     guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else {
       throw DownloadContinuedProcessingError.missingBundleIdentifier
     }

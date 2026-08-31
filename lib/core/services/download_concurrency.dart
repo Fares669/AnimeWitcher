@@ -5,9 +5,9 @@ import 'package:background_downloader/background_downloader.dart';
 /// Hive settings key used by official SkyStream and this fork.
 const String kDownloadConcurrencyStorageKey = 'download_concurrency';
 
-/// Persisted on download metadata for leftover Dart-parked rows (PR #114)
-/// and for kill-recovery of native holding-queue waiters that never reached
-/// URLSession. In-app UI still maps this to **في الانتظار...**.
+/// Persisted on download metadata for leftover Dart-parked rows
+/// (kill-recovery of waiters that never reached URLSession). In-app UI
+/// still maps this to **في الانتظار...**.
 const String kDownloadQueueWaitingMetadataKey = 'queueWaiting';
 
 const int kDownloadConcurrencyMin = 1;
@@ -98,24 +98,17 @@ TaskStatus displayDownloadStatus({
 }
 
 /// One BGContinuedProcessingTask / Live Activity for the whole download
-/// batch. Per-episode identifiers caused Rivera to lose the island on ep2
-/// (finish ep1 → process suspends → Dart vs native fight).
+/// batch. `start` updates this session; never finish while anything is
+/// running or waiting.
 const String kDownloadSessionOverlayTaskId = 'session';
 
-/// iOS Live Activity / `BGContinuedProcessingTask` is only for a file that
-/// is actually transferring. Waiting **في الانتظار** rows must not call `start`.
+/// iOS Live Activity is only for a file that is actually transferring.
+/// Waiting **في الانتظار** rows must not create a system task.
 bool shouldStartDownloadLiveActivity(TaskStatus status) =>
     status == TaskStatus.running;
 
-/// Never submit a second system task while the session overlay is alive.
-/// `start()` must update the existing activity (new file, reset progress).
-bool shouldStartSecondDownloadLiveActivity({
-  required bool sessionAlreadyActive,
-}) => !sessionAlreadyActive;
-
-/// Hard rule: do not `finish` / `stop` the session overlay while any episode
-/// in the batch is still running or waiting. That suspends the process and
-/// breaks promotion. Only end the session when the batch is empty.
+/// Never finish the session overlay while any episode in the batch is still
+/// running or waiting. Only end the session when the batch is empty.
 bool shouldFinishDownloadSessionOverlay({
   required int runningCount,
   required int waitingCount,
@@ -306,17 +299,6 @@ String formatDownloadSessionSubtitle({
   return parts.join(' • ');
 }
 
-/// Overflow episodes are always OS-enqueued into the native holding queue.
-/// Dart must not park-without-enqueue: that stranded ep3 on device (#116).
-bool shouldEnqueueOverflowToNativeHoldingQueue() => true;
-
-/// When the Flutter isolate is alive, Dart must start the next leftover
-/// waiter if a slot is free. Always true in production — do not gate this off.
-bool shouldPromoteWaitingWhenIsolateAlive() => true;
-
-/// Opening the app must unstick a leftover waiter if a slot is free.
-bool shouldPromoteWaitingOnAppForeground() => true;
-
 /// Native UserDefaults snapshot: leftover parked rows and HQ `enqueued`
 /// waiters. User-paused stays paused and is never persisted as a waiter.
 bool isNativeWaitingSnapshotWaiter({
@@ -366,9 +348,6 @@ bool shouldAttachToLiveNativeTask({
   }
   return false;
 }
-
-bool shouldStartSecondTransfer({required bool liveNativeOwnsEpisode}) =>
-    !liveNativeOwnsEpisode;
 
 /// Bytes on the wire: a waiter that is actually transferring must show
 /// **جارٍ التنزيل...**, not stay frozen at في الانتظار.
@@ -442,22 +421,6 @@ bool shouldReenqueueWaitingAfterProcessKill({
   return persisted == TaskStatus.enqueued;
 }
 
-/// iOS concurrency=1, two episodes: waiting rows stay **في الانتظار** with
-/// no Live Activity. Overlay starts only when the native task is `running`.
-bool waitingEpisodeMayStartLiveActivityWhileQueued() => false;
-
-enum DownloadAdmission { enqueueToNativeHoldingQueue }
-
-/// Every user-started episode is OS-enqueued. Native HoldingQueue owns N.
-DownloadAdmission admitDownload({
-  required int occupiedSlots,
-  required int maxConcurrent,
-}) {
-  assert(occupiedSlots >= 0);
-  clampDownloadConcurrency(maxConcurrent);
-  return DownloadAdmission.enqueueToNativeHoldingQueue;
-}
-
 class DownloadQueueEntry {
   const DownloadQueueEntry({
     required this.taskId,
@@ -477,14 +440,12 @@ class DownloadQueuePlan {
     required this.maxConcurrent,
     required this.occupiedCount,
     required this.waitingFifoIds,
-    required this.idsToPark,
     required this.idsToPromote,
   });
 
   final int maxConcurrent;
   final int occupiedCount;
   final List<String> waitingFifoIds;
-  final List<String> idsToPark;
   final List<String> idsToPromote;
 
   int get freeSlots => (maxConcurrent - occupiedCount).clamp(0, maxConcurrent);
@@ -492,8 +453,8 @@ class DownloadQueuePlan {
 
 /// FIFO re-enqueue of leftover Dart-parked waiters only. Native holding-queue
 /// `enqueued` rows already have a live FileDownloader task — promoting them
-/// starts a second transfer of the same episode (Rivera: 0.1MB ghost complete
-/// then restart from 0). Occupying URLSession tasks are never detached.
+/// starts a second transfer of the same episode. Occupying URLSession tasks
+/// are never detached.
 DownloadQueuePlan planDownloadQueue({
   required int maxConcurrent,
   required Iterable<DownloadQueueEntry> entries,
@@ -530,7 +491,6 @@ DownloadQueuePlan planDownloadQueue({
     maxConcurrent: n,
     occupiedCount: occupiedCount,
     waitingFifoIds: waitingFifoIds,
-    idsToPark: const [],
     idsToPromote: idsToPromote,
   );
 }
