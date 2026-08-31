@@ -78,21 +78,28 @@ class _StubDownloadsNotifier extends DownloadsNotifier {
   Future<List<DownloadItem>> build() async => _items;
 }
 
-Widget _downloadsApp(List<DownloadItem> items) {
+Widget _downloadsApp(
+  List<DownloadItem> items, {
+  TextDirection? shellDirection,
+}) {
+  Widget home = const Scaffold(
+    body: RepaintBoundary(
+      key: ValueKey('downloads-tab-root'),
+      child: DownloadsTab(),
+    ),
+  );
+  if (shellDirection != null) {
+    home = Directionality(textDirection: shellDirection, child: home);
+  }
   return ProviderScope(
     overrides: [
       downloadsProvider.overrideWith(() => _StubDownloadsNotifier(items)),
     ],
-    child: const MaterialApp(
-      locale: Locale('ar'),
+    child: MaterialApp(
+      locale: const Locale('ar'),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
-      home: const Scaffold(
-        body: RepaintBoundary(
-          key: ValueKey('downloads-tab-root'),
-          child: DownloadsTab(),
-        ),
-      ),
+      home: home,
     ),
   );
 }
@@ -631,6 +638,72 @@ void main() {
         ).writeAsBytesSync(bytes!.buffer.asUint8List());
       });
     }
+  });
+
+  testWidgets('tab swipe follows RTL like المواسم and الإحصائيات', (
+    tester,
+  ) async {
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (call) async => '/tmp',
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        null,
+      ),
+    );
+
+    final show = MultimediaItem(
+      title: 'Kuroneko',
+      url: 'https://animewitcher.test/kuro',
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+      tmdbId: 20,
+    );
+    DownloadItem episode(int n, TaskStatus status) {
+      return DownloadItem(
+        task: _task(
+          taskId: 'ep$n',
+          filename: 'الحلقة $n.mp4',
+          metaData: 'https://animewitcher.test/kuro/$n',
+        ),
+        status: status,
+        progress: status == TaskStatus.complete ? 1 : 0.2,
+        item: show,
+        episode: Episode(
+          name: 'الحلقة $n',
+          url: 'https://animewitcher.test/kuro/$n',
+          episode: n,
+          serverName: 'الحلقة $n',
+        ),
+        timestamp: n * 10,
+      );
+    }
+
+    await tester.pumpWidget(
+      _downloadsApp(
+        [episode(20, TaskStatus.running), episode(9, TaskStatus.complete)],
+        // DownloadsScreen used to force LTR on the whole page; the pager
+        // must still be RTL like the other FilterStyleTabBar screens.
+        shellDirection: TextDirection.ltr,
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      Directionality.of(tester.element(find.byType(TabBarView))),
+      TextDirection.rtl,
+    );
+    expect(find.text('الحلقة 20'), findsOneWidget);
+    expect(find.text('الحلقة 9'), findsNothing);
+
+    await tester.fling(find.byType(TabBarView), const Offset(400, 0), 2000);
+    await tester.pumpAndSettle();
+
+    expect(find.text('الحلقة 9'), findsOneWidget);
+    expect(find.text('مكتمل'), findsOneWidget);
+    expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
   });
 
   test('active FIFO is oldest first until the user reorders', () {

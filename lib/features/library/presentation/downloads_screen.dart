@@ -19,14 +19,13 @@ class DownloadsScreen extends ConsumerWidget {
     final title = AppLocalizations.of(context)!.downloads;
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final titleDirection =
-        isArabic ? TextDirection.rtl : TextDirection.ltr;
-    final titleAlignment =
-        isArabic ? Alignment.centerRight : Alignment.centerLeft;
+    final titleDirection = isArabic ? TextDirection.rtl : TextDirection.ltr;
+    final titleAlignment = isArabic
+        ? Alignment.centerRight
+        : Alignment.centerLeft;
 
-    final Widget page;
     if (isWidescreen) {
-      page = Scaffold(
+      return Scaffold(
         backgroundColor: Colors.transparent,
         body: Column(
           children: [
@@ -53,34 +52,38 @@ class DownloadsScreen extends ConsumerWidget {
           ],
         ),
       );
-    } else {
-      page = Scaffold(
-        appBar: AppBar(
-          leading: !appleUsesPersistentLiquidGlassHeader &&
-                  Navigator.of(context).canPop()
-              ? const AppleLiquidGlassBackButton()
-              : null,
-          centerTitle: false,
-          titleSpacing: 16,
-          title: ApplePersistentGlassHeaderScope(
-            enabled: Navigator.of(context).canPop(),
-            onBack: () => Navigator.of(context).maybePop(),
-            child: Align(
-              alignment: titleAlignment,
-              child: Directionality(
-                textDirection: titleDirection,
-                child: Text(title),
+    }
+
+    // AppBar chrome is LTR like المواسم / الإحصائيات. The body keeps the
+    // ambient RTL so tab swipe matches those screens.
+    return Scaffold(
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: AppBar(
+            leading:
+                !appleUsesPersistentLiquidGlassHeader &&
+                    Navigator.of(context).canPop()
+                ? const AppleLiquidGlassBackButton()
+                : null,
+            centerTitle: false,
+            titleSpacing: 16,
+            title: ApplePersistentGlassHeaderScope(
+              enabled: Navigator.of(context).canPop(),
+              onBack: () => Navigator.of(context).maybePop(),
+              child: Align(
+                alignment: titleAlignment,
+                child: Directionality(
+                  textDirection: titleDirection,
+                  child: Text(title),
+                ),
               ),
             ),
           ),
         ),
-        body: const DownloadsTab(),
-      );
-    }
-
-    return Directionality(
-      textDirection: TextDirection.ltr,
-      child: page,
+      ),
+      body: const DownloadsTab(),
     );
   }
 }

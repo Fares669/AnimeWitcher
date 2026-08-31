@@ -69,12 +69,14 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
             .where((item) => !isActiveDownloadStatus(item.status))
             .toList();
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Directionality(
-              textDirection: TextDirection.rtl,
-              child: FilterStyleTabBar(
+        // Same RTL pager as أنمي / المواسم / الإحصائيات: tab strip and
+        // TabBarView share one Directionality so swipe follows the tabs.
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilterStyleTabBar(
                 controller: _tabs,
                 isScrollable: false,
                 tabs: [
@@ -82,25 +84,25 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
                   FilterStyleTab(label: l10n.downloadsTabCompleted),
                 ],
               ),
-            ),
-            Expanded(
-              child: TabBarView(
-                controller: _tabs,
-                children: [
-                  _ActiveDownloadsList(
-                    items: active,
-                    activeProgress: activeProgress,
-                    emptyMessage: l10n.noDownloadsYet,
-                  ),
-                  _CompletedDownloadsList(
-                    items: completed,
-                    activeProgress: activeProgress,
-                    emptyMessage: l10n.noCompletedDownloadsYet,
-                  ),
-                ],
+              Expanded(
+                child: TabBarView(
+                  controller: _tabs,
+                  children: [
+                    _ActiveDownloadsList(
+                      items: active,
+                      activeProgress: activeProgress,
+                      emptyMessage: l10n.noDownloadsYet,
+                    ),
+                    _CompletedDownloadsList(
+                      items: completed,
+                      activeProgress: activeProgress,
+                      emptyMessage: l10n.noCompletedDownloadsYet,
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         );
       },
       loading: () => const Center(child: AppLoadingIndicator()),
