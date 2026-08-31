@@ -166,6 +166,12 @@ class DownloadOverlaySession {
   final int waitingCount;
   final double speedBytesPerSecond;
 
+  /// 1-based index of the current episode in this batch (`1 of 3`).
+  int get currentIndex => overlayCurrentIndex(
+    completedCount: completedCount,
+    batchTotal: batchTotal,
+  );
+
   bool get shouldFinish => shouldFinishDownloadSessionOverlay(
     runningCount: runningCount,
     waitingCount: waitingCount,
@@ -180,8 +186,8 @@ bool _isOverlayRunning(DownloadOverlayEntry entry) => occupiesDownloadSlot(
   queueWaiting: entry.queueWaiting,
 );
 
-/// Batch overlay: current **running** file's bytes, plus completed-of-total
-/// for this session (running + waiting + complete in the batch).
+/// Batch overlay: current **running** file's bytes, plus 1-based current
+/// episode index of this session (running + waiting + complete in the batch).
 DownloadOverlaySession planDownloadOverlaySession({
   required Iterable<DownloadOverlayEntry> entries,
 }) {
@@ -255,21 +261,38 @@ String formatDownloadOverlaySpeed(double bytesPerSecond) {
   return '${bytesPerSecond.toStringAsFixed(0)}B/s';
 }
 
-/// Line 1 of the manga overlay: `Downloading... 40%` of the current file.
-String formatDownloadSessionTitle({required double progress}) {
-  final percent = (progress.clamp(0.0, 1.0) * 100).round();
-  return 'Downloading... $percent%';
+/// 1-based current episode of the batch. First of 3 → `1 of 3`, not `0 of 3`.
+int overlayCurrentIndex({
+  required int completedCount,
+  required int batchTotal,
+}) {
+  final total = batchTotal < 1 ? 1 : batchTotal;
+  final index = completedCount + 1;
+  if (index < 1) return 1;
+  if (index > total) return total;
+  return index;
 }
 
-/// Line 2: `40MB/400MB • 0 of 5`, optionally `1.9MB/s • 40MB/400MB • 0 of 5`.
+/// Line 1: `Downloading “الحلقة 2.mp4”`. Percent lives on the circular progress.
+String formatDownloadSessionTitle({required String displayName}) {
+  final name = displayName.trim();
+  if (name.isEmpty) return 'Downloading';
+  return 'Downloading “$name”';
+}
+
+/// Line 2: `3.2MB/6.6MB • 1 of 3`, optionally `85KB/s • 3.2MB/6.6MB • 1 of 3`.
 String formatDownloadSessionSubtitle({
   required int transferredBytes,
   required int totalBytes,
-  required int completedCount,
+  required int currentIndex,
   required int batchTotal,
   double speedBytesPerSecond = 0,
 }) {
-  final count = '$completedCount of ${batchTotal < 1 ? 1 : batchTotal}';
+  final total = batchTotal < 1 ? 1 : batchTotal;
+  final index = currentIndex < 1
+      ? 1
+      : (currentIndex > total ? total : currentIndex);
+  final count = '$index of $total';
   final parts = <String>[];
   final speed = formatDownloadOverlaySpeed(speedBytesPerSecond);
   if (speed.isNotEmpty) parts.add(speed);

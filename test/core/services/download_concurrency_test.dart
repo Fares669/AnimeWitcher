@@ -177,27 +177,40 @@ void main() {
       },
     );
 
-    test('one session overlay: current-file bytes and completed of batch', () {
+    test('one session overlay: filename title and 1-based current index', () {
       expect(kDownloadSessionOverlayTaskId, 'session');
-      expect(formatDownloadSessionTitle(progress: 0.4), 'Downloading... 40%');
+      expect(
+        formatDownloadSessionTitle(displayName: 'الحلقة 2.mp4'),
+        'Downloading “الحلقة 2.mp4”',
+      );
       expect(
         formatDownloadSessionSubtitle(
           transferredBytes: 40 * 1000 * 1000,
           totalBytes: 400 * 1000 * 1000,
-          completedCount: 0,
+          currentIndex: 1,
           batchTotal: 5,
         ),
-        '40MB/400MB • 0 of 5',
+        '40MB/400MB • 1 of 5',
       );
       expect(
         formatDownloadSessionSubtitle(
           transferredBytes: 12 * 1000 * 1000,
           totalBytes: 400 * 1000 * 1000,
-          completedCount: 1,
+          currentIndex: 2,
           batchTotal: 5,
           speedBytesPerSecond: 1.9 * 1000 * 1000,
         ),
-        '1.9MB/s • 12MB/400MB • 1 of 5',
+        '1.9MB/s • 12MB/400MB • 2 of 5',
+      );
+      expect(
+        formatDownloadSessionSubtitle(
+          transferredBytes: 3200 * 1000,
+          totalBytes: 6600 * 1000,
+          currentIndex: 1,
+          batchTotal: 3,
+          speedBytesPerSecond: 85 * 1000,
+        ),
+        '85KB/s • 3.2MB/6.6MB • 1 of 3',
       );
 
       final whileEp1 = planDownloadOverlaySession(
@@ -234,17 +247,25 @@ void main() {
       );
       expect(whileEp1.currentTaskId, 'ep1');
       expect(whileEp1.completedCount, 0);
+      expect(whileEp1.currentIndex, 1);
+      expect(overlayCurrentIndex(completedCount: 0, batchTotal: 3), 1);
+      expect(overlayCurrentIndex(completedCount: 1, batchTotal: 3), 2);
+      expect(overlayCurrentIndex(completedCount: 2, batchTotal: 3), 3);
       expect(whileEp1.batchTotal, 5);
       expect(whileEp1.transferredBytes, 40 * 1000 * 1000);
       expect(whileEp1.shouldFinish, isFalse);
       expect(
+        formatDownloadSessionTitle(displayName: whileEp1.displayName),
+        'Downloading “الحلقة 1”',
+      );
+      expect(
         formatDownloadSessionSubtitle(
           transferredBytes: whileEp1.transferredBytes,
           totalBytes: whileEp1.totalBytes,
-          completedCount: whileEp1.completedCount,
+          currentIndex: whileEp1.currentIndex,
           batchTotal: whileEp1.batchTotal,
         ),
-        '40MB/400MB • 0 of 5',
+        '40MB/400MB • 1 of 5',
       );
 
       final afterEp1 = planDownloadOverlaySession(
@@ -282,8 +303,22 @@ void main() {
       );
       expect(afterEp1.currentTaskId, 'ep2');
       expect(afterEp1.completedCount, 1);
+      expect(afterEp1.currentIndex, 2);
       expect(afterEp1.batchTotal, 5);
       expect(afterEp1.shouldFinish, isFalse);
+      expect(
+        formatDownloadSessionTitle(displayName: afterEp1.displayName),
+        'Downloading “الحلقة 2”',
+      );
+      expect(
+        formatDownloadSessionSubtitle(
+          transferredBytes: afterEp1.transferredBytes,
+          totalBytes: afterEp1.totalBytes,
+          currentIndex: afterEp1.currentIndex,
+          batchTotal: afterEp1.batchTotal,
+        ),
+        '12MB/400MB • 2 of 5',
+      );
       expect(
         shouldStartSecondDownloadLiveActivity(sessionAlreadyActive: true),
         isFalse,

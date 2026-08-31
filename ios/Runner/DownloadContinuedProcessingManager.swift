@@ -327,12 +327,21 @@ final class DownloadContinuedProcessingManager {
   }
 
   private func title(for snapshot: Snapshot) -> String {
-    let percent = Int((snapshot.progress * 100.0).rounded())
-    return "Downloading... \(percent)%"
+    let name = snapshot.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    if name.isEmpty {
+      return "Downloading"
+    }
+    return "Downloading “\(name)”"
+  }
+
+  private func currentIndex(for snapshot: Snapshot) -> Int {
+    let total = max(snapshot.batchTotal, 1)
+    let index = snapshot.completedCount + 1
+    return min(max(index, 1), total)
   }
 
   private func subtitle(for snapshot: Snapshot) -> String {
-    let count = "\(snapshot.completedCount) of \(max(snapshot.batchTotal, 1))"
+    let count = "\(currentIndex(for: snapshot)) of \(max(snapshot.batchTotal, 1))"
     var parts: [String] = []
     let speed = formatSpeed(snapshot.speedBytesPerSecond)
     if !speed.isEmpty {
@@ -349,7 +358,7 @@ final class DownloadContinuedProcessingManager {
 
   private func sessionCountSubtitle(_ snapshot: Snapshot?) -> String {
     guard let snapshot else { return "" }
-    return "\(snapshot.completedCount) of \(max(snapshot.batchTotal, 1))"
+    return "\(currentIndex(for: snapshot)) of \(max(snapshot.batchTotal, 1))"
   }
 
   private func overlayTransferredBytes(progress: Double, totalBytes: Int64) -> Int64 {
