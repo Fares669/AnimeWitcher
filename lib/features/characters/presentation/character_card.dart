@@ -106,15 +106,18 @@ class CharacterPosterCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
-          Text(
-            character.name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
+          Directionality(
             textDirection: TextDirection.ltr,
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              height: 1.15,
+            child: Text(
+              character.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              textDirection: TextDirection.ltr,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                height: 1.15,
+              ),
             ),
           ),
         ],
