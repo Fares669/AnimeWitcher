@@ -23,436 +23,81 @@ on:
         required: true
         default: true
         type: boolean
+      build_linux:
+        description: 'Build Linux'
+        required: true
+        default: true
+        type: boolean
+      build_web:
+        description: 'Build Web'
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
-  version:
-    name: Get Version
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.get_version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Extract Version from pubspec.yaml
-        id: get_version
-        run: |
-          VERSION=$(grep 'version:' pubspec.yaml | cut -d ' ' -f 2 | cut -d '+' -f 1)
-          echo "version=v$VERSION" >> $GITHUB_OUTPUT
-      
-      - name: Create Dummy Assets Dir
-        run: mkdir -p assets/plugins/
-
-  create_release:
-    name: Create Draft Release
-    needs: version
+  build-android:
+    name: Build Android
+    if: inputs.build_android
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Create Release
-        uses: ncipollo/release-action@v1
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
         with:
-          tag: ${{ needs.version.outputs.version }}
-          name: ${{ needs.version.outputs.version }}
-          bodyFile: "CHANGELOG.md"
-          allowUpdates: true
-          draft: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
-  android:
-    name: Android Build
-    needs: [version, create_release]
-    if: ${{ github.event.inputs.build_android == 'true' }}
-    runs-on: ubuntu-latest
-    env:
-      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-      ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          cache: true
 
       - name: Install Dependencies
         run: |
+          rm -f pubspec.lock
           flutter pub get
           flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
 
-      - name: Decode Keystore
-        if: env.ANDROID_KEYSTORE_BASE64 != ''
+      - name: Build Android ARM64 APK
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release.jks
-          echo "storePassword=$ANDROID_STORE_PASSWORD" > android/key.properties
-          echo "keyPassword=$ANDROID_KEY_PASSWORD" >> android/key.properties
-          echo "keyAlias=$ANDROID_KEY_ALIAS" >> android/key.properties
-          echo "storeFile=release.jks" >> android/key.properties
+          flutter build apk --release --target-platform=android-arm64 --split-per-abi
 
-      - name: Generate dart-defines file
-        shell: bash
+      - name: Build Android ARM32 APK
         run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMESKIP_CLIENT_ID": "${{ secrets.ANIMESKIP_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}",
-            "ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID }}",
-            "ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID || '296971789988-0ksnaln8k2epsuejesllrr497jnd5if5.apps.googleusercontent.com' }}"
-          }
-          JSON_EOF
+          flutter build apk --release --target-platform=android-arm --split-per-abi
 
-      - name: Build Split APKs
-        run: flutter build apk --release --split-per-abi --dart-define-from-file=dart-defines.json
-
-      - name: Build Universal APK
-        run: flutter build apk --release --dart-define-from-file=dart-defines.json
-
-      - name: Build Debug APK
-        run: flutter build apk --debug --dart-define-from-file=dart-defines.json
-
-      - name: Rename APKs
+      - name: Build Android x86_64 APK
         run: |
-          VERSION="${{ needs.version.outputs.version }}"
-          cd build/app/outputs/flutter-apk/
-          
-          # Universal Release
-          if [ -f "app-release.apk" ]; then
-            mv "app-release.apk" "../../../../animewitcher-android-universal-${VERSION}.apk"
-          fi
-          
-          # Universal Debug
-          if [ -f "app-debug.apk" ]; then
-            mv "app-debug.apk" "../../../../animewitcher-android-debug-${VERSION}.apk"
-          fi
-          
-          # Splits
-          for f in app-*-release.apk; do
-            if [ -f "$f" ]; then
-              # Extract ABI: app-<abi>-release.apk -> <abi>
-              abi="${f#app-}"
-              abi="${abi%-release.apk}"
-              mv "$f" "../../../../animewitcher-android-${abi}-${VERSION}.apk"
-            fi
-          done
+          flutter build apk --release --target-platform=android-x64 --split-per-abi
 
-      - name: Upload Release Assets
-        uses: ncipollo/release-action@v1
+      - name: Build Android Universal APK
+        run: |
+          flutter build apk --release
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tag: ${{ needs.version.outputs.version }}
-          allowUpdates: true
-          draft: true
-          replacesArtifacts: true
-          artifacts: "*.apk"
-          omitBodyDuringUpdate: true
-          omitNameDuringUpdate: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  ios:
-    name: iOS Build (Unsigned)
-    needs: [version, create_release]
-    if: ${{ github.event.inputs.build_ios == 'true' }}
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Select Latest Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-          
-      - name: Install Dependencies
-        run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-
-      - name: Prepare media_kit iOS Headers
-        run: bash scripts/prepare_media_kit_ios_headers.sh
-
-      - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMESKIP_CLIENT_ID": "${{ secrets.ANIMESKIP_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}",
-            "ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID }}",
-            "ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID || '296971789988-0ksnaln8k2epsuejesllrr497jnd5if5.apps.googleusercontent.com' }}"
-          }
-          JSON_EOF
-
-      - name: Configure Google Sign-In for iOS
-        env:
-          ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID: ${{ secrets.ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID || '296971789988-0ksnaln8k2epsuejesllrr497jnd5if5.apps.googleusercontent.com' }}
-          ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID: ${{ secrets.ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID }}
-        run: bash scripts/configure_ios_google_sign_in.sh
-
-      - name: Build iOS (No Codesign)
-        run: |
-          flutter build ios --release --no-codesign --dart-define-from-file=dart-defines.json
-          mkdir -p Payload
-          mv build/ios/iphoneos/Runner.app Payload/
-          zip -r animewitcher-ios-unsigned-${{ needs.version.outputs.version }}.ipa Payload
-          
-      - name: Upload Release Assets
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ needs.version.outputs.version }}
-          allowUpdates: true
-          draft: true
-          replacesArtifacts: true
-          artifacts: "animewitcher-ios-unsigned-${{ needs.version.outputs.version }}.ipa"
-          omitBodyDuringUpdate: true
-          omitNameDuringUpdate: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  macos:
-    name: macOS Build
-    needs: [version, create_release]
-    if: ${{ github.event.inputs.build_macos == 'true' }}
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [arm64, x64]
-        include:
-          - arch: arm64
-            xcode_arch: arm64
-          - arch: x64
-            xcode_arch: x86_64
-    steps:
-      - uses: actions/checkout@v4
-      - name: Select Latest Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-
-      - name: Install Dependencies
-        run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-
-      - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMESKIP_CLIENT_ID": "${{ secrets.ANIMESKIP_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}",
-            "ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID }}",
-            "ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID || '296971789988-0ksnaln8k2epsuejesllrr497jnd5if5.apps.googleusercontent.com' }}"
-          }
-          JSON_EOF
-
-      # Build for a single architecture to reduce app size from ~430MB (universal) to ~270MB
-      - name: Build macOS (${{ matrix.arch }})
-        run: |
-          # First, generate the Xcode project with flutter
-          flutter build macos --release --config-only --dart-define-from-file=dart-defines.json
-          
-          # Build using xcodebuild with single architecture
-          cd macos
-          xcodebuild -workspace Runner.xcworkspace \
-            -configuration Release \
-            -scheme Runner \
-            -derivedDataPath ../build/macos \
-            ARCHS="${{ matrix.xcode_arch }}" \
-            ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-      
-      # Re-sign all frameworks to fix media_kit MPV crash (Issue #830)
-      # The frameworks built in CI have code signing issues that cause
-      # assertion failures in mpv_render_context_create
-      - name: Re-sign Frameworks
-        run: |
-          APP_PATH="build/macos/Build/Products/Release/AnimeWitcher.app"
-          FRAMEWORKS_PATH="$APP_PATH/Contents/Frameworks"
-          
-          echo "Re-signing frameworks..."
-          find "$FRAMEWORKS_PATH" -name "*.framework" -type d | while read framework; do
-            echo "Signing: $framework"
-            codesign --force --deep --sign - "$framework"
-          done
-          
-          # Also sign any dylibs
-          find "$FRAMEWORKS_PATH" -name "*.dylib" -type f | while read dylib; do
-            echo "Signing: $dylib"
-            codesign --force --sign - "$dylib"
-          done
-          
-          # Sign the main app
-          echo "Signing app..."
-          codesign --force --deep --sign - "$APP_PATH"
-          
-          echo "Done re-signing."
-        
-      # CRITICAL: Use -y flag to preserve symlinks!
-      # macOS frameworks contain symlinks (e.g., Mpv.framework/Mpv -> Versions/A/Mpv)
-      # Without -y, zip stores the file content instead of the symlink,
-      # causing MPV's internal config to fail with assertion errors.
-      - name: Generate DMG and Zip
-        run: |
-          VERSION="${{ needs.version.outputs.version }}"
-          cd build/macos/Build/Products/Release
-          
-          # Create DMG
-          mkdir -p dmg_temp
-          cp -R AnimeWitcher.app dmg_temp/
-          ln -s /Applications dmg_temp/Applications
-          hdiutil create -volname "AnimeWitcher" -srcfolder dmg_temp -ov -format UDZO "../../../../../animewitcher-macos-${{ matrix.arch }}-${VERSION}.dmg"
-          
-          # Fallback ZIP
-          zip -ry "../../../../../animewitcher-macos-${{ matrix.arch }}-${VERSION}.zip" AnimeWitcher.app
-
-      - name: Upload Release Assets
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ needs.version.outputs.version }}
-          allowUpdates: true
-          draft: true
-          replacesArtifacts: true
-          artifacts: |
-            animewitcher-macos-${{ matrix.arch }}-${{ needs.version.outputs.version }}.dmg
-            animewitcher-macos-${{ matrix.arch }}-${{ needs.version.outputs.version }}.zip
-          omitBodyDuringUpdate: true
-          omitNameDuringUpdate: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  windows:
-    name: Windows Build
-    needs: [version, create_release]
-    if: ${{ github.event.inputs.build_windows == 'true' }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: windows-2022
-            arch: x64
-    steps:
-      - uses: actions/checkout@v4
-      
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-
-      - name: Install Dependencies
-        run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-
-      - name: Download libmpv-2.dll
-        shell: pwsh
-        run: |
-          choco install 7zip -y --no-progress
-          $assetPattern = '^mpv-dev-x86_64-(?!v\d+-)\d{8}-git-[a-f0-9]+\.7z$'
-
-          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest'
-          $asset = $release.assets | Where-Object { $_.name -match $assetPattern } | Select-Object -First 1
-          if (-not $asset) {
-            throw "Could not find matching mpv asset for pattern: $assetPattern"
-          }
-
-          $archivePath = Join-Path $env:RUNNER_TEMP 'mpv-dev.7z'
-          $extractDir = Join-Path $env:RUNNER_TEMP 'mpv-dev-extract'
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archivePath
-          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
-          & 7z x $archivePath "-o$extractDir" -y | Out-Null
-
-          $dll = Get-ChildItem -Path $extractDir -Filter 'libmpv-2.dll' -Recurse | Select-Object -First 1
-          if (-not $dll) {
-            throw 'libmpv-2.dll was not found in extracted mpv archive'
-          }
-
-          "ANIMEWITCHER_WINDOWS_MPV_DLL=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Using downloaded libmpv: $($dll.FullName)"
-
-      - name: Generate dart-defines file
-        shell: bash
-        run: |
-          cat > dart-defines.json << 'JSON_EOF'
-          {
-            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
-            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
-            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
-            "ANIMESKIP_CLIENT_ID": "${{ secrets.ANIMESKIP_CLIENT_ID }}",
-            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
-            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}",
-            "ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID }}",
-            "ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID || '296971789988-0ksnaln8k2epsuejesllrr497jnd5if5.apps.googleusercontent.com' }}"
-          }
-          JSON_EOF
-
-      - name: Build Windows
-        run: flutter build windows --release --dart-define-from-file=dart-defines.json
-
-      - name: Install Inno Setup
-        shell: pwsh
-        run: choco install innosetup -y --no-progress
-
-      - name: Build Installer (EXE)
-        shell: pwsh
-        run: |
-          $Version = "${{ needs.version.outputs.version }}".TrimStart('v')
-          $AppDir = "..\..\..\build\windows\${{ matrix.arch }}\runner\Release"
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$Version /DAppArch=${{ matrix.arch }} /DAppDir=$AppDir windows\packaging\exe\setup.iss
-
-      - name: Compress Release (ZIP)
-        shell: pwsh
-        run: |
-          $Version = "${{ needs.version.outputs.version }}"
-          Compress-Archive -Path build\windows\${{ matrix.arch }}\runner\Release\* -DestinationPath "animewitcher-windows-${{ matrix.arch }}-$Version.zip"
-
-      - name: Upload Release Assets
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ needs.version.outputs.version }}
-          allowUpdates: true
-          draft: true
-          replacesArtifacts: true
-          artifacts: |
-            windows/packaging/exe/Output/*.exe
-            animewitcher-windows-${{ matrix.arch }}-${{ needs.version.outputs.version }}.zip
-          omitBodyDuringUpdate: true
-          omitNameDuringUpdate: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  publish_release:
-    name: Publish Release
-    needs: [version, create_release, android, ios, macos, windows]
-    if: >-
-      ${{
-        always() &&
-        needs.create_release.result == 'success' &&
-        (needs.android.result == 'success' || needs.android.result == 'skipped') &&
-        (needs.ios.result == 'success' || needs.ios.result == 'skipped') &&
-        (needs.macos.result == 'success' || needs.macos.result == 'skipped') &&
-        (needs.windows.result == 'success' || needs.windows.result == 'skipped')
-      }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ needs.version.outputs.version }}" --draft=false --repo "${{ github.repository }}"
+          name: release-android
+          path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 7
