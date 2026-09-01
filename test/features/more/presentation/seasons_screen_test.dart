@@ -166,6 +166,16 @@ Future<void> _selectTab(WidgetTester tester, String label) async {
   await tester.pump(const Duration(milliseconds: 400));
 }
 
+void _expectTitleCentered(WidgetTester tester, String title) {
+  final titleBox = tester.getRect(find.text(title).hitTestable());
+  final screen = tester.getRect(find.byType(Scaffold));
+  expect(
+    (titleBox.center.dx - screen.center.dx).abs(),
+    lessThan(2),
+    reason: '"$title" should sit at the horizontal center, not the RTL start',
+  );
+}
+
 Future<void> _writeShot(WidgetTester tester, Key key, String filename) async {
   final artifacts = Directory('/opt/cursor/artifacts');
   if (!artifacts.existsSync()) return;
@@ -185,7 +195,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'past/current/next tabs show the settings season string as-is above the grid',
+    'past/current/next tabs show the centered settings season string',
     (tester) async {
       await tester.runAsync(TestFonts.loadWalkthroughFonts);
       const shotKey = ValueKey('seasons-shot');
@@ -205,15 +215,21 @@ void main() {
       expect(titleBox.top, greaterThan(tabsBottom));
       expect(titleBox.bottom, lessThan(gridTop));
 
-      await _writeShot(tester, shotKey, 'seasons_current_title.png');
+      await _writeShot(tester, shotKey, 'seasons_current_title_centered.png');
+
+      await _expectTitleCentered(tester, 'صيف عام 2026');
 
       await _selectTab(tester, 'السابق');
       expect(find.text('ربيع عام 2026').hitTestable(), findsOneWidget);
       expect(find.text('صيف عام 2026').hitTestable(), findsNothing);
+      await _expectTitleCentered(tester, 'ربيع عام 2026');
+      await _writeShot(tester, shotKey, 'seasons_previous_title_centered.png');
 
       await _selectTab(tester, 'القادم');
       expect(find.text('خريف عام 2026').hitTestable(), findsOneWidget);
       expect(find.text('ربيع عام 2026').hitTestable(), findsNothing);
+      await _expectTitleCentered(tester, 'خريف عام 2026');
+      await _writeShot(tester, shotKey, 'seasons_next_title_centered.png');
     },
   );
 

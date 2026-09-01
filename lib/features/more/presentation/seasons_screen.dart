@@ -224,11 +224,15 @@ class SeasonListTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(
-        title,
-        style: Theme.of(
-          context,
-        ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+      child: Align(
+        alignment: Alignment.center,
+        child: Text(
+          title,
+          textAlign: TextAlign.center,
+          style: Theme.of(
+            context,
+          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+        ),
       ),
     );
   }
