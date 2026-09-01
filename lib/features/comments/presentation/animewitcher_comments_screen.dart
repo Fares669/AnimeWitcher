@@ -66,6 +66,18 @@ class _AnimeWitcherCommentsScreenState
           ? 'تم نشر تعليقك وهو قيد المراجعة.'
           : 'Your comment was submitted and is under review.');
 
+  String _editDialogTitle(bool isArabic) => _isReviews
+      ? (isArabic ? 'تعديل المراجعة' : 'Edit review')
+      : (isArabic ? 'تعديل التعليق' : 'Edit comment');
+
+  String _editHint(bool isArabic) => _isReviews
+      ? (isArabic ? 'اكتب مراجعة...' : 'Write your review...')
+      : (isArabic ? 'اكتب التعليق...' : 'Write your comment...');
+
+  String _editedMessage(bool isArabic) => _isReviews
+      ? (isArabic ? 'تم تعديل المراجعة.' : 'Review updated.')
+      : (isArabic ? 'تم تعديل التعليق.' : 'Comment updated.');
+
   final TextEditingController _commentController = TextEditingController();
   final Set<String> _revealedSpoilers = <String>{};
   final Set<String> _pendingLikes = <String>{};
@@ -196,7 +208,7 @@ class _AnimeWitcherCommentsScreenState
       await ref.read(animeWitcherAccountServiceProvider).publishComment(
             widget.target,
             text,
-            spoiler: _spoiler,
+            spoiler: _isReviews ? false : _spoiler,
           );
       if (!mounted) return;
       _commentController.clear();
@@ -285,13 +297,13 @@ class _AnimeWitcherCommentsScreenState
   Future<void> _editOwnComment(AnimeWitcherComment comment) async {
     final isArabic = _isArabic(context);
     final controller = TextEditingController(text: comment.text);
-    var spoiler = comment.spoiler;
+    var spoiler = _isReviews ? false : comment.spoiler;
     try {
       final draft = await showDialog<_CommentEditDraft>(
         context: context,
         builder: (dialogContext) => StatefulBuilder(
           builder: (context, setDialogState) => AlertDialog(
-            title: Text(isArabic ? 'تعديل التعليق' : 'Edit comment'),
+            title: Text(_editDialogTitle(isArabic)),
             content: SizedBox(
               width: 520,
               child: Column(
@@ -306,21 +318,21 @@ class _AnimeWitcherCommentsScreenState
                     textDirection:
                         isArabic ? TextDirection.rtl : TextDirection.ltr,
                     decoration: InputDecoration(
-                      hintText:
-                          isArabic ? 'اكتب التعليق...' : 'Write your comment...',
+                      hintText: _editHint(isArabic),
                       border: const OutlineInputBorder(),
                     ),
                   ),
-                  CheckboxListTile(
-                    value: spoiler,
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(
-                      isArabic ? 'يحتوي على حرق' : 'Contains spoilers',
+                  if (!_isReviews)
+                    CheckboxListTile(
+                      value: spoiler,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        isArabic ? 'يحتوي على حرق' : 'Contains spoilers',
+                      ),
+                      onChanged: (value) {
+                        setDialogState(() => spoiler = value == true);
+                      },
                     ),
-                    onChanged: (value) {
-                      setDialogState(() => spoiler = value == true);
-                    },
-                  ),
                 ],
               ),
             ),
@@ -335,7 +347,10 @@ class _AnimeWitcherCommentsScreenState
                   if (text.isEmpty) return;
                   Navigator.pop(
                     dialogContext,
-                    _CommentEditDraft(text: text, spoiler: spoiler),
+                    _CommentEditDraft(
+                      text: text,
+                      spoiler: _isReviews ? false : spoiler,
+                    ),
                   );
                 },
                 child: Text(isArabic ? 'حفظ' : 'Save'),
@@ -356,7 +371,7 @@ class _AnimeWitcherCommentsScreenState
             );
         if (!mounted) return;
         _replaceComment(updated);
-        _showMessage(isArabic ? 'تم تعديل التعليق.' : 'Comment updated.');
+        _showMessage(_editedMessage(isArabic));
       } catch (error) {
         if (mounted) {
           _showMessage(_commentErrorText(error, isArabic), isError: true);
@@ -724,7 +739,9 @@ class _AnimeWitcherCommentsScreenState
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final photo = comment.userPhotoUrl?.trim() ?? '';
-    final reveal = !comment.spoiler || _revealedSpoilers.contains(comment.path);
+    final reveal = _isReviews ||
+        !comment.spoiler ||
+        _revealedSpoilers.contains(comment.path);
     final likePending = _pendingLikes.contains(comment.path);
     final actionPending = _pendingCommentActions.contains(comment.path);
     final ownsComment = ref
@@ -940,16 +957,18 @@ class _AnimeWitcherCommentsScreenState
                     ),
                   ),
                   const SizedBox(width: 6),
-                  IconButton(
-                    tooltip: isArabic ? 'يحتوي على حرق' : 'Contains spoiler',
-                    onPressed: () => setState(() => _spoiler = !_spoiler),
-                    icon: Icon(
-                      _spoiler
-                          ? Icons.visibility_off_rounded
-                          : Icons.visibility_outlined,
-                      color: _spoiler ? colors.primary : colors.onSurfaceVariant,
+                  if (!_isReviews)
+                    IconButton(
+                      tooltip: isArabic ? 'يحتوي على حرق' : 'Contains spoiler',
+                      onPressed: () => setState(() => _spoiler = !_spoiler),
+                      icon: Icon(
+                        _spoiler
+                            ? Icons.visibility_off_rounded
+                            : Icons.visibility_outlined,
+                        color:
+                            _spoiler ? colors.primary : colors.onSurfaceVariant,
+                      ),
                     ),
-                  ),
                   IconButton.filled(
                     tooltip: isArabic ? 'نشر' : 'Publish',
                     onPressed: _publishing ? null : _publish,

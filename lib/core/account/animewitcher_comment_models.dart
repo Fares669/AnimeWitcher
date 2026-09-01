@@ -224,7 +224,7 @@ class AnimeWitcherComment {
       replies: fields.containsKey('replies')
           ? _intValue(fields['replies'])
           : _intValue(fields['comments']),
-      spoiler: fields['spoiler'] == true,
+      spoiler: isReview ? false : fields['spoiler'] == true,
       date: _dateValue(fields['date']),
       animeId: _optionalText(fields['anime_id']),
       episodeId: _optionalText(fields['episode_id']),

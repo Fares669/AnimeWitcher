@@ -49,6 +49,18 @@ class _AnimeWitcherMyCommentsScreenState
   bool get _isArabic =>
       Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
+  String get _editDialogTitle => _isReviews
+      ? (_isArabic ? 'تعديل المراجعة' : 'Edit review')
+      : (_isArabic ? 'تعديل التعليق' : 'Edit comment');
+
+  String get _editHint => _isReviews
+      ? (_isArabic ? 'اكتب مراجعة...' : 'Write your review...')
+      : (_isArabic ? 'اكتب التعليق...' : 'Write your comment...');
+
+  String get _editedMessage => _isReviews
+      ? (_isArabic ? 'تم تعديل المراجعة.' : 'Review updated.')
+      : (_isArabic ? 'تم تعديل التعليق.' : 'Comment updated.');
+
   @override
   void initState() {
     super.initState();
@@ -176,13 +188,13 @@ class _AnimeWitcherMyCommentsScreenState
 
   Future<void> _editComment(AnimeWitcherComment comment) async {
     final controller = TextEditingController(text: comment.text);
-    var spoiler = comment.spoiler;
+    var spoiler = _isReviews ? false : comment.spoiler;
     try {
       final draft = await showDialog<_CommentEditDraft>(
         context: context,
         builder: (dialogContext) => StatefulBuilder(
           builder: (context, setDialogState) => AlertDialog(
-            title: Text(_isArabic ? 'تعديل التعليق' : 'Edit comment'),
+            title: Text(_editDialogTitle),
             content: SizedBox(
               width: 520,
               child: Column(
@@ -197,22 +209,21 @@ class _AnimeWitcherMyCommentsScreenState
                     textDirection:
                         _isArabic ? TextDirection.rtl : TextDirection.ltr,
                     decoration: InputDecoration(
-                      hintText: _isArabic
-                          ? 'اكتب التعليق...'
-                          : 'Write your comment...',
+                      hintText: _editHint,
                       border: const OutlineInputBorder(),
                     ),
                   ),
-                  CheckboxListTile(
-                    value: spoiler,
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(
-                      _isArabic ? 'يحتوي على حرق' : 'Contains spoilers',
+                  if (!_isReviews)
+                    CheckboxListTile(
+                      value: spoiler,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        _isArabic ? 'يحتوي على حرق' : 'Contains spoilers',
+                      ),
+                      onChanged: (value) {
+                        setDialogState(() => spoiler = value == true);
+                      },
                     ),
-                    onChanged: (value) {
-                      setDialogState(() => spoiler = value == true);
-                    },
-                  ),
                 ],
               ),
             ),
@@ -227,7 +238,10 @@ class _AnimeWitcherMyCommentsScreenState
                   if (text.isEmpty) return;
                   Navigator.pop(
                     dialogContext,
-                    _CommentEditDraft(text: text, spoiler: spoiler),
+                    _CommentEditDraft(
+                      text: text,
+                      spoiler: _isReviews ? false : spoiler,
+                    ),
                   );
                 },
                 child: Text(_isArabic ? 'حفظ' : 'Save'),
@@ -248,11 +262,7 @@ class _AnimeWitcherMyCommentsScreenState
             );
         if (!mounted) return;
         _replaceComment(updated);
-        _showMessage(
-          _isArabic
-              ? 'تم تعديل التعليق.'
-              : 'Comment updated.',
-        );
+        _showMessage(_editedMessage);
       } catch (error) {
         if (mounted) _showMessage(_errorText(error), isError: true);
       } finally {
@@ -645,7 +655,7 @@ class _AnimeWitcherMyCommentsScreenState
                       ),
                     ),
                     const SizedBox(height: 10),
-                    if (comment.spoiler ||
+                    if ((!_isReviews && comment.spoiler) ||
                         comment.repliesClosed ||
                         (_isReviews && !comment.published)) ...[
                       Wrap(
@@ -659,7 +669,7 @@ class _AnimeWitcherMyCommentsScreenState
                               colors.tertiaryContainer,
                               colors.onTertiaryContainer,
                             ),
-                          if (comment.spoiler)
+                          if (!_isReviews && comment.spoiler)
                             _statusChip(
                               Icons.visibility_off_rounded,
                               _isArabic ? 'حرق' : 'Spoiler',

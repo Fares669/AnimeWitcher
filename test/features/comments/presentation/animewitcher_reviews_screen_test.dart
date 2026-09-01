@@ -35,6 +35,7 @@ class _FakeAccountService extends AnimeWitcherAccountService {
   int? lastLimit;
   String? lastPublishedText;
   bool lastPublishedWasReview = false;
+  bool lastPublishedSpoiler = false;
 
   @override
   bool get isSignedIn => signedIn;
@@ -93,6 +94,7 @@ class _FakeAccountService extends AnimeWitcherAccountService {
   }) async {
     lastPublishedText = rawComment.trim();
     lastPublishedWasReview = target.isReviews;
+    lastPublishedSpoiler = spoiler;
   }
 }
 
@@ -137,9 +139,24 @@ Widget _app({
   String? fontFamily,
   Key? shotKey,
 }) {
-  Widget child = home;
+  Widget app = MaterialApp(
+    locale: const Locale('ar'),
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
+    theme: ThemeData(
+      brightness: Brightness.dark,
+      fontFamily: fontFamily,
+      scaffoldBackgroundColor: Colors.black,
+      colorScheme: const ColorScheme.dark(
+        primary: Color(0xFFEEC60A),
+        surface: Color(0xFF000000),
+        onSurface: Color(0xFFE5E7EB),
+      ),
+    ),
+    home: home,
+  );
   if (shotKey != null) {
-    child = RepaintBoundary(key: shotKey, child: home);
+    app = RepaintBoundary(key: shotKey, child: app);
   }
   return ProviderScope(
     overrides: [
@@ -148,23 +165,15 @@ Widget _app({
         _FixedAccountController.new,
       ),
     ],
-    child: MaterialApp(
-      locale: const Locale('ar'),
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
-      supportedLocales: AppLocalizations.supportedLocales,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        fontFamily: fontFamily,
-        scaffoldBackgroundColor: Colors.black,
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFFEEC60A),
-          surface: Color(0xFF000000),
-          onSurface: Color(0xFFE5E7EB),
-        ),
-      ),
-      home: child,
-    ),
+    child: app,
   );
+}
+
+Future<void> _openOwnReviewEditor(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('إدارة التعليق'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('تعديل'));
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -220,6 +229,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     expect(service.lastPublishedWasReview, isTrue);
     expect(service.lastPublishedText, 'مراجعة جديدة');
+    expect(service.lastPublishedSpoiler, isFalse);
     final notifications = ProviderScope.containerOf(
       tester.element(find.byType(AnimeWitcherCommentsScreen)),
     ).read(notificationServiceProvider);
@@ -253,6 +263,85 @@ void main() {
     expect(find.text('مراجعتي قيد الفحص'), findsOneWidget);
     expect(find.text('جاري مراجعته'), findsOneWidget);
     expect(service.lastLimit, kAnimeWitcherReviewsPageSize);
+  });
+
+  testWidgets('reviews composer keeps send and hides the spoiler eye', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      _app(
+        service: _FakeAccountService(reviews: const <AnimeWitcherComment>[]),
+        home: const AnimeWitcherCommentsScreen(target: _target),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('المراجعات'), findsOneWidget);
+    expect(find.byTooltip('نشر'), findsOneWidget);
+    expect(find.byIcon(Icons.send_rounded), findsOneWidget);
+    expect(find.byTooltip('يحتوي على حرق'), findsNothing);
+    expect(find.byIcon(Icons.visibility_outlined), findsNothing);
+    expect(find.byIcon(Icons.visibility_off_rounded), findsNothing);
+  });
+
+  testWidgets('editing a published review uses the review title without spoiler', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      _app(
+        service: _FakeAccountService(
+          reviews: <AnimeWitcherComment>[
+            _review(id: 'mine', text: 'زمان', userId: 'me'),
+          ],
+        ),
+        home: const AnimeWitcherCommentsScreen(target: _target),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await _openOwnReviewEditor(tester);
+
+    expect(find.text('تعديل المراجعة'), findsOneWidget);
+    expect(find.text('تعديل التعليق'), findsNothing);
+    expect(find.text('يحتوي على حرق'), findsNothing);
+    expect(find.byType(CheckboxListTile), findsNothing);
+    expect(find.text('حفظ'), findsOneWidget);
+  });
+
+  testWidgets('my reviews edit dialog uses تعديل المراجعة without spoiler', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      _app(
+        service: _FakeAccountService(
+          reviews: <AnimeWitcherComment>[
+            _review(
+              id: 'mine',
+              text: 'زمان',
+              published: false,
+              userId: 'me',
+            ),
+          ],
+        ),
+        home: const AnimeWitcherMyCommentsScreen(isReviews: true),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('مراجعاتي'), findsOneWidget);
+    await _openOwnReviewEditor(tester);
+
+    expect(find.text('تعديل المراجعة'), findsOneWidget);
+    expect(find.text('تعديل التعليق'), findsNothing);
+    expect(find.text('يحتوي على حرق'), findsNothing);
+    expect(find.byType(CheckboxListTile), findsNothing);
   });
 
   testWidgets('reviews screenshots', (tester) async {
@@ -316,5 +405,36 @@ void main() {
         ],
       ),
     );
+    const editShot = ValueKey('review_edit_dialog');
+    await tester.pumpWidget(
+      _app(
+        service: _FakeAccountService(
+          reviews: <AnimeWitcherComment>[
+            _review(
+              id: 'mine',
+              text: 'زمان',
+              published: false,
+              userId: 'me',
+            ),
+          ],
+        ),
+        home: const AnimeWitcherMyCommentsScreen(isReviews: true),
+        fontFamily: 'NotoSansArabic',
+        shotKey: editShot,
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+    await _openOwnReviewEditor(tester);
+    await tester.runAsync(() async {
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(editShot),
+      );
+      final image = await boundary.toImage(pixelRatio: 2);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      File('${artifacts.path}/review_edit_dialog.png').writeAsBytesSync(
+        bytes!.buffer.asUint8List(),
+      );
+    });
   });
 }

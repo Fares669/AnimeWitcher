@@ -959,7 +959,10 @@ class AnimeWitcherAccountService {
         requireExisting: true,
       );
     });
-    return comment.copyWith(text: text, spoiler: spoiler);
+    return comment.copyWith(
+      text: text,
+      spoiler: comment.isReview ? false : spoiler,
+    );
   }
 
   Future<void> deleteOwnComment(AnimeWitcherComment comment) async {

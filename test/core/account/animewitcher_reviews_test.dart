@@ -78,6 +78,39 @@ void main() {
     expect(review.replies, 0);
   });
 
+  test('review documents ignore spoiler flags from Firestore', () {
+    final review = AnimeWitcherComment.fromDocument(
+      _doc(
+        path: 'anime_list/jigokuraku/reviews/rev-3',
+        fields: <String, dynamic>{
+          'review_text': 'بدون حرق',
+          'spoiler': true,
+          'user_id': 'user-1',
+        },
+      ),
+    );
+
+    expect(review.text, 'بدون حرق');
+    expect(review.isReview, isTrue);
+    expect(review.spoiler, isFalse);
+  });
+
+  test('comments still read the spoiler field', () {
+    final comment = AnimeWitcherComment.fromDocument(
+      _doc(
+        path: 'anime_list/jigokuraku/comments/c-2',
+        fields: <String, dynamic>{
+          'comment': 'حرق',
+          'spoiler': true,
+          'user_id': 'user-1',
+        },
+      ),
+    );
+
+    expect(comment.isReview, isFalse);
+    expect(comment.spoiler, isTrue);
+  });
+
   test('comments still read the comment field', () {
     final comment = AnimeWitcherComment.fromDocument(
       _doc(
