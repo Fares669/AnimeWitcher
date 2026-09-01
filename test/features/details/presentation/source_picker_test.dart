@@ -134,6 +134,8 @@ void main() {
 
     expect(find.text('حلقة 9'), findsOneWidget);
     expect(find.byType(AppLoadingIndicator), findsOneWidget);
+    expect(find.text('جارٍ التحميل...'), findsOneWidget);
+    expect(find.text('جارٍ الحل...'), findsNothing);
     expect(find.text('PD'), findsNothing);
     await tester.runAsync(
       () => _writeShot(tester, 'cw_server_sheet_loading.png'),
@@ -149,6 +151,73 @@ void main() {
     expect(find.text('PD'), findsOneWidget);
     expect(find.text('MF'), findsOneWidget);
     await tester.runAsync(() => _writeShot(tester, 'cw_server_sheet_rows.png'));
+  });
+
+  testWidgets('download loading uses the same sheet and جارٍ التحميل', (
+    tester,
+  ) async {
+    final pending = Completer<List<StreamResult>>();
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.runAsync(TestFonts.loadWalkthroughFonts);
+
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: _shotKey,
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          locale: const Locale('ar'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          theme: ThemeData(
+            brightness: Brightness.dark,
+            fontFamily: 'NotoSansArabic',
+            scaffoldBackgroundColor: Colors.black,
+            colorScheme: const ColorScheme.dark(
+              primary: Color(0xFFEEC60A),
+              surface: Color(0xFF1A1A1A),
+            ),
+          ),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () {
+                  unawaited(
+                    showStreamSourcePicker(
+                      context,
+                      const <StreamResult>[],
+                      sourcesFuture: pending.future,
+                      forDownload: true,
+                      episodeLabel: 'الحلقة 9',
+                    ),
+                  );
+                },
+                child: const Text('download'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('download'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('الحلقة 9'), findsOneWidget);
+    expect(find.byType(AppLoadingIndicator), findsOneWidget);
+    expect(find.text('جارٍ التحميل...'), findsOneWidget);
+    expect(find.text('جارٍ الحل...'), findsNothing);
+    await tester.runAsync(
+      () => _writeShot(tester, 'download_picker_sheet_loading.png'),
+    );
+
+    pending.complete(const <StreamResult>[
+      StreamResult(url: 'src-pd', source: 'PD', quality: '1080'),
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.text('PD'), findsOneWidget);
+    expect(find.byIcon(Icons.file_download_outlined), findsOneWidget);
   });
 
   testWidgets('server rows stay tappable above a floating taskbar', (

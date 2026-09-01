@@ -167,7 +167,7 @@ class _SourcePickerLoadingLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     return Text(
-      l10n?.resolving ?? 'جارٍ الحل...',
+      l10n?.loading ?? 'جارٍ التحميل...',
       textAlign: TextAlign.center,
       style: Theme.of(
         context,

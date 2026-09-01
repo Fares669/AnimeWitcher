@@ -66,37 +66,19 @@ class DownloadLauncher {
 
     bool isCanceled = false;
     bool dialogDismissed = false;
-    unawaited(
-      LoadingDialog.show(
-        context,
-        message: l10n.resolving,
-        onCancel: () {
-          isCanceled = true;
-          dialogDismissed = true;
-        },
-      ),
-    );
 
     try {
-      // Fetch only AnimeWitcher's source records here. Extraction happens
-      // after the user chooses PD/MF2/ST/etc.
-      final sources = await provider.loadStreamSources(resolveUrl);
-      if (isCanceled || !context.mounted) return;
-      if (!dialogDismissed) {
-        Navigator.of(context).pop();
-        dialogDismissed = true;
-      }
-      if (sources.isEmpty) {
-        throw Exception('لم يتم العثور على مصادر تنزيل لهذا العنصر.');
-      }
-
+      // Same server sheet as opening an episode: sources load inside the
+      // picker instead of a separate "جارٍ الحل" dialog.
       final selected = await showStreamSourcePicker(
         context,
-        sources,
+        const <StreamResult>[],
+        sourcesFuture: provider.loadStreamSources(resolveUrl),
         forDownload: true,
         episodeLabel: episodePickerTitle(resolvedEpisode),
       );
       if (selected == null || !context.mounted) return;
+      dialogDismissed = true;
 
       StreamResult stream = selected;
       if (selected.requiresResolution) {
@@ -105,7 +87,7 @@ class DownloadLauncher {
         unawaited(
           LoadingDialog.show(
             context,
-            message: l10n.resolving,
+            message: l10n.loading,
             onCancel: () {
               isCanceled = true;
               dialogDismissed = true;
@@ -264,7 +246,8 @@ class DownloadLauncher {
 
                   // Prefer the episode from the card (has isFinal/serverName).
                   // Fall back to item.episodes when launching without one.
-                  final episodeData = episode ??
+                  final episodeData =
+                      episode ??
                       item.episodes?.firstWhereOrNull(
                         (e) => e.url == resolveUrl,
                       );
@@ -319,14 +302,16 @@ class DownloadLauncher {
                   );
 
                   if (!started && finalContext.mounted) {
-                    _ref.read(notificationServiceProvider).showError(
-                      appText(
-                        finalContext,
-                        english:
-                            'Failed to start download. Check storage permissions.',
-                        arabic: 'فشل بدء التنزيل. تحقق من أذونات التخزين.',
-                      ),
-                    );
+                    _ref
+                        .read(notificationServiceProvider)
+                        .showError(
+                          appText(
+                            finalContext,
+                            english:
+                                'Failed to start download. Check storage permissions.',
+                            arabic: 'فشل بدء التنزيل. تحقق من أذونات التخزين.',
+                          ),
+                        );
                   }
                 },
                 child: Text(l10n.downloadNow),
