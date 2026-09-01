@@ -34,14 +34,25 @@ jobs:
         run: flutter gen-l10n
 
       - name: Analyze
-        # Existing warnings and infos remain visible in the log, but only
-        # analyzer errors block this first enforcement step. Warnings can be
-        # reduced safely in dedicated cleanup PRs rather than masking real
-        # build/test regressions behind a large baseline migration.
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+        run: |
+          flutter analyze --no-fatal-warnings --no-fatal-infos > analyze_log.txt 2>&1 || {
+            echo "### Flutter Analyze Failed" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat analyze_log.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat analyze_log.txt
+            exit 1
+          }
+          cat analyze_log.txt
 
       - name: Test
-        # A mock Firestore client test exercises the configured REST path. This
-        # harmless value satisfies its build-time configuration guard; it is
-        # never sent to an external service by the test suite.
-        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+        run: |
+          flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key > test_log.txt 2>&1 || {
+            echo "### Flutter Test Failed" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat test_log.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat test_log.txt
+            exit 1
+          }
+          cat test_log.txt
