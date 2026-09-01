@@ -217,18 +217,18 @@ void main() {
 
       await _writeShot(tester, shotKey, 'seasons_current_title_centered.png');
 
-      await _expectTitleCentered(tester, 'صيف عام 2026');
+      _expectTitleCentered(tester, 'صيف عام 2026');
 
       await _selectTab(tester, 'السابق');
       expect(find.text('ربيع عام 2026').hitTestable(), findsOneWidget);
       expect(find.text('صيف عام 2026').hitTestable(), findsNothing);
-      await _expectTitleCentered(tester, 'ربيع عام 2026');
+      _expectTitleCentered(tester, 'ربيع عام 2026');
       await _writeShot(tester, shotKey, 'seasons_previous_title_centered.png');
 
       await _selectTab(tester, 'القادم');
       expect(find.text('خريف عام 2026').hitTestable(), findsOneWidget);
       expect(find.text('ربيع عام 2026').hitTestable(), findsNothing);
-      await _expectTitleCentered(tester, 'خريف عام 2026');
+      _expectTitleCentered(tester, 'خريف عام 2026');
       await _writeShot(tester, shotKey, 'seasons_next_title_centered.png');
     },
   );
