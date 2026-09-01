@@ -25,12 +25,16 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Install dependencies and generate sources
+      - name: Install dependencies
         run: |
           rm -f pubspec.lock
           flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Generate localizations
+        run: flutter gen-l10n
+
+      - name: Generate sources
+        run: dart run build_runner build --delete-conflicting-outputs
 
       - name: Analyze
         # Existing warnings and infos remain visible in the log, but only
