@@ -40,7 +40,9 @@ bool isMostWatchedAnimationSectionTitle(String title) {
 bool isNewChaptersHomeSectionTitle(String title) {
   final normalized = normalizeHomeSectionTitle(title);
   final hasChapters =
-      normalized.contains('فصل') || normalized.contains('chapter');
+      normalized.contains('فصول') ||
+      normalized.contains('فصل') ||
+      normalized.contains('chapter');
   if (!hasChapters) return false;
   return normalized.contains('جديد') ||
       normalized.contains('احدث') ||

@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../support/test_fonts.dart';
 
@@ -124,6 +125,11 @@ Future<void> _loadHomeSuccess(WidgetTester tester) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  VisibilityDetectorController.instance.updateInterval = Duration.zero;
+
+  tearDown(() {
+    VisibilityDetectorController.instance.notifyNow();
+  });
 
   testWidgets('home does not render the فصول جديدة section', (tester) async {
     const size = Size(390, 1800);

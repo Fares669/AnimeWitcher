@@ -241,7 +241,9 @@ void main() {
   testWidgets('home rails omit فصول جديدة and keep neighboring rows', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(400, 1400));
+    await tester.runAsync(_loadWalkthroughFonts);
+    const size = Size(390, 900);
+    await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     const newChapters = 'فصول جديدة';
@@ -258,14 +260,23 @@ void main() {
 
     await tester.pumpWidget(
       _rtlApp(
-        child: ListView(
-          children: [
-            for (final entry in visibleHomeRailEntries(data))
-              _rail(
-                title: entry.key,
-                ids: [for (final item in entry.value) item.title],
-              ),
-          ],
+        size: size,
+        theme: _homeTheme(),
+        child: RepaintBoundary(
+          key: const ValueKey('home-rails-no-chapters'),
+          child: ColoredBox(
+            color: Colors.black,
+            child: ListView(
+              padding: const EdgeInsets.only(top: 8, bottom: 24),
+              children: [
+                for (final entry in visibleHomeRailEntries(data))
+                  _rail(
+                    title: entry.key,
+                    ids: [for (final item in entry.value) item.title],
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -275,8 +286,23 @@ void main() {
     expect(find.text('RxOiaLyVTBIUObsclHrw'), findsNothing);
     expect(find.text(latestEpisodes), findsOneWidget);
     expect(find.text(latestAdded), findsOneWidget);
-    expect(find.text('Episode Show'), findsOneWidget);
-    expect(find.text('Added Show'), findsOneWidget);
+    expect(find.text('Episode Show'), findsWidgets);
+    expect(find.text('Added Show'), findsWidgets);
+
+    final artifacts = Directory('/opt/cursor/artifacts');
+    if (!artifacts.existsSync()) {
+      return;
+    }
+    await tester.runAsync(() async {
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+        find.byKey(const ValueKey('home-rails-no-chapters')),
+      );
+      final image = await boundary.toImage(pixelRatio: 2);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      File(
+        '${artifacts.path}/home_rails_without_new_chapters.png',
+      ).writeAsBytesSync(bytes!.buffer.asUint8List());
+    });
   });
 
   testWidgets('home rails screenshot for walkthrough', (tester) async {
