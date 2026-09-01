@@ -40,7 +40,7 @@ jobs:
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch }}
       - uses: subosito/flutter-action@v2
@@ -93,7 +93,7 @@ jobs:
     if: ${{ github.event.inputs.build_ios == 'true' }}
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch }}
       - name: Select Latest Xcode
@@ -162,7 +162,7 @@ jobs:
           - arch: x64
             xcode_arch: x86_64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch }}
       - name: Select Latest Xcode
@@ -262,7 +262,7 @@ jobs:
           - os: windows-2022
             arch: x64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch }}
 
