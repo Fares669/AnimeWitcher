@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import 'home_provider.dart';
+import 'home_section_titles.dart';
 import 'home_state.dart';
 
 import 'package:animewitcher/features/home/presentation/widgets/continue_watching_section.dart';
@@ -365,56 +366,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
   }
 
-  bool _isLatestAddedSectionTitle(String title) {
-    final normalized = title
-        .toLowerCase()
-        .replaceAll(RegExp(r'[ً-ٰٟ]'), '')
-        .replaceAll(RegExp(r'[أإآ]'), 'ا')
-        .replaceAll('ة', 'ه')
-        .replaceAll(RegExp(r' +'), ' ')
-        .trim();
-
-    return normalized.contains('اخر الاعمال المضافه') ||
-        normalized.contains('الاعمال المضافه حديثا') ||
-        normalized.contains('latest additions') ||
-        normalized.contains('recently added');
-  }
-
-  bool _isMostWatchedAnimationSectionTitle(String title) {
-    final normalized = title
-        .toLowerCase()
-        .replaceAll(RegExp(r'[ً-ٰٟ]'), '')
-        .replaceAll(RegExp(r'[أإآ]'), 'ا')
-        .replaceAll('ة', 'ه')
-        .replaceAll(RegExp(r' +'), ' ')
-        .trim();
-
-    final isAnimation =
-        normalized.contains('انميشن') ||
-        normalized.contains('انيميشن') ||
-        normalized.contains('animation');
-    final isMostWatched =
-        normalized.contains('الاكثر مشاهده') ||
-        normalized.contains('most watched') ||
-        normalized.contains('most viewed');
-    return isAnimation && isMostWatched;
-  }
-
   List<Widget> _buildProviderSectionsWithNews(
     BuildContext context,
     Map<String, List<MultimediaItem>> data,
     List<NewsItem> news,
     AnimeWitcherProvider provider,
   ) {
-    final entries = data.entries
-        .where((entry) => entry.key != 'Trending')
-        .toList(growable: false);
+    final entries = visibleHomeRailEntries(data).toList(growable: false);
     var newsAfterIndex = entries.indexWhere(
-      (entry) => _isMostWatchedAnimationSectionTitle(entry.key),
+      (entry) => isMostWatchedAnimationSectionTitle(entry.key),
     );
     if (newsAfterIndex < 0) {
       newsAfterIndex = entries.indexWhere(
-        (entry) => _isLatestAddedSectionTitle(entry.key),
+        (entry) => isLatestAddedSectionTitle(entry.key),
       );
     }
     if (newsAfterIndex < 0 && entries.isNotEmpty) {
@@ -458,7 +422,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 .push<void>(context);
           },
           heroTagPrefix: 'home',
-          forcePortrait: _isLatestAddedSectionTitle(entry.key),
+          forcePortrait: isLatestAddedSectionTitle(entry.key),
         ),
       );
       if (news.isNotEmpty && index == newsAfterIndex) {
@@ -521,24 +485,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           child: CustomScrollView(
             controller: _scrollController,
             slivers: [
-              if (data.containsKey('Trending'))
+              if (homeHeroMovies(data) != null)
                 SliverToBoxAdapter(
                   child: HomeHeroCarousel(
-                    movies: data['Trending']!,
-                    scrollController: _scrollController,
-                    onNavigateUp: () => _firstActionFocusNode.requestFocus(),
-                    onControllerReady: (c) =>
-                        setState(() => _carouselController = c),
-                    onTap: (item) {
-                      DetailsRoute($extra: DetailsRouteExtra(item: item))
-                          .push<void>(context);
-                    },
-                  ),
-                )
-              else if (data.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: HomeHeroCarousel(
-                    movies: data.values.first,
+                    movies: homeHeroMovies(data)!,
                     scrollController: _scrollController,
                     onNavigateUp: () => _firstActionFocusNode.requestFocus(),
                     onControllerReady: (c) =>

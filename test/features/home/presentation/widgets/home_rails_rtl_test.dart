@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/features/home/presentation/home_section_titles.dart';
 import 'package:animewitcher/features/home/presentation/view_all_screen.dart';
 import 'package:animewitcher/features/home/presentation/widgets/home_section_header.dart';
 import 'package:animewitcher/features/home/presentation/widgets/media_horizontal_list.dart';
@@ -235,6 +236,47 @@ void main() {
     expect(find.text(mostWatched), findsOneWidget);
     expect(find.text(newsTitle), findsOneWidget);
     expect(find.text('عرض الكل'), findsNWidgets(3));
+  });
+
+  testWidgets('home rails omit فصول جديدة and keep neighboring rows', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(400, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    const newChapters = 'فصول جديدة';
+    const latestEpisodes = 'الحلقات الجديدة';
+    const latestAdded = 'آخر الأعمال المضافة';
+    final data = <String, List<MultimediaItem>>{
+      'Trending': <MultimediaItem>[_anime('Hero', 'hero')],
+      latestEpisodes: <MultimediaItem>[_anime('Episode Show', 'ep1')],
+      newChapters: <MultimediaItem>[
+        _anime('RxOiaLyVTBIUObsclHrw', 'RxOiaLyVTBIUObsclHrw'),
+      ],
+      latestAdded: <MultimediaItem>[_anime('Added Show', 'added')],
+    };
+
+    await tester.pumpWidget(
+      _rtlApp(
+        child: ListView(
+          children: [
+            for (final entry in visibleHomeRailEntries(data))
+              _rail(
+                title: entry.key,
+                ids: [for (final item in entry.value) item.title],
+              ),
+          ],
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text(newChapters), findsNothing);
+    expect(find.text('RxOiaLyVTBIUObsclHrw'), findsNothing);
+    expect(find.text(latestEpisodes), findsOneWidget);
+    expect(find.text(latestAdded), findsOneWidget);
+    expect(find.text('Episode Show'), findsOneWidget);
+    expect(find.text('Added Show'), findsOneWidget);
   });
 
   testWidgets('home rails screenshot for walkthrough', (tester) async {
