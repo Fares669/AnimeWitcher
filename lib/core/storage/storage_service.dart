@@ -1304,6 +1304,8 @@ class StorageService {
     String? filePath,
     bool? queueWaiting,
     bool? userPaused,
+    double? lastProgress,
+    int? lastExpectedBytes,
   }) async {
     final box = await Hive.openBox<dynamic>(kDownloadMetadataBox);
     await box.put(taskId, {
@@ -1315,6 +1317,9 @@ class StorageService {
       if (filePath != null && filePath.isNotEmpty) 'filePath': filePath,
       if (queueWaiting != null) kDownloadQueueWaitingMetadataKey: queueWaiting,
       if (userPaused != null) kDownloadUserPausedMetadataKey: userPaused,
+      if (lastProgress != null) kDownloadLastProgressMetadataKey: lastProgress,
+      if (lastExpectedBytes != null)
+        kDownloadLastExpectedBytesMetadataKey: lastExpectedBytes,
     });
   }
 
@@ -1324,6 +1329,8 @@ class StorageService {
     String? filePath,
     bool? queueWaiting,
     bool? userPaused,
+    double? lastProgress,
+    int? lastExpectedBytes,
   }) async {
     final box = await Hive.openBox<dynamic>(kDownloadMetadataBox);
     final data = box.get(taskId);
@@ -1340,6 +1347,12 @@ class StorageService {
     }
     if (userPaused != null) {
       map[kDownloadUserPausedMetadataKey] = userPaused;
+    }
+    if (lastProgress != null) {
+      map[kDownloadLastProgressMetadataKey] = lastProgress.clamp(0.0, 1.0);
+    }
+    if (lastExpectedBytes != null) {
+      map[kDownloadLastExpectedBytesMetadataKey] = lastExpectedBytes;
     }
     await box.put(taskId, map);
   }

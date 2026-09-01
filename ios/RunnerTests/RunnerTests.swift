@@ -8,7 +8,34 @@ class RunnerTests: XCTestCase {
     super.tearDown()
   }
 
-  func testPersistRequiresFullWaiterPayload() {
+  func testWaiterKeepsResumeDataAndSavedProgress() {
+    DownloadNativeWaitingQueue.resetForTests()
+    DownloadNativeWaitingQueue.persist(from: [
+      "maxConcurrent": 1,
+      "transferringTaskIds": ["ep1"],
+      "pausedTaskIds": [],
+      "waiters": [[
+        "taskId": "ep2",
+        "taskJson": "{\"taskId\":\"ep2\",\"url\":\"https://127.0.0.1:1/ep2.mp4\",\"filename\":\"الحلقة 2.mp4\"}",
+        "url": "https://127.0.0.1:1/ep2.mp4",
+        "filename": "الحلقة 2.mp4",
+        "displayName": "الحلقة 2.mp4",
+        "headers": ["Authorization": "Bearer x"],
+        "directory": "AnimeWitcher/Downloads/Show",
+        "httpRequestMethod": "GET",
+        "group": "downloads",
+        "resumeDataBase64": "cmVzdW1l",
+        "progress": 0.42,
+        "expectedBytes": 8000,
+      ]],
+    ])
+    let waiter = DownloadNativeWaitingQueue.load().waiters[0]
+    XCTAssertEqual(waiter.taskId, "ep2")
+    XCTAssertEqual(waiter.resumeDataBase64, "cmVzdW1l")
+    XCTAssertEqual(waiter.savedProgress, 0.42, accuracy: 0.0001)
+    XCTAssertEqual(waiter.savedExpectedBytes, 8000)
+    XCTAssertEqual(waiter.transferredBytes, 3360)
+  }
     DownloadNativeWaitingQueue.resetForTests()
     DownloadNativeWaitingQueue.persist(from: [
       "maxConcurrent": 1,

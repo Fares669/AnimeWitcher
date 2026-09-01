@@ -10,9 +10,16 @@ const String kDownloadConcurrencyStorageKey = 'download_concurrency';
 /// still maps this to **في الانتظار...**.
 const String kDownloadQueueWaitingMetadataKey = 'queueWaiting';
 
-/// Hive metadata: the user tapped pause. Native URLSession / HQ must drop
-/// this task so kill-reopen cannot revive it as **جارٍ التنزيل** at 0 MB/s.
+/// Hive metadata: the user tapped pause. Plugin pause produces resumeData
+/// and drops the transferring URLSession task so kill-reopen stays paused
+/// (not **جارٍ التنزيل** at 0 MB/s) without deleting already-downloaded bytes.
 const String kDownloadUserPausedMetadataKey = 'userPaused';
+
+/// Last known 0–1 progress. Fail/kill/pause must not wipe this.
+const String kDownloadLastProgressMetadataKey = 'lastProgress';
+
+/// Last known total size in bytes, paired with [kDownloadLastProgressMetadataKey].
+const String kDownloadLastExpectedBytesMetadataKey = 'lastExpectedBytes';
 
 /// Hive settings key for per-type download notification toggles.
 const String kDownloadNotificationSettingsKey =
@@ -74,6 +81,22 @@ bool isQueueWaitingMetadata(Map<String, dynamic>? metadata) =>
 /// True when the user paused this episode (not a parked failure).
 bool isUserPausedMetadata(Map<String, dynamic>? metadata) =>
     metadata?[kDownloadUserPausedMetadataKey] == true;
+
+double downloadMetadataProgress(Map<String, dynamic>? metadata) {
+  final value = metadata?[kDownloadLastProgressMetadataKey];
+  if (value is num) {
+    final progress = value.toDouble();
+    if (progress > 0 && progress <= 1) return progress;
+  }
+  return 0;
+}
+
+int downloadMetadataExpectedBytes(Map<String, dynamic>? metadata) {
+  final value = metadata?[kDownloadLastExpectedBytesMetadataKey];
+  if (value is int) return value;
+  if (value is num) return value.round();
+  return -1;
+}
 
 /// Occupied slots are files actually transferring. Native holding-queue
 /// waiters (`enqueued`) and leftover Dart-parked (`queueWaiting`) rows wait
@@ -774,6 +797,9 @@ bool isCompleteDownloadCredible({
 Map<String, Object> nativeWaitingPayload(
   DownloadTask task, {
   String? notificationConfigJson,
+  String? resumeDataBase64,
+  double? progress,
+  int? expectedBytes,
 }) {
   return <String, Object>{
     'taskId': task.taskId,
@@ -788,6 +814,11 @@ Map<String, Object> nativeWaitingPayload(
     'metaData': task.metaData,
     if (notificationConfigJson != null && notificationConfigJson.isNotEmpty)
       'notificationConfigJson': notificationConfigJson,
+    if (resumeDataBase64 != null && resumeDataBase64.isNotEmpty)
+      'resumeDataBase64': resumeDataBase64,
+    if (progress != null && progress > 0) 'progress': progress,
+    if (expectedBytes != null && expectedBytes > 0)
+      'expectedBytes': expectedBytes,
   };
 }
 
@@ -821,9 +852,17 @@ bool shouldReenqueueWaitingAfterProcessKill({
   return persisted == TaskStatus.enqueued;
 }
 
-/// Plugin `pause()` does not drop iOS URLSession tasks. After kill they
-/// come back as **جارٍ التنزيل** at 0 MB/s. Cancel the native task instead.
-bool shouldDequeueNativeAfterUserPause({
+/// Cancel deletes the URLSession temp file and resumeData. Never cancel on
+/// pause/fail/kill — only an explicit user delete may remove bytes.
+bool shouldCancelNativeAfterUserPause({
+  required bool userPaused,
+  required bool stillInNativeQueue,
+}) => false;
+
+/// Plugin `pause()` uses `cancelByProducingResumeData`, which drops the
+/// transferring task so it cannot come back as running after kill, while
+/// keeping resumeData / the partial file.
+bool shouldNativePauseAfterUserPause({
   required bool userPaused,
   required bool stillInNativeQueue,
 }) => userPaused && stillInNativeQueue;

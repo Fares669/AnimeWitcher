@@ -174,9 +174,8 @@ class DownloadService {
           ? update.task.metaData
           : update.task.url;
 
-      // User pause dequeues the native task. Swallow cancel/progress so the
-      // row stays **متوقف مؤقتاً** instead of vanishing or flipping back to
-      // **جارٍ التنزيل**.
+      // User pause uses plugin pause (resumeData). Swallow cancel/fail so the
+      // row stays **متوقف مؤقتاً** with its saved percent.
       if (_userPausedIds.contains(update.task.taskId) ||
           _dequeuingPausedIds.contains(update.task.taskId)) {
         return;
@@ -236,16 +235,21 @@ class DownloadService {
             return;
           }
 
+          final previous = current;
+          final progress = keepLastKnownDownloadProgress(
+            incoming: update.progress,
+            lastKnown: previous?.progress,
+          );
+
           // Bytes on the wire mean native is transferring. Never keep the row
           // frozen at في الانتظار while Speed: 1.9MB/s (Rivera case 1).
-          if (progressMeansNativeTransfer(update.progress)) {
+          if (progressMeansNativeTransfer(progress)) {
             _queueWaitingIds.remove(update.task.taskId);
           } else if (_queueWaitingIds.contains(update.task.taskId) ||
               current?.status == TaskStatus.enqueued) {
             return;
           }
 
-          final previous = current;
           final speed = keepLastKnownDownloadSpeed(
             status: TaskStatus.running,
             incomingSpeed: update.networkSpeed,
@@ -256,7 +260,7 @@ class DownloadService {
               : (previous?.timeRemaining ?? Duration.zero);
           final progressData = DownloadProgressData(
             taskId: update.task.taskId,
-            progress: update.progress,
+            progress: progress,
             networkSpeed: speed,
             timeRemaining: remaining,
             totalSize: update.expectedFileSize > 0
@@ -322,13 +326,17 @@ class DownloadService {
             queueWaiting: _queueWaitingIds.contains(update.task.taskId),
           );
           if (current != null) {
+            final kept = keepLastKnownDownloadProgress(
+              incoming: current.progress,
+              lastKnown: current.progress,
+            );
             _ref
                 .read(downloadProgressProvider.notifier)
                 .update(
                   trackingUrl,
                   DownloadProgressData(
                     taskId: current.taskId,
-                    progress: current.progress.clamp(0.0, 1.0),
+                    progress: kept,
                     networkSpeed: uiStatus == TaskStatus.running
                         ? current.networkSpeed
                         : 0,
@@ -560,11 +568,13 @@ class DownloadService {
         _queueWaitingIds.remove(task.taskId);
         _waitingPayloads.remove(task.taskId);
         _rememberSessionTask(task.taskId);
-        if (shouldDequeueNativeAfterUserPause(
+        if (shouldNativePauseAfterUserPause(
           userPaused: true,
           stillInNativeQueue: stillNative,
         )) {
-          await _dequeueNativeUnlocked(task);
+          try {
+            await FileDownloader().pause(task);
+          } catch (_) {}
         }
         await FileDownloader().database.updateRecord(
           TaskRecord(
@@ -752,7 +762,10 @@ class DownloadService {
     final entries = <DownloadOverlayEntry>[];
     for (final record in records) {
       if (record.task is! DownloadTask) continue;
+      final trackingUrl = downloadTrackingUrl(record.task);
+      final live = liveProgress[trackingUrl];
       final leftoverWaiting = _queueWaitingIds.contains(record.task.taskId);
+      final liveRunning = live?.status == TaskStatus.running;
       final inSession =
           _sessionOrder.contains(record.task.taskId) ||
           occupiesDownloadSlot(
@@ -760,22 +773,24 @@ class DownloadService {
             queueWaiting: leftoverWaiting,
           ) ||
           leftoverWaiting ||
+          liveRunning ||
           record.status == TaskStatus.enqueued;
       if (!inSession) continue;
       _rememberSessionTask(record.task.taskId);
-      final trackingUrl = downloadTrackingUrl(record.task);
-      final live = liveProgress[trackingUrl];
       final isPreferred = preferTaskId == record.task.taskId;
       var storedProgress = isPreferred
           ? (progress ?? live?.progress ?? record.progress)
           : (live?.progress ?? record.progress);
-      if (storedProgress < 0 || storedProgress > 1) storedProgress = 0.0;
+      storedProgress = keepLastKnownDownloadProgress(
+        incoming: storedProgress,
+        lastKnown: live?.progress ?? record.progress,
+      );
       final storedTotal = isPreferred
           ? (totalBytes ?? live?.totalSize ?? record.expectedFileSize)
           : (live?.totalSize ?? record.expectedFileSize);
       final displayStatus = displayDownloadStatus(
-        persisted: record.status,
-        queueWaiting: leftoverWaiting,
+        persisted: liveRunning ? TaskStatus.running : record.status,
+        queueWaiting: leftoverWaiting && !liveRunning,
       );
       final incomingSpeed = isPreferred
           ? (speedBytesPerSecond ?? (live?.networkSpeed ?? 0) * 1000 * 1000)
@@ -937,7 +952,10 @@ class DownloadService {
         queueWaiting: leftoverWaiting,
         userPaused: false,
       )) {
-        waiters.add(_waitingPayloads[task.taskId] ?? _waitingPayloadFor(task));
+        waiters.add(
+          _waitingPayloads[task.taskId] ??
+              await _waitingPayloadPreservingBytes(task),
+        );
         waiterIds.add(task.taskId);
         continue;
       }
@@ -966,6 +984,19 @@ class DownloadService {
       final idB = b['taskId'] as String? ?? '';
       return compareByDownloadQueueOrder(idA, idB, _sessionOrder);
     });
+    for (var i = 0; i < waiters.length; i++) {
+      final id = waiters[i]['taskId'] as String?;
+      if (id == null || id.isEmpty) continue;
+      if (waiters[i]['resumeDataBase64'] is String) continue;
+      try {
+        // ignore: invalid_use_of_visible_for_testing_member
+        final resume = await FileDownloader().downloaderForTesting
+            .getResumeData(id);
+        if (resume != null && resume.data.isNotEmpty) {
+          waiters[i] = {...waiters[i], 'resumeDataBase64': resume.data};
+        }
+      } catch (_) {}
+    }
     await _continuedProcessing.persistNativeQueue(
       maxConcurrent: max,
       waiters: waiters,
@@ -1001,6 +1032,68 @@ class DownloadService {
     return nativeWaitingPayload(
       task,
       notificationConfigJson: _notificationConfigJson(task),
+    );
+  }
+
+  Future<Map<String, Object>> _waitingPayloadPreservingBytes(
+    DownloadTask task,
+  ) async {
+    final payload = Map<String, Object>.from(_waitingPayloadFor(task));
+    try {
+      // ignore: invalid_use_of_visible_for_testing_member
+      final resume = await FileDownloader().downloaderForTesting.getResumeData(
+        task.taskId,
+      );
+      if (resume != null && resume.data.isNotEmpty) {
+        payload['resumeDataBase64'] = resume.data;
+      }
+    } catch (_) {}
+    final saved = await _savedProgressFor(task);
+    if (saved.progress > 0) payload['progress'] = saved.progress;
+    if (saved.totalSize > 0) payload['expectedBytes'] = saved.totalSize;
+    return payload;
+  }
+
+  Future<({double progress, int totalSize, int partialBytes})>
+  _savedProgressFor(DownloadTask task) async {
+    final trackingUrl = downloadTrackingUrl(task);
+    final current = _ref.read(downloadProgressProvider)[trackingUrl];
+    final record = await FileDownloader().database.recordForId(task.taskId);
+    final metadata = await _ref
+        .read(storageServiceProvider)
+        .getDownloadMetadata(task.taskId);
+    var progress = keepLastKnownDownloadProgress(
+      incoming: current?.progress ?? 0,
+      lastKnown: record?.progress,
+    );
+    progress = keepLastKnownDownloadProgress(
+      incoming: progress,
+      lastKnown: downloadMetadataProgress(metadata),
+    );
+    final totalSize =
+        current?.totalSize ??
+        record?.expectedFileSize ??
+        downloadMetadataExpectedBytes(metadata);
+    var partialBytes = 0;
+    try {
+      final path = await task.filePath();
+      if (path.isNotEmpty) {
+        final partial = await findPartialDownloadFile(destinationPath: path);
+        if (partial != null) {
+          partialBytes = await partial.length();
+          if (totalSize > 0 && partialBytes > 0) {
+            progress = keepLastKnownDownloadProgress(
+              incoming: progress,
+              lastKnown: partialBytes / totalSize,
+            );
+          }
+        }
+      }
+    } catch (_) {}
+    return (
+      progress: progress,
+      totalSize: totalSize,
+      partialBytes: partialBytes,
     );
   }
 
@@ -1129,7 +1222,14 @@ class DownloadService {
     try {
       var started = await _resumeDownloadTask(task);
       if (!started) {
-        started = await FileDownloader().enqueue(task);
+        final saved = await _savedProgressFor(task);
+        if (shouldRestartDownloadFromZero(
+          existingPartialBytes: saved.partialBytes,
+          expectedBytes: saved.totalSize,
+          savedProgress: saved.progress,
+        )) {
+          started = await FileDownloader().enqueue(task);
+        }
       }
       return started;
     } finally {
@@ -1147,6 +1247,10 @@ class DownloadService {
     Duration timeRemaining = Duration.zero,
   }) {
     final previous = _ref.read(downloadProgressProvider)[trackingUrl];
+    final keptProgress = keepLastKnownDownloadProgress(
+      incoming: progress,
+      lastKnown: previous?.progress,
+    );
     final speed = keepLastKnownDownloadSpeed(
       status: status,
       incomingSpeed: networkSpeed,
@@ -1164,7 +1268,7 @@ class DownloadService {
           trackingUrl,
           DownloadProgressData(
             taskId: taskId,
-            progress: progress,
+            progress: keptProgress,
             networkSpeed: speed,
             timeRemaining: remaining,
             status: status,
@@ -1231,13 +1335,31 @@ class DownloadService {
       final recorded = record.progress;
       if (recorded > 0 && recorded <= 1) progress = recorded;
     }
+    final metadata = await _ref
+        .read(storageServiceProvider)
+        .getDownloadMetadata(task.taskId);
+    progress = keepLastKnownDownloadProgress(
+      incoming: progress,
+      lastKnown: downloadMetadataProgress(metadata),
+    );
 
-    final totalSize = current?.totalSize ?? record?.expectedFileSize ?? -1;
+    final totalSize =
+        current?.totalSize ??
+        record?.expectedFileSize ??
+        downloadMetadataExpectedBytes(metadata);
 
-    // Never delete the DB record or metadata here — only mark paused.
+    // Never delete the DB record, metadata, or partial file here — only mark
+    // paused so retry/unpause can continue from the saved offset.
     await FileDownloader().database.updateRecord(
       TaskRecord(task, TaskStatus.paused, progress, totalSize),
     );
+    await _ref
+        .read(storageServiceProvider)
+        .patchDownloadMetadata(
+          task.taskId,
+          lastProgress: progress,
+          lastExpectedBytes: totalSize,
+        );
 
     _ref.read(activeDownloadsProvider.notifier).add(trackingUrl);
     _ref
@@ -1400,29 +1522,47 @@ class DownloadService {
       }
 
       if (downloadTask != null) {
-      // Drop the URLSession / HQ task so this episode is out of the queue
-      // entirely. Completing another file skips it; play puts it back at
-      // its original FIFO place. Plugin pause would leave it in the OS
-      // queue, which is why pause-all + kill comes back as 0 MB/s running.
-        await _dequeueNativeUnlocked(downloadTask);
+        // Plugin pause produces URLSession resumeData and drops the
+        // transferring task so it no longer occupies a slot. Never cancel —
+        // cancel deletes the temp file and forces a restart from byte 0.
+        try {
+          await FileDownloader().pause(downloadTask);
+        } catch (_) {}
         final trackingUrl = downloadTrackingUrl(downloadTask);
         final current = _ref.read(downloadProgressProvider)[trackingUrl];
         final record = await FileDownloader().database.recordForId(taskId);
-        var progress = current?.progress ?? record?.progress ?? 0.0;
-        if (progress < 0 || progress > 1) progress = 0.0;
-        await FileDownloader().database.updateRecord(
-          TaskRecord(
-            downloadTask,
-            TaskStatus.paused,
-            progress,
-            current?.totalSize ?? record?.expectedFileSize ?? -1,
-          ),
+        final metadata = await _ref
+            .read(storageServiceProvider)
+            .getDownloadMetadata(taskId);
+        var progress = keepLastKnownDownloadProgress(
+          incoming: current?.progress ?? 0,
+          lastKnown: record?.progress,
         );
+        progress = keepLastKnownDownloadProgress(
+          incoming: progress,
+          lastKnown: downloadMetadataProgress(metadata),
+        );
+        final totalSize =
+            current?.totalSize ??
+            record?.expectedFileSize ??
+            downloadMetadataExpectedBytes(metadata);
+        await FileDownloader().database.updateRecord(
+          TaskRecord(downloadTask, TaskStatus.paused, progress, totalSize),
+        );
+        await _ref
+            .read(storageServiceProvider)
+            .patchDownloadMetadata(
+              taskId,
+              queueWaiting: false,
+              userPaused: true,
+              lastProgress: progress,
+              lastExpectedBytes: totalSize,
+            );
         _publishProgress(
           trackingUrl: trackingUrl,
           taskId: taskId,
           progress: progress,
-          totalSize: current?.totalSize ?? record?.expectedFileSize ?? -1,
+          totalSize: totalSize,
           status: TaskStatus.paused,
         );
         _updatesController.add(
@@ -1515,10 +1655,10 @@ class DownloadService {
         await _ref
             .read(storageServiceProvider)
             .patchDownloadMetadata(taskId, queueWaiting: false);
-        await _resumeDownloadTask(downloadTask);
-      } else {
-        await _enqueueExistingTaskAsWaiterUnlocked(downloadTask);
       }
+      // resume() enqueues with resumeData. HoldingQueue holds it when N is
+      // full — never a fresh GET from byte 0.
+      await _resumeDownloadTask(downloadTask);
 
       for (final waiterId in plan.waitersToRestack) {
         final record = byId[waiterId];
@@ -1611,8 +1751,10 @@ class DownloadService {
     }
 
     final previous = await FileDownloader().database.recordForId(task.taskId);
-    var progress = previous?.progress ?? 0.0;
-    if (progress < 0 || progress > 1) progress = 0.0;
+    var progress = keepLastKnownDownloadProgress(
+      incoming: previous?.progress ?? 0.0,
+      lastKnown: previous?.progress,
+    );
     final totalSize = previous?.expectedFileSize ?? -1;
     _queueWaitingIds.remove(task.taskId);
     _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
@@ -1632,7 +1774,7 @@ class DownloadService {
     );
     _updatesController.add(TaskStatusUpdate(task, TaskStatus.enqueued));
 
-    final success = await FileDownloader().enqueue(task);
+    final success = await _resumeDownloadTask(task);
     if (!success) {
       _queueWaitingIds.add(task.taskId);
       _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
@@ -1640,27 +1782,6 @@ class DownloadService {
           .read(storageServiceProvider)
           .patchDownloadMetadata(task.taskId, queueWaiting: true);
     }
-  }
-
-  Future<void> _dequeueNativeUnlocked(DownloadTask task) async {
-    final trackingUrl = downloadTrackingUrl(task);
-    final ids = <String>{task.taskId};
-    for (final live in await FileDownloader().allTasks(allGroups: true)) {
-      if (live.taskId == task.taskId) {
-        ids.add(live.taskId);
-        continue;
-      }
-      if (trackingUrl.isNotEmpty && downloadTrackingUrl(live) == trackingUrl) {
-        ids.add(live.taskId);
-      }
-    }
-    _dequeuingPausedIds.addAll(ids);
-    try {
-      await FileDownloader().cancelTasksWithIds(ids.toList());
-    } catch (_) {}
-    Future<void>.delayed(const Duration(milliseconds: 800), () {
-      _dequeuingPausedIds.removeAll(ids);
-    });
   }
 
   Future<bool> _resumeDownloadTask(DownloadTask task) async {
@@ -1675,13 +1796,28 @@ class DownloadService {
         return true;
       }
     }
-    final resumedOrRestarted = await resumeOrRestartDownload(
+
+    final saved = await _savedProgressFor(task);
+    final trackingUrl = downloadTrackingUrl(task);
+    if (saved.progress > 0) {
+      _publishProgress(
+        trackingUrl: trackingUrl,
+        taskId: task.taskId,
+        progress: saved.progress,
+        totalSize: saved.totalSize,
+        status: TaskStatus.paused,
+      );
+    }
+
+    return resumeOrRestartDownload(
       canResume: () => FileDownloader().taskCanResume(task),
       resume: () => FileDownloader().resume(task),
       resumeFromPartial: () => _resumeUsingPartialFile(task),
       restart: () => FileDownloader().enqueue(task),
+      savedProgress: saved.progress,
+      existingPartialBytes: saved.partialBytes,
+      expectedBytes: saved.totalSize,
     );
-    return resumedOrRestarted;
   }
 
   Future<bool> _resumeUsingPartialFile(DownloadTask task) async {
@@ -1713,25 +1849,23 @@ class DownloadService {
       await partial.copy(dest.path);
     }
 
-    if (!Platform.isIOS) {
-      final tempPath = '$destinationPath.download';
+    final tempPath = '$destinationPath.download';
+    try {
       if (p.normalize(dest.path) != p.normalize(tempPath)) {
         await dest.copy(tempPath);
       }
-      try {
-        // Plugin resume data is stored on BaseDownloader. After a kill the
-        // temp file is often still on disk even when native resume blobs are
-        // gone; reuse that prefix instead of downloading from byte 0.
-        // ignore: invalid_use_of_visible_for_testing_member
-        await FileDownloader().downloaderForTesting.setResumeData(
-          ResumeData(task, tempPath, existingBytes, null),
-        );
-        if (await FileDownloader().resume(task)) {
-          return true;
-        }
-      } catch (_) {
-        // Fall through to a Range append when native resume data is rejected.
+      // Plugin resume data is stored on BaseDownloader. After a kill the
+      // temp file is often still on disk even when native resume blobs are
+      // gone; reuse that prefix instead of downloading from byte 0.
+      // ignore: invalid_use_of_visible_for_testing_member
+      await FileDownloader().downloaderForTesting.setResumeData(
+        ResumeData(task, tempPath, existingBytes, null),
+      );
+      if (await FileDownloader().resume(task)) {
+        return true;
       }
+    } catch (_) {
+      // Fall through to a Range append when native resume data is rejected.
     }
 
     return _appendRemainingWithDio(
@@ -1765,7 +1899,7 @@ class DownloadService {
       );
 
       // A 200 means the host ignored Range and sent the whole file. Do not
-      // append that onto the prefix — fall back to a full restart.
+      // append that onto the prefix, and do not delete the prefix either.
       if (response.statusCode != 206) return false;
 
       final body = response.data;

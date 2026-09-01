@@ -701,6 +701,16 @@ void main() {
           nativeWaiterPayloadIsComplete({'taskId': 'ep2', 'url': ''}),
           isFalse,
         );
+
+        final resumePayload = nativeWaitingPayload(
+          task,
+          resumeDataBase64: 'cmVzdW1l',
+          progress: 0.42,
+          expectedBytes: 8000,
+        );
+        expect(resumePayload['resumeDataBase64'], 'cmVzdW1l');
+        expect(resumePayload['progress'], 0.42);
+        expect(resumePayload['expectedBytes'], 8000);
       },
     );
 
@@ -1122,6 +1132,20 @@ void main() {
       );
     });
 
+    test('Hive lastProgress is kept for fail/kill/pause', () {
+      expect(downloadMetadataProgress(null), 0);
+      expect(
+        downloadMetadataProgress({kDownloadLastProgressMetadataKey: 0.55}),
+        0.55,
+      );
+      expect(
+        downloadMetadataExpectedBytes({
+          kDownloadLastExpectedBytesMetadataKey: 9000,
+        }),
+        9000,
+      );
+    });
+
     test('user pause is not a waiter and does not occupy a slot', () {
       final plan = planDownloadQueue(
         maxConcurrent: 1,
@@ -1177,18 +1201,37 @@ void main() {
       },
     );
 
-    test(
-      'complete skips user-paused and starts the first unpaused waiter',
-      () {
-        final plan = planDownloadQueue(
+    test('complete skips user-paused and starts the first unpaused waiter', () {
+      final plan = planDownloadQueue(
+        maxConcurrent: 1,
+        queueOrder: const ['ep6', 'ep7', 'ep8'],
+        entries: const [
+          DownloadQueueEntry(
+            taskId: 'ep6',
+            status: TaskStatus.complete,
+            timestamp: 1,
+          ),
+          DownloadQueueEntry(
+            taskId: 'ep7',
+            status: TaskStatus.paused,
+            timestamp: 2,
+            userPaused: true,
+          ),
+          DownloadQueueEntry(
+            taskId: 'ep8',
+            status: TaskStatus.enqueued,
+            timestamp: 3,
+          ),
+        ],
+      );
+      expect(plan.occupiedCount, 0);
+      expect(plan.waitingFifoIds, ['ep8']);
+      expect(plan.idsToPromote, isEmpty);
+      expect(
+        idsToStartAfterParkedFailure(
           maxConcurrent: 1,
           queueOrder: const ['ep6', 'ep7', 'ep8'],
           entries: const [
-            DownloadQueueEntry(
-              taskId: 'ep6',
-              status: TaskStatus.complete,
-              timestamp: 1,
-            ),
             DownloadQueueEntry(
               taskId: 'ep7',
               status: TaskStatus.paused,
@@ -1201,32 +1244,10 @@ void main() {
               timestamp: 3,
             ),
           ],
-        );
-        expect(plan.occupiedCount, 0);
-        expect(plan.waitingFifoIds, ['ep8']);
-        expect(plan.idsToPromote, isEmpty);
-        expect(
-          idsToStartAfterParkedFailure(
-            maxConcurrent: 1,
-            queueOrder: const ['ep6', 'ep7', 'ep8'],
-            entries: const [
-              DownloadQueueEntry(
-                taskId: 'ep7',
-                status: TaskStatus.paused,
-                timestamp: 2,
-                userPaused: true,
-              ),
-              DownloadQueueEntry(
-                taskId: 'ep8',
-                status: TaskStatus.enqueued,
-                timestamp: 3,
-              ),
-            ],
-          ),
-          ['ep8'],
-        );
-      },
-    );
+        ),
+        ['ep8'],
+      );
+    });
 
     test(
       'user resume while a slot is occupied waits and restacks later HQ waiters',
@@ -1324,35 +1345,38 @@ void main() {
       },
     );
 
-    test('resume keeps original FIFO place ahead of later leftover waiters', () {
-      final plan = planUserResumeQueue(
-        resumedId: 'ep7',
-        maxConcurrent: 1,
-        queueOrder: const ['ep6', 'ep7', 'ep8'],
-        entries: const [
-          DownloadQueueEntry(
-            taskId: 'ep6',
-            status: TaskStatus.running,
-            timestamp: 1,
-          ),
-          DownloadQueueEntry(
-            taskId: 'ep7',
-            status: TaskStatus.paused,
-            timestamp: 2,
-            userPaused: true,
-          ),
-          DownloadQueueEntry(
-            taskId: 'ep8',
-            status: TaskStatus.paused,
-            timestamp: 3,
-            queueWaiting: true,
-          ),
-        ],
-      );
-      expect(plan.startNow, isFalse);
-      expect(plan.waitingFifoIds, ['ep7', 'ep8']);
-      expect(plan.waitersToRestack, ['ep8']);
-    });
+    test(
+      'resume keeps original FIFO place ahead of later leftover waiters',
+      () {
+        final plan = planUserResumeQueue(
+          resumedId: 'ep7',
+          maxConcurrent: 1,
+          queueOrder: const ['ep6', 'ep7', 'ep8'],
+          entries: const [
+            DownloadQueueEntry(
+              taskId: 'ep6',
+              status: TaskStatus.running,
+              timestamp: 1,
+            ),
+            DownloadQueueEntry(
+              taskId: 'ep7',
+              status: TaskStatus.paused,
+              timestamp: 2,
+              userPaused: true,
+            ),
+            DownloadQueueEntry(
+              taskId: 'ep8',
+              status: TaskStatus.paused,
+              timestamp: 3,
+              queueWaiting: true,
+            ),
+          ],
+        );
+        expect(plan.startNow, isFalse);
+        expect(plan.waitingFifoIds, ['ep7', 'ep8']);
+        expect(plan.waitersToRestack, ['ep8']);
+      },
+    );
 
     test('failure-parked is not a waiter when resuming another episode', () {
       final plan = planUserResumeQueue(
@@ -1409,29 +1433,39 @@ void main() {
       expect(plan.waitersToRestack, isEmpty);
     });
 
-    test('kill recovery dequeues a user-paused native leftover', () {
-      expect(
-        shouldDequeueNativeAfterUserPause(
-          userPaused: true,
-          stillInNativeQueue: true,
-        ),
-        isTrue,
-      );
-      expect(
-        shouldDequeueNativeAfterUserPause(
-          userPaused: true,
-          stillInNativeQueue: false,
-        ),
-        isFalse,
-      );
-      expect(
-        shouldDequeueNativeAfterUserPause(
-          userPaused: false,
-          stillInNativeQueue: true,
-        ),
-        isFalse,
-      );
-    });
+    test(
+      'kill recovery pauses a user-paused native leftover, never cancels',
+      () {
+        expect(
+          shouldNativePauseAfterUserPause(
+            userPaused: true,
+            stillInNativeQueue: true,
+          ),
+          isTrue,
+        );
+        expect(
+          shouldNativePauseAfterUserPause(
+            userPaused: true,
+            stillInNativeQueue: false,
+          ),
+          isFalse,
+        );
+        expect(
+          shouldNativePauseAfterUserPause(
+            userPaused: false,
+            stillInNativeQueue: true,
+          ),
+          isFalse,
+        );
+        expect(
+          shouldCancelNativeAfterUserPause(
+            userPaused: true,
+            stillInNativeQueue: true,
+          ),
+          isFalse,
+        );
+      },
+    );
   });
 
   group('SettingsRepository download concurrency', () {

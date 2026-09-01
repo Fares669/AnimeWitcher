@@ -24,12 +24,29 @@ enum DownloadNativeWaitingQueue {
     var directory: String
     var httpRequestMethod: String
     var group: String
+    var resumeDataBase64: String?
+    var progress: Double?
+    var expectedBytes: Int64?
 
     var taskDescription: String {
       if let notificationConfigJson, !notificationConfigJson.isEmpty {
         return taskJson + "***<<<|>>>***" + notificationConfigJson
       }
       return taskJson
+    }
+
+    var savedProgress: Double {
+      let value = progress ?? 0
+      return value > 0 && value <= 1 ? value : 0
+    }
+
+    var savedExpectedBytes: Int64 {
+      expectedBytes ?? -1
+    }
+
+    var transferredBytes: Int64 {
+      guard savedExpectedBytes > 0, savedProgress > 0 else { return 0 }
+      return Int64((Double(savedExpectedBytes) * savedProgress).rounded(.down))
     }
 
     static func from(arguments: [String: Any]) -> Waiter? {
@@ -53,7 +70,10 @@ enum DownloadNativeWaitingQueue {
         filename: filename,
         directory: string(arguments["directory"]) ?? "",
         httpRequestMethod: string(arguments["httpRequestMethod"]) ?? "GET",
-        group: string(arguments["group"]) ?? "FileDownloaderGroup"
+        group: string(arguments["group"]) ?? "FileDownloaderGroup",
+        resumeDataBase64: string(arguments["resumeDataBase64"]),
+        progress: doubleValue(arguments["progress"]),
+        expectedBytes: int64Value(arguments["expectedBytes"])
       )
     }
   }
@@ -483,22 +503,37 @@ enum DownloadNativeWaitingQueue {
       requeue(waiter)
       return
     }
-    var request = URLRequest(url: url)
-    request.httpMethod = waiter.httpRequestMethod.isEmpty ? "GET" : waiter.httpRequestMethod
-    for (key, value) in waiter.headers {
-      request.setValue(value, forHTTPHeaderField: key)
+    let downloadTask: URLSessionDownloadTask
+    if let resume = waiter.resumeDataBase64,
+       !resume.isEmpty,
+       let data = Data(base64Encoded: resume),
+       !data.isEmpty {
+      downloadTask = session.downloadTask(withResumeData: data)
+      NSLog("[DownloadNativeWaitingQueue] resume %@", waiter.taskId)
+    } else {
+      var request = URLRequest(url: url)
+      request.httpMethod = waiter.httpRequestMethod.isEmpty ? "GET" : waiter.httpRequestMethod
+      for (key, value) in waiter.headers {
+        request.setValue(value, forHTTPHeaderField: key)
+      }
+      if let post = postFromTaskJson(waiter.taskJson), !post.isEmpty {
+        request.httpBody = post.data(using: .utf8)
+      }
+      downloadTask = session.downloadTask(with: request)
     }
-    if let post = postFromTaskJson(waiter.taskJson), !post.isEmpty {
-      request.httpBody = post.data(using: .utf8)
-    }
-    let downloadTask = session.downloadTask(with: request)
     downloadTask.taskDescription = waiter.taskDescription
     downloadTask.resume()
     lock.lock()
     seenTransferringIds.insert(waiter.taskId)
     lock.unlock()
     NSLog("[DownloadNativeWaitingQueue] started %@", waiter.taskId)
-    startLiveActivity(taskId: waiter.taskId, displayName: waiter.displayName)
+    startLiveActivity(
+      taskId: waiter.taskId,
+      displayName: waiter.displayName,
+      progress: waiter.savedProgress,
+      totalBytes: waiter.savedExpectedBytes,
+      transferredBytes: waiter.transferredBytes
+    )
   }
 
   private static func requeue(_ waiter: Waiter) {
@@ -656,7 +691,13 @@ enum DownloadNativeWaitingQueue {
     )
   }
 
-  private static func startLiveActivity(taskId: String, displayName: String) {
+  private static func startLiveActivity(
+    taskId: String,
+    displayName: String,
+    progress: Double = 0,
+    totalBytes: Int64 = -1,
+    transferredBytes: Int64 = 0
+  ) {
     lock.lock()
     let state = loadLocked()
     let presentation = overlayPresentation(
@@ -666,14 +707,15 @@ enum DownloadNativeWaitingQueue {
     )
     let keepExisting = state.transferringTaskIds.count > 1
     lock.unlock()
+    let initialProgress = progress > 0 ? progress : 0
     upsertSessionOverlay(
       currentTaskId: keepExisting ? presentation.currentTaskId : taskId,
       displayName: keepExisting && !presentation.displayName.isEmpty
         ? presentation.displayName
         : displayName,
-      progress: keepExisting ? presentation.progress : 0,
-      totalBytes: keepExisting ? presentation.totalBytes : -1,
-      transferredBytes: keepExisting ? presentation.transferredBytes : 0,
+      progress: keepExisting ? presentation.progress : initialProgress,
+      totalBytes: keepExisting ? presentation.totalBytes : totalBytes,
+      transferredBytes: keepExisting ? presentation.transferredBytes : transferredBytes,
       speedBytesPerSecond: keepExisting ? presentation.speedBytesPerSecond : 0
     )
   }
@@ -868,6 +910,13 @@ enum DownloadNativeWaitingQueue {
   private static func intValue(_ value: Any?) -> Int? {
     if let number = value as? NSNumber { return number.intValue }
     if let int = value as? Int { return int }
+    return nil
+  }
+
+  private static func doubleValue(_ value: Any?) -> Double? {
+    if let number = value as? NSNumber { return number.doubleValue }
+    if let double = value as? Double { return double }
+    if let int = value as? Int { return Double(int) }
     return nil
   }
 

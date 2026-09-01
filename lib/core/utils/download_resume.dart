@@ -28,11 +28,13 @@ bool shouldResumeFromPartialBytes({
   return true;
 }
 
-/// Prefer native resume data, then leftover bytes, then a full restart.
+/// Prefer native resume data, then leftover bytes. Restart from 0 only when
+/// there is nothing to keep — never when pause/fail/kill left progress.
 DownloadResumeStrategy chooseDownloadResumeStrategy({
   required bool canNativeResume,
   required int existingPartialBytes,
   required int expectedBytes,
+  double savedProgress = 0,
 }) {
   if (canNativeResume) return DownloadResumeStrategy.nativeResume;
   if (shouldResumeFromPartialBytes(
@@ -41,7 +43,37 @@ DownloadResumeStrategy chooseDownloadResumeStrategy({
   )) {
     return DownloadResumeStrategy.partialFile;
   }
+  if (savedProgress > 0) return DownloadResumeStrategy.partialFile;
   return DownloadResumeStrategy.restartFromZero;
+}
+
+/// Fresh GET from byte 0 is allowed only when nothing has been saved.
+/// Pause, fail, kill, and unpause must never take this path.
+bool shouldRestartDownloadFromZero({
+  required int existingPartialBytes,
+  required int expectedBytes,
+  double savedProgress = 0,
+}) {
+  if (shouldResumeFromPartialBytes(
+    existingPartialBytes: existingPartialBytes,
+    expectedBytes: expectedBytes,
+  )) {
+    return false;
+  }
+  if (savedProgress > 0) return false;
+  return true;
+}
+
+/// Unpause / retry / overlay ticks must not flash 0% over saved bytes.
+double keepLastKnownDownloadProgress({
+  required double incoming,
+  double? lastKnown,
+}) {
+  if (incoming > 0 && incoming <= 1) return incoming;
+  final last = lastKnown ?? 0;
+  if (last > 0 && last <= 1 && incoming <= 0) return last;
+  if (incoming < 0) return last > 0 ? last : 0;
+  return incoming.clamp(0.0, 1.0);
 }
 
 /// Continue a download that was killed mid-transfer. User-paused rows stay
@@ -120,13 +152,16 @@ Future<int> appendDownloadChunks({
   return written;
 }
 
-/// Resumes a paused download when resume data is available, otherwise starts
-/// the same task again. Returns whether either operation was accepted.
+/// Resumes a paused/failed/killed download. Never starts over from byte 0
+/// when resume data, a partial file, or saved progress exists.
 Future<bool> resumeOrRestartDownload({
   required Future<bool> Function() canResume,
   required Future<bool> Function() resume,
   Future<bool> Function()? resumeFromPartial,
   required Future<bool> Function() restart,
+  double savedProgress = 0,
+  int existingPartialBytes = 0,
+  int expectedBytes = -1,
 }) async {
   try {
     if (await canResume() && await resume()) {
@@ -144,6 +179,14 @@ Future<bool> resumeOrRestartDownload({
     } catch (_) {
       // Leftover bytes can be unreadable or the host can reject Range.
     }
+  }
+
+  if (!shouldRestartDownloadFromZero(
+    existingPartialBytes: existingPartialBytes,
+    expectedBytes: expectedBytes,
+    savedProgress: savedProgress,
+  )) {
+    return false;
   }
 
   try {

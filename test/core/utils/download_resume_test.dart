@@ -106,6 +106,50 @@ void main() {
     expect(restartCalls, 1);
   });
 
+  test('does not restart from zero when saved progress exists', () async {
+    var restartCalls = 0;
+
+    final result = await resumeOrRestartDownload(
+      canResume: () async => false,
+      resume: () async => false,
+      restart: () async {
+        restartCalls++;
+        return true;
+      },
+      savedProgress: 0.42,
+    );
+
+    expect(result, isFalse);
+    expect(restartCalls, 0);
+  });
+
+  test(
+    'does not restart from zero after a failed native resume if bytes remain',
+    () async {
+      var restartCalls = 0;
+
+      final result = await resumeOrRestartDownload(
+        canResume: () async => true,
+        resume: () async => false,
+        restart: () async {
+          restartCalls++;
+          return true;
+        },
+        existingPartialBytes: 2048,
+        expectedBytes: 10000,
+      );
+
+      expect(result, isFalse);
+      expect(restartCalls, 0);
+    },
+  );
+
+  test('keeps last known percent instead of flashing zero', () {
+    expect(keepLastKnownDownloadProgress(incoming: 0, lastKnown: 0.37), 0.37);
+    expect(keepLastKnownDownloadProgress(incoming: 0.5, lastKnown: 0.37), 0.5);
+    expect(keepLastKnownDownloadProgress(incoming: 0, lastKnown: 0), 0);
+  });
+
   test('restarts when checking resumability throws for a stale task', () async {
     var restartCalls = 0;
 
@@ -144,8 +188,31 @@ void main() {
         canNativeResume: false,
         existingPartialBytes: 0,
         expectedBytes: 100,
+        savedProgress: 0.4,
       ),
-      DownloadResumeStrategy.restartFromZero,
+      DownloadResumeStrategy.partialFile,
+    );
+    expect(
+      shouldRestartDownloadFromZero(
+        existingPartialBytes: 40,
+        expectedBytes: 100,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldRestartDownloadFromZero(
+        existingPartialBytes: 0,
+        expectedBytes: 100,
+        savedProgress: 0.25,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldRestartDownloadFromZero(
+        existingPartialBytes: 0,
+        expectedBytes: 100,
+      ),
+      isTrue,
     );
     expect(
       shouldResumeFromPartialBytes(
