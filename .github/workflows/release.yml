@@ -34,7 +34,7 @@ jobs:
     outputs:
       version: ${{ steps.get_version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
       - name: Extract Version from pubspec.yaml
         id: get_version
         run: |
@@ -49,7 +49,7 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
@@ -71,7 +71,7 @@ jobs:
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
@@ -159,7 +159,7 @@ jobs:
     if: ${{ github.event.inputs.build_ios == 'true' }}
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
       - name: Select Latest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -233,7 +233,7 @@ jobs:
           - arch: x64
             xcode_arch: x86_64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
       - name: Select Latest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -350,7 +350,7 @@ jobs:
           - os: windows-2022
             arch: x64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
       
       - uses: subosito/flutter-action@v2
         with:
