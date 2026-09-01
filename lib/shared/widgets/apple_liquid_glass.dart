@@ -442,7 +442,7 @@ class _ApplePersistentGlassHeaderOverlayState
       // persistent button on the active theme color regardless of page artwork.
       'backColor': colors.primary.toARGB32(),
       'backAccessibilityLabel': config?.backTooltip,
-      'toolbarTrailingInset': isInstantRoute ? 34.0 : 18.0,
+      'toolbarTrailingInset': 18.0,
       'animateToolbarChanges': !involvesInstantRoute,
       'instantVisibilityChanges': involvesInstantRoute,
       'hardCutToolbar': crossesInstantBoundary,
@@ -451,8 +451,7 @@ class _ApplePersistentGlassHeaderOverlayState
   }
 
   void _handleHeaderChanged() {
-    if (!mounted) return;
-    final next = applePersistentGlassHeaderController.value;
+    if (!mounted) return;\n    final next = applePersistentGlassHeaderController.value;
     final nextIsInstant = next?.instantRouteBoundary == true;
     final previousWasInstant =
         _lastRenderedActionConfig?.instantRouteBoundary == true;
@@ -1018,8 +1017,7 @@ class _AppleNativeGlassIconButton extends StatefulWidget {
 
 class _AppleNativeGlassIconButtonState
     extends State<_AppleNativeGlassIconButton> {
-  MethodChannel? _channel;
-
+  MethodChannel? _channel;\n
   Map<String, Object?> get _state => <String, Object?>{
     'systemName': widget.systemName,
     'enabled': widget.onPressed != null,
@@ -1722,24 +1720,117 @@ class _AppleSearchGlassActionsState extends State<AppleSearchGlassActions> {
       );
     }
 
-    return AppleLiquidGlassActionGroup(
-      height: height,
-      children: [
-        AppleLiquidGlassToolbarButton(
-          width: height,
-          icon: Icons.sort_rounded,
-          tooltip: widget.sortAccessibilityLabel,
-          color: widget.tintColor ?? Theme.of(context).colorScheme.primary,
-          onPressed: widget.onSortPressed,
+    return Center(
+      child: AppleLiquidGlassSurface(
+        height: height,
+        borderRadius: BorderRadius.circular(height / 2),
+        interactive: true,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AppleNativeMenuButton(
+              items: widget.sortItems,
+              selectedValue: widget.sortValue,
+              onSelected: widget.onSortSelected,
+              accessibilityLabel: widget.sortAccessibilityLabel,
+              systemImage: 'arrow.up.arrow.down',
+              fallbackIcon: Icons.sort_rounded,
+              size: height,
+              tintColor: widget.tintColor,
+            ),
+            const SizedBox(width: 8),
+            AppleSearchFilterButton(
+              onPressed: widget.onFilterPressed,
+              count: widget.filterCount,
+              loading: widget.isFilterLoading,
+              accessibilityLabel: widget.filterAccessibilityLabel,
+              size: height,
+              tintColor: widget.tintColor,
+            ),
+          ],
         ),
-        AppleLiquidGlassToolbarButton(
-          width: height,
-          icon: Icons.tune_rounded,
-          tooltip: widget.filterAccessibilityLabel,
-          color: widget.tintColor ?? Theme.of(context).colorScheme.primary,
-          onPressed: widget.isFilterLoading ? null : widget.onFilterPressed,
-        ),
-      ],
+      ),
+    );
+  }
+}
+
+class AppleSearchFilterButton extends StatelessWidget {
+  const AppleSearchFilterButton({
+    super.key,
+    required this.onPressed,
+    this.count = 0,
+    this.loading = false,
+    this.accessibilityLabel,
+    this.size = 42,
+    this.tintColor,
+  });
+
+  final VoidCallback onPressed;
+  final int count;
+  final bool loading;
+  final String? accessibilityLabel;
+  final double size;
+  final Color? tintColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveTint =
+        tintColor ?? Theme.of(context).colorScheme.primary;
+    return SizedBox.square(
+      dimension: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          IconButton(
+            tooltip: accessibilityLabel,
+            onPressed: loading ? null : onPressed,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.transparent,
+              foregroundColor: effectiveTint,
+              padding: EdgeInsets.zero,
+            ),
+            icon: loading
+                ? SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: effectiveTint,
+                    ),
+                  )
+                : Icon(
+                    Icons.tune_rounded,
+                    size: 20,
+                    color: effectiveTint,
+                  ),
+          ),
+          if (count > 0 && !loading)
+            Positioned(
+              top: 2,
+              right: 2,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: effectiveTint,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                constraints: const BoxConstraints(
+                  minWidth: 16,
+                  minHeight: 16,
+                ),
+                child: Text(
+                  count > 99 ? '99+' : '$count',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    height: 1.1,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
