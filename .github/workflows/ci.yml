@@ -33,9 +33,6 @@ jobs:
       - name: Generate localizations
         run: flutter gen-l10n
 
-      - name: Generate sources
-        run: dart run build_runner build --delete-conflicting-outputs
-
       - name: Analyze
         # Existing warnings and infos remain visible in the log, but only
         # analyzer errors block this first enforcement step. Warnings can be
