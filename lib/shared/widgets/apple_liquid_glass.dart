@@ -1,8 +1,76 @@
 import 'package:flutter/material.dart';
 
-// Temporary CI-safe stubs. Full Liquid Glass implementation should be restored
-// from main after this PR's character-card + menu hit-area fixes land.
+// Temporary CI-safe stubs for analyze/build_runner.
+// Full Liquid Glass implementation lives on main; restore after this PR lands.
+// Hit-area fix for Android PopupMenuButton is included below.
+
 bool get appleUsesPersistentLiquidGlassHeader => false;
+
+void appleUpdatePersistentGlassHeader(ApplePersistentGlassHeaderConfig? config) {}
+
+void appleClearPersistentGlassHeader(Object owner) {}
+
+class ApplePersistentGlassHeaderConfig {
+  ApplePersistentGlassHeaderConfig({
+    required this.owner,
+    this.route,
+    this.onBack,
+    this.backTooltip,
+    this.backForegroundColor,
+    this.backFallbackColor,
+    this.trailing,
+    this.trailingButtons,
+    this.branchIndex,
+    this.deferTrailingMorphUntilRouteSettles = false,
+    this.instantRouteBoundary = false,
+  });
+
+  final Object owner;
+  ModalRoute<dynamic>? route;
+  VoidCallback? onBack;
+  String? backTooltip;
+  Color? backForegroundColor;
+  Color? backFallbackColor;
+  Widget? trailing;
+  List<AppleLiquidGlassToolbarButton>? trailingButtons;
+  int? branchIndex;
+  bool deferTrailingMorphUntilRouteSettles;
+  bool instantRouteBoundary;
+
+  bool visuallyMatches(ApplePersistentGlassHeaderConfig other) {
+    final sameCustomTrailing =
+        (trailing == null && other.trailing == null) ||
+            identical(trailing, other.trailing);
+    return (onBack != null) == (other.onBack != null) &&
+        backTooltip == other.backTooltip &&
+        backForegroundColor == other.backForegroundColor &&
+        backFallbackColor == other.backFallbackColor &&
+        branchIndex == other.branchIndex &&
+        deferTrailingMorphUntilRouteSettles ==
+            other.deferTrailingMorphUntilRouteSettles &&
+        instantRouteBoundary == other.instantRouteBoundary &&
+        sameCustomTrailing;
+  }
+
+  void updateFrom(ApplePersistentGlassHeaderConfig other) {
+    route = other.route;
+    onBack = other.onBack;
+    backTooltip = other.backTooltip;
+    backForegroundColor = other.backForegroundColor;
+    backFallbackColor = other.backFallbackColor;
+    trailing = other.trailing;
+    trailingButtons = other.trailingButtons;
+    branchIndex = other.branchIndex;
+    deferTrailingMorphUntilRouteSettles =
+        other.deferTrailingMorphUntilRouteSettles;
+    instantRouteBoundary = other.instantRouteBoundary;
+  }
+}
+
+class ApplePersistentGlassHeaderController
+    extends ValueNotifier<ApplePersistentGlassHeaderConfig?> {
+  ApplePersistentGlassHeaderController() : super(null);
+}
 
 class ApplePersistentGlassHeaderScope extends StatelessWidget {
   const ApplePersistentGlassHeaderScope({
@@ -18,6 +86,7 @@ class ApplePersistentGlassHeaderScope extends StatelessWidget {
     this.branchIndex,
     this.deferTrailingMorphUntilRouteSettles = false,
   });
+
   final Widget child;
   final bool enabled;
   final VoidCallback? onBack;
@@ -28,6 +97,7 @@ class ApplePersistentGlassHeaderScope extends StatelessWidget {
   final List<AppleLiquidGlassToolbarButton>? trailingButtons;
   final int? branchIndex;
   final bool deferTrailingMorphUntilRouteSettles;
+
   @override
   Widget build(BuildContext context) => child;
 }
@@ -35,6 +105,7 @@ class ApplePersistentGlassHeaderScope extends StatelessWidget {
 class ApplePersistentGlassHeaderOverlay extends StatelessWidget {
   const ApplePersistentGlassHeaderOverlay({super.key, required this.child});
   final Widget child;
+
   @override
   Widget build(BuildContext context) => child;
 }
@@ -49,12 +120,14 @@ class AppleLiquidGlassSurface extends StatelessWidget {
     this.fallbackColor = Colors.transparent,
     this.fallbackBorder,
   });
+
   final Widget child;
   final BorderRadius borderRadius;
   final String style;
   final bool interactive;
   final Color fallbackColor;
   final BorderSide? fallbackBorder;
+
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
@@ -79,11 +152,13 @@ class AppleLiquidGlassBackButton extends StatelessWidget {
     this.fallbackColor,
     this.tooltip,
   });
+
   final VoidCallback? onPressed;
   final double size;
   final Color? foregroundColor;
   final Color? fallbackColor;
   final String? tooltip;
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
@@ -108,39 +183,82 @@ class AppleLiquidGlassBackButton extends StatelessWidget {
   }
 }
 
+class AppleLiquidGlassActionGroup extends StatelessWidget {
+  const AppleLiquidGlassActionGroup({
+    super.key,
+    required this.children,
+    this.height = 46,
+    this.fallbackColor,
+    this.collapsed = false,
+    this.collapsedSystemImage = 'arrow.up.arrow.down',
+    this.minimumCapacity = 0,
+  });
+
+  final List<Widget> children;
+  final double height;
+  final Color? fallbackColor;
+  final bool collapsed;
+  final String collapsedSystemImage;
+  final int minimumCapacity;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return AppleLiquidGlassSurface(
+      borderRadius: BorderRadius.circular(height / 2),
+      interactive: true,
+      fallbackColor: fallbackColor ?? colors.surfaceContainerHigh,
+      fallbackBorder: BorderSide(
+        color: colors.outlineVariant.withValues(alpha: 0.28),
+      ),
+      child: SizedBox(
+        height: height,
+        child: Row(mainAxisSize: MainAxisSize.min, children: children),
+      ),
+    );
+  }
+}
+
+/// Material / Android path for toolbar actions (including the library menu).
+///
+/// Hit-area fix: PopupMenuButton child is [SizedBox.expand] + centered icon so
+/// taps on the icon itself open the menu, not only the right side of the glyph.
 class AppleLiquidGlassToolbarButton extends StatelessWidget {
   const AppleLiquidGlassToolbarButton({
     super.key,
     required this.icon,
-    this.onPressed,
-    this.tooltip,
-    this.color,
-    this.width = 46,
-    this.menuItems = const [],
-    this.onMenuSelected,
-    this.selectedMenuValue,
-    this.menuTintColor,
     this.systemImage,
+    required this.onPressed,
+    this.color,
+    this.tooltip,
+    this.title,
+    this.titleOnly = false,
+    this.width = 46,
+    this.menuItems = const <AppleNativeMenuItem>[],
+    this.selectedMenuValue,
+    this.onMenuSelected,
+    this.menuTintColor,
   });
+
   final IconData icon;
-  final VoidCallback? onPressed;
-  final String? tooltip;
-  final Color? color;
-  final double width;
-  final List<AppleLiquidGlassMenuItem> menuItems;
-  final ValueChanged<String>? onMenuSelected;
-  final String? selectedMenuValue;
-  final Color? menuTintColor;
   final String? systemImage;
+  final VoidCallback? onPressed;
+  final Color? color;
+  final String? tooltip;
+  final String? title;
+  final bool titleOnly;
+  final double width;
+  final List<AppleNativeMenuItem> menuItems;
+  final String? selectedMenuValue;
+  final ValueChanged<String>? onMenuSelected;
+  final Color? menuTintColor;
 
   @override
   Widget build(BuildContext context) {
-    final effectiveColor =
-        color ?? Theme.of(context).colorScheme.onSurface;
+    final effectiveColor = color ?? Theme.of(context).colorScheme.onSurface;
 
     if (menuItems.isNotEmpty && onMenuSelected != null) {
       final tint = menuTintColor ?? effectiveColor;
-      // Expand hit target to full SizedBox so taps on the icon itself open the menu.
       return SizedBox(
         width: width,
         height: double.infinity,
@@ -156,17 +274,43 @@ class AppleLiquidGlassToolbarButton extends StatelessWidget {
                 child: Row(
                   children: [
                     if (item.icon != null) ...[
-                      Icon(item.icon, size: 20, color: tint),
+                      Icon(
+                        item.icon,
+                        size: 20,
+                        color: item.destructive
+                            ? Theme.of(context).colorScheme.error
+                            : tint,
+                      ),
                       const SizedBox(width: 12),
                     ],
-                    Expanded(child: Text(item.label)),
+                    Expanded(
+                      child: Text(
+                        item.label,
+                        style: item.destructive
+                            ? TextStyle(
+                                color: Theme.of(context).colorScheme.error,
+                              )
+                            : null,
+                      ),
+                    ),
+                    if (selectedMenuValue == item.value)
+                      Icon(Icons.check, size: 18, color: tint),
                   ],
                 ),
               ),
           ],
+          // Expand hit target to the full toolbar slot.
           child: SizedBox.expand(
             child: Center(
-              child: Icon(icon, color: color),
+              child: titleOnly && title != null
+                  ? Text(
+                      title!,
+                      style: TextStyle(
+                        color: effectiveColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    )
+                  : Icon(icon, color: color),
             ),
           ),
         ),
@@ -190,83 +334,67 @@ class AppleLiquidGlassToolbarButton extends StatelessWidget {
   }
 }
 
-class AppleLiquidGlassMenuItem {
-  const AppleLiquidGlassMenuItem({
+class AppleNativeMenuItem {
+  const AppleNativeMenuItem({
     required this.value,
     required this.label,
-    this.icon,
     this.systemImage,
+    this.icon,
     this.destructive = false,
   });
+
   final String value;
   final String label;
-  final IconData? icon;
   final String? systemImage;
+  final IconData? icon;
   final bool destructive;
+
+  Map<String, Object?> toPlatformValue() => <String, Object?>{
+        'value': value,
+        'label': label,
+        'systemImage': systemImage,
+        'destructive': destructive,
+      };
 }
 
-class AppleLiquidGlassSearchField extends StatelessWidget {
-  const AppleLiquidGlassSearchField({
-    super.key,
-    this.controller,
-    this.focusNode,
-    this.onChanged,
-    this.onSubmitted,
-    this.hintText,
-    this.autofocus = false,
-  });
-  final TextEditingController? controller;
-  final FocusNode? focusNode;
-  final ValueChanged<String>? onChanged;
-  final ValueChanged<String>? onSubmitted;
-  final String? hintText;
-  final bool autofocus;
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      focusNode: focusNode,
-      onChanged: onChanged,
-      onSubmitted: onSubmitted,
-      autofocus: autofocus,
-      decoration: InputDecoration(
-        hintText: hintText ?? 'Search',
-        border: InputBorder.none,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-      ),
-    );
-  }
-}
-
-class AppleLiquidGlassMenuButton extends StatelessWidget {
-  const AppleLiquidGlassMenuButton({
+class AppleNativeMenuButton extends StatelessWidget {
+  const AppleNativeMenuButton({
     super.key,
     required this.items,
     required this.onSelected,
+    required this.accessibilityLabel,
+    required this.systemImage,
     this.selectedValue,
-    this.fallbackIcon = Icons.more_horiz,
-    this.tintColor,
-    this.size = 46,
+    this.title,
+    this.width,
+    this.fallbackIcon = Icons.sort_rounded,
+    this.size = 44,
     this.enabled = true,
-    this.accessibilityLabel,
+    this.tintColor,
+    this.invisibleAnchor = false,
     this.onMenuOpened,
     this.onMenuClosed,
   });
-  final List<AppleLiquidGlassMenuItem> items;
+
+  final List<AppleNativeMenuItem> items;
   final ValueChanged<String> onSelected;
+  final String accessibilityLabel;
+  final String systemImage;
   final String? selectedValue;
+  final String? title;
+  final double? width;
   final IconData fallbackIcon;
-  final Color? tintColor;
   final double size;
   final bool enabled;
-  final String? accessibilityLabel;
+  final Color? tintColor;
+  final bool invisibleAnchor;
   final VoidCallback? onMenuOpened;
   final VoidCallback? onMenuClosed;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: size,
+      width: width ?? size,
       height: size,
       child: PopupMenuButton<String>(
         enabled: enabled,
@@ -284,13 +412,122 @@ class AppleLiquidGlassMenuButton extends StatelessWidget {
               child: Text(item.label),
             ),
         ],
-        child: Icon(fallbackIcon, color: tintColor),
+        child: SizedBox.expand(
+          child: Center(
+            child: Icon(fallbackIcon, color: tintColor),
+          ),
+        ),
       ),
     );
   }
 }
 
-// Additional stubs used across the app to keep analyzer happy.
+class AppleNativeGlassSearchField extends StatelessWidget {
+  const AppleNativeGlassSearchField({
+    super.key,
+    required this.controller,
+    required this.placeholder,
+    required this.onChanged,
+    required this.onSubmitted,
+    required this.tintColor,
+    required this.textColor,
+    required this.placeholderColor,
+    this.focusRequest = 0,
+    this.loading = false,
+    this.textDirection = TextDirection.ltr,
+    this.height = 44,
+  });
+
+  final TextEditingController controller;
+  final String placeholder;
+  final ValueChanged<String> onChanged;
+  final ValueChanged<String> onSubmitted;
+  final Color tintColor;
+  final Color textColor;
+  final Color placeholderColor;
+  final int focusRequest;
+  final bool loading;
+  final TextDirection textDirection;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: height,
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        onSubmitted: onSubmitted,
+        textDirection: textDirection,
+        style: TextStyle(color: textColor),
+        decoration: InputDecoration(
+          hintText: placeholder,
+          hintStyle: TextStyle(color: placeholderColor),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+        ),
+      ),
+    );
+  }
+}
+
+class AppleSearchGlassActions extends StatelessWidget {
+  const AppleSearchGlassActions({
+    super.key,
+    required this.onSortPressed,
+    required this.onSortSelected,
+    required this.onFilterPressed,
+    required this.sortValue,
+    required this.sortItems,
+    required this.sortAccessibilityLabel,
+    required this.filterAccessibilityLabel,
+    this.filterCount = 0,
+    this.isFilterLoading = false,
+    this.isArabic = false,
+  });
+
+  final VoidCallback onSortPressed;
+  final ValueChanged<String> onSortSelected;
+  final VoidCallback onFilterPressed;
+  final String sortValue;
+  final List<AppleNativeMenuItem> sortItems;
+  final String sortAccessibilityLabel;
+  final String filterAccessibilityLabel;
+  final int filterCount;
+  final bool isFilterLoading;
+  final bool isArabic;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AppleNativeMenuButton(
+          items: sortItems,
+          onSelected: onSortSelected,
+          accessibilityLabel: sortAccessibilityLabel,
+          systemImage: 'arrow.up.arrow.down',
+          selectedValue: sortValue,
+        ),
+        IconButton(
+          tooltip: filterAccessibilityLabel,
+          onPressed: onFilterPressed,
+          icon: Badge(
+            isLabelVisible: filterCount > 0,
+            label: Text('$filterCount'),
+            child: const Icon(Icons.filter_list_rounded),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// Legacy aliases some call sites may still reference.
+typedef AppleLiquidGlassMenuItem = AppleNativeMenuItem;
+typedef AppleLiquidGlassSearchField = AppleNativeGlassSearchField;
+typedef AppleLiquidGlassMenuButton = AppleNativeMenuButton;
+
 class AppleLiquidGlassContainer extends StatelessWidget {
   const AppleLiquidGlassContainer({super.key, required this.child});
   final Widget child;
@@ -310,34 +547,4 @@ class AppleLiquidGlassButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return TextButton(onPressed: onPressed, child: child);
   }
-}
-
-void appleUpdatePersistentGlassHeader(ApplePersistentGlassHeaderConfig? config) {}
-void appleClearPersistentGlassHeader(Object owner) {}
-
-class ApplePersistentGlassHeaderConfig {
-  ApplePersistentGlassHeaderConfig({
-    required this.owner,
-    this.route,
-    this.onBack,
-    this.backTooltip,
-    this.backForegroundColor,
-    this.backFallbackColor,
-    this.trailing,
-    this.trailingButtons,
-    this.branchIndex,
-    this.deferTrailingMorphUntilRouteSettles = false,
-    this.instantRouteBoundary = false,
-  });
-  final Object owner;
-  ModalRoute<dynamic>? route;
-  VoidCallback? onBack;
-  String? backTooltip;
-  Color? backForegroundColor;
-  Color? backFallbackColor;
-  Widget? trailing;
-  List<AppleLiquidGlassToolbarButton>? trailingButtons;
-  int? branchIndex;
-  bool deferTrailingMorphUntilRouteSettles;
-  bool instantRouteBoundary;
 }
