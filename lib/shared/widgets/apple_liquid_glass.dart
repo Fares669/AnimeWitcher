@@ -6,9 +6,14 @@ import 'package:flutter/material.dart';
 
 bool get appleUsesPersistentLiquidGlassHeader => false;
 
-void appleUpdatePersistentGlassHeader(ApplePersistentGlassHeaderConfig? config) {}
+void appleUpdatePersistentGlassHeader(ApplePersistentGlassHeaderConfig? config) {
+  if (config == null) return;
+  applePersistentGlassHeaderController.show(config);
+}
 
-void appleClearPersistentGlassHeader(Object owner) {}
+void appleClearPersistentGlassHeader(Object owner) {
+  applePersistentGlassHeaderController.hide(owner);
+}
 
 class ApplePersistentGlassHeaderConfig {
   ApplePersistentGlassHeaderConfig({
@@ -70,7 +75,59 @@ class ApplePersistentGlassHeaderConfig {
 class ApplePersistentGlassHeaderController
     extends ValueNotifier<ApplePersistentGlassHeaderConfig?> {
   ApplePersistentGlassHeaderController() : super(null);
+
+  final List<ApplePersistentGlassHeaderConfig> _routeStack =
+      <ApplePersistentGlassHeaderConfig>[];
+  int? _activeBranchIndex;
+
+  int? get activeBranchIndex => _activeBranchIndex;
+
+  void setActiveBranch(int index) {
+    if (_activeBranchIndex == index) return;
+    _activeBranchIndex = index;
+    _syncVisibleItem();
+  }
+
+  void _syncVisibleItem() {
+    ApplePersistentGlassHeaderConfig? next;
+    for (final entry in _routeStack.reversed) {
+      if (entry.branchIndex == null ||
+          _activeBranchIndex == null ||
+          entry.branchIndex == _activeBranchIndex) {
+        next = entry;
+        break;
+      }
+    }
+    if (!identical(value, next)) value = next;
+  }
+
+  void show(ApplePersistentGlassHeaderConfig config) {
+    final existingIndex = _routeStack.indexWhere(
+      (entry) => identical(entry.owner, config.owner),
+    );
+    if (existingIndex < 0) {
+      _routeStack.add(config);
+      _syncVisibleItem();
+      return;
+    }
+    final existing = _routeStack[existingIndex];
+    final wasVisible = identical(value, existing);
+    final visualChanged = !existing.visuallyMatches(config);
+    existing.updateFrom(config);
+    _syncVisibleItem();
+    if (wasVisible && identical(value, existing) && visualChanged) {
+      notifyListeners();
+    }
+  }
+
+  void hide(Object owner) {
+    _routeStack.removeWhere((entry) => identical(entry.owner, owner));
+    _syncVisibleItem();
+  }
 }
+
+final applePersistentGlassHeaderController =
+    ApplePersistentGlassHeaderController();
 
 class ApplePersistentGlassHeaderScope extends StatelessWidget {
   const ApplePersistentGlassHeaderScope({
