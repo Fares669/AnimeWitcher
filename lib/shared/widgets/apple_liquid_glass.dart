@@ -1,12 +1,7 @@
-import 'dart:convert';
-
-import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show PlatformViewHitTestBehavior;
-import 'package:flutter/services.dart';
 
-// File will be restored in follow-up - temporary minimal stubs to unblock CI
+// Temporary CI-safe stubs. Full Liquid Glass implementation should be restored
+// from main after this PR's character-card + menu hit-area fixes land.
 bool get appleUsesPersistentLiquidGlassHeader => false;
 
 class ApplePersistentGlassHeaderScope extends StatelessWidget {
@@ -66,7 +61,9 @@ class AppleLiquidGlassSurface extends StatelessWidget {
       decoration: BoxDecoration(
         color: fallbackColor,
         borderRadius: borderRadius,
-        border: fallbackBorder == null ? null : Border.fromBorderSide(fallbackBorder!),
+        border: fallbackBorder == null
+            ? null
+            : Border.fromBorderSide(fallbackBorder!),
       ),
       child: child,
     );
@@ -94,9 +91,13 @@ class AppleLiquidGlassBackButton extends StatelessWidget {
       child: SizedBox.square(
         dimension: size,
         child: IconButton(
-          tooltip: tooltip ?? MaterialLocalizations.of(context).backButtonTooltip,
+          tooltip: tooltip ??
+              MaterialLocalizations.of(context).backButtonTooltip,
           onPressed: onPressed ?? () => Navigator.of(context).maybePop(),
-          icon: const Icon(Icons.arrow_back_rounded, textDirection: TextDirection.ltr),
+          icon: const Icon(
+            Icons.arrow_back_rounded,
+            textDirection: TextDirection.ltr,
+          ),
           color: colors.primary,
         ),
       ),
@@ -122,7 +123,10 @@ class AppleLiquidGlassActionGroup extends StatelessWidget {
   final int minimumCapacity;
   @override
   Widget build(BuildContext context) {
-    return SizedBox(height: height, child: Row(mainAxisSize: MainAxisSize.min, children: children));
+    return SizedBox(
+      height: height,
+      child: Row(mainAxisSize: MainAxisSize.min, children: children),
+    );
   }
 }
 
@@ -168,9 +172,15 @@ class AppleLiquidGlassToolbarButton extends StatelessWidget {
           onSelected: onMenuSelected,
           itemBuilder: (context) => [
             for (final item in menuItems)
-              PopupMenuItem<String>(value: item.value, child: Text(item.label)),
+              PopupMenuItem<String>(
+                value: item.value,
+                child: Text(item.label),
+              ),
           ],
-          child: SizedBox.expand(child: Icon(icon, color: color)),
+          // Expand hit target so taps on the icon open the menu.
+          child: SizedBox.expand(
+            child: Icon(icon, color: color),
+          ),
         ),
       );
     }
@@ -205,11 +215,11 @@ class AppleNativeMenuItem {
   final IconData? icon;
   final bool destructive;
   Map<String, Object?> toPlatformValue() => <String, Object?>{
-    'value': value,
-    'label': label,
-    'systemImage': systemImage,
-    'destructive': destructive,
-  };
+        'value': value,
+        'label': label,
+        'systemImage': systemImage,
+        'destructive': destructive,
+      };
 }
 
 class AppleNativeMenuButton extends StatelessWidget {
@@ -261,7 +271,10 @@ class AppleNativeMenuButton extends StatelessWidget {
         },
         itemBuilder: (context) => [
           for (final item in items)
-            PopupMenuItem<String>(value: item.value, child: Text(item.label)),
+            PopupMenuItem<String>(
+              value: item.value,
+              child: Text(item.label),
+            ),
         ],
         child: Icon(fallbackIcon, color: tintColor),
       ),
@@ -306,14 +319,16 @@ Future<String?> showAppleNativeSearchSort({
   required List<Map<String, String>> items,
   required bool isArabic,
   required Color tintColor,
-}) async => null;
+}) async =>
+    null;
 
 Future<Map<String, dynamic>?> showAppleNativeSearchFilters({
   required Map<String, Object?> options,
   required Map<String, Object?> initialValue,
   required bool isArabic,
   required Color tintColor,
-}) async => null;
+}) async =>
+    null;
 
 class AppleSearchGlassActions extends StatelessWidget {
   const AppleSearchGlassActions({
