@@ -694,9 +694,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           textDirection: TextDirection.ltr,
           child: Row(
             children: [
-              _buildMobileSearchActionGroup(context),
-              const SizedBox(width: 10),
               Expanded(child: _buildMobileSearchField(context)),
+              const SizedBox(width: 10),
+              _buildMobileSearchActionGroup(context),
+              // Keep the native Liquid Glass controls clear of the screen edge.
+              // This shifts the whole sort/filter group left without changing
+              // either control's size, hitbox, or native menu morph behavior.
+              const SizedBox(width: 12),
             ],
           ),
         ),
