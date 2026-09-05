@@ -4,21 +4,37 @@ p = Path('test/core/services/download_concurrency_test.dart')
 text = p.read_text(encoding='utf-8')
 
 
-def replace_once(old: str, new: str, label: str) -> None:
+def rewrite_test(title: str, replacements: list[tuple[str, str, int]], new_title: str | None = None) -> None:
     global text
-    if old not in text:
-        raise RuntimeError(f'missing test marker: {label}')
-    text = text.replace(old, new, 1)
+    title_index = text.find(title)
+    if title_index < 0:
+        raise RuntimeError(f'missing test title: {title}')
+    start = text.rfind('    test(', 0, title_index)
+    if start < 0:
+        raise RuntimeError(f'missing test start: {title}')
+    end = text.find('\n    test(', title_index + len(title))
+    if end < 0:
+        end = len(text)
+    block = text[start:end]
+    for old, new, expected_count in replacements:
+        count = block.count(old)
+        if count != expected_count:
+            raise RuntimeError(
+                f'{title}: expected {expected_count} marker(s), found {count}: {old[:80]!r}'
+            )
+        block = block.replace(old, new, expected_count)
+    if new_title is not None:
+        block = block.replace(title, new_title, 1)
+    text = text[:start] + block + text[end:]
+
 
 # With plugin HoldingQueue disabled, `enqueued` is a short starting/reserved
 # state. Persistent waiters are paused records with queueWaiting=true.
-replace_once(
+rewrite_test(
     "'native snapshot waiters are HQ enqueued + leftover parked, never user-paused'",
-    "'native snapshot contains app-owned waiters, never starting or user-paused rows'",
-    'native snapshot title',
-)
-replace_once(
-    """        expect(
+    [
+        (
+            """        expect(
           isNativeWaitingSnapshotWaiter(
             status: TaskStatus.enqueued,
             queueWaiting: false,
@@ -26,7 +42,7 @@ replace_once(
           ),
           isTrue,
         );""",
-    """        expect(
+            """        expect(
           isNativeWaitingSnapshotWaiter(
             status: TaskStatus.enqueued,
             queueWaiting: false,
@@ -34,72 +50,62 @@ replace_once(
           ),
           isFalse,
         );""",
-    'starting row is not native waiter snapshot',
+            1,
+        ),
+    ],
+    new_title="'native snapshot contains app-owned waiters, never starting or user-paused rows'",
 )
 
-replace_once(
+rewrite_test(
     "'iOS concurrency=1, two episodes: waiter is enqueued, overlay only when running'",
-    "'iOS concurrency=1, two episodes: app waiter promotes only after slot frees'",
-    'ios queue title',
-)
-replace_once(
-    """            DownloadQueueEntry(
+    [
+        (
+            """            DownloadQueueEntry(
               taskId: 'ep2',
               status: TaskStatus.enqueued,
               timestamp: 2,
             ),""",
-    """            DownloadQueueEntry(
+            """            DownloadQueueEntry(
               taskId: 'ep2',
               status: TaskStatus.paused,
               timestamp: 2,
               queueWaiting: true,
             ),""",
-    'ios waiter while ep1 runs',
-)
-replace_once(
-    """            DownloadQueueEntry(
-              taskId: 'ep2',
-              status: TaskStatus.enqueued,
-              timestamp: 2,
-            ),""",
-    """            DownloadQueueEntry(
-              taskId: 'ep2',
-              status: TaskStatus.paused,
-              timestamp: 2,
-              queueWaiting: true,
-            ),""",
-    'ios waiter after ep1 completes',
-)
-replace_once(
-    """        expect(afterEp1Finishes.idsToPromote, isEmpty);
-        expect(
-          shouldAttachToLiveNativeTask(
-            taskId: 'ep2',
-            trackingUrl: 'https://cdn.test/ep2',
-            live: const [
+            2,
+        ),
+        (
+            "expect(afterEp1Finishes.idsToPromote, isEmpty);",
+            "expect(afterEp1Finishes.idsToPromote, ['ep2']);",
+            1,
+        ),
+        (
+            """            live: const [
               LiveNativeDownload(
                 taskId: 'ep2',
                 trackingUrl: 'https://cdn.test/ep2',
               ),
-            ],
-          ),
-          isTrue,
-        );""",
-    """        expect(afterEp1Finishes.idsToPromote, ['ep2']);
-        expect(
-          shouldAttachToLiveNativeTask(
-            taskId: 'ep2',
-            trackingUrl: 'https://cdn.test/ep2',
-            live: const [],
-          ),
-          isFalse,
-        );""",
-    'ios promotion after slot frees',
+            ],""",
+            """            live: const [],""",
+            1,
+        ),
+        (
+            """          isTrue,
+        );
+        expect(shouldStartDownloadLiveActivity(TaskStatus.running), isTrue);""",
+            """          isFalse,
+        );
+        expect(shouldStartDownloadLiveActivity(TaskStatus.running), isTrue);""",
+            1,
+        ),
+    ],
+    new_title="'iOS concurrency=1, two episodes: app waiter promotes only after slot frees'",
 )
 
-# Failed/paused rows release the slot; app-owned waiters are queueWaiting.
-replace_once(
-    """        DownloadQueueEntry(
+rewrite_test(
+    "'a failed episode parks paused and the next waiter starts'",
+    [
+        (
+            """        DownloadQueueEntry(
           taskId: 'ep7',
           status: TaskStatus.enqueued,
           timestamp: 2,
@@ -109,7 +115,7 @@ replace_once(
           status: TaskStatus.enqueued,
           timestamp: 3,
         ),""",
-    """        DownloadQueueEntry(
+            """        DownloadQueueEntry(
           taskId: 'ep7',
           status: TaskStatus.paused,
           timestamp: 2,
@@ -121,113 +127,107 @@ replace_once(
           timestamp: 3,
           queueWaiting: true,
         ),""",
-    'failed episode waiters',
+            1,
+        ),
+    ],
 )
 
-replace_once(
-    """          DownloadQueueEntry(
+rewrite_test(
+    "'user pause is not a waiter and does not occupy a slot'",
+    [
+        (
+            """          DownloadQueueEntry(
             taskId: 'ep7',
             status: TaskStatus.enqueued,
             timestamp: 2,
           ),""",
-    """          DownloadQueueEntry(
+            """          DownloadQueueEntry(
             taskId: 'ep7',
             status: TaskStatus.paused,
             timestamp: 2,
             queueWaiting: true,
           ),""",
-    'user pause test waiter',
-)
-replace_once(
-    """      expect(plan.idsToPromote, isEmpty);
-    });
-
-    test(
-      'pause-all does not promote paused rows just because slots are free',""",
-    """      expect(plan.idsToPromote, ['ep7']);
-    });
-
-    test(
-      'pause-all does not promote paused rows just because slots are free',""",
-    'user pause promotion expectation',
+            1,
+        ),
+        ("expect(plan.idsToPromote, isEmpty);", "expect(plan.idsToPromote, ['ep7']);", 1),
+    ],
 )
 
-replace_once(
-    """          DownloadQueueEntry(
+rewrite_test(
+    "'complete skips user-paused and starts the first unpaused waiter'",
+    [
+        (
+            """          DownloadQueueEntry(
             taskId: 'ep8',
             status: TaskStatus.enqueued,
             timestamp: 3,
           ),""",
-    """          DownloadQueueEntry(
+            """          DownloadQueueEntry(
             taskId: 'ep8',
             status: TaskStatus.paused,
             timestamp: 3,
             queueWaiting: true,
           ),""",
-    'complete test waiter',
-)
-replace_once(
-    """      expect(plan.idsToPromote, isEmpty);
-      expect(
-        idsToStartAfterParkedFailure(""",
-    """      expect(plan.idsToPromote, ['ep8']);
-      expect(
-        idsToStartAfterParkedFailure(""",
-    'complete promotion expectation',
-)
-replace_once(
-    """            DownloadQueueEntry(
+            1,
+        ),
+        (
+            """            DownloadQueueEntry(
               taskId: 'ep8',
               status: TaskStatus.enqueued,
               timestamp: 3,
             ),""",
-    """            DownloadQueueEntry(
+            """            DownloadQueueEntry(
               taskId: 'ep8',
               status: TaskStatus.paused,
               timestamp: 3,
               queueWaiting: true,
             ),""",
-    'complete helper waiter',
+            1,
+        ),
+        ("expect(plan.idsToPromote, isEmpty);", "expect(plan.idsToPromote, ['ep8']);", 1),
+    ],
 )
 
-replace_once(
+rewrite_test(
     "'user resume while a slot is occupied waits and restacks later HQ waiters'",
-    "'user resume while a slot is occupied waits behind the active transfer'",
-    'resume occupied title',
-)
-replace_once(
-    """            DownloadQueueEntry(
+    [
+        (
+            """            DownloadQueueEntry(
               taskId: 'ep8',
               status: TaskStatus.enqueued,
               timestamp: 3,
             ),""",
-    """            DownloadQueueEntry(
+            """            DownloadQueueEntry(
               taskId: 'ep8',
               status: TaskStatus.paused,
               timestamp: 3,
               queueWaiting: true,
             ),""",
-    'resume occupied later waiter',
+            1,
+        ),
+    ],
+    new_title="'user resume while a slot is occupied waits behind the active transfer'",
 )
 
-replace_once(
+rewrite_test(
     "'resume with a free slot and first in FIFO starts now and restacks later waiters'",
-    "'resume with a free slot and first in FIFO starts now ahead of later waiters'",
-    'resume free title',
-)
-replace_once(
-    """          DownloadQueueEntry(
+    [
+        (
+            """          DownloadQueueEntry(
             taskId: 'ep8',
             status: TaskStatus.enqueued,
             timestamp: 2,
           ),""",
-    """          DownloadQueueEntry(
+            """          DownloadQueueEntry(
             taskId: 'ep8',
             status: TaskStatus.paused,
             timestamp: 2,
             queueWaiting: true,
           ),""",
-    'resume free later waiter',
+            1,
+        ),
+    ],
+    new_title="'resume with a free slot and first in FIFO starts now ahead of later waiters'",
 )
 
 p.write_text(text, encoding='utf-8')
