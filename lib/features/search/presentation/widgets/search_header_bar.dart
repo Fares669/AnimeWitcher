@@ -249,7 +249,7 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                     ),
                   ),
                   if (!isCompact) ...[
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 4),
                     SearchActionButtons(
                       filterCount: widget.activeFilterCount,
                       isFilterLoading: widget.isFilterLoading,
@@ -264,6 +264,7 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                       tintColor: theme.colorScheme.primary,
                       height: SearchGlassSurface.height,
                     ),
+                    const SizedBox(width: 8),
                   ],
                 ],
               ),
