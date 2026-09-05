@@ -128,7 +128,24 @@ jobs:
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
       - name: Full Flutter test suite
-        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+        shell: bash
+        run: |
+          set +e
+          flutter test --reporter expanded \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key \
+            > /tmp/full-test.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '===== FULL SUITE FAILURE EXCERPTS ====='
+            grep -n -E 'FAILED|Test failed|Some tests failed|Expected:|Actual:|Which:|Exception|Error:|test/.+\.dart' \
+              /tmp/full-test.log | tail -n 350 || true
+            echo '===== FULL SUITE TAIL ====='
+            tail -n 250 /tmp/full-test.log
+            exit "$status"
+          fi
+          echo '===== FULL SUITE PASSED ====='
+          tail -n 40 /tmp/full-test.log
 
       - name: Show final diff summary
         if: always()
