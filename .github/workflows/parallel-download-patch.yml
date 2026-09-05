@@ -127,6 +127,9 @@ jobs:
           test/core/services/download_service_queue_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
+      - name: Full Flutter test suite
+        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
       - name: Show final diff summary
         if: always()
         shell: bash
