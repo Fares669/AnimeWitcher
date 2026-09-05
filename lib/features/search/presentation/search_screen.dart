@@ -694,9 +694,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           textDirection: TextDirection.ltr,
           child: Row(
             children: [
-              Expanded(child: _buildMobileSearchField(context)),
-              const SizedBox(width: 10),
               _buildMobileSearchActionGroup(context),
+              const SizedBox(width: 10),
+              Expanded(child: _buildMobileSearchField(context)),
             ],
           ),
         ),
