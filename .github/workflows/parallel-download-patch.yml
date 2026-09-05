@@ -33,7 +33,7 @@ jobs:
           python3 /tmp/apply_parallel_downloads.py
           python3 .github/parallel_patch/augment.py
           python3 .github/parallel_patch/fix_types.py
-          python3 .github/parallel_patch/fix_queue_tests.py
+          python3 .github/parallel_patch/fix_queue_tests_v2.py
 
       - name: Update legacy HoldingQueue expectations
         shell: bash
