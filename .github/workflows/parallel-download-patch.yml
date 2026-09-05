@@ -1,4 +1,4 @@
-name: Inspect adaptive parallel task construction
+name: Inspect adaptive parallel helpers
 
 on:
   push:
@@ -24,14 +24,14 @@ jobs:
           set -euo pipefail
           cat .github/parallel_patch/part*.b64 | base64 --decode > /tmp/apply_parallel_downloads.py
           python3 /tmp/apply_parallel_downloads.py
-      - name: Inspect parallel task use
+      - name: Inspect staged implementation
         shell: bash
         run: |
           set -euo pipefail
-          grep -n -A45 -B20 'ParallelDownloadTask' lib/core/services/download_service.dart || true
-          echo '===== adaptive helpers ====='
-          grep -n -A90 -B10 'adaptiveDownload' lib/core/services/download_service.dart lib/core/services/download_concurrency.dart || true
-          grep -n -A90 -B10 'downloadPart' lib/core/services/download_service.dart lib/core/services/download_concurrency.dart || true
-          echo '===== metadata/range probe ====='
-          grep -n -A140 -B15 'Future<DownloadMetadata?> getMetadata' lib/core/services/download_service.dart || true
+          git status --short
+          git diff --stat
+          echo '===== new parallel tests ====='
+          cat test/core/services/download_parallel_test.dart
+          echo '===== settings additions ====='
+          grep -R -n -E 'parallel|parts|chunks|download.*part' lib/core lib/features/settings lib/features/library | head -n 300 || true
           exit 1
