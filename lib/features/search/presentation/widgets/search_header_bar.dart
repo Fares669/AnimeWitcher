@@ -81,6 +81,23 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
               textDirection: TextDirection.ltr,
               child: Row(
                 children: [
+                  if (!isCompact) ...[
+                    SearchActionButtons(
+                      filterCount: widget.activeFilterCount,
+                      isFilterLoading: widget.isFilterLoading,
+                      sortValue: widget.sortValue,
+                      sortItems: widget.sortItems,
+                      onSortSelected: widget.onSortSelected,
+                      sortIcon: widget.sortIcon,
+                      sortSystemImage: widget.sortSystemImage,
+                      sortTooltip: widget.sortTooltip,
+                      filterTooltip: appText(context, english: 'Filters', arabic: 'الفلاتر'),
+                      onFilterPressed: widget.onShowFilters,
+                      tintColor: theme.colorScheme.primary,
+                      height: SearchGlassSurface.height,
+                    ),
+                    const SizedBox(width: 12),
+                  ],
                   Expanded(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
@@ -248,23 +265,6 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                       ),
                     ),
                   ),
-                  if (!isCompact) ...[
-                    const SizedBox(width: 12),
-                    SearchActionButtons(
-                      filterCount: widget.activeFilterCount,
-                      isFilterLoading: widget.isFilterLoading,
-                      sortValue: widget.sortValue,
-                      sortItems: widget.sortItems,
-                      onSortSelected: widget.onSortSelected,
-                      sortIcon: widget.sortIcon,
-                      sortSystemImage: widget.sortSystemImage,
-                      sortTooltip: widget.sortTooltip,
-                      filterTooltip: appText(context, english: 'Filters', arabic: 'الفلاتر'),
-                      onFilterPressed: widget.onShowFilters,
-                      tintColor: theme.colorScheme.primary,
-                      height: SearchGlassSurface.height,
-                    ),
-                  ],
                 ],
               ),
             ),
