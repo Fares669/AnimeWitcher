@@ -1,171 +1,38 @@
-name: Apply adaptive parallel downloads
+name: Inspect adaptive parallel download queue
 
 on:
   push:
     branches: [feat/adaptive-parallel-downloads]
     paths:
       - '.github/workflows/parallel-download-patch.yml'
-      - '.github/parallel_patch/**'
   workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: adaptive-parallel-download-patch
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  apply-verify-commit:
-    name: Apply, verify, and commit
-    if: github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]'
+  inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout feature branch
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: feat/adaptive-parallel-downloads
           fetch-depth: 0
-
-      - name: Reassemble and validate patch script
+      - name: Apply staged patch
         shell: bash
         run: |
           set -euo pipefail
           cat .github/parallel_patch/part*.b64 | base64 --decode > /tmp/apply_parallel_downloads.py
           python3 -m py_compile /tmp/apply_parallel_downloads.py
           python3 /tmp/apply_parallel_downloads.py
-
-      - name: Inspect patched queue helpers
+      - name: Inspect reservation and enqueue paths
         shell: bash
         run: |
           set -euo pipefail
-          echo '===== queue helper definitions ====='
-          grep -n -A55 -B5 'bool isNativeWaitingSnapshotWaiter' lib/core/services/download_concurrency.dart || true
-          grep -n -A100 -B5 'DownloadQueuePlan planDownloadQueue' lib/core/services/download_concurrency.dart || true
-          grep -n -A120 -B5 'UserResumeQueuePlan planUserResumeQueue' lib/core/services/download_concurrency.dart || true
-          echo '===== service queue integration ====='
-          grep -n -A100 -B10 'Future<List<DownloadQueueEntry>> _queueEntries' lib/core/services/download_service.dart || true
-          grep -n -A90 -B10 'Future<void> _syncQueueToCapUnlocked' lib/core/services/download_service.dart || true
-          echo '===== failing test neighborhoods ====='
-          sed -n '630,790p' test/core/services/download_concurrency_test.dart
-          sed -n '870,940p' test/core/services/download_concurrency_test.dart
-          sed -n '1160,1390p' test/core/services/download_concurrency_test.dart
+          echo '===== reservesDownloadSlot ====='
+          grep -n -A45 -B10 'bool reservesDownloadSlot' lib/core/services/download_concurrency.dart || true
+          echo '===== startDownload queue decision ====='
+          grep -n -A260 -B20 'Future<bool> startDownload' lib/core/services/download_service.dart | tail -n 280
+          echo '===== helpers using reservesDownloadSlot ====='
+          grep -n -B8 -A12 'reservesDownloadSlot' lib/core/services/download_service.dart lib/core/services/download_concurrency.dart || true
           exit 1
-
-      - name: Update queue regression expectations
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path, old, new, label):
-              p = Path(path)
-              text = p.read_text(encoding='utf-8')
-              if old not in text:
-                  raise RuntimeError(f'missing test marker: {label}')
-              p.write_text(text.replace(old, new, 1), encoding='utf-8')
-
-          path = 'test/core/services/download_concurrency_test.dart'
-          text = Path(path).read_text(encoding='utf-8')
-          start = text.find("  group('holding queue tuple', () {")
-          end = text.find("  group('applyDownloadQueueSettings', () {", start)
-          if start < 0 or end < 0:
-              raise RuntimeError('holding queue test section not found')
-          replacement = """  group('parallel-compatible queue configuration', () {
-            test('disables plugin holding queue so chunks cannot consume episode slots', () {
-              final config = downloadHoldingQueueGlobalConfig(2);
-              expect(config, hasLength(1));
-              expect(config.single.$1, Config.holdingQueue);
-              expect(config.single.$2, false);
-            });
-          });
-
-          """
-          text = text[:start] + replacement + text[end:]
-          text = text.replace(
-              """        expect(configured, <(String, dynamic)>[
-                    (Config.holdingQueue, (5, null, null)),
-                  ]);""",
-              """        expect(configured, <(String, dynamic)>[
-                    (Config.holdingQueue, false),
-                  ]);""",
-              1,
-          )
-          text = text.replace(
-              "expect(configured.single.$2, (1, null, null));",
-              "expect(configured.single.$2, false);",
-              1,
-          )
-          Path(path).write_text(text, encoding='utf-8')
-
-          replace_once(
-              'test/core/services/download_service_queue_test.dart',
-              """    expect(configured, <(String, dynamic)>[
-                  (Config.holdingQueue, (3, null, null)),
-                ]);""",
-              """    expect(configured, <(String, dynamic)>[
-                  (Config.holdingQueue, false),
-                ]);""",
-              'service queue configured value',
-          )
-          replace_once(
-              'test/core/services/download_service_queue_test.dart',
-              "expect(configured!.single.$2, downloadHoldingQueueValue(1));",
-              "expect(configured!.single.$2, false);",
-              'service queue clamped value',
-          )
-          PY
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.47.1
-          cache: true
-
-      - name: Install dependencies and generate sources
-        shell: bash
-        run: |
-          set -euo pipefail
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-
-      - name: Format changed Dart files
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t dart_files < <(git status --porcelain | sed -E 's/^.. //' | grep -E '\.dart$' || true)
-          if (( ${#dart_files[@]} )); then
-            dart format "${dart_files[@]}"
-          fi
-          git diff --check
-
-      - name: Analyze
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos
-
-      - name: Test
-        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-
-      - name: Remove temporary patch staging
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf .github/parallel_patch
-          rm -f .github/workflows/parallel-download-patch.yml
-          git diff --check
-
-      - name: Commit verified implementation
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          if git diff --cached --quiet; then
-            echo 'No verified changes to commit.' >&2
-            exit 1
-          fi
-          git commit -m 'feat: add adaptive parallel episode downloads'
-          git push origin HEAD:feat/adaptive-parallel-downloads
