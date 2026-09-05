@@ -159,5 +159,20 @@ rewrite_test(
     new_title="'user resume while a slot is occupied waits behind the active transfer'",
 )
 
+rewrite_test(
+    "'resume with a free slot and first in FIFO starts now and restacks later waiters'",
+    [("""            DownloadQueueEntry(
+              taskId: 'ep8',
+              status: TaskStatus.enqueued,
+              timestamp: 2,
+            ),""", """            DownloadQueueEntry(
+              taskId: 'ep8',
+              status: TaskStatus.paused,
+              timestamp: 2,
+              queueWaiting: true,
+            ),""", 1)],
+    new_title="'resume with a free slot and first in FIFO starts now ahead of later waiters'",
+)
+
 p.write_text(text, encoding='utf-8')
 print('Aligned legacy queue tests with app-owned waiter representation')
