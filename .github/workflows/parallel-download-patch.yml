@@ -33,6 +33,41 @@ jobs:
           python3 /tmp/apply_parallel_downloads.py
           python3 .github/parallel_patch/augment.py
 
+      - name: Fix logical task type promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('lib/core/services/download_service.dart')
+          text = p.read_text(encoding='utf-8')
+          old = """    for (final task in await FileDownloader().allTasks(allGroups: true)) {
+              if (!isLogicalEpisodeDownloadTask(task)) continue;
+              if (task.taskId == taskId) return task;
+              if (track.isNotEmpty && downloadTrackingUrl(task) == track) {
+                return task;
+              }
+            }
+"""
+          new = """    for (final task in await FileDownloader().allTasks(allGroups: true)) {
+              if (!isLogicalEpisodeDownloadTask(task)) continue;
+              final downloadTask = task as DownloadTask;
+              if (downloadTask.taskId == taskId) return downloadTask;
+              if (track.isNotEmpty && downloadTrackingUrl(downloadTask) == track) {
+                return downloadTask;
+              }
+            }
+"""
+          if old not in text:
+              raise RuntimeError('live native task loop marker not found')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          p = Path('lib/core/storage/settings_repository.dart')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace("import '../services/download_parallel.dart';\n", '', 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+
       - name: Update legacy HoldingQueue expectations
         shell: bash
         run: |
