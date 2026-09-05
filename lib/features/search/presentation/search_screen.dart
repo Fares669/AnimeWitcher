@@ -695,12 +695,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           child: Row(
             children: [
               Expanded(child: _buildMobileSearchField(context)),
-              const SizedBox(width: 10),
+              const SizedBox(width: 2),
               _buildMobileSearchActionGroup(context),
-              // Keep the native Liquid Glass controls clear of the screen edge.
-              // This shifts the whole sort/filter group left without changing
-              // either control's size, hitbox, or native menu morph behavior.
-              const SizedBox(width: 12),
+              // Move 8pt of the original gap after the controls so the capsule
+              // sits closer to the field without shortening the search field.
+              const SizedBox(width: 8),
             ],
           ),
         ),
