@@ -17,7 +17,6 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
-import '../../../../core/storage/settings_repository.dart';
 import '../../../../core/utils/immersive_mode.dart';
 import '../../../../core/utils/window_controls_visibility.dart';
 import '../../../../core/providers/device_info_provider.dart';
@@ -124,9 +123,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _isTv = deviceProfile?.isTv ?? false;
     _isTablet = deviceProfile?.isTablet ?? false;
 
-    if (Platform.isAndroid || Platform.isIOS) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    }
+    // Full screen for the duration, through the same helper the setting uses
+    // — iOS answers only one of these calls, and asking it for Android's
+    // sticky mode left the bar sitting on the picture. Held, because opening
+    // an episode turns the phone to landscape and the window that comes back
+    // from that carries the bars in their default state.
+    holdImmersiveFullScreen(true);
     WakelockPlus.enable();
 
     // Keep the renderer buffer bounded; mpv has its own adaptive demuxer cache.
@@ -304,21 +306,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     WidgetsBinding.instance.removeObserver(this);
 
     // Restore the system UI FIRST, before any disposal that could throw and
-    // skip this. immersiveSticky is set for all mobile in initState, so it
-    // must always be cleared on exit (on FireTV, leaving it active also makes
-    // the system swallow hardware back-button events).
+    // skip this. Full screen is set for all mobile in initState, so it must
+    // always be cleared on exit (on FireTV, leaving it active also makes the
+    // system swallow hardware back-button events).
     //
-    // Use manual + all overlays rather than edgeToEdge: leaving immersiveSticky
-    // for edgeToEdge does NOT reliably re-show the status/navigation bars on
-    // Android, so the user returns to a normal screen with the status bar
-    // still hidden. manual + SystemUiOverlay.values forces both bars back â
-    // the expected default behaviour off the player.
+    // Which calls that takes, and in which order, is decided per platform in
+    // immersive_mode.dart - the two phones answer different ones.
     if (Platform.isAndroid || Platform.isIOS) {
-      // Back to whatever the viewer chose outside the player, which may be
-      // full screen — restoring the bars unconditionally would override it.
-      applyImmersiveFullScreen(
-        ref.read(settingsRepositoryProvider).isImmersiveFullScreen(),
-      );
+      // Orientation first, then the bars: turning the phone back to portrait
+      // reconfigures the window, and asking after that change rather than
+      // before it means the request is not the one being overwritten.
       if (!_isTv) {
         if (_isTablet) {
           SystemChrome.setPreferredOrientations([]);
@@ -326,6 +323,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
         }
       }
+      // The bars come back. Full screen belongs to watching an episode, and
+      // this is the end of one.
+      applyImmersiveFullScreen(false);
     }
 
     _settingsSub?.close();

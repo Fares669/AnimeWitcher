@@ -4,16 +4,12 @@ import '../../../core/navigation/taskbar_destination.dart';
 import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_service.dart';
 import '../../../core/storage/settings_repository.dart';
-import '../../../core/utils/immersive_mode.dart';
 
 part 'general_settings_provider.g.dart';
 
 class GeneralSettings {
   final String defaultHomeScreen;
   final bool alwaysOnTop;
-
-  /// Hides the phone's status bar so the app's own artwork owns that strip.
-  final bool immersiveFullScreen;
   final List<String> taskbarOrder;
   final Set<String> hiddenTaskbarItems;
   final int downloadConcurrency;
@@ -22,7 +18,6 @@ class GeneralSettings {
   const GeneralSettings({
     this.defaultHomeScreen = '/home',
     this.alwaysOnTop = false,
-    this.immersiveFullScreen = false,
     this.taskbarOrder = defaultTaskbarOrderIds,
     this.hiddenTaskbarItems = const <String>{},
     this.downloadConcurrency = kDownloadConcurrencyDefault,
@@ -32,7 +27,6 @@ class GeneralSettings {
   GeneralSettings copyWith({
     String? defaultHomeScreen,
     bool? alwaysOnTop,
-    bool? immersiveFullScreen,
     List<String>? taskbarOrder,
     Set<String>? hiddenTaskbarItems,
     int? downloadConcurrency,
@@ -41,7 +35,6 @@ class GeneralSettings {
     return GeneralSettings(
       defaultHomeScreen: defaultHomeScreen ?? this.defaultHomeScreen,
       alwaysOnTop: alwaysOnTop ?? this.alwaysOnTop,
-      immersiveFullScreen: immersiveFullScreen ?? this.immersiveFullScreen,
       taskbarOrder: taskbarOrder ?? this.taskbarOrder,
       hiddenTaskbarItems: hiddenTaskbarItems ?? this.hiddenTaskbarItems,
       downloadConcurrency: downloadConcurrency ?? this.downloadConcurrency,
@@ -70,7 +63,6 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
         hidden,
       ),
       alwaysOnTop: repository.isAlwaysOnTop(),
-      immersiveFullScreen: repository.isImmersiveFullScreen(),
       taskbarOrder: order,
       hiddenTaskbarItems: hidden,
       downloadConcurrency: repository.getDownloadConcurrency(),
@@ -116,13 +108,6 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
       hiddenTaskbarItems: normalizedHidden,
       defaultHomeScreen: resolvedDefault,
     );
-  }
-
-  Future<void> setImmersiveFullScreen(bool enabled) async {
-    final repository = ref.read(settingsRepositoryProvider);
-    await repository.setImmersiveFullScreen(enabled);
-    applyImmersiveFullScreen(enabled);
-    state = state.copyWith(immersiveFullScreen: enabled);
   }
 
   Future<void> setAlwaysOnTop(bool enabled) async {

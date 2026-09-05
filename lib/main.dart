@@ -180,7 +180,6 @@ class _AppRootState extends State<AppRoot> {
       // Image widgets read the artwork quality switch directly, so publish it
       // (and the matching image cache budget) before the first screen paints.
       applyArtworkQuality(_storageService.isHighQualityPostersEnabled());
-      applyImmersiveFullScreen(_storageService.isImmersiveFullScreen());
 
       // Artwork mostly lives on MyAnimeList's CDN, which some networks block.
       // Publish last run's answer immediately so the first screen already

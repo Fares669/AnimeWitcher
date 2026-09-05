@@ -50,15 +50,6 @@ class MemoryStorageService extends StorageService {
   bool isAlwaysOnTop() => false;
 
   @override
-  bool isImmersiveFullScreen() =>
-      (settings['immersive_full_screen'] as bool?) ?? false;
-
-  @override
-  Future<void> setImmersiveFullScreen(bool enabled) async {
-    settings['immersive_full_screen'] = enabled;
-  }
-
-  @override
   bool isHighQualityPostersEnabled() => true;
 
   @override

@@ -689,17 +689,6 @@ class StorageService {
   }
 
   // --- Window Settings ---
-  /// Hides the phone's status bar while the app is open. Off by default; a
-  /// viewer who wants the clock and battery back turns it off again.
-  Future<void> setImmersiveFullScreen(bool enabled) async {
-    await _settingsBox.put('immersive_full_screen', enabled);
-  }
-
-  bool isImmersiveFullScreen() {
-    final value = _settingsBox.get('immersive_full_screen');
-    return value is bool ? value : false;
-  }
-
   Future<void> setAlwaysOnTop(bool enabled) async {
     await _settingsBox.put('always_on_top', enabled);
   }
