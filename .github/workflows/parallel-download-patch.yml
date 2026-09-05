@@ -35,6 +35,23 @@ jobs:
           python3 -m py_compile /tmp/apply_parallel_downloads.py
           python3 /tmp/apply_parallel_downloads.py
 
+      - name: Inspect patched queue helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '===== queue helper definitions ====='
+          grep -n -A55 -B5 'bool isNativeWaitingSnapshotWaiter' lib/core/services/download_concurrency.dart || true
+          grep -n -A100 -B5 'DownloadQueuePlan planDownloadQueue' lib/core/services/download_concurrency.dart || true
+          grep -n -A120 -B5 'UserResumeQueuePlan planUserResumeQueue' lib/core/services/download_concurrency.dart || true
+          echo '===== service queue integration ====='
+          grep -n -A100 -B10 'Future<List<DownloadQueueEntry>> _queueEntries' lib/core/services/download_service.dart || true
+          grep -n -A90 -B10 'Future<void> _syncQueueToCapUnlocked' lib/core/services/download_service.dart || true
+          echo '===== failing test neighborhoods ====='
+          sed -n '630,790p' test/core/services/download_concurrency_test.dart
+          sed -n '870,940p' test/core/services/download_concurrency_test.dart
+          sed -n '1160,1390p' test/core/services/download_concurrency_test.dart
+          exit 1
+
       - name: Update queue regression expectations
         shell: bash
         run: |
