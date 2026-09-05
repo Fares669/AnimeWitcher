@@ -35,6 +35,71 @@ jobs:
           python3 -m py_compile /tmp/apply_parallel_downloads.py
           python3 /tmp/apply_parallel_downloads.py
 
+      - name: Update queue regression expectations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise RuntimeError(f'missing test marker: {label}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = 'test/core/services/download_concurrency_test.dart'
+          text = Path(path).read_text(encoding='utf-8')
+          start = text.find("  group('holding queue tuple', () {")
+          end = text.find("  group('applyDownloadQueueSettings', () {", start)
+          if start < 0 or end < 0:
+              raise RuntimeError('holding queue test section not found')
+          replacement = """  group('parallel-compatible queue configuration', () {
+            test('disables plugin holding queue so chunks cannot consume episode slots', () {
+              final config = downloadHoldingQueueGlobalConfig(2);
+              expect(config, hasLength(1));
+              expect(config.single.$1, Config.holdingQueue);
+              expect(config.single.$2, false);
+            });
+          });
+
+          """
+          text = text[:start] + replacement + text[end:]
+          text = text.replace(
+              """        expect(configured, <(String, dynamic)>[
+                    (Config.holdingQueue, (5, null, null)),
+                  ]);""",
+              """        expect(configured, <(String, dynamic)>[
+                    (Config.holdingQueue, false),
+                  ]);""",
+              1,
+          )
+          text = text.replace(
+              "expect(configured.single.$2, (1, null, null));",
+              "expect(configured.single.$2, false);",
+              1,
+          )
+          Path(path).write_text(text, encoding='utf-8')
+
+          replace_once(
+              'test/core/services/download_service_queue_test.dart',
+              """    expect(configured, <(String, dynamic)>[
+                  (Config.holdingQueue, (3, null, null)),
+                ]);""",
+              """    expect(configured, <(String, dynamic)>[
+                  (Config.holdingQueue, false),
+                ]);""",
+              'service queue configured value',
+          )
+          replace_once(
+              'test/core/services/download_service_queue_test.dart',
+              "expect(configured!.single.$2, downloadHoldingQueueValue(1));",
+              "expect(configured!.single.$2, false);",
+              'service queue clamped value',
+          )
+          PY
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
