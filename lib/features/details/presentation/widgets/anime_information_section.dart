@@ -256,25 +256,29 @@ class _AnimeInfoValue extends StatelessWidget {
         const SizedBox(height: 4),
         if (hasActions)
           Wrap(
-            spacing: 8,
-            runSpacing: 2,
+            spacing: 7,
+            runSpacing: 7,
             children: [
               for (final value in entry.actionValues)
                 Material(
-                  color: Colors.transparent,
+                  color: colors.primary,
+                  borderRadius: BorderRadius.circular(999),
+                  clipBehavior: Clip.antiAlias,
                   child: InkWell(
-                    borderRadius: BorderRadius.circular(6),
                     onTap: () => entry.onValueTap!(value),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                       child: Text(
                         value,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodyMedium?.copyWith(
-                          color: colors.primary,
+                        style: textTheme.labelMedium?.copyWith(
+                          color: colors.onPrimary,
                           fontWeight: FontWeight.w600,
-                          height: 1.25,
+                          height: 1,
                         ),
                       ),
                     ),
