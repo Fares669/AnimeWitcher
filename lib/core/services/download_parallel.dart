@@ -4,8 +4,8 @@ import 'package:background_downloader/background_downloader.dart';
 const String kDownloadPartsSettingKey = 'download_parallel_parts';
 const int kDownloadPartsAuto = 0;
 const int kDownloadPartsMin = 1;
-const int kDownloadPartsMax = 5;
-const List<int> kDownloadPartChoices = <int>[0, 1, 2, 3, 4, 5];
+const int kDownloadPartsMax = 4;
+const List<int> kDownloadPartChoices = <int>[0, 1, 2, 3, 4];
 
 int normalizeDownloadPartPreference(Object? raw) {
   final value = raw is num ? raw.toInt() : int.tryParse(raw?.toString() ?? '');
@@ -24,11 +24,10 @@ int selectAdaptiveDownloadParts({
   if (normalized > 0) return normalized;
 
   const mib = 1024 * 1024;
-  if (totalBytes < 80 * mib) return 1;
-  if (totalBytes < 250 * mib) return 2;
-  if (totalBytes < 500 * mib) return 3;
-  if (totalBytes < 1000 * mib) return 4;
-  return 5;
+  if (totalBytes < 100 * mib) return 1;
+  if (totalBytes < 200 * mib) return 2;
+  if (totalBytes < 300 * mib) return 3;
+  return 4;
 }
 
 const kPersistentDownloadChunkGroup = 'animewitcher_parts';
