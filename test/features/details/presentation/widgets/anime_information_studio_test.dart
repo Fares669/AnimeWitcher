@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('studio is primary-colored and tappable', (tester) async {
+  testWidgets('studio matches genre chip styling and stays tappable', (
+    tester,
+  ) async {
     final tapped = <String>[];
     final item = MultimediaItem(
       title: 'Test',
@@ -17,7 +19,10 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: ThemeData.dark().copyWith(
-          colorScheme: const ColorScheme.dark(primary: primary),
+          colorScheme: const ColorScheme.dark(
+            primary: primary,
+            onPrimary: Colors.black,
+          ),
         ),
         home: Scaffold(
           body: AnimeInformationSection(item: item, onStudioTap: tapped.add),
@@ -25,7 +30,18 @@ void main() {
       ),
     );
 
-    expect(tester.widget<Text>(find.text('Madhouse')).style?.color, primary);
+    final text = tester.widget<Text>(find.text('Madhouse'));
+    expect(text.style?.color, Colors.black);
+    expect(text.style?.fontWeight, FontWeight.w600);
+
+    final materialFinder = find.ancestor(
+      of: find.text('Madhouse'),
+      matching: find.byType(Material),
+    );
+    final material = tester.widget<Material>(materialFinder.first);
+    expect(material.color, primary);
+    expect(material.borderRadius, BorderRadius.circular(999));
+
     await tester.tap(find.text('Madhouse'));
     expect(tapped, const ['Madhouse']);
   });
