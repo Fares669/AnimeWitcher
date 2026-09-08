@@ -130,8 +130,6 @@ class PersistentParallelDownload {
         _register(session);
         await _restoreNativeOwnership(session);
 
-        // A kill can happen after the durable .tmp write and before rename.
-        // Recover that checkpoint instead of throwing all saved ranges away.
         if (candidate.path == temp.path) {
           await manifest.parent.create(recursive: true);
           await manifest.writeAsString(raw, flush: true);
@@ -140,9 +138,7 @@ class PersistentParallelDownload {
           } catch (_) {}
         }
         return true;
-      } catch (_) {
-        // Try the .tmp checkpoint when the primary manifest was torn/corrupt.
-      }
+      } catch (_) {}
     }
     return false;
   }
@@ -166,10 +162,6 @@ class PersistentParallelDownload {
     }
   }
 
-  /// Imports legacy plugin checkpoints without cancelling/deleting their files.
-  /// Completed parts keep their filenames; the remaining native resume blobs
-  /// stay associated with the same child taskIds. Native retries are normalized
-  /// away so imported downloads use the same single recovery owner as new ones.
   Future<void> importLegacy(
     ParallelDownloadTask task,
     String resumeData,
@@ -254,7 +246,6 @@ class PersistentParallelDownload {
       session.resetRamp();
       try {
         await _status(session, TaskStatus.enqueued);
-
         if (await _adoptCompletedTarget(session)) return true;
 
         await _restoreNativeOwnership(session);
@@ -379,8 +370,6 @@ class PersistentParallelDownload {
         if (!await startPart(part.task, part.progress, part.size)) {
           session.currentBatchPendingIds.remove(part.task.taskId);
           _schedulePartRecovery(session, part);
-          // Automatic recovery is still an active logical download. Persisting
-          // waitingToRetry here made the parent notification flash as paused.
           await _status(session, TaskStatus.running);
           return true;
         }
@@ -638,9 +627,6 @@ class PersistentParallelDownload {
           if (update is! TaskStatusUpdate) return;
 
           if (session.active && update.status == TaskStatus.waitingToRetry) {
-            // Old in-flight workers created before this update can still enter
-            // native retry. Keep the slot reserved, but the logical episode is
-            // running/reconnecting rather than user-paused.
             part.launched = true;
             part.speed = 0;
             _activeConnectionIds.add(part.task.taskId);
@@ -761,31 +747,57 @@ class PersistentParallelDownload {
     if (!session.active || session.deleted || _disposed || part.complete) {
       return false;
     }
+
     part.recoveryAttempts++;
     part.speed = 0;
+    // The failed worker no longer owns a socket. Keep its identity marked as
+    // launched so the normal pump cannot replace it, but free the actual slot
+    // during backoff. This lets the reduced connection ceiling take effect.
     part.launched = true;
-    _activeConnectionIds.add(part.task.taskId);
+    _activeConnectionIds.remove(part.task.taskId);
     session.currentBatchPendingIds.add(part.task.taskId);
     final generation = session.generation;
-    part.recoveryTimer = Timer(_partRecoveryDelay(part.recoveryAttempts), () {
-      unawaited(
-        session.serialize(() async {
-          if (_disposed ||
-              !session.active ||
-              session.deleted ||
-              session.generation != generation ||
-              part.complete)
-            return;
-          part.recoveryTimer = null;
-          try {
-            if (await startPart(part.task, part.progress, part.size)) return;
-          } catch (_) {}
-          if (_schedulePartRecovery(session, part)) {
-            await _status(session, TaskStatus.running);
-          }
-        }),
-      );
-    });
+
+    void armRetry(Duration delay) {
+      part.recoveryTimer = Timer(delay, () {
+        unawaited(
+          session.serialize(() async {
+            part.recoveryTimer = null;
+            if (_disposed ||
+                !session.active ||
+                session.deleted ||
+                session.generation != generation ||
+                part.complete) {
+              return;
+            }
+
+            // Recovery timers from several failed parts can fire together. Only
+            // reclaim a socket when both the learned per-download ceiling and
+            // global budget have room; otherwise leave this exact part parked
+            // and retry the capacity check without increasing its backoff.
+            if (_activeConnectionsForSession(session) >=
+                    session.connectionCeiling ||
+                _activeConnectionIds.length >= _connectionBudget) {
+              armRetry(recoveryDelay);
+              return;
+            }
+
+            _activeConnectionIds.add(part.task.taskId);
+            try {
+              if (await startPart(part.task, part.progress, part.size)) return;
+            } catch (_) {}
+
+            _activeConnectionIds.remove(part.task.taskId);
+            if (_schedulePartRecovery(session, part)) {
+              await _status(session, TaskStatus.running);
+            }
+          }),
+        );
+      });
+    }
+
+    armRetry(_partRecoveryDelay(part.recoveryAttempts));
+    _schedulePumpAll();
     return true;
   }
 
