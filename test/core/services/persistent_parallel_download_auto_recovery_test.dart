@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:animewitcher/core/services/persistent_parallel_download.dart';
@@ -69,6 +70,12 @@ void main() {
     if (await directory.exists()) await directory.delete(recursive: true);
   });
 
+  test('multipart child uses app-owned recovery instead of native retries', () async {
+    expect(await coordinator.start(parent, 32), isTrue);
+    expect(starts, hasLength(1));
+    expect(starts.single.retries, 0);
+  });
+
   test('repeated system pauses recover the child without pausing the episode', () async {
     expect(await coordinator.start(parent, 32), isTrue);
     expect(starts, hasLength(1));
@@ -77,20 +84,18 @@ void main() {
     coordinator.handleUpdate(TaskStatusUpdate(child, TaskStatus.running));
     await Future<void>.delayed(Duration.zero);
 
-    // The old implementation stopped the whole parent after the third pause.
-    // Exercise well beyond that boundary and require the same child identity
-    // to keep recovering automatically.
     for (var interruption = 0; interruption < 6; interruption++) {
       final expectedStarts = starts.length + 1;
       coordinator.handleUpdate(TaskStatusUpdate(child, TaskStatus.paused));
       await waitUntil(() => starts.length >= expectedStarts);
       expect(starts.last.taskId, child.taskId);
       expect(coordinator.isActive(parent.taskId), isTrue);
-      expect(parentStatuses.last, TaskStatus.waitingToRetry);
+      expect(parentStatuses.last, TaskStatus.running);
       expect(pauses, isEmpty);
     }
 
     expect(parentStatuses, isNot(contains(TaskStatus.paused)));
+    expect(parentStatuses, isNot(contains(TaskStatus.waitingToRetry)));
   });
 
   test('transient connection failure retries only the affected child', () async {
@@ -110,7 +115,8 @@ void main() {
     await waitUntil(() => starts.length >= 2);
     expect(starts.last.taskId, child.taskId);
     expect(coordinator.isActive(parent.taskId), isTrue);
-    expect(parentStatuses.last, TaskStatus.waitingToRetry);
+    expect(parentStatuses.last, TaskStatus.running);
+    expect(parentStatuses, isNot(contains(TaskStatus.waitingToRetry)));
     expect(parentStatuses, isNot(contains(TaskStatus.paused)));
     expect(pauses, isEmpty);
   });
@@ -126,8 +132,39 @@ void main() {
     await waitUntil(() => starts.length >= 2);
     expect(starts.last.taskId, child.taskId);
     expect(coordinator.isActive(parent.taskId), isTrue);
-    expect(parentStatuses.last, TaskStatus.waitingToRetry);
+    expect(parentStatuses.last, TaskStatus.running);
+    expect(parentStatuses, isNot(contains(TaskStatus.waitingToRetry)));
     expect(parentStatuses, isNot(contains(TaskStatus.paused)));
+  });
+
+  test('legacy imported child disables native retries but keeps its identity', () async {
+    final legacy = DownloadTask(
+      taskId: 'episode.part.0',
+      url: parent.url,
+      filename: '0.part',
+      directory: '${directory.path}/video.mp4.parts',
+      baseDirectory: BaseDirectory.root,
+      headers: const {'Range': 'bytes=0-31'},
+      updates: Updates.statusAndProgress,
+      retries: 2,
+      allowPause: true,
+    );
+    final resumeData = jsonEncode([
+      {
+        'task': legacy.toJson(),
+        'fromByte': 0,
+        'toByte': 31,
+        'progress': 0.0,
+        'status': TaskStatus.paused.index,
+      },
+    ]);
+
+    await coordinator.importLegacy(parent, resumeData);
+    expect(await coordinator.start(parent, 32), isTrue);
+    expect(starts, hasLength(1));
+    expect(starts.single.taskId, legacy.taskId);
+    expect(starts.single.retries, 0);
+    expect(starts.single.headers['Range'], 'bytes=0-31');
   });
 
   test('permanent HTTP 403 still parks safely instead of retrying forever', () async {
