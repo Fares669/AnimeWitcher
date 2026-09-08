@@ -61,7 +61,7 @@ void main() {
       },
       onPartProgress: (_, _, _) {},
       livePartIds: () async => <String>{},
-      recoveryDelay: const Duration(milliseconds: 10),
+      recoveryDelay: const Duration(milliseconds: 50),
     );
   });
 
@@ -98,11 +98,12 @@ void main() {
     expect(parentStatuses, isNot(contains(TaskStatus.waitingToRetry)));
   });
 
-  test('transient connection failure retries only the affected child', () async {
+  test('transient failure releases its slot during backoff and retries only that child', () async {
     expect(await coordinator.start(parent, 32), isTrue);
     final child = starts.first;
     coordinator.handleUpdate(TaskStatusUpdate(child, TaskStatus.running));
     await Future<void>.delayed(Duration.zero);
+    expect(coordinator.activeConnectionCount, 1);
 
     coordinator.handleUpdate(
       TaskStatusUpdate(
@@ -112,8 +113,13 @@ void main() {
       ),
     );
 
+    await waitUntil(() => coordinator.activeConnectionCount == 0);
+    expect(starts, hasLength(1));
+    expect(parentStatuses.last, TaskStatus.running);
+
     await waitUntil(() => starts.length >= 2);
     expect(starts.last.taskId, child.taskId);
+    expect(coordinator.activeConnectionCount, 1);
     expect(coordinator.isActive(parent.taskId), isTrue);
     expect(parentStatuses.last, TaskStatus.running);
     expect(parentStatuses, isNot(contains(TaskStatus.waitingToRetry)));
