@@ -40,6 +40,7 @@ class ContinueWatchingCard extends ConsumerStatefulWidget {
 
 class _ContinueWatchingCardState extends ConsumerState<ContinueWatchingCard> {
   bool _isHovered = false;
+  bool _isOpening = false;
 
   static String _normalizeMatchKey(String value) {
     return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
@@ -159,46 +160,48 @@ class _ContinueWatchingCardState extends ConsumerState<ContinueWatchingCard> {
     final hasSecondaryTitle = secondaryTitle.isNotEmpty;
     return CardsWrapper(
       onTap: () async {
-        if (isLivestream) {
-          bool dialogDismissed = false;
-          bool canceled = false;
-          unawaited(
-            LoadingDialog.show(
-              context,
-              message: AppLocalizations.of(context)!.refreshingLiveStream,
-              onCancel: () {
-                canceled = true;
-                dialogDismissed = true;
-              },
-            ),
-          );
-          final refreshedItem = await _resolveFreshLiveItem(ref, item);
-          if (!context.mounted || canceled) return;
+        if (_isOpening) return;
+        _isOpening = true;
+        try {
+          if (isLivestream) {
+            bool dialogDismissed = false;
+            bool canceled = false;
+            unawaited(
+              LoadingDialog.show(
+                context,
+                message: AppLocalizations.of(context)!.refreshingLiveStream,
+                onCancel: () {
+                  canceled = true;
+                  dialogDismissed = true;
+                },
+              ),
+            );
+            final refreshedItem = await _resolveFreshLiveItem(ref, item);
+            if (!context.mounted || canceled) return;
 
-          if (!dialogDismissed) {
-            Navigator.of(context, rootNavigator: true).pop();
-            dialogDismissed = true;
+            if (!dialogDismissed) {
+              Navigator.of(context, rootNavigator: true).pop();
+              dialogDismissed = true;
+            }
+
+            final liveItem = refreshedItem ?? item;
+            if (!context.mounted || canceled) return;
+
+            unawaited(
+              ref.read(continueWatchingProvider.notifier).remove(item.url),
+            );
+            await PlayerRoute(
+              $extra: PlayerRouteExtra(item: liveItem, videoUrl: liveItem.url),
+            ).push<void>(context);
+            return;
           }
 
-          final liveItem = refreshedItem ?? item;
-          if (!context.mounted || canceled) return;
-
-          unawaited(
-            PlayerRoute(
-              $extra: PlayerRouteExtra(item: liveItem, videoUrl: liveItem.url),
-            ).push<void>(context),
-          );
-          unawaited(
-            ref.read(continueWatchingProvider.notifier).remove(item.url),
-          );
-          return;
-        }
-
-        unawaited(
-          ref
+          await ref
               .read(playbackLauncherProvider)
-              .playFromContinueWatching(context, widget.historyItem),
-        );
+              .playFromContinueWatching(context, widget.historyItem);
+        } finally {
+          _isOpening = false;
+        }
       },
       onLongPress: () {
         final origin = context;
@@ -288,7 +291,7 @@ class _ContinueWatchingCardState extends ConsumerState<ContinueWatchingCard> {
                   ),
                 ),
 
-                // Dark overlay (full card) â 40% at rest, 60% on hover
+                // Dark overlay (full card) — 40% at rest, 60% on hover
                 Positioned.fill(
                   child: IgnorePointer(
                     child: AnimatedContainer(
