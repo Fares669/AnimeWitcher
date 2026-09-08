@@ -39,11 +39,12 @@ const List<int> kDownloadPartChoices = <int>[
   16,
 ];
 
-/// Two retries plus the initial native request gives each child range three
-/// attempts, matching Gopeed's bounded per-connection failure budget. The
-/// logical episode itself still has zero retries so a permanently dead file
-/// yields its queue slot instead of blocking every episode behind it.
-const int kDownloadPartRetries = 2;
+/// Multipart recovery is owned by [PersistentParallelDownload], which keeps
+/// the same child taskId and partial bytes while applying its own bounded
+/// backoff/connection-pressure policy. Native retries must stay disabled here;
+/// stacking background_downloader retries on top creates synchronized retry
+/// waves where several parts stop and restart together.
+const int kDownloadPartRetries = 0;
 
 /// Gopeed expands 1, 2, 4, 8... and waits for the current batch's HTTP
 /// responses before opening the next batch. This helper only describes those
