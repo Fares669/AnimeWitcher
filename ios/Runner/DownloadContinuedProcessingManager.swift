@@ -58,6 +58,8 @@ final class DownloadContinuedProcessingManager {
   private var identifier: String?
   private var didRegisterIdentifier = false
   private var currentEpisodeTaskId = ""
+  private var lastAppliedUpdateAt: TimeInterval = 0
+  private let minimumUpdateInterval: TimeInterval = 1.0
 
   private init() {}
 
@@ -110,7 +112,7 @@ final class DownloadContinuedProcessingManager {
     self.snapshot = snapshot
 
     if let active = activeTask {
-      apply(snapshot, to: active)
+      applyIfDue(snapshot, to: active)
       return identifier
     }
 
@@ -223,7 +225,7 @@ final class DownloadContinuedProcessingManager {
     self.snapshot = snapshot
 
     if let task = activeTask {
-      apply(snapshot, to: task)
+      applyIfDue(snapshot, to: task)
     }
   }
 
@@ -286,6 +288,7 @@ final class DownloadContinuedProcessingManager {
     snapshot = nil
     identifier = nil
     currentEpisodeTaskId = ""
+    lastAppliedUpdateAt = 0
   }
 
   private func attach(_ task: BGContinuedProcessingTask) {
@@ -306,15 +309,35 @@ final class DownloadContinuedProcessingManager {
         self.snapshot = nil
         self.identifier = nil
         self.currentEpisodeTaskId = ""
+        self.lastAppliedUpdateAt = 0
       }
     }
 
     if let snapshot {
-      apply(snapshot, to: task)
+      applyIfDue(snapshot, to: task, force: true)
     } else {
       task.progress.totalUnitCount = 1000
       task.progress.completedUnitCount = 0
     }
+  }
+
+  /// System continued-processing UI is expensive and user-visible. Keep its
+  /// cadence at most once per second even if native/Dart producers burst.
+  /// The latest snapshot is still retained on every call, so the next eligible
+  /// callback uses current bytes and speed rather than an arbitrary old sample.
+  private func applyIfDue(
+    _ snapshot: Snapshot,
+    to task: BGContinuedProcessingTask,
+    force: Bool = false
+  ) {
+    let now = ProcessInfo.processInfo.systemUptime
+    if !force,
+       lastAppliedUpdateAt > 0,
+       now - lastAppliedUpdateAt < minimumUpdateInterval {
+      return
+    }
+    apply(snapshot, to: task)
+    lastAppliedUpdateAt = now
   }
 
   private func apply(

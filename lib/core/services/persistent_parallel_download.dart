@@ -16,7 +16,7 @@ import '../utils/download_resume.dart';
 /// progress cadence. Collapse that burst into one parent/UI sample so four or
 /// sixteen connections do not make the displayed bytes and speed jump several
 /// times back-to-back for the same measurement interval.
-const Duration kParallelProgressCoalesceDelay = Duration(milliseconds: 350);
+const Duration kParallelProgressCoalesceDelay = Duration(seconds: 1);
 
 /// Automatic child recovery is intentionally unbounded while the logical
 /// episode is active: transient URLSession/system/network interruptions must
@@ -1063,22 +1063,32 @@ class PersistentParallelDownload {
     session.lastDiskObservedBytes = creditedBytes;
     session.lastDiskObservedAt = now;
 
-    if (!changed) return;
-    await _persist(session);
+    // Keep a one-second parent heartbeat even when the byte count did not
+    // move. That lets the shared telemetry estimator expire a stale speed and
+    // pushes 0 B/s to both Flutter and the iOS continued-processing task.
+    if (!changed) {
+      _scheduleAggregateProgress(session);
+      return;
+    }
     if (session.parts.every((part) => part.complete)) {
+      // Completion is a durability boundary; never defer its manifest write.
+      await _persist(session);
       await _assemble(session);
       return;
     }
     if (!session.parentRunningReported) {
       await _status(session, TaskStatus.running);
     }
-    await _emitAggregateProgress(session);
-    _schedulePumpAll();
+    _scheduleAggregateProgress(session, persist: true);
   }
 
-  void _scheduleAggregateProgress(_ParallelSession session) {
+  void _scheduleAggregateProgress(
+    _ParallelSession session, {
+    bool persist = false,
+  }) {
     if (_disposed || !session.active || session.deleted) return;
     session.aggregateProgressDirty = true;
+    if (persist) session.aggregatePersistDirty = true;
     if (session.aggregateProgressTimer != null) return;
 
     session.aggregateProgressTimer = Timer(kParallelProgressCoalesceDelay, () {
@@ -1092,7 +1102,14 @@ class PersistentParallelDownload {
               !session.aggregateProgressDirty) {
             return;
           }
+          final persistCheckpoint = session.aggregatePersistDirty;
           session.aggregateProgressDirty = false;
+          session.aggregatePersistDirty = false;
+          // Native child callbacks can arrive from every active Range. Writing
+          // and fsyncing the whole manifest for each callback used to backlog
+          // the session serializer and delay pause/resume/pump work by tens of
+          // seconds. Checkpoint active progress once per parent sample instead.
+          if (persistCheckpoint) await _persist(session);
           await _emitAggregateProgress(session);
         }),
       );
@@ -1355,21 +1372,25 @@ class PersistentParallelDownload {
         _markConnectionReady(session, part);
       }
 
-      if (credible > previousCredible || completed) {
+      final progressChanged = credible > previousCredible || completed;
+      if (progressChanged) {
         onPartProgress(
           session.task.taskId,
           part.task.taskId,
           part.credibleProgress,
         );
-        await _persist(session);
       }
 
-      if (!session.active) return;
+      if (!session.active) {
+        // A late native callback after pause still carries credible bytes. It
+        // must be durable immediately because no active checkpoint timer runs.
+        if (progressChanged) await _persist(session);
+        return;
+      }
       if (!session.parentRunningReported) {
         await _status(session, TaskStatus.running);
       }
-      await _emitAggregateProgress(session);
-      _schedulePumpAll();
+      _scheduleAggregateProgress(session, persist: progressChanged);
     });
   }
 
@@ -1457,11 +1478,15 @@ class PersistentParallelDownload {
               part.task.taskId,
               part.credibleProgress,
             );
-            await _persist(session);
             if (session.active) {
-              _scheduleAggregateProgress(session);
+              _scheduleAggregateProgress(
+                session,
+                persist: part.credibleProgress > previousCredibleProgress,
+              );
+            } else if (part.credibleProgress > previousCredibleProgress) {
+              // Preserve late bytes immediately while the parent is inactive.
+              await _persist(session);
             }
-            _schedulePumpAll();
             return;
           }
 
@@ -2033,6 +2058,7 @@ class _ParallelSession {
   final Set<String> currentBatchPendingIds = {};
   Timer? aggregateProgressTimer;
   bool aggregateProgressDirty = false;
+  bool aggregatePersistDirty = false;
   Timer? diskProgressTimer;
   Timer? coordinatorRecoveryTimer;
   int lastDiskObservedBytes = -1;
@@ -2063,6 +2089,7 @@ class _ParallelSession {
     aggregateProgressTimer?.cancel();
     aggregateProgressTimer = null;
     aggregateProgressDirty = false;
+    aggregatePersistDirty = false;
   }
 
   void cancelDiskProgressPoll() {
