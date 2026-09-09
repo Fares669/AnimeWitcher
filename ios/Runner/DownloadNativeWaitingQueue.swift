@@ -198,6 +198,8 @@ enum DownloadNativeWaitingQueue {
   private static var activeEpisodeKeysByTaskId: [String: String] = [:]
   private static var startingEpisodeKeys = Set<String>()
   private static var lastWrites: [String: WriteSample] = [:]
+  private static var lastChunkWrites: [String: WriteSample] = [:]
+  private static let chunkBridgeInterval: CFTimeInterval = 0.25
 
   static func installUrlSessionHook() {
     lock.lock()
@@ -350,6 +352,7 @@ enum DownloadNativeWaitingQueue {
     activeEpisodeKeysByTaskId.removeAll()
     startingEpisodeKeys.removeAll()
     lastWrites.removeAll()
+    lastChunkWrites.removeAll()
   }
 
   /// Called from the plugin URLSession delegate after a native completion
@@ -360,9 +363,19 @@ enum DownloadNativeWaitingQueue {
     task: URLSessionTask,
     error: Error?
   ) {
-    // A native part is not an episode. Dart owns its parent and only frees
-    // that slot after all parts are safely assembled.
-    guard !isDownloadPart(task) else { return }
+    // A native part is not an episode, but its URLSession byte/completion
+    // evidence belongs to the Dart multipart parent. didFinishDownloadingTo
+    // calls us after the plugin moved the temp file, so completion can now be
+    // verified against the exact `.part` path by PersistentParallelDownload.
+    if isDownloadPart(task) {
+      postMultipartChunkUpdate(
+        task,
+        totalWritten: task.countOfBytesReceived,
+        totalExpected: task.countOfBytesExpectedToReceive,
+        completed: error == nil
+      )
+      return
+    }
     if let response = task.response as? HTTPURLResponse,
        !(200...299).contains(response.statusCode) {
       parkFailedTask(task: task)
@@ -763,12 +776,114 @@ enum DownloadNativeWaitingQueue {
     )
   }
 
+
+  private static func parentTaskId(from task: URLSessionTask) -> String? {
+    let description = task.taskDescription ?? ""
+    let json = description.components(separatedBy: "***<<<|>>>***").first ?? description
+    guard let data = json.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else {
+      return nil
+    }
+
+    if let meta = object["metaData"] as? String,
+       let metaData = meta.data(using: .utf8),
+       let metadata = try? JSONSerialization.jsonObject(with: metaData) as? [String: Any],
+       let parent = metadata["parentTaskId"] as? String,
+       !parent.isEmpty {
+      return parent
+    }
+
+    let child = object["taskId"] as? String ?? ""
+    if let range = child.range(of: ".part.", options: .backwards) {
+      let parent = String(child[..<range.lowerBound])
+      return parent.isEmpty ? nil : parent
+    }
+    return nil
+  }
+
+  /// Forward native URLSession byte counts for multipart children while the
+  /// body still lives in Apple's temporary file. Dart cannot stat that file,
+  /// which is why polling only `0.part`/`1.part` updated in whole-part jumps.
+  private static func postMultipartChunkUpdate(
+    _ task: URLSessionTask,
+    totalWritten: Int64,
+    totalExpected: Int64,
+    completed: Bool
+  ) {
+    guard isDownloadPart(task),
+          let childId = taskId(from: task),
+          let parentId = parentTaskId(from: task)
+    else {
+      return
+    }
+
+    let now = CFAbsoluteTimeGetCurrent()
+    var speed = 0.0
+    lock.lock()
+    if let last = lastChunkWrites[childId], now > last.time {
+      let elapsed = now - last.time
+      if !completed && elapsed < chunkBridgeInterval {
+        lock.unlock()
+        return
+      }
+      let delta = Double(max(totalWritten - last.bytes, 0))
+      if elapsed > 0 && delta > 0 {
+        speed = delta / elapsed
+      }
+    }
+    if completed {
+      lastChunkWrites[childId] = nil
+    } else {
+      lastChunkWrites[childId] = WriteSample(
+        taskId: childId,
+        bytes: max(totalWritten, 0),
+        time: now
+      )
+    }
+    lock.unlock()
+
+    var values: [String: Any] = [
+      "parentTaskId": parentId,
+      "chunkTaskId": childId,
+      "completed": completed,
+    ]
+    if totalWritten >= 0 {
+      values["writtenBytes"] = totalWritten
+    }
+    if totalExpected > 0 {
+      values["expectedBytes"] = totalExpected
+      values["progress"] = completed
+        ? 1.0
+        : min(max(Double(totalWritten) / Double(totalExpected), 0), 1)
+    } else if completed {
+      values["progress"] = 1.0
+    }
+    if speed > 0 {
+      values["speedBytesPerSecond"] = speed
+    }
+
+    NotificationCenter.default.post(
+      name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
+      object: nil,
+      userInfo: values
+    )
+  }
+
   static func handleBytesWritten(
     _ downloadTask: URLSessionDownloadTask,
     totalWritten: Int64,
     totalExpected: Int64
   ) {
-    guard !isDownloadPart(downloadTask) else { return }
+    if isDownloadPart(downloadTask) {
+      postMultipartChunkUpdate(
+        downloadTask,
+        totalWritten: totalWritten,
+        totalExpected: totalExpected,
+        completed: false
+      )
+      return
+    }
     guard let id = taskId(from: downloadTask) else { return }
     let json = downloadTask.taskDescription?
       .components(separatedBy: "***<<<|>>>***").first ?? ""

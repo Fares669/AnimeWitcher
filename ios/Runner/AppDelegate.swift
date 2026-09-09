@@ -350,6 +350,18 @@ import UserNotifications
       if let status = values["status"] as? NSNumber {
         arguments["status"] = status.intValue
       }
+      if let written = values["writtenBytes"] as? NSNumber {
+        arguments["writtenBytes"] = written.int64Value
+      }
+      if let expected = values["expectedBytes"] as? NSNumber {
+        arguments["expectedBytes"] = expected.int64Value
+      }
+      if let speed = values["speedBytesPerSecond"] as? NSNumber {
+        arguments["speedBytesPerSecond"] = speed.doubleValue
+      }
+      if let completed = values["completed"] as? Bool {
+        arguments["completed"] = completed
+      }
       channel?.invokeMethod("chunkUpdate", arguments: arguments)
     }
 #endif

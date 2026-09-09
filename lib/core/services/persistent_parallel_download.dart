@@ -1152,6 +1152,135 @@ class PersistentParallelDownload {
     return launchable > 0;
   }
 
+  /// iOS writes DownloadTask bodies into URLSession-owned temporary files, so
+  /// the final `.part` path can remain invisible until didFinishDownloadingTo.
+  /// The native delegate bridge reports the bytes here while they are still in
+  /// that temp file. This is byte evidence, not a guessed percentage: it wakes
+  /// the logical parent, advances slow-start and keeps speed/progress live even
+  /// when background_downloader's Dart callbacks are delayed or lost.
+  Future<void> handleNativeChunkUpdate({
+    required String parentTaskId,
+    required String chunkTaskId,
+    double? progress,
+    int? writtenBytes,
+    int? expectedBytes,
+    double? speedBytesPerSecond,
+    bool completed = false,
+  }) async {
+    if (_disposed) return;
+    final session = _sessions[parentTaskId] ?? _children[chunkTaskId];
+    if (session == null || session.deleted) return;
+
+    await session.serialize(() async {
+      if (_disposed ||
+          session.deleted ||
+          !identical(_sessions[session.task.taskId], session)) {
+        return;
+      }
+
+      _DownloadPart? part;
+      for (final candidate in session.parts) {
+        if (candidate.task.taskId == chunkTaskId) {
+          part = candidate;
+          break;
+        }
+      }
+      if (part == null || part.complete) return;
+
+      // The immutable Range in the manifest is the authority. Never trust a
+      // server-reported expected length enough to credit bytes outside it.
+      int? observedBytes;
+      double? credible;
+      if (writtenBytes != null &&
+          writtenBytes >= 0 &&
+          writtenBytes <= part.size) {
+        observedBytes = writtenBytes;
+        credible = part.size > 0 ? writtenBytes / part.size : 0;
+      } else if (progress != null && progress >= 0 && progress <= 1) {
+        credible = progress;
+      }
+
+      // didFinishDownloadingTo is hooked after the plugin moves the temp body
+      // to our final child path. Completion still requires exact local bytes.
+      if (completed) {
+        final file = File(await part.task.filePath());
+        if (await file.exists() &&
+            await file.length() == part.size &&
+            await _adoptExactSizePart(
+              session,
+              part,
+              settleNativeOwner: false,
+            )) {
+          await _afterAdoptedPart(session);
+          return;
+        }
+      }
+
+      if (credible == null) return;
+      credible = credible.clamp(0.0, 1.0).toDouble();
+
+      final previousCredible = part.credibleProgress;
+      final now = DateTime.now();
+      if (credible > previousCredible) {
+        if (speedBytesPerSecond != null && speedBytesPerSecond > 0) {
+          part.speed = speedBytesPerSecond / 1000 / 1000;
+        } else if (observedBytes != null &&
+            part.lastNativeBridgeBytes >= 0 &&
+            part.lastNativeBridgeAt != null) {
+          final elapsedMicros = now
+              .difference(part.lastNativeBridgeAt!)
+              .inMicroseconds;
+          final deltaBytes = observedBytes - part.lastNativeBridgeBytes;
+          if (elapsedMicros > 0 && deltaBytes > 0) {
+            part.speed =
+                deltaBytes *
+                Duration.microsecondsPerSecond /
+                elapsedMicros /
+                1000 /
+                1000;
+          }
+        }
+
+        part.credibleProgress = credible;
+        if (part.progress >= kParallelNativeCompletionSentinel ||
+            credible > part.progress) {
+          part.progress = credible;
+        }
+        part.recoveryAttempts = 0;
+        part.tailRecoveryAttempted = false;
+      } else if (speedBytesPerSecond != null && speedBytesPerSecond > 0) {
+        part.speed = speedBytesPerSecond / 1000 / 1000;
+      }
+
+      if (observedBytes != null) {
+        part.lastNativeBridgeBytes = observedBytes;
+        part.lastNativeBridgeAt = now;
+      }
+
+      if (session.active) {
+        part.launched = true;
+        _activeConnectionIds.add(part.task.taskId);
+        _markConnectionReady(session, part);
+      }
+
+      if (credible > previousCredible || completed) {
+        onPartProgress(
+          session.task.taskId,
+          part.task.taskId,
+          part.credibleProgress,
+        );
+        await _persist(session);
+      }
+
+      if (!session.active) return;
+      if (!session.parentRunningReported) {
+        await _status(session, TaskStatus.running);
+      }
+      await _emitAggregateProgress(session);
+      _schedulePumpAll();
+    });
+  }
+
   bool handleUpdate(TaskUpdate update) {
     if (update.task.group != kPersistentDownloadChunkGroup) return false;
     if (_disposed) return true;
@@ -1349,11 +1478,11 @@ class PersistentParallelDownload {
     return true;
   }
 
-  Future<void> pause(ParallelDownloadTask task) async {
-    if (_disposed) return;
-    if (!await restore(task)) return;
+  Future<bool> pause(ParallelDownloadTask task) async {
+    if (_disposed) return false;
+    if (!await restore(task)) return false;
     final session = _sessions[task.taskId]!;
-    await session.serialize(() => _pause(session));
+    return session.serialize(() => _pause(session));
   }
 
   bool _shouldAutomaticallyRecoverPart(TaskStatusUpdate update) {
@@ -1473,29 +1602,100 @@ class PersistentParallelDownload {
     }
   }
 
-  Future<void> _pause(_ParallelSession session) async {
+  Future<bool> _pause(_ParallelSession session) async {
     session.active = false;
     session.generation++;
     session.cancelAggregateProgress();
     session.cancelDiskProgressPoll();
     session.resetRamp();
-    // Restored sessions can still have native children even though their
-    // in-memory launched flags are false. Pause every unfinished identity,
-    // concurrently, so sixteen callback timeouts do not block controls for 80s.
+
+    final unfinished = session.parts
+        .where((part) => !part.complete)
+        .toList(growable: false);
+    var pauseFailed = false;
+
+    // Pause every actual child identity concurrently. DownloadService routes
+    // these child tasks to FileDownloader.pause, which owns their URLSession
+    // resume data; it must never route them through the single-file Transfer.
     await Future.wait(
-      session.parts.where((part) => !part.complete).map((part) async {
+      unfinished.map((part) async {
         try {
           await pausePart(part.task);
-        } catch (_) {}
-        part.launched = false;
-        part.speed = 0;
+        } catch (_) {
+          pauseFailed = true;
+        }
       }),
     );
+
+    Set<String> live = <String>{};
+    final lookupLive = livePartIds;
+    if (lookupLive != null) {
+      try {
+        live = await lookupLive();
+      } catch (_) {
+        pauseFailed = true;
+      }
+    }
+
+    var stillLive = unfinished
+        .where((part) => live.contains(part.task.taskId))
+        .toList(growable: false);
+
+    // A pause acknowledgement and the URLSession state transition are
+    // asynchronous on iOS. Retry only identities that are still demonstrably
+    // live; never cancel them, because cancel can discard resume bytes.
+    if (stillLive.isNotEmpty) {
+      await Future.wait(
+        stillLive.map((part) async {
+          try {
+            await pausePart(part.task);
+          } catch (_) {
+            pauseFailed = true;
+          }
+        }),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      if (lookupLive != null) {
+        try {
+          live = await lookupLive();
+        } catch (_) {
+          pauseFailed = true;
+        }
+      }
+      stillLive = unfinished
+          .where((part) => live.contains(part.task.taskId))
+          .toList(growable: false);
+    }
+
+    if (stillLive.isNotEmpty || (lookupLive == null && pauseFailed)) {
+      final stillIds = stillLive.map((part) => part.task.taskId).toSet();
+      session.active = true;
+      for (final part in unfinished) {
+        final owns = stillIds.contains(part.task.taskId);
+        part.launched = owns;
+        part.speed = 0;
+        if (owns) {
+          _activeConnectionIds.add(part.task.taskId);
+        } else {
+          _activeConnectionIds.remove(part.task.taskId);
+        }
+      }
+      _scheduleDiskProgressPoll(session);
+      await _persist(session);
+      await _status(session, TaskStatus.running);
+      return false;
+    }
+
+    for (final part in unfinished) {
+      part.launched = false;
+      part.speed = 0;
+    }
     final ids = session.parts.map((part) => part.task.taskId).toSet();
     _activeConnectionIds.removeWhere(ids.contains);
     await _persist(session);
     await _status(session, TaskStatus.paused);
     _schedulePumpAll();
+    return true;
   }
 
   Future<void> cancel(ParallelDownloadTask task) async {
@@ -1821,6 +2021,8 @@ class _DownloadPart {
   double tailWatchProgress = -1;
   bool tailRecoveryAttempted = false;
   bool needsCredibleProgressRepair;
+  int lastNativeBridgeBytes = -1;
+  DateTime? lastNativeBridgeAt;
 
   int get size => to - from + 1;
 

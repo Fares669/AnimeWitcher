@@ -185,6 +185,49 @@ void main() {
     },
   );
 
+  test(
+    'native iOS byte bridge advances parent before final part file exists',
+    () async {
+      expect(await coordinator.start(parent, 100), isTrue);
+      expect(starts.length, 1);
+      final first = starts.single;
+
+      await coordinator.handleNativeChunkUpdate(
+        parentTaskId: parent.taskId,
+        chunkTaskId: first.taskId,
+        writtenBytes: 10,
+        expectedBytes: 20,
+        speedBytesPerSecond: 500000,
+      );
+
+      final parentRecord = records[parent.taskId]!;
+      expect(parentRecord.status, TaskStatus.running);
+      expect(parentRecord.progress, closeTo(.1, .001));
+      expect(statuses, contains(TaskStatus.running));
+      await waitUntil(() => starts.length >= 3);
+    },
+  );
+
+  test('native iOS completion bridge adopts the exact moved part', () async {
+    expect(await coordinator.start(parent, 100), isTrue);
+    final first = starts.single;
+    final file = File(await first.filePath());
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(List<int>.filled(20, 4), flush: true);
+
+    await coordinator.handleNativeChunkUpdate(
+      parentTaskId: parent.taskId,
+      chunkTaskId: first.taskId,
+      writtenBytes: 20,
+      expectedBytes: 20,
+      completed: true,
+    );
+
+    expect(records[first.taskId]?.status, TaskStatus.complete);
+    expect(coordinator.progressFor(parent.taskId), greaterThanOrEqualTo(.2));
+    await waitUntil(() => starts.length >= 3);
+  });
+
   test('repeated system pauses recover only the affected identity', () async {
     await coordinator.start(parent, 25);
     await expandFreshTo(5);

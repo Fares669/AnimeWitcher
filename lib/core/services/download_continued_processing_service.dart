@@ -6,13 +6,16 @@ import 'package:flutter/services.dart';
 import 'download_concurrency.dart';
 
 typedef SystemDownloadCancellation = Future<void> Function(String taskId);
-typedef SystemDownloadChunkUpdate =
-    void Function({
-      required String parentTaskId,
-      required String chunkTaskId,
-      double? progress,
-      int? statusOrdinal,
-    });
+typedef SystemDownloadChunkUpdate = void Function({
+  required String parentTaskId,
+  required String chunkTaskId,
+  double? progress,
+  int? statusOrdinal,
+  int? writtenBytes,
+  int? expectedBytes,
+  double? speedBytesPerSecond,
+  required bool completed,
+});
 
 /// Bridges AnimeWitcher downloads to iOS 26's system-managed continued
 /// processing task UI. On older iOS versions the native side returns false
@@ -166,11 +169,18 @@ class DownloadContinuedProcessingService {
       }
       final rawProgress = arguments['progress'];
       final rawStatus = arguments['status'];
+      final rawWritten = arguments['writtenBytes'];
+      final rawExpected = arguments['expectedBytes'];
+      final rawSpeed = arguments['speedBytesPerSecond'];
       onChunkUpdate?.call(
         parentTaskId: parentTaskId,
         chunkTaskId: chunkTaskId,
         progress: rawProgress is num ? rawProgress.toDouble() : null,
         statusOrdinal: rawStatus is num ? rawStatus.toInt() : null,
+        writtenBytes: rawWritten is num ? rawWritten.toInt() : null,
+        expectedBytes: rawExpected is num ? rawExpected.toInt() : null,
+        speedBytesPerSecond: rawSpeed is num ? rawSpeed.toDouble() : null,
+        completed: arguments['completed'] == true,
       );
       return true;
     }
