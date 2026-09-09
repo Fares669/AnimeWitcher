@@ -11,6 +11,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/services/download_service.dart';
+import '../../../core/services/download_url_refresh.dart';
 import '../../../core/router/app_router.dart';
 import '../../../shared/widgets/loading_dialog.dart';
 import '../../../shared/widgets/custom_widgets.dart';
@@ -103,7 +104,12 @@ class DownloadLauncher {
         if (resolved.isEmpty) {
           throw Exception('تعذر استخراج رابط صالح من هذا المصدر.');
         }
-        stream = resolved.first;
+        // Carry the opaque selected source into the resolved stream when the
+        // provider did not already set refreshUrl. This lets downloads mint a
+        // fresh signed CDN URL after a long pause without opening the picker.
+        stream = resolved.first.refreshUrl?.trim().isNotEmpty == true
+            ? resolved.first
+            : resolved.first.copyWith(refreshUrl: selected.url);
       }
 
       await _verifyAndDownload(
@@ -111,6 +117,7 @@ class DownloadLauncher {
         stream,
         item,
         resolveUrl,
+        providerId: provider.packageName,
         episode: resolvedEpisode,
       );
     } catch (e) {
@@ -140,6 +147,7 @@ class DownloadLauncher {
     StreamResult stream,
     MultimediaItem item,
     String resolveUrl, {
+    required String providerId,
     Episode? episode,
   }) async {
     final l10n = AppLocalizations.of(context)!;
@@ -290,6 +298,20 @@ class DownloadLauncher {
                     );
                   }
 
+                  final refreshStore = _ref.read(
+                    downloadUrlRefreshStoreProvider,
+                  );
+                  await refreshStore.save(
+                    DownloadUrlRefreshDescriptor(
+                      trackingUrl: resolveUrl,
+                      providerId: providerId,
+                      source: stream.source,
+                      quality: stream.quality,
+                      refreshUrl: stream.refreshUrl,
+                      updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+                    ),
+                  );
+
                   final started = await downloadService.startDownload(
                     url: stream.url,
                     filename: filename,
@@ -301,6 +323,9 @@ class DownloadLauncher {
                     totalBytes: metadata.size ?? -1,
                   );
 
+                  if (!started) {
+                    await refreshStore.remove(resolveUrl);
+                  }
                   if (!started && finalContext.mounted) {
                     _ref
                         .read(notificationServiceProvider)
