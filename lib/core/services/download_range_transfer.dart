@@ -4,13 +4,15 @@ import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 
+import 'download_retry_policy.dart';
+
 /// Keep retries short: a permanently dead episode must still yield its queue
 /// slot, while transient CDN/radio failures should not force a manual resume.
 const int kDownloadRangeRequestAttempts = 3;
 const int kDownloadRangeReconnectAttempts = 2;
 const int kDownloadResumeProbeBytes = 64 * 1024;
 const int kDownloadRangeProgressUpdateBytes = 512 * 1024;
-const Duration kDownloadRangeRetryBaseDelay = Duration(milliseconds: 250);
+const Duration kDownloadRangeRetryBaseDelay = kDownloadRetryBaseDelay;
 const Duration kDownloadRangeProgressUpdateInterval = Duration(
   milliseconds: 250,
 );
@@ -23,23 +25,19 @@ const Duration kDownloadRangeMinFastFailTimeout = Duration(seconds: 3);
 const Duration kDownloadRangeMaxFastFailTimeout = Duration(seconds: 30);
 const Duration kDownloadRangeStreamIdleTimeout = Duration(seconds: 30);
 
-bool isRetryableDownloadHttpStatus(int? status) {
-  if (status == null) return false;
-  if (status == 408 || status == 425 || status == 429) return true;
-  return status >= 500 && status <= 599;
-}
+/// Compatibility wrappers used by existing tests/callers. The policy itself is
+/// centralized in download_retry_policy.dart.
+bool isRetryableDownloadHttpStatus(int? status) =>
+    isRetryableDownloadStatus(status);
 
 Duration downloadRangeRetryDelay({
   required int retryIndex,
   String? retryAfter,
-}) {
-  final seconds = int.tryParse(retryAfter?.trim() ?? '');
-  if (seconds != null && seconds >= 0) {
-    return Duration(seconds: seconds.clamp(0, 30));
-  }
-  final shift = retryIndex.clamp(0, 4);
-  return kDownloadRangeRetryBaseDelay * (1 << shift);
-}
+}) => downloadRetryDelay(
+  retryIndex: retryIndex,
+  retryAfter: retryAfter,
+  jitterUnit: 0.5,
+);
 
 /// Gopeed measures a successful connection and then gives later attempts a
 /// 50% safety margin, with a three-second floor. AnimeWitcher keeps the old
@@ -83,6 +81,20 @@ String? downloadIfRangeValidator(Headers headers) {
   return null;
 }
 
+class DownloadRangeFailure {
+  const DownloadRangeFailure({
+    required this.action,
+    this.statusCode,
+    this.resourceSize = -1,
+    this.error,
+  });
+
+  final DownloadFailureAction action;
+  final int? statusCode;
+  final int resourceSize;
+  final Object? error;
+}
+
 /// A cancellable append. Starting returns after the response is validated,
 /// leaving the download service's control queue free for pause/cancel.
 ///
@@ -94,17 +106,19 @@ String? downloadIfRangeValidator(Headers headers) {
 /// Before appending to an existing partial file we also verify a saved prefix
 /// against the current resource. If the origin exposes a strong ETag or
 /// Last-Modified validator, all remaining requests carry it as `If-Range`.
-/// This closes the dangerous case where a CDN changes the file behind the same
-/// URL and a resumed suffix would otherwise be appended to bytes from the old
-/// object. background_downloader already keeps ETags in native ResumeData;
-/// this provides the equivalent protection for AnimeWitcher's Dio fallback.
 class DownloadRangeTransfer {
-  DownloadRangeTransfer(this.dio);
+  DownloadRangeTransfer(this.dio, {math.Random? random})
+    : _random = random ?? math.Random();
+
   final Dio dio;
+  final math.Random _random;
   final _operations = <String, _RangeOperation>{};
+  final _lastFailures = <String, DownloadRangeFailure>{};
   final _maxConnectTimesByOrigin = <String, Duration>{};
+
   bool isActive(String id) => _operations.containsKey(id);
   Set<String> get activeTaskIds => _operations.keys.toSet();
+  DownloadRangeFailure? failureFor(String id) => _lastFailures[id];
 
   Future<void> stop(String id) async {
     final operation = _operations[id];
@@ -129,15 +143,21 @@ class DownloadRangeTransfer {
     required Future<void> Function(int written, int total, bool complete)
     onState,
     required Future<void> Function(int written, int total) onPaused,
+    Future<void> Function(DownloadRangeFailure failure)? onFailure,
+    bool canRefreshUrl = false,
   }) async {
     if (_operations.containsKey(id)) return true;
-    final operation = _RangeOperation();
+    _lastFailures.remove(id);
+    final operation = _RangeOperation(canRefreshUrl: canRefreshUrl);
     _operations[id] = operation;
     var launched = false;
     _OpenedRange? opened;
     try {
       final spec = _RangeSpec.fromHeaders(headers);
       if (!await file.exists() || await file.length() != existingBytes) {
+        operation.failure = const DownloadRangeFailure(
+          action: DownloadFailureAction.park,
+        );
         return false;
       }
       final guardedHeaders = await _guardResumeHeaders(
@@ -173,25 +193,33 @@ class DownloadRangeTransfer {
           expectedBytes: expectedBytes,
           onState: onState,
           onPaused: onPaused,
+          onFailure: onFailure,
         ),
       );
       return true;
-    } catch (_) {
+    } catch (error) {
+      operation.failure ??= DownloadRangeFailure(
+        action: isNoSpaceDownloadError(error)
+            ? DownloadFailureAction.stopNoSpace
+            : DownloadFailureAction.park,
+        error: error,
+      );
       return false;
     } finally {
       if (!launched) {
         operation.token.cancel();
         await _discard(opened?.stream);
+        final failure = operation.failure;
+        if (failure != null) {
+          _lastFailures[id] = failure;
+          if (onFailure != null) await onFailure(failure);
+        }
         _operations.remove(id);
         if (!operation.done.isCompleted) operation.done.complete();
       }
     }
   }
 
-  /// Legacy/native partial files may not have a validator persisted in their
-  /// task headers. Verify a small byte prefix first, then promote the origin's
-  /// strong validator into If-Range for the actual suffix request. This means
-  /// existing users get safe resume semantics without throwing away progress.
   Future<Map<String, String>?> _guardResumeHeaders({
     required _RangeOperation operation,
     required String url,
@@ -260,22 +288,43 @@ class DownloadRangeTransfer {
         );
         stream = response.data?.stream;
         final status = response.statusCode;
-        if (isRetryableDownloadHttpStatus(status)) {
-          await _discard(stream);
-          if (attempt + 1 >= kDownloadRangeRequestAttempts) return null;
-          await _retryDelay(
-            operation,
-            downloadRangeRetryDelay(
-              retryIndex: attempt,
-              retryAfter: response.headers.value('retry-after'),
-            ),
+        final decision = planDownloadFailure(
+          statusCode: status,
+          canRefreshUrl: operation.canRefreshUrl,
+          retryIndex: attempt,
+          retryAfter: response.headers.value('retry-after'),
+          jitterUnit: _random.nextDouble(),
+        );
+        if (decision.action == DownloadFailureAction.refreshUrl ||
+            decision.action == DownloadFailureAction.reconcileRange) {
+          operation.failure = DownloadRangeFailure(
+            action: decision.action,
+            statusCode: status,
+            resourceSize: _unsatisfiedRangeSize(response.headers),
           );
+          await _discard(stream);
+          return null;
+        }
+        if (decision.shouldRetry) {
+          await _discard(stream);
+          if (attempt + 1 >= kDownloadRangeRequestAttempts) {
+            operation.failure = DownloadRangeFailure(
+              action: DownloadFailureAction.park,
+              statusCode: status,
+            );
+            return null;
+          }
+          await _retryDelay(operation, decision.delay);
           continue;
         }
 
         final range = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$')
             .firstMatch(response.headers.value('content-range') ?? '');
         if (status != 206 || range == null || stream == null) {
+          operation.failure = DownloadRangeFailure(
+            action: DownloadFailureAction.park,
+            statusCode: status,
+          );
           await _discard(stream);
           return null;
         }
@@ -285,26 +334,43 @@ class DownloadRangeTransfer {
         if (responseStart != probeStart ||
             responseEnd != probeEnd ||
             responseEnd >= resourceSize) {
+          operation.failure = DownloadRangeFailure(
+            action: DownloadFailureAction.park,
+            statusCode: status,
+            resourceSize: resourceSize,
+          );
           await _discard(stream);
           return null;
         }
 
         final remotePrefix = await _readExactStream(stream, probeLength);
         if (remotePrefix == null || !_bytesEqual(localPrefix, remotePrefix)) {
+          operation.failure = const DownloadRangeFailure(
+            action: DownloadFailureAction.park,
+          );
           return null;
         }
         return _ResumeProbe(downloadIfRangeValidator(response.headers));
       } catch (error) {
         await _discard(stream);
-        if (operation.token.isCancelled ||
-            !_isRetryableDownloadError(error) ||
+        if (operation.token.isCancelled) return null;
+        final decision = planDownloadFailure(
+          connectionFailure: _isRetryableDownloadError(error),
+          noSpaceLeft: isNoSpaceDownloadError(error),
+          retryIndex: attempt,
+          jitterUnit: _random.nextDouble(),
+        );
+        if (!decision.shouldRetry ||
             attempt + 1 >= kDownloadRangeRequestAttempts) {
+          operation.failure = DownloadRangeFailure(
+            action: decision.action == DownloadFailureAction.retry
+                ? DownloadFailureAction.park
+                : decision.action,
+            error: error,
+          );
           return null;
         }
-        await _retryDelay(
-          operation,
-          downloadRangeRetryDelay(retryIndex: attempt),
-        );
+        await _retryDelay(operation, decision.delay);
       }
     }
     return null;
@@ -337,22 +403,43 @@ class DownloadRangeTransfer {
         );
         stream = response.data?.stream;
         final status = response.statusCode;
-        if (isRetryableDownloadHttpStatus(status)) {
-          await _discard(stream);
-          if (attempt + 1 >= attempts) return null;
-          await _retryDelay(
-            operation,
-            downloadRangeRetryDelay(
-              retryIndex: attempt,
-              retryAfter: response.headers.value('retry-after'),
-            ),
+        final decision = planDownloadFailure(
+          statusCode: status,
+          canRefreshUrl: operation.canRefreshUrl,
+          retryIndex: attempt,
+          retryAfter: response.headers.value('retry-after'),
+          jitterUnit: _random.nextDouble(),
+        );
+        if (decision.action == DownloadFailureAction.refreshUrl ||
+            decision.action == DownloadFailureAction.reconcileRange) {
+          operation.failure = DownloadRangeFailure(
+            action: decision.action,
+            statusCode: status,
+            resourceSize: _unsatisfiedRangeSize(response.headers),
           );
+          await _discard(stream);
+          return null;
+        }
+        if (decision.shouldRetry) {
+          await _discard(stream);
+          if (attempt + 1 >= attempts) {
+            operation.failure = DownloadRangeFailure(
+              action: DownloadFailureAction.park,
+              statusCode: status,
+            );
+            return null;
+          }
+          await _retryDelay(operation, decision.delay);
           continue;
         }
 
         final range = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$')
             .firstMatch(response.headers.value('content-range') ?? '');
         if (status != 206 || range == null || stream == null) {
+          operation.failure = DownloadRangeFailure(
+            action: DownloadFailureAction.park,
+            statusCode: status,
+          );
           await _discard(stream);
           return null;
         }
@@ -361,6 +448,9 @@ class DownloadRangeTransfer {
         );
         if (ifRange != null &&
             !_responseMatchesIfRange(response.headers, ifRange)) {
+          operation.failure = const DownloadRangeFailure(
+            action: DownloadFailureAction.park,
+          );
           await _discard(stream);
           return null;
         }
@@ -376,33 +466,40 @@ class DownloadRangeTransfer {
             end != (spec.limit ?? resourceSize - 1) ||
             (expectedBytes > 0 && total != expectedBytes) ||
             written >= total) {
+          operation.failure = DownloadRangeFailure(
+            action: DownloadFailureAction.park,
+            statusCode: status,
+            resourceSize: resourceSize,
+          );
           await _discard(stream);
           return null;
         }
         return _OpenedRange(stream: stream, total: total);
       } catch (error) {
         await _discard(stream);
-        if (operation.token.isCancelled ||
-            !_isRetryableDownloadError(error) ||
-            attempt + 1 >= attempts) {
+        if (operation.token.isCancelled) return null;
+        final decision = planDownloadFailure(
+          connectionFailure: _isRetryableDownloadError(error),
+          noSpaceLeft: isNoSpaceDownloadError(error),
+          retryIndex: attempt,
+          jitterUnit: _random.nextDouble(),
+        );
+        if (!decision.shouldRetry || attempt + 1 >= attempts) {
+          operation.failure = DownloadRangeFailure(
+            action: decision.action == DownloadFailureAction.retry
+                ? DownloadFailureAction.park
+                : decision.action,
+            error: error,
+          );
           return null;
         }
-        await _retryDelay(
-          operation,
-          downloadRangeRetryDelay(retryIndex: attempt),
-        );
+        await _retryDelay(operation, decision.delay);
       }
     }
     return null;
   }
 
-  /// Uses a short-lived child token for each HTTP attempt. Future.timeout by
-  /// itself does not cancel Dio, which could otherwise leave the old socket
-  /// alive while a retry opens another one. Cancelling the child token keeps
-  /// the connection count honest and mirrors Gopeed's fast-fail client.
   Future<void> _retryDelay(_RangeOperation operation, Duration delay) async {
-    // Retry-After may be thirty seconds. Pause/delete must interrupt backoff
-    // immediately, including while start() is validating the first response.
     final elapsed = Completer<void>();
     final timer = Timer(delay, elapsed.complete);
     try {
@@ -489,7 +586,7 @@ class DownloadRangeTransfer {
     if (error is DioException) {
       if (error.type == DioExceptionType.cancel) return false;
       final status = error.response?.statusCode;
-      if (isRetryableDownloadHttpStatus(status)) return true;
+      if (isRetryableDownloadStatus(status)) return true;
       switch (error.type) {
         case DioExceptionType.connectionTimeout:
         case DioExceptionType.sendTimeout:
@@ -519,6 +616,7 @@ class DownloadRangeTransfer {
     required int expectedBytes,
     required Future<void> Function(int, int, bool) onState,
     required Future<void> Function(int, int) onPaused,
+    required Future<void> Function(DownloadRangeFailure failure)? onFailure,
   }) async {
     RandomAccessFile? output;
     var complete = false;
@@ -553,10 +651,17 @@ class DownloadRangeTransfer {
           }
         } catch (error) {
           streamError = error;
+          if (isNoSpaceDownloadError(error)) {
+            operation.failure = DownloadRangeFailure(
+              action: DownloadFailureAction.stopNoSpace,
+              error: error,
+            );
+          }
         }
 
         if (written == total && !operation.token.isCancelled) break;
         if (operation.token.isCancelled ||
+            operation.failure?.action == DownloadFailureAction.stopNoSpace ||
             streamError is FormatException ||
             reconnects >= kDownloadRangeReconnectAttempts) {
           throw streamError ??
@@ -565,10 +670,12 @@ class DownloadRangeTransfer {
 
         reconnects++;
         await output.flush();
-        await _retryDelay(
-          operation,
-          downloadRangeRetryDelay(retryIndex: reconnects - 1),
+        final reconnectDecision = planDownloadFailure(
+          connectionFailure: true,
+          retryIndex: reconnects - 1,
+          jitterUnit: _random.nextDouble(),
         );
+        await _retryDelay(operation, reconnectDecision.delay);
         final reopened = await _openWithRetries(
           operation: operation,
           url: url,
@@ -592,17 +699,30 @@ class DownloadRangeTransfer {
       }
       await onState(written, total, true);
       complete = true;
-    } catch (_) {
+    } catch (error) {
+      operation.failure ??= DownloadRangeFailure(
+        action: isNoSpaceDownloadError(error)
+            ? DownloadFailureAction.stopNoSpace
+            : DownloadFailureAction.park,
+        error: error,
+      );
       // Keep every durable byte. The next explicit resume starts exactly from
       // [written] if the bounded automatic reconnects were exhausted.
     } finally {
       await output?.close();
       operation.token.cancel();
       try {
-        if (!complete) await onPaused(written, total);
+        if (!complete) {
+          await onPaused(written, total);
+          final failure = operation.failure;
+          if (failure != null) {
+            _lastFailures[id] = failure;
+            if (onFailure != null) await onFailure(failure);
+          }
+        } else {
+          _lastFailures.remove(id);
+        }
       } finally {
-        // Keep the transfer owned until the final paused checkpoint settles.
-        // Otherwise a new resume can race an old onPaused database write.
         _operations.remove(id);
         if (!operation.done.isCompleted) operation.done.complete();
       }
@@ -669,6 +789,13 @@ class DownloadRangeTransfer {
         lastModified == validator;
   }
 
+  int _unsatisfiedRangeSize(Headers headers) {
+    final match = RegExp(r'^bytes \*/(\d+)$').firstMatch(
+      headers.value('content-range') ?? '',
+    );
+    return match == null ? -1 : int.parse(match[1]!);
+  }
+
   Future<void> _discard(Stream<List<int>>? stream) async {
     if (stream == null) return;
     try {
@@ -676,6 +803,17 @@ class DownloadRangeTransfer {
       await subscription.cancel();
     } catch (_) {}
   }
+}
+
+bool isNoSpaceDownloadError(Object error) {
+  if (error is! FileSystemException) return false;
+  final code = error.osError?.errorCode;
+  if (code == 28 || code == 112) return true; // POSIX ENOSPC / Windows disk full
+  final message = '${error.message} ${error.osError?.message ?? ''}'
+      .toLowerCase();
+  return message.contains('no space left') ||
+      message.contains('disk full') ||
+      message.contains('not enough space');
 }
 
 class _RangeSpec {
@@ -708,6 +846,10 @@ class _ResumeProbe {
 }
 
 class _RangeOperation {
+  _RangeOperation({required this.canRefreshUrl});
+
+  final bool canRefreshUrl;
   final token = CancelToken();
   final done = Completer<void>();
+  DownloadRangeFailure? failure;
 }
