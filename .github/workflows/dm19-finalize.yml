@@ -1,0 +1,32 @@
+name: Finalize DM-19 plan status
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+      - name: Mark verified item complete
+        run: python3 .github/dm19_finalize.py
+      - name: Guard plan update
+        run: |
+          git diff --check
+          grep -F -- '- [x] **DM-19' DOWNLOAD_MANAGER_PLAN.md
+      - name: Commit plan status and cleanup verifier
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dm19-finalize.yml .github/dm19_finalize.py
+          git add DOWNLOAD_MANAGER_PLAN.md
+          git diff --cached --check
+          git commit -m "docs: mark verified DM-19 complete"
+          git push origin HEAD:plan/download-manager-reliability
