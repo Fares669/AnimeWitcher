@@ -1018,24 +1018,34 @@ class AnimeWitcherAccountService {
   ) async {
     final profile = _profile;
     if (comments.isEmpty || profile == null || _session == null) return comments;
-    return _authenticated((token) async {
-      return Future.wait<AnimeWitcherComment>(
-        comments.map((comment) async {
-          if (ownsComment(comment)) return comment;
-          try {
-            final like = await _firestore.getDocument(
-              '${comment.path}/likes/${profile.documentId}',
-              token,
-            );
-            return comment.copyWith(likedByMe: like != null);
-          } catch (_) {
-            // Reading comments must never fail just because the optional
-            // per-user like marker could not be fetched.
-            return comment;
-          }
-        }),
-      );
-    });
+    try {
+      return await _authenticated((token) async {
+        return Future.wait<AnimeWitcherComment>(
+          comments.map((comment) async {
+            if (ownsComment(comment)) return comment;
+            try {
+              final like = await _firestore.getDocument(
+                '${comment.path}/likes/${profile.documentId}',
+                token,
+              );
+              return comment.copyWith(likedByMe: like != null);
+            } catch (_) {
+              // Reading comments must never fail just because the optional
+              // per-user like marker could not be fetched.
+              return comment;
+            }
+          }),
+        );
+      });
+    } catch (_) {
+      // Nor because the session behind those markers could not be authorised.
+      // Getting a token is part of fetching them, and it fails for reasons
+      // that have nothing to do with the comments: an account this build has
+      // no keys for, a refresh that did not go through, a moment offline.
+      // The list is public and was already fetched; losing the "you liked
+      // this" markers is a smaller loss than losing every comment.
+      return comments;
+    }
   }
 
   Future<AnimeWitcherComment> toggleCommentLike(

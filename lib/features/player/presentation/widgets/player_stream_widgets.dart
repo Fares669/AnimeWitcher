@@ -437,10 +437,6 @@ class PlayerPlayPauseButton extends StatelessWidget {
   /// hidden away where it's easy to miss.
   final bool showBufferingSpinner;
 
-  /// Optional circular fill behind the glyph (used for the big touch-center
-  /// button so it reads as a tappable target over bright video).
-  final Color? backgroundColor;
-
   /// The glyph's own size, when it should differ from the button's circle.
   ///
   /// The transport row draws play, back and forward at one size and gives
@@ -467,7 +463,6 @@ class PlayerPlayPauseButton extends StatelessWidget {
     this.focusNode,
     this.onPressed,
     this.showBufferingSpinner = true,
-    this.backgroundColor,
   });
 
   @override
@@ -516,28 +511,26 @@ class PlayerPlayPauseButton extends StatelessWidget {
       onPressed: onPressed ?? () => player.playOrPause(),
       showFocusHighlight: isTv,
       shape: const CircleBorder(),
-      child: Container(
+      child: SizedBox(
         width: size,
         height: size,
-        alignment: Alignment.center,
-        decoration: backgroundColor != null
-            ? BoxDecoration(shape: BoxShape.circle, color: backgroundColor)
-            : null,
-        child: isSpinning
-            ? const _PlayerSpinner()
-            : _HoverTintedIcon(
-                icon: isPlaying ? LucideIcons.pause200 : LucideIcons.play200,
-                color: foregroundColor ?? Colors.white,
-                hoverColor: hoverColor,
-                size: iconSize ?? size * 0.88,
-              ),
+        child: Center(
+          child: isSpinning
+              ? const _PlayerSpinner()
+              : _HoverTintedIcon(
+                  icon: isPlaying ? LucideIcons.pause200 : LucideIcons.play200,
+                  color: foregroundColor ?? Colors.white,
+                  hoverColor: hoverColor,
+                  size: iconSize ?? size * 0.88,
+                ),
+        ),
       ),
     );
   }
 }
 
-/// Circular ±10s seek button shown beside [PlayerPlayPauseButton] in the
-/// touch centered overlay. The desktop/TV control row uses [PlayerIconButton]
+/// ±10s seek button shown beside [PlayerPlayPauseButton] in the touch
+/// centered overlay. The desktop/TV control row uses [PlayerIconButton]
 /// for the same action instead, to match the rest of that row's buttons.
 class PlayerSeekButton extends StatelessWidget {
   final bool forward;
@@ -545,7 +538,6 @@ class PlayerSeekButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback onPressed;
   final double size;
-  final Color? backgroundColor;
 
   const PlayerSeekButton({
     super.key,
@@ -554,7 +546,6 @@ class PlayerSeekButton extends StatelessWidget {
     required this.tooltip,
     required this.onPressed,
     this.size = 52,
-    this.backgroundColor,
   });
 
   @override
@@ -564,17 +555,15 @@ class PlayerSeekButton extends StatelessWidget {
       child: CustomButton(
         onPressed: onPressed,
         shape: const CircleBorder(),
-        child: Container(
+        child: SizedBox(
           width: size,
           height: size,
-          alignment: Alignment.center,
-          decoration: backgroundColor != null
-              ? BoxDecoration(shape: BoxShape.circle, color: backgroundColor)
-              : null,
-          child: SeekIcon(
-            forward: forward,
-            seconds: seconds,
-            size: size * 0.55,
+          child: Center(
+            child: SeekIcon(
+              forward: forward,
+              seconds: seconds,
+              size: size * 0.55,
+            ),
           ),
         ),
       ),

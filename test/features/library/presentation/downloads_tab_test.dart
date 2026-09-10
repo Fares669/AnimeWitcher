@@ -18,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../support/test_fonts.dart';
+import '../../../support/debug_shots.dart';
 
 MultimediaItem _blackTorch() {
   return MultimediaItem(
@@ -500,8 +501,8 @@ void main() {
     expect(find.byType(ExpansionTile), findsNothing);
     expect(find.byType(ReorderableListView), findsNothing);
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) return;
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) return;
 
     await tester.runAsync(() async {
       final boundary = tester.renderObject<RenderRepaintBoundary>(
@@ -573,8 +574,8 @@ void main() {
     expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
     expect(find.byType(FilterStyleTabBar), findsOneWidget);
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (artifacts.existsSync()) {
+    final artifacts = debugShotDirectory();
+    if (artifacts != null) {
       await tester.runAsync(() async {
         final boundary = tester.renderObject<RenderRepaintBoundary>(
           find.byKey(const ValueKey('downloads-tab-root')),
@@ -649,8 +650,8 @@ void main() {
       TextDirection.ltr,
     );
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (artifacts.existsSync()) {
+    final artifacts = debugShotDirectory();
+    if (artifacts != null) {
       await tester.runAsync(() async {
         final boundary = tester.renderObject<RenderRepaintBoundary>(
           find.byKey(const ValueKey('downloads-tab-root')),
@@ -833,8 +834,8 @@ void main() {
     expect(find.byIcon(Icons.play_circle_fill_rounded), findsNothing);
     expect(find.byIcon(Icons.delete_outline_rounded), findsNWidgets(3));
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (artifacts.existsSync()) {
+    final artifacts = debugShotDirectory();
+    if (artifacts != null) {
       await tester.runAsync(() async {
         final boundary = tester.renderObject<RenderRepaintBoundary>(
           find.byKey(const ValueKey('downloads-tab-root')),
@@ -932,8 +933,8 @@ void main() {
     expect(find.byIcon(Icons.pause_rounded), findsNothing);
     expect(find.byIcon(Icons.drag_handle_rounded), findsNothing);
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) return;
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) return;
     await tester.runAsync(() async {
       final boundary = tester.renderObject<RenderRepaintBoundary>(
         find.byKey(const ValueKey('downloads-tab-root')),

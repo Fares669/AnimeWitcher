@@ -16,6 +16,7 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/localized_text.dart';
 import '../../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../comments/presentation/animewitcher_replies_screen.dart';
+import '../../../../core/utils/avatar_image.dart';
 
 const Key kDetailsCommentsPreviewKey = Key('details-comments-preview');
 
@@ -278,11 +279,11 @@ class _CommentRow extends StatelessWidget {
               CircleAvatar(
                 radius: 18,
                 backgroundColor: colors.surfaceContainerHighest,
-                backgroundImage:
-                    (comment.userPhotoUrl != null &&
-                        comment.userPhotoUrl!.isNotEmpty)
-                    ? NetworkImage(comment.userPhotoUrl!)
-                    : null,
+                backgroundImage: avatarImage(
+                  context,
+                  comment.userPhotoUrl,
+                  radius: 18,
+                ),
                 child:
                     (comment.userPhotoUrl == null ||
                         comment.userPhotoUrl!.isEmpty)

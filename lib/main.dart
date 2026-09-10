@@ -18,7 +18,6 @@ import 'core/utils/app_utils.dart';
 import 'core/utils/artwork_host_fallback.dart';
 import 'core/utils/window_controls_visibility.dart';
 import 'core/utils/artwork_quality.dart';
-import 'core/utils/immersive_mode.dart';
 import 'core/utils/factory_reset.dart';
 import 'core/utils/localized_text.dart';
 import 'core/providers/update_provider.dart';

@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/test_fonts.dart';
+import '../../../support/debug_shots.dart';
 
 class _KeepAlivePage extends StatefulWidget {
   const _KeepAlivePage({required this.child});
@@ -30,8 +31,8 @@ class _KeepAlivePageState extends State<_KeepAlivePage>
 }
 
 Future<void> _writeShot(WidgetTester tester, String filename, Key key) async {
-  final artifacts = Directory('/opt/cursor/artifacts');
-  if (!artifacts.existsSync()) return;
+  final artifacts = debugShotDirectory();
+  if (artifacts == null) return;
   await tester.runAsync(() async {
     final boundary = tester.renderObject<RenderRepaintBoundary>(
       find.byKey(key),

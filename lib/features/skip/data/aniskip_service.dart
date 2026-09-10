@@ -1,5 +1,4 @@
 import 'dart:collection';
-import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -110,6 +109,10 @@ class AniSkipService implements SkipService {
     final until = _rateLimitUntil;
     if (until != null && DateTime.now().isBefore(until)) return [];
 
+    // Whether AniSkip actually told us something. An empty result is only
+    // worth remembering for an hour when it came from the service saying so.
+    var answered = false;
+
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         'https://api.aniskip.com/v2/skip-times/$malId/$episode',
@@ -119,7 +122,8 @@ class AniSkipService implements SkipService {
         },
       );
       final data = response.data;
-      if (response.statusCode == 200 && data != null && data['found'] == true) {
+      answered = response.statusCode == 200;
+      if (answered && data != null && data['found'] == true) {
         final results = data['results'];
         // The API can return several submissions of the same type, each
         // timed against a different release length. Keep one per type —
@@ -167,13 +171,21 @@ class AniSkipService implements SkipService {
           'AniSkip rate-limited; holding off ${retryAfter.inSeconds}s',
         );
       }
-      // 404 simply means nobody has submitted timestamps for this episode.
+      // 404 simply means nobody has submitted timestamps for this episode —
+      // an answer, and one worth remembering. A rate limit or a server error
+      // is not: it says nothing about whether the timings exist.
+      if (e.response?.statusCode == 404) answered = true;
     } catch (_) {
       // Ignore — the caller treats an empty list as "no skip data".
     }
 
     // Cache the miss too, so a seek-heavy session doesn't re-ask every time.
-    _store(key, const []);
+    //
+    // Only a real one, though. Caching a request that failed would hide the
+    // skip button for the rest of the hour over a moment without a
+    // connection, and the viewer would have no way to ask again — which is
+    // exactly what "AniSkip doesn't work" looks like from the outside.
+    if (answered) _store(key, const []);
     return [];
   }
 

@@ -107,7 +107,7 @@ class DetailsRatingsSummary extends StatelessWidget {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          formatRatingScore(witcherScore!),
+                          formatRatingScore(witcherScore),
                           style: scoreStyle,
                         ),
                       ],
@@ -156,7 +156,7 @@ class DetailsRatingsSummary extends StatelessWidget {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          formatRatingScore(externalScore!),
+                          formatRatingScore(externalScore),
                           style: scoreStyle,
                         ),
                       ],

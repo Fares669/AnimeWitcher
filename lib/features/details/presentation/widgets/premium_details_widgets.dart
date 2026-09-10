@@ -12,6 +12,7 @@ import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'countdown_unit_visibility.dart';
 import 'details_ratings_row.dart';
+import '../../../../core/utils/avatar_image.dart';
 
 bool _isArabicDetailsLocale(BuildContext context) => true;
 
@@ -560,9 +561,11 @@ class CastCarousel extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     radius: 35,
-                    backgroundImage: actor.image != null
-                        ? CachedNetworkImageProvider(actor.image!)
-                        : null,
+                    backgroundImage: avatarImage(
+                      context,
+                      actor.image,
+                      radius: 35,
+                    ),
                     child: actor.image == null
                         ? const Icon(Icons.person)
                         : null,

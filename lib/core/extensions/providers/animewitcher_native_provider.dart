@@ -319,37 +319,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return result.json;
   }
 
-  Future<Map<String, dynamic>?> _postJson(
-    String url,
-    Map<String, dynamic> body, {
-    CancelToken? cancelToken,
-    Duration timeout = _httpTimeout,
-    Map<String, String>? headers,
-  }) async {
-    try {
-      final response = await _dio.post<dynamic>(
-        url,
-        data: body,
-        cancelToken: cancelToken,
-        options: _jsonOptions(
-          headers: <String, String>{
-            'Content-Type': 'application/json; charset=UTF-8',
-            ...?headers,
-          },
-          timeout: timeout,
-        ),
-      );
-      if ((response.statusCode ?? 0) < 200 ||
-          (response.statusCode ?? 0) >= 300) {
-        return null;
-      }
-      final value = _map(response.data);
-      return value.isEmpty ? null : value;
-    } on DioException {
-      return null;
-    }
-  }
-
   String _encodeFirestorePath(String path) {
     return path
         .split('/')
@@ -2636,7 +2605,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       page: pageNumber,
       hitsPerPage: safeLimit,
       maxHitsPerPage: _homeViewMoreHitsPerPage,
-      filters: plan.filters,
       attributes: attributes,
       throwOnFailure: throwOnFailure,
     );
@@ -3653,10 +3621,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         details['relatedAnimeIds'] ??
         details['related_anime'];
     if (raw is String) {
+      final text = raw;
       try {
-        raw = jsonDecode(raw);
+        raw = jsonDecode(text);
       } catch (_) {
-        raw = raw
+        raw = text
             .split(RegExp(r'[\s,|]+'))
             .where((value) => value.isNotEmpty)
             .toList();
@@ -5219,11 +5188,9 @@ class _HomePlan {
   const _HomePlan({
     required this.index,
     this.query = '',
-    this.filters = '',
     this.recent = false,
   });
   final String index;
   final String query;
-  final String filters;
   final bool recent;
 }

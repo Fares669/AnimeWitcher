@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -10,8 +11,10 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:video_view/video_view.dart' as vv;
+
 import '../../../../l10n/generated/app_localizations.dart';
 import '../player_controller.dart';
+import '../player_shortcuts.dart';
 import '../../../details/presentation/playback_launcher.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -33,6 +36,8 @@ import '../player_pip.dart';
 import '../player_chrome_actions.dart';
 import '../player_gesture_handler.dart';
 import 'player_metadata_scrim.dart';
+import '../../data/anime4k.dart';
+import 'anime4k_player_sheet.dart';
 
 class AnimeWitcherPlayerControls extends ConsumerStatefulWidget {
   final Player player;
@@ -917,6 +922,49 @@ class AnimeWitcherPlayerControlsState
     );
   }
 
+  /// Jumps to [fraction] of the way through the episode — the number keys.
+  ///
+  /// Silently does nothing before a duration arrives: a fraction of an unknown
+  /// length is not a position, and seeking to zero would be a surprising thing
+  /// for the 5 key to do.
+  void seekToFraction(double fraction) {
+    if (_duration <= Duration.zero) return;
+    final target = Duration(
+      milliseconds: (_duration.inMilliseconds * fraction.clamp(0.0, 1.0))
+          .round(),
+    );
+    unawaited(ref.read(playerControllerProvider.notifier).seekTo(target));
+    // Surface the chrome: after a jump you want to see where you landed.
+    onUserInteraction();
+  }
+
+  /// Steps playback speed by a quarter — the `,` and `.` keys.
+  void stepPlaybackSpeed({required bool faster}) {
+    final playerState = ref.read(playerControllerProvider);
+    final current = playerState.playbackSpeed;
+    final next = steppedPlaybackSpeed(
+      current,
+      faster: faster,
+      maxSpeed: playerState.maxPlaybackSpeed,
+    );
+    // Already at the end of the range: say nothing rather than flashing a
+    // toast that reports no change.
+    if (next == current) return;
+
+    unawaited(
+      ref
+          .read(playerControllerProvider.notifier)
+          .setPlaybackSpeed(next, persist: true),
+    );
+    ref
+        .read(playerGestureHandlerProvider.notifier)
+        .showToast(
+          playbackSpeedLabel(next),
+          faster ? LucideIcons.fastForward200 : LucideIcons.rewind200,
+        );
+    onUserInteraction();
+  }
+
   void cycleResize() {
     setState(() {
       _resizeMode = (_resizeMode + 1) % _resizeModes.length;
@@ -1265,9 +1313,6 @@ class AnimeWitcherPlayerControlsState
                                   arabic: 'إرجاع $seekDuration ثوانٍ',
                                 ),
                                 onPressed: () => triggerSeek(true),
-                                backgroundColor: Colors.black.withValues(
-                                  alpha: 0.32,
-                                ),
                               ),
                               const SizedBox(width: 28),
                               PlayerPlayPauseButton(
@@ -1276,9 +1321,6 @@ class AnimeWitcherPlayerControlsState
                                 isLoading: widget.isLoading,
                                 isTv: _isTv,
                                 size: 82,
-                                backgroundColor: Colors.black.withValues(
-                                  alpha: 0.32,
-                                ),
                                 onPressed: _togglePlay,
                               ),
                               const SizedBox(width: 28),
@@ -1291,9 +1333,6 @@ class AnimeWitcherPlayerControlsState
                                   arabic: 'تقديم $seekDuration ثوانٍ',
                                 ),
                                 onPressed: () => triggerSeek(false),
-                                backgroundColor: Colors.black.withValues(
-                                  alpha: 0.32,
-                                ),
                               ),
                             ],
                           ),
@@ -1666,6 +1705,15 @@ class AnimeWitcherPlayerControlsState
       hasEpisodePicker: hasEpisodePicker,
       showResize: playerSettings.showResize,
       isDesktop: isDesktop,
+      // The button follows the feature, not the mode. Choosing "off"
+      // from its own list must not retire the control that chose it.
+      anime4kOn: playerSettings.anime4kEnabled,
+      anime4kSupported: anime4kAvailableOn(
+        isDesktopPlatform: isDesktop,
+        usingAdaptiveBackend: ref.watch(
+          playerControllerProvider.select((s) => s.useExoPlayer),
+        ),
+      ),
     );
 
     // Right-side optional player controls. PiP sits immediately left of
@@ -1695,7 +1743,9 @@ class AnimeWitcherPlayerControlsState
             isTv: _isTv,
           ),
           PlayerChromeAction.rotate => PlayerIconButton(
-            icon: LucideIcons.rotate3d200,
+            icon: LucideIcons.rotateCw200,
+            iconBuilder: (color, size) =>
+                RotateScreenIcon(size: size, color: color),
             tooltip: l10n.rotate,
             onPressed: _toggleOrientation,
             isTv: _isTv,
@@ -1706,8 +1756,32 @@ class AnimeWitcherPlayerControlsState
             onPressed: openEpisodesPanel,
             isTv: _isTv,
           ),
+          PlayerChromeAction.anime4k => PlayerIconButton(
+            key: const ValueKey<String>('playerAnime4kButton'),
+            icon: LucideIcons.sparkles200,
+            tooltip:
+                'Anime4K · ${playerSettings.anime4kMode.label} '
+                '(${playerSettings.anime4kQuality.suffix})',
+            onPressed: () => Anime4kPlayerSheet.show(
+              context: context,
+              currentMode: playerSettings.anime4kMode,
+              onModeSelected: (mode) async {
+                await ref
+                    .read(playerSettingsProvider.notifier)
+                    .setAnime4kMode(mode);
+                await ref
+                    .read(playerControllerProvider.notifier)
+                    .applyAnime4kShaders();
+              },
+            ),
+            isTv: _isTv,
+          ),
           PlayerChromeAction.resize => PlayerIconButton(
-            icon: LucideIcons.ratio200,
+            // A divided rectangle, which is what an aspect ratio is. The
+            // overlapping squares this replaces read as two of something at
+            // the size this is drawn, and the outward arrows that would also
+            // suit it are the fullscreen button two places along.
+            icon: LucideIcons.proportions200,
             tooltip: l10n.resize,
             onPressed: cycleResize,
             isTv: _isTv,

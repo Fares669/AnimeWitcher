@@ -11,7 +11,6 @@ import '../../features/details/presentation/details_screen.dart';
 import '../../features/player/presentation/player_screen.dart';
 import '../../features/home/presentation/view_all_screen.dart';
 import '../domain/entity/multimedia_item.dart';
-import '../../features/home/presentation/home_provider.dart';
 import '../../shared/widgets/app_scaffold.dart';
 import '../storage/settings_repository.dart';
 import '../extensions/base_provider.dart';

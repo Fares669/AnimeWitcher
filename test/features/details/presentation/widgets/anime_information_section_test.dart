@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../../support/test_fonts.dart';
+import '../../../../support/debug_shots.dart';
 
 MultimediaItem _item({
   String? source,
@@ -241,8 +242,8 @@ void main() {
         TextDirection.rtl,
       );
 
-      final artifacts = Directory('/opt/cursor/artifacts');
-      if (artifacts.existsSync()) {
+      final artifacts = debugShotDirectory();
+      if (artifacts != null) {
         final loaded = await tester.runAsync(() async {
           final arabic = await TestFonts.loadWalkthroughFonts();
           await TestFonts.loadFamily('NotoSans', const [
@@ -317,8 +318,8 @@ void main() {
           .load();
     });
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) return;
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) return;
 
     Future<void> shot(String name, MultimediaItem item) async {
       await tester.pumpWidget(

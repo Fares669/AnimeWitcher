@@ -267,6 +267,9 @@ class ArtworkFallbackService {
   ) async {
     Map<int, String> found;
     var banners = <int, String>{};
+    // Whether AniList actually answered. A batch that never reached it has
+    // learned nothing about these ids — see [_runIdBatch]'s use below.
+    var answered = true;
     try {
       final result = await _aniListByMalIds(ids);
       found = result.covers;
@@ -274,6 +277,7 @@ class ArtworkFallbackService {
     } catch (e) {
       if (kDebugMode) debugPrint('[Artwork] AniList id batch failed: $e');
       found = <int, String>{};
+      answered = false;
     }
 
     // AniList did not know these; AniZip and Kitsu are the last places worth
@@ -312,14 +316,23 @@ class ArtworkFallbackService {
     for (final id in ids) {
       final url = found[id];
       if (waiting.containsKey(id)) {
-        _remember(id, url);
-        _markDirty(url);
+        // A miss is only worth remembering when something actually said no.
+        // Recording one after a failed request turns a moment without a
+        // connection into "this anime has no artwork" for the rest of the
+        // session — fifty titles at a time, since that is the batch — and
+        // nothing ever looks again.
+        if (url != null || answered) {
+          _remember(id, url);
+          _markDirty(url);
+        }
         waiting[id]?.complete(url);
       }
       if (bannerWaiting.containsKey(id)) {
         final banner = banners[id];
-        _rememberBanner(id, banner);
-        _markDirty(banner);
+        if (banner != null || answered) {
+          _rememberBanner(id, banner);
+          _markDirty(banner);
+        }
         bannerWaiting[id]?.complete(banner);
       }
     }
@@ -332,11 +345,13 @@ class ArtworkFallbackService {
     Map<String, Completer<String?>> waiting,
   ) async {
     Map<String, String> found;
+    var answered = true;
     try {
       found = await _aniListByTitles(keys, texts);
     } catch (e) {
       if (kDebugMode) debugPrint('[Artwork] AniList title batch failed: $e');
       found = <String, String>{};
+      answered = false;
     }
     if (kDebugMode) {
       debugPrint(
@@ -345,8 +360,11 @@ class ArtworkFallbackService {
     }
     for (final key in keys) {
       final url = found[key];
-      _rememberTitle(key, url);
-      _markDirty(url);
+      // As above: only an answer teaches us anything about a title.
+      if (url != null || answered) {
+        _rememberTitle(key, url);
+        _markDirty(url);
+      }
       waiting[key]?.complete(url);
     }
     _schedulePersist();

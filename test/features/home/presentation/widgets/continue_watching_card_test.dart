@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../../support/test_fonts.dart';
+import '../../../../support/debug_shots.dart';
 
 HistoryItem _historyItem() {
   return HistoryItem(
@@ -108,8 +109,8 @@ Widget _shell({required Widget child, VoidCallback? onTaskbarTap}) {
 }
 
 Future<void> _writeShot(WidgetTester tester, String filename) async {
-  final artifacts = Directory('/opt/cursor/artifacts');
-  if (!artifacts.existsSync()) return;
+  final artifacts = debugShotDirectory();
+  if (artifacts == null) return;
   final boundary = tester.renderObject<RenderRepaintBoundary>(
     find.byKey(const ValueKey('cw-card-shot')),
   );

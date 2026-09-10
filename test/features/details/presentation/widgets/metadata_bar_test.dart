@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../../support/test_fonts.dart';
+import '../../../../support/debug_shots.dart';
 
 void main() {
   testWidgets('header metadata shows the compact poster-side rating', (
@@ -56,8 +57,8 @@ void main() {
 
     final loaded = await tester.runAsync(TestFonts.loadWalkthroughFonts);
     if (loaded != true) return;
-    final artifacts = Directory('/opt/cursor/artifacts');
-    artifacts.createSync(recursive: true);
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) return;
     const shotKey = ValueKey<String>('metadata-bar-with-rating');
     await tester.pumpWidget(
       ProviderScope(

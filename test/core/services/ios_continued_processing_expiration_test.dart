@@ -6,9 +6,13 @@ void main() {
   test(
     'continued-processing expiration ends only the OS lease, not the download',
     () async {
-      final source = await File(
+      // Normalised because this searches for literal newlines. Git checks the
+      // file out with CRLF wherever core.autocrlf is on, which is the default
+      // on Windows — there the '\n\n' below matches nothing and the test
+      // fails on a tree that is perfectly correct.
+      final source = (await File(
         'ios/Runner/DownloadContinuedProcessingManager.swift',
-      ).readAsString();
+      ).readAsString()).replaceAll('\r\n', '\n');
       final start = source.indexOf('task.expirationHandler =');
       final end = source.indexOf('\n\n    if let snapshot', start);
 

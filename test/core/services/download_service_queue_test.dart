@@ -1,5 +1,4 @@
 import 'package:animewitcher/core/network/dio_client_provider.dart';
-import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_service.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:background_downloader/background_downloader.dart';

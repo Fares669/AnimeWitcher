@@ -948,34 +948,6 @@ class _HomeHeroCarouselState extends ConsumerState<HomeHeroCarousel>
     );
   }
 
-  Widget _buildMiniBadge(
-    BuildContext context,
-    String label, {
-    bool isProvider = false,
-  }) {
-    final theme = Theme.of(context);
-    final color = isProvider
-        ? theme.colorScheme.primary
-        : theme.colorScheme.secondary;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withValues(alpha: 0.5), width: 0.5),
-      ),
-      child: Text(
-        label,
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: color,
-          fontSize: 8,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 0.5,
-        ),
-      ),
-    );
-  }
 }
 
 /// A single progress dot whose width animates with spring physics.

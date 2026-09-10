@@ -17,6 +17,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../../support/debug_shots.dart';
 
 const Size _phoneLandscape = Size(800, 360);
 const Size _phonePortrait = Size(390, 844);
@@ -96,8 +97,8 @@ Widget _app({required Widget child, bool catalogLtr = false}) {
 }
 
 Future<void> _writeShot(WidgetTester tester, String filename, Key key) async {
-  final artifacts = Directory('/opt/cursor/artifacts');
-  if (!artifacts.existsSync()) return;
+  final artifacts = debugShotDirectory();
+  if (artifacts == null) return;
   await tester.runAsync(() async {
     final boundary = tester.renderObject<RenderRepaintBoundary>(
       find.byKey(key),

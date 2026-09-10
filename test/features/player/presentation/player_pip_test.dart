@@ -97,6 +97,8 @@ void main() {
         hasEpisodePicker: true,
         showResize: false,
         isDesktop: false,
+        anime4kOn: false,
+        anime4kSupported: true,
       );
 
       expect(actions, [
@@ -118,6 +120,8 @@ void main() {
         hasEpisodePicker: true,
         showResize: true,
         isDesktop: false,
+        anime4kOn: false,
+        anime4kSupported: true,
       );
 
       expect(
@@ -138,9 +142,79 @@ void main() {
         hasEpisodePicker: false,
         showResize: false,
         isDesktop: false,
+        anime4kOn: false,
+        anime4kSupported: true,
       );
 
       expect(actions, [PlayerChromeAction.rotate]);
+    });
+
+    List<PlayerChromeAction> withAnime4k({
+      required bool on,
+      required bool supported,
+    }) {
+      return PlayerChromeActions.visible(
+        showPlaybackSpeed: false,
+        supportsPlaybackSpeed: false,
+        showPip: false,
+        pipSupported: false,
+        showRotate: false,
+        canRotate: false,
+        showEpisodes: false,
+        hasEpisodePicker: false,
+        showResize: true,
+        isDesktop: false,
+        anime4kOn: on,
+        anime4kSupported: supported,
+      );
+    }
+
+    test('the Anime4K button appears only once a mode is chosen', () {
+      expect(
+        withAnime4k(on: false, supported: true),
+        <PlayerChromeAction>[PlayerChromeAction.resize],
+      );
+      expect(
+        withAnime4k(on: true, supported: true),
+        <PlayerChromeAction>[
+          PlayerChromeAction.anime4k,
+          PlayerChromeAction.resize,
+        ],
+      );
+    });
+
+    test('it stays hidden on a backend that cannot run shaders', () {
+      // The adaptive player used for DRM has no GLSL stage; offering the
+      // panel there would let someone change a setting that never reaches
+      // the picture they are looking at.
+      expect(
+        withAnime4k(on: true, supported: false),
+        <PlayerChromeAction>[PlayerChromeAction.resize],
+      );
+    });
+
+    test('it sits beside resize, both being about how the picture looks', () {
+      final actions = PlayerChromeActions.visible(
+        showPlaybackSpeed: true,
+        supportsPlaybackSpeed: true,
+        showPip: false,
+        pipSupported: false,
+        showRotate: false,
+        canRotate: false,
+        showEpisodes: true,
+        hasEpisodePicker: true,
+        showResize: true,
+        isDesktop: true,
+        anime4kOn: true,
+        anime4kSupported: true,
+      );
+      expect(actions, <PlayerChromeAction>[
+        PlayerChromeAction.playbackSpeed,
+        PlayerChromeAction.episodes,
+        PlayerChromeAction.anime4k,
+        PlayerChromeAction.resize,
+        PlayerChromeAction.desktopFullscreen,
+      ]);
     });
   });
 

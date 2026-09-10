@@ -12,7 +12,6 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../shared/widgets/apple_liquid_glass.dart';
 import '../details_controller.dart';
-import '../details_ratings.dart';
 import 'details_layout_widgets.dart';
 
 /// Height shared by every control in the row, so they sit on one line.

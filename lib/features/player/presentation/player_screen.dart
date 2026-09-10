@@ -25,6 +25,7 @@ import 'widgets/animewitcher_player_controls.dart';
 import 'widgets/hotstar_player_style.dart';
 import 'widgets/player_ltr.dart';
 import 'player_controller.dart';
+import 'player_shortcuts.dart';
 import 'player_gesture_handler.dart';
 
 TextStyle _getSubtitleTextStyle(String? fontFamily, TextStyle baseStyle) {
@@ -536,6 +537,40 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     // TV with controls already visible but focus on root (rare/transient) â
     // leave arrows for traversal.
     if (_isTv) return KeyEventResult.ignored;
+
+    // Keyboard conventions every desktop player shares. They sit below the TV
+    // return deliberately: a remote has no J or number row, and the digits it
+    // does have belong to its own navigation.
+    if (event.logicalKey == LogicalKeyboardKey.keyK) {
+      _controlsKeyFinal.currentState?.togglePlayPause();
+      _controlsKeyFinal.currentState?.onUserInteraction();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyJ) {
+      _controlsKeyFinal.currentState?.triggerSeek(true);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyL) {
+      _controlsKeyFinal.currentState?.triggerSeek(false);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.comma ||
+        event.logicalKey == LogicalKeyboardKey.period) {
+      _controlsKeyFinal.currentState?.stepPlaybackSpeed(
+        faster: event.logicalKey == LogicalKeyboardKey.period,
+      );
+      return KeyEventResult.handled;
+    }
+    final fraction = seekFractionForKey(event.logicalKey);
+    if (fraction != null) {
+      // Repeats are dropped: holding 5 should land on the halfway mark once,
+      // not re-seek to it many times a second while the engine is still
+      // moving there.
+      if (event is KeyDownEvent) {
+        _controlsKeyFinal.currentState?.seekToFraction(fraction);
+      }
+      return KeyEventResult.handled;
+    }
 
     if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
       _controlsKeyFinal.currentState?.changeVolume(0.05);

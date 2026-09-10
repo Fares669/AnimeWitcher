@@ -18,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/memory_storage_service.dart';
 import '../../../support/test_fonts.dart';
+import '../../../support/debug_shots.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -141,8 +142,8 @@ void main() {
     expect(storage.getDownloadParallelParts(), 4);
     expect(find.text(downloadPartsSubtitle(4)), findsOneWidget);
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) return;
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) return;
 
     await tester.runAsync(() async {
       final boundary = tester.renderObject<RenderRepaintBoundary>(
@@ -230,8 +231,8 @@ void main() {
       DownloadNotificationPrefs.disabled,
     );
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (artifacts.existsSync()) {
+    final artifacts = debugShotDirectory();
+    if (artifacts != null) {
       await tester.runAsync(() async {
         final boundary = tester.renderObject<RenderRepaintBoundary>(
           find.byKey(const ValueKey('download-notifications-dialog')),

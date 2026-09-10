@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'widgets/download_log_dialog.dart';
@@ -25,6 +27,9 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'cache_provider.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
+
+import '../../player/data/anime4k.dart';
+import 'widgets/anime4k_dialog.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -403,6 +408,18 @@ class SettingsScreen extends ConsumerWidget {
                 .read(playerSettingsProvider.notifier)
                 .setPrefetchNextEpisode(!playerSettings.prefetchNextEpisode),
           ),
+          // Desktop only. Offering it on a phone would be offering a
+          // setting that cannot run there — see anime4kAvailableOn.
+          if (Platform.isWindows || Platform.isMacOS || Platform.isLinux)
+            SettingsTile(
+              icon: Icons.auto_awesome_rounded,
+              title: 'Anime4K',
+              subtitle: !playerSettings.anime4kEnabled
+                  ? appText(context, english: 'Off', arabic: 'إيقاف')
+                  : '${playerSettings.anime4kMode.label} '
+                        '(${playerSettings.anime4kQuality.suffix})',
+              onTap: () => showAnime4kDialog(context, ref),
+            ),
           SettingsTile(
             icon: Icons.tune_rounded,
             title: l10n.playerControls,

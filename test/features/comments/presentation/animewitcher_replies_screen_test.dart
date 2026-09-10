@@ -18,13 +18,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/test_fonts.dart';
+import '../../../support/debug_shots.dart';
 
 class _FakeAccountService extends AnimeWitcherAccountService {
   _FakeAccountService({
     required this.comments,
     required this.replies,
     this.signedIn = true,
-    this.myUserId = 'me',
   }) : super(
          storage: StorageService(),
          secureStorage: SecureTokenStorage(StorageService()),
@@ -33,7 +33,7 @@ class _FakeAccountService extends AnimeWitcherAccountService {
   final List<AnimeWitcherComment> comments;
   final List<AnimeWitcherComment> replies;
   final bool signedIn;
-  final String myUserId;
+  final String myUserId = 'me';
 
   int loadCommentsCalls = 0;
   int loadRepliesCalls = 0;
@@ -180,10 +180,8 @@ Widget _app({
 }
 
 Future<void> _writeShot(WidgetTester tester, String filename, Key key) async {
-  final artifacts = Directory(
-    '${Directory.systemTemp.path}/animewitcher-test-artifacts',
-  );
-  artifacts.createSync(recursive: true);
+  final artifacts = debugShotDirectory();
+  if (artifacts == null) return;
   await tester.runAsync(() async {
     final boundary = tester.renderObject<RenderRepaintBoundary>(
       find.byKey(key),
@@ -391,5 +389,40 @@ void main() {
     expect(find.text('التعليقات'), findsOneWidget);
     expect(service.loadCommentsCalls, 1);
     expect(service.loadRepliesCalls, 1);
+  });
+
+  testWidgets('signed out, the composer is replaced by a sign-in notice', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.runAsync(TestFonts.loadWalkthroughFonts);
+
+    final service = _FakeAccountService(
+      comments: <AnimeWitcherComment>[parent],
+      replies: <AnimeWitcherComment>[otherReply],
+      signedIn: false,
+    );
+
+    await tester.pumpWidget(
+      _app(
+        service: service,
+        home: AnimeWitcherRepliesScreen(parentComment: parent),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // The replies themselves stay readable — signing in is only required to
+    // add one.
+    expect(find.text('انا فكرتها كيلوا'), findsOneWidget);
+
+    expect(
+      find.text('سجّل الدخول إلى حساب AnimeWitcher لإضافة رد.'),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.lock_outline_rounded), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.byTooltip('إرسال'), findsNothing);
   });
 }

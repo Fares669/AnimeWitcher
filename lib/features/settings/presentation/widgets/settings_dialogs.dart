@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import '../../../../shared/widgets/custom_widgets.dart';
 import '../../../../shared/widgets/glass_dialog.dart';
 import '../../../../core/account/account_providers.dart';
@@ -12,7 +11,6 @@ import '../../../../core/storage/settings_repository.dart';
 import '../../../../core/theme/theme_provider.dart';
 import '../../../../core/utils/app_utils.dart';
 import '../../../../core/utils/factory_reset.dart';
-import '../../../../shared/widgets/loading_indicator.dart';
 import '../player_settings_provider.dart';
 import '../general_settings_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';

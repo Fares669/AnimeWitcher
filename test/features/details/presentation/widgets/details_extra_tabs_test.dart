@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../../support/test_fonts.dart';
+import '../../../../support/debug_shots.dart';
 
 MultimediaItem _item(String title, String id, {String? relation}) {
   return MultimediaItem(
@@ -54,8 +55,8 @@ ScrollableState _railScrollable(WidgetTester tester, String role) {
 }
 
 Future<void> _writeShot(WidgetTester tester, String filename, Key key) async {
-  final artifacts = Directory('/opt/cursor/artifacts');
-  if (!artifacts.existsSync()) return;
+  final artifacts = debugShotDirectory();
+  if (artifacts == null) return;
   await tester.runAsync(() async {
     final boundary = tester.renderObject<RenderRepaintBoundary>(
       find.byKey(key),
@@ -317,8 +318,8 @@ void main() {
     expect(find.text(animeWitcherRelatedEmptyMessage), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsWidgets);
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) return;
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) return;
     await tester.pumpWidget(
       _app(
         RepaintBoundary(
@@ -920,8 +921,8 @@ void main() {
       expect((message.dx - box.center.dx).abs(), lessThan(24));
       expect((message.dy - box.center.dy).abs(), lessThan(48));
 
-      final artifacts = Directory('/opt/cursor/artifacts');
-      if (!artifacts.existsSync()) return;
+      final artifacts = debugShotDirectory();
+      if (artifacts == null) return;
       await tester.pumpWidget(
         _app(
           RepaintBoundary(

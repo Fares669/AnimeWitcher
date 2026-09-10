@@ -15,7 +15,9 @@ import 'package:video_view/video_view.dart'
     show VideoController, SubtitleTrackConfig, VideoControllerPlaybackState;
 
 import '../../../../core/logger/app_logger.dart';
+
 import 'package:animewitcher/core/account/account_providers.dart';
+
 import '../../../../core/services/download_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
@@ -43,6 +45,8 @@ import '../../skip/data/skip_service.dart';
 import '../../../../core/storage/settings_repository.dart';
 import 'playback_recovery_policy.dart';
 import 'playback_resume.dart';
+import '../data/anime4k.dart';
+import '../data/anime4k_shader_library.dart';
 
 enum PlaybackUiPhaseKind {
   idle,
@@ -1267,10 +1271,8 @@ class PlayerController extends Notifier<PlayerState> {
             _manualSelectionPending = false;
             revertToPreviousStream(
               _playerText(
-                english:
-                    'Selected source is not playable. Reverting back to previous source.',
-                arabic:
-                    'المصدر المحدد غير قابل للتشغيل. جارٍ الرجوع إلى المصدر السابق.',
+                english: 'Selected source is not playable. Reverting back to previous source.',
+                arabic: 'المصدر المحدد غير قابل للتشغيل. جارٍ الرجوع إلى المصدر السابق.',
               ),
             );
           } else {
@@ -1301,10 +1303,8 @@ class PlayerController extends Notifier<PlayerState> {
             SourceAttemptStatus.failed,
           );
           _revertMessage = _playerText(
-            english:
-                'Current source stopped unexpectedly. Trying next available source...',
-            arabic:
-                'توقف المصدر الحالي بشكل غير متوقع. جارٍ تجربة المصدر التالي المتاح...',
+            english: 'Current source stopped unexpectedly. Trying next available source...',
+            arabic: 'توقف المصدر الحالي بشكل غير متوقع. جارٍ تجربة المصدر التالي المتاح...',
           );
           unawaited(retryNextStream(sourceSessionId: state.sourceSessionId));
         }
@@ -1614,10 +1614,8 @@ class PlayerController extends Notifier<PlayerState> {
       _resetBufferWatchdog();
       _resetMidPlaybackReconnect();
       _revertMessage = _playerText(
-        english:
-            'This source stopped responding after the seek. Trying the next one…',
-        arabic:
-            'توقف هذا المصدر عن الاستجابة بعد التقديم. جارٍ تجربة المصدر التالي…',
+        english: 'This source stopped responding after the seek. Trying the next one…',
+        arabic: 'توقف هذا المصدر عن الاستجابة بعد التقديم. جارٍ تجربة المصدر التالي…',
       );
       unawaited(retryNextStream(sourceSessionId: state.sourceSessionId));
     }
@@ -1852,10 +1850,8 @@ class PlayerController extends Notifier<PlayerState> {
           SourceAttemptStatus.failed,
         );
         _revertMessage = _playerText(
-          english:
-              'Current source stopped unexpectedly. Trying next available source...',
-          arabic:
-              'توقف المصدر الحالي بشكل غير متوقع. جارٍ تجربة المصدر التالي المتاح...',
+          english: 'Current source stopped unexpectedly. Trying next available source...',
+          arabic: 'توقف المصدر الحالي بشكل غير متوقع. جارٍ تجربة المصدر التالي المتاح...',
         );
         retryNextStream(sourceSessionId: state.sourceSessionId);
       }
@@ -1909,10 +1905,8 @@ class PlayerController extends Notifier<PlayerState> {
     if (state.currentStream == null) return;
     _markSourceAttempt(state.currentStreamIndex, SourceAttemptStatus.failed);
     _revertMessage = _playerText(
-      english:
-          'Current source stopped unexpectedly. Trying next available source...',
-      arabic:
-          'توقف المصدر الحالي بشكل غير متوقع. جارٍ تجربة المصدر التالي المتاح...',
+      english: 'Current source stopped unexpectedly. Trying next available source...',
+      arabic: 'توقف المصدر الحالي بشكل غير متوقع. جارٍ تجربة المصدر التالي المتاح...',
     );
     unawaited(retryNextStream(sourceSessionId: state.sourceSessionId));
   }
@@ -2586,7 +2580,70 @@ class PlayerController extends Notifier<PlayerState> {
     await _player.open(Media(mediaKitUrl, httpHeaders: headers), play: play);
     if (!_isCurrentSourceSession(sourceSessionId)) return;
     state = state.copyWith(useExoPlayer: false, isSeekable: true);
+    unawaited(applyAnime4kShaders());
     _scheduleAutoSubtitleSelection();
+  }
+
+  /// What mpv reported for `glsl-shaders` after the last apply, for the
+  /// debug line below: a value mpv rejected and one it accepted are
+  /// indistinguishable from the outside otherwise.
+  String _anime4kApplied = '';
+
+  /// Hands mpv the Anime4K pipeline the settings ask for, or clears it.
+  ///
+  /// Only mpv can do this. The adaptive backend used for DRM and some live
+  /// streams has no GLSL stage at all, so on that path this does nothing
+  /// rather than pretending to — which is also why the setting says it is
+  /// for the built-in player.
+  ///
+  /// Called when a file opens and again when the setting changes, so turning
+  /// a mode on takes effect on what is already playing.
+  Future<void> applyAnime4kShaders() async {
+    if (_isDisposed) return;
+    if (!anime4kAvailableOn(
+      isDesktopPlatform:
+          Platform.isWindows || Platform.isMacOS || Platform.isLinux,
+      usingAdaptiveBackend: state.useExoPlayer,
+    )) {
+      return;
+    }
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+
+    try {
+      final settings = ref.read(playerSettingsProvider).asData?.value;
+      final pipeline = await ref
+          .read(anime4kShaderLibraryProvider)
+          .pipeline(
+            mode: (settings?.anime4kEnabled ?? false)
+                ? (settings?.anime4kMode ?? Anime4kMode.off)
+                : Anime4kMode.off,
+            quality: settings?.anime4kQuality ?? Anime4kQuality.m,
+            directory: settings?.anime4kShaderDirectory ?? '',
+          );
+      if (_isDisposed) return;
+      // An empty string is how mpv is told to run no shaders, so this both
+      // applies a mode and turns one off.
+      await platform.setProperty('glsl-shaders', pipeline.value);
+
+      // Read it back. mpv accepts a malformed list without complaint and
+      // simply renders nothing different, so "did it take" is a question
+      // only the property itself can answer — and the answer is what tells
+      // a viewer whether their folder is wrong or their eyes are.
+      final applied = await platform.getProperty('glsl-shaders');
+      _anime4kApplied = applied.trim();
+      if (kDebugMode) {
+        debugPrint(
+          'Anime4K: asked for ${pipeline.files.length} shaders, '
+          'mpv holds "$_anime4kApplied"'
+          '${pipeline.missing.isEmpty ? '' : ', missing '
+                    '${pipeline.missing.join(", ")}'}',
+        );
+      }
+    } catch (e) {
+      // A shader that will not load must not take playback down with it.
+      if (kDebugMode) debugPrint('Anime4K shaders not applied: $e');
+    }
   }
 
   Future<void> seekTo(Duration position, {bool fast = false}) async {
@@ -2929,10 +2986,8 @@ class PlayerController extends Notifier<PlayerState> {
         // silently to the previously playing source instead.
         revertToPreviousStream(
           _playerText(
-            english:
-                'Selected source is not playable. Reverting back to previous source.',
-            arabic:
-                'المصدر المحدد غير قابل للتشغيل. جارٍ الرجوع إلى المصدر السابق.',
+            english: 'Selected source is not playable. Reverting back to previous source.',
+            arabic: 'المصدر المحدد غير قابل للتشغيل. جارٍ الرجوع إلى المصدر السابق.',
           ),
         );
         return;
@@ -3045,10 +3100,8 @@ class PlayerController extends Notifier<PlayerState> {
       } else {
         revertToPreviousStream(
           _playerText(
-            english:
-                'Could not switch to selected source. Reverting back to previous source.',
-            arabic:
-                'تعذر التبديل إلى المصدر المحدد. جارٍ الرجوع إلى المصدر السابق.',
+            english: 'Could not switch to selected source. Reverting back to previous source.',
+            arabic: 'تعذر التبديل إلى المصدر المحدد. جارٍ الرجوع إلى المصدر السابق.',
           ),
         );
       }

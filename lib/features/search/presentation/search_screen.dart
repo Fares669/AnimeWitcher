@@ -26,6 +26,8 @@ import '../../../shared/widgets/recoverable_network_state.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
+import '../data/recent_searches.dart';
+import 'widgets/recent_searches_view.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
@@ -291,6 +293,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
     ref.read(searchSuggestionControllerProvider.notifier).clear();
     ref.read(searchQueryProvider.notifier).set(trimmed);
+    // Recorded on submit rather than as you type: a half-typed title is not
+    // a search anyone wants offered back to them.
+    ref.read(recentSearchesProvider.notifier).record(trimmed);
     // Keep the field focused after Search/Enter. The app-wide scroll behavior
     // dismisses the keyboard only when the user starts dragging a scroll view.
   }
@@ -857,6 +862,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final isInputEmpty = _controller.text.trim().isEmpty;
 
     if (query.isEmpty || isInputEmpty) {
+      // What you searched for last is more useful than an invitation to
+      // search, so it takes the placeholder's place when there is any.
+      final recents = ref.watch(recentSearchesProvider);
+      if (recents.isNotEmpty) {
+        return RecentSearchesView(
+          searches: recents,
+          onSelected: _submitSearch,
+          onRemoved: (value) =>
+              ref.read(recentSearchesProvider.notifier).remove(value),
+          onClearAll: () =>
+              ref.read(recentSearchesProvider.notifier).clear(),
+        );
+      }
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

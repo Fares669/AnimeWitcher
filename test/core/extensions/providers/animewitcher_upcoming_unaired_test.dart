@@ -7,6 +7,7 @@ import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../../../support/debug_shots.dart';
 
 class _MemoryStorageService extends StorageService {
   final Map<String, String> values = <String, String>{};
@@ -283,8 +284,8 @@ void main() {
     expect(page.hasMore, isTrue);
     expect(page.nextOffset, 100);
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (artifacts.existsSync()) {
+    final artifacts = debugShotDirectory();
+    if (artifacts != null) {
       File('${artifacts.path}/coming_soon_algolia_browse.txt').writeAsStringSync(
         'method: ${query.method}\n'
         'host: ${query.uri.host}\n'

@@ -33,18 +33,17 @@ class StreamSourcePrefetch {
 
   final Map<String, _Entry> _entries = <String, _Entry>{};
 
-  /// Starts a fetch for [episodeUrl] and forgets the result if it fails.
+  /// Starts a fetch for [episodeUrl] ahead of anyone asking for it.
   ///
   /// Fire and forget: a warm that errors must not surface anything, because
-  /// nobody asked for it yet. The real request will report its own failure.
+  /// nobody has asked for these sources yet, and the real request reports its
+  /// own failure. [sources] has already arranged for a failure to be
+  /// forgotten; catching here only keeps it from going unhandled.
   void warm(AnimeWitcherProvider provider, String episodeUrl) {
     if (episodeUrl.trim().isEmpty) return;
     if (_live(episodeUrl) != null) return;
     unawaited(
-      sources(provider, episodeUrl).catchError((_) {
-        _entries.remove(episodeUrl);
-        return const <StreamResult>[];
-      }),
+      sources(provider, episodeUrl).catchError((_) => const <StreamResult>[]),
     );
   }
 
@@ -59,10 +58,33 @@ class StreamSourcePrefetch {
 
     final future = provider.loadStreamSources(episodeUrl);
     _entries[episodeUrl] = _Entry(future, DateTime.now().add(ttl));
+    _forgetIfItFails(episodeUrl, future);
     while (_entries.length > maxEntries) {
       _entries.remove(_entries.keys.first);
     }
     return future;
+  }
+
+  /// Drops a cached fetch that ended in an error.
+  ///
+  /// Only a result is worth keeping for ten minutes. Keeping a failure that
+  /// long turns a moment without a connection into ten minutes without one:
+  /// the viewer's obvious answer to "couldn't load the sources" is to tap the
+  /// episode again, and that tap was being served the same stored error
+  /// without the provider ever being asked, long after the network came back.
+  void _forgetIfItFails(String episodeUrl, Future<List<StreamResult>> future) {
+    unawaited(
+      future.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace __) {
+          // Only when it is still this future's entry: a later call may have
+          // replaced it already, and that one deserves its own life.
+          if (identical(_entries[episodeUrl]?.future, future)) {
+            _entries.remove(episodeUrl);
+          }
+        },
+      ),
+    );
   }
 
   /// Drops everything — a new anime's episodes have nothing to do with the

@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/test_fonts.dart';
+import '../../../support/debug_shots.dart';
 
 class _SignedOutAccount extends AnimeWitcherAccountController {
   @override
@@ -30,8 +31,8 @@ Future<void> _writeShot(
   String key,
   String filename,
 ) async {
-  final artifacts = Directory('/opt/cursor/artifacts');
-  if (!artifacts.existsSync()) return;
+  final artifacts = debugShotDirectory();
+  if (artifacts == null) return;
   final boundary = tester.renderObject<RenderRepaintBoundary>(
     find.byKey(ValueKey(key)),
   );

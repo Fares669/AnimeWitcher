@@ -11,7 +11,6 @@ import '../../../../core/utils/image_fallbacks.dart';
 import '../../../../shared/widgets/thumbnail_error_placeholder.dart';
 import '../../../../shared/widgets/fallback_poster_image.dart';
 import 'premium_details_widgets.dart';
-import 'details_hero_actions.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/services/notification_service.dart';

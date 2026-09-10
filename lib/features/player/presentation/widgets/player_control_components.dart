@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 
 import 'dart:ui' show FontFeature;
 
@@ -63,6 +62,43 @@ class SeekIcon extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A phone with an arrow turning around it: the button that flips the player
+/// between portrait and landscape.
+///
+/// Lucide has no single glyph for this, and the mark this replaces —
+/// `rotate-3d` — is a cube tumbling in space, which named the verb without
+/// naming what it turns. Two of lucide's own glyphs stacked say both, and
+/// keep the stroke weight of the row they sit in, which a Material icon
+/// borrowed for the purpose would not.
+class RotateScreenIcon extends StatelessWidget {
+  const RotateScreenIcon({
+    super.key,
+    this.size = 24,
+    this.color = Colors.white,
+  });
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Icon(LucideIcons.rotateCw200, size: size, color: color),
+          // Half the box: the ring's clear middle is about seven tenths of
+          // it, so the phone sits inside without its corners meeting the
+          // stroke.
+          Icon(LucideIcons.smartphone200, size: size * 0.5, color: color),
         ],
       ),
     );

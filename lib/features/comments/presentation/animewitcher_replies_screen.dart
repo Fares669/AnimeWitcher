@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
@@ -13,6 +12,7 @@ import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/utils/request_generation.dart';
 
 import 'widgets/animewitcher_comment_sort_control.dart';
+import '../../../core/utils/avatar_image.dart';
 
 class AnimeWitcherRepliesScreen extends ConsumerStatefulWidget {
   const AnimeWitcherRepliesScreen({
@@ -470,8 +470,7 @@ class _AnimeWitcherRepliesScreenState
                   CircleAvatar(
                     radius: 20,
                     backgroundColor: colors.surfaceContainerHighest,
-                    backgroundImage:
-                        photo.isEmpty ? null : CachedNetworkImageProvider(photo),
+                    backgroundImage: avatarImage(context, photo, radius: 20),
                     child: photo.isEmpty
                         ? Icon(Icons.person_rounded, color: colors.onSurfaceVariant)
                         : null,

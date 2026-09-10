@@ -119,6 +119,9 @@ class IntroDbService implements SkipService {
       return [];
     }
 
+    // Whether IntroDB actually told us something. See the store below.
+    var answered = false;
+
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         _endpoint,
@@ -129,7 +132,8 @@ class IntroDbService implements SkipService {
         },
       );
 
-      if (response.statusCode == 200 && response.data != null) {
+      answered = response.statusCode == 200;
+      if (answered && response.data != null) {
         final cleaned = SkipSegment.sanitize(
           parseSegments(response.data, durationSec: duration?.toDouble()),
           durationSec: duration?.toDouble(),
@@ -147,13 +151,18 @@ class IntroDbService implements SkipService {
           'IntroDB rate-limited; holding off ${retryAfter.inSeconds}s',
         );
       }
-      // Other errors (404 no segments, network blips) are not interesting.
+      // A 404 is IntroDB saying it has nothing for this episode, which is
+      // worth remembering. A rate limit or a network blip is not an answer
+      // at all, and must not be stored as one.
+      if (e.response?.statusCode == 404) answered = true;
     } catch (_) {
       // Ignore — caller treats empty list as "no skip data".
     }
 
-    // Cache empty result too, so we don't re-query a missing episode every seek.
-    _store(key, const []);
+    // Cache an empty result too, so we don't re-query a missing episode on
+    // every seek — but only when the emptiness was IntroDB's answer rather
+    // than a request that never arrived.
+    if (answered) _store(key, const []);
     return [];
   }
 

@@ -13,6 +13,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../../support/test_fonts.dart';
+import '../../../../support/debug_shots.dart';
 
 MultimediaItem _anime(String title, String id) {
   return MultimediaItem(
@@ -113,8 +114,8 @@ void main() {
         reason: 'chevron sits to the left of عرض الكل',
       );
 
-      final artifacts = Directory('/opt/cursor/artifacts');
-      if (artifacts.existsSync()) {
+      final artifacts = debugShotDirectory();
+      if (artifacts != null) {
         await tester.runAsync(_loadWalkthroughFonts);
         await tester.pumpWidget(
           _rtlApp(
@@ -289,8 +290,8 @@ void main() {
     expect(find.text('Episode Show'), findsWidgets);
     expect(find.text('Added Show'), findsWidgets);
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) {
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) {
       return;
     }
     await tester.runAsync(() async {
@@ -360,8 +361,8 @@ void main() {
     );
     expect(first.dx, greaterThan(last.dx));
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) {
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) {
       return;
     }
 

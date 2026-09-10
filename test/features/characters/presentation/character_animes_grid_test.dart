@@ -9,6 +9,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/test_fonts.dart';
+import '../../../support/debug_shots.dart';
 
 MultimediaItem _show({
   required String title,
@@ -152,8 +153,8 @@ void main() {
     expect(find.text('فيلم'), findsWidgets);
     expect(find.text('1999'), findsOneWidget);
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) return;
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) return;
     await tester.runAsync(() async {
       final boundary = tester.renderObject<RenderRepaintBoundary>(
         find.byKey(const ValueKey('character-animes-grid-shot')),
@@ -232,8 +233,8 @@ void main() {
     expect(first.right, greaterThan(390 / 2));
     expect((titleBox.right - first.right).abs(), lessThan(24));
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) return;
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) return;
     await tester.runAsync(() async {
       final boundary = tester.renderObject<RenderRepaintBoundary>(
         find.byKey(const ValueKey('character-animes-two-shot')),

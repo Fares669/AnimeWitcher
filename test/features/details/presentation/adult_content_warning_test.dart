@@ -10,6 +10,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/test_fonts.dart';
+import '../../../support/debug_shots.dart';
 
 MultimediaItem _item({
   List<String>? tags,
@@ -269,8 +270,8 @@ void main() {
     final loaded = await tester.runAsync(TestFonts.loadWalkthroughFonts);
     if (loaded != true) return;
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) return;
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) return;
 
     Future<void> shot(String name, MultimediaItem item) async {
       final key = ValueKey(name);

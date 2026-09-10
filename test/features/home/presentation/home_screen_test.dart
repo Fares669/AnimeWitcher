@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../support/test_fonts.dart';
+import '../../../support/debug_shots.dart';
 
 const _brokenChapterId = 'RxOiaLyVTBIUObsclHrw';
 
@@ -167,8 +168,8 @@ void main() {
     expect(find.text('فصول جديدة'), findsNothing);
     expect(find.text('آخر الأعمال المضافة'), findsOneWidget);
 
-    final artifacts = Directory('/opt/cursor/artifacts');
-    if (!artifacts.existsSync()) {
+    final artifacts = debugShotDirectory();
+    if (artifacts == null) {
       return;
     }
 
