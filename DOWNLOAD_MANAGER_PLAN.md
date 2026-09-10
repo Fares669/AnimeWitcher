@@ -432,4 +432,4 @@ Existing identifiers remain stable; final-review items are `DM-29` through `DM-3
 
 ## Final review exit criteria
 
-This review phase is considered closed only when all of the following are true: the plan contains every confirmed failure mode found in the three audit passes; each implementation item has a root cause, proposed correction, verification cases, and dependencies; no checklist item is marked complete; the PR diff remains documentation-only; and implementation begins from this file rather than from ad-hoc fixes.
+This review phase is considered closed only when the plan contains every confirmed failure mode found in the three audit passes; each implementation item has a root cause, proposed correction, verification cases, and dependencies; no checklist item is marked complete; the PR diff remains documentation-only; and implementation begins from this file rather than from ad-hoc fixes.
