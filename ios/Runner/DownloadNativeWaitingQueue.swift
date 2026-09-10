@@ -9,7 +9,7 @@ enum DownloadNativeDiagnosticLog {
   private static var file: URL?
   private static var size = 0
   private static var sequence = 0
-  private static var lastProgress: [Int: TimeInterval] = [:]
+  private static var lastProgress: [String: TimeInterval] = [:]
   private static let session = String(Int64(Date().timeIntervalSince1970 * 1000000))
 
   static func configure(_ value: Bool) {
@@ -20,15 +20,26 @@ enum DownloadNativeDiagnosticLog {
     }
   }
 
+  private static func progressOwnerKey(_ task: URLSessionTask) -> String {
+    if let taskId = DownloadNativeWaitingQueue.taskId(from: task), !taskId.isEmpty {
+      if let part = taskId.range(of: ".part.", options: .backwards) {
+        return String(taskId[..<part.lowerBound])
+      }
+      return taskId
+    }
+    return "native:\(task.taskIdentifier)"
+  }
+
   static func record(_ event: String, task: URLSessionTask, error: Error? = nil) {
     queue.sync {
       guard enabled else { return }
       let now = Date().timeIntervalSince1970
+      let progressKey = progressOwnerKey(task)
       if event == "progress" {
-        if let previous = lastProgress[task.taskIdentifier], now - previous < 1.0 { return }
-        lastProgress[task.taskIdentifier] = now
+        if let previous = lastProgress[progressKey], now - previous < 1.0 { return }
+        lastProgress[progressKey] = now
       } else {
-        lastProgress.removeValue(forKey: task.taskIdentifier)
+        lastProgress.removeValue(forKey: progressKey)
       }
       sequence += 1
       var row: [String: Any] = ["time": ISO8601DateFormatter().string(from: Date()),
@@ -1311,7 +1322,9 @@ enum DownloadNativeWaitingQueue {
     let shouldUpdateNativeOverlay = parentIsTransferring
       && (completed || now - lastOverlay >= chunkBridgeInterval)
     if shouldUpdateNativeOverlay { lastMultipartOverlayTimes[parentId] = now }
-    saveLocked(state)
+    if shouldUpdateNativeOverlay || completed {
+      saveLocked(state)
+    }
     lock.unlock()
 
     var values: [String: Any] = [
