@@ -53,19 +53,37 @@ jobs:
           cp /tmp/download_manager_plan_patched.md DOWNLOAD_MANAGER_PLAN.md
           dart format lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
 
-      - name: Verify GREEN
+      - name: Verify GREEN guard
+        run: flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+
+      - name: Verify GREEN multipart behavior
         run: |
-          flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
-          flutter test test/core/services/persistent_parallel_download_test.dart
-          flutter test test/core/services/persistent_parallel_download_recovery_test.dart
-          flutter test test/core/services/persistent_parallel_download_pending_start_lease_test.dart
+          set +e
+          flutter test test/core/services/persistent_parallel_download_test.dart 2>&1 | tee /tmp/multipart.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo '### Multipart failure tail' >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            tail -80 /tmp/multipart.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -40 /tmp/multipart.log | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g' | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+          exit "$status"
+
+      - name: Verify GREEN recovery
+        run: flutter test test/core/services/persistent_parallel_download_recovery_test.dart
+
+      - name: Verify GREEN pending-start lease
+        run: flutter test test/core/services/persistent_parallel_download_pending_start_lease_test.dart
 
       - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
 
       - name: Guard and commit slice
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name "github-actions[bot]]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/dm29-slice3.yml .github/dm29_slice3.py
           git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
