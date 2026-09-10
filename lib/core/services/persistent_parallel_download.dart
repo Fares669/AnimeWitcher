@@ -103,6 +103,12 @@ const Duration kParallelHostProfileSampleInterval = Duration(seconds: 5);
 /// slow-start and update the UI without restarting any Range.
 const Duration kParallelDiskProgressPollInterval = Duration(seconds: 1);
 
+/// Deadline for an accepted multipart enqueue to prove native ownership.
+/// Expiry never guesses that ownership ended: the coordinator first queries
+/// runtime liveness and visible durable bytes, and keeps the lease while
+/// ownership is unknown.
+const Duration kParallelPendingStartLeaseDelay = Duration(seconds: 5);
+
 class NativeParallelBackgroundPlan {
   const NativeParallelBackgroundPlan({
     required this.parentTaskId,
@@ -144,6 +150,7 @@ class PersistentParallelDownload {
     this.recoveryDelay = const Duration(seconds: 1),
     this.tailStallDelay = kParallelTailStallDelay,
     this.diskProgressPollInterval = kParallelDiskProgressPollInterval,
+    this.pendingStartLeaseDelay = kParallelPendingStartLeaseDelay,
     this.maxActiveConnections = kDownloadGlobalConnectionBudget,
     this.onHostPressure,
     this.onHostSample,
@@ -180,6 +187,7 @@ class PersistentParallelDownload {
   final Duration recoveryDelay;
   final Duration tailStallDelay;
   final Duration diskProgressPollInterval;
+  final Duration pendingStartLeaseDelay;
   final void Function(String url, int fallbackCeiling)? onHostPressure;
   final void Function(String url, int activeConnections, double bytesPerSecond)?
   onHostSample;
@@ -942,6 +950,130 @@ class PersistentParallelDownload {
   int _launchablePartCount(_ParallelSession session) =>
       _launchableParts(session).length;
 
+  void _cancelPendingStartLease(_DownloadPart part) {
+    part.pendingStartLeaseTimer?.cancel();
+    part.pendingStartLeaseTimer = null;
+  }
+
+  void _rollbackPendingStartReservation(
+    _ParallelSession session,
+    _DownloadPart part,
+  ) {
+    _cancelPendingStartLease(part);
+    if (session.currentBatchPendingIds.remove(part.task.taskId)) {
+      session.currentBatchRemaining++;
+    }
+    _activeConnectionIds.remove(part.task.taskId);
+    part.launched = false;
+    part.speed = 0;
+  }
+
+  Future<int> _durablePartBytes(_DownloadPart part) async {
+    try {
+      final saved = await canonicalizePartialDownloadFile(
+        destinationPath: await part.task.filePath(),
+      );
+      if (saved != null) return saved.bytes;
+      final file = File(await part.task.filePath());
+      if (await file.exists()) return await file.length();
+    } catch (_) {}
+    return 0;
+  }
+
+  void _armPendingStartLease(_ParallelSession session, _DownloadPart part) {
+    if (_disposed ||
+        !session.active ||
+        session.pauseRequested ||
+        session.deleted ||
+        part.complete ||
+        !part.launched ||
+        !session.currentBatchPendingIds.contains(part.task.taskId)) {
+      _cancelPendingStartLease(part);
+      return;
+    }
+
+    _cancelPendingStartLease(part);
+    final parentGeneration = session.generation;
+    final attemptGeneration = part.attemptGeneration;
+    part.pendingStartLeaseTimer = Timer(pendingStartLeaseDelay, () {
+      part.pendingStartLeaseTimer = null;
+      unawaited(
+        session.serialize(() async {
+          if (_disposed ||
+              !session.active ||
+              session.pauseRequested ||
+              session.deleted ||
+              session.generation != parentGeneration ||
+              part.complete ||
+              !part.launched ||
+              part.attemptGeneration != attemptGeneration ||
+              !session.currentBatchPendingIds.contains(part.task.taskId)) {
+            return;
+          }
+
+          final lookup = livePartIds;
+          if (lookup == null) {
+            _armPendingStartLease(session, part);
+            return;
+          }
+
+          Set<String> live;
+          try {
+            live = await lookup();
+          } catch (_) {
+            // Failed liveness means ownership is unknown, never absent.
+            _armPendingStartLease(session, part);
+            return;
+          }
+          if (live.contains(part.task.taskId)) {
+            _markConnectionReady(session, part);
+            _armTailStallWatch(session, part);
+            await _persist(session);
+            return;
+          }
+
+          final durableBytes = await _durablePartBytes(part);
+          if (durableBytes == part.size &&
+              part.size > 0 &&
+              await _adoptExactSizePart(
+                session,
+                part,
+                settleNativeOwner: false,
+              )) {
+            await _afterAdoptedPart(session);
+            return;
+          }
+
+          // Close the liveness-vs-disk-read race before releasing the slot.
+          try {
+            live = await lookup();
+          } catch (_) {
+            _armPendingStartLease(session, part);
+            return;
+          }
+          if (live.contains(part.task.taskId)) {
+            _markConnectionReady(session, part);
+            _armTailStallWatch(session, part);
+            await _persist(session);
+            return;
+          }
+
+          diagnosticLog?.record('parallel.pendingStartLeaseExpired', {
+            'taskId': session.task.taskId,
+            'childTaskId': part.task.taskId,
+            'attemptGeneration': attemptGeneration,
+            'durableBytes': durableBytes,
+          });
+          _rollbackPendingStartReservation(session, part);
+          _schedulePartRecovery(session, part);
+          await _persist(session);
+          if (session.active) await _status(session, TaskStatus.running);
+          _schedulePumpAll();
+        }),
+      );
+    });
+  }
+
   Future<bool> _pumpSession(_ParallelSession session) async {
     if (_disposed ||
         !session.active ||
@@ -1022,18 +1154,8 @@ class PersistentParallelDownload {
         session.currentBatchPendingIds.add(part.task.taskId);
         session.currentBatchRemaining--;
 
-        void rollbackUnownedReservation() {
-          // Reservation happens before startPart to close the enqueue/running
-          // race. If native never accepts the child, put that slot back into
-          // the same slow-start batch. Otherwise repeated transient enqueue
-          // failures consume the batch counter and can strand the episode with
-          // no launchable work even though its immutable Range still exists.
-          if (session.currentBatchPendingIds.remove(part.task.taskId)) {
-            session.currentBatchRemaining++;
-          }
-          _activeConnectionIds.remove(part.task.taskId);
-          part.launched = false;
-        }
+        void rollbackUnownedReservation() =>
+            _rollbackPendingStartReservation(session, part);
 
         bool started;
         try {
@@ -1082,7 +1204,9 @@ class PersistentParallelDownload {
         if (record != null &&
             (record.status == TaskStatus.running ||
                 record.status == TaskStatus.waitingToRetry)) {
-          session.currentBatchPendingIds.remove(part.task.taskId);
+          _markConnectionReady(session, part);
+        } else {
+          _armPendingStartLease(session, part);
         }
       }
 
@@ -1093,6 +1217,7 @@ class PersistentParallelDownload {
   }
 
   void _markConnectionReady(_ParallelSession session, _DownloadPart part) {
+    _cancelPendingStartLease(part);
     if (!session.currentBatchPendingIds.remove(part.task.taskId)) return;
     if (session.currentBatchRemaining == 0 &&
         session.currentBatchPendingIds.isEmpty) {
@@ -1117,6 +1242,7 @@ class PersistentParallelDownload {
   void _releaseConnection(_DownloadPart part) {
     part.recoveryTimer?.cancel();
     part.recoveryTimer = null;
+    _cancelPendingStartLease(part);
     _cancelTailStallWatch(part);
     _activeConnectionIds.remove(part.task.taskId);
     part.launched = false;
@@ -2205,6 +2331,7 @@ class PersistentParallelDownload {
     if (!session.active || session.deleted || _disposed || part.complete) {
       return false;
     }
+    _cancelPendingStartLease(part);
     _cancelTailStallWatch(part);
     part.recoveryAttempts++;
     part.speed = 0;
@@ -2262,8 +2389,13 @@ class PersistentParallelDownload {
           // parked at the completion sentinel is different: arm the watchdog so
           // stale URLSession ownership cannot reserve the final slot forever.
           if (nativeOwnsPart) {
+            _markConnectionReady(session, part);
             _armTailStallWatch(session, part);
             continue;
+          }
+
+          if (session.currentBatchPendingIds.contains(part.task.taskId)) {
+            _rollbackPendingStartReservation(session, part);
           }
 
           // URLSession can temporarily drop a worker during hand-off without
@@ -2903,6 +3035,8 @@ class _ParallelSession {
     for (final part in parts) {
       part.recoveryTimer?.cancel();
       part.recoveryTimer = null;
+      part.pendingStartLeaseTimer?.cancel();
+      part.pendingStartLeaseTimer = null;
       part.tailStallTimer?.cancel();
       part.tailStallTimer = null;
     }
@@ -2954,6 +3088,7 @@ class _DownloadPart {
   double speed = 0;
   int recoveryAttempts = 0;
   Timer? recoveryTimer;
+  Timer? pendingStartLeaseTimer;
   Timer? tailStallTimer;
   double tailWatchProgress = -1;
   bool tailRecoveryAttempted = false;
