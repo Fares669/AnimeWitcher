@@ -1,0 +1,57 @@
+name: Verify Download Range Reconciliation
+
+on:
+  push:
+    branches:
+      - fix/download-recovery-phase4-range-reconciliation-tests
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: fix/download-recovery-phase4-range-reconciliation-tests
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Add reconciliation tests
+        run: python3 .github/scripts/add-range-reconciliation-tests.py
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Format
+        run: |
+          dart format test/core/services/download_range_transfer_test.dart
+          git diff --check
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Range reconciliation matrix
+        run: flutter test test/core/services/download_range_transfer_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Full test suite
+        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Commit verified tests
+        run: |
+          rm .github/scripts/add-range-reconciliation-tests.py
+          rm .github/workflows/verify-download-range-reconciliation.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add test/core/services/download_range_transfer_test.dart
+          git add -u .github/scripts/add-range-reconciliation-tests.py .github/workflows/verify-download-range-reconciliation.yml
+          git diff --cached --check
+          git commit -m "Add exhaustive Range and 416 reconciliation coverage"
+          git push origin HEAD:fix/download-recovery-phase4-range-reconciliation-tests
