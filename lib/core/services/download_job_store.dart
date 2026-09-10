@@ -4,7 +4,23 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'download_job_state.dart';
 
-const int kDownloadJobSchemaVersion = 1;
+const int kDownloadJobSchemaVersion = 2;
+
+/// Provenance for [DownloadJobRecord.durableBytes].
+///
+/// Percentage/progress estimates are intentionally absent. `legacyUnknown` is
+/// the migration/fail-safe bucket for positive byte counts that predate this
+/// schema or arrive without a durability contract.
+enum DownloadDurableByteProvenance {
+  none,
+  legacyUnknown,
+  verifiedFinalFile,
+  exactDisk,
+  rangeFlushed,
+  multipartManifest,
+  nativeRecoverable,
+}
+
 const String kDownloadJobStoreBox = 'download_job_store_v1';
 
 /// Durable identity of the remote object whose bytes are stored locally.
@@ -88,6 +104,7 @@ class DownloadJobRecord {
     required this.state,
     required this.generation,
     required this.durableBytes,
+    this.durableByteProvenance = DownloadDurableByteProvenance.none,
     required this.expectedBytes,
     required this.userPaused,
     required this.queueWaiting,
@@ -100,6 +117,7 @@ class DownloadJobRecord {
   final DownloadJobState state;
   final int generation;
   final int durableBytes;
+  final DownloadDurableByteProvenance durableByteProvenance;
   final int expectedBytes;
   final bool userPaused;
   final bool queueWaiting;
@@ -114,6 +132,7 @@ class DownloadJobRecord {
     DownloadJobState? state,
     int? generation,
     int? durableBytes,
+    DownloadDurableByteProvenance? durableByteProvenance,
     int? expectedBytes,
     bool? userPaused,
     bool? queueWaiting,
@@ -126,6 +145,7 @@ class DownloadJobRecord {
     state: state ?? this.state,
     generation: generation ?? this.generation,
     durableBytes: durableBytes ?? this.durableBytes,
+    durableByteProvenance: durableByteProvenance ?? this.durableByteProvenance,
     expectedBytes: expectedBytes ?? this.expectedBytes,
     userPaused: userPaused ?? this.userPaused,
     queueWaiting: queueWaiting ?? this.queueWaiting,
@@ -140,6 +160,10 @@ class DownloadJobRecord {
     'state': state.name,
     'generation': generation,
     'durableBytes': durableBytes,
+    'durableByteProvenance': _normalizedDurableByteProvenance(
+      durableBytes,
+      durableByteProvenance,
+    ).name,
     'expectedBytes': expectedBytes,
     'userPaused': userPaused,
     'queueWaiting': queueWaiting,
@@ -157,6 +181,12 @@ class DownloadJobRecord {
     final generation = _intValue(map['generation']);
     final durableBytes = _intValue(map['durableBytes']);
     if (generation < 0 || durableBytes < 0) return null;
+    final schemaVersion = _intValue(map['schemaVersion'], fallback: 1);
+    final durableByteProvenance = _durableByteProvenanceValue(
+      map['durableByteProvenance'],
+      durableBytes: durableBytes,
+      schemaVersion: schemaVersion,
+    );
 
     return DownloadJobRecord(
       taskId: taskId,
@@ -164,6 +194,7 @@ class DownloadJobRecord {
       state: _jobStateValue(map['state']),
       generation: generation,
       durableBytes: durableBytes,
+      durableByteProvenance: durableByteProvenance,
       expectedBytes: _intValue(map['expectedBytes'], fallback: -1),
       userPaused: map['userPaused'] == true,
       queueWaiting: map['queueWaiting'] == true,
@@ -311,6 +342,10 @@ class DownloadJobStore {
                 oldFingerprint.finalUrl,
           );
     final durable = next.copyWith(
+      durableByteProvenance: _normalizedDurableByteProvenance(
+        next.durableBytes,
+        next.durableByteProvenance,
+      ),
       expectedBytes: next.expectedBytes > 0
           ? next.expectedBytes
           : current?.expectedBytes,
@@ -332,6 +367,7 @@ class DownloadJobStore {
     required String trackingUrl,
     required DownloadJobState state,
     int? durableBytes,
+    DownloadDurableByteProvenance? durableByteProvenance,
     int? expectedBytes,
     bool? userPaused,
     bool? queueWaiting,
@@ -348,6 +384,12 @@ class DownloadJobStore {
     final keptBytes = current != null && current.durableBytes > incomingBytes
         ? current.durableBytes
         : incomingBytes;
+    final keptProvenance = _checkpointProvenance(
+      current: current,
+      suppliedBytes: durableBytes,
+      keptBytes: keptBytes,
+      suppliedProvenance: durableByteProvenance,
+    );
     final incomingExpected = expectedBytes ?? -1;
     final keptExpected = incomingExpected > 0
         ? incomingExpected
@@ -361,6 +403,7 @@ class DownloadJobStore {
             state: state,
             generation: 0,
             durableBytes: keptBytes,
+            durableByteProvenance: keptProvenance,
             expectedBytes: keptExpected,
             userPaused: userPaused ?? false,
             queueWaiting: queueWaiting ?? false,
@@ -370,6 +413,7 @@ class DownloadJobStore {
         : current.copyWith(
             state: state,
             durableBytes: keptBytes,
+            durableByteProvenance: keptProvenance,
             expectedBytes: keptExpected,
             userPaused: userPaused ?? current.userPaused,
             queueWaiting: queueWaiting ?? current.queueWaiting,
@@ -405,6 +449,7 @@ class DownloadJobStore {
     DownloadAttemptToken token, {
     DownloadJobState? state,
     int? durableBytes,
+    DownloadDurableByteProvenance? durableByteProvenance,
     int? expectedBytes,
     bool? userPaused,
     bool? queueWaiting,
@@ -413,10 +458,21 @@ class DownloadJobStore {
   }) => _serialize(() async {
     final current = await get(token.taskId);
     if (current == null || current.generation != token.generation) return false;
+    final nextBytes = durableBytes ?? current.durableBytes;
+    final nextProvenance = durableBytes == null
+        ? (durableByteProvenance ?? current.durableByteProvenance)
+        : _normalizedDurableByteProvenance(
+            nextBytes,
+            durableByteProvenance ??
+                (nextBytes == current.durableBytes
+                    ? current.durableByteProvenance
+                    : DownloadDurableByteProvenance.legacyUnknown),
+          );
     return _putUnlocked(
       current.copyWith(
         state: state,
         durableBytes: durableBytes,
+        durableByteProvenance: nextProvenance,
         expectedBytes: expectedBytes,
         userPaused: userPaused,
         queueWaiting: queueWaiting,
@@ -436,6 +492,53 @@ class DownloadJobStore {
     final job = await get(token.taskId);
     return job != null && job.generation == token.generation;
   }
+}
+
+DownloadDurableByteProvenance _normalizedDurableByteProvenance(
+  int durableBytes,
+  DownloadDurableByteProvenance provenance,
+) {
+  if (durableBytes <= 0) return DownloadDurableByteProvenance.none;
+  return provenance == DownloadDurableByteProvenance.none
+      ? DownloadDurableByteProvenance.legacyUnknown
+      : provenance;
+}
+
+DownloadDurableByteProvenance _durableByteProvenanceValue(
+  Object? value, {
+  required int durableBytes,
+  required int schemaVersion,
+}) {
+  if (durableBytes <= 0) return DownloadDurableByteProvenance.none;
+  final raw = value?.toString().trim();
+  if (raw != null && raw.isNotEmpty) {
+    for (final candidate in DownloadDurableByteProvenance.values) {
+      if (candidate.name == raw) return candidate;
+    }
+  }
+  // Schema-v1 rows had no provenance. Unknown/future values are also treated
+  // conservatively so they can never gain authority accidentally.
+  return DownloadDurableByteProvenance.legacyUnknown;
+}
+
+DownloadDurableByteProvenance _checkpointProvenance({
+  required DownloadJobRecord? current,
+  required int? suppliedBytes,
+  required int keptBytes,
+  required DownloadDurableByteProvenance? suppliedProvenance,
+}) {
+  if (keptBytes <= 0) return DownloadDurableByteProvenance.none;
+  if (suppliedProvenance != null) {
+    return _normalizedDurableByteProvenance(keptBytes, suppliedProvenance);
+  }
+  if (current != null &&
+      (suppliedBytes == null || keptBytes == current.durableBytes)) {
+    return _normalizedDurableByteProvenance(
+      keptBytes,
+      current.durableByteProvenance,
+    );
+  }
+  return DownloadDurableByteProvenance.legacyUnknown;
 }
 
 String? _nonEmptyString(Object? value) {

@@ -33,6 +33,8 @@ DownloadJobRecord _job({
   DownloadJobState state = DownloadJobState.running,
   int generation = 1,
   int durableBytes = 100,
+  DownloadDurableByteProvenance durableByteProvenance =
+      DownloadDurableByteProvenance.none,
   int expectedBytes = 1000,
   bool userPaused = false,
   bool queueWaiting = false,
@@ -44,6 +46,7 @@ DownloadJobRecord _job({
   state: state,
   generation: generation,
   durableBytes: durableBytes,
+  durableByteProvenance: durableByteProvenance,
   expectedBytes: expectedBytes,
   userPaused: userPaused,
   queueWaiting: queueWaiting,
@@ -52,6 +55,48 @@ DownloadJobRecord _job({
 );
 
 void main() {
+  group('durable byte provenance codec', () {
+    test('v1 positive durable bytes migrate as legacy unknown evidence', () {
+      final legacy = _job(durableBytes: 456).toJson()
+        ..['schemaVersion'] = 1
+        ..remove('durableByteProvenance');
+
+      final decoded = DownloadJobRecord.fromJson(legacy);
+
+      expect(decoded, isNotNull);
+      expect(
+        decoded!.durableByteProvenance,
+        DownloadDurableByteProvenance.legacyUnknown,
+      );
+    });
+
+    test('v2 exact disk provenance round trips explicitly', () {
+      final source = _job(
+        durableBytes: 456,
+        durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
+      );
+
+      final json = source.toJson();
+      final decoded = DownloadJobRecord.fromJson(json);
+
+      expect(json['schemaVersion'], 2);
+      expect(json['durableByteProvenance'], 'exactDisk');
+      expect(
+        decoded?.durableByteProvenance,
+        DownloadDurableByteProvenance.exactDisk,
+      );
+    });
+
+    test('unqualified positive bytes persist as explicit legacy unknown', () {
+      final json = _job(durableBytes: 12).toJson();
+      expect(json['durableByteProvenance'], 'legacyUnknown');
+      expect(
+        DownloadJobRecord.fromJson(json)?.durableByteProvenance,
+        DownloadDurableByteProvenance.legacyUnknown,
+      );
+    });
+  });
+
   group('DownloadJobRecord codec', () {
     test('round trips logical state and resource fingerprint', () {
       const fingerprint = DownloadResourceFingerprint(
