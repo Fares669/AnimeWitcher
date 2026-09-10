@@ -52,12 +52,18 @@ void main() {
 
         // startPart accepted the enqueue but native ownership never appeared and
         // no running/progress/final callback was delivered. The coordinator must
-        // not leave this child in the slow-start pending set forever.
+        // not leave this child in the slow-start pending set forever. Another
+        // range may use the freed slot while this range observes recovery backoff,
+        // but the original immutable Range must itself be retried with a new
+        // attempt generation.
         await Future<void>.delayed(const Duration(seconds: 6));
 
-        expect(starts.length, greaterThanOrEqualTo(2));
-        expect(starts[1].taskId, first.taskId);
-        expect(starts[1].metaData, isNot(first.metaData));
+        final retriedFirstRange = starts
+            .where((task) => task.taskId == first.taskId)
+            .skip(1)
+            .toList(growable: false);
+        expect(retriedFirstRange, isNotEmpty);
+        expect(retriedFirstRange.first.metaData, isNot(first.metaData));
         expect(coordinator.isActive(parent.taskId), isTrue);
       } finally {
         await coordinator.dispose();
