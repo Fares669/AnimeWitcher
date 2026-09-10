@@ -429,3 +429,7 @@ Existing identifiers remain stable; final-review items are `DM-29` through `DM-3
 - Mark `[x]` only when the behavior described under that item is implemented and its required verification passes. Record implementation notes/commits for the next Task.
 - DM-18 remains unchecked until the complete end-to-end matrix passes on supported platforms.
 - If implementation uncovers a genuinely new root cause, update this document explicitly; do not silently expand code scope.
+
+## Final review exit criteria
+
+This review phase is considered closed only when all of the following are true: the plan contains every confirmed failure mode found in the three audit passes; each implementation item has a root cause, proposed correction, verification cases, and dependencies; no checklist item is marked complete; the PR diff remains documentation-only; and implementation begins from this file rather than from ad-hoc fixes.
