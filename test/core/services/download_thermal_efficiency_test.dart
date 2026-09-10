@@ -146,4 +146,37 @@ void main() {
       expect(completion, contains('promoteMultipartIfPossible('));
     },
   );
+
+  test('native diagnostic progress sampling collapses multipart children', () {
+    final swift = File('ios/Runner/DownloadNativeWaitingQueue.swift')
+        .readAsStringSync();
+    final loggerStart = swift.indexOf('enum DownloadNativeDiagnosticLog');
+    final loggerEnd = swift.indexOf('import ObjectiveC', loggerStart);
+    expect(loggerStart, greaterThanOrEqualTo(0));
+    expect(loggerEnd, greaterThan(loggerStart));
+    final logger = swift.substring(loggerStart, loggerEnd);
+    expect(logger, contains('lastProgress: [String: TimeInterval]'));
+    expect(logger, contains('progressOwnerKey('));
+    expect(logger, contains("range(of: \".part.\""));
+  });
+
+  test('native multipart state persistence is coalesced per parent sample', () {
+    final swift = File('ios/Runner/DownloadNativeWaitingQueue.swift')
+        .readAsStringSync();
+    final start = swift.indexOf(
+      'private static func postMultipartChunkUpdate(',
+    );
+    final end = swift.indexOf(
+      'private static func rememberDownloadSession(',
+      start,
+    );
+    expect(start, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(start));
+    final section = swift.substring(start, end);
+    expect(
+      section,
+      contains('if shouldUpdateNativeOverlay || completed {\n      saveLocked(state)'),
+    );
+    expect(section, isNot(contains('\n    saveLocked(state)\n    lock.unlock()')));
+  });
 }
