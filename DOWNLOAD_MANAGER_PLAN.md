@@ -1,278 +1,393 @@
 # AnimeWitcher Download Manager Reliability Plan
 
-> **Source of truth for the download-manager reliability work.**
+> **Source of truth for all download-manager reliability work in PR #231.**
 >
-> This document was created from a review-only pass. The review commit intentionally changes no download logic, performs no refactor, and adds no feature. Every implementation item remains unchecked so a later task can start from the first `[ ]` item and use this same PR/branch for all follow-up work.
+> This document is the result of two review-only passes. The review commits intentionally change no download logic, perform no refactor, and add no feature. Every implementation item remains unchecked so later Tasks can resume from the first eligible `[ ]` item while using the same branch and PR.
 
 ## Review baseline and scope
 
 - Reviewed against `main` commit `7f25aadf6f18008a93aa95dddf5d7810bdb73279` (tree `8ac644f7dcae67d3326ca71a90de4be918f09d9c`).
-- Primary Dart orchestration reviewed: `download_service.dart`, `persistent_parallel_download.dart`, `download_transport.dart`, `download_range_transfer.dart`, `download_retry_policy.dart`, `download_concurrency.dart`, `download_connection_governor.dart`, `download_host_profile.dart`, `download_job_state.dart`, `download_job_store.dart`, `download_parallel.dart`, `download_plugin_compat.dart`, `download_url_refresh.dart`, `download_telemetry.dart`, and download utilities.
-- Persistence/UI integration reviewed: `storage_service.dart`, `downloads_provider.dart`, `download_launcher.dart`, download cleanup/resume utilities, and the surrounding downloads UI flow.
-- iOS background/continued-processing integration reviewed: `DownloadContinuedProcessingManager.swift`, `DownloadNativeWaitingQueue.swift`, `AppDelegate.swift` integration, and the Dart continued-processing bridge.
-- Existing download tests were reviewed, including recovery, relaunch chaos, fault injection, startup reconciliation, range transfer, URL refresh, transport, concurrency, multipart recovery/tail recovery, telemetry, and iOS bridge tests.
+- Primary Dart orchestration reviewed end-to-end: `download_service.dart`, `persistent_parallel_download.dart`, `download_transport.dart`, `download_range_transfer.dart`, `download_retry_policy.dart`, `download_concurrency.dart`, `download_connection_governor.dart`, `download_host_profile.dart`, `download_job_state.dart`, `download_job_store.dart`, `download_parallel.dart`, `download_plugin_compat.dart`, `download_url_refresh.dart`, `download_telemetry.dart`, and download utilities.
+- Persistence/UI integration reviewed: `storage_service.dart`, `downloads_provider.dart`, `download_launcher.dart`, download cleanup/resume utilities, database/metadata projections, and user control paths.
+- iOS native/background integration reviewed in depth: `DownloadContinuedProcessingManager.swift`, `DownloadNativeWaitingQueue.swift`, its URLSession delegate IMP hooks, `AppDelegate.swift`, native queue snapshots, multipart promotion, background retry, and the Dart bridge.
+- Platform policy reviewed: Android UIDT/background requirements, macOS download entitlements, iOS continued-processing/background URLSession behavior, and cross-platform concurrency assumptions.
+- Recent download-manager commit history was reviewed because many iOS/multipart/progress/thermal fixes landed close together; interaction regressions are therefore explicitly part of this plan.
+- Existing download tests were reviewed, including recovery, relaunch chaos, fault injection, startup reconciliation, range transfer, URL refresh, transport, concurrency, multipart recovery/tail recovery, telemetry, zero-restart invariants, JobStore invariants, and iOS bridge/source tests.
+- External dependency review date: **2026-09-10**. `pubspec.lock` is on `background_downloader 9.6.0`; `9.6.1` is available and adds supported iOS native status/progress callbacks. Any dependency change is an implementation item, not part of this review commit.
 
 ## Current architecture and lifecycle
 
 ### Main components
 
-1. **Launch/source resolution** — `download_launcher.dart` resolves a provider/source, verifies metadata/range capability, persists a URL-refresh descriptor, and calls `DownloadService.startDownload()`.
-2. **Logical queue/orchestration** — `download_service.dart` owns user-facing task lifecycle, queue slots, pause/resume/cancel, state projection, source refresh, native transport rehydration, restart recovery, and coordination with persistence.
-3. **Single-file transport** — `download_transport.dart` delegates normal one-file transfers to `background_downloader`, while `download_range_transfer.dart` provides a validated byte-range continuation fallback when a visible partial file exists.
-4. **Multipart transport** — `persistent_parallel_download.dart` owns immutable byte ranges, per-part attempts, manifests, global connection reservations, slow-start/ramp behavior, recovery timers, source validation, and final staging/assembly.
-5. **Durable state** — download state is distributed across `DownloadJobStore` (Hive), `background_downloader` records/resume data, download metadata (Hive), multipart manifests/part files, URL-refresh descriptors, iOS native queue state, and process-local sets/maps.
-6. **UI projection** — `downloads_provider.dart` combines downloader records + metadata + live service events and currently also performs some persistence normalization itself.
-7. **iOS background continuity** — the Dart service exports queue snapshots/multipart plans to Swift so URLSession work can continue and promote waiters while Flutter is suspended.
+1. **Launch/source resolution** — `download_launcher.dart` resolves a provider/source, probes metadata/range capability, persists a URL-refresh descriptor, and calls `DownloadService.startDownload()`.
+2. **Logical queue/orchestration** — `download_service.dart` owns user-facing lifecycle, queue slots, pause/resume/cancel, source refresh, native transport rehydration, restart recovery, and state projection.
+3. **Single-file native transport** — `download_transport.dart` uses the `background_downloader` Transfer API for normal one-file downloads.
+4. **Visible-prefix fallback** — `download_range_transfer.dart` performs validated Range continuation when durable bytes are visible to Dart.
+5. **Multipart coordinator** — `persistent_parallel_download.dart` owns immutable ranges, attempt generations, manifests, slow start, connection reservations, retries, disk polling, source validation, and final assembly.
+6. **Durable logical state** — `DownloadJobStore` is intended to be logical authority, but state is still replicated across plugin DB/resume data, Hive metadata, manifests/files, refresh descriptors, iOS UserDefaults queue state, and process-local sets/maps.
+7. **UI projection** — `downloads_provider.dart` combines plugin records, metadata, and service events and currently performs some persistence normalization/deletion itself.
+8. **iOS background continuity** — Dart exports queue/multipart plans to Swift; Swift can promote URLSession tasks while Flutter is suspended and sends native byte/status evidence back when Flutter is available.
 
 ### Lifecycle traces
 
-- **Download:** source resolve -> metadata probe -> metadata/refresh descriptor -> logical task/job checkpoint -> queue -> single native transfer or multipart coordinator -> progress/status projection -> completion persistence -> downloaded file.
-- **Pause:** durable pause intent is written -> range writer is stopped/joined where applicable -> single native or multipart transport is asked to pause -> logical/plugin/UI paused state is projected.
-- **Resume:** logical queue serializes resume -> user-pause intent is cleared -> task/bytes are reconstructed -> URL may be refreshed -> native resume, visible-partial range continuation, multipart restore, or safe fresh restart is attempted.
-- **Failure/retry:** native/range failures are classified; multipart children may retry independently; logical failures are generally parked as a recoverable paused/interrupted row; authorization/not-found failures may trigger source refresh.
-- **App restart/crash:** `DownloadService.init()` restores logical intent, rehydrates native transfers, walks persisted downloader records, restores multipart manifests, reconciles ownership, rebuilds the queue, and `onAppForegrounded()` runs another reconciliation when the app resumes.
-- **Network interruption:** native plugin retry behavior, Dart range retry policy, multipart child recovery, and iOS URLSession retry logic currently have different retry/parking semantics; there is no single download-level waiting-for-network state.
-- **Cancel/delete:** logical cancellation attempts to stop native/range/multipart ownership and tombstone state; the UI then removes downloader records/metadata/files on a best-effort basis.
+- **Fresh download:** source resolve -> metadata/range probe -> refresh descriptor -> logical JobStore/metadata state -> queue reservation -> single native transport or multipart coordinator -> progress/status -> final verification -> completion persistence.
+- **Pause:** record user intent -> stop/join Dart range writer if active -> pause native/multipart ownership -> reconcile transport ownership -> project paused logical state.
+- **Resume:** reconcile ownership -> clear user-pause intent -> reconstruct task/bytes -> possibly refresh source -> native resume, visible-prefix Range continuation, multipart restore, or safe restart -> establish queue/transport ownership -> project accepted result.
+- **Failure/retry:** classify HTTP/network/storage failure -> retry/backoff/refresh/reconcile or park -> preserve durable bytes -> eventually re-enter normal fenced start/resume path.
+- **App restart/crash:** restore JobStore + metadata + plugin DB/native ownership + manifests/files -> derive one logical inventory -> preserve user intent -> rebuild queue -> reconcile again on foreground.
+- **Network interruption:** currently split between Transfer behavior, Dart Range retries, multipart child recovery, and custom iOS URLSession retries; this must converge onto one logical policy.
+- **Cancel/delete:** durable cancel intent/tombstone should precede ownership settlement; destructive DB/file cleanup must happen only when stale writers cannot return.
 
-## Findings summary
+## Deep-review findings summary
 
-### Confirmed / high-confidence defects
+### Confirmed / very high-confidence P0 paths
 
-- Multipart slow-start can strand a child indefinitely after `startPart()` reports success if no subsequent running/progress/status callback arrives. The child remains in `currentBatchPendingIds`, blocking the next ramp batch, and no pending-start lease/watchdog exists.
-- Startup recovery enumerates `background_downloader` database records and joins `DownloadJobStore`; a valid authoritative JobStore entry with a missing downloader DB row is not itself enumerated/reconstructed. The downloads UI has the same DB-first visibility problem.
-- Single-file pause treats an accepted native pause as successful after a 5-second callback timeout without verifying that the ordinary task left the live native set. Multipart children do perform this ownership verification; ordinary single-file tasks do not.
-- Resume is exposed as `Future<void>` to the UI. Several failure/no-task paths can return without throwing or without an explicit failure outcome, while the UI has already optimistically switched the row to `enqueued`.
-- `startDownload()` can find an existing recoverable row, call the resume path, and return success even when the resume attempt did not actually establish transport ownership.
-- Completion persistence can choose the current on-disk file length as the first positive “known” expected size. This makes the completion boundary weaker than it appears because an independently known expected size is not always required before `completed` is checkpointed.
-- `TaskStatus.paused` carries multiple meanings (explicit user pause, queue/failure parking, interrupted transfer), and separate metadata/in-memory flags are required to disambiguate it. At least one iOS native snapshot path can infer `userPaused` from a paused downloader row when it is not a queue waiter.
-- `downloads_provider.dart` rewrites failed/not-found downloader records to paused directly, outside `DownloadService`/`DownloadJobStore`, creating another writer of lifecycle state and another race surface.
-- The downloads UI can time out waiting for cancellation and then independently delete downloader DB/metadata/files while cancellation is still settling, leaving a race with native ownership.
-- A refreshed signed URL cannot safely reuse native-only resume data for a single-file transfer when no visible partial prefix exists, so an expired URL can leave preserved bytes that cannot be migrated to the refreshed source automatically.
+- Multipart slow-start can strand a child indefinitely after `startPart()` reports success if no running/progress/status callback arrives. The child remains in `currentBatchPendingIds`; there is no pending-start lease.
+- The current native-liveness helper filters `FileDownloader().allTasks()` using plugin DB rows marked `paused`. A real URLSession worker can therefore be hidden precisely after a pause-state race, causing later reconciliation/resume to conclude there is no owner and potentially create a second writer.
+- Resume/start controls do not expose one authoritative accepted/failed outcome to callers; UI can remain `enqueued` after a silent no-op.
+- Startup inventory is downloader-DB-first. JobStore-only or metadata/filesystem-only recoverable jobs are not independently enumerated.
+- JobStore deliberately rejects decreasing `durableBytes`, but stronger disk evidence can legitimately prove that fewer bytes survived. Recovery attempts to write corrected lower bytes through `put()`, which rejects the update, and some callers do not inspect the rejection.
+- `savedProgress > 0` is currently treated as sufficient reason to forbid restart-from-zero even when no visible bytes and no native resume data exist. Combined with stale JobStore/high-water progress, this can create a permanent resume deadlock.
+- `_checkpointLogicalJob()` is fail-open for control boundaries: rejected/throwing JobStore writes are logged and swallowed, while pause/resume/queue/cancel orchestration may continue as if the authoritative intent was durable.
+- iOS native multipart promotion is not a two-phase ownership handoff. Swift can select/start an unlaunched child from a persisted plan while Dart still considers that same generation unlaunched; a foreground/background race or stale Dart snapshot can therefore produce two current owners for the same immutable Range.
+- Multipart exact-size adoption and tail recycling prove byte length but do not always prove that the old native owner stopped. Some pause/cancel failures are intentionally ignored before the coordinator releases ownership or schedules another attempt.
+- User deletion uses an in-memory `_terminalJobIds` tombstone and later removes the JobStore row. A crash after logical deletion but before all native effects settle can therefore lose durable terminal knowledge needed to reject resurrection.
 
-### Important risks / design gaps
+### Confirmed / high-confidence P1 paths
 
-- Multiple durable authorities are updated independently and often best-effort/unawaited; crash windows can produce valid but conflicting snapshots that current reconciliation does not cover exhaustively.
-- Fixed-duration fences (for example waiter restacking/callback suppression windows) are time-based rather than acknowledgement/generation-based and are vulnerable to unusually late native callbacks.
-- Range, native, multipart, and iOS background retry paths react differently to offline/online transitions; a task can look `running` at 0 B/s or park until manual action instead of entering a consistent network-wait state.
-- Resume of a partial range may hold a serialized scheduler path while performing probes/range setup, producing head-of-line blocking between concurrent logical downloads under adverse network conditions.
-- Display progress is intentionally monotonic, but exact recoverable bytes can be lower after corruption/loss. Without a distinct durable-byte projection the UI can temporarily claim progress that cannot actually be resumed.
-- Orphan `.parts` directories, `.assembling` files, and partial files are recoverable when their logical records still exist, but there is no complete filesystem-inventory recovery path when the DB/metadata side disappears.
-- The Dart->iOS continued-processing bridge swallows platform invocation failures by design. A failed native queue snapshot is therefore not visible to the logical state machine and can leave Dart/native background views diverged.
-- Static/native subscriptions and process-lifetime maps are mostly cleaned for the keep-alive singleton path, but lifecycle ownership should be explicitly stress-tested to prevent duplicate subscriptions or retained state across reinitialization/hot-restart/test scenarios.
+- Logical episode identity and execution `taskId` are not the same concept, but several runtime paths are DB/taskId-first while other paths match by `trackingUrl` or file key. Attaching to a live task with a different taskId can split metadata/job state across identities instead of atomically adopting one owner.
+- Generic completion persistence can use the current file's own length as the first positive expected size, weakening independent completion verification.
+- `downloads_provider.dart` is still a competing writer of lifecycle DB state and destructive cleanup.
+- The Range receive loop awaits durable/plugin checkpoint work from `onState` while receiving the response stream. At high throughput, frequent JobStore + plugin DB writes can become storage backpressure on the network loop itself.
+- Range/native/multipart/iOS retry paths differ on offline, 404/expired-source, retry budgets, and stall handling. The Transfer API already exposes offline hold information, but the custom transport abstraction does not surface it.
+- iOS native queue snapshots are versionless and written to UserDefaults; Dart->native bridge errors are swallowed. A stale Dart snapshot can also repopulate multipart waiters already consumed natively.
+- The custom iOS implementation replaces Objective-C IMPs on the plugin URLSession delegate. `background_downloader 9.6.1` now exposes supported native status/progress callbacks; keeping a broad swizzle after supported hooks exist increases compatibility and ordering risk.
+- Multipart assembly requires substantial extra storage while all part files still exist. No explicit headroom/reservation policy prevents an episode from reaching the tail and then repeatedly failing during `.assembling` creation/truncation.
+
+### Important P2 / hardening gaps
+
+- Dart allows up to 10 simultaneous logical episodes while the Swift native queue clamps its concurrency value to 5, so foreground/background execution semantics diverge for settings above 5.
+- `TransferHint.userInitiated` is applied to downloads, while Android 14+ UIDT requires user-visible notification behavior. The app allows download notifications to be disabled, so this combination needs an explicit tested fallback policy.
+- Time-based callback suppression/restacking windows remain where generation/ack fences should decide correctness.
+- Resume preparation can hold serialized scheduler paths and create head-of-line blocking under slow probes/storage.
+- Orphan `.parts`, `.assembling`, partial and final files are not comprehensively inventoried when logical records disappear.
+- Range-transfer disposal cancels operations but does not join every operation before the service can be recreated; static/native subscriptions and process-lifetime maps also deserve lifecycle stress tests.
+- Several iOS/runtime tests verify that source strings contain a guard rather than behaviorally exercising the race. Those tests protect structure but cannot prove cross-layer convergence.
 
 ## Severity convention
 
-- **P0 / Critical:** can permanently strand active work or make a resumable task unrecoverable without clear user action.
-- **P1 / High:** can create wrong lifecycle state, duplicate ownership, data-integrity risk, or unreliable recovery in realistic conditions.
-- **P2 / Medium:** robustness/fairness/diagnostic gap that amplifies failures or makes edge cases harder to recover from.
-- **P3 / Low:** defensive lifecycle cleanup/hardening with limited normal-user impact.
+- **P0 / Critical:** can strand active work indefinitely, create duplicate writers, resurrect deleted work, or make a resumable task unrecoverable without an explicit safe decision.
+- **P1 / High:** can create incorrect lifecycle state, data-integrity risk, serious background/recovery failure, or major throughput/availability degradation.
+- **P2 / Medium:** robustness, fairness, platform-policy, compatibility, or diagnostic gap that amplifies failures.
+- **P3 / Low:** defensive resource/lifecycle hardening with limited normal-user impact.
 
 # Implementation checklist
 
-## Phase 1 — Stop the known “stuck forever” paths
+## Phase 1 — Eliminate ambiguous ownership and permanent resume deadlocks
 
-- [ ] **DM-01 — Add a lease/watchdog for multipart `pending-start` ownership**
-  - **Problem:** A multipart child whose enqueue/start call returns `true` can remain forever in `currentBatchPendingIds` if native never emits the callback that marks it ready. The next slow-start batch is blocked and a multi-part episode can sit at 0 B/s with untouched parts.
-  - **Root cause:** Reservation is made before enqueue (correctly closing the enqueue/running race), but the reservation has no expiration/ownership confirmation deadline. `_pumpSession()` treats a non-empty pending set as a successful wait condition, so coordinator recovery is not armed for this state.
+- [ ] **DM-01 — Add a generation-bound lease/watchdog for multipart `pending-start` ownership**
+  - **Problem:** `startPart()` can return `true` and the child can remain forever in `currentBatchPendingIds` if no readiness callback arrives, blocking slow-start expansion.
+  - **Root cause:** reservation occurs before enqueue correctly, but there is no deadline that turns an accepted command into verified ownership or rollback.
   - **Severity / priority:** **P0 / Critical. First implementation item.**
-  - **Expected files/areas:** `lib/core/services/persistent_parallel_download.dart`; possibly `download_service.dart` for live-owner verification; multipart auto-recovery tests.
-  - **Proposed fix:** Give each pending-start attempt a generation-bound lease. On expiry, query/confirm native/range ownership and durable bytes. If ownership is real, adopt it and release the slow-start gate; if not, roll back only that reservation and schedule normal child recovery. Never launch a duplicate while ownership is ambiguous.
-  - **Verification/testing:** Add a deterministic behavioral test where `startPart()` returns `true` but no callback ever arrives; verify the coordinator recovers and later ranges start. Add variants for delayed callback after lease expiry, pause during the lease, app reconciliation during the lease, 5/8/16 configured parts, and global-budget contention.
-  - **Dependencies:** None. Later DM-10 generation fencing should reuse the same lease token model.
+  - **Expected files/areas:** `lib/core/services/persistent_parallel_download.dart`, `download_service.dart` liveness seam, multipart behavioral tests.
+  - **Proposed fix:** attach a lease to the exact child attempt generation. At expiry reconcile real owner + durable bytes. Adopt a proven owner; otherwise roll back only that reservation and schedule recovery. Delayed callbacks must be fenced by generation/lease identity.
+  - **Verification/testing:** accepted start with no callback; callback after lease; pause/cancel during lease; reconciliation during lease; 1/2/5/8/16 parts; global budget contention; no duplicate launch.
+  - **Dependencies:** None.
+
+- [ ] **DM-19 — Replace DB-filtered native liveness with an independent runtime ownership oracle**
+  - **Problem:** `_liveTransferTasks()` excludes tasks whose plugin DB row is `paused`, even though DB state is not proof that URLSession/WorkManager ownership ended.
+  - **Root cause:** persisted transport status is being used as a negative liveness signal. This can hide the exact still-live worker produced by an accepted-pause/missing-callback race.
+  - **Severity / priority:** **P0 / Critical.**
+  - **Expected files/areas:** `download_service.dart`, `download_transport.dart`, platform/native liveness APIs, ownership reconciliation tests.
+  - **Proposed fix:** define a liveness oracle from actual Transfer/native/range/multipart ownership and explicit acknowledgement. Never remove an owner from the live set merely because a DB row says paused. Represent `unknown/settling` separately from `not owned`.
+  - **Verification/testing:** DB paused + native running; Transfer handle paused but URLSession still live; stale DB running + no native owner; app restart; liveness query failure; ensure resume never creates a second writer while ownership is unknown.
+  - **Dependencies:** None; DM-02 must consume this oracle.
+
+- [ ] **DM-20 — Permit authoritative downward correction of durable bytes when stronger evidence proves byte loss**
+  - **Problem:** JobStore's monotonic `durableBytes` invariant rejects a lower byte count even when exact disk evidence proves that the old checkpoint was stale or the partial file was lost/truncated.
+  - **Root cause:** normal callback monotonicity and recovery reconciliation use the same `put()` semantics. Recovery has no privileged, evidence-tagged correction operation; rejected corrections can be ignored.
+  - **Severity / priority:** **P0 / Critical.**
+  - **Expected files/areas:** `download_job_store.dart`, `download_job_state.dart`, `download_service.dart`, recovery byte-selection tests, fault-injection tests.
+  - **Proposed fix:** keep monotonic writes for ordinary attempts, but add a narrow reconciliation operation that can lower bytes only when a stronger evidence source (exact disk inventory or verified final/manifest rollback) proves the correction. Fence it by generation/fingerprint and record the reason/source.
+  - **Verification/testing:** JobStore 70 MB vs disk 40 MB; JobStore progress vs zero surviving bytes; truncated partial after crash; manifest rollback; stale callback after correction; incompatible fingerprint. Assert stale high-water bytes cannot return.
+  - **Dependencies:** DM-19 recommended for correct native-only evidence classification.
+
+- [ ] **DM-21 — Make authoritative lifecycle checkpoints fail closed at control boundaries**
+  - **Problem:** pause/resume/queue/start/cancel can continue after `_checkpointLogicalJob()` rejects or throws, so the action visible to native/UI may not survive a crash.
+  - **Root cause:** `_checkpointLogicalJob()` returns `Future<void>` and swallows both rejected checkpoints and backend exceptions; some direct `_jobStore.put()` results are also not checked.
+  - **Severity / priority:** **P0 / Critical for user-intent boundaries; progress checkpoints may remain best-effort.**
+  - **Expected files/areas:** `download_service.dart`, `download_job_store.dart`, storage error modeling, control-result tests.
+  - **Proposed fix:** return a typed durable-checkpoint result. Require a successful write-ahead checkpoint before transitions that change ownership or user intent. If persistence is unavailable, do not claim the new state; preserve the safest current ownership and expose a recoverable storage/state error. Keep telemetry/progress persistence separately coalesced/best-effort.
+  - **Verification/testing:** backend write throws/returns false during fresh start, queueing, pause, resume, source refresh, cancel and completion. Kill immediately after each failure and verify intent/state cannot invert.
+  - **Dependencies:** DM-20 for evidence-correction semantics.
 
 - [ ] **DM-02 — Make single-file pause prove that transport ownership actually stopped**
-  - **Problem:** The logical/UI state can become paused after an accepted native pause even if the ordinary single-file worker is still live after the 5-second callback timeout.
-  - **Root cause:** `_pauseTransfer()` verifies post-pause liveness for internal multipart chunks, but not for normal single-file native tasks. Timeout is currently interpreted as success rather than “state unknown”.
+  - **Problem:** a single-file task can be presented as paused after an accepted pause and a 5-second callback timeout even if native ownership remains.
+  - **Root cause:** normal single-file pause lacks the post-command ownership proof already attempted for internal multipart children; timeout is treated as success instead of unknown.
   - **Severity / priority:** **P0 / Critical.**
-  - **Expected files/areas:** `lib/core/services/download_service.dart`, `lib/core/services/download_transport.dart`, pause/resume behavioral tests.
-  - **Proposed fix:** Use the same explicit ownership-settlement invariant for normal tasks: an accepted command is not a completed pause. Confirm the task is no longer live or receive a generation-matching paused/final callback; otherwise keep an interrupted/pausing state and reconcile rather than claiming paused. Do not discard resume data or cancel as a substitute for pause.
-  - **Verification/testing:** Simulate accepted pause + missing callback + still-live owner; accepted pause + delayed callback; pause racing completion; repeated pause/resume; and iOS background owner handoff. Assert no duplicate resume starts and no hidden live transfer under a paused card.
-  - **Dependencies:** None; DM-05 will simplify the final state representation.
+  - **Expected files/areas:** `download_service.dart`, `download_transport.dart`, pause/resume behavioral tests.
+  - **Proposed fix:** an accepted pause command is not a paused state. Require generation-matching paused/final evidence or the DM-19 liveness oracle to prove release. Otherwise remain `pausing/interrupted/settling` and reconcile; never enqueue another writer.
+  - **Verification/testing:** accepted pause + missing callback + still-live owner; delayed callback; completion race; repeated pause/resume; app background/foreground; liveness query failure.
+  - **Dependencies:** DM-19, DM-21.
 
-- [ ] **DM-03 — Return an explicit resume/start outcome and eliminate silent resume no-ops**
-  - **Problem:** UI marks a row `enqueued` optimistically, while `resumeDownload()` returns no success/failure value and missing-task/failed-resume paths can return silently. `startDownload()` can also report success for an existing paused row even if its resume failed.
-  - **Root cause:** The control API models resume as a command-only `Future<void>` even though downstream operations have meaningful boolean/ownership results. Task lookup, state restoration, URL refresh, native resume, range fallback, and multipart restore do not converge on one externally visible outcome.
+- [ ] **DM-22 — Introduce a two-phase Dart<->Swift ownership handoff for iOS multipart promotion**
+  - **Problem:** Swift can start an unlaunched multipart child from `multipartPlans` while Dart still considers the same child/generation launchable. A stale Dart snapshot can also repopulate waiters Swift already consumed.
+  - **Root cause:** exported multipart plans are snapshots, not claims. Swift removes a selected waiter then starts it outside the state lock, without a durable claim token acknowledged by Dart; foreground can change between selection and launch.
+  - **Severity / priority:** **P0 / Critical duplicate-writer risk.**
+  - **Expected files/areas:** `persistent_parallel_download.dart`, `download_continued_processing_service.dart`, `DownloadNativeWaitingQueue.swift`, `AppDelegate.swift`, iOS multipart handoff tests.
+  - **Proposed fix:** give each exported child `(parent, child, generation, lease/claimId)` ownership state. Native must atomically claim before launch; Dart must treat claimed children as unavailable even before progress. Snapshots carry a monotonic version and cannot re-add a consumed/claimed child. Re-check foreground/claim validity immediately before `resume()`, and requeue/expire an unstarted claim safely.
+  - **Verification/testing:** background transition during selection; foreground transition before `resume()`; stale Dart snapshot after native claim; delayed first byte; duplicate `persistNativeQueue`; process suspension; claim expiration; verify exactly one URLSession/FileDownloader writer per Range.
+  - **Dependencies:** DM-01 attempt lease model, DM-10 generation fencing, DM-15 versioned snapshots.
+
+- [ ] **DM-23 — Require old-owner settlement before multipart exact-size adoption, recycle, or relaunch**
+  - **Problem:** `_adoptExactSizePart()` can catch/ignore pause failure and still mark a part complete; tail recycle can ignore cancellation failure and later schedule another attempt. Exact byte length proves content availability, not exclusive ownership.
+  - **Root cause:** byte-integrity proof and ownership-settlement proof are conflated. Generation filtering prevents stale callbacks from mutating state but cannot stop an old native writer from continuing to write/delete/move files.
   - **Severity / priority:** **P0 / Critical.**
-  - **Expected files/areas:** `download_service.dart`, `downloads_provider.dart`, `download_launcher.dart`, related control/UI tests.
-  - **Proposed fix:** Introduce a small typed control result (for example started/running, queued, alreadyComplete, userPaused, recoverableFailure, missingState/terminal) and require `startDownload()`/resume flows to return it consistently. Only project optimistic UI state that the service has durably accepted; on recoverable failure publish the authoritative state/event immediately.
-  - **Verification/testing:** Tests for missing downloader DB row, missing metadata, failed native resume, failed range fallback, multipart manifest missing, expired URL refresh failure, queue-full resume, and already-complete file. Assert UI cannot remain `enqueued` without queued or active ownership.
-  - **Dependencies:** DM-04 for full recovery of JobStore-only tasks; can be implemented before it with an explicit `missingState` outcome.
+  - **Expected files/areas:** `persistent_parallel_download.dart`, `download_service.dart` child pause/cancel seam, native ownership tests.
+  - **Proposed fix:** separate `bytesVerified` from `ownerSettled`. Before assembly, deletion, backup restore, or relaunch, prove native/range ownership ended or quarantine the part in `settling` until reconciliation can prove it. Never free a connection slot as launchable merely because callback ownership is fenced.
+  - **Verification/testing:** exact-size child + pause failure + still-live owner; tail cancel failure; late native write after recycle; completion callback lost; app restart while settling; ensure no concurrent writers and no part deletion while owner remains.
+  - **Dependencies:** DM-19 and DM-10.
 
-- [ ] **DM-04 — Recover from the union of authoritative persistence sources, not downloader DB rows only**
-  - **Problem:** On restart, a job can survive in `DownloadJobStore` (and/or metadata/partial files) while its `background_downloader` row is missing. It is not enumerated by current startup recovery and can also disappear from the downloads UI.
-  - **Root cause:** `_recoverPersistedDownloads()` and `_refreshList()` start from `FileDownloader().database.allRecords()`. `DownloadJobStore` is consulted only after a downloader row is already known, so it is not a true inventory source.
+- [ ] **DM-03 — Return an explicit start/resume outcome and eliminate silent control no-ops**
+  - **Problem:** UI can optimistically show `enqueued` while resume returns no actionable success/failure result; existing-row `startDownload()` can also report success without established ownership.
+  - **Root cause:** command APIs collapse queued, attached, running, already-complete, missing-state, source-refresh failure and recoverable failure into `void`/boolean paths.
   - **Severity / priority:** **P0 / Critical.**
-  - **Expected files/areas:** `download_service.dart`, `download_job_store.dart`, `storage_service.dart`, `downloads_provider.dart`, startup reconciliation tests, relaunch/fault-injection tests.
-  - **Proposed fix:** Build an idempotent startup inventory keyed by logical task/tracking identity from the union of JobStore, downloader DB/rehydrated transfers, metadata, multipart manifests, and safe filesystem evidence. Define reconstruction rules for missing representations and explicit orphan rules when reconstruction is impossible. Keep the JobStore as logical authority rather than merely a join.
-  - **Verification/testing:** Fault-inject loss of each persistence source one at a time and in realistic pairs; verify resumable bytes remain visible/recoverable, terminal jobs are never resurrected, user pause survives, queue order is deterministic, and duplicate logical rows are not created.
-  - **Dependencies:** DM-03 strongly recommended; DM-05 defines cleaner state precedence used by the final reconciliation matrix.
+  - **Expected files/areas:** `download_service.dart`, `downloads_provider.dart`, `download_launcher.dart`, control/UI tests.
+  - **Proposed fix:** define a typed outcome such as `running/attached`, `queued`, `alreadyComplete`, `paused`, `settlingOwnership`, `restartRequired`, `recoverableFailure`, `missingState`, `terminal`. UI state changes only after the service durably accepts the transition.
+  - **Verification/testing:** missing DB row, JobStore-only task, failed native resume, failed range fallback, manifest missing, source refresh failure, queue full, ownership unknown, already-complete file.
+  - **Dependencies:** DM-19 through DM-23 provide reliable evidence; implementation can start earlier with conservative outcomes.
 
-## Phase 2 — Establish one lifecycle truth and protect data integrity
+- [ ] **DM-04 — Recover from the union of persistence/ownership sources, not downloader DB rows only**
+  - **Problem:** valid logical jobs can disappear from recovery/UI when the plugin DB row is missing while JobStore, metadata, native ownership, manifest or files survive.
+  - **Root cause:** startup/UI inventory begins from `FileDownloader().database.allRecords()` and joins stronger evidence only after a row is known.
+  - **Severity / priority:** **P0 / Critical.**
+  - **Expected files/areas:** `download_service.dart`, `download_job_store.dart`, `storage_service.dart`, `downloads_provider.dart`, filesystem/manifest inventory, startup tests.
+  - **Proposed fix:** construct one idempotent logical inventory from the union of JobStore, plugin DB/Transfer handles, native ownership, metadata, multipart manifests and safe app-owned filesystem evidence. Reconstruct missing projections or mark explicit orphan/settling states.
+  - **Verification/testing:** remove each source singly and in pairs; preserve user pause; recover proven bytes; do not resurrect terminal jobs; deterministic FIFO; no duplicate logical rows.
+  - **Dependencies:** DM-19, DM-20, DM-21; DM-24 provides canonical identity.
 
-- [ ] **DM-05 — Stop encoding multiple logical meanings as `TaskStatus.paused`**
-  - **Problem:** User pause, interrupted/failure parking, and queue-related states can collapse to the same downloader status, with truth spread across `_userPausedIds`, `_queueWaitingIds`, Hive metadata, JobStore, and iOS snapshot inference.
-  - **Root cause:** Plugin status is being used both as transport state and logical application state. Side flags compensate, but those flags live in different stores and are updated on different schedules.
-  - **Severity / priority:** **P1 / High; architectural prerequisite for later reconciliation hardening.**
-  - **Expected files/areas:** `download_job_state.dart`, `download_job_store.dart`, `download_service.dart`, `download_concurrency.dart`, `downloads_provider.dart`, continued-processing snapshot code/tests.
-  - **Proposed fix:** Make `DownloadJobState` the sole logical lifecycle authority and treat plugin status as transport evidence only. Centralize projection from logical state -> UI/native compatibility status. Persist explicit user intent and queue intent; never infer user pause solely from plugin `paused`.
-  - **Verification/testing:** Expand the startup/reconciliation matrix for every logical state x plugin status x native ownership x metadata flags. Verify the same logical state is produced regardless of event ordering.
-  - **Dependencies:** DM-03/DM-04 should feed the new outcome/inventory model. DM-11, DM-12, and DM-15 depend on this.
+## Phase 2 — Establish one logical truth, canonical identity, and durable integrity
+
+- [ ] **DM-05 — Make `DownloadJobState` the sole logical lifecycle authority**
+  - **Problem:** `TaskStatus.paused` currently means user pause, interrupted/failure parking and sometimes queue compatibility state, with intent scattered through metadata and memory sets.
+  - **Root cause:** plugin transport status and application lifecycle state are mixed.
+  - **Severity / priority:** **P1 / High; architectural prerequisite.**
+  - **Expected files/areas:** `download_job_state.dart`, `download_job_store.dart`, `download_service.dart`, `download_concurrency.dart`, `downloads_provider.dart`, iOS snapshot projection.
+  - **Proposed fix:** plugin status becomes transport evidence only. Persist explicit logical state/user intent/queue intent and centralize logical -> UI/native compatibility projection. Never infer user pause solely from plugin `paused`.
+  - **Verification/testing:** full logical-state x plugin-status x native-ownership x metadata matrix, with event-order permutations.
+  - **Dependencies:** DM-03/DM-04.
+
+- [ ] **DM-24 — Introduce one canonical logical episode identity across changing taskIds**
+  - **Problem:** runtime duplicate detection is DB/taskId-first, while other paths match `trackingUrl` or file target. A live task with a different taskId can be attached to while metadata/JobStore remain split, or a new task can be created when the old DB row vanished but native ownership remains.
+  - **Root cause:** `taskId` is being used both as execution-attempt identity and logical episode identity.
+  - **Severity / priority:** **P1 / High; raise to P0 if duplicate runtime start is reproduced.**
+  - **Expected files/areas:** `download_service.dart`, `download_job_store.dart`, `download_cleanup.dart` identity helpers, `downloads_provider.dart`, Swift `episodeKey`, duplicate-start tests.
+  - **Proposed fix:** define a stable logical download key (tracking episode identity plus safe target/resource context) and separate it from execution taskId/generation. Adoption of a differently named live owner must atomically move/alias all logical projections rather than partially copying metadata.
+  - **Verification/testing:** DB row lost while native task live; same episode different taskId; same filename different episode; source URL changes; duplicate taps; app restart during taskId adoption; ensure one logical row and one owner.
+  - **Dependencies:** DM-05; used by DM-04 final inventory.
 
 - [ ] **DM-06 — Strengthen final-file completion verification with independent expected-resource evidence**
-  - **Problem:** A nonzero file can be checkpointed as completed using its own current length as the first positive “known size”, and complete downloader rows can bypass meaningful revalidation during startup. A truncated/wrong resource therefore has a weaker integrity boundary than intended.
-  - **Root cause:** `_persistCompletedFilePath()` asks `knownDownloadSize()` with `fileBytes` before independently known sizes. `knownDownloadSize()` returns the first positive candidate. Length equality is strong in multipart assembly, but the generic logical completion path does not always require an independent expected size/fingerprint.
+  - **Problem:** a nonzero file can be checkpointed complete using its current length as the first positive expected size; same-size wrong-resource cases can also evade size-only checks.
+  - **Root cause:** observed file bytes, expected resource bytes and resource identity are not consistently distinguished at the generic completion boundary.
   - **Severity / priority:** **P1 / High (data integrity).**
-  - **Expected files/areas:** `download_service.dart`, `download_resume.dart`, `download_job_state.dart`/fingerprint handling, completion/relaunch tests.
-  - **Proposed fix:** Separate `observedFileBytes` from `expectedResourceBytes`. Complete only when an independent expected size is known and matches, or when a deliberately defined alternative integrity proof is available. Preserve strong ETag/Last-Modified/resource identity where possible. On uncertainty, enter verifying/interrupted rather than completed.
-  - **Verification/testing:** Truncated final file with stale complete DB row; wrong-size file; same-size resource replacement with validator change; complete multipart staging; unknown-size source; crash between rename and completion checkpoint. Assert no corrupt/truncated file becomes logical `completed`.
-  - **Dependencies:** DM-05 for clean `verifying/interrupted` projection; DM-04 for restart inventory.
+  - **Expected files/areas:** `download_service.dart`, `download_resume.dart`, JobStore fingerprint model, completion/relaunch tests.
+  - **Proposed fix:** require independent expected size or an explicit alternative integrity proof. Capture/use strong ETag/Last-Modified where available; preserve prefix validation for partials. Unknown integrity enters `verifying/interrupted`, not `completed`.
+  - **Verification/testing:** truncated final with stale complete row; wrong-size file; same-size changed resource; unknown-size source; crash after rename before checkpoint; multipart final target conflict.
+  - **Dependencies:** DM-05, DM-20.
 
-- [ ] **DM-07 — Make cancel/delete a single ownership-settlement transaction from the UI’s perspective**
-  - **Problem:** The downloads UI may time out waiting for `cancelDownload()` and then delete DB metadata/files while native cancellation is still settling. A late native worker can still own/write the target after its logical records disappear.
-  - **Root cause:** Presentation code independently performs downloader DB, metadata, artwork, and filesystem deletion after a fixed timeout. Cancellation ownership/tombstone authority is split between service and UI.
+- [ ] **DM-07 — Make cancel/delete a durable tombstone-first ownership-settlement transaction**
+  - **Problem:** UI can time out cancellation and delete DB/metadata/files while ownership still settles; the service's terminal tombstone is process-local and the JobStore row is ultimately removed.
+  - **Root cause:** terminal intent is not retained durably through the entire native-settlement/cleanup window, and destructive cleanup is split across service/UI.
+  - **Severity / priority:** **P0 / Critical after deeper review.**
+  - **Expected files/areas:** `download_service.dart`, `downloads_provider.dart`, `download_job_store.dart`, cleanup utilities, native queue cleanup.
+  - **Proposed fix:** persist `canceled` tombstone before any ownership mutation. UI may hide immediately, but DB/files/metadata are cleaned by an idempotent service transaction only after ownership is settled. Retain tombstone long enough to reject late native/plugin callbacks, then garbage-collect by explicit policy.
+  - **Verification/testing:** cancel during native/range/multipart transfer, pause, assembly and refresh; cancel API timeout; kill after tombstone before native ack; late running/complete callback; reinstall/reinit cleanup.
+  - **Dependencies:** DM-19, DM-21, DM-10.
+
+- [ ] **DM-08 — Make source refresh safe and complete for all resumable representations**
+  - **Problem:** native-resume-only single downloads cannot safely migrate opaque resume data across an expired signed URL; HTTP 404 refresh semantics also differ between range/multipart paths.
+  - **Root cause:** source refresh lacks one capability matrix for visible bytes, opaque native resume data, multipart parts and provider-specific expired-link statuses.
   - **Severity / priority:** **P1 / High.**
-  - **Expected files/areas:** `downloads_provider.dart`, `download_service.dart`, cleanup utilities, JobStore, cancel/relaunch tests.
-  - **Proposed fix:** Move logical deletion into one service-owned idempotent operation with durable tombstone-first ordering. UI can hide the row immediately, but destructive file/record cleanup must occur only after ownership is settled or be represented as pending cleanup that restart reconciliation can finish safely.
-  - **Verification/testing:** Cancel while active, cancel during native pause, cancel during range append, cancel during multipart assembly, cancellation API timeout, app kill immediately after user delete, and late callback after tombstone. Verify no resurrected row and no writer survives against a deleted/reused path.
-  - **Dependencies:** DM-05; DM-10 generation fencing should protect late callbacks.
+  - **Expected files/areas:** `download_service.dart`, `download_transport.dart`, `download_plugin_compat.dart`, `download_url_refresh.dart`, multipart refresh callbacks/tests.
+  - **Proposed fix:** define a platform-safe decision tree: try valid same-source native resume; migrate/adopt visible verified prefix when possible; validate refreshed resource identity; range-resume or restart only when evidence permits. Normalize 401/403/404 handling using descriptor/provider evidence instead of inconsistent hard-coded paths. Expose `restartRequired` when opaque bytes cannot be migrated.
+  - **Verification/testing:** 401/403/404 expired source, native resume data only, visible partial, changed size/validator, descriptor expired, provider unavailable, refresh during app restart.
+  - **Dependencies:** DM-03, DM-06, DM-20.
 
-- [ ] **DM-08 — Make URL refresh recover native-resume-only single downloads safely**
-  - **Problem:** If a single-file transfer has durable bytes only inside native resume data and its signed URL expires, the service deliberately avoids replacing that URL because the native resume blob embeds the old source. The task can become unrecoverable without restarting or losing progress.
-  - **Root cause:** There is no portable migration from opaque native resume data to a verified visible byte prefix before refreshing the source URL.
+- [ ] **DM-16 — Separate historical presentation progress from recoverable byte evidence**
+  - **Problem:** current helpers intentionally prevent restart when `savedProgress > 0`, even when no visible bytes and no native resume data survive. A stale percentage can therefore block every safe continuation path.
+  - **Root cause:** UI high-water progress is treated as proof that durable bytes exist. The zero-restart test currently codifies that assumption.
+  - **Severity / priority:** **P1 / High; directly involved in resume deadlocks.**
+  - **Expected files/areas:** `download_resume.dart`, `download_telemetry.dart`, `download_service.dart`, `download_job_state.dart`, `downloads_provider.dart`, zero-restart/recovery tests.
+  - **Proposed fix:** recovery decisions accept only evidence-bearing inputs: verified native resume ownership/data, exact disk bytes, current-generation manifest/JobStore bytes after DM-20 reconciliation. Historical percentage remains presentation metadata only and may reconcile downward after proven byte loss.
+  - **Verification/testing:** stale 42% + zero bytes + no native resume must yield a deliberate restart/recoverable outcome; visible partial still blocks destructive restart; late regressive callback; 0.999 sentinel; restart after corrected JobStore.
+  - **Dependencies:** DM-20, DM-05, DM-06.
+
+## Phase 3 — Deterministic retries, concurrency, and I/O behavior
+
+- [ ] **DM-09 — Introduce one network-interruption/hold policy across all transports**
+  - **Problem:** native Transfer, Dart Range, multipart recovery and iOS native retries react differently to offline/online transitions, stalls and retry exhaustion.
+  - **Root cause:** custom `DownloadTransport` does not expose Transfer hold reason/stall state, while custom layers each implement their own retry semantics.
   - **Severity / priority:** **P1 / High.**
-  - **Expected files/areas:** `download_service.dart`, `download_transport.dart`, `download_plugin_compat.dart`, `download_url_refresh.dart`, iOS native queue where applicable, URL-refresh integrity tests.
-  - **Proposed fix:** Define a platform-safe migration decision tree: first attempt valid native resume; if URL is expired, extract/adopt a verifiable partial file/prefix when the platform exposes one; validate new source identity/size/validator; then range-resume. If bytes cannot be proven/migrated, expose an explicit recoverable “restart required” outcome rather than looping or silently remaining paused.
-  - **Verification/testing:** Expired signed URL with native resume data only, visible partial + expired URL, changed resource same URL, provider unavailable, descriptor expired, refresh returns different size/quality, and app restart between refresh and resumed write.
-  - **Dependencies:** DM-03 outcome model and DM-06 resource identity rules.
+  - **Expected files/areas:** `download_transport.dart`, `download_retry_policy.dart`, `download_range_transfer.dart`, `persistent_parallel_download.dart`, `download_service.dart`, Swift background retry.
+  - **Proposed fix:** model `waitingForNetwork` separately from server backoff and user pause. Surface Transfer `holdReason` where supported, use connectivity restoration as a trigger, and define progress-reset retry budgets/circuit behavior consistently. Evaluate `stallTimeout` rather than duplicating an inferior watchdog for native single transfers.
+  - **Verification/testing:** offline->online, Wi-Fi<->cellular, DNS/captive network, long offline period, intermittent progress, retry exhaustion, pause/cancel while offline, simultaneous recovery, 408/425/429/5xx.
+  - **Dependencies:** DM-05, DM-03.
 
-## Phase 3 — Make retries, races, and concurrent downloads deterministic
-
-- [ ] **DM-09 — Introduce a consistent network-interruption state and recovery trigger**
-  - **Problem:** Offline transitions are handled differently by native single transfers, Dart range transfers, multipart child recovery, and iOS background URLSession. Some paths park; others keep retrying/backing off while the parent appears running at 0 B/s.
-  - **Root cause:** Retry policy classifies transport/HTTP failures but the logical download state machine has no shared “waiting for connectivity / interrupted by network” contract or connectivity-restored trigger.
+- [ ] **DM-10 — Replace time-based correctness fences with generations/acks**
+  - **Problem:** late callbacks after pause/resume/restacking/retry/source replacement/cancel can mutate newer state; fixed 800ms/other timing windows cannot prove causality.
+  - **Root cause:** generation fencing exists only in portions of the stack and does not cover every logical/native operation.
   - **Severity / priority:** **P1 / High.**
-  - **Expected files/areas:** `download_retry_policy.dart`, `download_range_transfer.dart`, `persistent_parallel_download.dart`, `download_service.dart`, platform/native background bridge as needed, network fault tests.
-  - **Proposed fix:** Normalize network-loss classification into a logical interrupted/waiting state without consuming destructive retry budget while known-offline. On connectivity restoration or foreground reconciliation, revalidate ownership/source and resume through the normal fenced path. Keep server overload/backoff distinct from device offline.
-  - **Verification/testing:** Wi-Fi->offline->online, Wi-Fi<->cellular/IP change, DNS failure, connection reset, captive/no-internet network, long offline period, pause while offline, cancel while offline, and multiple queued episodes recovering together.
-  - **Dependencies:** DM-05; DM-03 for user-visible outcomes.
+  - **Expected files/areas:** JobStore, `download_service.dart`, multipart coordinator, Swift queue/bridge payloads.
+  - **Proposed fix:** every ownership-changing operation carries a durable generation/operation token. Accept only current-token callbacks, except independently verified safe terminal bytes. Replace arbitrary callback-suppression windows with ack/settlement state.
+  - **Verification/testing:** callbacks delayed 0.8s/5s/30s; stale complete after source change; stale failure after successful resume; cancel then running; background promotion vs foreground recovery.
+  - **Dependencies:** DM-01, DM-19, DM-05.
 
-- [ ] **DM-10 — Replace time-based callback suppression with generation/acknowledgement fences**
-  - **Problem:** Late callbacks can arrive after pause, resume, restacking, retry, source replacement, or cancellation. Some paths already use attempt generations, but other protections rely on fixed delays such as waiter-restacking windows.
-  - **Root cause:** Attempt identity is strong inside portions of multipart/range handling but is not uniformly carried through every logical/native transition.
+- [ ] **DM-11 — Define crash-safe write ordering and convergence for all replicas**
+  - **Problem:** JobStore, plugin DB, metadata, manifest, filesystem, URL-refresh store and native queue can each be individually valid while mutually inconsistent after a crash.
+  - **Root cause:** no cross-store transaction exists; correctness requires explicit write-ahead rules and idempotent reconciliation.
   - **Severity / priority:** **P1 / High.**
-  - **Expected files/areas:** `download_job_store.dart`, `download_service.dart`, `persistent_parallel_download.dart`, `DownloadNativeWaitingQueue.swift`, native bridge payloads, race tests.
-  - **Proposed fix:** Attach a durable/logical generation or operation token to every transition that can receive a late callback. Accept a callback only if it belongs to the current generation or is a safe terminal completion with independently verified bytes. Remove correctness dependence on arbitrary millisecond fences.
-  - **Verification/testing:** Inject callbacks after 0.8s/5s/30s, stale completion after new source generation, old failure after successful resume, cancel then stale running, and native background promotion racing Flutter foreground restore.
-  - **Dependencies:** Reuse DM-01 lease generations; DM-05 logical authority.
+  - **Expected files/areas:** `download_service.dart`, JobStore, storage service, multipart manifest, native queue store/bridge, fault-injection harness.
+  - **Proposed fix:** document per-transition write ordering with JobStore intent first for control boundaries, then executor effects, then projections. Add generation/version fields where missing. Reconciliation must tolerate crash after every write and converge without discarding stronger evidence.
+  - **Verification/testing:** inject death after every write in start, queue promotion, pause, resume, URL refresh, child completion, assembly rename, final completion, cancel/tombstone/cleanup.
+  - **Dependencies:** DM-04, DM-05, DM-10, DM-21.
 
-- [ ] **DM-11 — Define crash-safe write ordering and reconciliation for all persistence replicas**
-  - **Problem:** JobStore, plugin DB, metadata, multipart manifest, refresh descriptor, native iOS queue, and filesystem checkpoints can be written independently/best-effort. A crash between writes can leave mutually inconsistent but individually valid state.
-  - **Root cause:** No single transaction can span Hive, plugin DB, filesystem, and native URLSession; several writes are intentionally `unawaited`, so correctness depends on reconciliation but current reconciliation is not exhaustive.
+- [ ] **DM-25 — Remove persistence/database backpressure from the Range receive loop**
+  - **Problem:** `_receive()` awaits `onState` while consuming the network stream; `onState` can await JobStore and plugin DB writes every 512 KiB/250 ms threshold.
+  - **Root cause:** durable checkpointing is synchronous with data ingestion instead of coalesced behind an ordered writer.
+  - **Severity / priority:** **P1 / High when throughput/storage latency is high.**
+  - **Expected files/areas:** `download_range_transfer.dart`, `download_service.dart`, JobStore progress checkpoints, range throughput tests.
+  - **Proposed fix:** keep exact in-memory/disk byte counters on the receive path, enqueue/coalesce ordered persistence snapshots at a bounded cadence, and synchronously flush/join only at pause, failure, completion, source change, cancel and dispose boundaries. Backpressure must be bounded so a slow store cannot grow an unbounded queue.
+  - **Verification/testing:** high-speed local stream + deliberately slow JobStore/plugin DB; pause during pending checkpoint; crash after last unflushed progress; disk-full persistence error; assert throughput remains stable and boundary bytes are durable.
+  - **Dependencies:** DM-21 defines critical vs best-effort writes; DM-20 handles recovery correction.
+
+- [ ] **DM-13 — Prevent head-of-line blocking and prove fairness across simultaneous downloads**
+  - **Problem:** serialized queue/session paths can await slow resume probes/range setup/storage while unrelated downloads need promotion.
+  - **Root cause:** invariant protection and slow transport preparation share the same serialization scope.
+  - **Severity / priority:** **P2 / Medium; P1 if profiling reproduces starvation.**
+  - **Expected files/areas:** `persistent_parallel_download.dart`, `download_service.dart`, `download_concurrency.dart`, connection governor.
+  - **Proposed fix:** reserve state/slot quickly, perform slow preparation outside broad scheduler locks where safe, then commit only with the same generation/lease. Preserve logical FIFO without letting a dead host block healthy sessions.
+  - **Verification/testing:** fast + stalled hosts; 5/8/16 parts; probe timeout; rate-limit on one host; queue concurrency 1..10; pause/cancel during promotion; bounded promotion latency.
+  - **Dependencies:** DM-01, DM-10, DM-25.
+
+- [ ] **DM-12 — Remove lifecycle persistence writes from the presentation layer**
+  - **Problem:** `downloads_provider.dart` rewrites failed/not-found rows and performs destructive cleanup while DownloadService/JobStore simultaneously own lifecycle.
+  - **Root cause:** UI became a repair layer to translate plugin statuses.
   - **Severity / priority:** **P1 / High.**
-  - **Expected files/areas:** `download_service.dart`, `download_job_store.dart`, `storage_service.dart`, `persistent_parallel_download.dart`, continued-processing bridge/native store, relaunch/fault-injection tests.
-  - **Proposed fix:** Document and implement strict write-ahead ordering around `DownloadJobStore` logical intent plus idempotent projections to secondary stores. Add version/generation markers where missing. Every restart path must tolerate a crash after each individual write and converge without losing proven bytes or resurrecting terminal work.
-  - **Verification/testing:** Fault-inject a process death after every state-write boundary in start, queue promotion, pause, resume, source refresh, part completion, assembly rename, completion, and cancel. Reopen stores and assert invariant convergence.
-  - **Dependencies:** DM-04 inventory and DM-05 authority are prerequisites; DM-10 protects stale callbacks during convergence.
+  - **Expected files/areas:** `downloads_provider.dart`, `download_service.dart`, state snapshot/projection helpers.
+  - **Proposed fix:** UI reads a service-owned logical snapshot and sends commands only. Optimistic visuals require an accepted service operation token/outcome; DB/metadata/file cleanup belongs to service reconciliation.
+  - **Verification/testing:** UI refresh racing failure/pause/resume/completion/delete; provider recreation; ensure no lifecycle DB writes originate from presentation code.
+  - **Dependencies:** DM-03, DM-05, DM-07.
 
-- [ ] **DM-12 — Remove lifecycle-state writes from the presentation layer**
-  - **Problem:** `downloads_provider.dart` mutates downloader persistence (for example failed/not-found -> paused) and independently cleans records, while DownloadService/JobStore are simultaneously managing the same lifecycle.
-  - **Root cause:** UI refresh code evolved into a repair layer because plugin statuses do not map directly to desired presentation states.
-  - **Severity / priority:** **P1 / High.**
-  - **Expected files/areas:** `downloads_provider.dart`, `download_service.dart`, state projection helpers/tests.
-  - **Proposed fix:** Make UI read a service-owned logical snapshot/event stream and send commands only. Put all persistence reconciliation/normalization inside DownloadService. Keep optimistic visuals only when tied to a service-issued accepted operation token/outcome.
-  - **Verification/testing:** Race UI refresh against native failure, pause, resume, completion and cancel; recreate provider while transfers run; verify no DB writes originate from presentation lifecycle normalization and visible state always converges to service state.
-  - **Dependencies:** DM-03 and DM-05; DM-07 moves deletion ownership first.
+## Phase 4 — Filesystem, background, dependency, and platform hardening
 
-- [ ] **DM-13 — Prevent head-of-line blocking and verify fairness across simultaneous downloads**
-  - **Problem:** Multiple logical downloads share a serialized pump/global connection budget. A resumed partial child can perform resume capability probes or range setup while the scheduler is awaiting it, potentially delaying promotion/pumping of unrelated sessions on a bad host/network.
-  - **Root cause:** Scheduler serialization protects invariants but some awaited transport preparation is comparatively slow and happens inside the serialized coordination path.
-  - **Severity / priority:** **P2 / Medium (raise to P1 if profiling reproduces user-visible starvation).**
-  - **Expected files/areas:** `persistent_parallel_download.dart`, `download_service.dart`, `download_concurrency.dart`, connection governor, concurrency/fairness tests.
-  - **Proposed fix:** Measure first. If reproduced, split short state reservation from slow transport preparation, retain generation/slot ownership, and let other sessions progress without exceeding the global connection budget. Preserve FIFO at logical episode level where intended.
-  - **Verification/testing:** Concurrent episodes on fast + stalled hosts, 5/8/16 parts, partial resume probe timeout, one server rate-limiting while another is healthy, queue concurrency 1..max, and cancellation/pause during promotion. Assert bounded promotion latency and no budget oversubscription.
-  - **Dependencies:** DM-01 and DM-10 so async preparation cannot create duplicate ownership.
+- [ ] **DM-27 — Add storage-headroom policy for multipart download + assembly**
+  - **Problem:** multipart can successfully download all ranges yet fail at the tail because `.assembling` needs another near-full-file allocation while all part files remain. Repeated resume can repeat the same failure without a clear reason.
+  - **Root cause:** source-size validation is not paired with destination free-space/headroom planning; assembly's crash-safe staging temporarily amplifies storage use.
+  - **Severity / priority:** **P1 / High for large files/low-storage devices.**
+  - **Expected files/areas:** `download_service.dart`, `persistent_parallel_download.dart`, cleanup/storage helpers, UI error outcome, disk-space tests.
+  - **Proposed fix:** preflight and periodically re-evaluate required free space using a conservative platform-aware headroom model. Preserve crash-safe assembly; if a lower-amplification assembly algorithm is introduced, prove crash recovery before using it. Surface explicit `insufficientStorage` instead of generic paused/failed.
+  - **Verification/testing:** just enough for parts but not staging; disk fills mid-download/mid-assembly; sparse/allocation behavior; cleanup frees space; resume after space becomes available; never delete proven parts solely because assembly lacks headroom.
+  - **Dependencies:** DM-03 outcome model, DM-06 integrity.
 
-## Phase 4 — Recovery/cleanup/background hardening
+- [ ] **DM-14 — Inventory and safely recover/clean orphan download artifacts**
+  - **Problem:** `.parts`, `.assembling`, `.part/.tmp/.download` or final files can survive while logical DB/metadata rows disappear.
+  - **Root cause:** cleanup/recovery is target-driven rather than a complete, app-root-scoped inventory.
+  - **Severity / priority:** **P2 / Medium; P1 combined with persistence loss.**
+  - **Expected files/areas:** cleanup utilities, multipart coordinator, DownloadService, JobStore/metadata reconciliation.
+  - **Proposed fix:** scan only app-owned download roots; correlate artifacts with canonical logical identity/generation; adopt provable state, quarantine ambiguous targets, delete only artifacts proven obsolete by durable tombstones/age policy.
+  - **Verification/testing:** crash during assembly stages; missing manifest; `.tmp` newer than canonical manifest; final conflict; missing DB/metadata; canceled-generation leftovers; external files untouched.
+  - **Dependencies:** DM-04, DM-06, DM-07, DM-11, DM-24.
 
-- [ ] **DM-14 — Inventory and safely recover or clean orphan partial/manifests/staging files**
-  - **Problem:** `.parts`, `.assembling`, `.part/.tmp/.download`, or final files can survive a crash while one or more logical DB/metadata records disappear. Current recovery is strongest when the logical parent record still exists.
-  - **Root cause:** Cleanup utilities are target-driven; startup does not build a complete safe filesystem inventory under AnimeWitcher’s download root and correlate it with logical jobs/manifests.
-  - **Severity / priority:** **P2 / Medium; P1 when combined with DM-04 persistence loss.**
-  - **Expected files/areas:** `download_cleanup.dart`, `persistent_parallel_download.dart`, `download_service.dart`, JobStore/metadata reconciliation, fault-injection tests.
-  - **Proposed fix:** Add a narrowly scoped scanner for app-owned download paths only. Adopt exact, identity-linked staging/final/part state where provable; quarantine/leave ambiguous user-visible files untouched; clean only artifacts proven obsolete by terminal tombstones/generations and an age/safety policy.
-  - **Verification/testing:** Crash during each assembly phase, missing manifest with parts, manifest temp newer than canonical, final target conflict, missing DB row, canceled-generation leftovers, low disk/full disk, and files outside the app download root (must never be touched).
-  - **Dependencies:** DM-04, DM-06, DM-11.
+- [ ] **DM-15 — Make Dart<->iOS queue snapshots versioned, acknowledged, and recoverable**
+  - **Problem:** queue snapshot bridge calls swallow platform failures; native queue state is stored as a versionless UserDefaults blob; stale Dart snapshots can overwrite newer native consumption/promotion state.
+  - **Root cause:** correctness-sensitive queue checkpoints use best-effort semantics designed for optional UI updates.
+  - **Severity / priority:** **P1 / High after deeper review.**
+  - **Expected files/areas:** `download_continued_processing_service.dart`, `DownloadNativeWaitingQueue.swift`, `AppDelegate.swift`, DownloadService snapshot writer.
+  - **Proposed fix:** separate overlay calls from queue-state checkpoints. Add monotonically increasing snapshot/version/claim generations and acknowledgement. Reject stale snapshots. Evaluate an atomic native journal/file if UserDefaults durability is insufficient for ownership claims. Reconcile unacknowledged writes on foreground/background handoff.
+  - **Verification/testing:** method-channel failure; process suspended after Dart send but before ack; native promotion then stale Dart snapshot; native completion while Flutter sleeps; repeated identical snapshot; corrupted/native store reset.
+  - **Dependencies:** DM-10, DM-11; DM-22 consumes the version/claim model.
 
-- [ ] **DM-15 — Make Dart<->iOS background queue snapshot failures observable and reconcilable**
-  - **Problem:** Continued-processing bridge invocation catches/swallow platform errors, so Dart can believe a native queue snapshot was exported even when Swift never accepted it. Flutter suspension can then leave native queue ownership stale.
-  - **Root cause:** The bridge is intentionally best-effort for compatibility, but correctness-sensitive queue persistence uses the same fire-and-forget error semantics as noncritical presentation updates.
-  - **Severity / priority:** **P2 / Medium; P1 for reproducible iOS background stalls.**
-  - **Expected files/areas:** `download_continued_processing_service.dart`, `DownloadNativeWaitingQueue.swift`, `DownloadContinuedProcessingManager.swift`, `download_service.dart`, iOS source/behavior tests.
-  - **Proposed fix:** Distinguish optional UI-overlay calls from queue-state checkpoint calls. Queue persistence should return an acknowledgement/version when supported. On failure, record it durably/diagnostically and force reconciliation on foreground/background handoff without duplicating native ownership.
-  - **Verification/testing:** Method channel failure, plugin unavailable, app suspended immediately after queue change, native completion while Dart sleeps, multipart native promotion, foreground restore, and stale snapshot version rejection.
-  - **Dependencies:** DM-05 logical authority, DM-10 generation/version fencing, DM-11 write ordering.
+- [ ] **DM-26 — Reduce/remove fragile URLSession delegate IMP swizzling using supported plugin APIs**
+  - **Problem:** AnimeWitcher replaces implementations on `background_downloader`'s `UrlSessionDelegate` selectors for completion/progress/promotion. Plugin internals or selector ordering can change across versions, and failure to hook is currently mostly diagnostic.
+  - **Root cause:** older plugin versions lacked native host callbacks needed while Dart was suspended. `background_downloader 9.6.1` now exposes supported iOS native status/progress closures, while the project lockfile remains on 9.6.0.
+  - **Severity / priority:** **P1 / High compatibility/race reduction; do not perform a blind upgrade.**
+  - **Expected files/areas:** `pubspec.yaml`, `pubspec.lock`, `AppDelegate.swift`, `DownloadNativeWaitingQueue.swift`, `download_plugin_compat.dart`, iOS integration/source tests.
+  - **Proposed fix:** first isolate and verify 9.6.1 behavior. Move status/progress observation to official callbacks where behavior matches. Retain only the smallest native hook still required for queue promotion/completion ordering, if any, and guard unsupported compatibility APIs by version. Remove source-string assumptions once behavioral coverage exists.
+  - **Verification/testing:** foreground/background status/progress, completion promotion, retry replacement, app suspension, plugin update compatibility, hook unavailable, duplicate callback prevention, build preview/device integration.
+  - **Dependencies:** DM-22/DM-15 define required handoff semantics before removing hooks.
 
-- [ ] **DM-16 — Separate durable recoverable bytes from monotonic presentation progress**
-  - **Problem:** UI progress intentionally avoids regressions, but after partial-file loss/correction the amount of provable resumable data can be lower. Treating both as one number creates misleading state and complicates recovery decisions.
-  - **Root cause:** Telemetry/presentation high-water marks and recovery byte truth serve different purposes but are persisted/projected through overlapping record fields.
-  - **Severity / priority:** **P2 / Medium.**
-  - **Expected files/areas:** `download_telemetry.dart`, `download_service.dart`, `download_job_state.dart`, `downloads_provider.dart`, multipart progress tests.
-  - **Proposed fix:** Keep durable bytes authoritative for recovery/integrity and a separate ephemeral/presentation progress stream for smooth UI. On restart/recovery, display must be able to reconcile downward only when proven necessary and explain/represent recovery rather than silently claiming unavailable bytes.
-  - **Verification/testing:** Lost partial file with stale progress, 0.999 sentinel, late regressive callback, manifest rollback to last durable checkpoint, app restart, and resumed download after source replacement.
-  - **Dependencies:** DM-05 and DM-06.
+- [ ] **DM-28 — Align platform execution-policy and concurrency semantics**
+  - **Problem:** Dart logical concurrency allows 1..10 while Swift clamps native queue concurrency to 5. Android downloads always carry `userInitiated`, but Android 14+ UIDT requires notification-visible execution while users can disable download notifications.
+  - **Root cause:** platform-specific safety caps/hints evolved separately from the user-facing queue/notification settings.
+  - **Severity / priority:** **P2 / Medium; P1 if device tests show failed/background-stalled transfers.**
+  - **Expected files/areas:** `download_concurrency.dart`, task creation/notification configuration, `DownloadNativeWaitingQueue.swift`, Android manifest/config, platform tests.
+  - **Proposed fix:** explicitly define supported foreground/background concurrency per platform and project settings accordingly rather than silently clamping. On Android, test notification-off behavior and choose a documented WorkManager/UIDT/foreground-service fallback that remains valid. Keep macOS entitlement requirements covered by build checks.
+  - **Verification/testing:** concurrency 1/5/6/10 across iOS foreground/background; Android 14+ notifications allowed/denied/disabled; long >9-minute task; process background/termination; no hidden setting mismatch.
+  - **Dependencies:** DM-09 network/transport policy; otherwise independent.
 
 - [ ] **DM-17 — Audit and harden resource/subscription lifetime across reinitialization**
-  - **Problem:** Most session timers/controllers/part resources are explicitly canceled, but the download stack also has static/shared downloader subscriptions and process-lifetime maps. They are safe only if singleton/reinit assumptions always hold.
-  - **Root cause:** The app uses a keep-alive service plus static plugin event bridging; tests/hot restart/recreated provider scopes can exercise lifetime patterns different from normal production startup.
-  - **Severity / priority:** **P3 / Low unless profiling shows retained sessions.**
-  - **Expected files/areas:** `download_service.dart`, `download_transport.dart`, `persistent_parallel_download.dart`, diagnostic log/native bridge disposal, lifecycle tests.
-  - **Proposed fix:** Define ownership for every stream subscription, controller, timer, native transfer handle, recovery timer, telemetry entry, and static bridge. Make init/dispose idempotent; ensure a second service initialization does not duplicate delivery or retain old session state.
-  - **Verification/testing:** Repeated init/dispose loops, provider scope recreation, hundreds of completed/canceled downloads, multipart pause/resume cycles, and memory/handle-count inspection where platform tooling permits.
-  - **Dependencies:** DM-10 makes duplicate/late delivery safer; otherwise independent.
+  - **Problem:** the stack contains static/shared plugin event bridges, timers, Transfer handles, range operations, native observers and process-lifetime maps. `DownloadRangeTransfer.dispose()` cancels operations but does not itself join every operation before service teardown continues.
+  - **Root cause:** normal production assumes a keep-alive singleton, while tests/recreated scopes/hot restart and error recovery can exercise reinitialization.
+  - **Severity / priority:** **P2 / Medium after deeper review.**
+  - **Expected files/areas:** `download_service.dart`, `download_transport.dart`, `download_range_transfer.dart`, multipart coordinator, AppDelegate observers/native state.
+  - **Proposed fix:** document owner/lifetime for every controller/subscription/timer/native handle. Make dispose asynchronous where joining is required; prevent a second service instance from receiving old-operation callbacks or starting while old writers are settling.
+  - **Verification/testing:** repeated init/dispose; provider recreation; dispose during Range write/multipart retry; hundreds of complete/cancel cycles; memory/file-handle inspection; no duplicate subscriptions.
+  - **Dependencies:** DM-10 makes late delivery safe.
 
-## Phase 5 — Prove the whole system, not just individual helpers
+## Phase 5 — Prove behavior, not source shape
 
 - [ ] **DM-18 — Build an end-to-end deterministic reliability/chaos acceptance matrix**
-  - **Problem:** Existing tests cover many important helpers and prior regressions, but several “runtime stability” checks assert source-code structure, and the uncovered pending-start/recovery-inventory/control-result races require behavioral orchestration tests.
-  - **Root cause:** The download manager spans plugin DB, Hive, filesystem, native transport, multipart scheduler, UI projection, and iOS background state; unit tests for each layer do not prove cross-layer convergence under reordered/lost callbacks and crashes.
-  - **Severity / priority:** **P1 / High as the release gate; implement incrementally alongside each preceding fix, finalize last.**
-  - **Expected files/areas:** existing `test/core/services/*download*` suites plus new focused orchestration/fault-injection harnesses; iOS source/native integration tests where executable native tests are unavailable.
-  - **Proposed fix:** Add deterministic fake transport/persistence clocks capable of dropping, delaying, duplicating, and reordering callbacks; fault injection at durable-write boundaries; and scenario matrices for single + multipart. Prefer behavior assertions over source-string assertions for correctness-critical invariants.
-  - **Verification/testing:** Mandatory final matrix: fresh download; pause/resume; repeated pause/resume; failure/retry; process kill/restart; crash during checkpoint; offline/online; expired URL refresh; missing plugin DB; missing metadata; partial-file loss; 1/2/5/8/16 parts; one missing child callback; 0.999 tail; server ignores Range; server changes validator; simultaneous downloads; queue full; cancel/delete races; low disk; assembly crash; iOS background suspend/promotion/foreground. Run targeted tests after each item and the complete download suite before marking this final item complete.
-  - **Dependencies:** All prior items. This is the final acceptance gate, not a substitute for per-item tests.
+  - **Problem:** many existing tests are valuable, but some correctness-critical iOS/runtime tests assert source strings and some unit invariants encode assumptions that the deeper review identified as unsafe.
+  - **Root cause:** the manager spans plugin DB, JobStore/Hive, filesystem, native executor, multipart scheduler, UI projection and Swift background state; isolated helper tests cannot prove convergence under lost/reordered callbacks and crashes.
+  - **Severity / priority:** **P1 / High as final release gate; grow incrementally with every earlier fix.**
+  - **Expected files/areas:** existing `test/core/services/*download*` suites plus deterministic fake transport/store/native-handoff harnesses and platform integration tests where executable native tests are practical.
+  - **Proposed fix:** support dropped/delayed/duplicated/reordered callbacks, liveness ambiguity, slow/failing stores, crash injection at every durable boundary, native claim/snapshot races and controlled network/server behavior. Prefer behavioral assertions over source-string presence for invariants.
+  - **Verification/testing:** mandatory matrix includes fresh download; pause/resume; accepted pause with live owner; retry/failure; zero surviving bytes with stale progress; JobStore byte rollback; JobStore write failure; process kill/restart; missing DB/metadata/job; 1/2/5/8/16 parts; missing start callback; native/Dart same-part race; exact-size part with unsettled owner; 0.999 tail; expired 401/403/404 source; ignored Range; validator/resource change; offline/online; multiple downloads; queue full; cancel/tombstone races; low disk/assembly failure; iOS suspension/native promotion/foreground; Android long UIDT/notification-off cases; service dispose/reinit.
+  - **Dependencies:** All prior items. Final item remains unchecked until the complete matrix passes on supported platforms.
 
 ## Dependency / execution order
 
-Recommended order for later tasks:
+Later Tasks should follow **file order first**, then dependencies. Existing DM identifiers were intentionally preserved when this deeper review added DM-19..DM-28.
 
-1. DM-01 -> DM-02 -> DM-03 -> DM-04 to eliminate the currently strongest stuck/resume/restart failure paths.
-2. DM-05 establishes the logical state authority used by subsequent work.
-3. DM-06 and DM-07 close integrity and ownership-deletion boundaries.
-4. DM-08 and DM-09 normalize expired-source and network recovery.
-5. DM-10 and DM-11 harden races/crash consistency across all stores/transports.
-6. DM-12 removes competing UI writers once the service contract is stable.
-7. DM-13 through DM-17 handle fairness, orphan recovery, iOS snapshot reliability, byte/progress separation, and resource lifetime.
-8. DM-18 is developed continuously as regression coverage but remains unchecked until the full final matrix passes.
+Recommended implementation sequence:
 
-## Invariants every implementation PR commit must preserve
+1. **DM-01 -> DM-19 -> DM-20 -> DM-21 -> DM-02**: eliminate ambiguous start/pause ownership and stale-byte deadlocks.
+2. **DM-22 -> DM-23**: eliminate iOS/multipart duplicate-writer and unsettled-owner paths before broader state refactors.
+3. **DM-03 -> DM-04 -> DM-05 -> DM-24**: establish explicit control outcomes, complete inventory, one logical state machine, and canonical identity.
+4. **DM-06 -> DM-07 -> DM-08 -> DM-16**: protect final integrity, terminal deletion, source refresh, and recovery-byte truth.
+5. **DM-09 -> DM-10 -> DM-11 -> DM-25 -> DM-13 -> DM-12**: normalize retry/race/write ordering, remove hot-path persistence pressure, then simplify UI ownership.
+6. **DM-27 -> DM-14 -> DM-15 -> DM-26 -> DM-28 -> DM-17**: harden storage, orphan recovery, native snapshots/plugin integration, platform policy, and resource lifetime.
+7. **DM-18** grows alongside every item but remains the final unchecked acceptance gate until the complete matrix passes.
 
-- Never start a second writer for the same logical task/range while ownership of an earlier generation is unknown.
-- Never claim `paused`, `running`, `queued`, or `completed` solely because a command was accepted; require logical intent plus transport/durable evidence appropriate to that state.
-- Explicit user pause and explicit user cancel always outrank automatic retry/recovery.
-- Proven on-disk bytes are never discarded merely to repair state bookkeeping.
-- A final file is never overwritten during automatic recovery when its identity/expected size is uncertain.
-- Multipart assembly remains staging-based and validates every part boundary before atomic final promotion.
-- Terminal tombstones must prevent late native callbacks from resurrecting deleted/canceled work.
-- Queue/global connection limits must remain bounded under retries, delayed callbacks, and concurrent sessions.
-- Source refresh must never append bytes from an unverified different resource.
-- Restart reconciliation must be idempotent: running it multiple times converges to the same logical state without duplicate tasks.
+## Invariants every implementation commit must preserve
+
+- Never start a second writer for the same logical episode/range while an earlier owner is live **or ownership is unknown**.
+- A DB status is never proof of native non-ownership.
+- Command acceptance is never equivalent to state completion: `pause`, `resume`, `cancel`, `enqueue`, native claim and source replacement require the appropriate durable/ownership acknowledgement.
+- Control-boundary user intent must be durable before ownership-changing side effects; progress telemetry may be best-effort only when boundary flushes remain correct.
+- Exact disk bytes outrank historical progress and may legitimately force a recovery-byte correction downward.
+- Historical percentage alone is never evidence that bytes still exist.
+- Explicit user pause and cancel outrank automatic retry/recovery.
+- Terminal tombstones survive long enough to reject late native callbacks and finish cleanup after a crash.
+- Proven bytes are never discarded merely to repair bookkeeping; when bytes cannot be proven, the system makes an explicit safe restart/restart-required decision instead of deadlocking.
+- A final file is never marked complete solely by comparing its length with itself; completion requires independent expected-resource evidence or an explicit alternative proof.
+- Multipart assembly remains staging/crash-safe and never deletes/reuses a part until prior writer ownership is settled.
+- Dart and Swift ownership snapshots are monotonic/versioned; stale snapshots cannot reintroduce consumed native work.
+- Queue/global/per-host connection limits remain bounded under retries, delayed callbacks, native background promotion and concurrent sessions.
+- Source refresh never appends old bytes to an unverified different resource.
+- Restart/foreground reconciliation is idempotent: repeated reconciliation converges to the same logical state without duplicate tasks.
+- Slow persistence must not directly throttle the network receive loop beyond bounded checkpoint pressure.
+- Unsupported/plugin-internal hooks stay isolated, version-gated, and covered by behavior tests until replaced by public APIs.
 
 ## Checklist protocol for later Tasks
 
-- Read this file before changing code.
-- Start from the first unchecked item whose dependencies are complete.
-- Implement only a reviewable slice of that item at a time, with its regression test first where feasible.
-- Re-read the diff and run the targeted verification before checking an item.
-- Mark `[x]` only when the item’s described behavioral verification passes and update the item with any implementation notes that future Tasks need.
-- Keep using the same branch and PR until DM-18 is complete.
-- If a newly discovered root cause invalidates an item, update this document explicitly rather than silently changing scope.
+- Read this file completely before changing code.
+- Read the current PR/branch state and the latest implementation notes before selecting work.
+- Start from the first unchecked item in file order whose dependencies are complete.
+- If an earlier item is partially implemented, finish it before opening another.
+- Implement one clear, reviewable slice at a time and add the behavioral regression test first where feasible.
+- Do not replace a behavioral failure with a longer arbitrary timeout; establish an acknowledgement, lease, generation, or evidence-based rule.
+- Re-read the diff and run the item's targeted verification before checking it.
+- Mark `[x]` only when the item's described behavioral verification passes; record implementation notes/commits under the item for the next Task.
+- Keep using branch `plan/download-manager-reliability` and PR #231 until DM-18 is complete.
+- If a newly discovered root cause invalidates an item, update this source-of-truth document explicitly rather than silently changing scope.
