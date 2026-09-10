@@ -1,0 +1,74 @@
+name: Guarded DM-29 multipart byte truth
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install and generate
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Prepare RED guard only
+        run: |
+          cp lib/core/services/persistent_parallel_download.dart /tmp/persistent_parallel_download.dart
+          cp DOWNLOAD_MANAGER_PLAN.md /tmp/download_manager_plan.md
+          python3 .github/dm29_slice3.py
+          cp lib/core/services/persistent_parallel_download.dart /tmp/persistent_parallel_download_patched.dart
+          cp DOWNLOAD_MANAGER_PLAN.md /tmp/download_manager_plan_patched.md
+          cp /tmp/persistent_parallel_download.dart lib/core/services/persistent_parallel_download.dart
+          cp /tmp/download_manager_plan.md DOWNLOAD_MANAGER_PLAN.md
+          dart format test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+
+      - name: Verify RED
+        run: |
+          set +e
+          flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart > /tmp/red.log 2>&1
+          status=$?
+          cat /tmp/red.log
+          test $status -ne 0
+
+      - name: Apply production patch
+        run: |
+          cp /tmp/persistent_parallel_download_patched.dart lib/core/services/persistent_parallel_download.dart
+          cp /tmp/download_manager_plan_patched.md DOWNLOAD_MANAGER_PLAN.md
+          dart format lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+
+      - name: Verify GREEN
+        run: |
+          flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          flutter test test/core/services/persistent_parallel_download_test.dart
+          flutter test test/core/services/persistent_parallel_download_recovery_test.dart
+          flutter test test/core/services/persistent_parallel_download_pending_start_lease_test.dart
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Guard and commit slice
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dm29-slice3.yml .github/dm29_slice3.py
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          git diff --cached --check
+          git commit -m "fix: persist exact multipart durable bytes"
+          git push origin HEAD:plan/download-manager-reliability
