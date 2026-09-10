@@ -57,7 +57,7 @@ enum DownloadNativeDiagnosticLog {
         defer { try? handle.close() }
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
-        try handle.synchronize()
+        if event != "progress" { try handle.synchronize() }
         size += data.count
       } catch {
         // Logging must never fail or interrupt URLSession delegate handling.
@@ -1762,7 +1762,6 @@ enum DownloadNativeWaitingQueue {
   private static func saveLocked(_ state: State) {
     if let data = try? JSONEncoder().encode(state) {
       UserDefaults.standard.set(data, forKey: stateKey)
-      UserDefaults.standard.synchronize()
     }
   }
 

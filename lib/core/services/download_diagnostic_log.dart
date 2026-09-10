@@ -146,19 +146,19 @@ class DownloadDiagnosticLog {
 
     final taskId = fields['taskId']?.toString() ?? '';
     if (taskId.isEmpty) return false;
+    final parentTaskId = fields['parentTaskId']?.toString() ?? '';
+    final sampleId = parentTaskId.isNotEmpty ? parentTaskId : taskId;
     final terminal =
         fields['result'] == true ||
         fields['status'] != null ||
         fields['errorType'] != null ||
         fields['httpStatus'] != null;
     if (terminal) {
-      _lastHighFrequencyEventAt.removeWhere(
-        (key, _) => key.endsWith(':$taskId'),
-      );
+      _lastHighFrequencyEventAt.remove('$event:$sampleId');
       return false;
     }
 
-    final key = '$event:$taskId';
+    final key = '$event:$sampleId';
     final now = DateTime.now();
     final previous = _lastHighFrequencyEventAt[key];
     if (previous != null &&
