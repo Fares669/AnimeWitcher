@@ -1,0 +1,40 @@
+name: Dispatch v1.5.0 Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/dispatch-release-v1.5.0.yml'
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  dispatch:
+    name: Dispatch release workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Build & Release for all platforms
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release.yml \
+            --repo "${{ github.repository }}" \
+            --ref "release/v1.5.0" \
+            -f build_android=true \
+            -f build_ios=true \
+            -f build_macos=true \
+            -f build_windows=true
+
+      - name: Remove temporary dispatcher
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILE='.github/workflows/dispatch-release-v1.5.0.yml'
+          SHA=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE}?ref=main" --jq .sha)
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/contents/${FILE}" \
+            -f message='chore: remove temporary v1.5.0 release dispatcher' \
+            -f sha="$SHA" \
+            -f branch='main'
