@@ -144,15 +144,23 @@ void main() {
   });
 
   test('unknown runtime ownership keeps lease and never creates second writer', () async {
+    var livenessQueries = 0;
     final harness = await buildHarness(
       id: 'pending-start-unknown',
-      livePartIds: () async => throw StateError('liveness unavailable'),
+      livePartIds: () async {
+        livenessQueries++;
+        if (livenessQueries == 1) return <String>{};
+        throw StateError('liveness unavailable');
+      },
     );
     try {
+      // Startup ownership reconciliation succeeds. Only the lease-time oracle
+      // becomes unavailable, which must be treated as unknown rather than gone.
       expect(await harness.coordinator.start(harness.parent, 2 * mib), isTrue);
       final first = harness.starts.single;
       await Future<void>.delayed(const Duration(milliseconds: 180));
 
+      expect(livenessQueries, greaterThan(1));
       expect(
         harness.starts.where((task) => task.taskId == first.taskId),
         hasLength(1),
