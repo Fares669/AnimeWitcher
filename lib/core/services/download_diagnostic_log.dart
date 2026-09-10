@@ -4,7 +4,7 @@ import 'dart:io';
 
 /// Optional JSON-lines journal. No URLs, headers, filenames or exception text
 /// are accepted: callers supply numeric diagnostics and internal identifiers.
-/// Each append is flushed; failures never escape into the download engine.
+/// Appends are serialized; failures never escape into the download engine.
 class DownloadDiagnosticLog {
   DownloadDiagnosticLog(
     this.directory, {
@@ -122,7 +122,10 @@ class DownloadDiagnosticLog {
             await old.delete();
           }
         }
-        await _file!.writeAsBytes(bytes, mode: FileMode.append, flush: true);
+        // Diagnostic progress is not recovery state. Closing each append is
+        // sufficient here; forcing fsync on every sampled child is expensive on
+        // iOS and can turn a 16-part download into continuous storage pressure.
+        await _file!.writeAsBytes(bytes, mode: FileMode.append);
         _bytes += bytes.length;
         lastError = null;
       } catch (error) {
@@ -147,7 +150,9 @@ class DownloadDiagnosticLog {
     final taskId = fields['taskId']?.toString() ?? '';
     if (taskId.isEmpty) return false;
     final parentTaskId = fields['parentTaskId']?.toString() ?? '';
-    final sampleId = parentTaskId.isNotEmpty ? parentTaskId : taskId;
+    final sampleId = parentTaskId.isNotEmpty
+        ? parentTaskId
+        : _inferredProgressOwner(taskId);
     final terminal =
         fields['result'] == true ||
         fields['status'] != null ||
@@ -167,6 +172,12 @@ class DownloadDiagnosticLog {
     }
     _lastHighFrequencyEventAt[key] = now;
     return false;
+  }
+
+  String _inferredProgressOwner(String taskId) {
+    final marker = taskId.lastIndexOf('.part.');
+    if (marker > 0) return taskId.substring(0, marker);
+    return taskId;
   }
 
   Future<void> flush() => _tail;
