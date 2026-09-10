@@ -25,8 +25,8 @@ direct_pattern = re.compile(
     r"(?P=indent)    : 0,"
 )
 service, direct_count = direct_pattern.subn('', service)
-if direct_count != 4:
-    raise SystemExit(f'expected four direct synthetic durableBytes writes, found {direct_count}')
+if direct_count != 3:
+    raise SystemExit(f'expected three direct synthetic durableBytes writes, found {direct_count}')
 
 # A failed resume must use only the exact visible partial-byte observation.
 saved_old = """            durableBytes: saved.totalSize > 0 && saved.progress > 0
