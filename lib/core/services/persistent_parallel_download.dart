@@ -103,6 +103,18 @@ const Duration kParallelHostProfileSampleInterval = Duration(seconds: 5);
 /// slow-start and update the UI without restarting any Range.
 const Duration kParallelDiskProgressPollInterval = Duration(seconds: 1);
 
+class NativeParallelBackgroundPlan {
+  const NativeParallelBackgroundPlan({
+    required this.parentTaskId,
+    required this.maxConcurrent,
+    required this.tasks,
+  });
+
+  final String parentTaskId;
+  final int maxConcurrent;
+  final List<DownloadTask> tasks;
+}
+
 /// Native DownloadTasks transfer the parts; this coordinator persists their
 /// identity before starting them. A process restart must not create new parts
 /// or ask the plugin to resume an already completed part.
@@ -192,6 +204,45 @@ class PersistentParallelDownload {
   /// The byte-credible aggregate for a restored/live multipart parent.
   /// Native 0.999 completion sentinels are intentionally excluded.
   double? progressFor(String id) => _sessions[id]?.progress;
+
+  /// Fresh, generation-fenced Range children that iOS may start directly on
+  /// the already-running background URLSession while Dart is suspended. The
+  /// native cap is the session's *currently proven* active width, never the
+  /// configured ceiling, so moving to background cannot bypass slow-start or
+  /// the host governor. Only zero-byte children are exported: URLSession resume
+  /// blobs and source-refresh validation remain owned by Dart.
+  List<NativeParallelBackgroundPlan> nativeBackgroundPlans() {
+    if (_disposed) return const <NativeParallelBackgroundPlan>[];
+    final plans = <NativeParallelBackgroundPlan>[];
+    for (final session in _sessions.values) {
+      if (!session.active || session.pauseRequested || session.deleted)
+        continue;
+      final provenWidth = _activeConnectionsForSession(session);
+      if (provenWidth <= 0) continue;
+      final tasks = session.parts
+          .where(
+            (part) =>
+                !part.complete &&
+                !part.launched &&
+                part.recoveryTimer == null &&
+                part.attemptGeneration > 0 &&
+                !part.sourceValidationRequired &&
+                part.progress <= 0 &&
+                part.credibleProgress <= 0,
+          )
+          .map((part) => part.task)
+          .toList(growable: false);
+      if (tasks.isEmpty) continue;
+      plans.add(
+        NativeParallelBackgroundPlan(
+          parentTaskId: session.task.taskId,
+          maxConcurrent: provenWidth.clamp(1, kDownloadGlobalConnectionBudget),
+          tasks: tasks,
+        ),
+      );
+    }
+    return plans;
+  }
 
   /// Repair a child whose native resume checkpoint claimed progress but no
   /// resumable/native/on-disk bytes survived. The immutable Range itself is
@@ -769,6 +820,12 @@ class PersistentParallelDownload {
       session.active = true;
       session.resetRamp();
       try {
+        // Future native background refills must carry the same attempt token as
+        // the Dart-owned session. Preparing metadata does not launch anything
+        // and does not increase the slow-start width.
+        for (final part in session.parts) {
+          if (!part.complete) _preparePartAttempt(session, part);
+        }
         // Persist the logical generation before any child is handed to native IO.
         await _persist(session);
         await _status(session, TaskStatus.enqueued);
@@ -1688,6 +1745,7 @@ class PersistentParallelDownload {
     double? progress,
     int? writtenBytes,
     int? expectedBytes,
+    int? attemptGeneration,
     double? speedBytesPerSecond,
     bool completed = false,
   }) async {
@@ -1709,9 +1767,27 @@ class PersistentParallelDownload {
           break;
         }
       }
-      // Native bridge updates do not carry the Dart task metadata token.
-      // Accept them only while this exact child currently owns a slot.
-      if (part == null || part.complete || !part.launched) return;
+      if (part == null || part.complete) return;
+      // Native background refill tasks are created from a pre-fenced child
+      // definition while Dart can be asleep. Adopt that ownership only when
+      // Swift echoed the exact current attempt token. A late callback from an
+      // older URLSession task can therefore never resurrect the Range.
+      if (!part.launched) {
+        final canAdoptNativeOwner =
+            session.active &&
+            !session.pauseRequested &&
+            !part.sourceValidationRequired &&
+            attemptGeneration != null &&
+            attemptGeneration == part.attemptGeneration;
+        if (!canAdoptNativeOwner) return;
+        part.launched = true;
+        _activeConnectionIds.add(part.task.taskId);
+        _markConnectionReady(session, part);
+      } else if (attemptGeneration != null &&
+          part.attemptGeneration > 0 &&
+          attemptGeneration != part.attemptGeneration) {
+        return;
+      }
 
       // The immutable Range in the manifest is the authority. Never trust a
       // server-reported expected length enough to credit bytes outside it.
@@ -1842,7 +1918,16 @@ class PersistentParallelDownload {
           if (!part.launched &&
               !(update is TaskStatusUpdate &&
                   update.status == TaskStatus.complete)) {
-            return;
+            final canAdoptNativeOwner =
+                session.active &&
+                !session.pauseRequested &&
+                !part.sourceValidationRequired &&
+                callbackAttempt != null &&
+                callbackAttempt == part.attemptGeneration;
+            if (!canAdoptNativeOwner) return;
+            part.launched = true;
+            _activeConnectionIds.add(part.task.taskId);
+            _markConnectionReady(session, part);
           }
           if (generation != session.generation &&
               !(update is TaskStatusUpdate &&

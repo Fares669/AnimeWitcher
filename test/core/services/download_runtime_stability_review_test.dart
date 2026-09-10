@@ -332,6 +332,52 @@ void main() {
       expect(source, contains('!session.pauseRequested &&'));
     });
 
+    test('single-episode iOS overlay cannot multiply the file total', () {
+      final swift = File('ios/Runner/DownloadNativeWaitingQueue.swift')
+          .readAsStringSync();
+      expect(swift, contains('if state.sessionBatchTotal <= 1'));
+      expect(swift, contains('retainedNativeOwners + dartTransferring'));
+      expect(
+        swift,
+        isNot(contains('current.transferringTaskIds + dartTransferring')),
+      );
+      expect(swift, contains('acceptsDartOverlayUpdates()'));
+
+      final appDelegate = File('ios/Runner/AppDelegate.swift')
+          .readAsStringSync();
+      expect(
+        appDelegate,
+        contains('if !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates()'),
+      );
+    });
+
+    test(
+      'iOS background multipart refills the proven connection width natively',
+      () {
+        final parallel = File(
+          'lib/core/services/persistent_parallel_download.dart',
+        ).readAsStringSync();
+        expect(parallel, contains('nativeBackgroundPlans()'));
+        expect(parallel, contains('maxConcurrent: provenWidth.clamp('));
+        expect(parallel, contains('part.progress <= 0'));
+        expect(parallel, contains('!part.sourceValidationRequired'));
+        expect(
+          parallel,
+          contains('attemptGeneration == part.attemptGeneration'),
+        );
+
+        final swift = File('ios/Runner/DownloadNativeWaitingQueue.swift')
+            .readAsStringSync();
+        expect(swift, contains('struct MultipartPlan: Codable'));
+        expect(swift, contains('promoteMultipartIfPossible('));
+        expect(swift, contains('session.getAllTasks'));
+        expect(swift, contains('startMultipartChild(waiter, on: session)'));
+        expect(swift, contains('task.priority = URLSessionTask.highPriority'));
+        expect(swift, contains('background.multipart.promote'));
+        expect(swift, contains('values["attemptGeneration"] = attempt'));
+      },
+    );
+
     test(
       'multipart native bytes keep iOS continued-processing progress alive',
       () {

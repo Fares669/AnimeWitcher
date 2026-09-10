@@ -206,6 +206,7 @@ import UserNotifications
       if call.method == "persistNativeQueue" || call.method == "persistWaitingQueue" {
         let arguments = call.arguments as? [String: Any] ?? [:]
         DownloadNativeWaitingQueue.persist(from: arguments)
+        DownloadNativeWaitingQueue.promoteMultipartIfPossible()
         result(true)
         return
       }
@@ -277,6 +278,10 @@ import UserNotifications
             }
 
           case "update":
+            if !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates() {
+              result(true)
+              return
+            }
             let progress =
               (arguments["progress"] as? NSNumber)?.doubleValue ?? 0.0
             let totalBytes =
@@ -362,6 +367,9 @@ import UserNotifications
       }
       if let expected = values["expectedBytes"] as? NSNumber {
         arguments["expectedBytes"] = expected.int64Value
+      }
+      if let attempt = values["attemptGeneration"] as? NSNumber {
+        arguments["attemptGeneration"] = attempt.intValue
       }
       if let speed = values["speedBytesPerSecond"] as? NSNumber {
         arguments["speedBytesPerSecond"] = speed.doubleValue

@@ -533,6 +533,7 @@ class DownloadService {
     int? statusOrdinal,
     int? writtenBytes,
     int? expectedBytes,
+    int? attemptGeneration,
     double? speedBytesPerSecond,
     bool completed = false,
   }) {
@@ -571,6 +572,7 @@ class DownloadService {
         progress: derivedProgress,
         writtenBytes: writtenBytes,
         expectedBytes: expectedBytes,
+        attemptGeneration: attemptGeneration,
         speedBytesPerSecond: speedBytesPerSecond,
         completed: completed,
       ),
@@ -1832,6 +1834,18 @@ class DownloadService {
         }
       } catch (_) {}
     }
+    final multipartPlans = <Map<String, Object>>[];
+    if (Platform.isIOS) {
+      for (final plan in _parallel.nativeBackgroundPlans()) {
+        multipartPlans.add(<String, Object>{
+          'parentTaskId': plan.parentTaskId,
+          'maxConcurrent': plan.maxConcurrent,
+          'waiters': <Map<String, Object>>[
+            for (final child in plan.tasks) nativeWaitingPayload(child),
+          ],
+        });
+      }
+    }
     await _continuedProcessing.persistNativeQueue(
       maxConcurrent: max,
       waiters: waiters,
@@ -1848,6 +1862,7 @@ class DownloadService {
       sessionTransferredBytes: overlay?.transferredBytes ?? 0,
       sessionSpeedBytesPerSecond: overlay?.speedBytesPerSecond ?? 0,
       sessionCurrentIndex: overlay?.currentIndex ?? 0,
+      multipartPlans: multipartPlans,
     );
   }
 
