@@ -1471,7 +1471,10 @@ enum DownloadNativeWaitingQueue {
         totalExpected: totalExpected,
         completed: false
       )
-      promoteMultipartIfPossible(on: session, parentId: parentTaskId(from: downloadTask))
+      // Progress does not free a connection slot. Re-probing URLSession here
+      // made every didWrite callback call getAllTasks while multiple ranges
+      // were active. Initial background handoff and child completion are the
+      // only ownership changes that can require a refill.
       return
     }
     guard let id = taskId(from: downloadTask) else { return }
