@@ -104,4 +104,46 @@ void main() {
       contains('if event != "progress" { try handle.synchronize() }'),
     );
   });
+
+  test(
+    'multipart background refill probes run on ownership changes, not every byte callback',
+    () {
+      final swift = File('ios/Runner/DownloadNativeWaitingQueue.swift')
+          .readAsStringSync();
+      final start = swift.indexOf('static func handleBytesWritten(');
+      final end = swift.indexOf('private static func postSingleTaskUpdate(', start);
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final writeHandler = swift.substring(start, end);
+      final multipartStart = writeHandler.indexOf(
+        'if isDownloadPart(downloadTask) {',
+      );
+      final multipartEnd = writeHandler.indexOf(
+        'guard let id = taskId(from: downloadTask)',
+        multipartStart,
+      );
+      expect(multipartStart, greaterThanOrEqualTo(0));
+      expect(multipartEnd, greaterThan(multipartStart));
+      final multipartProgress = writeHandler.substring(
+        multipartStart,
+        multipartEnd,
+      );
+      expect(
+        multipartProgress,
+        isNot(contains('promoteMultipartIfPossible(')),
+      );
+
+      final completionStart = swift.indexOf(
+        'static func handlePluginTaskCompleted(',
+      );
+      final completionEnd = swift.indexOf(
+        'static func parkFailedTask(',
+        completionStart,
+      );
+      expect(completionStart, greaterThanOrEqualTo(0));
+      expect(completionEnd, greaterThan(completionStart));
+      final completion = swift.substring(completionStart, completionEnd);
+      expect(completion, contains('promoteMultipartIfPossible('));
+    },
+  );
 }
