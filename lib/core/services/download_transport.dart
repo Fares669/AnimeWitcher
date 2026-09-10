@@ -7,6 +7,37 @@ bool isNativeSingleDownloadTask(Task task) =>
 
 const int kDownloadLargeFileHintThresholdBytes = 50 * 1024 * 1024;
 
+/// Runtime ownership is intentionally separate from persisted task status.
+/// Only [notOwned] permits a new writer for the same execution identity.
+enum DownloadRuntimeOwnership { owned, notOwned, settling, unknown }
+
+extension DownloadRuntimeOwnershipSafety on DownloadRuntimeOwnership {
+  bool get blocksNewWriter => this != DownloadRuntimeOwnership.notOwned;
+}
+
+/// Resolve ownership from executor/runtime evidence only. A persisted database
+/// status is deliberately not an input: it may describe an older projection.
+DownloadRuntimeOwnership resolveDownloadRuntimeOwnership({
+  required bool runtimeQuerySucceeded,
+  required bool runtimeTaskPresent,
+  bool localRangeWriterActive = false,
+  bool operationSettling = false,
+  bool transferHandlePresent = false,
+}) {
+  if (localRangeWriterActive || runtimeTaskPresent) {
+    return DownloadRuntimeOwnership.owned;
+  }
+  if (operationSettling) return DownloadRuntimeOwnership.settling;
+  if (!runtimeQuerySucceeded) {
+    // A Transfer handle can be rehydrated from persistence, so presence alone
+    // cannot prove ownership; query failure therefore remains unknown.
+    return DownloadRuntimeOwnership.unknown;
+  }
+  // A successful executor query that does not contain the task is the
+  // independent negative acknowledgement needed before another writer starts.
+  return DownloadRuntimeOwnership.notOwned;
+}
+
 /// Anime episodes are explicit user downloads. User-initiated is always useful;
 /// largeFile is added when size is unknown or the episode is large enough to
 /// benefit from background_downloader's long-running transfer policy.
@@ -59,7 +90,8 @@ class NativeSingleDownloadTransport implements DownloadTransport {
 
   @override
   bool owns(String taskId) =>
-      _handles.containsKey(taskId) || _downloader.transfers.forId(taskId) != null;
+      _handles.containsKey(taskId) ||
+      _downloader.transfers.forId(taskId) != null;
 
   Transfer? handleFor(String taskId) =>
       _handles[taskId] ?? _downloader.transfers.forId(taskId);

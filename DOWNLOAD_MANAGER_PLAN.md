@@ -104,6 +104,8 @@
   - **Proposed fix:** define `owned / notOwned / settling / unknown` from actual Transfer/native/range/multipart ownership plus acknowledgement. DB status may support a conclusion but can never independently negate a live owner.
   - **Verification/testing:** DB paused + native running; stale DB running + owner gone; Transfer handle exists but executor state unknown; liveness query failure; relaunch; no duplicate resume while unknown.
   - **Dependencies:** None.
+  - **Implementation status (2026-09-11):** Runtime ownership model and fail-closed writer guard are being implemented. The plugin's public `allTasks(allGroups: true)` active-executor query is now the native ownership source instead of filtering that result with persisted DB `paused` rows; Range ownership remains an independent positive signal. Query failure maps to `unknown`, which blocks a new writer, and accepted-but-unsettled ownership has an explicit `settling` state for subsequent control-ack work.
+  - **Confirmed root cause:** `_liveTransferTasks()` took an executor-active result and then removed IDs solely because the persistent database projected them as `paused`, allowing stale DB state to overrule stronger runtime evidence.
 
 - [ ] **DM-29 — Make durable-byte provenance explicit and ban percentage-derived byte truth**
   - **Problem:** several lifecycle checkpoints persist `durableBytes = totalSize * progress`; multipart recovery also stores/derives credited state from floating-point progress rather than exact byte counts.

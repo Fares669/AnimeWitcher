@@ -3393,17 +3393,27 @@ class DownloadService {
     return (task: updated, refreshed: true);
   }
 
-  Future<List<Task>> _liveTransferTasks() async {
-    // allTasks/taskForId include persisted paused tasks. They are not proof
-    // that URLSession or a worker currently owns a transfer. Use the public
-    // tracked-task database to exclude durable paused records instead of the
-    // plugin's testing-only downloader API.
-    final paused = (await FileDownloader().database.allRecordsWithStatus(
-      TaskStatus.paused,
-    )).map((record) => record.taskId).toSet();
-    return (await FileDownloader().allTasks(allGroups: true))
-        .where((task) => !paused.contains(task.taskId))
-        .toList();
+  Future<List<Task>> _liveTransferTasks() =>
+      FileDownloader().allTasks(allGroups: true);
+
+  Future<DownloadRuntimeOwnership> _runtimeOwnershipFor(String taskId) async {
+    if (_rangeTransfers.isActive(taskId)) {
+      return DownloadRuntimeOwnership.owned;
+    }
+    try {
+      final activeTasks = await _liveTransferTasks();
+      return resolveDownloadRuntimeOwnership(
+        runtimeQuerySucceeded: true,
+        runtimeTaskPresent: activeTasks.any((task) => task.taskId == taskId),
+        transferHandlePresent: _nativeTransport.handleFor(taskId) != null,
+      );
+    } catch (_) {
+      return resolveDownloadRuntimeOwnership(
+        runtimeQuerySucceeded: false,
+        runtimeTaskPresent: false,
+        transferHandlePresent: _nativeTransport.handleFor(taskId) != null,
+      );
+    }
   }
 
   Future<void> _reconcileTransferOwnership() async {
@@ -3475,9 +3485,8 @@ class DownloadService {
         // pauseDownload already joined the Range writer before entering the
         // control queue. A missing native task is expected in that case.
         return rangeAlreadyStopped &&
-            !(await _liveTransferTasks()).any(
-              (live) => live.taskId == task.taskId,
-            );
+            await _runtimeOwnershipFor(task.taskId) ==
+                DownloadRuntimeOwnership.notOwned;
       }
 
       // pause() acknowledges the command before URLSession has necessarily
@@ -3490,17 +3499,13 @@ class DownloadService {
       if (isInternalDownloaderChunk(task)) {
         // Verify the child really left the live native set. If the first pause
         // raced URLSession hand-off, retry the same identity once; never cancel.
-        var stillLive = (await _liveTransferTasks()).any(
-          (live) => live.taskId == task.taskId,
-        );
-        if (stillLive) {
+        var ownership = await _runtimeOwnershipFor(task.taskId);
+        if (ownership == DownloadRuntimeOwnership.owned) {
           if (!await FileDownloader().pause(task)) return false;
           await Future<void>.delayed(const Duration(milliseconds: 200));
-          stillLive = (await _liveTransferTasks()).any(
-            (live) => live.taskId == task.taskId,
-          );
+          ownership = await _runtimeOwnershipFor(task.taskId);
         }
-        if (stillLive) return false;
+        if (ownership != DownloadRuntimeOwnership.notOwned) return false;
       }
       return true;
     } finally {
@@ -3514,11 +3519,14 @@ class DownloadService {
       'progress': progress,
       'total': size,
     });
-    if (_rangeTransfers.isActive(task.taskId)) return true;
-    if ((await _liveTransferTasks()).any(
-      (live) => live.taskId == task.taskId,
-    )) {
-      return true;
+    final ownership = await _runtimeOwnershipFor(task.taskId);
+    if (ownership == DownloadRuntimeOwnership.owned) return true;
+    if (ownership.blocksNewWriter) {
+      diagnosticLog.record('part.startOwnershipBlocked', {
+        'taskId': task.taskId,
+        'ownership': ownership.name,
+      });
+      return false;
     }
 
     final forceSourceValidation = downloadInternalSourceValidationRequired(
