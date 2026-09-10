@@ -1,0 +1,30 @@
+name: Verify iOS Download Thermal Efficiency
+
+on:
+  push:
+    branches:
+      - fix/ios-background-multipart-throughput
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-ios-download-thermal-efficiency
+  cancel-in-progress: true
+
+jobs:
+  thermal-regression:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/ios-background-multipart-throughput
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Reproduce thermal regression
+        run: flutter test test/core/services/download_thermal_efficiency_test.dart
