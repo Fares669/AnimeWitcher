@@ -96,7 +96,7 @@
   - **Confirmed root cause:** accepted native enqueue previously had no post-acceptance deadline, so a missing readiness callback could reserve the slow-start slot indefinitely.
   - **Verification passed:** regression coverage includes accepted start/no callback retry with a new attempt generation, proven runtime ownership without duplicate writer, unknown-liveness fail-closed behavior, reconciliation during the lease, and pause during the lease. `Flutter Checks` completed successfully for commit `6250ca886205472fbdeaaaad71a269f5e162915b` after the final test correction; the later head-only check had `action_required` with no jobs after verifier cleanup and is not a test failure.
 
-- [ ] **DM-19 — Replace DB-filtered liveness with an independent runtime ownership oracle**
+- [x] **DM-19 — Replace DB-filtered liveness with an independent runtime ownership oracle**
   - **Problem:** `_liveTransferTasks()` can exclude a real worker because the plugin DB row says `paused`.
   - **Root cause:** durable/persisted transport status is incorrectly used as proof that runtime ownership does not exist.
   - **Severity / priority:** **P0 / Critical.**
@@ -104,8 +104,9 @@
   - **Proposed fix:** define `owned / notOwned / settling / unknown` from actual Transfer/native/range/multipart ownership plus acknowledgement. DB status may support a conclusion but can never independently negate a live owner.
   - **Verification/testing:** DB paused + native running; stale DB running + owner gone; Transfer handle exists but executor state unknown; liveness query failure; relaunch; no duplicate resume while unknown.
   - **Dependencies:** None.
-  - **Implementation status (2026-09-11):** Runtime ownership model and fail-closed writer guard are being implemented. The plugin's public `allTasks(allGroups: true)` active-executor query is now the native ownership source instead of filtering that result with persisted DB `paused` rows; Range ownership remains an independent positive signal. Query failure maps to `unknown`, which blocks a new writer, and accepted-but-unsettled ownership has an explicit `settling` state for subsequent control-ack work.
+  - **Implementation notes (2026-09-11):** Added explicit `owned / notOwned / settling / unknown` runtime ownership semantics with a fail-closed `blocksNewWriter` rule. `_liveTransferTasks()` now consumes the plugin's runtime-active `allTasks(allGroups: true)` result directly instead of removing IDs based on persisted `paused` rows. Range activity is independent positive ownership evidence, successful runtime absence is the negative acknowledgement for `notOwned`, and query failure remains `unknown`. Multipart start/pause paths now consult this oracle so an ambiguous owner cannot cause a second writer.
   - **Confirmed root cause:** `_liveTransferTasks()` took an executor-active result and then removed IDs solely because the persistent database projected them as `paused`, allowing stale DB state to overrule stronger runtime evidence.
+  - **Verification passed:** `Guarded DM-19 implementation` run 34537930159 passed patch application, formatting, generation, `download_runtime_ownership_test.dart`, all three targeted multipart/lease regression suites, `flutter analyze --no-fatal-warnings --no-fatal-infos`, diff checks, commit and push. Coverage verifies runtime-active ownership wins regardless of stale persisted pause, successful runtime absence yields `notOwned`, failed liveness with a rehydrated Transfer handle remains `unknown`, `settling` and `unknown` block a writer, and Range activity is authoritative positive evidence.
 
 - [ ] **DM-29 — Make durable-byte provenance explicit and ban percentage-derived byte truth**
   - **Problem:** several lifecycle checkpoints persist `durableBytes = totalSize * progress`; multipart recovery also stores/derives credited state from floating-point progress rather than exact byte counts.
