@@ -2073,15 +2073,11 @@ class DownloadService {
         ? TaskStatus.running
         : (record?.status ?? TaskStatus.enqueued);
     if (!_userPausedIds.contains(attached.taskId)) {
-      final durableBytes = totalSize > 0 && progress > 0
-          ? (totalSize * progress).floor()
-          : 0;
       await _checkpointLogicalJob(
         attached,
         state: transferring
             ? DownloadJobState.running
             : DownloadJobState.starting,
-        durableBytes: durableBytes,
         expectedBytes: totalSize,
         userPaused: false,
         queueWaiting: false,
@@ -2350,9 +2346,6 @@ class DownloadService {
     await _checkpointLogicalJob(
       task,
       state: DownloadJobState.interrupted,
-      durableBytes: totalSize > 0 && progress > 0
-          ? (totalSize * progress).floor()
-          : 0,
       expectedBytes: totalSize,
       userPaused: false,
       queueWaiting: false,
@@ -2618,9 +2611,6 @@ class DownloadService {
           await _checkpointLogicalJob(
             downloadTask,
             state: DownloadJobState.running,
-            durableBytes: totalSize > 0 && progress > 0
-                ? (totalSize * progress).floor()
-                : 0,
             expectedBytes: totalSize,
             userPaused: false,
             queueWaiting: false,
@@ -2657,9 +2647,6 @@ class DownloadService {
         await _checkpointLogicalJob(
           downloadTask,
           state: DownloadJobState.pausedByUser,
-          durableBytes: totalSize > 0 && progress > 0
-              ? (totalSize * progress).floor()
-              : 0,
           expectedBytes: totalSize,
           userPaused: true,
           queueWaiting: false,
@@ -2775,9 +2762,7 @@ class DownloadService {
           await _checkpointLogicalJob(
             downloadTask,
             state: DownloadJobState.interrupted,
-            durableBytes: saved.totalSize > 0 && saved.progress > 0
-                ? (saved.totalSize * saved.progress).floor()
-                : saved.partialBytes,
+            durableBytes: saved.partialBytes,
             expectedBytes: saved.totalSize,
             userPaused: false,
             queueWaiting: false,
