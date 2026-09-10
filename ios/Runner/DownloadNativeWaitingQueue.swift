@@ -9,7 +9,7 @@ enum DownloadNativeDiagnosticLog {
   private static var file: URL?
   private static var size = 0
   private static var sequence = 0
-  private static var lastProgress: [Int: TimeInterval] = [:]
+  private static var lastProgress: [String: TimeInterval] = [:]
   private static let session = String(Int64(Date().timeIntervalSince1970 * 1000000))
 
   static func configure(_ value: Bool) {
@@ -20,15 +20,26 @@ enum DownloadNativeDiagnosticLog {
     }
   }
 
+  private static func progressOwnerKey(_ task: URLSessionTask) -> String {
+    if let taskId = DownloadNativeWaitingQueue.taskId(from: task), !taskId.isEmpty {
+      if let part = taskId.range(of: ".part.", options: .backwards) {
+        return String(taskId[..<part.lowerBound])
+      }
+      return taskId
+    }
+    return "native:\(task.taskIdentifier)"
+  }
+
   static func record(_ event: String, task: URLSessionTask, error: Error? = nil) {
     queue.sync {
       guard enabled else { return }
       let now = Date().timeIntervalSince1970
+      let progressKey = progressOwnerKey(task)
       if event == "progress" {
-        if let previous = lastProgress[task.taskIdentifier], now - previous < 1.0 { return }
-        lastProgress[task.taskIdentifier] = now
+        if let previous = lastProgress[progressKey], now - previous < 1.0 { return }
+        lastProgress[progressKey] = now
       } else {
-        lastProgress.removeValue(forKey: task.taskIdentifier)
+        lastProgress.removeValue(forKey: progressKey)
       }
       sequence += 1
       var row: [String: Any] = ["time": ISO8601DateFormatter().string(from: Date()),
@@ -57,7 +68,7 @@ enum DownloadNativeDiagnosticLog {
         defer { try? handle.close() }
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
-        try handle.synchronize()
+        if event != "progress" { try handle.synchronize() }
         size += data.count
       } catch {
         // Logging must never fail or interrupt URLSession delegate handling.
@@ -145,6 +156,24 @@ enum DownloadNativeWaitingQueue {
     }
   }
 
+  struct MultipartPlan: Codable, Equatable, Sendable {
+    var parentTaskId: String
+    var maxConcurrent: Int
+    var waiters: [Waiter]
+
+    static func from(arguments: [String: Any]) -> MultipartPlan? {
+      guard let parentTaskId = string(arguments["parentTaskId"]),
+            !parentTaskId.isEmpty else { return nil }
+      let cap = min(max(intValue(arguments["maxConcurrent"]) ?? 1, 1), 16)
+      let waiters = dictionaryArray(arguments["waiters"]).compactMap(Waiter.from(arguments:))
+      return MultipartPlan(
+        parentTaskId: parentTaskId,
+        maxConcurrent: cap,
+        waiters: waiters
+      )
+    }
+  }
+
   struct RunningSample: Codable, Equatable {
     var written: Int64
     var expected: Int64
@@ -169,6 +198,7 @@ enum DownloadNativeWaitingQueue {
     var sessionSpeedBytesPerSecond: Double
     var sessionCurrentIndex: Int
     var runningSamples: [String: RunningSample]
+    var multipartPlans: [MultipartPlan]
 
     init(
       maxConcurrent: Int,
@@ -186,7 +216,8 @@ enum DownloadNativeWaitingQueue {
       sessionTransferredBytes: Int64 = 0,
       sessionSpeedBytesPerSecond: Double = 0,
       sessionCurrentIndex: Int = 0,
-      runningSamples: [String: RunningSample] = [:]
+      runningSamples: [String: RunningSample] = [:],
+      multipartPlans: [MultipartPlan] = []
     ) {
       self.maxConcurrent = maxConcurrent
       self.transferringTaskIds = transferringTaskIds
@@ -204,6 +235,7 @@ enum DownloadNativeWaitingQueue {
       self.sessionSpeedBytesPerSecond = sessionSpeedBytesPerSecond
       self.sessionCurrentIndex = sessionCurrentIndex
       self.runningSamples = runningSamples
+      self.multipartPlans = multipartPlans
     }
 
     init(from decoder: Decoder) throws {
@@ -224,6 +256,7 @@ enum DownloadNativeWaitingQueue {
       sessionSpeedBytesPerSecond = try container.decodeIfPresent(Double.self, forKey: .sessionSpeedBytesPerSecond) ?? 0
       sessionCurrentIndex = try container.decodeIfPresent(Int.self, forKey: .sessionCurrentIndex) ?? 0
       runningSamples = try container.decodeIfPresent([String: RunningSample].self, forKey: .runningSamples) ?? [:]
+      multipartPlans = try container.decodeIfPresent([MultipartPlan].self, forKey: .multipartPlans) ?? []
     }
 
     func overlayCurrentIndex(runningTaskId: String? = nil) -> Int {
@@ -288,6 +321,8 @@ enum DownloadNativeWaitingQueue {
   private static var backgroundRetryStates: [String: BackgroundRetryState] = [:]
   private static var multipartChildSamples: [String: [String: RunningSample]] = [:]
   private static var lastMultipartOverlayTimes: [String: CFAbsoluteTime] = [:]
+  private static var latestDownloadSession: URLSession?
+  private static var multipartPromotionParents = Set<String>()
   private static let chunkBridgeInterval: CFTimeInterval = 1.0
   private static let taskBridgeInterval: CFTimeInterval = 1.0
   private static let speedWindowInterval: CFTimeInterval = 4.0
@@ -316,6 +351,8 @@ enum DownloadNativeWaitingQueue {
     let dartSessionIds = stringArray(arguments["sessionTaskIds"])
     let dartCompletedCount = intValue(arguments["sessionCompletedCount"]) ?? 0
     let dartBatchTotal = intValue(arguments["sessionBatchTotal"]) ?? 0
+    let dartMultipartPlans = dictionaryArray(arguments["multipartPlans"])
+      .compactMap(MultipartPlan.from(arguments:))
     let released = Set(stringArray(arguments["queueWaitingTaskIds"]))
 
     let pausedSet = Set(dartPaused)
@@ -332,7 +369,17 @@ enum DownloadNativeWaitingQueue {
 
     // Leftover Dart-parked waiters must not occupy a native transferring slot.
     seenTransferringIds.subtract(released)
-    let transferring = unique(current.transferringTaskIds + dartTransferring)
+    // Persisted liveness is not runtime ownership. Keep an old logical ID
+    // only when this process has actual URLSession evidence for it; otherwise a
+    // relaunch plus a new taskId for the same episode made the overlay sum the
+    // same 452 MB resource two or three times.
+    let multipartRuntimeParents = Set(
+      multipartChildSamples.compactMap { $0.value.isEmpty ? nil : $0.key }
+    )
+    let retainedNativeOwners = current.transferringTaskIds.filter {
+      seenTransferringIds.contains($0) || multipartRuntimeParents.contains($0)
+    }
+    let transferring = unique(retainedNativeOwners + dartTransferring)
       .filter {
         !pausedSet.contains($0)
           && !completed.contains($0)
@@ -429,7 +476,8 @@ enum DownloadNativeWaitingQueue {
           if nextWaiter > 0 { return nextWaiter }
           return current.sessionCurrentIndex
         }(),
-        runningSamples: current.runningSamples.filter { transferringSet.contains($0.key) }
+        runningSamples: current.runningSamples.filter { transferringSet.contains($0.key) },
+        multipartPlans: dartMultipartPlans
       )
     )
   }
@@ -454,6 +502,8 @@ enum DownloadNativeWaitingQueue {
     backgroundRetryStates.removeAll()
     multipartChildSamples.removeAll()
     lastMultipartOverlayTimes.removeAll()
+    latestDownloadSession = nil
+    multipartPromotionParents.removeAll()
   }
 
   /// URLSession transport failures that are worth retrying without waking
@@ -608,6 +658,7 @@ enum DownloadNativeWaitingQueue {
     task: URLSessionTask,
     error: Error?
   ) {
+    rememberDownloadSession(session)
     // A native part is not an episode, but its URLSession byte/completion
     // evidence belongs to the Dart multipart parent. didFinishDownloadingTo
     // calls us after the plugin moved the temp file, so completion can now be
@@ -619,6 +670,7 @@ enum DownloadNativeWaitingQueue {
         totalExpected: task.countOfBytesExpectedToReceive,
         completed: error == nil
       )
+      promoteMultipartIfPossible(on: session, parentId: parentTaskId(from: task))
       return
     }
     if let response = task.response as? HTTPURLResponse,
@@ -966,6 +1018,36 @@ enum DownloadNativeWaitingQueue {
     speedBytesPerSecond: Double
   ) {
     let transferringSet = Set(state.transferringTaskIds)
+    // One logical episode must have one byte denominator. Even if a stale
+    // persisted ID survives briefly during foreground/background handoff, never
+    // add two samples for a `1 of 1` session. This is a presentation guard; the
+    // persisted-owner filter above fixes the underlying state.
+    if state.sessionBatchTotal <= 1 {
+      let candidateId = transferringSet.contains(state.sessionCurrentTaskId)
+        && state.runningSamples[state.sessionCurrentTaskId] != nil
+        ? state.sessionCurrentTaskId
+        : state.transferringTaskIds.first(where: { state.runningSamples[$0] != nil })
+      if let candidateId, let running = state.runningSamples[candidateId] {
+        let total = running.expected > 0 ? running.expected : state.sessionTotalBytes
+        let transferred = total > 0
+          ? min(max(running.written, 0), total)
+          : max(running.written, 0)
+        let progress = total > 0
+          ? min(max(Double(transferred) / Double(total), 0), 1)
+          : state.sessionProgress
+        let name = !running.displayName.isEmpty
+          ? running.displayName
+          : (!state.sessionDisplayName.isEmpty ? state.sessionDisplayName : fallbackName)
+        return (
+          currentTaskId: candidateId,
+          displayName: name,
+          progress: progress,
+          totalBytes: total,
+          transferredBytes: transferred,
+          speedBytesPerSecond: max(running.speed, 0)
+        )
+      }
+    }
     var written: Int64 = 0
     var expected: Int64 = 0
     var combinedSpeed = 0.0
@@ -1023,6 +1105,18 @@ enum DownloadNativeWaitingQueue {
     )
   }
 
+
+  private static func attemptGeneration(from task: URLSessionTask) -> Int? {
+    let description = task.taskDescription ?? ""
+    let json = description.components(separatedBy: "***<<<|>>>***").first ?? description
+    guard let data = json.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let meta = object["metaData"] as? String,
+          let metaData = meta.data(using: .utf8),
+          let metadata = try? JSONSerialization.jsonObject(with: metaData) as? [String: Any]
+    else { return nil }
+    return (metadata["attemptGeneration"] as? NSNumber)?.intValue
+  }
 
   private static func parentTaskId(from task: URLSessionTask) -> String? {
     let description = task.taskDescription ?? ""
@@ -1228,7 +1322,9 @@ enum DownloadNativeWaitingQueue {
     let shouldUpdateNativeOverlay = parentIsTransferring
       && (completed || now - lastOverlay >= chunkBridgeInterval)
     if shouldUpdateNativeOverlay { lastMultipartOverlayTimes[parentId] = now }
-    saveLocked(state)
+    if shouldUpdateNativeOverlay || completed {
+      saveLocked(state)
+    }
     lock.unlock()
 
     var values: [String: Any] = [
@@ -1246,6 +1342,9 @@ enum DownloadNativeWaitingQueue {
         : min(max(Double(totalWritten) / Double(totalExpected), 0), 1)
     } else if completed {
       values["progress"] = 1.0
+    }
+    if let attempt = attemptGeneration(from: task) {
+      values["attemptGeneration"] = attempt
     }
     if speed > 0 {
       values["speedBytesPerSecond"] = speed
@@ -1272,11 +1371,112 @@ enum DownloadNativeWaitingQueue {
     }
   }
 
+  private static func rememberDownloadSession(_ session: URLSession) {
+    lock.lock()
+    latestDownloadSession = session
+    lock.unlock()
+  }
+
+  static func acceptsDartOverlayUpdates() -> Bool {
+    isAppInForeground()
+  }
+
+  static func promoteMultipartIfPossible(
+    on suppliedSession: URLSession? = nil,
+    parentId: String? = nil
+  ) {
+    guard !isAppInForeground() else { return }
+
+    lock.lock()
+    if let suppliedSession { latestDownloadSession = suppliedSession }
+    let session = suppliedSession ?? latestDownloadSession
+    let state = loadLocked()
+    let plans = state.multipartPlans.filter { parentId == nil || $0.parentTaskId == parentId }
+    lock.unlock()
+
+    guard let session else { return }
+    for plan in plans where !plan.waiters.isEmpty {
+      promoteMultipartPlan(plan.parentTaskId, on: session)
+    }
+  }
+
+  private static func promoteMultipartPlan(_ parentId: String, on session: URLSession) {
+    lock.lock()
+    if multipartPromotionParents.contains(parentId) {
+      lock.unlock()
+      return
+    }
+    multipartPromotionParents.insert(parentId)
+    lock.unlock()
+
+    session.getAllTasks { tasks in
+      defer {
+        lock.lock()
+        multipartPromotionParents.remove(parentId)
+        lock.unlock()
+      }
+      guard !isAppInForeground() else { return }
+
+      let liveChildIds = Set(tasks.compactMap { task -> String? in
+        guard task.state != .completed,
+              isDownloadPart(task),
+              parentTaskId(from: task) == parentId
+        else { return nil }
+        return taskId(from: task)
+      })
+
+      let selected: [Waiter]
+      lock.lock()
+      var state = loadLocked()
+      guard let index = state.multipartPlans.firstIndex(where: { $0.parentTaskId == parentId }) else {
+        lock.unlock()
+        return
+      }
+      var plan = state.multipartPlans[index]
+      plan.waiters.removeAll { liveChildIds.contains($0.taskId) }
+      let available = max(min(plan.maxConcurrent, 16) - liveChildIds.count, 0)
+      selected = Array(plan.waiters.prefix(available))
+      if !selected.isEmpty {
+        let selectedIds = Set(selected.map(\.taskId))
+        plan.waiters.removeAll { selectedIds.contains($0.taskId) }
+      }
+      state.multipartPlans[index] = plan
+      saveLocked(state)
+      lock.unlock()
+
+      for waiter in selected {
+        startMultipartChild(waiter, on: session)
+      }
+    }
+  }
+
+  private static func startMultipartChild(_ waiter: Waiter, on session: URLSession) {
+    guard waiter.savedProgress <= 0,
+          waiter.resumeDataBase64?.isEmpty ?? true,
+          let url = URL(string: waiter.url)
+    else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = waiter.httpRequestMethod.isEmpty ? "GET" : waiter.httpRequestMethod
+    for (key, value) in waiter.headers {
+      request.setValue(value, forHTTPHeaderField: key)
+    }
+    if let post = postFromTaskJson(waiter.taskJson), !post.isEmpty {
+      request.httpBody = post.data(using: .utf8)
+    }
+    let task = session.downloadTask(with: request)
+    task.taskDescription = waiter.taskDescription
+    task.priority = URLSessionTask.highPriority
+    DownloadNativeDiagnosticLog.record("background.multipart.promote", task: task)
+    task.resume()
+  }
+
   static func handleBytesWritten(
     _ downloadTask: URLSessionDownloadTask,
+    session: URLSession? = nil,
     totalWritten: Int64,
     totalExpected: Int64
   ) {
+    if let session { rememberDownloadSession(session) }
     if isDownloadPart(downloadTask) {
       postMultipartChunkUpdate(
         downloadTask,
@@ -1284,6 +1484,10 @@ enum DownloadNativeWaitingQueue {
         totalExpected: totalExpected,
         completed: false
       )
+      // Progress does not free a connection slot. Re-probing URLSession here
+      // made every didWrite callback call getAllTasks while multiple ranges
+      // were active. Initial background handoff and child completion are the
+      // only ownership changes that can require a refill.
       return
     }
     guard let id = taskId(from: downloadTask) else { return }
@@ -1574,7 +1778,6 @@ enum DownloadNativeWaitingQueue {
   private static func saveLocked(_ state: State) {
     if let data = try? JSONEncoder().encode(state) {
       UserDefaults.standard.set(data, forKey: stateKey)
-      UserDefaults.standard.synchronize()
     }
   }
 
@@ -1903,6 +2106,7 @@ private enum DownloadUrlSessionHook {
       DownloadNativeWaitingQueue.noteBackgroundRetryProgress(downloadTask)
       DownloadNativeWaitingQueue.handleBytesWritten(
         downloadTask,
+        session: session,
         totalWritten: totalWritten,
         totalExpected: totalExpected
       )

@@ -22,6 +22,7 @@ typedef SystemDownloadChunkUpdate = void Function({
   int? statusOrdinal,
   int? writtenBytes,
   int? expectedBytes,
+  int? attemptGeneration,
   double? speedBytesPerSecond,
   required bool completed,
 });
@@ -186,6 +187,7 @@ class DownloadContinuedProcessingService {
     int sessionTransferredBytes = 0,
     double sessionSpeedBytesPerSecond = 0,
     int sessionCurrentIndex = 0,
+    List<Map<String, Object>> multipartPlans = const [],
   }) async {
     await _invoke('persistNativeQueue', <String, Object>{
       'maxConcurrent': maxConcurrent,
@@ -205,6 +207,7 @@ class DownloadContinuedProcessingService {
       'sessionTransferredBytes': sessionTransferredBytes,
       'sessionSpeedBytesPerSecond': sessionSpeedBytesPerSecond,
       'sessionCurrentIndex': sessionCurrentIndex,
+      'multipartPlans': multipartPlans,
     });
   }
 
@@ -248,6 +251,7 @@ class DownloadContinuedProcessingService {
       final rawStatus = arguments['status'];
       final rawWritten = arguments['writtenBytes'];
       final rawExpected = arguments['expectedBytes'];
+      final rawAttempt = arguments['attemptGeneration'];
       final rawSpeed = arguments['speedBytesPerSecond'];
       onChunkUpdate?.call(
         parentTaskId: parentTaskId,
@@ -256,6 +260,7 @@ class DownloadContinuedProcessingService {
         statusOrdinal: rawStatus is num ? rawStatus.toInt() : null,
         writtenBytes: rawWritten is num ? rawWritten.toInt() : null,
         expectedBytes: rawExpected is num ? rawExpected.toInt() : null,
+        attemptGeneration: rawAttempt is num ? rawAttempt.toInt() : null,
         speedBytesPerSecond: rawSpeed is num ? rawSpeed.toDouble() : null,
         completed: arguments['completed'] == true,
       );
