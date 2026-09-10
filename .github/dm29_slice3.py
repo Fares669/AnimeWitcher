@@ -49,7 +49,7 @@ source = source.replace(old, new, 1)
 
 # Constructor/model field.
 old = """    this.sourceValidationRequired = false,\n    double? credibleProgress,\n    this.needsCredibleProgressRepair = false,\n  }) : credibleProgress = complete\n"""
-new = """    this.sourceValidationRequired = false,\n    double? credibleProgress,\n    int? durableBytes,\n    this.needsCredibleProgressRepair = false,\n  }) : durableBytes = complete\n           ? to - from + 1\n           : (durableBytes ?? 0).clamp(0, to - from + 1),\n       credibleProgress = complete\n"""
+new = """    this.sourceValidationRequired = false,\n    double? credibleProgress,\n    int? durableBytes,\n    this.needsCredibleProgressRepair = false,\n  }) : durableBytes = complete\n           ? to - from + 1\n           : (durableBytes ?? 0).clamp(0, to - from + 1).toInt(),\n       credibleProgress = complete\n"""
 if old not in source:
     raise SystemExit('part constructor anchor missing')
 source = source.replace(old, new, 1)
