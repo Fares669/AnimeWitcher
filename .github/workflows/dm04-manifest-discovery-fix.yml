@@ -1,0 +1,293 @@
+name: DM04 Manifest Discovery Fix
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - .github/workflows/dm04-manifest-discovery-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  implement-manifest-discovery:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Add conservative multipart manifest discovery
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('lib/core/services/persistent_parallel_download.dart')
+          source = path.read_text()
+          anchor = 'const int kParallelManifestSchemaVersion = 6;\n\n'
+          if source.count(anchor) != 1:
+              raise SystemExit(f'expected one discovery insertion anchor, found {source.count(anchor)}')
+          if 'class ParallelManifestRecoveryEvidence' in source:
+              raise SystemExit('manifest discovery already exists')
+
+          addition = r'''class ParallelManifestRecoveryEvidence {
+            const ParallelManifestRecoveryEvidence({
+              required this.manifestFile,
+              required this.schemaVersion,
+              required this.parentTaskId,
+              required this.parentTask,
+              required this.childTasks,
+              required this.expectedBytes,
+              required this.durableBytes,
+              required this.checkpointSequence,
+            });
+
+            final File manifestFile;
+            final int schemaVersion;
+            final String parentTaskId;
+            final ParallelDownloadTask? parentTask;
+            final List<DownloadTask> childTasks;
+            final int expectedBytes;
+            final int durableBytes;
+            final int checkpointSequence;
+          }
+
+          class _DiscoveredParallelManifestCandidate {
+            const _DiscoveredParallelManifestCandidate({
+              required this.evidence,
+              required this.modifiedMillis,
+              required this.isTemp,
+            });
+
+            final ParallelManifestRecoveryEvidence evidence;
+            final int modifiedMillis;
+            final bool isTemp;
+          }
+
+          /// Enumerates durable multipart checkpoints below explicitly trusted roots.
+          ///
+          /// Discovery never infers logical identity from a filename. Schema-v6
+          /// manifests can carry a verified parent task descriptor; older manifests
+          /// remain visible as unresolved evidence so startup can avoid silently
+          /// discarding their children without fabricating a parent.
+          Future<List<ParallelManifestRecoveryEvidence>>
+          discoverParallelManifestRecoveryEvidence(Iterable<Directory> roots) async {
+            final grouped = <String, List<_DiscoveredParallelManifestCandidate>>{};
+
+            for (final root in roots) {
+              try {
+                if (!await root.exists()) continue;
+                await for (final entity in root.list(
+                  recursive: true,
+                  followLinks: false,
+                )) {
+                  if (entity is! File) continue;
+                  final name = p.basename(entity.path);
+                  if (name != 'manifest.json' && name != 'manifest.json.tmp') {
+                    continue;
+                  }
+                  final isTemp = name.endsWith('.tmp');
+                  final canonicalPath = p.normalize(
+                    isTemp
+                        ? entity.path.substring(0, entity.path.length - 4)
+                        : entity.path,
+                  );
+
+                  try {
+                    final decoded = jsonDecode(await entity.readAsString());
+                    if (decoded is! Map) continue;
+                    final snapshot = Map<String, dynamic>.from(decoded);
+                    final schemaVersion =
+                        (snapshot['schemaVersion'] as num?)?.toInt() ?? 1;
+                    if (schemaVersion < 1 ||
+                        schemaVersion > kParallelManifestSchemaVersion) {
+                      continue;
+                    }
+                    final parentTaskId =
+                        snapshot['parentTaskId']?.toString().trim() ?? '';
+                    if (parentTaskId.isEmpty) continue;
+                    final checkpointSequence =
+                        (snapshot['checkpointSequence'] as num?)?.toInt() ?? 0;
+                    if (checkpointSequence < 0) continue;
+                    final rawParts = snapshot['parts'];
+                    if (rawParts is! List || rawParts.isEmpty) continue;
+
+                    final childTasks = <DownloadTask>[];
+                    var layoutValid = true;
+                    var nextByte = 0;
+                    var calculatedBytes = 0;
+                    var durableBytes = 0;
+                    for (final rawPart in rawParts) {
+                      if (rawPart is! Map) {
+                        layoutValid = false;
+                        break;
+                      }
+                      final part = Map<String, dynamic>.from(rawPart);
+                      final from = (part['from'] as num?)?.toInt();
+                      final to = (part['to'] as num?)?.toInt();
+                      final rawTask = part['task'];
+                      if (from == null ||
+                          to == null ||
+                          from != nextByte ||
+                          to < from ||
+                          rawTask is! Map) {
+                        layoutValid = false;
+                        break;
+                      }
+                      final restored = Task.createFromJson(
+                        Map<String, dynamic>.from(rawTask),
+                      );
+                      if (restored is! DownloadTask ||
+                          !restored.taskId.startsWith('$parentTaskId.part.')) {
+                        layoutValid = false;
+                        break;
+                      }
+                      final size = to - from + 1;
+                      final savedDurable =
+                          (part['durableBytes'] as num?)?.toInt();
+                      final complete = part['complete'] == true;
+                      if (savedDurable != null &&
+                          (savedDurable < 0 || savedDurable > size)) {
+                        layoutValid = false;
+                        break;
+                      }
+                      durableBytes += complete
+                          ? size
+                          : (savedDurable == null ? 0 : savedDurable);
+                      childTasks.add(restored);
+                      calculatedBytes += size;
+                      nextByte = to + 1;
+                    }
+                    if (!layoutValid || childTasks.isEmpty || calculatedBytes <= 0) {
+                      continue;
+                    }
+
+                    final declaredBytes =
+                        (snapshot['totalBytes'] as num?)?.toInt() ??
+                        (snapshot['expectedBytes'] as num?)?.toInt() ??
+                        -1;
+                    if (declaredBytes > 0 && declaredBytes != calculatedBytes) {
+                      continue;
+                    }
+                    final expectedBytes =
+                        declaredBytes > 0 ? declaredBytes : calculatedBytes;
+
+                    ParallelDownloadTask? parentTask;
+                    final rawParent = snapshot['parentTask'];
+                    if (schemaVersion >= 6 && rawParent is Map) {
+                      try {
+                        final restored = Task.createFromJson(
+                          Map<String, dynamic>.from(rawParent),
+                        );
+                        if (restored is ParallelDownloadTask &&
+                            restored.taskId == parentTaskId) {
+                          final expectedManifest = p.normalize(
+                            '${await restored.filePath()}.parts/manifest.json',
+                          );
+                          if (expectedManifest == canonicalPath) {
+                            parentTask = restored;
+                          }
+                        }
+                      } catch (_) {
+                        parentTask = null;
+                      }
+                    }
+
+                    final stat = await entity.stat();
+                    final evidence = ParallelManifestRecoveryEvidence(
+                      manifestFile: File(canonicalPath),
+                      schemaVersion: schemaVersion,
+                      parentTaskId: parentTaskId,
+                      parentTask: parentTask,
+                      childTasks: List<DownloadTask>.unmodifiable(childTasks),
+                      expectedBytes: expectedBytes,
+                      durableBytes: durableBytes.clamp(0, expectedBytes),
+                      checkpointSequence: checkpointSequence,
+                    );
+                    grouped
+                        .putIfAbsent(
+                          canonicalPath,
+                          () => <_DiscoveredParallelManifestCandidate>[],
+                        )
+                        .add(
+                          _DiscoveredParallelManifestCandidate(
+                            evidence: evidence,
+                            modifiedMillis: stat.modified.millisecondsSinceEpoch,
+                            isTemp: isTemp,
+                          ),
+                        );
+                  } catch (_) {
+                    // Torn/corrupt checkpoints never become recovery authority.
+                  }
+                }
+              } catch (_) {
+                // One inaccessible trusted root must not block other roots.
+              }
+            }
+
+            final result = <ParallelManifestRecoveryEvidence>[];
+            for (final candidates in grouped.values) {
+              candidates.sort((a, b) {
+                final bySequence = b.evidence.checkpointSequence.compareTo(
+                  a.evidence.checkpointSequence,
+                );
+                if (bySequence != 0) return bySequence;
+                final byModified = b.modifiedMillis.compareTo(a.modifiedMillis);
+                if (byModified != 0) return byModified;
+                if (a.isTemp == b.isTemp) return 0;
+                return a.isTemp ? -1 : 1;
+              });
+              result.add(candidates.first.evidence);
+            }
+            result.sort((a, b) {
+              final byId = a.parentTaskId.compareTo(b.parentTaskId);
+              if (byId != 0) return byId;
+              return a.manifestFile.path.compareTo(b.manifestFile.path);
+            });
+            return result;
+          }
+
+          '''
+          addition = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in addition.splitlines()
+          ) + '\n'
+          source = source.replace(anchor, anchor + addition, 1)
+          path.write_text(source)
+          PY
+          dart format lib/core/services/persistent_parallel_download.dart
+      - name: Run focused manifest and recovery tests
+        run: >-
+          flutter test
+          test/core/services/persistent_parallel_download_manifest_discovery_test.dart
+          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+          test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          test/core/services/persistent_parallel_download_recovery_snapshot_test.dart
+          test/core/services/persistent_parallel_download_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Verify scoped diff
+        run: |
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "lib/core/services/persistent_parallel_download.dart"
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/persistent_parallel_download.dart
+          git commit -m "fix(downloads): discover durable multipart manifests"
+          git push origin HEAD:plan/download-manager-reliability
