@@ -1,4 +1,4 @@
-name: Verify notification readiness hypothesis
+name: Verify notification readiness fix
 
 on:
   push:
@@ -6,15 +6,17 @@ on:
       - plan/download-manager-reliability
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  verify:
+  verify-and-commit:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -25,20 +27,98 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Apply production-hypothesis patch in workspace only
+      - name: Apply guarded production fix and contract regression
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('lib/core/services/download_service.dart')
-          s = p.read_text()
+
+          service = Path('lib/core/services/download_service.dart')
+          s = service.read_text()
           old = """  Future<void> applyNotificationSettings(\n    DownloadNotificationPrefs prefs,\n  ) async {\n    await _awaitCommandReadiness('applyNotificationSettings');\n    await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);\n    _configureDownloadNotifications(prefs);\n  }\n"""
-          new = """  Future<void> applyNotificationSettings(\n    DownloadNotificationPrefs prefs,\n  ) async {\n    await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);\n    _configureDownloadNotifications(prefs);\n  }\n"""
-          assert s.count(old) == 1, s.count(old)
-          p.write_text(s.replace(old, new))
+          new = """  Future<void> applyNotificationSettings(\n    DownloadNotificationPrefs prefs,\n  ) async {\n    // Notification preferences are configuration, not download lifecycle\n    // ownership. Persist them even while startup recovery is still settling;\n    // _initialize() reads the same persisted value before recovery begins.\n    await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);\n    _configureDownloadNotifications(prefs);\n  }\n"""
+          if s.count(old) != 1:
+              raise SystemExit(f'notification method anchor count={s.count(old)}')
+          service.write_text(s.replace(old, new, 1))
+
+          guard = Path('test/core/services/download_initialization_barrier_guard_test.dart')
+          g = guard.read_text()
+          old_entry = """      (\n        'applyNotificationSettings',\n        'Future<void> applyNotificationSettings(',\n        'void _configureDownloadNotifications(',\n      ),\n"""
+          if g.count(old_entry) != 1:
+              raise SystemExit(f'notification guard entry count={g.count(old_entry)}')
+          g = g.replace(old_entry, '', 1)
+          marker = """  test(\n    'foreground reconciliation joins initialization instead of returning early',\n"""
+          regression = """  test('notification preferences do not wait for download recovery', () {\n    final source = File('lib/core/services/download_service.dart')\n        .readAsStringSync();\n    final body = methodBody(\n      source,\n      'Future<void> applyNotificationSettings(',\n      'void _configureDownloadNotifications(',\n    );\n\n    expect(\n      body,\n      isNot(contains(\"_awaitCommandReadiness('applyNotificationSettings')\")),\n      reason: 'notification configuration must not be blocked by job recovery',\n    );\n    final persist = body.indexOf('.setDownloadNotificationPrefs(prefs)');\n    final configure = body.indexOf('_configureDownloadNotifications(prefs)');\n    expect(persist, greaterThanOrEqualTo(0));\n    expect(configure, greaterThan(persist));\n  });\n\n"""
+          if g.count(marker) != 1:
+              raise SystemExit(f'guard insertion marker count={g.count(marker)}')
+          guard.write_text(g.replace(marker, regression + marker, 1))
           PY
-          dart format lib/core/services/download_service.dart
+          dart format lib/core/services/download_service.dart test/core/services/download_initialization_barrier_guard_test.dart
       - name: Focused Settings regression
         run: flutter test test/features/settings/presentation/download_concurrency_settings_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Analyze hypothesis
+      - name: Readiness contract regression
+        run: flutter test test/core/services/download_initialization_barrier_guard_test.dart test/core/services/download_service_readiness_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: DM-03 focused coverage
+        run: |
+          flutter test \
+            test/core/services/download_command_outcome_test.dart \
+            test/core/services/download_control_outcome_guard_test.dart \
+            test/core/services/download_start_outcome_guard_test.dart \
+            test/core/services/download_initialization_barrier_guard_test.dart \
+            test/core/services/download_service_readiness_test.dart \
+            test/core/services/download_range_transfer_test.dart \
+            test/core/services/download_source_refresh_integrity_test.dart \
+            test/core/services/persistent_parallel_download_test.dart \
+            test/core/services/persistent_parallel_download_range_identity_test.dart \
+            test/core/utils/download_resume_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Full test suite
+        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Finalize plan and clean temporary verification workflows
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('DOWNLOAD_MANAGER_PLAN.md')
+          s = p.read_text()
+          dm03 = '- [ ] **DM-03 — Return explicit typed outcomes for start/resume/pause/cancel**'
+          if s.count(dm03) != 1:
+              raise SystemExit(f'DM-03 checkbox count={s.count(dm03)}')
+          s = s.replace(dm03, dm03.replace('[ ]', '[x]'), 1)
+
+          next_item = '\n- [ ] **DM-04 — Recover from the union of persistence and ownership sources**'
+          if next_item not in s:
+              raise SystemExit('DM-04 anchor not found')
+          dm03_notes = """\n  - **Completion notes (2026-09-11):** Public start/resume/pause/cancel callers now consume explicit `DownloadCommandOutcome` values; launcher, downloads provider and progress-dialog control paths no longer treat transport acceptance as logical success. Missing state, queueing, attachment, user pause, ownership settlement, restart/recoverable failure, service unavailability and terminal completion/cancel are distinguished explicitly.\n  - **Final verification:** focused typed-outcome/control/readiness/Range/source-refresh/multipart/native-resume coverage passed together with the full Flutter test suite and `flutter analyze --no-fatal-warnings --no-fatal-infos` on the final implementation head.\n"""
+          s = s.replace(next_item, dm03_notes + next_item, 1)
+
+          dm01_anchor = '\n- [x] **DM-01 — Add a generation-bound lease/watchdog for multipart `pending-start` ownership**'
+          if dm01_anchor not in s:
+              raise SystemExit('DM-01 anchor not found')
+          dm34 = """\n- [x] **DM-34 — Decouple notification preferences from download recovery readiness**\n  - **Problem:** Changing download-notification preferences could remain stuck indefinitely while `DownloadService` startup/recovery readiness was pending, so the setting was neither persisted nor reflected in the UI.\n  - **Root cause:** `applyNotificationSettings()` was incorrectly classified as a lifecycle ownership mutation and awaited the DM-32 recovery barrier before writing configuration. Initialization already reads and applies the persisted notification preferences before recovery, so this dependency was unnecessary.\n  - **Fix:** Persist and apply notification configuration directly. Lifecycle commands remain readiness-gated, while a regression guard explicitly keeps notification preferences independent from job recovery.\n  - **Verification:** The original widget regression was observed RED with preferences still all enabled after a 2.5-second probe; the production-hypothesis patch made the same test GREEN and passed analyze. Final focused Settings/readiness tests, DM-03 matrix, full suite and analyze all passed before this item was closed.\n  - **Dependencies:** DM-32 semantics remain unchanged for actual download lifecycle mutations.\n"""
+          s = s.replace(dm01_anchor, dm34 + dm01_anchor, 1)
+          p.write_text(s)
+          PY
+          rm -f .github/workflows/diagnose-download-notification-test.yml
+          rm -f .github/workflows/dm03-final-verify.yml
+          git diff --check
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          remote_head="$(git ls-remote origin refs/heads/plan/download-manager-reliability | cut -f1)"
+          if [ "$remote_head" != "$GITHUB_SHA" ]; then
+            echo "Branch moved during verification: expected $GITHUB_SHA, got $remote_head" >&2
+            exit 75
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_service.dart \
+            test/core/services/download_initialization_barrier_guard_test.dart \
+            DOWNLOAD_MANAGER_PLAN.md \
+            .github/workflows/diagnose-download-notification-test.yml \
+            .github/workflows/dm03-final-verify.yml
+          git diff --cached --check
+          git commit -m 'fix(downloads): decouple notification settings readiness'
+          git push origin HEAD:plan/download-manager-reliability
