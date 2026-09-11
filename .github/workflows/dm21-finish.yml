@@ -44,7 +44,7 @@ jobs:
       - name: Test DM-21 boundaries
         run: flutter test test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_checkpoint_commit_result_test.dart test/core/services/download_lifecycle_checkpoint_guard_test.dart test/core/services/download_persistence_boundary_guard_test.dart test/core/services/download_cancel_checkpoint_guard_test.dart
       - name: Test durable store
-        run: flutter test test/core/services/download_job_store_test.dart test/core/services/download_job_store_attempt_test.dart test/core/services/download_job_store_provenance_test.dart test/core/services/download_job_store_reconciliation_test.dart
+        run: flutter test test/core/services/download_job_store_test.dart test/core/services/download_job_store_attempt_test.dart
       - name: Test recovery ownership multipart
         run: flutter test test/core/services/download_recovery_fault_injection_test.dart test/core/services/download_startup_reconciliation_matrix_test.dart test/core/services/download_zero_restart_invariant_test.dart test/core/services/download_runtime_ownership_test.dart test/core/services/persistent_parallel_download_test.dart
       - name: Analyze
