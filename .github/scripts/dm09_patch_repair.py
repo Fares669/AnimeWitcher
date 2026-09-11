@@ -26,6 +26,20 @@ p.write_text(text.replace(old_status_mapping, new_status_mapping))
 first = text.index(block)
 second = text.index(block, first + len(block))
 text = text[:first] + replacement + text[first + len(block):second] + text[second + len(block):]
+
+# A truncated response body is not proof that connectivity is unavailable.
+# Preserve the range transfer's bounded reconnect path; if the reconnect itself
+# fails because the network is actually unavailable, _openWithRetries will
+# classify that connection failure as waitForNetwork. The original DM-09 patch
+# short-circuited every incomplete stream into a network hold, which stranded
+# truncated-body failures in downloading state.
+range_marker = '\nrange_file = "lib/core/services/download_range_transfer.dart"\n'
+service_marker = '\nservice = "lib/core/services/download_service.dart"\n'
+range_start = text.find(range_marker)
+service_start = text.find(service_marker, range_start + 1)
+if range_start < 0 or service_start < 0:
+    raise SystemExit('DM-09 range-transfer repair drift')
+text = text[:range_start] + text[service_start:]
 path.write_text(text)
 
 # The retry-policy regression was reformatted after the original DM-09 patch
