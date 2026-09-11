@@ -21,6 +21,28 @@ void main() {
       );
     });
 
+    test('exact-size local bytes stay on the local completion path', () {
+      expect(
+        shouldRestartDownloadFromZero(
+          existingPartialBytes: 1000,
+          expectedBytes: 1000,
+          savedProgress: 0,
+        ),
+        isFalse,
+      );
+      expect(
+        chooseDownloadResumeStrategy(
+          canNativeResume: false,
+          existingPartialBytes: 1000,
+          expectedBytes: 1000,
+          savedProgress: 0,
+        ),
+        DownloadResumeStrategy.partialFile,
+        reason:
+            'an exact-size durable file must be adopted/completed, never stranded or restarted',
+      );
+    });
+
     test('saved progress blocks restart even when native temp is hidden', () {
       expect(
         shouldRestartDownloadFromZero(
