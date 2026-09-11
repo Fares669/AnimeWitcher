@@ -1709,7 +1709,7 @@ class AnimeWitcherPlayerControlsState
       // from its own list must not retire the control that chose it.
       anime4kOn: playerSettings.anime4kEnabled,
       anime4kSupported: anime4kAvailableOn(
-        isDesktopPlatform: isDesktop,
+        isNativePlatform: isDesktop || Platform.isAndroid || Platform.isIOS,
         usingAdaptiveBackend: ref.watch(
           playerControllerProvider.select((s) => s.useExoPlayer),
         ),

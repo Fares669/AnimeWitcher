@@ -1,0 +1,76 @@
+name: Anime4K platform build verification
+
+on:
+  push:
+    branches:
+      - feat/anime4k-mobile-gpu
+
+jobs:
+  android:
+    name: Android compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Generate
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Build Android
+        run: flutter build apk --debug
+
+  ios:
+    name: iOS compile (unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Test Anime4K Metal shader translator
+        run: |
+          swiftc \
+            native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalShaderTests.swift \
+            -o /tmp/anime4k_metal_shader_tests
+          /tmp/anime4k_metal_shader_tests
+      - name: Generate
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Prepare media_kit iOS headers
+        run: bash scripts/prepare_media_kit_ios_headers.sh
+      - name: Configure Google Sign-In
+        env:
+          ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID: ${{ secrets.ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID || '296971789988-0ksnaln8k2epsuejesllrr497jnd5if5.apps.googleusercontent.com' }}
+          ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID: ${{ secrets.ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID }}
+        run: bash scripts/configure_ios_google_sign_in.sh
+      - name: Build iOS
+        run: flutter build ios --release --no-codesign
+
+  macos:
+    name: macOS compile
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Generate
+        run: |
+          flutter config --enable-macos-desktop
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Build macOS
+        run: flutter build macos --release

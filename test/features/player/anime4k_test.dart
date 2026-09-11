@@ -319,35 +319,38 @@ void main() {
     });
   });
 
+  group('GPU video-output validation', () {
+    test('accepts mpv outputs that implement custom shaders', () {
+      for (final vo in <String>['gpu', 'gpu-next', 'libmpv', '  GPU  ']) {
+        expect(anime4kGpuRendererSupportsShaders(vo), isTrue, reason: vo);
+      }
+    });
+
+    test('rejects outputs without the mpv GLSL render stage', () {
+      for (final vo in <String>['', 'null', 'xv', 'mediacodec_embed']) {
+        expect(anime4kGpuRendererSupportsShaders(vo), isFalse, reason: vo);
+      }
+    });
+  });
+
   group('where it is offered at all', () {
     test('desktop on the mpv backend, and nowhere else', () {
       expect(
-        anime4kAvailableOn(
-          isDesktopPlatform: true,
-          usingAdaptiveBackend: false,
-        ),
+        anime4kAvailableOn(isNativePlatform: true, usingAdaptiveBackend: false),
         isTrue,
       );
     });
 
-    test('not on a phone, whatever is playing', () {
-      // The shaders are a real load on a GPU, and a phone has neither the
-      // thermal room nor a screen big enough to show what the work bought.
-      for (final adaptive in <bool>[true, false]) {
-        expect(
-          anime4kAvailableOn(
-            isDesktopPlatform: false,
-            usingAdaptiveBackend: adaptive,
-          ),
-          isFalse,
-          reason: 'adaptive backend: $adaptive',
-        );
-      }
+    test('native mobile playback is supported', () {
+      expect(
+        anime4kAvailableOn(isNativePlatform: true, usingAdaptiveBackend: false),
+        isTrue,
+      );
     });
 
     test('not on the backend that has no shader stage', () {
       expect(
-        anime4kAvailableOn(isDesktopPlatform: true, usingAdaptiveBackend: true),
+        anime4kAvailableOn(isNativePlatform: true, usingAdaptiveBackend: true),
         isFalse,
       );
     });

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -380,9 +382,14 @@ class _Anime4kDialogState extends ConsumerState<_Anime4kDialog> {
                 Text(
                   appText(
                     context,
-                    english:
-                        'Each step up roughly doubles the work the GPU does.',
-                    arabic: 'كل درجة أعلى تضاعف تقريبًا الحِمل على كرت الشاشة.',
+                    english: Platform.isAndroid || Platform.isIOS
+                        ? 'On phones, start with S. Each step up roughly doubles '
+                              'GPU work and can increase heat and battery use.'
+                        : 'Each step up roughly doubles the work the GPU does.',
+                    arabic: Platform.isAndroid || Platform.isIOS
+                        ? 'على الهاتف ابدأ بحجم S. كل درجة أعلى تضاعف تقريبًا '
+                              'عمل الـGPU وقد تزيد الحرارة واستهلاك البطارية.'
+                        : 'كل درجة أعلى تضاعف تقريبًا الحِمل على كرت الشاشة.',
                   ),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: colors.onSurfaceVariant,

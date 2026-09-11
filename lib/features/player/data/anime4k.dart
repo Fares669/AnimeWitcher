@@ -86,20 +86,29 @@ extension Anime4kModeName on Anime4kMode {
 
 /// Whether this device can be offered Anime4K at all.
 ///
-/// Desktop only, and only on the mpv backend. The shaders are a real load on
-/// a GPU — the network sizes are described by their own project in multiples
-/// of processing time — and a phone playing a 1080p stream has neither the
-/// thermal room nor a screen large enough to show what the work bought. The
-/// adaptive backend used for DRM and some live streams has no GLSL stage at
-/// all, so there is nothing to offer there either.
-///
-/// Judged by platform rather than by window size: a narrow window on a
-/// desktop still has the card behind it, and a tablet-sized phone does not.
+/// Anime4K needs the native media_kit/libmpv renderer because mpv applies the
+/// GLSL chain in its GPU video-output stage. Android, iOS, macOS, Windows and
+/// Linux are eligible; the adaptive video_view backend is not because it has
+/// no mpv GLSL stage.
 bool anime4kAvailableOn({
-  required bool isDesktopPlatform,
+  required bool isNativePlatform,
   required bool usingAdaptiveBackend,
 }) {
-  return isDesktopPlatform && !usingAdaptiveBackend;
+  return isNativePlatform && !usingAdaptiveBackend;
+}
+
+/// Whether the active renderer can execute Anime4K GPU shaders.
+///
+/// mpv documents custom shaders for gpu, gpu-next and libmpv. Apple can also
+/// use the native Metal compute backend. Keeping this check separate lets the
+/// player reject fallback/software/no-shader outputs instead of accepting the
+/// setting while drawing an unchanged picture.
+bool anime4kGpuRendererSupportsShaders(String currentVo) {
+  final vo = currentVo.trim().toLowerCase();
+  return vo == 'gpu' ||
+      vo == 'gpu-next' ||
+      vo == 'libmpv' ||
+      vo == 'metal';
 }
 
 /// Whether the feature is on, for a setting that may predate the flag.
@@ -281,7 +290,7 @@ String anime4kListSeparator({required bool onWindows}) => onWindows ? ';' : ':';
 ///
 /// Only the separator itself is escaped — both characters are legal inside a
 /// filename on their own platform. On Windows the drive colon is left exactly
-/// as it is: escaping it produced `C\:\shaders\...`, which is not a path any
+/// as it is: escaping it produced `C\\:\\shaders\\...`, which is not a path any
 /// system can open.
 ///
 /// Getting this wrong does not fail loudly. mpv takes the string, finds

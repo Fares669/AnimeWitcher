@@ -1,0 +1,12 @@
+AnimeWitcher Anime4K Metal integration
+
+Portions of the Anime4K Metal shader parser and execution model are derived
+from Anime4KMetal by Yi Xie:
+https://github.com/imxieyi/Anime4KMetal
+
+Anime4KMetal is licensed under the Apache License, Version 2.0.
+Copyright 2021 Yi Xie.
+
+Anime4K GLSL shaders themselves are provided by bloc97/Anime4K under the
+licenses shipped with that project. AnimeWitcher does not bundle those shader
+files; they are downloaded separately by the application/user.
