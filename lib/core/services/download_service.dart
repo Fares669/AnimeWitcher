@@ -2502,9 +2502,46 @@ class DownloadService {
     bool notifyContinuedProcessing = true,
   }) async {
     diagnosticLog.record('command.cancel', {'taskId': taskId});
-    // Tombstone the logical download before waiting on native IO. This makes a
-    // user delete immediate in every UI and prevents late URLSession callbacks
-    // from resurrecting the row while the OS finishes canceling its worker.
+    // Persist terminal intent before stopping any writer. The durable row is
+    // removed only after native/plugin cleanup below has returned; DM-07 will
+    // further extend this into a cleanup-acknowledged tombstone protocol.
+    final existingJob = await _jobStore.get(taskId);
+    final parentRecord = await FileDownloader().database.recordForId(taskId);
+    DownloadTask? cancelTask = parentRecord?.task is DownloadTask
+        ? parentRecord!.task as DownloadTask
+        : await _liveNativeTaskFor(taskId: taskId, trackingUrl: trackingUrl);
+    if (existingJob != null &&
+        existingJob.state != DownloadJobState.completed) {
+      if (cancelTask != null) {
+        final cancelPersisted = await _checkpointLogicalJob(
+          cancelTask,
+          state: DownloadJobState.canceled,
+          userPaused: false,
+          queueWaiting: false,
+        );
+        if (!cancelPersisted) {
+          throw StateError('Failed to persist cancel intent for $taskId');
+        }
+      } else {
+        final cancelPersisted = await _jobStore.checkpoint(
+          taskId: existingJob.taskId,
+          trackingUrl: existingJob.trackingUrl,
+          state: DownloadJobState.canceled,
+          durableBytes: existingJob.durableBytes,
+          durableByteProvenance: existingJob.durableByteProvenance,
+          expectedBytes: existingJob.expectedBytes,
+          userPaused: false,
+          queueWaiting: false,
+          fingerprint: existingJob.fingerprint,
+        );
+        if (!cancelPersisted) {
+          throw StateError('Failed to persist cancel intent for $taskId');
+        }
+        _terminalJobIds.add(taskId);
+      }
+    }
+
+    // Project the tombstone only after durable cancel intent is secured.
     _cancellingUrls.add(trackingUrl);
     _terminalJobIds.add(taskId);
     _queueWaitingIds.remove(taskId);
@@ -2531,9 +2568,6 @@ class DownloadService {
             ids.add(task.taskId);
           }
         }
-        final parentRecord = await FileDownloader().database.recordForId(
-          taskId,
-        );
         if (parentRecord?.task is ParallelDownloadTask) {
           await _parallel.cancel(parentRecord!.task as ParallelDownloadTask);
         } else if (parentRecord?.task is DownloadTask &&
