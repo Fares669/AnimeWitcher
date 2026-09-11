@@ -1,0 +1,72 @@
+name: DM05 Provider Authority Fix
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/scripts/dm05_provider_authority_patch.py
+      - .github/workflows/dm05-provider-authority-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  provider-authority:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Apply JobState-first provider projection
+        run: |
+          python3 .github/scripts/dm05_provider_authority_patch.py
+          dart format \
+            lib/core/services/download_job_state.dart \
+            lib/core/services/download_service.dart \
+            lib/features/library/presentation/downloads_provider.dart
+      - name: Run focused provider authority tests
+        run: >-
+          flutter test
+          test/core/services/download_job_state_queue_authority_test.dart
+          test/core/services/download_job_state_authority_test.dart
+          test/core/services/download_job_state_test.dart
+          test/features/library/presentation/downloads_job_state_authority_test.dart
+          test/core/services/download_concurrency_test.dart
+          test/core/services/download_startup_reconciliation_matrix_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Verify scoped diff
+        run: |
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            lib/core/services/download_job_state.dart \
+            lib/core/services/download_service.dart \
+            lib/features/library/presentation/downloads_provider.dart | sort)"
+          test "$changed" = "$expected"
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            lib/core/services/download_job_state.dart \
+            lib/core/services/download_service.dart \
+            lib/features/library/presentation/downloads_provider.dart
+          git commit -m "fix(downloads): project UI from durable JobState"
+          git pull --rebase origin plan/download-manager-reliability
+          git push origin HEAD:plan/download-manager-reliability
