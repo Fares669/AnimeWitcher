@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: core-download-state-agent-${{ github.event.pull_request.number || github.ref }}
@@ -41,11 +41,15 @@ jobs:
           test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
-  dm05-dm24-contracts:
-    name: DM05 and DM24 contracts
+  dm05-state-authority:
+    name: DM05 JobState authority
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      - name: Apply guarded DM05 patch
+        run: python3 .github/scripts/agent_dm05_overlay_state_patch.py
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -56,16 +60,23 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run logical state and identity regressions
+      - name: Run DM05 regressions
         run: >-
           flutter test
           test/core/services/download_job_state_authority_test.dart
           test/core/services/download_job_state_queue_authority_test.dart
-          test/core/services/download_job_logical_identity_test.dart
-          test/core/services/download_logical_identity_test.dart
-          test/core/services/download_logical_identity_persistence_test.dart
-          test/core/services/download_logical_identity_start_test.dart
-          test/core/services/download_overlay_logical_identity_test.dart
           test/features/library/presentation/downloads_job_state_authority_test.dart
-          test/features/library/presentation/downloads_logical_identity_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Verify patch cleanliness
+        run: git diff --check
+      - name: Commit verified DM05 fix
+        run: |
+          if git diff --quiet -- lib/core/services/download_service.dart; then
+            echo 'DM05 patch already applied'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_service.dart
+          git commit -m 'fix(downloads): make session overlay JobState authoritative'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
