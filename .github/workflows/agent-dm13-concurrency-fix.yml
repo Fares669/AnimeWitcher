@@ -1,0 +1,186 @@
+name: Agent DM13 Scheduler Fairness GREEN
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - .github/workflows/agent-dm13-concurrency-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  complete:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with: {fetch-depth: 0}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Prepare
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Reproduce DM-13 RED
+        run: |
+          set +e
+          flutter test \
+            test/core/services/persistent_parallel_download_hol_red_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key 2>&1 | tee /tmp/dm13-red.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -eq 0 ]; then
+            echo 'DM-13 unexpectedly GREEN before implementation' >&2
+            exit 1
+          fi
+          if grep -qE 'Undefined name|Compilation failed|Failed to load' /tmp/dm13-red.log; then
+            echo 'DM-13 RED must be behavioral, not a compile failure' >&2
+            exit 1
+          fi
+          echo 'DM-13 behavioral RED reproduced as expected'
+      - name: Apply DM-13 scheduler fairness fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('lib/core/services/persistent_parallel_download.dart')
+          text = path.read_text()
+
+          old_pump = '''        Future<void>.microtask(() async {
+                    final sessions = List<_ParallelSession>.from(_sessions.values);
+                    for (final session in sessions) {
+                      if (_disposed) return;
+                      if (!session.active || session.deleted) continue;
+                      await session.serialize(() async {
+                        if (_disposed || !session.active || session.deleted) return;
+                        try {
+                          if (!await _pumpSession(session)) {
+                            _scheduleCoordinatorRecovery(session);
+                          } else {
+                            await _persist(session);
+                          }
+                        } catch (_) {
+                          // Coordinator bookkeeping is not a user-visible pause.
+                          // Keep native owners untouched and reconcile them shortly.
+                          _scheduleCoordinatorRecovery(session);
+                        }
+                      });
+                    }
+                  })'''
+          new_pump = '''        Future<void>.microtask(() async {
+                    final sessions = List<_ParallelSession>.from(_sessions.values);
+                    await Future.wait<void>(
+                      sessions
+                          .where((session) => session.active && !session.deleted)
+                          .map(
+                            (session) => session.serialize(() async {
+                              if (_disposed ||
+                                  !session.active ||
+                                  session.deleted) {
+                                return;
+                              }
+                              try {
+                                if (!await _pumpSession(session)) {
+                                  _scheduleCoordinatorRecovery(session);
+                                } else {
+                                  await _persist(session);
+                                }
+                              } catch (_) {
+                                // One slow/failing session must not head-of-line block
+                                // unrelated sessions. Per-session serialization still
+                                // preserves ordering inside each logical download.
+                                _scheduleCoordinatorRecovery(session);
+                              }
+                            }),
+                          ),
+                    );
+                  })'''
+          if text.count(old_pump) != 1:
+              raise SystemExit(f'DM-13 pump anchor count={text.count(old_pump)}')
+          text = text.replace(old_pump, new_pump, 1)
+
+          old_reservation = '''        _preparePartAttempt(session, part);
+        await _persist(session);
+
+        // Reserve before enqueueing to close the enqueue->running race. This'''
+          new_reservation = '''        _preparePartAttempt(session, part);
+        await _persist(session);
+
+        // Parallel session pumps can consume capacity while this pump awaits
+        // record/manifest IO. Revalidate immediately before the synchronous
+        // reservation so stale availability can never overbook the global or
+        // per-session connection budget.
+        if (_activeConnectionIds.length >= _connectionBudget ||
+            _activeConnectionsForSession(session) >= session.connectionCeiling) {
+          return true;
+        }
+
+        // Reserve before enqueueing to close the enqueue->running race. This'''
+          if text.count(old_reservation) != 1:
+              raise SystemExit(
+                  f'DM-13 reservation anchor count={text.count(old_reservation)}'
+              )
+          text = text.replace(old_reservation, new_reservation, 1)
+          path.write_text(text)
+          PY
+          dart format lib/core/services/persistent_parallel_download.dart
+          git diff --check
+      - name: Verify DM-13 and adjacent concurrency regressions
+        run: |
+          set -o pipefail
+          flutter test \
+            test/core/services/persistent_parallel_download_hol_red_test.dart \
+            test/core/services/persistent_parallel_download_pending_start_lease_test.dart \
+            test/core/services/persistent_parallel_download_test.dart \
+            test/core/services/persistent_parallel_download_auto_recovery_test.dart \
+            test/core/services/download_concurrency_test.dart \
+            test/core/services/download_connection_governor_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key 2>&1 | tee /tmp/dm13-test.log
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Mark DM-13 complete and push
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('DOWNLOAD_MANAGER_PLAN.md')
+          text = path.read_text()
+          old = '- [ ] **DM-13 — Prevent head-of-line blocking and prove fairness across simultaneous downloads**'
+          new = '- [x] **DM-13 — Prevent head-of-line blocking and prove fairness across simultaneous downloads**'
+          if text.count(old) != 1:
+              raise SystemExit(f'DM-13 checklist anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          marker = '  - **Dependencies:** DM-01, DM-10, DM-25.\n'
+          note = (
+              '  - **Implementation notes (2026-09-11):** Multipart session pumps now run concurrently across logical downloads while each session retains its own serialization. Admission is revalidated immediately before the synchronous native-slot reservation, so a slow enqueue/persist in one session cannot block healthy sessions and concurrent pumps cannot overbook the global or per-session connection budget.\n'
+              '  - **Confirmed root cause:** `_schedulePumpAll()` awaited every session serially, so slow `startPart`/storage work in one host prevented later sessions from reaching promotion. Simply parallelizing pumps would have introduced a stale-capacity race because global availability was computed before async record/manifest work; the final pre-reservation recheck closes that race.\n'
+              '  - **Verification passed:** RED→GREEN stalled-host vs fast-host fairness coverage, pending-start lease/global budget regressions, persistent multipart scheduler/auto-recovery regressions, concurrency/governor tests, analyzer, and `git diff --check`.\n'
+          )
+          if text.count(marker) < 1:
+              raise SystemExit('DM-13 dependency marker missing')
+          start = text.index(new)
+          pos = text.index(marker, start) + len(marker)
+          text = text[:pos] + note + text[pos:]
+          path.write_text(text)
+          PY
+          rm -f .github/workflows/agent-dm13-concurrency-fix.yml
+          git add -A
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "fix(downloads): remove cross-session scheduler head-of-line blocking"
+          git push origin HEAD:plan/download-manager-reliability
+      - name: Upload DM-13 diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm13-scheduler-diagnostics
+          path: |
+            /tmp/dm13-red.log
+            /tmp/dm13-test.log
+          if-no-files-found: ignore
+          retention-days: 1
