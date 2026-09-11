@@ -1,0 +1,27 @@
+name: Agent DM06 RED
+
+on:
+  push:
+    branches:
+      - agent/core-download-state-recovery-20260911
+    paths:
+      - test/core/services/download_resource_identity_guard_test.dart
+      - .github/workflows/agent-dm06-red.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: DM06 regression must fail before fix
+        run: flutter test test/core/services/download_resource_identity_guard_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
