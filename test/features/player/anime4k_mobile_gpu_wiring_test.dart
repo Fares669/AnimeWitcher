@@ -22,4 +22,14 @@ void main() {
     expect(source, contains('anime4kGpuRendererSupportsShaders'));
     expect(source, contains("getProperty('glsl-shaders')"));
   });
+
+  test('sample preview validates the same GPU shader path', () {
+    final source = File(
+      'lib/features/player/presentation/widgets/anime4k_sample_preview.dart',
+    ).readAsStringSync();
+
+    expect(source, contains("getProperty('current-vo')"));
+    expect(source, contains("getProperty('gpu-dumb-mode')"));
+    expect(source, contains('anime4kGpuRendererSupportsShaders'));
+  });
 }
