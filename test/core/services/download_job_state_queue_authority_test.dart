@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:animewitcher/core/services/download_job_state.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -41,6 +42,20 @@ void main() {
           reason: '$state must not reserve a logical episode slot',
         );
       }
+    });
+
+    test('UI projection is derived from JobState, not executor pause flags', () {
+      expect(downloadJobDisplayStatus(DownloadJobState.queued), TaskStatus.enqueued);
+      expect(downloadJobDisplayStatus(DownloadJobState.starting), TaskStatus.enqueued);
+      expect(downloadJobDisplayStatus(DownloadJobState.running), TaskStatus.running);
+      expect(
+        downloadJobDisplayStatus(DownloadJobState.retryWaiting),
+        TaskStatus.waitingToRetry,
+      );
+      expect(downloadJobDisplayStatus(DownloadJobState.pausedByUser), TaskStatus.paused);
+      expect(downloadJobDisplayStatus(DownloadJobState.interrupted), TaskStatus.paused);
+      expect(downloadJobDisplayStatus(DownloadJobState.completed), TaskStatus.complete);
+      expect(downloadJobDisplayStatus(DownloadJobState.canceled), TaskStatus.canceled);
     });
 
     test('service queue accounting consults JobStore before legacy replicas', () {
