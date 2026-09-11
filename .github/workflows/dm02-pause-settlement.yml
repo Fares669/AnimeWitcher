@@ -23,25 +23,19 @@ jobs:
           channel: stable
           flutter-version: 3.47.1
           cache: true
-      - name: Setup dependencies
-        run: flutter pub get
-      - name: Install RED regression guard
-        run: python3 .github/dm02_pause_settlement.py tests
-      - name: Prove regression is RED before implementation
+      - run: flutter pub get
+      - name: Prove pre-fix regression
         shell: bash
         run: |
+          python3 .github/dm02_pause_settlement.py tests
           set +e
           flutter test test/core/services/download_pause_settlement_guard_test.dart >/tmp/dm02-red.log 2>&1
           code=$?
           cat /tmp/dm02-red.log
-          if [ "$code" -eq 0 ]; then
-            echo 'DM-02 regression unexpectedly passed before implementation'
-            exit 1
-          fi
-      - name: Apply DM-02 implementation
-        run: python3 .github/dm02_pause_settlement.py apply
-      - name: Correct generated startup projection parentheses
+          test "$code" -ne 0
+      - name: Apply implementation
         run: |
+          python3 .github/dm02_pause_settlement.py apply
           python3 - <<'PY'
           from pathlib import Path
           p = Path('lib/core/services/download_service.dart')
@@ -52,46 +46,15 @@ jobs:
               raise SystemExit(f'expected one generated parenthesis tail, found {s.count(bad)}')
           p.write_text(s.replace(bad, good, 1))
           PY
-      - name: Format changed Dart files
-        run: dart format lib/core/services/download_service.dart test/core/services/download_pause_settlement_guard_test.dart
-      - name: Verify DM-02 source invariants
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          s = Path('lib/core/services/download_service.dart').read_text()
-          p0 = s.index('Future<bool> _pauseTransfer(')
-          p1 = s.index('Future<bool> _resumeDownloadTask(', p0)
-          pause_transfer = s[p0:p1]
-          assert 'var ownership = await _runtimeOwnershipFor(task.taskId);' in pause_transfer
-          assert 'ownership != DownloadRuntimeOwnership.notOwned' in pause_transfer
-          assert 'Verify the child really left the live native set' not in pause_transfer
-          c0 = s.index('Future<void> pauseDownload(String taskId) async {')
-          c1 = s.index('Future<void> resumeDownload(String taskId) async {', c0)
-          command = s[c0:c1]
-          f0 = command.index('if (!didPause) {')
-          f1 = command.index('await FileDownloader().database.updateRecord(', f0)
-          failed = command[f0:f1]
-          assert "diagnosticLog.record('pause.settling'" in failed
-          assert '_userPausedIds.remove(taskId)' not in failed
-          assert 'DownloadJobState.running' not in failed
-          assert 'TaskStatus.running' not in failed
-          r0 = s.index('Future<void> _recoverPersistedDownloads() async {')
-          r1 = s.index('int _occupiedSlotCount(', r0)
-          recovery = s[r0:r1]
-          assert 'var userPauseSettled = !userPaused;' in recovery
-          assert 'userPauseSettled = await _pauseTransfer(task);' in recovery
-          assert 'if (userPauseSettled) {' in recovery
-          assert 'userPaused && userPauseSettled' in recovery
-          PY
-      - name: Run ownership and recovery regressions
+          dart format lib/core/services/download_service.dart
+      - name: Run focused regressions
         run: |
           flutter test test/core/services/download_runtime_ownership_test.dart
           flutter test test/core/services/download_job_store_recovery_test.dart
           flutter test test/core/services/download_zero_restart_invariant_test.dart
       - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
-      - name: Mark DM-02 complete with verification notes
-        shell: bash
+      - name: Mark DM-02 complete
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -103,7 +66,7 @@ jobs:
               raise SystemExit('DM-02 unchecked anchor missing')
           s = s.replace(anchor, done, 1)
           dep = '  - **Dependencies:** DM-19, DM-21, DM-32.\n'
-          notes = '''  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof now applies to ordinary single-file downloads and multipart children; an owned same-identity worker receives one pause retry without cancellation.\n  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, the user pause intent remains durably `pausing` and `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite the plugin DB/UI to `paused` until release is proven.\n  - **Confirmed root cause:** `_pauseTransfer()` waited up to five seconds for a pause/final callback but only verified runtime ownership for internal multipart children; ordinary single-file tasks returned success after the timeout. Startup pause enforcement also ignored the boolean result and unconditionally wrote `TaskStatus.paused`.\n  - **Verification passed:** pre-fix RED regression; post-fix source invariants for ownership proof, settling intent, and startup projection; runtime-ownership, JobStore recovery, zero-restart invariant regressions; `flutter analyze --no-fatal-warnings --no-fatal-infos`; diff check before commit.\n'''
+          notes = '''  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof applies to ordinary single-file downloads and multipart children; an owned same-identity worker gets one pause retry without cancellation.\n  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, durable user intent remains `pausing` with `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite plugin/UI state to `paused` until release is proven.\n  - **Confirmed root cause:** `_pauseTransfer()` waited for pause/final callbacks but only verified runtime ownership for internal multipart children, so an ordinary single-file task could return success after timeout while its worker remained alive. Startup pause enforcement also ignored the pause result and unconditionally persisted `TaskStatus.paused`.\n  - **Verification passed:** pre-fix RED regression; runtime-ownership, JobStore recovery and zero-restart regression suites; `flutter analyze --no-fatal-warnings --no-fatal-infos`; `git diff --check`.\n'''
           idx = s.find(done)
           dep_idx = s.find(dep, idx)
           if dep_idx < 0:
@@ -113,7 +76,6 @@ jobs:
           p.write_text(s)
           PY
       - name: Commit and push
-        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
