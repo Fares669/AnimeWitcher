@@ -332,8 +332,19 @@ class DownloadService {
           await _rangeTransfers.stop(id);
         }
         await FileDownloader().cancelTasksWithIds(ids);
+        final unsettled = <String>[];
         for (final id in ids) {
+          final ownership = await _waitForCancelOwnershipRelease(id);
+          if (ownership != DownloadRuntimeOwnership.notOwned) {
+            unsettled.add(id);
+            continue;
+          }
           await FileDownloader().database.deleteRecordWithId(id);
+        }
+        if (unsettled.isNotEmpty) {
+          throw StateError(
+            'Multipart cancel ownership did not settle: ${unsettled.join(',')}',
+          );
         }
       },
       saveRecord: (record) => FileDownloader().database.updateRecord(record),
@@ -2639,11 +2650,35 @@ class DownloadService {
           await _parallel.cancel(parentRecord!.task as ParallelDownloadTask);
         } else if (parentRecord?.task is DownloadTask &&
             isNativeSingleDownloadTask(parentRecord!.task)) {
-          await _nativeTransport.cancel(parentRecord.task as DownloadTask);
+          final settlement = await _nativeTransport.cancel(
+            parentRecord.task as DownloadTask,
+          );
+          diagnosticLog.record('cancel.commandSettlement', {
+            'taskId': taskId,
+            'settlement': settlement.name,
+          });
+          // Do not issue a second bulk cancel for this same single-file owner.
           ids.remove(taskId);
         }
         if (ids.isNotEmpty) {
           await FileDownloader().cancelTasksWithIds(ids.toList());
+        }
+
+        // Command acknowledgement is not ownership acknowledgement. Keep the
+        // durable cancel tombstone, plugin row, metadata and Transfer handle if
+        // the runtime oracle cannot independently prove release. A later
+        // reconcile/repeated cancel can settle cleanup safely.
+        final cancelOwnership = await _waitForCancelOwnershipRelease(taskId);
+        if (cancelOwnership != DownloadRuntimeOwnership.notOwned) {
+          diagnosticLog.record('cancel.ownershipUnsettled', {
+            'taskId': taskId,
+            'ownership': cancelOwnership.name,
+          });
+          await _persistNativeWaitingSnapshot();
+          if (notifyContinuedProcessing) {
+            await _syncSessionOverlay(completedSuccess: false);
+          }
+          return;
         }
         _nativeTransport.forget(taskId);
         _userPausedIds.remove(taskId);
@@ -3557,6 +3592,23 @@ class DownloadService {
         transferHandlePresent: _nativeTransport.handleFor(taskId) != null,
       );
     }
+  }
+
+  Future<DownloadRuntimeOwnership> _waitForCancelOwnershipRelease(
+    String taskId, {
+    int attempts = 10,
+    Duration delay = const Duration(milliseconds: 100),
+  }) async {
+    var ownership = await _runtimeOwnershipFor(taskId);
+    for (
+      var attempt = 1;
+      attempt < attempts && ownership != DownloadRuntimeOwnership.notOwned;
+      attempt++
+    ) {
+      await Future<void>.delayed(delay);
+      ownership = await _runtimeOwnershipFor(taskId);
+    }
+    return ownership;
   }
 
   Future<void> _reconcileTransferOwnership() async {

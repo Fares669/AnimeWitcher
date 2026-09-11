@@ -193,7 +193,7 @@
   - **Verification/testing:** exact-size child + failed pause + live writer; failed tail cancel; old writer writes after recycle attempt; callback lost; process restart while settling; no part reuse/deletion before settlement.
   - **Dependencies:** DM-19, DM-10.
 
-- [ ] **DM-30 — Preserve ownership evidence until cancel is positively settled**
+- [x] **DM-30 — Preserve ownership evidence until cancel is positively settled**
   - **Problem:** single transport detaches Transfer tracking even when `cancel()` returns false; service and multipart cancellation paths can ignore cancel failure and delete DB records anyway; UI may skip cancellation based on status.
   - **Root cause:** “cancel command sent”, “executor no longer owns task”, and “safe to forget/delete task” are collapsed into one operation.
   - **Severity / priority:** **P0 / Critical.**
@@ -201,6 +201,10 @@
   - **Proposed fix:** cancellation returns a typed settlement such as `canceled`, `alreadyGone`, `stillOwned`, `unknown`. Keep Transfer/native tracking and DB ownership evidence until the oracle proves release. Never decide cancellation necessity from `TaskStatus` alone. Failed/unknown cancel enters durable settling state under tombstone protection.
   - **Verification/testing:** Transfer.cancel false; cancel throws; bulk child cancel false; DB says failed/notFound while native worker live; repeated cancel; cancel during completion; app kill during unknown settlement; no owner is forgotten prematurely.
   - **Dependencies:** DM-19, DM-21; DM-07 consumes this result.
+  - **Implementation notes (2026-09-11):** Native single-file cancellation now returns an explicit command settlement (`canceled`, `alreadyGone`, `stillOwned`, `unknown`) and never detaches Transfer tracking inside `cancel()`. The service treats command acknowledgement as provisional and waits for the DM-19 runtime oracle to prove `notOwned` before calling `forget()` or deleting plugin/metadata/JobStore/refresh evidence.
+  - **Multipart settlement:** bulk child cancellation now joins Range writers, issues the native cancel, then checks each child through the same runtime ownership oracle before deleting its plugin row. Any owned/settling/unknown child makes cancellation fail closed so `PersistentParallelDownload.cancel()` cannot proceed to delete child files while an old writer may still own them.
+  - **Confirmed root cause:** `NativeSingleDownloadTransport.cancel()` previously called `_detach()` even when `Transfer.cancel()` returned `false`, and `cancelDownload()` unconditionally forgot the handle and destroyed all durable records after issuing cancel commands. The multipart callback likewise deleted child rows without checking whether bulk cancel actually released ownership.
+  - **Verification passed:** pre-fix RED cancellation guards; typed settlement unit matrix; ownership-preservation source guard; runtime ownership, JobStore, lifecycle checkpoint and recovery reconciliation suites; generated-source-aware `flutter analyze --no-fatal-warnings --no-fatal-infos`; `git diff --check`.
 
 - [ ] **DM-03 — Return explicit typed outcomes for start/resume/pause/cancel**
   - **Problem:** callers receive void/boolean results that cannot distinguish running, attached, queued, settling, missing state, restart required, persistence failure or terminal state.

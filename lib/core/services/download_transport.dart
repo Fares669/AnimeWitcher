@@ -11,6 +11,24 @@ const int kDownloadLargeFileHintThresholdBytes = 50 * 1024 * 1024;
 /// Only [notOwned] permits a new writer for the same execution identity.
 enum DownloadRuntimeOwnership { owned, notOwned, settling, unknown }
 
+/// Result of issuing a cancellation command. None of these values, including
+/// [canceled], independently proves that the executor released file ownership;
+/// callers must still obtain a runtime [DownloadRuntimeOwnership.notOwned]
+/// acknowledgement before forgetting handles or deleting durable evidence.
+enum DownloadCancelSettlement { canceled, alreadyGone, stillOwned, unknown }
+
+DownloadCancelSettlement resolveDownloadCancelCommand({
+  required bool hadTrackedOwner,
+  required bool commandSucceeded,
+  required bool commandThrew,
+}) {
+  if (commandThrew) return DownloadCancelSettlement.unknown;
+  if (commandSucceeded) return DownloadCancelSettlement.canceled;
+  return hadTrackedOwner
+      ? DownloadCancelSettlement.stillOwned
+      : DownloadCancelSettlement.unknown;
+}
+
 extension DownloadRuntimeOwnershipSafety on DownloadRuntimeOwnership {
   bool get blocksNewWriter => this != DownloadRuntimeOwnership.notOwned;
 }
@@ -55,7 +73,7 @@ abstract interface class DownloadTransport {
   Future<bool> start(DownloadTask task);
   Future<bool> pause(DownloadTask task);
   Future<bool> resume(DownloadTask task);
-  Future<bool> cancel(DownloadTask task);
+  Future<DownloadCancelSettlement> cancel(DownloadTask task);
   Stream<TaskUpdate> updatesFor(String taskId);
   Future<void> dispose();
 }
@@ -157,17 +175,31 @@ class NativeSingleDownloadTransport implements DownloadTransport {
   }
 
   @override
-  Future<bool> cancel(DownloadTask task) async {
-    if (!isNativeSingleDownloadTask(task)) return false;
+  Future<DownloadCancelSettlement> cancel(DownloadTask task) async {
+    if (!isNativeSingleDownloadTask(task)) {
+      return DownloadCancelSettlement.unknown;
+    }
     final transfer = handleFor(task.taskId);
     try {
       final canceled = transfer != null
           ? await transfer.cancel()
           : await _downloader.cancelTaskWithId(task.taskId);
-      _detach(task.taskId);
-      return canceled;
+      // Never detach here. A true command result is an acknowledgement, not
+      // proof that URLSession stopped writing. DownloadService forgets this
+      // handle only after its independent runtime oracle returns notOwned.
+      return resolveDownloadCancelCommand(
+        hadTrackedOwner: transfer != null,
+        commandSucceeded: canceled,
+        commandThrew: false,
+      );
     } catch (_) {
-      return false;
+      // Preserve any handle/subscription on uncertainty. Forgetting it here can
+      // permit a second writer while the old executor is still alive.
+      return resolveDownloadCancelCommand(
+        hadTrackedOwner: transfer != null,
+        commandSucceeded: false,
+        commandThrew: true,
+      );
     }
   }
 
