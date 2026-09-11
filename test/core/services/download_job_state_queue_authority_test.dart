@@ -63,8 +63,6 @@ void main() {
         'lib/core/services/download_service.dart',
       ).readAsStringSync();
 
-      // Match method definitions, not earlier call sites. The queue synchronizer
-      // calls both helpers before their declarations in this large service.
       final occupiedStart = source.indexOf(
         'Future<int> _occupiedSlotCount(List<TaskRecord> records) async',
       );
@@ -86,6 +84,26 @@ void main() {
       expect(queueBody, contains('_jobStore'));
       expect(queueBody, contains('downloadJobQueueWaiting'));
       expect(queueBody, contains('downloadJobUserPaused'));
+    });
+
+    test('native waiting snapshot does not infer user pause from plugin paused', () {
+      final source = File(
+        'lib/core/services/download_service.dart',
+      ).readAsStringSync();
+      final start = source.indexOf('Future<void> _persistNativeWaitingSnapshot(');
+      final end = source.indexOf('String? _notificationConfigJson(', start);
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
+
+      expect(body, contains('final job = await _jobStore.get(task.taskId)'));
+      expect(body, contains('downloadJobUserPaused(job.state)'));
+      expect(body, contains('downloadJobQueueWaiting(job.state)'));
+      expect(body, contains('Pre-JobStore migration fallback'));
+      expect(
+        body.indexOf('final job = await _jobStore.get(task.taskId)'),
+        lessThan(body.indexOf('record.status == TaskStatus.paused')),
+      );
     });
   });
 }
