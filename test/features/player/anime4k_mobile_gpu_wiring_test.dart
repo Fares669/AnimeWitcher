@@ -32,6 +32,17 @@ void main() {
     expect(source, contains("getProperty('glsl-shaders')"));
   });
 
+  test('player checks gpu-dumb-mode only after asking mpv to load shaders', () {
+    final source = File(
+      'lib/features/player/presentation/player_controller.dart',
+    ).readAsStringSync();
+
+    final apply = source.indexOf("setProperty('glsl-shaders', pipeline.value)");
+    final dumbMode = source.indexOf("getProperty('gpu-dumb-mode')");
+    expect(apply, greaterThanOrEqualTo(0));
+    expect(dumbMode, greaterThan(apply));
+  });
+
   test('sample preview validates the same GPU shader path', () {
     final source = File(
       'lib/features/player/presentation/widgets/anime4k_sample_preview.dart',
@@ -40,5 +51,16 @@ void main() {
     expect(source, contains("getProperty('current-vo')"));
     expect(source, contains("getProperty('gpu-dumb-mode')"));
     expect(source, contains('anime4kGpuRendererSupportsShaders'));
+  });
+
+  test('sample preview checks dumb mode after loading the shader chain', () {
+    final source = File(
+      'lib/features/player/presentation/widgets/anime4k_sample_preview.dart',
+    ).readAsStringSync();
+
+    final apply = source.indexOf("setProperty('glsl-shaders', pipeline.value)");
+    final dumbMode = source.indexOf("getProperty('gpu-dumb-mode')");
+    expect(apply, greaterThanOrEqualTo(0));
+    expect(dumbMode, greaterThan(apply));
   });
 }
