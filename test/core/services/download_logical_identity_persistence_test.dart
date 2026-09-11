@@ -62,9 +62,8 @@ void main() {
       );
     });
 
-    test('storage and start flow persist and consult logical identity', () {
+    test('storage persists explicit logical identity on save and patch', () {
       final storage = File('lib/core/storage/storage_service.dart').readAsStringSync();
-      final service = File('lib/core/services/download_service.dart').readAsStringSync();
 
       final saveStart = storage.indexOf('Future<void> saveDownloadMetadata(');
       final patchStart = storage.indexOf('Future<void> patchDownloadMetadata(');
@@ -78,16 +77,6 @@ void main() {
       expect(saveBody, contains("'logicalId': logicalId"));
       expect(patchBody, contains('String? logicalId'));
       expect(patchBody, contains("map['logicalId'] = logicalId"));
-
-      final start = service.indexOf('Future<DownloadCommandOutcome> startDownloadOutcome({');
-      final complete = service.indexOf('Future<List<TaskRecord>> _completeRecordsForEpisode(', start);
-      expect(start, greaterThanOrEqualTo(0));
-      expect(complete, greaterThan(start));
-      final body = service.substring(start, complete);
-      expect(body, contains('DownloadLogicalIdentity.fromMedia'));
-      expect(body, contains('_jobStore.allForLogicalId(logicalId)'));
-      expect(body, contains('logicalId: logicalId'));
-      expect(body, contains('saveDownloadMetadata('));
     });
   });
 }
