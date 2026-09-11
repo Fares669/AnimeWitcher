@@ -2005,11 +2005,19 @@ class DownloadService {
     await _syncSessionOverlay();
   }
 
-  int _occupiedSlotCount(List<TaskRecord> records) {
+  Future<int> _occupiedSlotCount(List<TaskRecord> records) async {
     final occupying = <String>{};
     for (final record in records) {
       if (!isLogicalEpisodeDownloadTask(record.task)) continue;
       final taskId = record.task.taskId;
+      final job = await _jobStore.get(taskId);
+      if (job != null) {
+        if (downloadJobOccupiesSlot(job.state)) occupying.add(taskId);
+        continue;
+      }
+
+      // Pre-JobStore migration fallback only. Once a durable job exists the
+      // replicas below are never allowed to decide lifecycle.
       if (_userPausedIds.contains(taskId)) {
         if (_parallel.hasLiveConnections(taskId)) occupying.add(taskId);
         continue;
@@ -2033,22 +2041,35 @@ class DownloadService {
     final entries = <DownloadQueueEntry>[];
     for (final record in records) {
       if (!isLogicalEpisodeDownloadTask(record.task)) continue;
-      if (record.status == TaskStatus.complete ||
-          record.status == TaskStatus.canceled) {
+      final taskId = record.task.taskId;
+      final job = await _jobStore.get(taskId);
+      if (job != null &&
+          (job.state == DownloadJobState.completed ||
+              job.state == DownloadJobState.canceled ||
+              job.state == DownloadJobState.orphaned)) {
         continue;
       }
-      final metadata = await storage.getDownloadMetadata(record.task.taskId);
-      final queueWaiting =
-          _queueWaitingIds.contains(record.task.taskId) ||
-          isQueueWaitingMetadata(metadata);
-      final userPaused =
-          _userPausedIds.contains(record.task.taskId) ||
-          isUserPausedMetadata(metadata);
+      if (job == null &&
+          (record.status == TaskStatus.complete ||
+              record.status == TaskStatus.canceled)) {
+        continue;
+      }
+      final metadata = await storage.getDownloadMetadata(taskId);
+      final queueWaiting = job != null
+          ? downloadJobQueueWaiting(job.state)
+          : _queueWaitingIds.contains(taskId) ||
+                isQueueWaitingMetadata(metadata);
+      final userPaused = job != null
+          ? downloadJobUserPaused(job.state)
+          : _userPausedIds.contains(taskId) || isUserPausedMetadata(metadata);
       entries.add(
         DownloadQueueEntry(
-          taskId: record.task.taskId,
-          status: record.status,
-          timestamp: (metadata?['timestamp'] as int?) ?? 0,
+          taskId: taskId,
+          status: job != null
+              ? downloadJobTaskStatus(job.state)
+              : record.status,
+          timestamp:
+              (metadata?['timestamp'] as int?) ?? job?.updatedAtMillis ?? 0,
           queueWaiting: queueWaiting,
           userPaused: userPaused,
         ),
@@ -2074,7 +2095,9 @@ class DownloadService {
     // Promote leftover parked waiters. Native HoldingQueue already owns
     // OS-enqueued waiters — do not enqueue a second copy.
     for (final taskId in plan.idsToPromote) {
-      if (_occupiedSlotCount(await FileDownloader().database.allRecords()) >=
+      if ((await _occupiedSlotCount(
+            await FileDownloader().database.allRecords(),
+          )) >=
           max) {
         break;
       }
@@ -2997,7 +3020,9 @@ class DownloadService {
       queueOrder: _queueOrder(),
     );
     for (final taskId in ids) {
-      if (_occupiedSlotCount(await FileDownloader().database.allRecords()) >=
+      if ((await _occupiedSlotCount(
+            await FileDownloader().database.allRecords(),
+          )) >=
           max) {
         break;
       }
@@ -3410,7 +3435,9 @@ class DownloadService {
     final reservedEarlier = <String>{};
     try {
       for (final earlierId in plan.earlierWaiterIds) {
-        if (_occupiedSlotCount(await FileDownloader().database.allRecords()) >=
+        if (await _occupiedSlotCount(
+              await FileDownloader().database.allRecords(),
+            ) >=
             max) {
           break;
         }
@@ -3424,7 +3451,7 @@ class DownloadService {
       }
 
       final latestRecords = await FileDownloader().database.allRecords();
-      final occupiedAfterEarlier = _occupiedSlotCount(latestRecords);
+      final occupiedAfterEarlier = await _occupiedSlotCount(latestRecords);
       final remainingWaiters = plan.waitingFifoIds
           .where(
             (id) =>
@@ -4791,7 +4818,7 @@ class DownloadService {
         final maxConcurrent = clampDownloadConcurrency(
           storage.getDownloadConcurrency(),
         );
-        final occupied = _occupiedSlotCount(
+        final occupied = await _occupiedSlotCount(
           await FileDownloader().database.allRecords(),
         );
         final startNow = occupied < maxConcurrent;

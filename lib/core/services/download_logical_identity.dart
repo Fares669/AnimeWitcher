@@ -22,25 +22,28 @@ class DownloadLogicalIdentity {
 
   factory DownloadLogicalIdentity.fromMedia({
     required MultimediaItem item,
-    required Episode episode,
+    Episode? episode,
   }) {
     final contentKey = _contentIdentity(item);
-    final dubStatus = episode.dubStatus != DubStatus.none
-        ? episode.dubStatus
+    final episodeDub = episode?.dubStatus ?? DubStatus.none;
+    final dubStatus = episodeDub != DubStatus.none
+        ? episodeDub
         : (item.isDubbed ? DubStatus.dubbed : DubStatus.none);
+    final season = episode?.season ?? 0;
+    final episodeNumber = episode?.episode ?? 0;
     final key = <String>[
       'download:v1',
       contentKey,
-      's${episode.season}',
-      'e${episode.episode}',
+      's$season',
+      'e$episodeNumber',
       'dub:${dubStatus.name}',
     ].join('|');
 
     return DownloadLogicalIdentity._(
       key: key,
       contentKey: contentKey,
-      season: episode.season,
-      episode: episode.episode,
+      season: season,
+      episode: episodeNumber,
       dubStatus: dubStatus,
     );
   }
@@ -105,7 +108,8 @@ class DownloadLogicalIdentity {
     }
     final scheme = uri.scheme.toLowerCase();
     final host = uri.host.toLowerCase();
-    final includePort = uri.hasPort &&
+    final includePort =
+        uri.hasPort &&
         !((scheme == 'https' && uri.port == 443) ||
             (scheme == 'http' && uri.port == 80));
     final authority = includePort ? '$host:${uri.port}' : host;
@@ -114,11 +118,38 @@ class DownloadLogicalIdentity {
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) || other is DownloadLogicalIdentity && key == other.key;
+      identical(this, other) ||
+      other is DownloadLogicalIdentity && key == other.key;
 
   @override
   int get hashCode => key.hashCode;
 
   @override
   String toString() => key;
+}
+
+/// Restores the stable logical identity from presentation metadata.
+///
+/// New metadata carries the key explicitly. Legacy rows may be migrated only
+/// from the original media/episode snapshots; executor URLs, filenames and
+/// task IDs are never accepted as substitutes because they are mutable attempt
+/// details and can collide across episodes.
+String? logicalDownloadIdFromMetadata(Map<String, dynamic>? metadata) {
+  if (metadata == null) return null;
+  final explicit = metadata['logicalId']?.toString().trim();
+  if (explicit != null && explicit.isNotEmpty) return explicit;
+
+  final rawItem = metadata['item'];
+  if (rawItem is! Map) return null;
+  try {
+    final item = MultimediaItem.fromJson(Map<String, dynamic>.from(rawItem));
+    Episode? episode;
+    final rawEpisode = metadata['episode'];
+    if (rawEpisode is Map) {
+      episode = Episode.fromJson(Map<String, dynamic>.from(rawEpisode));
+    }
+    return DownloadLogicalIdentity.fromMedia(item: item, episode: episode).key;
+  } catch (_) {
+    return null;
+  }
 }

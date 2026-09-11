@@ -1412,6 +1412,7 @@ class StorageService {
     Episode? episode,
     String? trackingUrl,
     String? filePath,
+    String? logicalId,
     Map<String, dynamic>? taskSnapshot,
     bool? queueWaiting,
     bool? userPaused,
@@ -1426,6 +1427,8 @@ class StorageService {
       if (trackingUrl != null && trackingUrl.isNotEmpty)
         'trackingUrl': trackingUrl,
       if (filePath != null && filePath.isNotEmpty) 'filePath': filePath,
+      if (logicalId != null && logicalId.trim().isNotEmpty)
+        'logicalId': logicalId.trim(),
       if (taskSnapshot != null)
         'taskSnapshot': Map<String, dynamic>.from(taskSnapshot),
       if (queueWaiting != null) kDownloadQueueWaitingMetadataKey: queueWaiting,
@@ -1440,6 +1443,7 @@ class StorageService {
     String taskId, {
     String? trackingUrl,
     String? filePath,
+    String? logicalId,
     Map<String, dynamic>? taskSnapshot,
     bool? queueWaiting,
     bool? userPaused,
@@ -1455,6 +1459,9 @@ class StorageService {
     }
     if (filePath != null && filePath.isNotEmpty) {
       map['filePath'] = filePath;
+    }
+    if (logicalId != null && logicalId.trim().isNotEmpty) {
+      map['logicalId'] = logicalId.trim();
     }
     if (taskSnapshot != null) {
       map['taskSnapshot'] = Map<String, dynamic>.from(taskSnapshot);

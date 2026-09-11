@@ -22,6 +22,53 @@ enum DownloadJobState {
   orphaned,
 }
 
+/// Queue scheduling is a projection of the durable logical state. Plugin
+/// TaskStatus and legacy metadata are executor/migration evidence only.
+bool downloadJobQueueWaiting(DownloadJobState state) =>
+    state == DownloadJobState.queued;
+
+/// `pausing` still owns its slot until executor ownership is proven released;
+/// only the settled logical pause is excluded as user-paused by the scheduler.
+bool downloadJobUserPaused(DownloadJobState state) =>
+    state == DownloadJobState.pausedByUser;
+
+bool downloadJobOccupiesSlot(DownloadJobState state) {
+  return switch (state) {
+    DownloadJobState.starting ||
+    DownloadJobState.running ||
+    DownloadJobState.retryWaiting ||
+    DownloadJobState.pausing ||
+    DownloadJobState.assembling ||
+    DownloadJobState.verifying => true,
+    DownloadJobState.queued ||
+    DownloadJobState.pausedByUser ||
+    DownloadJobState.interrupted ||
+    DownloadJobState.completed ||
+    DownloadJobState.canceled ||
+    DownloadJobState.orphaned => false,
+  };
+}
+
+/// Compatibility projection for queue code that still consumes TaskStatus.
+/// This never reads TaskStatus to derive logical state; direction is strictly
+/// DownloadJobState -> plugin-shaped status.
+TaskStatus downloadJobTaskStatus(DownloadJobState state) {
+  return switch (state) {
+    DownloadJobState.queued => TaskStatus.paused,
+    DownloadJobState.starting => TaskStatus.enqueued,
+    DownloadJobState.running ||
+    DownloadJobState.pausing ||
+    DownloadJobState.assembling ||
+    DownloadJobState.verifying => TaskStatus.running,
+    DownloadJobState.retryWaiting => TaskStatus.waitingToRetry,
+    DownloadJobState.pausedByUser ||
+    DownloadJobState.interrupted ||
+    DownloadJobState.orphaned => TaskStatus.paused,
+    DownloadJobState.completed => TaskStatus.complete,
+    DownloadJobState.canceled => TaskStatus.canceled,
+  };
+}
+
 /// What startup reconciliation should do after deriving the logical state.
 enum DownloadRecoveryAction {
   /// The OS/native downloader still owns the transfer. Attach to it and never

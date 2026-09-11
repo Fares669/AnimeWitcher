@@ -5,7 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'download_job_state.dart';
 
-const int kDownloadJobSchemaVersion = 4;
+const int kDownloadJobSchemaVersion = 5;
 
 /// Provenance for [DownloadJobRecord.durableBytes].
 ///
@@ -120,6 +120,7 @@ class DownloadResourceFingerprint {
 class DownloadJobRecord {
   const DownloadJobRecord({
     required this.taskId,
+    this.logicalId,
     required this.trackingUrl,
     required this.state,
     required this.generation,
@@ -137,6 +138,12 @@ class DownloadJobRecord {
   });
 
   final String taskId;
+
+  /// Stable logical episode identity. Multiple execution task IDs may point to
+  /// the same value across retry/adoption generations. Legacy rows can be null
+  /// until presentation metadata is available to migrate them safely.
+  final String? logicalId;
+
   final String trackingUrl;
   final DownloadJobState state;
   final int generation;
@@ -167,6 +174,7 @@ class DownloadJobRecord {
   }
 
   DownloadJobRecord copyWith({
+    String? logicalId,
     String? trackingUrl,
     DownloadJobState? state,
     int? generation,
@@ -185,6 +193,7 @@ class DownloadJobRecord {
     int? lastByteReconciliationAtMillis,
   }) => DownloadJobRecord(
     taskId: taskId,
+    logicalId: logicalId ?? this.logicalId,
     trackingUrl: trackingUrl ?? this.trackingUrl,
     state: state ?? this.state,
     generation: generation ?? this.generation,
@@ -210,6 +219,7 @@ class DownloadJobRecord {
   Map<String, Object?> toJson() => <String, Object?>{
     'schemaVersion': kDownloadJobSchemaVersion,
     'taskId': taskId,
+    if (_nonEmptyString(logicalId) != null) 'logicalId': logicalId,
     'trackingUrl': trackingUrl,
     'state': state.name,
     'generation': generation,
@@ -253,6 +263,7 @@ class DownloadJobRecord {
 
     return DownloadJobRecord(
       taskId: taskId,
+      logicalId: _nonEmptyString(map['logicalId']),
       trackingUrl: trackingUrl,
       state: _jobStateValue(map['state']),
       generation: generation,
@@ -359,6 +370,18 @@ class DownloadJobStore {
     return jobs;
   }
 
+  /// Returns every execution row currently associated with one logical episode.
+  /// The store intentionally does not collapse them here: DownloadService must
+  /// settle/adopt executor ownership before removing an obsolete task ID.
+  Future<List<DownloadJobRecord>> allForLogicalId(String logicalId) async {
+    final id = logicalId.trim();
+    if (id.isEmpty) return const <DownloadJobRecord>[];
+    final jobs = await all();
+    return jobs
+        .where((job) => _nonEmptyString(job.logicalId) == id)
+        .toList(growable: false);
+  }
+
   /// Persist a newer view of a logical job.
   ///
   /// Returns false for stale or unsafe writes instead of allowing a late
@@ -374,6 +397,13 @@ class DownloadJobStore {
     if (next.generation < 0 || next.durableBytes < 0) return false;
 
     final current = await get(taskId);
+    final incomingLogicalId = _nonEmptyString(next.logicalId);
+    final currentLogicalId = _nonEmptyString(current?.logicalId);
+    if (currentLogicalId != null &&
+        incomingLogicalId != null &&
+        currentLogicalId != incomingLogicalId) {
+      return false;
+    }
     if (current != null) {
       if (current.state == DownloadJobState.completed &&
           next.state != DownloadJobState.completed) {
@@ -417,6 +447,7 @@ class DownloadJobStore {
                 oldFingerprint.finalUrl,
           );
     final durable = next.copyWith(
+      logicalId: incomingLogicalId ?? currentLogicalId,
       durableByteProvenance: _normalizedDurableByteProvenance(
         next.durableBytes,
         next.durableByteProvenance,
@@ -440,6 +471,7 @@ class DownloadJobStore {
   /// discarding stronger identity or byte evidence.
   Future<bool> checkpoint({
     required String taskId,
+    String? logicalId,
     required String trackingUrl,
     required DownloadJobState state,
     int? durableBytes,
@@ -476,6 +508,7 @@ class DownloadJobStore {
     final next = current == null
         ? DownloadJobRecord(
             taskId: id,
+            logicalId: _nonEmptyString(logicalId),
             trackingUrl: tracking,
             state: state,
             generation: 0,
@@ -489,6 +522,7 @@ class DownloadJobStore {
             fingerprint: fingerprint,
           )
         : current.copyWith(
+            logicalId: _nonEmptyString(logicalId),
             state: state,
             durableBytes: keptBytes,
             durableByteProvenance: keptProvenance,
