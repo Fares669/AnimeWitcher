@@ -73,7 +73,7 @@ void main() {
     coordinator.handleUpdate(TaskStatusUpdate(slowFirst, TaskStatus.running));
     coordinator.handleUpdate(TaskStatusUpdate(fastFirst, TaskStatus.running));
 
-    final fastPromoted = await Future<bool>.any(<Future<bool>>[
+    final fastPromoted = await Future.any(<Future<bool>>[
       () async {
         for (var i = 0; i < 40; i++) {
           if (startsByHost['fast.example']!.length > 1) return true;
