@@ -34,6 +34,7 @@ import 'download_retry_policy.dart';
 import 'download_host_profile.dart';
 import 'download_job_state.dart';
 import 'download_job_store.dart';
+import 'download_resource_identity.dart';
 import 'download_logical_identity.dart';
 import 'download_service_readiness.dart';
 import 'download_url_refresh.dart';
@@ -1298,6 +1299,7 @@ class DownloadService {
     int? expectedBytes,
     bool? userPaused,
     bool? queueWaiting,
+    DownloadResourceFingerprint? fingerprint,
   }) async {
     final terminal =
         state == DownloadJobState.completed ||
@@ -1322,10 +1324,13 @@ class DownloadService {
         userPaused: userPaused,
         queueWaiting: queueWaiting,
         taskSnapshot: task.toJson(),
-        fingerprint: DownloadResourceFingerprint(
-          expectedBytes: expectedBytes ?? -1,
-          finalUrl: task.url,
-        ),
+        fingerprint:
+            fingerprint ??
+            fingerprintWithExpectedBytes(
+              remote: null,
+              expectedBytes: expectedBytes ?? -1,
+              fallbackFinalUrl: task.url,
+            ),
       ),
     );
     if (commit != DownloadLifecycleCheckpointCommit.committed) {
@@ -3854,6 +3859,33 @@ class DownloadService {
     if (partial == null) return false;
     final existingBytes = partial.bytes;
     if (expectedBytes > 0 && existingBytes == expectedBytes) {
+      final persistedFingerprint = (await _jobStore.get(task.taskId))
+          ?.fingerprint;
+      final currentFingerprint = await _probeResourceFingerprint(
+        task.url,
+        headers: task.headers,
+      );
+      final prefixProof = await _rangeTransfers.verifyExistingPrefix(
+        id: '${task.taskId}.completion-proof',
+        url: task.url,
+        headers: task.headers,
+        file: partial.file,
+        written: existingBytes,
+      );
+      if (!downloadCompletionEvidenceMatches(
+        observedFileBytes: existingBytes,
+        expectedResourceBytes: expectedBytes,
+        prefixMatches: prefixProof.matches,
+        persistedFingerprint: persistedFingerprint,
+        currentFingerprint: currentFingerprint,
+      )) {
+        diagnosticLog.record('completion.identityRejected', {
+          'taskId': task.taskId,
+          'bytes': existingBytes,
+          'expected': expectedBytes,
+        });
+        return false;
+      }
       final checkpointed = await _checkpointLogicalJob(
         task,
         state: DownloadJobState.completed,
@@ -3862,6 +3894,11 @@ class DownloadService {
         expectedBytes: expectedBytes,
         userPaused: false,
         queueWaiting: false,
+        fingerprint: fingerprintWithExpectedBytes(
+          remote: currentFingerprint,
+          expectedBytes: expectedBytes,
+          fallbackFinalUrl: task.url,
+        ),
       );
       if (!checkpointed) return false;
 
@@ -4078,17 +4115,45 @@ class DownloadService {
             await dest.exists() &&
             await dest.length() == failure.resourceSize &&
             (expectedBytes <= 0 || expectedBytes == failure.resourceSize)) {
+          final currentFingerprint = await _probeResourceFingerprint(
+            task.url,
+            headers: task.headers,
+          );
+          final persistedFingerprint = (await _jobStore.get(task.taskId))
+              ?.fingerprint;
+          final completionExpected = knownDownloadSize(<int?>[
+            expectedBytes,
+            persistedFingerprint?.expectedBytes,
+            currentFingerprint?.expectedBytes,
+            failure.resourceSize,
+          ]);
+          if (!downloadCompletionEvidenceMatches(
+            observedFileBytes: failure.resourceSize,
+            expectedResourceBytes: completionExpected,
+            // DownloadRangeTransfer only reaches reconcileRange after its
+            // existing-prefix guard has succeeded.
+            prefixMatches: true,
+            persistedFingerprint: persistedFingerprint,
+            currentFingerprint: currentFingerprint,
+          )) {
+            return;
+          }
           await _jobStore.updateForAttempt(
             activeToken,
             state: DownloadJobState.completed,
             durableBytes: failure.resourceSize,
             durableByteProvenance: DownloadDurableByteProvenance.rangeFlushed,
-            expectedBytes: failure.resourceSize,
+            expectedBytes: completionExpected,
+            fingerprint: fingerprintWithExpectedBytes(
+              remote: currentFingerprint,
+              expectedBytes: completionExpected,
+              fallbackFinalUrl: task.url,
+            ),
           );
           await FileDownloader().database.updateRecord(
-            TaskRecord(task, TaskStatus.complete, 1, failure.resourceSize),
+            TaskRecord(task, TaskStatus.complete, 1, completionExpected),
           );
-          _sharedEvents.add(TaskProgressUpdate(task, 1, failure.resourceSize));
+          _sharedEvents.add(TaskProgressUpdate(task, 1, completionExpected));
           _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));
         }
       },
@@ -4103,6 +4168,10 @@ class DownloadService {
     final trackingUrl = downloadTrackingUrl(task);
     var job = await _jobStore.get(task.taskId);
     if (job == null) {
+      final remoteFingerprint = await _probeResourceFingerprint(
+        task.url,
+        headers: task.headers,
+      );
       final seeded = DownloadJobRecord(
         taskId: task.taskId,
         trackingUrl: trackingUrl,
@@ -4115,9 +4184,10 @@ class DownloadService {
         queueWaiting: false,
         updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
         taskSnapshot: task.toJson(),
-        fingerprint: DownloadResourceFingerprint(
+        fingerprint: fingerprintWithExpectedBytes(
+          remote: remoteFingerprint,
           expectedBytes: expectedBytes,
-          finalUrl: task.url,
+          fallbackFinalUrl: task.url,
         ),
       );
       if (!await _jobStore.put(seeded)) return null;
@@ -4155,6 +4225,8 @@ class DownloadService {
     }
 
     final trackingUrl = downloadTrackingUrl(task);
+    final authoritativeFingerprint = (await _jobStore.get(task.taskId))
+        ?.fingerprint;
     final store = _ref.read(downloadUrlRefreshStoreProvider);
     final descriptor = await store.get(trackingUrl);
     if (descriptor == null) return (task: task, refreshed: false);
@@ -4162,6 +4234,14 @@ class DownloadService {
     // Keep a still-valid URL. This avoids provider extraction work on every
     // short pause/resume while still detecting expired signed links.
     final current = await getMetadata(task.url, headers: task.headers);
+    final currentFingerprint = await _probeResourceFingerprint(
+      task.url,
+      headers: task.headers,
+    );
+    final currentIdentityMatches =
+        authoritativeFingerprint == null ||
+        currentFingerprint == null ||
+        authoritativeFingerprint.compatibleWith(currentFingerprint);
     final currentSizeMatches =
         expectedBytes <= 0 ||
         current?.size == null ||
@@ -4172,7 +4252,8 @@ class DownloadService {
     if (current != null &&
         current.size != null &&
         currentSizeMatches &&
-        currentRangeOk) {
+        currentRangeOk &&
+        currentIdentityMatches) {
       return (task: task, refreshed: false);
     }
 
@@ -4188,10 +4269,19 @@ class DownloadService {
       refreshed.url,
       headers: refreshed.headers,
     );
+    final refreshedFingerprint = await _probeResourceFingerprint(
+      refreshed.url,
+      headers: refreshed.headers,
+    );
+    final refreshedIdentityMatches =
+        authoritativeFingerprint == null ||
+        refreshedFingerprint == null ||
+        authoritativeFingerprint.compatibleWith(refreshedFingerprint);
     if (metadata?.size == null ||
         (expectedBytes > 0 && metadata!.size != expectedBytes) ||
         ((task is ParallelDownloadTask || partialBytes > 0) &&
-            metadata?.supportsRanges != true)) {
+            metadata?.supportsRanges != true) ||
+        !refreshedIdentityMatches) {
       return (task: task, refreshed: false);
     }
 
@@ -4205,6 +4295,11 @@ class DownloadService {
       expectedBytes: expectedBytes,
       userPaused: false,
       queueWaiting: false,
+      fingerprint: fingerprintWithExpectedBytes(
+        remote: refreshedFingerprint,
+        expectedBytes: expectedBytes,
+        fallbackFinalUrl: refreshed.url,
+      ),
     );
     if (!refreshCheckpointed) {
       throw StateError(
@@ -4483,6 +4578,89 @@ class DownloadService {
           (await getMetadata(task.url, headers: task.headers))?.size ?? -1;
     }
     return _parallel.start(task, totalBytes);
+  }
+
+  Future<DownloadResourceFingerprint?> _probeResourceFingerprint(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
+    String? strongEtag;
+    String? lastModified;
+    var expectedBytes = -1;
+    String? finalUrl;
+
+    void absorb(Response<dynamic> response) {
+      strongEtag ??= strongDownloadEtag(response.headers.value('etag'));
+      final modified = response.headers.value('last-modified')?.trim();
+      if (lastModified == null && modified != null && modified.isNotEmpty) {
+        lastModified = modified;
+      }
+      final range = RegExp(r'^bytes\s+\d+-\d+/(\d+)$')
+          .firstMatch(response.headers.value('content-range') ?? '');
+      final rangeBytes = range == null ? null : int.tryParse(range[1]!);
+      final contentBytes = int.tryParse(
+        response.headers.value('content-length') ?? '',
+      );
+      if (rangeBytes != null && rangeBytes > 0) {
+        expectedBytes = rangeBytes;
+      } else if (response.statusCode != 206 &&
+          contentBytes != null &&
+          contentBytes > 0) {
+        expectedBytes = contentBytes;
+      }
+      final resolved = response.realUri.toString().trim();
+      if (resolved.isNotEmpty) finalUrl = resolved;
+    }
+
+    try {
+      final response = await _dio
+          .head<dynamic>(
+            url,
+            options: Options(
+              headers: {...?headers, 'Accept-Encoding': 'identity'},
+              followRedirects: true,
+            ),
+          )
+          .timeout(const Duration(seconds: 10));
+      absorb(response);
+    } catch (_) {}
+
+    if (expectedBytes <= 0 || (strongEtag == null && lastModified == null)) {
+      try {
+        final response = await _dio
+            .get<dynamic>(
+              url,
+              options: Options(
+                headers: {
+                  ...?headers,
+                  'Range': 'bytes=0-0',
+                  'Accept-Encoding': 'identity',
+                },
+                followRedirects: true,
+                responseType: ResponseType.stream,
+                validateStatus: (status) =>
+                    status != null && (status == 200 || status == 206),
+              ),
+            )
+            .timeout(const Duration(seconds: 10));
+        absorb(response);
+        final body = response.data;
+        if (body is ResponseBody) {
+          final subscription = body.stream.listen(null);
+          await subscription.cancel();
+        }
+      } catch (_) {}
+    }
+
+    if (strongEtag == null && lastModified == null && expectedBytes <= 0) {
+      return null;
+    }
+    return DownloadResourceFingerprint(
+      strongEtag: strongEtag,
+      lastModified: lastModified,
+      expectedBytes: expectedBytes,
+      finalUrl: finalUrl ?? url,
+    );
   }
 
   Future<DownloadMetadata?> getMetadata(
@@ -5019,7 +5197,19 @@ class DownloadService {
           await FileDownloader().database.allRecords(),
         );
         final startNow = occupied < maxConcurrent;
-        final expectedBytes = totalBytes > 0 ? totalBytes : -1;
+        final remoteFingerprint = await _probeResourceFingerprint(
+          url,
+          headers: headers,
+        );
+        final expectedBytes = knownDownloadSize(<int?>[
+          totalBytes,
+          remoteFingerprint?.expectedBytes,
+        ]);
+        final resourceFingerprint = fingerprintWithExpectedBytes(
+          remote: remoteFingerprint,
+          expectedBytes: expectedBytes,
+          fallbackFinalUrl: url,
+        );
         // Freeze the chosen transfer shape before queueing. This preserves a
         // manual/Auto multipart choice for episode 2+ instead of converting
         // only the first episode and leaving later FIFO rows single-part.
@@ -5042,10 +5232,7 @@ class DownloadService {
             queueWaiting: !startNow,
             updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
             taskSnapshot: transferTask.toJson(),
-            fingerprint: DownloadResourceFingerprint(
-              expectedBytes: expectedBytes,
-              finalUrl: url,
-            ),
+            fingerprint: resourceFingerprint,
           ),
         );
         if (!jobPersisted) {
@@ -5218,27 +5405,86 @@ class DownloadService {
     try {
       final path = await task.filePath();
       var fileBytes = -1;
+      File? completedFile;
       if (path.isNotEmpty) {
         final file = File(path);
-        if (await file.exists()) fileBytes = await file.length();
+        if (await file.exists()) {
+          completedFile = file;
+          fileBytes = await file.length();
+        }
       }
+
       final record = await FileDownloader().database.recordForId(task.taskId);
+      final storage = _ref.read(storageServiceProvider);
+      final metadata = await storage.getDownloadMetadata(task.taskId);
+      final job = await _jobStore.get(task.taskId);
+      final currentFingerprint = task is DownloadTask
+          ? await _probeResourceFingerprint(task.url, headers: task.headers)
+          : null;
+
+      // Never promote the observed file into its own expectation. Every value
+      // here must pre-exist the final local length or come from remote evidence.
       final expectedBytes = knownDownloadSize(<int?>[
-        fileBytes,
+        job?.expectedBytes,
         record?.expectedFileSize,
+        downloadMetadataExpectedBytes(metadata),
         _telemetry.expectedBytesFor(task.taskId),
+        currentFingerprint?.expectedBytes,
       ]);
+
       if (task is DownloadTask) {
+        var prefixMatches = false;
+        if (completedFile != null && fileBytes > 0 && expectedBytes > 0) {
+          final proof = await _rangeTransfers.verifyExistingPrefix(
+            id: '${task.taskId}.final-proof',
+            url: task.url,
+            headers: task.headers,
+            file: completedFile,
+            written: fileBytes,
+          );
+          prefixMatches = proof.matches;
+        }
+
+        final verified = downloadCompletionEvidenceMatches(
+          observedFileBytes: fileBytes,
+          expectedResourceBytes: expectedBytes,
+          prefixMatches: prefixMatches,
+          persistedFingerprint: job?.fingerprint,
+          currentFingerprint: currentFingerprint,
+        );
+        if (!verified) {
+          diagnosticLog.record('completion.resourceIdentityRejected', {
+            'taskId': task.taskId,
+            'fileBytes': fileBytes,
+            'expectedBytes': expectedBytes,
+            'prefixMatches': prefixMatches,
+          });
+          await _checkpointLogicalJob(
+            task,
+            state: DownloadJobState.interrupted,
+            expectedBytes: expectedBytes,
+            userPaused: false,
+            queueWaiting: false,
+            fingerprint: currentFingerprint,
+          );
+          return;
+        }
+
+        final completedFingerprint = fingerprintWithExpectedBytes(
+          remote: currentFingerprint ?? job?.fingerprint,
+          expectedBytes: expectedBytes,
+          fallbackFinalUrl: task.url,
+        );
         final completedPersisted = await _checkpointLogicalJob(
           task,
           state: DownloadJobState.completed,
-          durableBytes: fileBytes > 0 ? fileBytes : null,
-          durableByteProvenance: fileBytes > 0
-              ? DownloadDurableByteProvenance.verifiedFinalFile
-              : null,
+          durableBytes: fileBytes,
+          durableByteProvenance:
+              DownloadDurableByteProvenance.verifiedFinalFile,
           expectedBytes: expectedBytes,
           userPaused: false,
           queueWaiting: false,
+          fingerprint: completedFingerprint,
         );
         if (!completedPersisted) {
           diagnosticLog.record('completion.persistenceBlocked', {
@@ -5247,15 +5493,14 @@ class DownloadService {
           return;
         }
       }
-      await _ref
-          .read(storageServiceProvider)
-          .patchDownloadMetadata(
-            task.taskId,
-            trackingUrl: downloadTrackingUrl(task),
-            filePath: path,
-            lastProgress: 1,
-            lastExpectedBytes: expectedBytes,
-          );
+
+      await storage.patchDownloadMetadata(
+        task.taskId,
+        trackingUrl: downloadTrackingUrl(task),
+        filePath: path,
+        lastProgress: 1,
+        lastExpectedBytes: expectedBytes,
+      );
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[DownloadService] persist filePath failed: $e');

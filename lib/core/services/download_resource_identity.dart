@@ -71,7 +71,9 @@ DownloadResourceFingerprint fingerprintWithExpectedBytes({
   return DownloadResourceFingerprint(
     strongEtag: remote?.strongEtag,
     lastModified: remote?.lastModified,
-    expectedBytes: expectedBytes > 0 ? expectedBytes : remote?.expectedBytes ?? -1,
+    expectedBytes: expectedBytes > 0
+        ? expectedBytes
+        : remote?.expectedBytes ?? -1,
     finalUrl: remote?.finalUrl ?? fallbackFinalUrl,
   );
 }

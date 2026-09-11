@@ -277,7 +277,7 @@
   - **Verification passed:** prior RED reproduction plus GREEN legacy-adoption/different-logical-ID fencing, canonical identity persistence/overlay/provider suites, DM-05 lifecycle-authority regressions, and analyzer.
 
 
-- [ ] **DM-06 — Strengthen resource identity and final completion verification**
+- [x] **DM-06 — Strengthen resource identity and final completion verification**
   - **Problem:** current file length may become the expected length; same-size resource replacement can pass size-only checks; fingerprint validator fields are not consistently populated end-to-end.
   - **Root cause:** observed bytes, expected resource size, stable resource identity and volatile signed delivery URL are mixed.
   - **Severity / priority:** **P1 / High (data integrity).**
@@ -285,6 +285,10 @@
   - **Proposed fix:** distinguish `observedFileBytes`, `expectedResourceBytes`, stable resource identity and delivery URL. Persist strong ETag/Last-Modified when available; preserve provider/source/quality identity; use byte-prefix proof where validators are absent. Never compare a raw signed URL as the sole stable identity, and never complete solely because observed length equals itself.
   - **Verification/testing:** truncated final; wrong-size final; same-size changed resource; signed URL rotates for same resource; validator changes; validators absent; unknown-size source; crash after rename before complete checkpoint.
   - **Dependencies:** DM-05, DM-20, DM-29.
+  - **Implementation notes (2026-09-11):** Resource identity now separates observed local bytes, independently expected resource bytes, stable validator evidence and volatile delivery URL. Fresh/range jobs persist strong ETag/Last-Modified/expected-size fingerprints when available; exact-size recovery, native completion and Range reconciliation require independent size plus stable-validator or byte-prefix proof. Source refresh permits signed URL rotation only when the stable fingerprint remains compatible.
+  - **Confirmed root cause:** completion paths could promote the file being verified into their own expected size and several resume/refresh paths persisted only URL+size, so a truncated or same-size replaced resource could satisfy size-only completion without durable identity proof.
+  - **Verification passed:** RED→GREEN service guards, same-size changed-resource rejection, signed-URL rotation acceptance, validator-free prefix proof, weak-ETag rejection, source-refresh integrity/checkpoint tests, recovery/durable-byte regressions, DM-05 authority and DM-24 logical-identity regressions, and analyzer.
+
 
 - [ ] **DM-07 — Make delete a durable tombstone-first ownership-settlement transaction**
   - **Problem:** UI can hide a row, time out cancel, delete DB/metadata/files, and lose the terminal fact while a worker is still settling.

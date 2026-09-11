@@ -46,8 +46,8 @@ const String kDownloadJobStoreBox = 'download_job_store_v1';
 /// Durable identity of the remote object whose bytes are stored locally.
 ///
 /// A strong ETag is preferred, Last-Modified is a fallback, and expected size
-/// plus final URL give us additional evidence when a provider refreshes a
-/// signed CDN URL. The store never silently replaces an incompatible
+/// provide stable evidence. Final URL is delivery metadata only because a
+/// signed CDN URL may rotate without changing the resource. The store never silently replaces an incompatible
 /// fingerprint because doing so could attach old bytes to a different object.
 class DownloadResourceFingerprint {
   const DownloadResourceFingerprint({
@@ -65,8 +65,7 @@ class DownloadResourceFingerprint {
   bool get hasIdentityEvidence =>
       (strongEtag?.trim().isNotEmpty ?? false) ||
       (lastModified?.trim().isNotEmpty ?? false) ||
-      expectedBytes > 0 ||
-      (finalUrl?.trim().isNotEmpty ?? false);
+      expectedBytes > 0;
 
   Map<String, Object?> toJson() => <String, Object?>{
     if (strongEtag?.trim().isNotEmpty ?? false) 'strongEtag': strongEtag,
