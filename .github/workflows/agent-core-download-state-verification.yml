@@ -1,6 +1,6 @@
 name: Agent DM10 Generation And Ack Fencing
 
-# Nudge after installing the push trigger so this commit executes the verifier.
+# Re-run after repairing the remaining DM-10 restack timer projection.
 on:
   push:
     branches: [plan/download-manager-reliability]
