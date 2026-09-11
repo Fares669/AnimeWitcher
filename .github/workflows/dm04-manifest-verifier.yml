@@ -1,0 +1,38 @@
+name: DM04 Manifest Recovery Verifier
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+      - lib/core/services/persistent_parallel_download.dart
+      - .github/workflows/dm04-manifest-verifier.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dm04-manifest-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manifest-recovery:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Run manifest parent recovery regression
+        run: >-
+          flutter test
+          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
