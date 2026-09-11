@@ -129,6 +129,18 @@ void main() {
     await Future<void>.delayed(Duration.zero);
   }
 
+
+
+  test('missing multipart manifest is reported as not restorable', () async {
+    final manifest = File('${await parent.filePath()}.parts/manifest.json');
+    expect(await manifest.exists(), isFalse);
+    expect(await coordinator.restore(parent), isFalse);
+    expect(
+      starts,
+      isEmpty,
+      reason: 'restore must not create a writer when no manifest exists',
+    );
+  });
   test('five parts cover each byte once', () async {
     expect(await coordinator.start(parent, 23), isTrue);
     await expandFreshTo(5);
