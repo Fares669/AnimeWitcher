@@ -79,13 +79,15 @@ probe_method = r'''  Future<DownloadResourceFingerprint?> _probeResourceFingerpr
       } catch (_) {}
     }
 
-    final fingerprint = DownloadResourceFingerprint(
+    if (strongEtag == null && lastModified == null && expectedBytes <= 0) {
+      return null;
+    }
+    return DownloadResourceFingerprint(
       strongEtag: strongEtag,
       lastModified: lastModified,
       expectedBytes: expectedBytes,
       finalUrl: finalUrl ?? url,
     );
-    return fingerprint.hasIdentityEvidence ? fingerprint : null;
   }
 
 '''

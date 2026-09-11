@@ -52,7 +52,7 @@ void main() {
         downloadCompletionEvidenceMatches(
           observedFileBytes: 1000,
           expectedResourceBytes: 1000,
-          prefixMatches: true,
+          prefixMatches: false,
           persistedFingerprint: const DownloadResourceFingerprint(
             strongEtag: '"same"',
             lastModified: 'date',
@@ -64,6 +64,25 @@ void main() {
             lastModified: 'date',
             expectedBytes: 1000,
             finalUrl: 'https://cdn.test/file?token=new',
+          ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('matching strong validator permits completion without Range proof', () {
+      expect(
+        downloadCompletionEvidenceMatches(
+          observedFileBytes: 1000,
+          expectedResourceBytes: 1000,
+          prefixMatches: false,
+          persistedFingerprint: const DownloadResourceFingerprint(
+            strongEtag: '"v1"',
+            expectedBytes: 1000,
+          ),
+          currentFingerprint: const DownloadResourceFingerprint(
+            strongEtag: '"v1"',
+            expectedBytes: 1000,
           ),
         ),
         isTrue,

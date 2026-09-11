@@ -9,15 +9,32 @@ String? strongDownloadEtag(String? raw) {
   return value;
 }
 
+bool _matchingStableValidator(
+  DownloadResourceFingerprint persisted,
+  DownloadResourceFingerprint current,
+) {
+  final persistedEtag = strongDownloadEtag(persisted.strongEtag);
+  final currentEtag = strongDownloadEtag(current.strongEtag);
+  if (persistedEtag != null && currentEtag != null) {
+    return persistedEtag == currentEtag;
+  }
+  final persistedModified = persisted.lastModified?.trim();
+  final currentModified = current.lastModified?.trim();
+  return persistedModified != null &&
+      persistedModified.isNotEmpty &&
+      currentModified != null &&
+      currentModified.isNotEmpty &&
+      persistedModified == currentModified;
+}
+
 /// Completion of a local artifact is a resource-integrity decision, not a
 /// progress decision. [observedFileBytes] must therefore be compared against an
 /// independently known resource size; it can never become its own expectation.
 ///
-/// A matching prefix is required even when validators are absent. When both the
-/// persisted and current resource expose comparable validators, any conflict
-/// rejects the artifact. Signed/final URL rotation alone is intentionally not a
-/// mismatch because [DownloadResourceFingerprint.compatibleWith] does not use
-/// delivery URL as the stable identity.
+/// Strong validators are preferred. If no comparable validator survived,
+/// callers must prove a byte prefix against the current resource. Signed/final
+/// URL rotation alone is intentionally not a mismatch because delivery URL is
+/// not treated as stable resource identity.
 bool downloadCompletionEvidenceMatches({
   required int observedFileBytes,
   required int expectedResourceBytes,
@@ -27,7 +44,6 @@ bool downloadCompletionEvidenceMatches({
 }) {
   if (observedFileBytes <= 0 || expectedResourceBytes <= 0) return false;
   if (observedFileBytes != expectedResourceBytes) return false;
-  if (!prefixMatches) return false;
 
   final persistedExpected = persistedFingerprint?.expectedBytes ?? -1;
   if (persistedExpected > 0 && persistedExpected != expectedResourceBytes) {
@@ -37,12 +53,14 @@ bool downloadCompletionEvidenceMatches({
   if (currentExpected > 0 && currentExpected != expectedResourceBytes) {
     return false;
   }
-  if (persistedFingerprint != null &&
-      currentFingerprint != null &&
-      !persistedFingerprint.compatibleWith(currentFingerprint)) {
-    return false;
+  if (persistedFingerprint != null && currentFingerprint != null) {
+    if (!persistedFingerprint.compatibleWith(currentFingerprint)) return false;
+    if (prefixMatches ||
+        _matchingStableValidator(persistedFingerprint, currentFingerprint)) {
+      return true;
+    }
   }
-  return true;
+  return prefixMatches;
 }
 
 DownloadResourceFingerprint fingerprintWithExpectedBytes({
