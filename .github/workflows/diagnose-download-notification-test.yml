@@ -54,6 +54,7 @@ jobs:
           guard.write_text(g.replace(marker, regression + marker, 1))
           PY
           dart format lib/core/services/download_service.dart test/core/services/download_initialization_barrier_guard_test.dart
+          git diff --check
       - name: Focused Settings regression
         run: flutter test test/features/settings/presentation/download_concurrency_settings_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
       - name: Readiness contract regression
@@ -76,37 +77,10 @@ jobs:
         run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
       - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
-      - name: Finalize plan and clean temporary verification workflows
+      - name: Commit validated source fix
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('DOWNLOAD_MANAGER_PLAN.md')
-          s = p.read_text()
-          dm03 = '- [ ] **DM-03 — Return explicit typed outcomes for start/resume/pause/cancel**'
-          if s.count(dm03) != 1:
-              raise SystemExit(f'DM-03 checkbox count={s.count(dm03)}')
-          s = s.replace(dm03, dm03.replace('[ ]', '[x]'), 1)
-
-          next_item = '\n- [ ] **DM-04 — Recover from the union of persistence and ownership sources**'
-          if next_item not in s:
-              raise SystemExit('DM-04 anchor not found')
-          dm03_notes = """\n  - **Completion notes (2026-09-11):** Public start/resume/pause/cancel callers now consume explicit `DownloadCommandOutcome` values; launcher, downloads provider and progress-dialog control paths no longer treat transport acceptance as logical success. Missing state, queueing, attachment, user pause, ownership settlement, restart/recoverable failure, service unavailability and terminal completion/cancel are distinguished explicitly.\n  - **Final verification:** focused typed-outcome/control/readiness/Range/source-refresh/multipart/native-resume coverage passed together with the full Flutter test suite and `flutter analyze --no-fatal-warnings --no-fatal-infos` on the final implementation head.\n"""
-          s = s.replace(next_item, dm03_notes + next_item, 1)
-
-          dm01_anchor = '\n- [x] **DM-01 — Add a generation-bound lease/watchdog for multipart `pending-start` ownership**'
-          if dm01_anchor not in s:
-              raise SystemExit('DM-01 anchor not found')
-          dm34 = """\n- [x] **DM-34 — Decouple notification preferences from download recovery readiness**\n  - **Problem:** Changing download-notification preferences could remain stuck indefinitely while `DownloadService` startup/recovery readiness was pending, so the setting was neither persisted nor reflected in the UI.\n  - **Root cause:** `applyNotificationSettings()` was incorrectly classified as a lifecycle ownership mutation and awaited the DM-32 recovery barrier before writing configuration. Initialization already reads and applies the persisted notification preferences before recovery, so this dependency was unnecessary.\n  - **Fix:** Persist and apply notification configuration directly. Lifecycle commands remain readiness-gated, while a regression guard explicitly keeps notification preferences independent from job recovery.\n  - **Verification:** The original widget regression was observed RED with preferences still all enabled after a 2.5-second probe; the production-hypothesis patch made the same test GREEN and passed analyze. Final focused Settings/readiness tests, DM-03 matrix, full suite and analyze all passed before this item was closed.\n  - **Dependencies:** DM-32 semantics remain unchanged for actual download lifecycle mutations.\n"""
-          s = s.replace(dm01_anchor, dm34 + dm01_anchor, 1)
-          p.write_text(s)
-          PY
-          rm -f .github/workflows/diagnose-download-notification-test.yml
-          rm -f .github/workflows/dm03-final-verify.yml
-          git diff --check
-      - name: Commit verified fix
-        shell: bash
-        run: |
+          set -euo pipefail
           remote_head="$(git ls-remote origin refs/heads/plan/download-manager-reliability | cut -f1)"
           if [ "$remote_head" != "$GITHUB_SHA" ]; then
             echo "Branch moved during verification: expected $GITHUB_SHA, got $remote_head" >&2
@@ -115,10 +89,11 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add lib/core/services/download_service.dart \
-            test/core/services/download_initialization_barrier_guard_test.dart \
-            DOWNLOAD_MANAGER_PLAN.md \
-            .github/workflows/diagnose-download-notification-test.yml \
-            .github/workflows/dm03-final-verify.yml
+            test/core/services/download_initialization_barrier_guard_test.dart
           git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No validated source changes to commit.' >&2
+            exit 1
+          fi
           git commit -m 'fix(downloads): decouple notification settings readiness'
           git push origin HEAD:plan/download-manager-reliability
