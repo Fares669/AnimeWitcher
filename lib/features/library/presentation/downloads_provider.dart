@@ -8,6 +8,7 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_job_state.dart';
+import '../../../core/services/download_logical_identity.dart';
 import '../../../core/services/download_service.dart';
 import '../../../core/utils/download_cleanup.dart';
 import 'download_episode_artwork.dart';
@@ -20,6 +21,7 @@ class DownloadItem {
   final double progress;
   final MultimediaItem item;
   final Episode? episode;
+  final String? logicalId;
   final int timestamp;
 
   DownloadItem({
@@ -28,6 +30,7 @@ class DownloadItem {
     required this.progress,
     required this.item,
     this.episode,
+    this.logicalId,
     required this.timestamp,
   });
 
@@ -36,6 +39,16 @@ class DownloadItem {
 
 bool downloadsPointAtSameTarget(DownloadItem a, DownloadItem b) {
   if (identical(a, b) || a.id == b.id) return true;
+  final logicalA = a.logicalId?.trim();
+  final logicalB = b.logicalId?.trim();
+  if (logicalA != null &&
+      logicalA.isNotEmpty &&
+      logicalB != null &&
+      logicalB.isNotEmpty) {
+    return a.logicalId == b.logicalId;
+  }
+  // Pre-logical-identity migration fallback: only incomplete legacy evidence
+  // may fall through to mutable URL/file heuristics.
   final trackA = downloadTrackingUrl(a.task);
   final trackB = downloadTrackingUrl(b.task);
   if (trackA.isNotEmpty && trackA == trackB) return true;
@@ -92,6 +105,7 @@ List<List<DownloadItem>> groupDownloadsByEpisodeOrFile(
     if (rootA != rootB) parent[rootA] = rootB;
   }
 
+  final byLogicalId = <String, int>{};
   final byTracking = <String, int>{};
   final byFile = <String, int>{};
   void unionKey(Map<String, int> map, String key, int i) {
@@ -105,6 +119,12 @@ List<List<DownloadItem>> groupDownloadsByEpisodeOrFile(
   }
 
   for (var i = 0; i < items.length; i++) {
+    final logicalId = items[i].logicalId?.trim();
+    if (logicalId != null && logicalId.isNotEmpty) {
+      unionKey(byLogicalId, logicalId, i);
+      continue;
+    }
+    // Pre-logical-identity migration fallback.
     unionKey(byTracking, downloadTrackingUrl(items[i].task), i);
     unionKey(byTracking, items[i].episode?.url.trim() ?? '', i);
     unionKey(byFile, downloadTaskFileKey(items[i].task), i);
@@ -204,6 +224,7 @@ DownloadItem? downloadItemFromTaskMetadata({
             Map<String, dynamic>.from(metadata['episode'] as Map),
           )
         : null,
+    logicalId: logicalDownloadIdFromMetadata(metadata),
     timestamp: (metadata['timestamp'] as int?) ?? 0,
   );
 }
@@ -398,6 +419,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           progress: newProgress.clamp(0.0, 1.0),
           item: existing.item,
           episode: existing.episode,
+          logicalId: existing.logicalId,
           timestamp: existing.timestamp,
         );
 
