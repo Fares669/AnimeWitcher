@@ -73,6 +73,19 @@ void main() {
         'if (userPauseSettled) {\n          await FileDownloader().database.updateRecord(',
       ),
     );
-    expect(recovery, contains('(userPaused && userPauseSettled)'));
+    expect(
+      recovery,
+      contains('state: DownloadJobState.pausing,'),
+      reason: 'unsettled startup pause must remain durable pausing',
+    );
+    expect(
+      recovery,
+      contains('final projectedJob = await _jobStore.get(task.taskId);'),
+    );
+    expect(
+      recovery,
+      contains('status: downloadJobDisplayStatus(projectedState),'),
+      reason: 'startup UI projection must come from authoritative JobStore state',
+    );
   });
 }
