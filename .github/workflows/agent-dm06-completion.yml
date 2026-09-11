@@ -25,27 +25,35 @@ jobs:
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
           git reset --hard HEAD
-      - name: Confirm RED
-        shell: bash
-        run: |
-          set +e
-          flutter test test/core/services/download_resource_identity_guard_test.dart test/core/services/download_resource_identity_service_guard_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-          status=$?
-          set -e
-          test "$status" -ne 0
-      - name: Apply fix
+      - name: Apply DM-06 fix
         run: |
           python3 .github/scripts/agent_dm06_resource_integrity_patch.py
           python3 .github/scripts/agent_dm06_probe_method_patch.py
-          dart format lib/core/services/download_service.dart lib/core/services/download_resource_identity.dart
-      - name: Verify
+          python3 .github/scripts/dm06_remaining_repair.py
+          dart format lib/core/services/download_service.dart lib/core/services/download_resource_identity.dart lib/core/services/download_job_store.dart
+      - name: Verify focused and regression suites
         run: |
-          flutter test test/core/services/download_resource_identity_guard_test.dart test/core/services/download_resource_identity_service_guard_test.dart test/core/services/download_resource_identity_test.dart test/core/services/download_source_refresh_integrity_test.dart test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_recovery_reconciliation_guard_test.dart test/core/services/download_durable_byte_contract_guard_test.dart test/core/services/download_durable_byte_provenance_guard_test.dart test/core/services/download_job_single_authority_test.dart test/core/services/download_logical_identity_start_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-          flutter analyze --no-fatal-warnings --no-fatal-infos
-      - name: Commit
+          flutter test \
+            test/core/services/download_resource_identity_guard_test.dart \
+            test/core/services/download_resource_identity_service_guard_test.dart \
+            test/core/services/download_resource_identity_test.dart \
+            test/core/services/download_source_refresh_integrity_test.dart \
+            test/core/services/download_source_refresh_checkpoint_guard_test.dart \
+            test/core/services/download_recovery_reconciliation_guard_test.dart \
+            test/core/services/download_durable_byte_contract_guard_test.dart \
+            test/core/services/download_durable_byte_provenance_guard_test.dart \
+            test/core/services/download_parallel_complete_artifact_guard_test.dart \
+            test/core/services/persistent_parallel_download_range_identity_test.dart \
+            test/core/services/download_job_single_authority_test.dart \
+            test/core/services/download_logical_identity_start_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Mark complete and push
         run: |
           python3 .github/scripts/dm06_mark_complete.py
           rm -f .github/workflows/agent-dm06-completion.yml
+          rm -f .github/workflows/agent-dm06-diagnose.yml
           git add -A
           git diff --check
           git config user.name github-actions[bot]
