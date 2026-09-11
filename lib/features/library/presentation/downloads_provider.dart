@@ -555,23 +555,28 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   }
 
   Future<void> pauseDownload(String taskId) async {
-    _setOptimisticStatus(taskId, TaskStatus.paused);
-    try {
-      await ref.read(downloadServiceProvider).pauseDownload(taskId);
-    } catch (_) {
-      state = AsyncData(await _refreshList());
+    final outcome = await ref
+        .read(downloadServiceProvider)
+        .pauseDownloadOutcome(taskId);
+    if (outcome == DownloadCommandOutcome.paused) {
+      _setOptimisticStatus(taskId, TaskStatus.paused);
+      return;
     }
+    state = AsyncData(await _refreshList());
   }
 
   Future<void> resumeDownload(String taskId) async {
-    // Queue state is the only universally correct immediate state: if a slot is
-    // free DownloadService will replace it with running almost immediately;
-    // otherwise the user sees في الانتظار instead of a dead play button.
-    _setOptimisticStatus(taskId, TaskStatus.enqueued);
-    try {
-      await ref.read(downloadServiceProvider).resumeDownload(taskId);
-    } catch (_) {
-      state = AsyncData(await _refreshList());
+    final outcome = await ref
+        .read(downloadServiceProvider)
+        .resumeDownloadOutcome(taskId);
+    switch (outcome) {
+      case DownloadCommandOutcome.running:
+      case DownloadCommandOutcome.attached:
+        _setOptimisticStatus(taskId, TaskStatus.running);
+      case DownloadCommandOutcome.queued:
+        _setOptimisticStatus(taskId, TaskStatus.enqueued);
+      default:
+        state = AsyncData(await _refreshList());
     }
   }
 }
