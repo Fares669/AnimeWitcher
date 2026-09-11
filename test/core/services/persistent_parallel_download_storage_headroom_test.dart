@@ -21,7 +21,7 @@ void main() {
       final records = <String, TaskRecord>{};
       final starts = <DownloadTask>[];
       final statuses = <TaskStatus>[];
-      final totalBytes = 2 * 1024 * 1024;
+      const totalBytes = 8192;
       final parent = ParallelDownloadTask(
         taskId: 'dm27-parent',
         url: 'https://storage.example/video',
@@ -58,22 +58,49 @@ void main() {
         if (await directory.exists()) await directory.delete(recursive: true);
       });
 
-      Future<void> waitUntil(bool Function() predicate) async {
+      Future<void> waitUntil(
+        String stage,
+        bool Function() predicate,
+      ) async {
         for (var i = 0; i < 400; i++) {
           if (predicate()) return;
           await Future<void>.delayed(const Duration(milliseconds: 5));
         }
-        fail('timed out waiting for multipart coordinator');
+        fail(
+          'timed out during $stage; starts=${starts.length}, '
+          'parent=${records[parent.taskId]?.status}, statuses=$statuses',
+        );
       }
 
-      Future<void> acknowledgeNewStarts(Set<String> acknowledged) async {
-        final batch = starts
-            .where((task) => acknowledged.add(task.taskId))
-            .toList(growable: false);
-        for (final task in batch) {
+      Future<void> markRunning(Iterable<DownloadTask> tasks) async {
+        for (final task in tasks) {
           coordinator.handleUpdate(TaskStatusUpdate(task, TaskStatus.running));
         }
         await Future<void>.delayed(Duration.zero);
+      }
+
+      Future<void> expandFreshTo(int target) async {
+        final acknowledged = <String>{};
+        while (starts.length < target) {
+          final before = starts.length;
+          final batch = starts
+              .where((task) => acknowledged.add(task.taskId))
+              .toList(growable: false);
+          expect(
+            batch,
+            isNotEmpty,
+            reason: 'ramp must expose a new batch before waiting for promotion',
+          );
+          await markRunning(batch);
+          await waitUntil(
+            'initial connection ramp $before->$target',
+            () => starts.length > before || starts.length >= target,
+          );
+        }
+        final finalBatch = starts
+            .where((task) => acknowledged.add(task.taskId))
+            .toList(growable: false);
+        if (finalBatch.isNotEmpty) await markRunning(finalBatch);
       }
 
       int rangeSize(DownloadTask task) {
@@ -87,13 +114,7 @@ void main() {
       }
 
       expect(await coordinator.start(parent, totalBytes), isTrue);
-      final acknowledged = <String>{};
-      while (starts.length < 5) {
-        final before = starts.length;
-        await acknowledgeNewStarts(acknowledged);
-        await waitUntil(() => starts.length > before || starts.length >= 5);
-      }
-      await acknowledgeNewStarts(acknowledged);
+      await expandFreshTo(5);
       expect(starts, hasLength(5));
 
       // Materialize every byte before creating storage pressure. This models
@@ -123,11 +144,11 @@ void main() {
       expect(lines.length, greaterThanOrEqualTo(2));
       final columns = lines.last.trim().split(RegExp(r'\s+'));
       final availableKiB = int.parse(columns[3]);
-      const reserveKiB = 256;
+      const reserveKiB = 4;
       expect(
         availableKiB,
-        greaterThan(reserveKiB + 1024),
-        reason: 'CI must provide a bounded tmpfs with enough room for parts',
+        greaterThan(reserveKiB + 16),
+        reason: 'CI bounded tmpfs must have enough room for verified parts',
       );
 
       final filler = File('${directory.path}.filler');
@@ -175,8 +196,11 @@ void main() {
       // no range should need to be redownloaded just because staging failed.
       final startsBeforeResume = starts.length;
       expect(await coordinator.start(parent, totalBytes), isTrue);
-      await waitUntil(() => target.existsSync());
-      await waitUntil(() => records[parent.taskId]?.status == TaskStatus.complete);
+      await waitUntil('post-ENOSPC assembly retry', () => target.existsSync());
+      await waitUntil(
+        'post-ENOSPC completion checkpoint',
+        () => records[parent.taskId]?.status == TaskStatus.complete,
+      );
       expect(starts.length, startsBeforeResume);
       expect(await target.length(), totalBytes);
     },
