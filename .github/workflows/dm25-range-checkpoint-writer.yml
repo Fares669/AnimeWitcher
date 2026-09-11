@@ -41,12 +41,14 @@ jobs:
         run: |
           python3 .github/dm25_range_checkpoint_writer.py apply
           dart format lib/core/services/download_range_transfer.dart test/core/services/download_range_checkpoint_backpressure_test.dart
-      - name: Run focused regressions
-        run: |
-          flutter test test/core/services/download_range_checkpoint_backpressure_test.dart
-          flutter test test/core/services/download_range_transfer_test.dart
-          flutter test test/core/services/download_durable_byte_provenance_guard_test.dart
-          flutter test test/core/services/download_lifecycle_checkpoint_guard_test.dart
+      - name: Verify DM-25 backpressure behavior
+        run: flutter test test/core/services/download_range_checkpoint_backpressure_test.dart
+      - name: Verify Range recovery regressions
+        run: flutter test test/core/services/download_range_transfer_test.dart
+      - name: Verify durable-byte provenance regressions
+        run: flutter test test/core/services/download_durable_byte_provenance_guard_test.dart
+      - name: Verify lifecycle checkpoint regressions
+        run: flutter test test/core/services/download_lifecycle_checkpoint_guard_test.dart
       - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
       - name: Mark DM-25 complete
