@@ -34,32 +34,40 @@ void main() {
     expect(dialog, contains('pauseDownloadOutcome(data.taskId)'));
   });
 
-  test('DM-03 removal waits for typed terminal ownership before cleanup', () {
+  test('DM-07 removal delegates destructive cleanup to the service transaction', () {
     final provider = File(
       'lib/features/library/presentation/downloads_provider.dart',
     ).readAsStringSync();
+    final service = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+
     final start = provider.indexOf('Future<void> removeDownloads(');
     final end = provider.indexOf('\n  void _setOptimisticStatus(', start);
     expect(start, greaterThanOrEqualTo(0));
     expect(end, greaterThan(start));
     final body = provider.substring(start, end);
 
-    final cancelOutcome = body.indexOf('.cancelDownloadOutcome(');
-    final uiTombstone = body.indexOf('_deletingIds.addAll(droppedIds)');
-    final pluginDelete = body.indexOf(
-      'FileDownloader().database.deleteRecordWithId',
-    );
-    expect(cancelOutcome, greaterThanOrEqualTo(0));
-    expect(uiTombstone, greaterThan(cancelOutcome));
-    expect(pluginDelete, greaterThan(uiTombstone));
-    expect(
-      body,
-      contains('onTimeout: () => DownloadCommandOutcome.settlingOwnership'),
-    );
-    expect(body, contains('DownloadCommandOutcome.terminal'));
-    expect(body, contains('DownloadCommandOutcome.alreadyComplete'));
-    expect(body, contains('DownloadCommandOutcome.missingState'));
+    expect(body, contains('.deleteDownloadOutcome('));
+    expect(body, contains('_deletingIds.addAll(droppedIds)'));
+    expect(body, isNot(contains('FileDownloader().database.deleteRecordWithId')));
+    expect(body, isNot(contains('removeDownloadMetadata(')));
+    expect(body, isNot(contains('deleteDownloadedFile(')));
     expect(body, isNot(contains('.cancelDownload(')));
-  });
+    expect(body, isNot(contains('.cancelDownloadOutcome(')));
 
+    final deleteStart = service.indexOf(
+      'Future<DownloadCommandOutcome> deleteDownloadOutcome(',
+    );
+    final deleteEnd = service.indexOf(
+      'Future<DownloadCommandOutcome> pauseDownloadOutcome(',
+      deleteStart,
+    );
+    expect(deleteStart, greaterThanOrEqualTo(0));
+    expect(deleteEnd, greaterThan(deleteStart));
+    final deleteBody = service.substring(deleteStart, deleteEnd);
+    expect(deleteBody, contains('cancelDownloadOutcome('));
+    expect(deleteBody, contains('DownloadRuntimeOwnership.notOwned'));
+    expect(deleteBody, contains('deleteDownloadedFile(file)'));
+    expect(deleteBody, contains('DownloadCommandOutcome.settlingOwnership'));
+  });
 }
