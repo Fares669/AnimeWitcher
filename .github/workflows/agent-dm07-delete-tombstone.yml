@@ -1,17 +1,20 @@
-name: Agent DM07 Delete Tombstone RED
+name: Agent DM07 Delete Tombstone GREEN
 
 on:
   push:
     branches: [plan/download-manager-reliability]
     paths:
       - .github/workflows/agent-dm07-delete-tombstone.yml
-      - test/core/services/download_delete_tombstone_guard_test.dart
+
+permissions:
+  contents: write
 
 jobs:
-  red:
+  complete:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with: {fetch-depth: 0}
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -23,15 +26,49 @@ jobs:
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
           git reset --hard HEAD
-      - name: Confirm DM-07 RED
+      - name: Apply DM-07 tombstone-first delete transaction
         run: |
-          set +e
-          flutter test test/core/services/download_delete_tombstone_guard_test.dart \
-            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-          status=$?
-          set -e
-          if [ "$status" -eq 0 ]; then
-            echo "DM-07 unexpectedly passed before production fix"
-            exit 1
-          fi
-          echo "DM-07 RED reproduced as expected"
+          python3 .github/scripts/dm07_delete_tombstone_patch.py
+          dart format \
+            lib/core/services/download_job_store.dart \
+            lib/core/services/download_service.dart \
+            lib/features/library/presentation/downloads_provider.dart \
+            test/core/services/download_delete_tombstone_guard_test.dart
+          git diff --check
+      - name: Verify DM-07 and adjacent ownership regressions
+        run: |
+          set -o pipefail
+          flutter test \
+            test/core/services/download_delete_tombstone_guard_test.dart \
+            test/core/services/download_job_store_test.dart \
+            test/core/services/download_callback_generation_test.dart \
+            test/core/services/download_cancel_checkpoint_guard_test.dart \
+            test/core/services/download_cancel_ownership_guard_test.dart \
+            test/core/services/download_cancel_settlement_test.dart \
+            test/core/services/download_runtime_ownership_test.dart \
+            test/core/services/download_control_outcome_guard_test.dart \
+            test/features/library/presentation/downloads_logical_identity_test.dart \
+            test/features/library/presentation/downloads_job_state_authority_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key 2>&1 | tee /tmp/dm07-test.log
+      - name: Upload DM-07 diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm07-test-diagnostics
+          path: /tmp/dm07-test.log
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Mark DM-07 complete and push
+        run: |
+          python3 .github/scripts/dm07_mark_complete.py
+          rm -f .github/workflows/agent-dm07-delete-tombstone.yml
+          rm -f .github/scripts/dm07_delete_tombstone_patch.py
+          rm -f .github/scripts/dm07_mark_complete.py
+          git add -A
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "fix(downloads): make delete tombstone-first and ownership-settled"
+          git push origin HEAD:plan/download-manager-reliability
