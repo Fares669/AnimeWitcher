@@ -7,6 +7,28 @@ import 'download_job_state.dart';
 
 const int kDownloadJobSchemaVersion = 6;
 
+/// User-delete tombstones stay durable long enough to fence late native
+/// callbacks across relaunches. Cleanup may happen immediately after
+/// ownership settlement; only the tombstone itself is age-gated for GC.
+const Duration kDownloadCanceledTombstoneRetention = Duration(days: 30);
+
+bool downloadCanceledTombstoneEligibleForGc(
+  DownloadJobRecord job, {
+  required int nowMillis,
+  required bool ownershipReleased,
+  required bool pluginRecordAbsent,
+  required bool metadataAbsent,
+}) {
+  if (job.state != DownloadJobState.canceled || job.generation <= 0) {
+    return false;
+  }
+  if (!ownershipReleased || !pluginRecordAbsent || !metadataAbsent) {
+    return false;
+  }
+  final ageMillis = nowMillis - job.updatedAtMillis;
+  return ageMillis >= kDownloadCanceledTombstoneRetention.inMilliseconds;
+}
+
 /// Provenance for [DownloadJobRecord.durableBytes].
 ///
 /// Percentage/progress estimates are intentionally absent. `legacyUnknown` is
@@ -545,6 +567,49 @@ class DownloadJobStore {
             fingerprint: fingerprint,
           );
     return _putUnlocked(next);
+  });
+
+  /// Persist the explicit user-delete terminal fact before touching any
+  /// runtime owner. This is the only transition allowed to convert another
+  /// terminal state (for example completed) into canceled. Ordinary writes
+  /// remain protected by [_putUnlocked]'s terminal fence.
+  Future<DownloadAttemptToken?> tombstoneForDeletion(
+    DownloadJobRecord seed, {
+    int? updatedAtMillis,
+  }) => _serialize(() async {
+    final taskId = seed.taskId.trim();
+    final trackingUrl = seed.trackingUrl.trim();
+    if (taskId.isEmpty || trackingUrl.isEmpty) return null;
+    if (seed.generation < 0 || seed.durableBytes < 0) return null;
+
+    final current = await get(taskId);
+    final seedLogicalId = _nonEmptyString(seed.logicalId);
+    final currentLogicalId = _nonEmptyString(current?.logicalId);
+    if (current != null) {
+      if (current.trackingUrl != trackingUrl) return null;
+      if (currentLogicalId != null &&
+          seedLogicalId != null &&
+          currentLogicalId != seedLogicalId) {
+        return null;
+      }
+      if (current.state == DownloadJobState.canceled) {
+        return current.attemptToken;
+      }
+    }
+
+    final base = current ?? seed;
+    final next = base.copyWith(
+      logicalId: currentLogicalId ?? seedLogicalId,
+      state: DownloadJobState.canceled,
+      generation: base.generation + 1,
+      userPaused: false,
+      queueWaiting: false,
+      updatedAtMillis: updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
+    );
+    // Intentionally bypass the generic terminal-transition rejection.
+    // Every other identity/byte field is inherited from the current row.
+    await backend.write(taskId, next.toJson());
+    return next.attemptToken;
   });
 
   /// Start a new execution generation atomically. The durable bytes and

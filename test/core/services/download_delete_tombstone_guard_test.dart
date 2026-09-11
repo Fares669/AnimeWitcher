@@ -59,62 +59,76 @@ String _methodBody(String source, String startSignature, String endSignature) {
 
 void main() {
   group('DM-07 durable delete tombstone', () {
-    test('explicit deletion can tombstone completed and fences late reopen', () async {
-      final store = DownloadJobStore(_MemoryBackend());
-      expect(
-        await store.put(_job(state: DownloadJobState.completed, generation: 7)),
-        isTrue,
-      );
+    test(
+      'explicit deletion can tombstone completed and fences late reopen',
+      () async {
+        final store = DownloadJobStore(_MemoryBackend());
+        expect(
+          await store.put(
+            _job(state: DownloadJobState.completed, generation: 7),
+          ),
+          isTrue,
+        );
 
-      final token = await store.tombstoneForDeletion(
-        _job(state: DownloadJobState.completed, generation: 7),
-        updatedAtMillis: 20,
-      );
+        final token = await store.tombstoneForDeletion(
+          _job(state: DownloadJobState.completed, generation: 7),
+          updatedAtMillis: 20,
+        );
 
-      expect(token, isNotNull);
-      expect(token!.generation, 8);
-      final saved = await store.get('episode-delete');
-      expect(saved?.state, DownloadJobState.canceled);
-      expect(saved?.generation, 8);
-      expect(saved?.durableBytes, 512);
-      expect(saved?.fingerprint?.strongEtag, '"episode-7"');
-      expect(
-        await store.put(_job(state: DownloadJobState.running, generation: 9)),
-        isFalse,
-        reason: 'late callbacks may not resurrect a deletion tombstone',
-      );
-    });
+        expect(token, isNotNull);
+        expect(token!.generation, 8);
+        final saved = await store.get('episode-delete');
+        expect(saved?.state, DownloadJobState.canceled);
+        expect(saved?.generation, 8);
+        expect(saved?.durableBytes, 512);
+        expect(saved?.fingerprint?.strongEtag, '"episode-7"');
+        expect(
+          await store.put(_job(state: DownloadJobState.running, generation: 9)),
+          isFalse,
+          reason: 'late callbacks may not resurrect a deletion tombstone',
+        );
+      },
+    );
 
-    test('repeated deletion is idempotent and keeps the same generation', () async {
-      final store = DownloadJobStore(_MemoryBackend());
-      await store.put(_job(generation: 2));
-      final first = await store.tombstoneForDeletion(
-        _job(generation: 2),
-        updatedAtMillis: 10,
-      );
-      final second = await store.tombstoneForDeletion(
-        _job(generation: 2),
-        updatedAtMillis: 11,
-      );
+    test(
+      'repeated deletion is idempotent and keeps the same generation',
+      () async {
+        final store = DownloadJobStore(_MemoryBackend());
+        await store.put(_job(generation: 2));
+        final first = await store.tombstoneForDeletion(
+          _job(generation: 2),
+          updatedAtMillis: 10,
+        );
+        final second = await store.tombstoneForDeletion(
+          _job(generation: 2),
+          updatedAtMillis: 11,
+        );
 
-      expect(first, isNotNull);
-      expect(second, isNotNull);
-      expect(second!.generation, first!.generation);
-      expect((await store.get('episode-delete'))?.state, DownloadJobState.canceled);
-    });
+        expect(first, isNotNull);
+        expect(second, isNotNull);
+        expect(second!.generation, first!.generation);
+        expect(
+          (await store.get('episode-delete'))?.state,
+          DownloadJobState.canceled,
+        );
+      },
+    );
 
-    test('a missing execution row can still receive a durable delete tombstone', () async {
-      final store = DownloadJobStore(_MemoryBackend());
-      final token = await store.tombstoneForDeletion(
-        _job(generation: 0),
-        updatedAtMillis: 30,
-      );
+    test(
+      'a missing execution row can still receive a durable delete tombstone',
+      () async {
+        final store = DownloadJobStore(_MemoryBackend());
+        final token = await store.tombstoneForDeletion(
+          _job(generation: 0),
+          updatedAtMillis: 30,
+        );
 
-      expect(token?.generation, 1);
-      final saved = await store.get('episode-delete');
-      expect(saved?.state, DownloadJobState.canceled);
-      expect(saved?.logicalId, 'provider|anime|episode-7');
-    });
+        expect(token?.generation, 1);
+        final saved = await store.get('episode-delete');
+        expect(saved?.state, DownloadJobState.canceled);
+        expect(saved?.logicalId, 'provider|anime|episode-7');
+      },
+    );
 
     test('tombstone GC requires age plus independently settled ownership and projections', () {
       const retention = kDownloadCanceledTombstoneRetention;
@@ -164,41 +178,50 @@ void main() {
       'lib/features/library/presentation/downloads_provider.dart',
     ).readAsStringSync();
 
-    test('cancel persists tombstone and never removes it during ordinary cleanup', () {
-      final body = _methodBody(
-        service,
-        'Future<void> cancelDownload(',
-        'Future<DownloadCommandOutcome> cancelDownloadOutcome(',
-      );
-      expect(body, contains('tombstoneForDeletion('));
-      expect(body, isNot(contains('_jobStore.remove(taskId)')));
-      final settled = body.indexOf('_waitForCancelOwnershipRelease(taskId)');
-      final pluginDelete = body.indexOf(
-        'FileDownloader().database.deleteRecordWithId(taskId)',
-      );
-      expect(settled, greaterThanOrEqualTo(0));
-      expect(pluginDelete, greaterThan(settled));
-      expect(
-        body.substring(settled, pluginDelete),
-        contains('DownloadRuntimeOwnership.notOwned'),
-      );
-    });
+    test(
+      'cancel persists tombstone and never removes it during ordinary cleanup',
+      () {
+        final body = _methodBody(
+          service,
+          'Future<void> cancelDownload(',
+          'Future<DownloadCommandOutcome> cancelDownloadOutcome(',
+        );
+        expect(body, contains('tombstoneForDeletion('));
+        expect(body, isNot(contains('_jobStore.remove(taskId)')));
+        final settled = body.indexOf('_waitForCancelOwnershipRelease(taskId)');
+        final pluginDelete = body.indexOf(
+          'FileDownloader().database.deleteRecordWithId(taskId)',
+        );
+        expect(settled, greaterThanOrEqualTo(0));
+        expect(pluginDelete, greaterThan(settled));
+        expect(
+          body.substring(settled, pluginDelete),
+          contains('DownloadRuntimeOwnership.notOwned'),
+        );
+      },
+    );
 
-    test('delete transaction is service-owned and UI has no lifecycle destruction', () {
-      expect(service, contains('Future<DownloadCommandOutcome> deleteDownloadOutcome('));
-      final removeBody = _methodBody(
-        provider,
-        'Future<void> removeDownloads(List<DownloadItem> items) async {',
-        'void _setOptimisticStatus(',
-      );
-      expect(removeBody, contains('.deleteDownloadOutcome('));
-      expect(
-        removeBody,
-        isNot(contains('FileDownloader().database.deleteRecordWithId')),
-      );
-      expect(removeBody, isNot(contains('removeDownloadMetadata(')));
-      expect(removeBody, isNot(contains('.deleteDownloadedFile(')));
-      expect(removeBody, isNot(contains('file.delete(recursive: true)')));
-    });
+    test(
+      'delete transaction is service-owned and UI has no lifecycle destruction',
+      () {
+        expect(
+          service,
+          contains('Future<DownloadCommandOutcome> deleteDownloadOutcome('),
+        );
+        final removeBody = _methodBody(
+          provider,
+          'Future<void> removeDownloads(List<DownloadItem> items) async {',
+          'void _setOptimisticStatus(',
+        );
+        expect(removeBody, contains('.deleteDownloadOutcome('));
+        expect(
+          removeBody,
+          isNot(contains('FileDownloader().database.deleteRecordWithId')),
+        );
+        expect(removeBody, isNot(contains('removeDownloadMetadata(')));
+        expect(removeBody, isNot(contains('.deleteDownloadedFile(')));
+        expect(removeBody, isNot(contains('file.delete(recursive: true)')));
+      },
+    );
   });
 }

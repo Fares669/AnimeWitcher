@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -482,13 +481,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   Future<void> removeDownloads(List<DownloadItem> items) async {
     if (items.isEmpty) return;
     final downloadService = ref.read(downloadServiceProvider);
-    final storage = ref.read(storageServiceProvider);
     final current = List<DownloadItem>.from(state.value ?? items);
 
-    // Resolve the logical rows synchronously first and hide them before any
-    // filesystem/native await. The old order deleted the file first and, when
-    // an active worker still owned it, `stillExists` caused us to skip cancel
-    // entirely — leaving a stuck row that could never disappear.
     final toRemove = <String, DownloadItem>{};
     for (final requested in items) {
       toRemove[requested.id] = requested;
@@ -499,27 +493,27 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       }
     }
 
-    // Active rows may only disappear after the service proves that every
-    // writer released ownership. Command acknowledgement alone is not enough:
-    // an iOS URLSession/Range writer can still be settling after cancel.
+    // Presentation submits a delete command only. Tombstone persistence,
+    // ownership settlement and DB/metadata/video destruction are service-owned.
     for (final item in toRemove.values) {
-      if (!shouldCancelDownload(item.status)) continue;
-      final trackingUrl = downloadTrackingUrl(item.task);
       final outcome = await downloadService
-          .cancelDownloadOutcome(item.task.taskId, trackingUrl)
+          .deleteDownloadOutcome(
+            item.task,
+            item.item,
+            episode: item.episode,
+            notifyContinuedProcessing: false,
+          )
           .timeout(
             const Duration(seconds: 3),
             onTimeout: () => DownloadCommandOutcome.settlingOwnership,
           );
-      final safeToDestroy = switch (outcome) {
+      final safeToHide = switch (outcome) {
         DownloadCommandOutcome.terminal ||
         DownloadCommandOutcome.alreadyComplete ||
         DownloadCommandOutcome.missingState => true,
         _ => false,
       };
-      if (!safeToDestroy) {
-        // Fail closed. Keep the visible/durable row and all file/metadata
-        // evidence so a later reconcile/retry can finish ownership settlement.
+      if (!safeToHide) {
         state = AsyncData(await _refreshList());
         return;
       }
@@ -530,7 +524,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     for (final id in droppedIds) {
       _lastProgressUiUpdate.remove(id);
     }
-
     if (state.value != null) {
       state = AsyncData(
         state.value!.where((item) => !droppedIds.contains(item.id)).toList(),
@@ -542,51 +535,11 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       ref.read(activeDownloadsProvider.notifier).remove(trackingUrl);
       ref.read(downloadProgressProvider.notifier).remove(trackingUrl);
       ref.read(downloadChunkProgressProvider.notifier).remove(item.id);
-    }
-
-    // Capture possible final/partial paths after ownership release but before
-    // metadata cleanup removes the information needed to find them.
-    final filesToDelete = <String, File>{};
-    for (final item in toRemove.values) {
-      try {
-        final taskPath = await item.task.filePath();
-        if (taskPath.isNotEmpty) filesToDelete[taskPath] = File(taskPath);
-      } catch (_) {}
-      try {
-        final resolved = await downloadService
-            .resolveDownloadedFile(item.task, item.item, episode: item.episode)
-            .timeout(const Duration(milliseconds: 750));
-        if (resolved != null) filesToDelete[resolved.path] = resolved;
-      } catch (_) {}
-    }
-
-    // Ownership is settled above. Destructive DB/Hive/file cleanup is now
-    // safe and remains best-effort so stale presentation artifacts cannot
-    // prevent an otherwise proven logical delete.
-    for (final item in toRemove.values) {
-      try {
-        await FileDownloader().database.deleteRecordWithId(item.task.taskId);
-      } catch (_) {}
-      try {
-        await storage.removeDownloadMetadata(item.task.taskId);
-      } catch (_) {}
+      // Artwork is presentation cache, not lifecycle authority. DM-12 will
+      // remove the remaining presentation-owned cache mutation separately.
       try {
         await deleteDownloadedEpisodeArtwork(item.id);
       } catch (_) {}
-    }
-
-    final deletedPaths = <String>{};
-    for (final file in filesToDelete.values) {
-      if (!deletedPaths.add(file.path)) continue;
-      try {
-        await downloadService
-            .deleteDownloadedFile(file)
-            .timeout(const Duration(seconds: 2));
-      } catch (_) {
-        try {
-          if (await file.exists()) await file.delete(recursive: true);
-        } catch (_) {}
-      }
     }
   }
 

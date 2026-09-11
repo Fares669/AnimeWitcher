@@ -1994,6 +1994,54 @@ class DownloadService {
 
     await _syncQueueToCapUnlocked();
     await _syncSessionOverlay();
+    await _garbageCollectCanceledTombstones();
+  }
+
+  Future<void> _garbageCollectCanceledTombstones() async {
+    final storage = _ref.read(storageServiceProvider);
+    final refreshStore = _ref.read(downloadUrlRefreshStoreProvider);
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
+    for (final job in await _jobStore.all()) {
+      if (job.state != DownloadJobState.canceled) continue;
+      final ownership = await _runtimeOwnershipFor(job.taskId);
+      if (ownership != DownloadRuntimeOwnership.notOwned) continue;
+
+      // Cleanup is idempotent and may be retried on every recovery. It never
+      // runs while a writer might still own the destination.
+      try {
+        await FileDownloader().database.deleteRecordWithId(job.taskId);
+      } catch (_) {}
+      try {
+        await storage.removeDownloadMetadata(job.taskId);
+      } catch (_) {}
+      try {
+        await refreshStore.remove(job.trackingUrl);
+      } catch (_) {}
+      final restored = job.restoreTaskSnapshot();
+      if (restored != null) {
+        try {
+          final path = await restored.filePath();
+          if (path.isNotEmpty) {
+            final file = File(path);
+            if (await file.exists()) await deleteDownloadedFile(file);
+          }
+        } catch (_) {}
+      }
+
+      final pluginRecordAbsent =
+          await FileDownloader().database.recordForId(job.taskId) == null;
+      final metadataAbsent =
+          await storage.getDownloadMetadata(job.taskId) == null;
+      if (downloadCanceledTombstoneEligibleForGc(
+        job,
+        nowMillis: nowMillis,
+        ownershipReleased: true,
+        pluginRecordAbsent: pluginRecordAbsent,
+        metadataAbsent: metadataAbsent,
+      )) {
+        await _jobStore.remove(job.taskId);
+      }
+    }
   }
 
   Future<int> _occupiedSlotCount(List<TaskRecord> records) async {
@@ -3199,53 +3247,63 @@ class DownloadService {
   }) async {
     await _awaitCommandReadiness('cancelDownload');
     diagnosticLog.record('command.cancel', {'taskId': taskId});
-    // Persist terminal intent before stopping any writer. The durable row is
-    // removed only after native/plugin cleanup below has returned; DM-07 will
-    // further extend this into a cleanup-acknowledged tombstone protocol.
+
+    final storage = _ref.read(storageServiceProvider);
     final existingJob = await _jobStore.get(taskId);
     final parentRecord = await FileDownloader().database.recordForId(taskId);
     DownloadTask? cancelTask = parentRecord?.task is DownloadTask
         ? parentRecord!.task as DownloadTask
         : await _liveNativeTaskFor(taskId: taskId, trackingUrl: trackingUrl);
-    if (existingJob != null &&
-        existingJob.state != DownloadJobState.completed) {
-      final cancelOperation = await _jobStore.beginOperation(
-        taskId,
-        state: existingJob.state,
-      );
-      if (cancelOperation == null) {
-        throw StateError('Failed to fence cancel operation for $taskId');
-      }
+
+    // The durable delete fact is written before any executor stop/cancel. The
+    // tombstone itself advances the DM-10 generation fence and is idempotent on
+    // repeated delete commands.
+    DownloadJobRecord? deletionSeed = existingJob;
+    if (deletionSeed == null) {
+      var durableBytes = 0;
+      var expectedBytes = -1;
+      Map<String, dynamic>? taskSnapshot;
+      String? logicalId;
       if (cancelTask != null) {
-        final cancelPersisted = await _checkpointLogicalJob(
-          cancelTask,
+        final saved = await _savedProgressFor(cancelTask);
+        durableBytes = saved.partialBytes > 0 ? saved.partialBytes : 0;
+        expectedBytes = saved.totalSize;
+        taskSnapshot = cancelTask.toJson();
+        logicalId = logicalDownloadIdFromMetadata(
+          await storage.getDownloadMetadata(taskId),
+        );
+      }
+      final stableTrackingUrl = trackingUrl.trim().isNotEmpty
+          ? trackingUrl.trim()
+          : (cancelTask == null ? '' : downloadTrackingUrl(cancelTask));
+      if (stableTrackingUrl.isNotEmpty) {
+        deletionSeed = DownloadJobRecord(
+          taskId: taskId,
+          logicalId: logicalId,
+          trackingUrl: stableTrackingUrl,
           state: DownloadJobState.canceled,
+          generation: 0,
+          durableBytes: durableBytes,
+          durableByteProvenance: durableBytes > 0
+              ? DownloadDurableByteProvenance.exactDisk
+              : DownloadDurableByteProvenance.none,
+          expectedBytes: expectedBytes,
           userPaused: false,
           queueWaiting: false,
+          updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+          taskSnapshot: taskSnapshot,
         );
-        if (!cancelPersisted) {
-          throw StateError('Failed to persist cancel intent for $taskId');
-        }
-      } else {
-        final cancelPersisted = await _jobStore.checkpoint(
-          taskId: existingJob.taskId,
-          trackingUrl: existingJob.trackingUrl,
-          state: DownloadJobState.canceled,
-          durableBytes: existingJob.durableBytes,
-          durableByteProvenance: existingJob.durableByteProvenance,
-          expectedBytes: existingJob.expectedBytes,
-          userPaused: false,
-          queueWaiting: false,
-          fingerprint: existingJob.fingerprint,
-        );
-        if (!cancelPersisted) {
-          throw StateError('Failed to persist cancel intent for $taskId');
-        }
-        _terminalJobIds.add(taskId);
+      }
+    }
+    if (deletionSeed != null) {
+      final tombstone = await _jobStore.tombstoneForDeletion(deletionSeed);
+      if (tombstone == null) {
+        throw StateError('Failed to persist delete tombstone for $taskId');
       }
     }
 
-    // Project the tombstone only after durable cancel intent is secured.
+    // UI/session projections may disappear after the terminal fact is durable,
+    // but destructive storage cleanup stays behind ownership settlement.
     _terminalJobIds.add(taskId);
     _queueWaitingIds.remove(taskId);
     _waitingPayloads.remove(taskId);
@@ -3280,17 +3338,12 @@ class DownloadService {
           'taskId': taskId,
           'settlement': settlement.name,
         });
-        // Do not issue a second bulk cancel for this same single-file owner.
         ids.remove(taskId);
       }
       if (ids.isNotEmpty) {
         await FileDownloader().cancelTasksWithIds(ids.toList());
       }
 
-      // Command acknowledgement is not ownership acknowledgement. Keep the
-      // durable cancel tombstone, plugin row, metadata and Transfer handle if
-      // the runtime oracle cannot independently prove release. A later
-      // reconcile/repeated cancel can settle cleanup safely.
       final cancelOwnership = await _waitForCancelOwnershipRelease(taskId);
       if (cancelOwnership != DownloadRuntimeOwnership.notOwned) {
         diagnosticLog.record('cancel.ownershipUnsettled', {
@@ -3303,16 +3356,17 @@ class DownloadService {
         }
         return;
       }
+
       _nativeTransport.forget(taskId);
       _userPausedIds.remove(taskId);
       _dequeuingPausedIds.remove(taskId);
       _ref.read(activeDownloadsProvider.notifier).remove(trackingUrl);
       _ref.read(downloadProgressProvider.notifier).remove(trackingUrl);
-      // Proactive cleanup
       await FileDownloader().database.deleteRecordWithId(taskId);
-      await _ref.read(storageServiceProvider).removeDownloadMetadata(taskId);
-      await _jobStore.remove(taskId);
+      await storage.removeDownloadMetadata(taskId);
       await _ref.read(downloadUrlRefreshStoreProvider).remove(trackingUrl);
+      // Keep the canceled JobStore row. It is the durable fence against late
+      // complete/running callbacks and is GC'd only by the age+ownership policy.
       await _syncQueueToCapUnlocked();
       if (notifyContinuedProcessing) {
         await _syncSessionOverlay(completedSuccess: false);
@@ -3340,6 +3394,59 @@ class DownloadService {
     final ownership = await _runtimeOwnershipFor(taskId);
     final job = await _jobStore.get(taskId);
     return resolveCancelCommandOutcome(state: job?.state, ownership: ownership);
+  }
+
+  Future<DownloadCommandOutcome> deleteDownloadOutcome(
+    Task task,
+    MultimediaItem item, {
+    Episode? episode,
+    bool notifyContinuedProcessing = true,
+  }) async {
+    final filesToDelete = <String, File>{};
+    try {
+      final directPath = await task.filePath();
+      if (directPath.isNotEmpty) filesToDelete[directPath] = File(directPath);
+    } catch (_) {}
+    try {
+      final resolved = await resolveDownloadedFile(
+        task,
+        item,
+        episode: episode,
+      );
+      if (resolved != null) filesToDelete[resolved.path] = resolved;
+    } catch (_) {}
+
+    final outcome = await cancelDownloadOutcome(
+      task.taskId,
+      downloadTrackingUrl(task),
+      notifyContinuedProcessing: notifyContinuedProcessing,
+    );
+    final safeToDestroy = switch (outcome) {
+      DownloadCommandOutcome.terminal ||
+      DownloadCommandOutcome.alreadyComplete ||
+      DownloadCommandOutcome.missingState => true,
+      _ => false,
+    };
+    if (!safeToDestroy) return outcome;
+
+    final ownership = await _runtimeOwnershipFor(task.taskId);
+    if (ownership != DownloadRuntimeOwnership.notOwned) {
+      return DownloadCommandOutcome.settlingOwnership;
+    }
+
+    var cleanupFailed = false;
+    for (final file in filesToDelete.values) {
+      try {
+        if (await file.exists() && !await deleteDownloadedFile(file)) {
+          cleanupFailed = true;
+        }
+      } catch (_) {
+        cleanupFailed = true;
+      }
+    }
+    return cleanupFailed
+        ? DownloadCommandOutcome.recoverableFailure
+        : DownloadCommandOutcome.terminal;
   }
 
   Future<DownloadCommandOutcome> pauseDownloadOutcome(String taskId) async {

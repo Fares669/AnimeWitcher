@@ -290,7 +290,7 @@
   - **Verification passed:** RED→GREEN service guards, same-size changed-resource rejection, signed-URL rotation acceptance, validator-free prefix proof, weak-ETag rejection, source-refresh integrity/checkpoint tests, recovery/durable-byte regressions, DM-05 authority and DM-24 logical-identity regressions, and analyzer.
 
 
-- [ ] **DM-07 — Make delete a durable tombstone-first ownership-settlement transaction**
+- [x] **DM-07 — Make delete a durable tombstone-first ownership-settlement transaction**
   - **Problem:** UI can hide a row, time out cancel, delete DB/metadata/files, and lose the terminal fact while a worker is still settling.
   - **Root cause:** terminal intent, cancellation, persistence cleanup and filesystem cleanup are split between service and UI.
   - **Severity / priority:** **P0 / Critical.**
@@ -298,6 +298,10 @@
   - **Proposed fix:** persist logical `canceled` tombstone before any ownership mutation; use DM-30 settlement result; perform idempotent cleanup only after ownership is proven gone. Retain/gc tombstones by explicit generation/age policy. UI may hide immediately but does not own destructive cleanup.
   - **Verification/testing:** active/range/multipart/assembly/refresh delete; cancel timeout/false; kill after tombstone; late complete/running callback; repeated delete; failed/notFound-looking row with live owner.
   - **Dependencies:** DM-19, DM-21, DM-30, DM-10.
+  - **Implementation notes (2026-09-11):** User delete now persists a generation-fenced `canceled` JobStore tombstone before any Range/native/multipart cancellation. Destructive plugin DB, metadata, refresh-descriptor and video cleanup occurs only after the runtime ownership oracle proves `notOwned`; the JobStore tombstone remains durable after cleanup. Repeated delete is idempotent, and missing/completed execution rows can be explicitly tombstoned without weakening the generic terminal-state fence.
+  - **Tombstone retention/GC:** canceled tombstones use an explicit 30-day retention policy and may be removed only after age threshold plus independently proven released ownership and absent plugin/metadata projections. Startup reconciliation retries idempotent cleanup for settled tombstones before evaluating GC.
+  - **Confirmed root cause:** the prior cancel path deleted its own JobStore `canceled` row immediately after ownership settlement, while `downloads_provider.dart` separately deleted plugin DB rows, Hive metadata and files. A crash/late callback could therefore outlive the only terminal fact, and presentation code raced the service for destructive cleanup.
+  - **Verification passed:** RED→GREEN explicit completed→canceled deletion tombstone, late-reopen fence, repeated-delete idempotency, missing-row tombstone, age/ownership/projection GC policy, service-owned delete guards, cancel ownership/checkpoint/settlement regressions, DM-10 callback-generation regressions, logical-identity/JobState presentation regressions, analyzer and `git diff --check`.
 
 - [ ] **DM-31 — Make URL-refresh descriptor ownership transactional and generation-aware**
   - **Problem:** `DownloadLauncher` saves a descriptor before `startDownload()` and removes it on a failed result; concurrent/obsolete callers for the same episode can remove the descriptor of a successful/current job.
