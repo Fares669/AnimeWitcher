@@ -5,6 +5,7 @@ on:
     branches: [plan/download-manager-reliability]
     paths:
       - .github/workflows/dm04-manifest-discovery-fix.yml
+      - test/core/services/persistent_parallel_download_manifest_discovery_test.dart
   workflow_dispatch:
 
 permissions:
