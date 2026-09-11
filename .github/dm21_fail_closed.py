@@ -24,21 +24,21 @@ void main() {
     final pause = source.substring(pauseStart, pauseEnd);
     expect(pause.indexOf('final checkpointed = await _checkpointLogicalJob('), greaterThanOrEqualTo(0));
     expect(pause.indexOf('final checkpointed = await _checkpointLogicalJob('), lessThan(pause.indexOf('final stoppedRange = await _rangeTransfers.stop(taskId);')));
-    expect(pause, contains("throw StateError('Failed to persist pause intent for $taskId')"));
+    expect(pause, contains(r"throw StateError('Failed to persist pause intent for $taskId')"));
 
     final resumeStart = source.indexOf('Future<void> _resumeUserPausedUnlocked(String taskId)');
     final resumeEnd = source.indexOf('bool _isOccupyingTaskId(', resumeStart);
     final resume = source.substring(resumeStart, resumeEnd);
     expect(resume.indexOf('final checkpointed = await _checkpointLogicalJob('), greaterThanOrEqualTo(0));
     expect(resume.indexOf('final checkpointed = await _checkpointLogicalJob('), lessThan(resume.indexOf('_userPausedIds.remove(taskId);')));
-    expect(resume, contains("throw StateError('Failed to persist resume intent for $taskId')"));
+    expect(resume, contains(r"throw StateError('Failed to persist resume intent for $taskId')"));
 
     final queueStart = source.indexOf('Future<void> _enqueueExistingTaskAsWaiterUnlocked(DownloadTask task)');
     final queueEnd = source.indexOf('Future<DownloadTask> _adaptiveTaskForFreshStart(', queueStart);
     final queue = source.substring(queueStart, queueEnd);
     expect(queue.indexOf('final checkpointed = await _checkpointLogicalJob('), greaterThanOrEqualTo(0));
     expect(queue.indexOf('final checkpointed = await _checkpointLogicalJob('), lessThan(queue.indexOf('_queueWaitingIds.add(task.taskId);')));
-    expect(queue, contains("throw StateError('Failed to persist queue intent for ${task.taskId}')"));
+    expect(queue, contains(r"throw StateError('Failed to persist queue intent for ${task.taskId}')"));
   });
 }
 '''
@@ -312,7 +312,6 @@ def apply():
     plan = PLAN.read_text()
     marker = '''  - **Dependencies:** DM-20.\n'''
     note = '''  - **Dependencies:** DM-20.\n  - **Implementation status (2026-09-11, control-boundary slice):** `_checkpointLogicalJob` now reports explicit commit/reject/error success instead of swallowing failure as `void`. Queue admission persists `queued` before mutating waiter/metadata/plugin projections; user resume persists `starting` before clearing durable/user-paused projections; user pause persists `pausing` before stopping Range/native ownership. A failed authoritative checkpoint throws before those ownership side effects. Remaining DM-21 work is to audit/fence fresh-start, refresh replacement, completion and cancel/delete boundaries plus direct JobStore writes and add backend reject/throw fault-injection coverage.\n'''
-    # Only replace the DM-21 dependency marker: it is the first exact marker after DM-21.
     dm21 = plan.index('- [ ] **DM-21')
     pos = plan.index(marker, dm21)
     plan = plan[:pos] + plan[pos:].replace(marker, note, 1)
