@@ -50,10 +50,16 @@ jobs:
           dart format lib/core/services/download_job_store.dart lib/core/services/download_service.dart test/core/services/download_job_store_test.dart test/core/services/download_recovery_reconciliation_guard_test.dart
       - name: Test JobStore reconciliation
         run: flutter test test/core/services/download_job_store_test.dart
+      - name: Test JobStore attempt fencing
+        run: flutter test test/core/services/download_job_store_attempt_test.dart
       - name: Test recovery reconciliation guard
         run: flutter test test/core/services/download_recovery_reconciliation_guard_test.dart
-      - name: Test recovery policy
-        run: flutter test test/core/services/download_recovery_policy_test.dart
+      - name: Test recovery fault injection
+        run: flutter test test/core/services/download_recovery_fault_injection_test.dart
+      - name: Test startup reconciliation matrix
+        run: flutter test test/core/services/download_startup_reconciliation_matrix_test.dart
+      - name: Test zero restart invariant
+        run: flutter test test/core/services/download_zero_restart_invariant_test.dart
       - name: Test durable provenance guard
         run: flutter test test/core/services/download_durable_byte_provenance_guard_test.dart
       - name: Test durable byte contract guard
