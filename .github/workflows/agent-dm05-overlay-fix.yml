@@ -1,14 +1,18 @@
-name: Agent DM05 Overlay Fix
+name: Agent DM05 Lifecycle Authority Fix
 
 on:
   push:
     branches:
-      - agent/core-download-state-recovery-dm04-dm16-20260911
+      - plan/download-manager-reliability
     paths:
       - .github/workflows/agent-dm05-overlay-fix.yml
 
 permissions:
   contents: write
+
+concurrency:
+  group: agent-dm05-lifecycle-authority
+  cancel-in-progress: false
 
 jobs:
   fix:
@@ -28,109 +32,410 @@ jobs:
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
           git reset --hard HEAD
-      - name: Apply JobState-first session overlay fix
+      - name: Add DM-05 authority regression
+        run: |
+          cat > test/core/services/download_job_single_authority_test.dart <<'DART'
+          import 'dart:io';
+
+          import 'package:animewitcher/core/services/download_job_state.dart';
+          import 'package:animewitcher/core/services/download_job_store.dart';
+          import 'package:flutter_test/flutter_test.dart';
+
+          class _MemoryBackend implements DownloadJobBackend {
+            final Map<String, Map<String, dynamic>> values = {};
+
+            @override
+            Future<Map<String, dynamic>?> read(String taskId) async {
+              final value = values[taskId];
+              return value == null ? null : Map<String, dynamic>.from(value);
+            }
+
+            @override
+            Future<List<Map<String, dynamic>>> readAll() async =>
+                values.values.map(Map<String, dynamic>.from).toList();
+
+            @override
+            Future<void> write(String taskId, Map<String, Object?> value) async {
+              values[taskId] = Map<String, dynamic>.from(value);
+            }
+
+            @override
+            Future<void> delete(String taskId) async => values.remove(taskId);
+          }
+
+          Map<String, Object?> _rawJob({
+            required int schemaVersion,
+            required String state,
+            bool userPaused = false,
+            bool queueWaiting = false,
+          }) => <String, Object?>{
+            'schemaVersion': schemaVersion,
+            'taskId': 'task-1',
+            'trackingUrl': 'episode://1',
+            'state': state,
+            'generation': 1,
+            'durableBytes': 0,
+            'expectedBytes': 100,
+            'userPaused': userPaused,
+            'queueWaiting': queueWaiting,
+            'updatedAtMillis': 1,
+          };
+
+          void main() {
+            group('DM-05 sole logical lifecycle authority', () {
+              test('store normalizes compatibility flags from DownloadJobState', () async {
+                final store = DownloadJobStore(_MemoryBackend());
+                expect(
+                  await store.put(
+                    const DownloadJobRecord(
+                      taskId: 'task-1',
+                      trackingUrl: 'episode://1',
+                      state: DownloadJobState.running,
+                      generation: 1,
+                      durableBytes: 0,
+                      expectedBytes: 100,
+                      userPaused: true,
+                      queueWaiting: true,
+                      updatedAtMillis: 1,
+                    ),
+                  ),
+                  isTrue,
+                );
+
+                final stored = await store.get('task-1');
+                expect(stored, isNotNull);
+                expect(stored!.state, DownloadJobState.running);
+                expect(stored.userPaused, isFalse);
+                expect(stored.queueWaiting, isFalse);
+              });
+
+              test('legacy pause flag migrates once into explicit logical state', () {
+                final record = DownloadJobRecord.fromJson(
+                  _rawJob(
+                    schemaVersion: 5,
+                    state: 'running',
+                    userPaused: true,
+                  ),
+                );
+                expect(record, isNotNull);
+                expect(record!.state, DownloadJobState.pausedByUser);
+                expect(record.userPaused, isTrue);
+                expect(record.queueWaiting, isFalse);
+              });
+
+              test('current schema ignores stale side flags for a running job', () {
+                final record = DownloadJobRecord.fromJson(
+                  _rawJob(
+                    schemaVersion: 6,
+                    state: 'running',
+                    userPaused: true,
+                    queueWaiting: true,
+                  ),
+                );
+                expect(record, isNotNull);
+                expect(record!.state, DownloadJobState.running);
+                expect(record.userPaused, isFalse);
+                expect(record.queueWaiting, isFalse);
+              });
+
+              test('startup recovery does not let legacy pause metadata override JobStore', () {
+                final source = File(
+                  'lib/core/services/download_service.dart',
+                ).readAsStringSync();
+                expect(
+                  source,
+                  contains(
+                    'final userPaused = oldJob != null\n'
+                    '          ? downloadJobHasUserPauseIntent(oldJob.state)\n'
+                    '          : isUserPausedMetadata(metadata) ||',
+                  ),
+                );
+                expect(source, isNot(contains('oldJob?.userPaused == true')));
+                expect(
+                  source,
+                  isNot(
+                    contains(
+                      '(record.status == TaskStatus.running && stillNative)',
+                    ),
+                  ),
+                );
+              });
+            });
+          }
+          DART
+      - name: Confirm RED before production fix
+        shell: bash
+        run: |
+          set +e
+          flutter test test/core/services/download_job_single_authority_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key > /tmp/dm05-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/dm05-red.log
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected DM-05 regression to be RED before the production fix.' >&2
+            exit 1
+          fi
+      - name: Apply DM-05 single-authority fix
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('lib/core/services/download_service.dart')
-          text = path.read_text()
-          old = """      final leftoverWaiting = _queueWaitingIds.contains(record.task.taskId);
-              final liveRunning = live?.status == TaskStatus.running;
-              final inSession =
-                  _sessionOrder.contains(record.task.taskId) ||
-                  occupiesDownloadSlot(
-                    status: record.status,
-                    queueWaiting: leftoverWaiting,
-                  ) ||
-                  leftoverWaiting ||
-                  liveRunning ||
-                  record.status == TaskStatus.enqueued;
+
+          state_path = Path('lib/core/services/download_job_state.dart')
+          state = state_path.read_text()
+          old = '''bool downloadJobUserPaused(DownloadJobState state) =>
+              state == DownloadJobState.pausedByUser;
+          '''
+          new = '''bool downloadJobUserPaused(DownloadJobState state) =>
+              state == DownloadJobState.pausedByUser;
+
+          /// Durable user-pause intent is part of the logical state machine.
+          /// `pausing` remains user intent until executor ownership is settled.
+          bool downloadJobHasUserPauseIntent(DownloadJobState state) =>
+              state == DownloadJobState.pausing ||
+              state == DownloadJobState.pausedByUser;
+
+          bool downloadJobIsTerminal(DownloadJobState state) =>
+              state == DownloadJobState.completed ||
+              state == DownloadJobState.canceled ||
+              state == DownloadJobState.orphaned;
+
+          /// Migrate pre-DM-05 side flags exactly once into explicit state.
+          /// Pause wins over queue because accidentally resuming a user-paused
+          /// download is less safe than conservatively keeping it paused.
+          DownloadJobState migrateLegacyDownloadJobState({
+            required DownloadJobState state,
+            required bool userPaused,
+            required bool queueWaiting,
+          }) {
+            if (downloadJobIsTerminal(state)) return state;
+            if (userPaused) {
+              return state == DownloadJobState.pausing
+                  ? DownloadJobState.pausing
+                  : DownloadJobState.pausedByUser;
+            }
+            if (queueWaiting) return DownloadJobState.queued;
+            return state;
+          }
+          '''
+          if old not in state:
+              raise SystemExit('DownloadJobState userPaused anchor not found')
+          state_path.write_text(state.replace(old, new, 1))
+
+          store_path = Path('lib/core/services/download_job_store.dart')
+          store = store_path.read_text()
+          store = store.replace(
+              'const int kDownloadJobSchemaVersion = 5;',
+              'const int kDownloadJobSchemaVersion = 6;',
+              1,
+          )
+          old = """    final schemaVersion = _intValue(map['schemaVersion'], fallback: 1);
+              final durableByteProvenance = _durableByteProvenanceValue(
           """
-          new = """      final job = await _jobStore.get(record.task.taskId);
-              // DownloadJobState is authoritative once a durable record exists.
-              // Pre-JobStore migration fallback may still consult executor/UI replicas.
-              final leftoverWaiting = job != null
-                  ? downloadJobQueueWaiting(job.state)
-                  : _queueWaitingIds.contains(record.task.taskId);
-              final liveRunning = live?.status == TaskStatus.running;
-              final occupiesSlot = job != null
-                  ? downloadJobOccupiesSlot(job.state)
-                  : occupiesDownloadSlot(
-                      status: record.status,
-                      queueWaiting: leftoverWaiting,
-                    );
-              final inSession =
-                  _sessionOrder.contains(record.task.taskId) ||
-                  occupiesSlot ||
-                  leftoverWaiting ||
-                  (job == null && liveRunning) ||
-                  (job == null && record.status == TaskStatus.enqueued);
+          new = """    final schemaVersion = _intValue(map['schemaVersion'], fallback: 1);
+              var state = _jobStateValue(map['state']);
+              if (schemaVersion < 6) {
+                state = migrateLegacyDownloadJobState(
+                  state: state,
+                  userPaused: map['userPaused'] == true,
+                  queueWaiting: map['queueWaiting'] == true,
+                );
+              }
+              final durableByteProvenance = _durableByteProvenanceValue(
           """
-          if old not in text:
-              raise SystemExit('DM05 overlay classification target not found')
-          text = text.replace(old, new, 1)
-          old = """      final displayStatus = displayDownloadStatus(
-                persisted: liveRunning ? TaskStatus.running : record.status,
-                queueWaiting: leftoverWaiting && !liveRunning,
+          if old not in store:
+              raise SystemExit('JobStore schema anchor not found')
+          store = store.replace(old, new, 1)
+          store = store.replace("      state: _jobStateValue(map['state']),", "      state: state,", 1)
+          store = store.replace(
+              "      userPaused: map['userPaused'] == true,\n      queueWaiting: map['queueWaiting'] == true,",
+              "      userPaused: downloadJobHasUserPauseIntent(state),\n      queueWaiting: downloadJobQueueWaiting(state),",
+              1,
+          )
+          store = store.replace(
+              "    'userPaused': userPaused,\n    'queueWaiting': queueWaiting,",
+              "    'userPaused': downloadJobHasUserPauseIntent(state),\n    'queueWaiting': downloadJobQueueWaiting(state),",
+              1,
+          )
+          old = '''    final durable = next.copyWith(
+                logicalId: incomingLogicalId ?? currentLogicalId,
+                durableByteProvenance: _normalizedDurableByteProvenance(
+          '''
+          new = '''    final durable = next.copyWith(
+                logicalId: incomingLogicalId ?? currentLogicalId,
+                // Compatibility flags are persisted projections only. They can
+                // never contradict or override the logical lifecycle state.
+                userPaused: downloadJobHasUserPauseIntent(next.state),
+                queueWaiting: downloadJobQueueWaiting(next.state),
+                durableByteProvenance: _normalizedDurableByteProvenance(
+          '''
+          if old not in store:
+              raise SystemExit('JobStore durable normalization anchor not found')
+          store_path.write_text(store.replace(old, new, 1))
+
+          service_path = Path('lib/core/services/download_service.dart')
+          service = service_path.read_text()
+          old = '''      final paused =
+                  job.userPaused ||
+                  job.state == DownloadJobState.pausing ||
+                  job.state == DownloadJobState.pausedByUser;
+              final terminal =
+                  job.state == DownloadJobState.completed ||
+                  job.state == DownloadJobState.canceled ||
+                  job.state == DownloadJobState.orphaned;
+              if (paused) _userPausedIds.add(job.taskId);
+              if (job.queueWaiting || job.state == DownloadJobState.queued) {
+                _queueWaitingIds.add(job.taskId);
+              }
+              if (terminal) _terminalJobIds.add(job.taskId);
+          '''
+          new = '''      final paused = downloadJobHasUserPauseIntent(job.state);
+              final terminal = downloadJobIsTerminal(job.state);
+              if (paused) _userPausedIds.add(job.taskId);
+              if (downloadJobQueueWaiting(job.state)) {
+                _queueWaitingIds.add(job.taskId);
+              }
+              if (terminal) _terminalJobIds.add(job.taskId);
+          '''
+          if old not in service:
+              raise SystemExit('restoreAuthoritativeJobIntent anchor not found')
+          service = service.replace(old, new, 1)
+
+          old = '''      final queueWaiting = oldJob == null
+                  ? legacyQueueWaiting
+                  : oldJob.queueWaiting || oldJob.state == DownloadJobState.queued;
+          '''
+          new = '''      final queueWaiting = oldJob == null
+                  ? legacyQueueWaiting
+                  : downloadJobQueueWaiting(oldJob.state);
+          '''
+          if old not in service:
+              raise SystemExit('recovery queue authority anchor not found')
+          service = service.replace(old, new, 1)
+
+          old = '''      final userPaused =
+                  isUserPausedMetadata(metadata) ||
+                  _userPausedIds.contains(task.taskId) ||
+                  oldJob?.userPaused == true ||
+                  oldJob?.state == DownloadJobState.pausedByUser ||
+                  oldJob?.state == DownloadJobState.pausing;
+          '''
+          new = '''      final userPaused = oldJob != null
+                  ? downloadJobHasUserPauseIntent(oldJob.state)
+                  : isUserPausedMetadata(metadata) ||
+                        _userPausedIds.contains(task.taskId);
+          '''
+          if old not in service:
+              raise SystemExit('recovery user-pause authority anchor not found')
+          service = service.replace(old, new, 1)
+
+          service = service.replace(
+              '        userPaused: userPaused,\n        queueWaiting: recoveryPlan.shouldRequeue,',
+              '        userPaused: downloadJobHasUserPauseIntent(recoveryPlan.state),\n        queueWaiting: downloadJobQueueWaiting(recoveryPlan.state),',
+              1,
+          )
+
+          old = '''      final showAsWaiting = _queueWaitingIds.contains(task.taskId);
+              final showAsRunning =
+                  !userPaused &&
+                  ((record.status == TaskStatus.running && stillNative) ||
+                      (shouldContinue && !showAsWaiting));
+              _publishProgress(
+                trackingUrl: trackingUrl,
+                taskId: task.taskId,
+                progress: progress,
+                totalSize: expectedBytes,
+                status: showAsWaiting
+                    ? TaskStatus.enqueued
+                    : ((userPaused && userPauseSettled)
+                          ? TaskStatus.paused
+                          : (showAsRunning
+                                ? TaskStatus.running
+                                : (stillNative && wasRunning
+                                      ? record.status
+                                      : TaskStatus.paused))),
               );
-          """
-          new = """      final displayStatus = job != null
-                  ? downloadJobDisplayStatus(job.state)
-                  : displayDownloadStatus(
-                      persisted: liveRunning ? TaskStatus.running : record.status,
-                      queueWaiting: leftoverWaiting && !liveRunning,
-                    );
-          """
-          if old not in text:
-              raise SystemExit('DM05 overlay display target not found')
-          text = text.replace(old, new, 1)
-          old = """    for (final payload in _waitingPayloads.entries) {
-              if (seen.contains(payload.key)) continue;
-              _rememberSessionTask(payload.key);
-              entries.add(
-                DownloadOverlayEntry(
-                  taskId: payload.key,
-                  status: TaskStatus.enqueued,
-                  displayName: payload.value['displayName'] as String? ?? '',
-                  queueWaiting: true,
-          """
-          new = """    for (final payload in _waitingPayloads.entries) {
-              if (seen.contains(payload.key)) continue;
-              final job = await _jobStore.get(payload.key);
-              if (job != null && !downloadJobQueueWaiting(job.state)) continue;
-              _rememberSessionTask(payload.key);
-              entries.add(
-                DownloadOverlayEntry(
-                  taskId: payload.key,
-                  status: job != null
-                      ? downloadJobDisplayStatus(job.state)
-                      : TaskStatus.enqueued,
-                  displayName: payload.value['displayName'] as String? ?? '',
-                  queueWaiting: job != null
-                      ? downloadJobQueueWaiting(job.state)
-                      : true,
-          """
-          if old not in text:
-              raise SystemExit('DM05 waiting overlay target not found')
-          text = text.replace(old, new, 1)
-          path.write_text(text)
+          '''
+          new = '''      final projectedJob = await _jobStore.get(task.taskId);
+              final projectedState = projectedJob?.state ?? recoveryPlan.state;
+              _publishProgress(
+                trackingUrl: trackingUrl,
+                taskId: task.taskId,
+                progress: progress,
+                totalSize: expectedBytes,
+                status: downloadJobDisplayStatus(projectedState),
+              );
+          '''
+          if old not in service:
+              raise SystemExit('recovery display projection anchor not found')
+          service = service.replace(old, new, 1)
+
+          old = '''          state: _userPausedIds.contains(task.taskId)
+                      ? DownloadJobState.pausedByUser
+                      : DownloadJobState.interrupted,
+          '''
+          new = '''          state: downloadJobHasUserPauseIntent(
+                    (await _jobStore.get(task.taskId))?.state ??
+                        DownloadJobState.interrupted,
+                  )
+                      ? DownloadJobState.pausedByUser
+                      : DownloadJobState.interrupted,
+          '''
+          if old not in service:
+              raise SystemExit('Range paused authority anchor not found')
+          service = service.replace(old, new, 1)
+          service_path.write_text(service)
+
+          plan_path = Path('DOWNLOAD_MANAGER_PLAN.md')
+          plan = plan_path.read_text()
+          marker = '- [ ] **DM-05 — Make `DownloadJobState` the sole logical lifecycle authority**'
+          if marker not in plan:
+              raise SystemExit('DM-05 checklist marker not found')
+          plan = plan.replace(marker, marker.replace('[ ]', '[x]'), 1)
+          anchor = '  - **Dependencies:** DM-03, DM-04.\n\n- [ ] **DM-24'
+          notes = '''  - **Dependencies:** DM-03, DM-04.
+              - **Implementation notes (2026-09-11):** JobStore schema v6 makes `DownloadJobState` the only durable lifecycle authority. `userPaused` and `queueWaiting` remain compatibility fields but are derived from state on every write/read; schema-v5 side flags migrate once into explicit state. Startup recovery now ignores stale plugin/metadata pause/queue flags whenever a JobStore row exists, and recovery UI status is projected from the latest logical state instead of executor `TaskStatus`.
+              - **Confirmed root cause:** the recovery planner had already been made JobState-first, but `_recoverPersistedDownloads()` recomputed `userPaused` from legacy metadata/in-memory flags afterward and persisted that contradictory flag into the migrated job. A stale `userPaused=true` could therefore turn an authoritative running job back into pause behavior after relaunch. JobStore also allowed state/side-flag contradictions to be serialized.
+              - **Verification passed:** RED→GREEN JobStore authority/migration regression, startup-recovery authority source guard, existing DM-05 state/queue/provider regressions, JobStore tests, startup reconciliation matrix, runtime ownership/recovery inventory/durable-only recovery suites, and `flutter analyze --no-fatal-warnings --no-fatal-infos`.
+
+          - [ ] **DM-24'''
+          if anchor not in plan:
+              raise SystemExit('DM-05 notes insertion anchor not found')
+          plan_path.write_text(plan.replace(anchor, notes, 1))
           PY
-          dart format lib/core/services/download_service.dart
-      - name: Green regression
+          dart format \
+            lib/core/services/download_job_state.dart \
+            lib/core/services/download_job_store.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_job_single_authority_test.dart
+      - name: DM-05 focused GREEN regressions
         run: >-
           flutter test
-          test/core/services/download_job_state_queue_authority_test.dart
+          test/core/services/download_job_single_authority_test.dart
+          test/core/services/download_job_store_test.dart
           test/core/services/download_job_state_authority_test.dart
+          test/core/services/download_job_state_queue_authority_test.dart
           test/features/library/presentation/downloads_job_state_authority_test.dart
+          test/core/services/download_concurrency_test.dart
+          test/core/services/download_startup_reconciliation_matrix_test.dart
+          test/core/services/download_runtime_ownership_test.dart
+          test/core/services/download_recovery_inventory_test.dart
+          test/core/services/download_durable_only_recovery_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
       - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
-      - name: Commit fix and remove one-shot workflow
+      - name: Commit DM-05 fix and remove one-shot artifacts
         run: |
           git rm .github/workflows/agent-dm05-overlay-fix.yml
+          git rm -f .github/scripts/dm05_state_authority_patch.py || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add lib/core/services/download_service.dart
+          git add \
+            DOWNLOAD_MANAGER_PLAN.md \
+            lib/core/services/download_job_state.dart \
+            lib/core/services/download_job_store.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_job_single_authority_test.dart
           git diff --cached --check
-          git commit -m "fix(downloads): make session overlay JobState-first"
-          git push origin HEAD:agent/core-download-state-recovery-dm04-dm16-20260911
+          git commit -m "fix(downloads): make JobState the lifecycle authority"
+          git push origin HEAD:plan/download-manager-reliability
