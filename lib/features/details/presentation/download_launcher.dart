@@ -312,7 +312,7 @@ class DownloadLauncher {
                     ),
                   );
 
-                  final started = await downloadService.startDownload(
+                  final outcome = await downloadService.startDownloadOutcome(
                     url: stream.url,
                     filename: filename,
                     directory: saveDir,
@@ -322,21 +322,49 @@ class DownloadLauncher {
                     headers: stream.headers,
                     totalBytes: metadata.size ?? -1,
                   );
+                  final accepted = switch (outcome) {
+                    DownloadCommandOutcome.running ||
+                    DownloadCommandOutcome.attached ||
+                    DownloadCommandOutcome.queued ||
+                    DownloadCommandOutcome.alreadyComplete => true,
+                    _ => false,
+                  };
 
-                  if (!started) {
+                  if (!accepted) {
                     await refreshStore.remove(resolveUrl);
                   }
-                  if (!started && finalContext.mounted) {
-                    _ref
-                        .read(notificationServiceProvider)
-                        .showError(
-                          appText(
-                            finalContext,
-                            english:
-                                'Failed to start download. Check storage permissions.',
-                            arabic: 'فشل بدء التنزيل. تحقق من أذونات التخزين.',
-                          ),
-                        );
+                  if (!accepted && finalContext.mounted) {
+                    final message = switch (outcome) {
+                      DownloadCommandOutcome.serviceUnavailable => appText(
+                        finalContext,
+                        english:
+                            'The download service is not ready yet. Please try again.',
+                        arabic:
+                            'خدمة التنزيل غير جاهزة بعد. حاول مرة أخرى.',
+                      ),
+                      DownloadCommandOutcome.restartRequired => appText(
+                        finalContext,
+                        english:
+                            'The download needs the app to restart before it can continue.',
+                        arabic:
+                            'يحتاج التنزيل إلى إعادة تشغيل التطبيق قبل المتابعة.',
+                      ),
+                      DownloadCommandOutcome.settlingOwnership => appText(
+                        finalContext,
+                        english:
+                            'The previous download worker is still stopping. Please retry shortly.',
+                        arabic:
+                            'ما زال عامل التنزيل السابق يتوقف. حاول مرة أخرى بعد قليل.',
+                      ),
+                      _ => appText(
+                        finalContext,
+                        english:
+                            'Failed to start download. Please retry or select another source.',
+                        arabic:
+                            'فشل بدء التنزيل. حاول مجددًا أو اختر مصدرًا آخر.',
+                      ),
+                    };
+                    _ref.read(notificationServiceProvider).showError(message);
                   }
                 },
                 child: Text(l10n.downloadNow),
