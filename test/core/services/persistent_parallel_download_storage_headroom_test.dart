@@ -117,19 +117,16 @@ void main() {
       await expandFreshTo(5);
       expect(starts, hasLength(5));
 
-      // Materialize every byte before creating storage pressure. This models
-      // the exact DM-27 boundary: verified parts fit, but a second full-size
-      // staging artifact does not.
-      for (final task in starts) {
+      // Materialize and acknowledge the first four ranges. Keep the final
+      // range absent until storage pressure is in place so exact-size disk
+      // adoption cannot race ahead and assemble before the ENOSPC boundary.
+      for (final task in starts.take(4)) {
         final file = File(await task.filePath());
         await file.parent.create(recursive: true);
         await file.writeAsBytes(
           List<int>.filled(rangeSize(task), 7),
           flush: true,
         );
-      }
-
-      for (final task in starts.take(4)) {
         coordinator.handleUpdate(TaskStatusUpdate(task, TaskStatus.complete));
         await Future<void>.delayed(Duration.zero);
       }
@@ -144,17 +141,17 @@ void main() {
       expect(lines.length, greaterThanOrEqualTo(2));
       final columns = lines.last.trim().split(RegExp(r'\s+'));
       final availableKiB = int.parse(columns[3]);
-      const reserveKiB = 4;
+      const leaveBeforeFinalPartKiB = 8;
       expect(
         availableKiB,
-        greaterThan(reserveKiB + 16),
+        greaterThan(leaveBeforeFinalPartKiB + 16),
         reason: 'CI bounded tmpfs must have enough room for verified parts',
       );
 
       final filler = File('${directory.path}.filler');
       final output = await filler.open(mode: FileMode.write);
       try {
-        var remaining = (availableKiB - reserveKiB) * 1024;
+        var remaining = (availableKiB - leaveBeforeFinalPartKiB) * 1024;
         final block = List<int>.filled(1024 * 1024, 3);
         while (remaining > 0) {
           final count = math.min(remaining, block.length);
@@ -166,13 +163,26 @@ void main() {
         await output.close();
       }
 
+      final lastTask = starts.last;
+      final lastFile = File(await lastTask.filePath());
+      await lastFile.parent.create(recursive: true);
+      await lastFile.writeAsBytes(
+        List<int>.filled(rangeSize(lastTask), 7),
+        flush: true,
+      );
+
       final partFiles = <File>[
         for (final task in starts) File(await task.filePath()),
       ];
       final target = File(await parent.filePath());
+      expect(
+        await target.exists(),
+        isFalse,
+        reason: 'assembly must not happen before the final completion signal',
+      );
 
       coordinator.handleUpdate(
-        TaskStatusUpdate(starts.last, TaskStatus.complete),
+        TaskStatusUpdate(lastTask, TaskStatus.complete),
       );
       await Future<void>.delayed(const Duration(milliseconds: 150));
 
