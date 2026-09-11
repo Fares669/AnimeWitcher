@@ -29,12 +29,12 @@ jobs:
           marker = '\n\n## Phase 2 — One logical state, canonical identity, integrity, and terminal deletion'
           if text.count(marker) != 1:
               raise SystemExit('DM-04 phase boundary not found uniquely')
-          notes = '''
-  - **Implementation notes (2026-09-11):** Startup recovery now builds one deterministic inventory from plugin DB records, live runtime/native ownership, JobStore task snapshots, presentation metadata and multipart manifest descriptors. Stronger executor evidence wins duplicate execution identities; JobStore/metadata/manifest-only rows are reconstructed once, missing presentation identity becomes explicit orphan/settling state, and unresolved legacy manifests settle known child writers instead of fabricating a parent. Exact disk/manifest byte reconciliation remains provenance-bound and generation-fenced.
-  - **Confirmed root cause:** startup enumeration was historically downloader-DB-first, so loss of a plugin row could hide a still-recoverable logical download even when durable JobStore, metadata, manifest or live ownership evidence survived.
-  - **Verification passed:** Agent Core Download State Verify run `34602555933` passed `flutter analyze --no-fatal-warnings --no-fatal-infos` plus recovery inventory, durable-only recovery, missing-presentation settlement, manifest-startup inventory, recovery reconciliation/snapshot, runtime ownership, and relevant multipart manifest discovery/durability regressions.
-'''
-          text = text.replace(marker, '\n' + notes + marker, 1)
+          notes = (
+              '  - **Implementation notes (2026-09-11):** Startup recovery now builds one deterministic inventory from plugin DB records, live runtime/native ownership, JobStore task snapshots, presentation metadata and multipart manifest descriptors. Stronger executor evidence wins duplicate execution identities; JobStore/metadata/manifest-only rows are reconstructed once, missing presentation identity becomes explicit orphan/settling state, and unresolved legacy manifests settle known child writers instead of fabricating a parent. Exact disk/manifest byte reconciliation remains provenance-bound and generation-fenced.\n'
+              '  - **Confirmed root cause:** startup enumeration was historically downloader-DB-first, so loss of a plugin row could hide a still-recoverable logical download even when durable JobStore, metadata, manifest or live ownership evidence survived.\n'
+              '  - **Verification passed:** Agent Core Download State Verify run `34602555933` passed `flutter analyze --no-fatal-warnings --no-fatal-infos` plus recovery inventory, durable-only recovery, missing-presentation settlement, manifest-startup inventory, recovery reconciliation/snapshot, runtime ownership, and relevant multipart manifest discovery/durability regressions.\n'
+          )
+          text = text.replace(marker, '\n\n' + notes + marker, 1)
           path.write_text(text)
           PY
           git rm .github/workflows/agent-core-download-state-verify.yml
