@@ -114,6 +114,12 @@ service = replace_once(
     '',
     'remove restack timer fence',
 )
+service = replace_once(
+    service,
+    '    occupying.removeAll(_restackingWaiterIds);\n',
+    '',
+    'remove restack occupied-slot timer projection',
+)
 
 service = replace_once(
     service,
@@ -287,8 +293,6 @@ retain_replacement = """  Future<void> _retainLiveNativeOrPause(
 """
 service = replace_once(service, retain_anchor, retain_replacement, 'terminal callback logical state fence')
 
-# Cancel: advance generation before any executor effect while preserving the
-# existing write-ahead canceled checkpoint required by DM-21.
 cancel_checkpoint_anchor = """    if (existingJob != null &&
         existingJob.state != DownloadJobState.completed) {
       if (cancelTask != null) {
@@ -305,12 +309,7 @@ cancel_checkpoint_replacement = """    if (existingJob != null &&
       if (cancelTask != null) {
 """
 service = replace_once(service, cancel_checkpoint_anchor, cancel_checkpoint_replacement, 'cancel generation')
-service = replace_once(
-    service,
-    '    _cancellingUrls.add(trackingUrl);\n',
-    '',
-    'cancel URL projection removal',
-)
+service = replace_once(service, '    _cancellingUrls.add(trackingUrl);\n', '', 'cancel URL projection removal')
 
 service = replace_once(
     service,
@@ -344,9 +343,6 @@ service = replace_once(
     'cancel remove 500ms suppression',
 )
 
-# Pause: persist intent, then advance generation before stopping ownership. The
-# settle acknowledgement commits through the token so a superseded pause cannot
-# overwrite a later resume.
 pause_checkpoint = """        if (!checkpointed) {
           throw StateError('Failed to persist pause intent for $taskId');
         }
@@ -390,8 +386,6 @@ pause_final_replacement = """        final pauseCommitted = await _jobStore.upda
 """
 service = replace_once(service, pause_final, pause_final_replacement, 'pause ack commit')
 
-# Resume command generation. _resumeDownloadTask advances again when it actually
-# establishes a new executor attempt.
 resume_checkpoint = """    if (!checkpointed) {
       throw StateError('Failed to persist resume intent for $taskId');
     }
@@ -467,15 +461,10 @@ new_restack = """  Future<List<String>> _cancelNativeWaitersForRestackUnlocked(
   ) async {
     if (ids.isEmpty) return const <String>[];
 
-    // Advance the durable generation before canceling the old waiter identity.
-    // This makes token-aware callbacks stale immediately. A waiter is eligible
-    // for re-enqueue only after the runtime oracle independently acknowledges
-    // that the old owner is gone.
     final ready = <String>[];
     for (final id in ids) {
       final job = await _jobStore.get(id);
       if (job == null) {
-        // Migration-only fallback: no durable generation exists yet.
         ready.add(id);
         continue;
       }
@@ -524,8 +513,6 @@ new_restack = """  Future<List<String>> _cancelNativeWaitersForRestackUnlocked(
 """
 service = replace_once(service, old_restack, new_restack, 'restack ownership acknowledgement')
 
-# Every actual resume/retry establishes a fresh durable execution generation
-# after live-owner adoption has already been ruled out.
 resume_task_anchor = """    if (live != null) {
       final record = await FileDownloader().database.recordForId(live.taskId);
       if (record != null && isLiveNativeDownloadStatus(record.status)) {
@@ -557,8 +544,6 @@ resume_task_replacement = """    if (live != null) {
 """
 service = replace_once(service, resume_task_anchor, resume_task_replacement, 'resume execution generation')
 
-# Fresh starts also get an execution generation immediately before ownership is
-# handed to the executor.
 fresh_start_anchor = """        _updatesController.add(
           TaskStatusUpdate(transferTask, TaskStatus.enqueued),
         );
@@ -580,8 +565,6 @@ fresh_start_replacement = """        _updatesController.add(
 """
 service = replace_once(service, fresh_start_anchor, fresh_start_replacement, 'fresh execution generation')
 
-# Source replacement advances generation after the durable identity boundary and
-# before changing executor/manifest identity.
 refresh_anchor = """    if (!refreshCheckpointed) {
       throw StateError(
         'Failed to persist source refresh boundary for ${task.taskId}',
