@@ -12,10 +12,12 @@ void main() {
   test(
     'DM-27 assembly disk-full preserves verified parts and can resume',
     () async {
-      final shm = Directory('/dev/shm');
-      if (!Platform.isLinux || !await shm.exists()) return;
+      final rootPath = Platform.environment['DM27_TEST_ROOT'];
+      if (!Platform.isLinux || rootPath == null || rootPath.isEmpty) return;
+      final root = Directory(rootPath);
+      if (!await root.exists()) return;
 
-      final directory = await shm.createTemp('animewitcher-dm27-');
+      final directory = await root.createTemp('animewitcher-dm27-');
       final records = <String, TaskRecord>{};
       final starts = <DownloadTask>[];
       final statuses = <TaskStatus>[];
@@ -122,7 +124,11 @@ void main() {
       final columns = lines.last.trim().split(RegExp(r'\s+'));
       final availableKiB = int.parse(columns[3]);
       const reserveKiB = 256;
-      if (availableKiB <= reserveKiB + 1024) return;
+      expect(
+        availableKiB,
+        greaterThan(reserveKiB + 1024),
+        reason: 'CI must provide a bounded tmpfs with enough room for parts',
+      );
 
       final filler = File('${directory.path}.filler');
       final output = await filler.open(mode: FileMode.write);
