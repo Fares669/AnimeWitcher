@@ -1,0 +1,61 @@
+name: DM03 Logical Start Outcomes
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - '.github/workflows/dm03-start-outcomes.yml'
+      - '.github/dm03_start_outcome.py'
+
+permissions:
+  contents: write
+
+jobs:
+  dm03-start:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Prove old service API lacks typed start outcome
+        shell: bash
+        run: |
+          set +e
+          grep -q 'Future<DownloadCommandOutcome> startDownloadOutcome' lib/core/services/download_service.dart
+          code=$?
+          test "$code" -ne 0
+      - name: Apply DM-03 logical start outcome
+        run: |
+          python3 .github/dm03_start_outcome.py
+          dart format lib/core/services/download_service.dart test/core/services/download_command_outcome_test.dart test/core/services/download_start_outcome_guard_test.dart
+      - name: Verify command outcome matrix and start contract
+        run: flutter test test/core/services/download_command_outcome_test.dart test/core/services/download_start_outcome_guard_test.dart
+      - name: Verify transport, cancellation, ownership and queue regressions
+        run: |
+          flutter test test/core/services/download_transport_outcome_test.dart
+          flutter test test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart
+          flutter test test/core/services/download_runtime_ownership_test.dart
+          flutter test test/core/services/download_lifecycle_checkpoint_guard_test.dart
+          flutter test test/core/services/download_recovery_reconciliation_guard_test.dart
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Commit partial DM-03 service progress
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+Fares669@users.noreply.github.com"
+          git rm .github/workflows/dm03-start-outcomes.yml .github/dm03_start_outcome.py
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart test/core/services/download_command_outcome_test.dart test/core/services/download_start_outcome_guard_test.dart
+          git diff --cached --check
+          git commit -m "refactor: expose typed download start outcomes"
+          git push origin HEAD:plan/download-manager-reliability
