@@ -28,6 +28,7 @@ jobs:
       - name: Add tests
         run: |
           python3 .github/dm21_finish.py tests
+          python3 .github/dm21_fix_guard.py
           dart format test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_checkpoint_commit_result_test.dart
       - name: Prove RED source boundary
         run: |
@@ -52,7 +53,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/dm21-finish.yml .github/dm21_finish.py
+          git rm .github/workflows/dm21-finish.yml .github/dm21_finish.py .github/dm21_fix_guard.py
           git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_checkpoint_commit_result_test.dart test/core/services/download_lifecycle_checkpoint_guard_test.dart
           git diff --cached --check
           git commit -m "fix: fail closed on remaining download lifecycle boundaries"
