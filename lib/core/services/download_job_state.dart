@@ -60,6 +60,21 @@ class DownloadRecoveryInventory {
   final Set<String> durableOnlyTaskIds;
 }
 
+enum DownloadDurableOnlyRecoveryDisposition { recover, orphan }
+
+/// A durable JobStore row is safe to revive only when both execution and
+/// presentation identities survived. A task snapshot alone can restart bytes,
+/// but without AnimeWitcher metadata the episode cannot be projected back into
+/// the user-visible downloads inventory.
+DownloadDurableOnlyRecoveryDisposition planDurableOnlyRecoveryDisposition({
+  required bool hasPresentationMetadata,
+  required bool hasRecoverableTaskDescriptor,
+}) {
+  return hasPresentationMetadata && hasRecoverableTaskDescriptor
+      ? DownloadDurableOnlyRecoveryDisposition.recover
+      : DownloadDurableOnlyRecoveryDisposition.orphan;
+}
+
 /// Build one deterministic startup inventory from every source that can carry
 /// a complete logical task descriptor. Source precedence is deliberate:
 /// persisted executor projection > live runtime ownership > durable snapshot.
