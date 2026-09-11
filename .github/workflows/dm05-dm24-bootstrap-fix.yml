@@ -34,11 +34,13 @@ jobs:
         run: |
           python3 .github/scripts/dm05_queue_authority_patch.py
           python3 .github/scripts/dm24_jobstore_patch.py
+          python3 .github/scripts/dm24_metadata_identity_patch.py
           dart format \
             lib/core/services/download_job_state.dart \
             lib/core/services/download_service.dart \
             lib/core/services/download_job_store.dart \
-            lib/core/services/download_logical_identity.dart
+            lib/core/services/download_logical_identity.dart \
+            lib/core/storage/storage_service.dart
       - name: Run authority and identity regressions
         run: >-
           flutter test
@@ -50,6 +52,7 @@ jobs:
           test/core/services/download_recovery_inventory_test.dart
           test/core/services/download_runtime_ownership_test.dart
           test/core/services/download_logical_identity_test.dart
+          test/core/services/download_logical_identity_persistence_test.dart
           test/core/services/download_job_logical_identity_test.dart
           test/core/services/download_job_store_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
@@ -62,7 +65,9 @@ jobs:
           expected="$(printf '%s\n' \
             lib/core/services/download_job_state.dart \
             lib/core/services/download_job_store.dart \
-            lib/core/services/download_service.dart | sort)"
+            lib/core/services/download_logical_identity.dart \
+            lib/core/services/download_service.dart \
+            lib/core/storage/storage_service.dart | sort)"
           test "$changed" = "$expected"
       - name: Commit implementation
         run: |
@@ -71,7 +76,9 @@ jobs:
           git add \
             lib/core/services/download_job_state.dart \
             lib/core/services/download_job_store.dart \
-            lib/core/services/download_service.dart
+            lib/core/services/download_logical_identity.dart \
+            lib/core/services/download_service.dart \
+            lib/core/storage/storage_service.dart
           git commit -m "fix(downloads): establish logical state and identity authority"
           git pull --rebase origin plan/download-manager-reliability
           git push origin HEAD:plan/download-manager-reliability
