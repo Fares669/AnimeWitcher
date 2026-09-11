@@ -525,6 +525,19 @@ enum DownloadNativeWaitingQueue {
     ].contains(code)
   }
 
+  static func isNetworkUnavailableBackgroundTransportErrorCode(_ code: Int) -> Bool {
+    [
+      -1003, // cannot find host
+      -1004, // cannot connect to host
+      -1005, // network connection lost
+      -1006, // DNS lookup failed
+      -1009, // not connected to Internet
+      -1018, // international roaming off
+      -1019, // call is active
+      -1020, // data not allowed
+    ].contains(code)
+  }
+
   static func backgroundRetryDelay(forConsecutiveFailure failure: Int) -> TimeInterval {
     switch max(failure, 1) {
     case 1: return 1
@@ -588,6 +601,18 @@ enum DownloadNativeWaitingQueue {
     guard nsError.domain == NSURLErrorDomain,
           isRetryableBackgroundTransportErrorCode(nsError.code)
     else {
+      return false
+    }
+
+    if isNetworkUnavailableBackgroundTransportErrorCode(nsError.code) {
+      DownloadNativeDiagnosticLog.record(
+        "background.networkHold",
+        task: task,
+        error: error
+      )
+      // Do not spend the bounded server/transport retry budget while the
+      // device has no usable network. The plugin surfaces this settlement and
+      // Dart's durable waitingForNetwork state resumes it on connectivity.
       return false
     }
 

@@ -54,14 +54,10 @@ void main() {
     );
   });
 
-  test('connection failure is retryable without an HTTP status', () {
-    final decision = planDownloadFailure(
-      connectionFailure: true,
-      retryIndex: 0,
-      jitterUnit: 0.5,
-    );
-    expect(decision.action, DownloadFailureAction.retry);
-    expect(decision.delay, kDownloadRetryBaseDelay);
+  test('connection failure enters network hold without backoff budget', () {
+    final decision = planDownloadFailure(connectionFailure: true);
+    expect(decision.action, DownloadFailureAction.waitForNetwork);
+    expect(decision.delay, Duration.zero);
   });
 
   test('disk full stops explicitly and wins over retryable status', () {

@@ -64,15 +64,18 @@ void main() {
   });
 
   group('DM-09 cross-transport ownership', () {
-    test('service observes connectivity and reconciles held jobs through fencing', () {
-      final source = File('lib/core/services/download_service.dart')
-          .readAsStringSync();
-      expect(source, contains('connectivity_plus'));
-      expect(source, contains('onConnectivityChanged'));
-      expect(source, contains('DownloadJobState.waitingForNetwork'));
-      expect(source, contains('_resumeNetworkHeldDownloads'));
-      expect(source, contains('_jobStore.beginOperation('));
-    });
+    test(
+      'service observes connectivity and reconciles held jobs through fencing',
+      () {
+        final source = File('lib/core/services/download_service.dart')
+            .readAsStringSync();
+        expect(source, contains('connectivity_plus'));
+        expect(source, contains('onConnectivityChanged'));
+        expect(source, contains('DownloadJobState.waitingForNetwork'));
+        expect(source, contains('_resumeNetworkHeldDownloads'));
+        expect(source, contains('_jobStore.beginOperation('));
+      },
+    );
 
     test('iOS offline errors do not consume background retry budget', () {
       final source = File('ios/Runner/DownloadNativeWaitingQueue.swift')
@@ -86,7 +89,10 @@ void main() {
       final retryStart = source.indexOf(
         'static func retryBackgroundTransferIfNeeded(',
       );
-      final hookStart = source.indexOf('private static func hookComplete(', retryStart);
+      final hookStart = source.indexOf(
+        'private static func hookComplete(',
+        retryStart,
+      );
       expect(retryStart, greaterThanOrEqualTo(0));
       expect(hookStart, greaterThan(retryStart));
       final retryBody = source.substring(retryStart, hookStart);

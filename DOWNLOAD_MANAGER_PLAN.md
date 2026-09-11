@@ -335,7 +335,9 @@
 
 ## Phase 3 — Deterministic retries, callback fencing, persistence, and concurrency
 
-- [ ] **DM-09 — Introduce one network-interruption/hold policy across all transports**
+- [x] **DM-09 — Introduce one network-interruption/hold policy across all transports**
+  - **Implemented:** offline transport failures now enter a durable `waitingForNetwork` state instead of spending host/server retry backoff; connectivity restoration reconciles behind generation + runtime-ownership fences, and native/iOS/Range paths share the same logical hold contract.
+  - **Verification passed:** network-hold RED→GREEN coverage, retry-policy/server-backoff separation, durable job/recovery state, Range/multipart adjacency, runtime ownership/generation fencing, startup reconciliation, queue authority, iOS offline retry-budget guards, and analyzer.
   - **Problem:** native Transfer, Dart Range, multipart and iOS native retry paths differ for offline periods, transport failures and retry exhaustion.
   - **Root cause:** custom orchestration does not expose one logical network-hold contract; native Transfer hold/offline evidence is not fully projected upward.
   - **Severity / priority:** **P1 / High.**

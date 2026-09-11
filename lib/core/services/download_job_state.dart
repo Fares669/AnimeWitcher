@@ -12,6 +12,7 @@ enum DownloadJobState {
   starting,
   running,
   retryWaiting,
+  waitingForNetwork,
   pausing,
   pausedByUser,
   interrupted,
@@ -66,6 +67,7 @@ bool downloadJobOccupiesSlot(DownloadJobState state) {
     DownloadJobState.assembling ||
     DownloadJobState.verifying => true,
     DownloadJobState.queued ||
+    DownloadJobState.waitingForNetwork ||
     DownloadJobState.pausedByUser ||
     DownloadJobState.interrupted ||
     DownloadJobState.completed ||
@@ -85,7 +87,8 @@ TaskStatus downloadJobTaskStatus(DownloadJobState state) {
     DownloadJobState.pausing ||
     DownloadJobState.assembling ||
     DownloadJobState.verifying => TaskStatus.running,
-    DownloadJobState.retryWaiting => TaskStatus.waitingToRetry,
+    DownloadJobState.retryWaiting ||
+    DownloadJobState.waitingForNetwork => TaskStatus.waitingToRetry,
     DownloadJobState.pausedByUser ||
     DownloadJobState.interrupted ||
     DownloadJobState.orphaned => TaskStatus.paused,
@@ -104,7 +107,8 @@ TaskStatus downloadJobDisplayStatus(DownloadJobState state) {
     DownloadJobState.pausing ||
     DownloadJobState.assembling ||
     DownloadJobState.verifying => TaskStatus.running,
-    DownloadJobState.retryWaiting => TaskStatus.waitingToRetry,
+    DownloadJobState.retryWaiting ||
+    DownloadJobState.waitingForNetwork => TaskStatus.waitingToRetry,
     DownloadJobState.pausedByUser ||
     DownloadJobState.interrupted ||
     DownloadJobState.orphaned => TaskStatus.paused,
@@ -124,6 +128,10 @@ enum DownloadRecoveryAction {
 
   /// An explicit user pause is durable across process death.
   keepPaused,
+
+  /// Connectivity is unavailable and no executor currently owns the writer.
+  /// Keep durable bytes parked until a connectivity restoration reconciliation.
+  keepNetworkHeld,
 
   /// The row is terminal or there is not enough durable evidence to revive it.
   ignore,
@@ -279,6 +287,7 @@ DownloadRecoveryPlan planDownloadRecovery({
   required bool userPaused,
   required bool stillInNativeQueue,
   required bool hasMetadata,
+  bool networkAvailable = true,
 }) {
   if (persisted == TaskStatus.complete) {
     return const DownloadRecoveryPlan(
@@ -292,6 +301,20 @@ DownloadRecoveryPlan planDownloadRecovery({
       state: DownloadJobState.pausedByUser,
       action: DownloadRecoveryAction.keepPaused,
     );
+  }
+
+  if (!networkAvailable && !queueWaiting) {
+    final recoverableOffline =
+        persisted != TaskStatus.complete &&
+        (persisted != TaskStatus.canceled || hasMetadata);
+    if (recoverableOffline) {
+      return DownloadRecoveryPlan(
+        state: DownloadJobState.waitingForNetwork,
+        action: stillInNativeQueue
+            ? DownloadRecoveryAction.keepNative
+            : DownloadRecoveryAction.keepNetworkHeld,
+      );
+    }
   }
 
   if (stillInNativeQueue) {
@@ -371,6 +394,7 @@ DownloadRecoveryPlan planDownloadRecoveryWithJobAuthority({
   DownloadJobState? authoritativeState,
   bool authoritativeUserPaused = false,
   bool authoritativeQueueWaiting = false,
+  bool networkAvailable = true,
 }) {
   if (authoritativeState == null) {
     return planDownloadRecovery(
@@ -379,6 +403,7 @@ DownloadRecoveryPlan planDownloadRecoveryWithJobAuthority({
       userPaused: userPaused,
       stillInNativeQueue: stillInNativeQueue,
       hasMetadata: hasMetadata,
+      networkAvailable: networkAvailable,
     );
   }
 
@@ -406,11 +431,38 @@ DownloadRecoveryPlan planDownloadRecoveryWithJobAuthority({
     );
   }
 
+  if (authoritativeState == DownloadJobState.waitingForNetwork) {
+    if (!networkAvailable) {
+      return DownloadRecoveryPlan(
+        state: DownloadJobState.waitingForNetwork,
+        action: stillInNativeQueue
+            ? DownloadRecoveryAction.keepNative
+            : DownloadRecoveryAction.keepNetworkHeld,
+      );
+    }
+    if (!stillInNativeQueue) {
+      return const DownloadRecoveryPlan(
+        state: DownloadJobState.interrupted,
+        action: DownloadRecoveryAction.requeue,
+      );
+    }
+  }
+
+  if (!networkAvailable && authoritativeState != DownloadJobState.queued) {
+    return DownloadRecoveryPlan(
+      state: DownloadJobState.waitingForNetwork,
+      action: stillInNativeQueue
+          ? DownloadRecoveryAction.keepNative
+          : DownloadRecoveryAction.keepNetworkHeld,
+    );
+  }
+
   if (stillInNativeQueue) {
     final state = switch (authoritativeState) {
       DownloadJobState.queued => DownloadJobState.queued,
       DownloadJobState.starting => DownloadJobState.starting,
       DownloadJobState.retryWaiting => DownloadJobState.retryWaiting,
+      DownloadJobState.waitingForNetwork => DownloadJobState.waitingForNetwork,
       DownloadJobState.assembling => DownloadJobState.assembling,
       DownloadJobState.verifying => DownloadJobState.verifying,
       _ => DownloadJobState.running,

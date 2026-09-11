@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -79,6 +80,7 @@ DownloadCommandOutcome downloadCommandOutcomeForJobState(
     DownloadJobState.verifying => DownloadCommandOutcome.running,
     DownloadJobState.queued => DownloadCommandOutcome.queued,
     DownloadJobState.retryWaiting ||
+    DownloadJobState.waitingForNetwork ||
     DownloadJobState.interrupted => DownloadCommandOutcome.recoverableFailure,
     DownloadJobState.pausing => DownloadCommandOutcome.settlingOwnership,
     DownloadJobState.pausedByUser => DownloadCommandOutcome.paused,
@@ -367,6 +369,9 @@ class DownloadService {
   late final DownloadContinuedProcessingService _continuedProcessing;
   final _updatesController = StreamController<TaskUpdate>.broadcast();
   StreamSubscription<TaskUpdate>? _updatesSubscription;
+  final Connectivity _connectivity = Connectivity();
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  bool _networkAvailable = true;
   bool _isInitialized = false;
   bool _disposed = false;
   final DownloadServiceReadinessBarrier _readiness =
@@ -700,10 +705,151 @@ class DownloadService {
     _terminalJobIds.clear();
     unawaited(_nativeTransport.dispose());
     _updatesSubscription?.cancel();
+    _connectivitySubscription?.cancel();
     unawaited(_continuedProcessing.dispose());
     _updatesController.close();
     // Do NOT cancel _fdSubscription — it matches FileDownloader()'s singleton
     // lifetime and cannot be re-subscribed after cancellation.
+  }
+
+  bool _hasConnectivity(List<ConnectivityResult> results) =>
+      results.any((result) => result != ConnectivityResult.none);
+
+  Future<void> _initializeConnectivity() async {
+    try {
+      _networkAvailable = _hasConnectivity(
+        await _connectivity.checkConnectivity(),
+      );
+    } catch (_) {
+      // A platform connectivity probe failure is unknown, not proof of offline.
+      _networkAvailable = true;
+    }
+    await _connectivitySubscription?.cancel();
+    _connectivitySubscription = _connectivity.onConnectivityChanged.listen(
+      _handleConnectivityChanged,
+    );
+    diagnosticLog.record('network.state', {'available': _networkAvailable});
+  }
+
+  void _handleConnectivityChanged(List<ConnectivityResult> results) {
+    final available = _hasConnectivity(results);
+    final restored = !_networkAvailable && available;
+    _networkAvailable = available;
+    diagnosticLog.record('network.state', {
+      'available': available,
+      'restored': restored,
+    });
+    if (restored && _isInitialized && !_disposed) {
+      unawaited(_resumeNetworkHeldDownloads());
+    }
+  }
+
+  Future<void> _holdDownloadForNetwork(DownloadTask task) async {
+    if (_disposed ||
+        _terminalJobIds.contains(task.taskId) ||
+        _userPausedIds.contains(task.taskId)) {
+      return;
+    }
+    final saved = await _savedProgressFor(task);
+    final checkpointed = await _checkpointLogicalJob(
+      task,
+      state: DownloadJobState.waitingForNetwork,
+      durableBytes: saved.partialBytes,
+      durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
+      expectedBytes: saved.totalSize,
+      userPaused: false,
+      queueWaiting: false,
+    );
+    if (!checkpointed) return;
+    final hold = await _jobStore.beginOperation(
+      task.taskId,
+      state: DownloadJobState.waitingForNetwork,
+    );
+    if (hold == null) return;
+    _queueWaitingIds.remove(task.taskId);
+    _waitingPayloads.remove(task.taskId);
+    await FileDownloader().database.updateRecord(
+      TaskRecord(
+        task,
+        TaskStatus.waitingToRetry,
+        saved.progress,
+        saved.totalSize,
+      ),
+    );
+    _publishProgress(
+      trackingUrl: downloadTrackingUrl(task),
+      taskId: task.taskId,
+      progress: saved.progress,
+      totalSize: saved.totalSize,
+      status: TaskStatus.waitingToRetry,
+    );
+    _updatesController.add(TaskStatusUpdate(task, TaskStatus.waitingToRetry));
+    diagnosticLog.record('network.hold', {
+      'taskId': task.taskId,
+      'generation': hold.generation,
+    });
+  }
+
+  Future<void> _resumeNetworkHeldDownloads() async {
+    if (!_networkAvailable || _disposed) return;
+    await _serializeQueue(() async {
+      if (!_networkAvailable || _disposed) return;
+      final held = (await _jobStore.all())
+          .where((job) => job.state == DownloadJobState.waitingForNetwork)
+          .toList(growable: false);
+      for (final job in held) {
+        if (_terminalJobIds.contains(job.taskId) ||
+            _userPausedIds.contains(job.taskId)) {
+          continue;
+        }
+        final ownership = await _runtimeOwnershipFor(job.taskId);
+        if (ownership == DownloadRuntimeOwnership.owned) {
+          diagnosticLog.record('network.restoreOwned', {'taskId': job.taskId});
+          continue;
+        }
+        if (ownership != DownloadRuntimeOwnership.notOwned) {
+          diagnosticLog.record('network.restoreDeferred', {
+            'taskId': job.taskId,
+            'ownership': ownership.name,
+          });
+          continue;
+        }
+        final record = await FileDownloader().database.recordForId(job.taskId);
+        final task = record?.task is DownloadTask
+            ? record!.task as DownloadTask
+            : job.restoreTaskSnapshot();
+        if (task == null) continue;
+        final claim = await _jobStore.beginOperation(
+          job.taskId,
+          state: DownloadJobState.interrupted,
+        );
+        if (claim == null) continue;
+        await _enqueueExistingTaskAsWaiterUnlocked(task);
+        diagnosticLog.record('network.restoreQueued', {
+          'taskId': job.taskId,
+          'generation': claim.generation,
+        });
+      }
+      await _syncQueueToCapUnlocked();
+      await _syncSessionOverlay();
+    });
+  }
+
+  Future<void> _acknowledgeNativeNetworkResume(DownloadTask task) async {
+    final job = await _jobStore.get(task.taskId);
+    if (job?.state != DownloadJobState.waitingForNetwork) return;
+    final ownership = await _runtimeOwnershipFor(task.taskId);
+    if (ownership != DownloadRuntimeOwnership.owned) return;
+    final token = await _jobStore.beginOperation(
+      task.taskId,
+      state: DownloadJobState.running,
+    );
+    if (token != null) {
+      diagnosticLog.record('network.nativeResumeAck', {
+        'taskId': task.taskId,
+        'generation': token.generation,
+      });
+    }
   }
 
   Future<void> init() {
@@ -757,6 +903,7 @@ class DownloadService {
       diagnosticLog.lastError = 'Unable to initialize log directory';
     }
     diagnosticLog.record('service.initialize');
+    await _initializeConnectivity();
     // Restore durable user intent before native/plugin callbacks can race the
     // startup reconciliation pass.
     await _restoreAuthoritativeJobIntent();
@@ -833,6 +980,23 @@ class DownloadService {
       if (_userPausedIds.contains(update.task.taskId) ||
           _dequeuingPausedIds.contains(update.task.taskId)) {
         return;
+      }
+
+      if (update is TaskStatusUpdate &&
+          update.task is DownloadTask &&
+          !_networkAvailable &&
+          (update.status == TaskStatus.waitingToRetry ||
+              update.status == TaskStatus.failed ||
+              update.status == TaskStatus.canceled ||
+              update.status == TaskStatus.notFound)) {
+        unawaited(_holdDownloadForNetwork(update.task as DownloadTask));
+        return;
+      }
+
+      if (update is TaskStatusUpdate &&
+          update.task is DownloadTask &&
+          update.status == TaskStatus.running) {
+        unawaited(_acknowledgeNativeNetworkResume(update.task as DownloadTask));
       }
 
       // Ghost cancel/fail from HQ dequeue while URLSession still owns this
@@ -1780,6 +1944,7 @@ class DownloadService {
         authoritativeState: oldJob?.state,
         authoritativeUserPaused: oldJob?.userPaused ?? false,
         authoritativeQueueWaiting: oldJob?.queueWaiting ?? false,
+        networkAvailable: _networkAvailable,
       );
 
       // Migrate pre-DownloadJobStore installs on first reconciliation. Only
@@ -1900,6 +2065,24 @@ class DownloadService {
         _queueWaitingIds.remove(task.taskId);
         _waitingPayloads.remove(task.taskId);
         _forgetSessionTask(task.taskId);
+        continue;
+      }
+
+      if (recoveryPlan.action == DownloadRecoveryAction.keepNetworkHeld) {
+        _queueWaitingIds.remove(task.taskId);
+        _waitingPayloads.remove(task.taskId);
+        _rememberSessionTask(task.taskId);
+        await FileDownloader().database.updateRecord(
+          TaskRecord(task, TaskStatus.waitingToRetry, progress, expectedBytes),
+        );
+        _publishProgress(
+          trackingUrl: trackingUrl,
+          taskId: task.taskId,
+          progress: progress,
+          totalSize: expectedBytes,
+          status: TaskStatus.waitingToRetry,
+        );
+        diagnosticLog.record('recovery.networkHeld', {'taskId': task.taskId});
         continue;
       }
 
@@ -2051,7 +2234,12 @@ class DownloadService {
       final taskId = record.task.taskId;
       final job = await _jobStore.get(taskId);
       if (job != null) {
-        if (downloadJobOccupiesSlot(job.state)) occupying.add(taskId);
+        if (downloadJobOccupiesSlot(job.state)) {
+          occupying.add(taskId);
+        } else if (job.state == DownloadJobState.waitingForNetwork) {
+          final ownership = await _runtimeOwnershipFor(taskId);
+          if (ownership.blocksNewWriter) occupying.add(taskId);
+        }
         continue;
       }
 
@@ -2117,6 +2305,7 @@ class DownloadService {
   }
 
   Future<void> _syncQueueToCapUnlocked() async {
+    if (!_networkAvailable) return;
     final max = clampDownloadConcurrency(
       _ref.read(storageServiceProvider).getDownloadConcurrency(),
     );
@@ -3931,6 +4120,10 @@ class DownloadService {
   }
 
   Future<bool> _resumeDownloadTask(DownloadTask task) async {
+    if (!_networkAvailable) {
+      await _holdDownloadForNetwork(task);
+      return true;
+    }
     if (_parallel.isActive(task.taskId) ||
         _rangeTransfers.isActive(task.taskId))
       return true;
@@ -4297,6 +4490,9 @@ class DownloadService {
       onFailure: (failure) async {
         if (!logical || token == null) {
           if (parallelParent != null &&
+              failure.action == DownloadFailureAction.waitForNetwork) {
+            await _holdDownloadForNetwork(parallelParent);
+          } else if (parallelParent != null &&
               failure.action == DownloadFailureAction.refreshUrl) {
             _scheduleParallelParentRefresh(parallelParent.taskId);
           }
@@ -4304,6 +4500,10 @@ class DownloadService {
         }
         final activeToken = token;
         if (!await _jobStore.accepts(activeToken)) return;
+        if (failure.action == DownloadFailureAction.waitForNetwork) {
+          await _holdDownloadForNetwork(task);
+          return;
+        }
         if (failure.action == DownloadFailureAction.refreshUrl) {
           // DownloadRangeTransfer removes its ownership immediately after this
           // callback returns. Queue the retry on the next event turn so the
@@ -4563,7 +4763,9 @@ class DownloadService {
       FileDownloader().allTasks(allGroups: true);
 
   Future<DownloadRuntimeOwnership> _runtimeOwnershipFor(String taskId) async {
-    if (_rangeTransfers.isActive(taskId)) {
+    if (_rangeTransfers.isActive(taskId) ||
+        _parallel.isActive(taskId) ||
+        _parallel.hasLiveConnections(taskId)) {
       return DownloadRuntimeOwnership.owned;
     }
     try {
@@ -4794,6 +4996,10 @@ class DownloadService {
   }
 
   Future<bool> _enqueueTransfer(DownloadTask task, int totalBytes) async {
+    if (!_networkAvailable) {
+      await _holdDownloadForNetwork(task);
+      return true;
+    }
     if (task is! ParallelDownloadTask) return _nativeTransport.start(task);
     if (totalBytes <= 0) {
       totalBytes =

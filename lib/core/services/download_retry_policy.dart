@@ -5,6 +5,7 @@ const Duration kDownloadRetryMaxDelay = Duration(seconds: 30);
 
 enum DownloadFailureAction {
   retry,
+  waitForNetwork,
   refreshUrl,
   reconcileRange,
   stopNoSpace,
@@ -27,9 +28,7 @@ bool isRetryableDownloadStatus(int? statusCode) {
 }
 
 bool isDownloadUrlRefreshStatus(int? statusCode, {bool include404 = true}) =>
-    statusCode == 401 ||
-    statusCode == 403 ||
-    (include404 && statusCode == 404);
+    statusCode == 401 || statusCode == 403 || (include404 && statusCode == 404);
 
 Duration downloadRetryDelay({
   required int retryIndex,
@@ -77,7 +76,10 @@ DownloadRetryDecision planDownloadFailure({
       isDownloadUrlRefreshStatus(statusCode, include404: refreshOn404)) {
     return const DownloadRetryDecision(DownloadFailureAction.refreshUrl);
   }
-  if (connectionFailure || isRetryableDownloadStatus(statusCode)) {
+  if (connectionFailure) {
+    return const DownloadRetryDecision(DownloadFailureAction.waitForNetwork);
+  }
+  if (isRetryableDownloadStatus(statusCode)) {
     return DownloadRetryDecision(
       DownloadFailureAction.retry,
       delay: downloadRetryDelay(
