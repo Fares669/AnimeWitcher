@@ -3406,6 +3406,11 @@ class DownloadService {
     }
 
     final saved = await _savedProgressFor(task);
+    if (saved.totalSize > 0 &&
+        saved.partialBytes == saved.totalSize &&
+        await _resumeUsingPartialFile(task)) {
+      return true;
+    }
     final refreshResult = await _refreshTaskBeforeResume(
       task,
       expectedBytes: saved.totalSize,
@@ -3467,7 +3472,25 @@ class DownloadService {
   }
 
   Future<bool> _resumeUsingPartialFile(DownloadTask task) async {
-    if (task is ParallelDownloadTask) return false;
+    final isParallel = task is ParallelDownloadTask;
+    if (isParallel) {
+      Set<String> livePartIds;
+      try {
+        livePartIds = await _livePartIds();
+      } catch (_) {
+        diagnosticLog.record('completion.localArtifactOwnershipUnknown', {
+          'taskId': task.taskId,
+        });
+        return false;
+      }
+      if (livePartIds.any((id) => id.startsWith('${task.taskId}.part.'))) {
+        diagnosticLog.record('completion.localArtifactOwnedParts', {
+          'taskId': task.taskId,
+        });
+        return false;
+      }
+    }
+
     String destinationPath;
     try {
       destinationPath = await task.filePath();
@@ -3476,20 +3499,51 @@ class DownloadService {
     }
     if (destinationPath.isEmpty) return false;
 
+    final expectedBytes = (await _savedProgressFor(task)).totalSize;
+    if (isParallel) {
+      final candidate = await findPartialDownloadFile(
+        destinationPath: destinationPath,
+      );
+      if (candidate == null || expectedBytes <= 0) return false;
+      int candidateBytes;
+      try {
+        candidateBytes = await candidate.length();
+      } catch (_) {
+        return false;
+      }
+      if (candidateBytes != expectedBytes) return false;
+    }
+
     final partial = await canonicalizePartialDownloadFile(
       destinationPath: destinationPath,
     );
     if (partial == null) return false;
     final existingBytes = partial.bytes;
-    final expectedBytes = (await _savedProgressFor(task)).totalSize;
     if (expectedBytes > 0 && existingBytes == expectedBytes) {
+      final checkpointed = await _checkpointLogicalJob(
+        task,
+        state: DownloadJobState.completed,
+        durableBytes: expectedBytes,
+        durableByteProvenance: DownloadDurableByteProvenance.verifiedFinalFile,
+        expectedBytes: expectedBytes,
+        userPaused: false,
+        queueWaiting: false,
+      );
+      if (!checkpointed) return false;
+
       await FileDownloader().database.updateRecord(
         TaskRecord(task, TaskStatus.complete, 1, expectedBytes),
       );
+      diagnosticLog.record('completion.adoptedExactLocalArtifact', {
+        'taskId': task.taskId,
+        'bytes': expectedBytes,
+        'parallel': isParallel,
+      });
       _sharedEvents.add(TaskProgressUpdate(task, 1, expectedBytes));
       _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));
       return true;
     }
+    if (task is ParallelDownloadTask) return false;
     if (!shouldResumeFromPartialBytes(
       existingPartialBytes: existingBytes,
       expectedBytes: expectedBytes,

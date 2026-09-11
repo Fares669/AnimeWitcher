@@ -49,6 +49,14 @@ DownloadResumeStrategy chooseDownloadResumeStrategy({
   double savedProgress = 0,
 }) {
   if (canNativeResume) return DownloadResumeStrategy.nativeResume;
+  // An exact-size durable file is already a completion candidate. It must
+  // stay on the local recovery path instead of being classified as a
+  // zero-byte restart merely because no progress percentage survived.
+  if (existingPartialBytes > 0 &&
+      expectedBytes > 0 &&
+      existingPartialBytes == expectedBytes) {
+    return DownloadResumeStrategy.partialFile;
+  }
   if (shouldResumeFromPartialBytes(
     existingPartialBytes: existingPartialBytes,
     expectedBytes: expectedBytes,
