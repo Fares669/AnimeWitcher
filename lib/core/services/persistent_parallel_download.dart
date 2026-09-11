@@ -1376,6 +1376,16 @@ class PersistentParallelDownload {
         _preparePartAttempt(session, part);
         await _persist(session);
 
+        // Parallel session pumps can consume capacity while this pump awaits
+        // record/manifest IO. Revalidate immediately before the synchronous
+        // reservation so stale availability can never overbook the global or
+        // per-session connection budget.
+        if (_activeConnectionIds.length >= _connectionBudget ||
+            _activeConnectionsForSession(session) >=
+                session.connectionCeiling) {
+          return true;
+        }
+
         // Reserve before enqueueing to close the enqueue->running race. This
         // also keeps 5 episodes x 16 parts from becoming 80 native requests.
         part.launched = true;
@@ -2045,24 +2055,29 @@ class PersistentParallelDownload {
     pump =
         Future<void>.microtask(() async {
               final sessions = List<_ParallelSession>.from(_sessions.values);
-              for (final session in sessions) {
-                if (_disposed) return;
-                if (!session.active || session.deleted) continue;
-                await session.serialize(() async {
-                  if (_disposed || !session.active || session.deleted) return;
-                  try {
-                    if (!await _pumpSession(session)) {
-                      _scheduleCoordinatorRecovery(session);
-                    } else {
-                      await _persist(session);
-                    }
-                  } catch (_) {
-                    // Coordinator bookkeeping is not a user-visible pause.
-                    // Keep native owners untouched and reconcile them shortly.
-                    _scheduleCoordinatorRecovery(session);
-                  }
-                });
-              }
+              await Future.wait<void>(
+                sessions
+                    .where((session) => session.active && !session.deleted)
+                    .map(
+                      (session) => session.serialize(() async {
+                        if (_disposed || !session.active || session.deleted) {
+                          return;
+                        }
+                        try {
+                          if (!await _pumpSession(session)) {
+                            _scheduleCoordinatorRecovery(session);
+                          } else {
+                            await _persist(session);
+                          }
+                        } catch (_) {
+                          // One slow/failing session must not head-of-line block
+                          // unrelated sessions. Per-session serialization still
+                          // preserves ordering inside each logical download.
+                          _scheduleCoordinatorRecovery(session);
+                        }
+                      }),
+                    ),
+              );
             })
             .catchError((Object _, StackTrace _) {
               // Session-level failures park their parent. An unexpected lifecycle race

@@ -378,7 +378,7 @@
   - **Confirmed root cause:** `_receive()` previously awaited `onState()` immediately after each 512 KiB/250 ms flush. That observer can await Hive/JobStore/plugin database work, so storage latency directly stopped socket consumption even though the exact bytes were already durable on disk.
   - **Verification passed:** RED test proves a blocked progress observer used to stop file ingestion; GREEN coverage proves the file continues to drain while the first observer is blocked, pending snapshots coalesce, and `stop()` retains ownership until the queued checkpoint joins before `onPaused`. Existing Range recovery, durable-byte provenance and lifecycle checkpoint suites plus generated-source-aware `flutter analyze --no-fatal-warnings --no-fatal-infos` and `git diff --check` pass.
 
-- [ ] **DM-13 — Prevent head-of-line blocking and prove fairness across simultaneous downloads**
+- [x] **DM-13 — Prevent head-of-line blocking and prove fairness across simultaneous downloads**
   - **Problem:** broad serialization can wait on slow probes, range setup or storage while unrelated sessions need promotion.
   - **Root cause:** short state reservation and slow I/O preparation share serialization scope.
   - **Severity / priority:** **P2 / Medium; raise to P1 if profiling reproduces starvation.**
@@ -386,6 +386,9 @@
   - **Proposed fix:** reserve state/slot quickly, perform slow preparation outside broad locks where safe, then commit with the same generation/lease. Preserve logical FIFO without allowing a dead host to block healthy sessions.
   - **Verification/testing:** fast + stalled hosts; 5/8/16 parts; range probe timeout; rate limiting; queue concurrency 1..10; pause/cancel during promotion; bounded promotion latency.
   - **Dependencies:** DM-01, DM-10, DM-25.
+  - **Implementation notes (2026-09-11):** Multipart session pumps now run concurrently across logical downloads while each session retains its own serialization. Admission is revalidated immediately before the synchronous native-slot reservation, so a slow enqueue/persist in one session cannot block healthy sessions and concurrent pumps cannot overbook the global or per-session connection budget.
+  - **Confirmed root cause:** `_schedulePumpAll()` awaited every session serially, so slow `startPart`/storage work in one host prevented later sessions from reaching promotion. Simply parallelizing pumps would have introduced a stale-capacity race because global availability was computed before async record/manifest work; the final pre-reservation recheck closes that race.
+  - **Verification passed:** RED→GREEN stalled-host vs fast-host fairness coverage, pending-start lease/global budget regressions, persistent multipart scheduler/auto-recovery regressions, concurrency/governor tests, analyzer, and `git diff --check`.
 
 - [ ] **DM-12 — Remove lifecycle persistence and destructive cleanup from presentation code**
   - **Problem:** downloads provider rewrites plugin states and deletes DB/metadata/files while service state evolves concurrently.
