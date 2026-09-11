@@ -5,6 +5,7 @@ on:
     branches: [plan/download-manager-reliability]
     paths:
       - .github/workflows/agent-dm09-network-hold.yml
+      - .github/scripts/dm09_patch_repair.py
 
 permissions:
   contents: write
