@@ -1,4 +1,4 @@
-name: Verify notification settings isolation fix
+name: Verify notification readiness hypothesis
 
 on:
   push:
@@ -6,97 +6,39 @@ on:
       - plan/download-manager-reliability
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  verify-and-commit:
+  verify:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.47.1
           cache: true
-
       - name: Prepare
         run: |
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-
-      - name: Apply minimal test-isolation seam
+      - name: Apply production-hypothesis patch in workspace only
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
-          service = Path('lib/core/services/download_service.dart')
-          s = service.read_text()
-          anchor = """  @visibleForTesting\n  static Future<void> Function(List<(String, dynamic)> globalConfig)?\n  configureHoldingQueueForTesting;\n"""
-          replacement = anchor + """\n  /// Test-only seam for Settings UI tests. Production must still pass through\n  /// the readiness barrier before mutating notification preferences.\n  @visibleForTesting\n  static Future<void> Function(DownloadNotificationPrefs prefs)?\n  applyNotificationSettingsForTesting;\n"""
-          if anchor not in s:
-              raise SystemExit('download service hook anchor not found')
-          s = s.replace(anchor, replacement, 1)
-
-          old_method = """  Future<void> applyNotificationSettings(\n    DownloadNotificationPrefs prefs,\n  ) async {\n    await _awaitCommandReadiness('applyNotificationSettings');\n    await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);\n    _configureDownloadNotifications(prefs);\n  }\n"""
-          new_method = """  Future<void> applyNotificationSettings(\n    DownloadNotificationPrefs prefs,\n  ) async {\n    final testOverride = applyNotificationSettingsForTesting;\n    if (testOverride != null) {\n      await testOverride(prefs);\n      return;\n    }\n    await _awaitCommandReadiness('applyNotificationSettings');\n    await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);\n    _configureDownloadNotifications(prefs);\n  }\n"""
-          if old_method not in s:
-              raise SystemExit('notification method anchor not found')
-          service.write_text(s.replace(old_method, new_method, 1))
-
-          test = Path('test/features/settings/presentation/download_concurrency_settings_test.dart')
-          t = test.read_text()
-          t = t.replace("import 'package:hive/hive.dart';\n", '')
-          setup = """  late Directory hiveDirectory;\n\n  setUpAll(() async {\n    hiveDirectory = await Directory.systemTemp.createTemp(\n      'animewitcher-download-settings-',\n    );\n    Hive.init(hiveDirectory.path);\n  });\n\n"""
-          if setup not in t:
-              raise SystemExit('Hive setup anchor not found')
-          t = t.replace(setup, '', 1)
-          old_teardown = """  tearDown(() {\n    DownloadService.configureHoldingQueueForTesting = null;\n  });\n\n  tearDownAll(() async {\n    await Hive.close();\n    if (await hiveDirectory.exists()) {\n      await hiveDirectory.delete(recursive: true);\n    }\n  });\n"""
-          new_teardown = """  tearDown(() {\n    DownloadService.configureHoldingQueueForTesting = null;\n    DownloadService.applyNotificationSettingsForTesting = null;\n  });\n"""
-          if old_teardown not in t:
-              raise SystemExit('test teardown anchor not found')
-          t = t.replace(old_teardown, new_teardown, 1)
-          notification_anchor = """    final storage = MemoryStorageService();\n    DownloadService.configureHoldingQueueForTesting = (_) async {};\n    await tester.runAsync(TestFonts.loadWalkthroughFonts);\n"""
-          notification_replacement = """    final storage = MemoryStorageService();\n    DownloadService.configureHoldingQueueForTesting = (_) async {};\n    DownloadService.applyNotificationSettingsForTesting =\n        storage.setDownloadNotificationPrefs;\n    await tester.runAsync(TestFonts.loadWalkthroughFonts);\n"""
-          # Only patch the second occurrence, which belongs to the notification test.
-          first = t.find(notification_anchor)
-          second = t.find(notification_anchor, first + len(notification_anchor)) if first >= 0 else -1
-          if second < 0:
-              raise SystemExit('second settings test anchor not found')
-          t = t[:second] + notification_replacement + t[second + len(notification_anchor):]
-          test.write_text(t)
+          p = Path('lib/core/services/download_service.dart')
+          s = p.read_text()
+          old = """  Future<void> applyNotificationSettings(\n    DownloadNotificationPrefs prefs,\n  ) async {\n    await _awaitCommandReadiness('applyNotificationSettings');\n    await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);\n    _configureDownloadNotifications(prefs);\n  }\n"""
+          new = """  Future<void> applyNotificationSettings(\n    DownloadNotificationPrefs prefs,\n  ) async {\n    await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);\n    _configureDownloadNotifications(prefs);\n  }\n"""
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new))
           PY
-          dart format lib/core/services/download_service.dart test/features/settings/presentation/download_concurrency_settings_test.dart
-
+          dart format lib/core/services/download_service.dart
       - name: Focused Settings regression
         run: flutter test test/features/settings/presentation/download_concurrency_settings_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-
-      - name: DM-03 focused coverage
-        run: |
-          flutter test test/core/services/download_command_outcome_test.dart test/core/services/download_control_outcome_guard_test.dart test/core/services/download_start_outcome_guard_test.dart test/core/services/download_initialization_barrier_guard_test.dart test/core/services/download_service_readiness_test.dart test/core/services/download_range_transfer_test.dart test/core/services/download_source_refresh_integrity_test.dart test/core/services/persistent_parallel_download_test.dart test/core/services/persistent_parallel_download_range_identity_test.dart test/core/utils/download_resume_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-
-      - name: Full test suite
-        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-
-      - name: Analyze and diff check
-        run: |
-          flutter analyze --no-fatal-warnings --no-fatal-infos
-          git diff --check
-
-      - name: Commit verified fix and remove temporary diagnostic workflow
-        shell: bash
-        run: |
-          rm .github/workflows/diagnose-download-notification-test.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add lib/core/services/download_service.dart \
-            test/features/settings/presentation/download_concurrency_settings_test.dart \
-            .github/workflows/diagnose-download-notification-test.yml
-          git diff --cached --check
-          git commit -m 'test(downloads): isolate notification settings readiness'
-          git push origin HEAD:plan/download-manager-reliability
+      - name: Analyze hypothesis
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
