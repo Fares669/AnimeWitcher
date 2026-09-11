@@ -1,0 +1,39 @@
+name: Agent DM09 Network Hold RED
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - .github/workflows/agent-dm09-network-hold.yml
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Prepare
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Verify DM-09 is RED before implementation
+        run: |
+          set +e
+          flutter test \
+            test/core/services/download_network_state_red_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          status=$?
+          if [ "$status" -eq 0 ]; then
+            echo 'DM-09 unexpectedly GREEN before implementation' >&2
+            exit 1
+          fi
+          echo 'DM-09 RED reproduced as expected'
