@@ -46,6 +46,44 @@ jobs:
           fi
           rm -rf /mnt/dm27/* || true
 
+      - name: Normalize DM-27 patch against current HEAD
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/scripts/apply_dm27.py')
+          s = p.read_text()
+          old = """dispose_anchor = '    await _updatesController.close();'
+          if 'await _parallelFailures.close();' not in d:
+              if dispose_anchor not in d:
+                  raise SystemExit('download service dispose anchor drift')
+              d = d.replace(dispose_anchor, dispose_anchor + '\\n    await _parallelFailures.close();', 1)
+          """
+          new = """dispose_anchor = '    _disposed = true;'
+          if 'unawaited(_parallelFailures.close());' not in d:
+              if dispose_anchor not in d:
+                  raise SystemExit('download service dispose anchor drift')
+              d = d.replace(dispose_anchor, dispose_anchor + '\\n    unawaited(_parallelFailures.close());', 1)
+          """
+          if old not in s:
+              raise SystemExit('DM-27 dispose patch-shim drift')
+          s = s.replace(old, new, 1)
+          old_headroom = """        final remaining = session.size - assembledBytes;
+                  if (!await _hasAssemblyHeadroom(
+                    session,
+                    target,
+                    remainingBytes: remaining,
+                  )) {"""
+          new_headroom = """        if (!await _hasAssemblyHeadroom(
+                    session,
+                    target,
+                    remainingBytes: 0,
+                  )) {"""
+          if old_headroom not in s:
+              raise SystemExit('DM-27 recheck accounting shim drift')
+          s = s.replace(old_headroom, new_headroom, 1)
+          p.write_text(s)
+          PY
+
       - name: Apply DM-27 implementation
         run: |
           python3 .github/scripts/apply_dm27.py
@@ -75,7 +113,7 @@ jobs:
               raise SystemExit('DM-27 checklist anchor missing or already complete')
           s = s.replace(old, new, 1)
           dep = '  - **Dependencies:** DM-03, DM-06.\n'
-          note = '  - **Implementation notes (2026-09-12):** Multipart assembly preflights and re-evaluates destination-volume headroom, retains an 8 MiB reserve, and safely handles ENOSPC/EDQUOT races. Storage exhaustion emits typed `ParallelAssemblyFailureReason.insufficientStorage`, removes only incomplete staging, pauses the logical parent, and retains every verified Range for zero-redownload assembly retry. DownloadService exposes the typed failure stream for UI projection.\n  - **Verification passed:** Bounded-filesystem behavior was confirmed RED before the fix, then GREEN with verified parts preserved, typed `insufficientStorage`, no premature completion, and successful assembly after space is freed without another Range. Focused multipart regressions and analyzer also passed.\n'
+          note = '  - **Implementation notes (2026-09-12):** Multipart assembly preflights destination-volume capacity for the full staging allocation, re-evaluates the reserved safety margin while writing, and safely handles ENOSPC/EDQUOT races. Storage exhaustion emits typed `ParallelAssemblyFailureReason.insufficientStorage`, removes only incomplete staging, pauses the logical parent, and retains every verified Range for zero-redownload assembly retry. DownloadService exposes the typed failure stream for UI projection.\n  - **Verification passed:** Bounded-filesystem behavior was confirmed RED before the fix, then GREEN with verified parts preserved, typed `insufficientStorage`, no premature completion, and successful assembly after space is freed without another Range. Focused multipart regressions and analyzer also passed.\n'
           marker = s.find(new)
           dep_at = s.find(dep, marker)
           if dep_at < 0:
