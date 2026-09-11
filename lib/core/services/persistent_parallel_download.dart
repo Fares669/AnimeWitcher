@@ -38,6 +38,223 @@ const Duration kParallelProgressPersistInterval = Duration(seconds: 1);
 /// presentation/history only and is never recovery byte authority.
 const int kParallelManifestSchemaVersion = 6;
 
+class ParallelManifestRecoveryEvidence {
+  const ParallelManifestRecoveryEvidence({
+    required this.manifestFile,
+    required this.schemaVersion,
+    required this.parentTaskId,
+    required this.parentTask,
+    required this.childTasks,
+    required this.expectedBytes,
+    required this.durableBytes,
+    required this.checkpointSequence,
+  });
+
+  final File manifestFile;
+  final int schemaVersion;
+  final String parentTaskId;
+  final ParallelDownloadTask? parentTask;
+  final List<DownloadTask> childTasks;
+  final int expectedBytes;
+  final int durableBytes;
+  final int checkpointSequence;
+}
+
+class _DiscoveredParallelManifestCandidate {
+  const _DiscoveredParallelManifestCandidate({
+    required this.evidence,
+    required this.modifiedMillis,
+    required this.isTemp,
+  });
+
+  final ParallelManifestRecoveryEvidence evidence;
+  final int modifiedMillis;
+  final bool isTemp;
+}
+
+/// Enumerates durable multipart checkpoints below explicitly trusted roots.
+///
+/// Discovery never infers logical identity from a filename. Schema-v6
+/// manifests can carry a verified parent task descriptor; older manifests
+/// remain visible as unresolved evidence so startup can avoid silently
+/// discarding their children without fabricating a parent.
+Future<List<ParallelManifestRecoveryEvidence>>
+discoverParallelManifestRecoveryEvidence(Iterable<Directory> roots) async {
+  final grouped = <String, List<_DiscoveredParallelManifestCandidate>>{};
+
+  for (final root in roots) {
+    try {
+      if (!await root.exists()) continue;
+      await for (final entity in root.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is! File) continue;
+        final name = p.basename(entity.path);
+        if (name != 'manifest.json' && name != 'manifest.json.tmp') {
+          continue;
+        }
+        final isTemp = name.endsWith('.tmp');
+        final canonicalPath = p.normalize(
+          isTemp
+              ? entity.path.substring(0, entity.path.length - 4)
+              : entity.path,
+        );
+
+        try {
+          final decoded = jsonDecode(await entity.readAsString());
+          if (decoded is! Map) continue;
+          final snapshot = Map<String, dynamic>.from(decoded);
+          final schemaVersion =
+              (snapshot['schemaVersion'] as num?)?.toInt() ?? 1;
+          if (schemaVersion < 1 ||
+              schemaVersion > kParallelManifestSchemaVersion) {
+            continue;
+          }
+          final parentTaskId =
+              snapshot['parentTaskId']?.toString().trim() ?? '';
+          if (parentTaskId.isEmpty) continue;
+          final checkpointSequence =
+              (snapshot['checkpointSequence'] as num?)?.toInt() ?? 0;
+          if (checkpointSequence < 0) continue;
+          final rawParts = snapshot['parts'];
+          if (rawParts is! List || rawParts.isEmpty) continue;
+
+          final childTasks = <DownloadTask>[];
+          var layoutValid = true;
+          var nextByte = 0;
+          var calculatedBytes = 0;
+          var durableBytes = 0;
+          for (final rawPart in rawParts) {
+            if (rawPart is! Map) {
+              layoutValid = false;
+              break;
+            }
+            final part = Map<String, dynamic>.from(rawPart);
+            final from = (part['from'] as num?)?.toInt();
+            final to = (part['to'] as num?)?.toInt();
+            final rawTask = part['task'];
+            if (from == null ||
+                to == null ||
+                from != nextByte ||
+                to < from ||
+                rawTask is! Map) {
+              layoutValid = false;
+              break;
+            }
+            final restored = Task.createFromJson(
+              Map<String, dynamic>.from(rawTask),
+            );
+            if (restored is! DownloadTask ||
+                !restored.taskId.startsWith('$parentTaskId.part.')) {
+              layoutValid = false;
+              break;
+            }
+            final size = to - from + 1;
+            final savedDurable = (part['durableBytes'] as num?)?.toInt();
+            final complete = part['complete'] == true;
+            if (savedDurable != null &&
+                (savedDurable < 0 || savedDurable > size)) {
+              layoutValid = false;
+              break;
+            }
+            durableBytes += complete
+                ? size
+                : (savedDurable == null ? 0 : savedDurable);
+            childTasks.add(restored);
+            calculatedBytes += size;
+            nextByte = to + 1;
+          }
+          if (!layoutValid || childTasks.isEmpty || calculatedBytes <= 0) {
+            continue;
+          }
+
+          final declaredBytes =
+              (snapshot['totalBytes'] as num?)?.toInt() ??
+              (snapshot['expectedBytes'] as num?)?.toInt() ??
+              -1;
+          if (declaredBytes > 0 && declaredBytes != calculatedBytes) {
+            continue;
+          }
+          final expectedBytes = declaredBytes > 0
+              ? declaredBytes
+              : calculatedBytes;
+
+          ParallelDownloadTask? parentTask;
+          final rawParent = snapshot['parentTask'];
+          if (schemaVersion >= 6 && rawParent is Map) {
+            try {
+              final restored = Task.createFromJson(
+                Map<String, dynamic>.from(rawParent),
+              );
+              if (restored is ParallelDownloadTask &&
+                  restored.taskId == parentTaskId) {
+                final expectedManifest = p.normalize(
+                  '${await restored.filePath()}.parts/manifest.json',
+                );
+                if (expectedManifest == canonicalPath) {
+                  parentTask = restored;
+                }
+              }
+            } catch (_) {
+              parentTask = null;
+            }
+          }
+
+          final stat = await entity.stat();
+          final evidence = ParallelManifestRecoveryEvidence(
+            manifestFile: File(canonicalPath),
+            schemaVersion: schemaVersion,
+            parentTaskId: parentTaskId,
+            parentTask: parentTask,
+            childTasks: List<DownloadTask>.unmodifiable(childTasks),
+            expectedBytes: expectedBytes,
+            durableBytes: durableBytes.clamp(0, expectedBytes),
+            checkpointSequence: checkpointSequence,
+          );
+          grouped
+              .putIfAbsent(
+                canonicalPath,
+                () => <_DiscoveredParallelManifestCandidate>[],
+              )
+              .add(
+                _DiscoveredParallelManifestCandidate(
+                  evidence: evidence,
+                  modifiedMillis: stat.modified.millisecondsSinceEpoch,
+                  isTemp: isTemp,
+                ),
+              );
+        } catch (_) {
+          // Torn/corrupt checkpoints never become recovery authority.
+        }
+      }
+    } catch (_) {
+      // One inaccessible trusted root must not block other roots.
+    }
+  }
+
+  final result = <ParallelManifestRecoveryEvidence>[];
+  for (final candidates in grouped.values) {
+    candidates.sort((a, b) {
+      final bySequence = b.evidence.checkpointSequence.compareTo(
+        a.evidence.checkpointSequence,
+      );
+      if (bySequence != 0) return bySequence;
+      final byModified = b.modifiedMillis.compareTo(a.modifiedMillis);
+      if (byModified != 0) return byModified;
+      if (a.isTemp == b.isTemp) return 0;
+      return a.isTemp ? -1 : 1;
+    });
+    result.add(candidates.first.evidence);
+  }
+  result.sort((a, b) {
+    final byId = a.parentTaskId.compareTo(b.parentTaskId);
+    if (byId != 0) return byId;
+    return a.manifestFile.path.compareTo(b.manifestFile.path);
+  });
+  return result;
+}
+
 /// Validate response metadata from a native multipart child. A full HTTP
 /// 200 is safe only when this child already represents the entire resource;
 /// multi-part ignored-Range responses are handled by the full-body fallback.
