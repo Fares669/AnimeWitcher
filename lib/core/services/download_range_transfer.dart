@@ -735,6 +735,7 @@ class DownloadRangeTransfer {
     var reconnects = 0;
     var lastReportedWritten = written;
     final progressClock = Stopwatch()..start();
+    final checkpoints = _RangeCheckpointWriter(onState);
     final total = opened.total;
     try {
       output = await file.open(mode: FileMode.append);
@@ -755,8 +756,10 @@ class DownloadRangeTransfer {
               lastReportedWritten: lastReportedWritten,
               elapsed: progressClock.elapsed,
             )) {
+              // Flush makes [written] durable before it is published, but do
+              // not make network ingestion wait for Hive/plugin persistence.
               await output.flush();
-              await onState(written, total, false);
+              checkpoints.schedule(written, total, false);
               lastReportedWritten = written;
               progressClock.reset();
             }
@@ -809,6 +812,9 @@ class DownloadRangeTransfer {
       if (written != total || operation.token.isCancelled) {
         throw const FormatException('Range body is incomplete');
       }
+      // Completion is a correctness boundary: all coalesced progress writes
+      // must settle before the terminal checkpoint can be committed.
+      await checkpoints.flush();
       await onState(written, total, true);
       complete = true;
     } catch (error) {
@@ -838,6 +844,16 @@ class DownloadRangeTransfer {
       operation.token.cancel();
       try {
         if (!complete) {
+          // Pause/failure/cancel is also a correctness boundary. Join any
+          // outstanding coalesced write before publishing the paused state.
+          try {
+            await checkpoints.flush();
+          } catch (error) {
+            operation.failure = DownloadRangeFailure(
+              action: DownloadFailureAction.park,
+              error: error,
+            );
+          }
           await onPaused(written, total);
           final failure = operation.failure;
           if (failure != null) {
@@ -951,6 +967,70 @@ bool isNoSpaceDownloadError(Object error) {
   return message.contains('no space left') ||
       message.contains('disk full') ||
       message.contains('not enough space');
+}
+
+class _RangeCheckpoint {
+  const _RangeCheckpoint(this.written, this.total, this.complete);
+
+  final int written;
+  final int total;
+  final bool complete;
+}
+
+/// Serializes persistence observers without serializing network ingestion.
+/// While one callback is in flight, newer progress replaces older pending
+/// progress. [flush] is used at lifecycle boundaries to recover the old
+/// fail-closed ordering without paying storage latency on every network chunk.
+class _RangeCheckpointWriter {
+  _RangeCheckpointWriter(this._callback);
+
+  final Future<void> Function(int written, int total, bool complete) _callback;
+  _RangeCheckpoint? _pending;
+  Future<void>? _drainFuture;
+  Object? _failure;
+  StackTrace? _failureStack;
+
+  void schedule(int written, int total, bool complete) {
+    _pending = _RangeCheckpoint(written, total, complete);
+    _startDrain();
+  }
+
+  void _startDrain() {
+    if (_drainFuture != null || _pending == null) return;
+    _drainFuture = _drain();
+  }
+
+  Future<void> _drain() async {
+    try {
+      while (true) {
+        final next = _pending;
+        if (next == null) break;
+        _pending = null;
+        if (_failure != null) continue;
+        try {
+          await _callback(next.written, next.total, next.complete);
+        } catch (error, stack) {
+          _failure = error;
+          _failureStack = stack;
+        }
+      }
+    } finally {
+      _drainFuture = null;
+      if (_pending != null) _startDrain();
+    }
+  }
+
+  Future<void> flush() async {
+    while (_pending != null || _drainFuture != null) {
+      _startDrain();
+      final drain = _drainFuture;
+      if (drain != null) await drain;
+    }
+    final failure = _failure;
+    if (failure != null) {
+      Error.throwWithStackTrace(failure, _failureStack ?? StackTrace.current);
+    }
+  }
 }
 
 class _RangeSpec {

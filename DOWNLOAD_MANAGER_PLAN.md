@@ -314,7 +314,7 @@
   - **Verification/testing:** kill after every write/effect in start, queue promotion, pause, resume, refresh, child completion, assembly rename, completion, cancel/tombstone and cleanup.
   - **Dependencies:** DM-04, DM-05, DM-10, DM-21, DM-31.
 
-- [ ] **DM-25 — Remove persistence/database backpressure from the Range receive loop**
+- [x] **DM-25 — Remove persistence/database backpressure from the Range receive loop**
   - **Problem:** Range `_receive()` awaits `onState`, which can await JobStore/plugin DB writes while network data is flowing.
   - **Root cause:** progress persistence is synchronous with ingestion instead of coalesced behind a bounded ordered writer.
   - **Severity / priority:** **P1 / High under high throughput or slow storage.**
@@ -322,6 +322,10 @@
   - **Proposed fix:** maintain exact byte counters in the receive path; coalesce ordered background checkpoints at bounded cadence; synchronously flush/join at pause/failure/complete/source-change/cancel/dispose. Bound pending persistence work.
   - **Verification/testing:** high-speed local stream + slow/failing stores; pause with pending snapshot; crash before/after flush; disk-full persistence error; stable throughput and correct boundary bytes.
   - **Dependencies:** DM-21, DM-29, DM-20.
+  - **Implementation notes (2026-09-11):** Range ingestion now separates durable-file flushing from slower JobStore/plugin observers. After each byte/interval threshold the file is flushed, then the newest exact `(written,total)` checkpoint is submitted to a single-flight coalescing writer without awaiting storage in the network receive loop. While one persistence callback is in flight, older pending progress snapshots are replaced by the newest exact durable byte count.
+  - **Boundary semantics:** completion and every pause/failure/cancel exit synchronously join the checkpoint writer before publishing their terminal/paused boundary. Persistence callback errors are retained and converted into a parked failure at the boundary, so throughput optimization does not make lifecycle boundaries fail open. Reconnects keep using the exact in-memory/disk offset and do not create parallel persistence writers.
+  - **Confirmed root cause:** `_receive()` previously awaited `onState()` immediately after each 512 KiB/250 ms flush. That observer can await Hive/JobStore/plugin database work, so storage latency directly stopped socket consumption even though the exact bytes were already durable on disk.
+  - **Verification passed:** RED test proves a blocked progress observer used to stop file ingestion; GREEN coverage proves the file continues to drain while the first observer is blocked, pending snapshots coalesce, and `stop()` retains ownership until the queued checkpoint joins before `onPaused`. Existing Range recovery, durable-byte provenance and lifecycle checkpoint suites plus generated-source-aware `flutter analyze --no-fatal-warnings --no-fatal-infos` and `git diff --check` pass.
 
 - [ ] **DM-13 — Prevent head-of-line blocking and prove fairness across simultaneous downloads**
   - **Problem:** broad serialization can wait on slow probes, range setup or storage while unrelated sessions need promotion.
