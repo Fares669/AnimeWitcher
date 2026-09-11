@@ -8,7 +8,7 @@ GUARD = Path('test/core/services/download_start_outcome_guard_test.dart')
 source = SERVICE.read_text()
 
 enum_anchor = "class DownloadProgressData {\n"
-enum_block = '''enum DownloadCommandOutcome {\n  running,\n  attached,\n  queued,\n  paused,\n  settlingOwnership,\n  alreadyComplete,\n  restartRequired,\n  recoverableFailure,\n  serviceUnavailable,\n  missingState,\n  terminal,\n}\n\nDownloadCommandOutcome downloadCommandOutcomeForJobState(\n  DownloadJobState? state,\n) {\n  return switch (state) {\n    DownloadJobState.running || DownloadJobState.starting =>\n      DownloadCommandOutcome.running,\n    DownloadJobState.queued => DownloadCommandOutcome.queued,\n    DownloadJobState.pausing => DownloadCommandOutcome.settlingOwnership,\n    DownloadJobState.pausedByUser => DownloadCommandOutcome.paused,\n    DownloadJobState.completed => DownloadCommandOutcome.alreadyComplete,\n    DownloadJobState.canceled => DownloadCommandOutcome.terminal,\n    DownloadJobState.interrupted => DownloadCommandOutcome.recoverableFailure,\n    null => DownloadCommandOutcome.missingState,\n  };\n}\n\n'''
+enum_block = '''enum DownloadCommandOutcome {\n  running,\n  attached,\n  queued,\n  paused,\n  settlingOwnership,\n  alreadyComplete,\n  restartRequired,\n  recoverableFailure,\n  serviceUnavailable,\n  missingState,\n  terminal,\n}\n\nDownloadCommandOutcome downloadCommandOutcomeForJobState(\n  DownloadJobState? state,\n) {\n  return switch (state) {\n    DownloadJobState.running ||\n    DownloadJobState.starting ||\n    DownloadJobState.assembling ||\n    DownloadJobState.verifying => DownloadCommandOutcome.running,\n    DownloadJobState.queued => DownloadCommandOutcome.queued,\n    DownloadJobState.retryWaiting || DownloadJobState.interrupted =>\n      DownloadCommandOutcome.recoverableFailure,\n    DownloadJobState.pausing => DownloadCommandOutcome.settlingOwnership,\n    DownloadJobState.pausedByUser => DownloadCommandOutcome.paused,\n    DownloadJobState.completed => DownloadCommandOutcome.alreadyComplete,\n    DownloadJobState.canceled => DownloadCommandOutcome.terminal,\n    DownloadJobState.orphaned || null => DownloadCommandOutcome.missingState,\n  };\n}\n\n'''
 if enum_anchor not in source:
     raise SystemExit('DownloadProgressData anchor missing')
 source = source.replace(enum_anchor, enum_block + enum_anchor, 1)
@@ -24,19 +24,19 @@ start_end = source.index('  Future<List<TaskRecord>> _completeRecordsForEpisode(
 segment = source[start_begin:start_end]
 
 replacements = [
-    ('''          _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);\n          return true;\n''', '''          _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);\n          return DownloadCommandOutcome.attached;\n''', 'existing active attach'),
-    ('''        if (existingRecord.task is! DownloadTask) {\n          return false;\n        }\n''', '''        if (existingRecord.task is! DownloadTask) {\n          return DownloadCommandOutcome.recoverableFailure;\n        }\n''', 'invalid existing task'),
-    ('''          await _attachToLiveNativeTask(existingTask, live: live);\n          _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);\n          return true;\n''', '''          await _attachToLiveNativeTask(existingTask, live: live);\n          _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);\n          return DownloadCommandOutcome.attached;\n''', 'native live attach'),
-    ('''        await _resumeUserPausedUnlocked(existingTask.taskId);\n        return true;\n''', '''        await _resumeUserPausedUnlocked(existingTask.taskId);\n        return downloadCommandOutcomeForJobState(\n          (await _jobStore.get(existingTask.taskId))?.state,\n        );\n''', 'existing resume outcome'),
-    ('''          return true;\n        case CompleteDownloadAction.dropAndEnqueue:\n''', '''          return DownloadCommandOutcome.alreadyComplete;\n        case CompleteDownloadAction.dropAndEnqueue:\n''', 'already complete'),
-    ('''          await _persistNativeWaitingSnapshot();\n          unawaited(_syncSessionOverlay());\n          return true;\n        }\n\n        _startingTaskIds.add(transferTask.taskId);\n''', '''          await _persistNativeWaitingSnapshot();\n          unawaited(_syncSessionOverlay());\n          return DownloadCommandOutcome.queued;\n        }\n\n        _startingTaskIds.add(transferTask.taskId);\n''', 'fresh queued'),
-    ('''          _updatesController.add(\n            TaskStatusUpdate(transferTask, TaskStatus.paused),\n          );\n          return false;\n        }\n\n        await _persistNativeWaitingSnapshot();\n        unawaited(_syncSessionOverlay());\n        return true;\n''', '''          _updatesController.add(\n            TaskStatusUpdate(transferTask, TaskStatus.paused),\n          );\n          return DownloadCommandOutcome.recoverableFailure;\n        }\n\n        await _persistNativeWaitingSnapshot();\n        unawaited(_syncSessionOverlay());\n        return DownloadCommandOutcome.running;\n''', 'fresh enqueue result'),
-    ('''        return false;\n      } finally {\n''', '''        return DownloadCommandOutcome.recoverableFailure;\n      } finally {\n''', 'start catch failure'),
+    ('''          _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);\n          return true;\n''', '''          _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);\n          return DownloadCommandOutcome.attached;\n''', 'existing active attach', 2),
+    ('''        if (existingRecord.task is! DownloadTask) {\n          return false;\n        }\n''', '''        if (existingRecord.task is! DownloadTask) {\n          return DownloadCommandOutcome.recoverableFailure;\n        }\n''', 'invalid existing task', 1),
+    ('''          await _attachToLiveNativeTask(existingTask, live: live);\n          _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);\n          return true;\n''', '''          await _attachToLiveNativeTask(existingTask, live: live);\n          _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);\n          return DownloadCommandOutcome.attached;\n''', 'native live attach', 1),
+    ('''        await _resumeUserPausedUnlocked(existingTask.taskId);\n        return true;\n''', '''        await _resumeUserPausedUnlocked(existingTask.taskId);\n        return downloadCommandOutcomeForJobState(\n          (await _jobStore.get(existingTask.taskId))?.state,\n        );\n''', 'existing resume outcome', 1),
+    ('''          return true;\n        case CompleteDownloadAction.dropAndEnqueue:\n''', '''          return DownloadCommandOutcome.alreadyComplete;\n        case CompleteDownloadAction.dropAndEnqueue:\n''', 'already complete', 1),
+    ('''          await _persistNativeWaitingSnapshot();\n          unawaited(_syncSessionOverlay());\n          return true;\n        }\n\n        _startingTaskIds.add(transferTask.taskId);\n''', '''          await _persistNativeWaitingSnapshot();\n          unawaited(_syncSessionOverlay());\n          return DownloadCommandOutcome.queued;\n        }\n\n        _startingTaskIds.add(transferTask.taskId);\n''', 'fresh queued', 1),
+    ('''          _updatesController.add(\n            TaskStatusUpdate(transferTask, TaskStatus.paused),\n          );\n          return false;\n        }\n\n        await _persistNativeWaitingSnapshot();\n        unawaited(_syncSessionOverlay());\n        return true;\n''', '''          _updatesController.add(\n            TaskStatusUpdate(transferTask, TaskStatus.paused),\n          );\n          return DownloadCommandOutcome.recoverableFailure;\n        }\n\n        await _persistNativeWaitingSnapshot();\n        unawaited(_syncSessionOverlay());\n        return DownloadCommandOutcome.running;\n''', 'fresh enqueue result', 1),
+    ('''        return false;\n      } finally {\n''', '''        return DownloadCommandOutcome.recoverableFailure;\n      } finally {\n''', 'start catch failure', 1),
 ]
-for old, new, label in replacements:
+for old, new, label, expected in replacements:
     count = segment.count(old)
-    if count != 1:
-        raise SystemExit(f'{label}: expected 1 match, got {count}')
+    if count != expected:
+        raise SystemExit(f'{label}: expected {expected} match(es), got {count}')
     segment = segment.replace(old, new, 1)
 source = source[:start_begin] + segment + source[start_end:]
 SERVICE.write_text(source)
@@ -47,22 +47,34 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('downloadCommandOutcomeForJobState', () {
-    test('maps active and queued states without conflating them', () {
-      expect(
-        downloadCommandOutcomeForJobState(DownloadJobState.running),
-        DownloadCommandOutcome.running,
-      );
-      expect(
-        downloadCommandOutcomeForJobState(DownloadJobState.starting),
-        DownloadCommandOutcome.running,
-      );
+    test('maps active pipeline stages and queue distinctly', () {
+      for (final state in [
+        DownloadJobState.starting,
+        DownloadJobState.running,
+        DownloadJobState.assembling,
+        DownloadJobState.verifying,
+      ]) {
+        expect(
+          downloadCommandOutcomeForJobState(state),
+          DownloadCommandOutcome.running,
+        );
+      }
       expect(
         downloadCommandOutcomeForJobState(DownloadJobState.queued),
         DownloadCommandOutcome.queued,
       );
     });
 
-    test('keeps ownership settlement and user pause distinct', () {
+    test('keeps transient failure, ownership settlement and pause distinct', () {
+      for (final state in [
+        DownloadJobState.retryWaiting,
+        DownloadJobState.interrupted,
+      ]) {
+        expect(
+          downloadCommandOutcomeForJobState(state),
+          DownloadCommandOutcome.recoverableFailure,
+        );
+      }
       expect(
         downloadCommandOutcomeForJobState(DownloadJobState.pausing),
         DownloadCommandOutcome.settlingOwnership,
@@ -73,7 +85,7 @@ void main() {
       );
     });
 
-    test('maps terminal, complete, failure and missing state explicitly', () {
+    test('maps terminal, complete, orphaned and absent state explicitly', () {
       expect(
         downloadCommandOutcomeForJobState(DownloadJobState.completed),
         DownloadCommandOutcome.alreadyComplete,
@@ -83,8 +95,8 @@ void main() {
         DownloadCommandOutcome.terminal,
       );
       expect(
-        downloadCommandOutcomeForJobState(DownloadJobState.interrupted),
-        DownloadCommandOutcome.recoverableFailure,
+        downloadCommandOutcomeForJobState(DownloadJobState.orphaned),
+        DownloadCommandOutcome.missingState,
       );
       expect(
         downloadCommandOutcomeForJobState(null),
