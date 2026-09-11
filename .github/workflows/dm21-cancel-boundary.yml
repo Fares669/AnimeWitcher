@@ -1,0 +1,59 @@
+name: DM21 Cancel Boundary
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+
+permissions:
+  contents: write
+
+jobs:
+  dm21:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Setup
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Add guard
+        run: |
+          python3 .github/dm21_cancel_boundary.py tests
+          dart format test/core/services/download_cancel_checkpoint_guard_test.dart
+      - name: Prove RED
+        run: |
+          set +e
+          flutter test test/core/services/download_cancel_checkpoint_guard_test.dart > /tmp/red.log 2>&1
+          status=$?
+          cat /tmp/red.log
+          test "$status" -ne 0
+      - name: Apply
+        run: |
+          python3 .github/dm21_cancel_boundary.py apply
+          dart format lib/core/services/download_service.dart test/core/services/download_cancel_checkpoint_guard_test.dart
+      - name: Test guards
+        run: flutter test test/core/services/download_cancel_checkpoint_guard_test.dart test/core/services/download_lifecycle_checkpoint_guard_test.dart test/core/services/download_persistence_boundary_guard_test.dart
+      - name: Test JobStore
+        run: flutter test test/core/services/download_job_store_test.dart test/core/services/download_job_store_attempt_test.dart
+      - name: Test recovery ownership multipart
+        run: flutter test test/core/services/download_recovery_fault_injection_test.dart test/core/services/download_startup_reconciliation_matrix_test.dart test/core/services/download_zero_restart_invariant_test.dart test/core/services/download_runtime_ownership_test.dart test/core/services/persistent_parallel_download_test.dart
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dm21-cancel-boundary.yml .github/dm21_cancel_boundary.py
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart test/core/services/download_cancel_checkpoint_guard_test.dart
+          git diff --cached --check
+          git commit -m "fix: persist cancel intent before ownership cleanup"
+          git push origin HEAD:plan/download-manager-reliability
