@@ -1,0 +1,334 @@
+name: DM-27 storage headroom verifier
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm27-storage-headroom-verifier.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-apply:
+    if: github.event.head_commit.message == 'chore(ci): verify DM-27 storage headroom'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: plan/download-manager-reliability
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Create bounded filesystem
+        run: |
+          sudo mkdir -p /mnt/dm27
+          sudo mount -t tmpfs -o size=32m tmpfs /mnt/dm27
+          sudo chmod 777 /mnt/dm27
+
+      - name: Prove DM-27 RED before implementation
+        shell: bash
+        run: |
+          set +e
+          DM27_TEST_ROOT=/mnt/dm27 flutter test test/core/services/persistent_parallel_download_storage_headroom_test.dart
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo 'DM-27 behavioral reproduction unexpectedly passed before the fix'
+            exit 1
+          fi
+          rm -rf /mnt/dm27/* || true
+
+      - name: Apply DM-27 implementation
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          pub = Path('pubspec.yaml')
+          s = pub.read_text()
+          needle = '  path_provider: ^2.1.5\n'
+          if '  disk_usage: ^1.0.0\n' not in s:
+            if needle not in s:
+              raise SystemExit('pubspec path_provider anchor drift')
+            s = s.replace(needle, needle + '  disk_usage: ^1.0.0\n', 1)
+          pub.write_text(s)
+
+          path = Path('lib/core/services/persistent_parallel_download.dart')
+          s = path.read_text()
+
+          const_anchor = 'const Duration kParallelProgressPersistInterval = Duration(seconds: 1);\n'
+          addition = '''const Duration kParallelProgressPersistInterval = Duration(seconds: 1);\n\n/// Keep a small reserve beyond the remaining staging allocation so assembly\n/// does not consume the filesystem down to its last metadata blocks.\nconst int kParallelAssemblyStorageReserveBytes = 8 * 1024 * 1024;\n\nenum ParallelAssemblyFailureReason { insufficientStorage }\n\nclass ParallelAssemblyFailure {\n  const ParallelAssemblyFailure({required this.parentTaskId, required this.reason});\n\n  final String parentTaskId;\n  final ParallelAssemblyFailureReason reason;\n}\n'''
+          if 'enum ParallelAssemblyFailureReason' not in s:
+            if const_anchor not in s:
+              raise SystemExit('parallel constants anchor drift')
+            s = s.replace(const_anchor, addition, 1)
+
+          ctor_anchor = '    this.onHostPressure,\n    this.onHostSample,\n  });'
+          ctor_repl = '''    this.onHostPressure,\n    this.onHostSample,\n    this.availableStorageBytes,\n    this.onAssemblyFailure,\n    this.assemblyStorageReserveBytes = kParallelAssemblyStorageReserveBytes,\n  });'''
+          if 'this.availableStorageBytes,' not in s:
+            if ctor_anchor not in s:
+              raise SystemExit('parallel constructor anchor drift')
+            s = s.replace(ctor_anchor, ctor_repl, 1)
+
+          field_anchor = '''  final void Function(String url, int activeConnections, double bytesPerSecond)?\n  onHostSample;\n'''
+          field_repl = '''  final void Function(String url, int activeConnections, double bytesPerSecond)?\n  onHostSample;\n\n  /// Returns free bytes on the volume containing [path]. Null means the host\n  /// could not answer, in which case allocation errors remain the safety net.\n  final Future<int?> Function(String path)? availableStorageBytes;\n  final void Function(ParallelAssemblyFailure failure)? onAssemblyFailure;\n  final int assemblyStorageReserveBytes;\n'''
+          if 'final Future<int?> Function(String path)? availableStorageBytes;' not in s:
+            if field_anchor not in s:
+              raise SystemExit('parallel field anchor drift')
+            s = s.replace(field_anchor, field_repl, 1)
+
+          start = s.find('  Future<void> _assemble(_ParallelSession session) async {')
+          end = s.find('\n}\n\nclass _ParallelSession {', start)
+          if start < 0 or end < 0:
+            raise SystemExit('assembly method boundary drift')
+
+          method = r'''  bool _isInsufficientStorageError(FileSystemException error) {
+    final code = error.osError?.errorCode;
+    if (code == 28 || code == 69 || code == 112 || code == 122) return true;
+    final message = '${error.message} ${error.osError?.message ?? ''}'.toLowerCase();
+    return message.contains('no space left') ||
+        message.contains('disk full') ||
+        message.contains('not enough space') ||
+        message.contains('quota exceeded');
+  }
+
+  Future<bool> _hasAssemblyHeadroom(
+    _ParallelSession session,
+    File target, {
+    required int remainingBytes,
+  }) async {
+    final probe = availableStorageBytes;
+    if (probe == null) return true;
+    try {
+      final free = await probe(target.parent.path);
+      if (free == null || free < 0) return true;
+      final reserve = assemblyStorageReserveBytes < 0
+          ? 0
+          : assemblyStorageReserveBytes;
+      return free >= remainingBytes + reserve;
+    } catch (_) {
+      // Storage telemetry is advisory. The write path below still catches
+      // ENOSPC/EDQUOT and preserves every verified part.
+      return true;
+    }
+  }
+
+  Future<void> _handleAssemblyStorageFailure(
+    _ParallelSession session,
+    File staging, {
+    FileSystemException? error,
+  }) async {
+    diagnosticLog?.record('assembly.insufficientStorage', {
+      'taskId': session.task.taskId,
+      'total': session.size,
+      if (error?.osError?.errorCode != null) 'osError': error!.osError!.errorCode,
+    });
+    try {
+      if (await staging.exists()) await staging.delete();
+    } catch (_) {}
+    onAssemblyFailure?.call(
+      ParallelAssemblyFailure(
+        parentTaskId: session.task.taskId,
+        reason: ParallelAssemblyFailureReason.insufficientStorage,
+      ),
+    );
+    // A storage shortage is recoverable and must never invalidate exact Range
+    // files. Pausing only the logical parent retains all proven parts so a
+    // later resume can retry assembly without another network request.
+    await _pause(session);
+  }
+
+  Future<void> _assemble(_ParallelSession session) async {
+    diagnosticLog?.record('assembly.begin', {
+      'taskId': session.task.taskId,
+      'total': session.size,
+      'count': session.parts.length,
+    });
+    final target = File(await session.task.filePath());
+    if (await target.exists()) {
+      if (await target.length() == session.size) {
+        await _finishCompleteSession(session);
+        return;
+      }
+      await _pause(session);
+      return;
+    }
+
+    final staging = File('${target.path}.assembling');
+    if (!await _hasAssemblyHeadroom(
+      session,
+      target,
+      remainingBytes: session.size,
+    )) {
+      await _handleAssemblyStorageFailure(session, staging);
+      return;
+    }
+
+    RandomAccessFile? output;
+    try {
+      output = await staging.open(mode: FileMode.write);
+      await output.truncate(session.size);
+      await output.setPosition(0);
+      var assembledBytes = 0;
+      for (final part in session.parts) {
+        final file = File(await part.task.filePath());
+        if (!await file.exists() || await file.length() != part.size) {
+          await _pause(session);
+          return;
+        }
+        final remaining = session.size - assembledBytes;
+        if (!await _hasAssemblyHeadroom(
+          session,
+          target,
+          remainingBytes: remaining,
+        )) {
+          await output.close();
+          output = null;
+          await _handleAssemblyStorageFailure(session, staging);
+          return;
+        }
+        await for (final bytes in file.openRead()) {
+          if (session.deleted) return;
+          if (assembledBytes + bytes.length > session.size) {
+            await _pause(session);
+            return;
+          }
+          await output.writeFrom(bytes);
+          assembledBytes += bytes.length;
+        }
+      }
+      if (assembledBytes != session.size) {
+        await _pause(session);
+        return;
+      }
+      await output.flush();
+    } on FileSystemException catch (error) {
+      if (!_isInsufficientStorageError(error)) rethrow;
+      try {
+        await output?.close();
+      } catch (_) {}
+      output = null;
+      await _handleAssemblyStorageFailure(session, staging, error: error);
+      return;
+    } finally {
+      try {
+        await output?.close();
+      } catch (_) {}
+    }
+    if (session.deleted) return;
+    if (!await staging.exists() || await staging.length() != session.size) {
+      await _pause(session);
+      return;
+    }
+    try {
+      await staging.rename(target.path);
+    } on FileSystemException catch (error) {
+      if (!_isInsufficientStorageError(error)) rethrow;
+      await _handleAssemblyStorageFailure(session, staging, error: error);
+      return;
+    }
+    await _finishCompleteSession(session);
+  }
+'''
+          s = s[:start] + method + s[end:]
+          path.write_text(s)
+
+          service = Path('lib/core/services/download_service.dart')
+          d = service.read_text()
+          import_anchor = "import 'package:device_info_plus/device_info_plus.dart';\n"
+          if "package:disk_usage/disk_usage.dart" not in d:
+            if import_anchor not in d:
+              raise SystemExit('download service import anchor drift')
+            d = d.replace(import_anchor, import_anchor + "import 'package:disk_usage/disk_usage.dart';\n", 1)
+
+          args_anchor = '      onPartProgress: (parent, child, progress) {'
+          args_add = '''      availableStorageBytes: (path) => DiskUsage.freeSpace(path),\n      onAssemblyFailure: (failure) {\n        diagnosticLog.record('parallel.failure', {\n          'taskId': failure.parentTaskId,\n          'reason': failure.reason.name,\n        });\n        if (!_disposed) _parallelFailures.add(failure);\n      },\n      onPartProgress: (parent, child, progress) {'''
+          if 'availableStorageBytes: (path) => DiskUsage.freeSpace(path)' not in d:
+            if args_anchor not in d:
+              raise SystemExit('download service parallel callback anchor drift')
+            d = d.replace(args_anchor, args_add, 1)
+
+          controller_anchor = '  final _updatesController = StreamController<TaskUpdate>.broadcast();\n'
+          controller_add = '''  final _updatesController = StreamController<TaskUpdate>.broadcast();\n  final _parallelFailures = StreamController<ParallelAssemblyFailure>.broadcast();\n\n  Stream<ParallelAssemblyFailure> get parallelFailures => _parallelFailures.stream;\n'''
+          if 'Stream<ParallelAssemblyFailure> get parallelFailures' not in d:
+            if controller_anchor not in d:
+              raise SystemExit('download service failure stream anchor drift')
+            d = d.replace(controller_anchor, controller_add, 1)
+
+          dispose_anchor = '    await _updatesController.close();'
+          if 'await _parallelFailures.close();' not in d:
+            if dispose_anchor not in d:
+              raise SystemExit('download service dispose anchor drift')
+            d = d.replace(dispose_anchor, dispose_anchor + '\n    await _parallelFailures.close();', 1)
+          service.write_text(d)
+
+          test = Path('test/core/services/persistent_parallel_download_storage_headroom_test.dart')
+          t = test.read_text()
+          statuses_anchor = '      final statuses = <TaskStatus>[];\n'
+          if 'final assemblyFailures = <ParallelAssemblyFailure>[];' not in t:
+            t = t.replace(statuses_anchor, statuses_anchor + '      final assemblyFailures = <ParallelAssemblyFailure>[];\n', 1)
+          ctor_test_anchor = '        livePartIds: () async => <String>{},\n'
+          ctor_test_add = '''        livePartIds: () async => <String>{},\n        availableStorageBytes: (path) async {\n          final result = await Process.run('df', <String>['-Pk', path]);\n          if (result.exitCode != 0) return null;\n          final lines = (result.stdout as String).trim().split('\\n');\n          final columns = lines.last.trim().split(RegExp(r'\\s+'));\n          return int.parse(columns[3]) * 1024;\n        },\n        assemblyStorageReserveBytes: 4 * 1024,\n        onAssemblyFailure: assemblyFailures.add,\n'''
+          if 'onAssemblyFailure: assemblyFailures.add' not in t:
+            if ctor_test_anchor not in t:
+              raise SystemExit('DM27 test constructor anchor drift')
+            t = t.replace(ctor_test_anchor, ctor_test_add, 1)
+          assertion_anchor = '      expect(statuses, isNot(contains(TaskStatus.complete)));\n'
+          assertion_add = '''      expect(statuses, isNot(contains(TaskStatus.complete)));\n      expect(assemblyFailures, hasLength(1));\n      expect(\n        assemblyFailures.single.reason,\n        ParallelAssemblyFailureReason.insufficientStorage,\n      );\n'''
+          if 'assemblyFailures.single.reason' not in t:
+            if assertion_anchor not in t:
+              raise SystemExit('DM27 test assertion anchor drift')
+            t = t.replace(assertion_anchor, assertion_add, 1)
+          test.write_text(t)
+          PY
+          dart format lib/core/services/persistent_parallel_download.dart lib/core/services/download_service.dart test/core/services/persistent_parallel_download_storage_headroom_test.dart
+          flutter pub get
+
+      - name: Verify DM-27 behavior and regressions
+        env:
+          DM27_TEST_ROOT: /mnt/dm27
+        run: |
+          rm -rf /mnt/dm27/* || true
+          flutter test test/core/services/persistent_parallel_download_storage_headroom_test.dart
+          flutter test test/core/services/persistent_parallel_download_test.dart
+          flutter test test/core/services/persistent_parallel_download_auto_recovery_test.dart
+          flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Mark DM-27 verified and commit
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('DOWNLOAD_MANAGER_PLAN.md')
+          s = p.read_text()
+          old = '- [ ] **DM-27 — Add storage-headroom policy for multipart download and assembly**'
+          new = '- [x] **DM-27 — Add storage-headroom policy for multipart download and assembly**'
+          if old not in s:
+            raise SystemExit('DM-27 checklist anchor missing or already complete')
+          s = s.replace(old, new, 1)
+          dep = '  - **Dependencies:** DM-03, DM-06.\n'
+          note = '''  - **Implementation notes (2026-09-12):** Multipart assembly now preflights and re-evaluates destination-volume headroom using a cross-platform free-space probe, keeps an 8 MiB reserve beyond remaining staging bytes, and still treats ENOSPC/EDQUOT/disk-full allocation failures as authoritative safety evidence when telemetry is unavailable or races. Storage exhaustion emits the typed `ParallelAssemblyFailureReason.insufficientStorage`, removes only the incomplete staging artifact, pauses the logical parent, and preserves every exact completed Range for zero-redownload assembly retry. DownloadService exposes the typed failure stream for UI projection.\n  - **Verification passed:** The bounded-tmpfs behavioral regression was confirmed RED before the fix, then GREEN with all five verified parts preserved through storage exhaustion, a typed `insufficientStorage` signal, no premature completion, and successful assembly after freeing space without starting another Range. Focused multipart recovery/manifest regressions and `flutter analyze --no-fatal-warnings --no-fatal-infos` also passed.\n'''
+          marker = s.find(new)
+          dep_at = s.find(dep, marker)
+          if dep_at < 0:
+            raise SystemExit('DM-27 dependency anchor drift')
+          insert_at = dep_at + len(dep)
+          s = s[:insert_at] + note + s[insert_at:]
+          p.write_text(s)
+          PY
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pubspec.yaml pubspec.lock lib/core/services/persistent_parallel_download.dart lib/core/services/download_service.dart test/core/services/persistent_parallel_download_storage_headroom_test.dart DOWNLOAD_MANAGER_PLAN.md
+          git rm .github/workflows/dm27-storage-headroom-verifier.yml
+          git commit -m 'fix(download): preserve multipart parts on storage exhaustion (DM-27)'
+          git push origin HEAD:plan/download-manager-reliability
