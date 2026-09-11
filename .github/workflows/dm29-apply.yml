@@ -1,0 +1,61 @@
+name: Apply verified DM-29 multipart byte truth
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install and generate
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Apply verified migration
+        run: |
+          git show 04dc8b7c3035691f2627549cf64c0935f263fd04:.github/dm29_slice3.py > /tmp/dm29_slice3.py
+          python3 /tmp/dm29_slice3.py
+          dart format lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+
+      - name: Verify multipart byte-truth guard
+        run: flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+
+      - name: Verify multipart behavior
+        run: flutter test test/core/services/persistent_parallel_download_test.dart
+
+      - name: Verify multipart recovery
+        run: flutter test test/core/services/persistent_parallel_download_recovery_test.dart
+
+      - name: Verify pending-start lease
+        run: flutter test test/core/services/persistent_parallel_download_pending_start_lease_test.dart
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Commit verified slice and self-clean
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dm29-apply.yml DM29_DIAGNOSTIC.md
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          git diff --cached --check
+          git commit -m "fix: persist exact multipart durable bytes"
+          git push origin HEAD:plan/download-manager-reliability
