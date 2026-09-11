@@ -105,5 +105,22 @@ void main() {
         lessThan(body.indexOf('record.status == TaskStatus.paused')),
       );
     });
+
+    test('session overlay status and waiting intent are JobState-first', () {
+      final source = File(
+        'lib/core/services/download_service.dart',
+      ).readAsStringSync();
+      final start = source.indexOf('Future<DownloadOverlaySession> _planSessionOverlay(');
+      final end = source.indexOf('Future<void> _syncSessionOverlay(', start);
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
+
+      expect(body, contains('final job = await _jobStore.get(record.task.taskId)'));
+      expect(body, contains('downloadJobQueueWaiting(job.state)'));
+      expect(body, contains('downloadJobOccupiesSlot(job.state)'));
+      expect(body, contains('downloadJobDisplayStatus(job.state)'));
+      expect(body, contains('Pre-JobStore migration fallback'));
+    });
   });
 }
