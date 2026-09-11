@@ -66,13 +66,49 @@ new_status = '''      final displayStatus = job != null
             );
 '''
 
-if new_start in source and new_status in source:
-    raise SystemExit(0)
-if source.count(old_start) != 1:
-    raise SystemExit(f'overlay start anchor mismatch: {source.count(old_start)}')
-if source.count(old_status) != 1:
-    raise SystemExit(f'overlay status anchor mismatch: {source.count(old_status)}')
+old_waiter = '''    for (final payload in _waitingPayloads.entries) {
+      if (seen.contains(payload.key)) continue;
+      _rememberSessionTask(payload.key);
+      entries.add(
+        DownloadOverlayEntry(
+          taskId: payload.key,
+          status: TaskStatus.enqueued,
+          displayName: payload.value['displayName'] as String? ?? '',
+          queueWaiting: true,
+'''
+new_waiter = '''    for (final payload in _waitingPayloads.entries) {
+      if (seen.contains(payload.key)) continue;
+      final job = await _jobStore.get(payload.key);
+      if (job != null && !downloadJobQueueWaiting(job.state)) continue;
+      _rememberSessionTask(payload.key);
+      entries.add(
+        DownloadOverlayEntry(
+          taskId: payload.key,
+          status: job != null
+              ? downloadJobDisplayStatus(job.state)
+              : TaskStatus.enqueued,
+          displayName: payload.value['displayName'] as String? ?? '',
+          queueWaiting: job != null
+              ? downloadJobQueueWaiting(job.state)
+              : true,
+'''
 
-source = source.replace(old_start, new_start, 1)
-source = source.replace(old_status, new_status, 1)
-path.write_text(source)
+changed = False
+if new_start not in source:
+    if source.count(old_start) != 1:
+        raise SystemExit(f'overlay start anchor mismatch: {source.count(old_start)}')
+    source = source.replace(old_start, new_start, 1)
+    changed = True
+if new_status not in source:
+    if source.count(old_status) != 1:
+        raise SystemExit(f'overlay status anchor mismatch: {source.count(old_status)}')
+    source = source.replace(old_status, new_status, 1)
+    changed = True
+if new_waiter not in source:
+    if source.count(old_waiter) != 1:
+        raise SystemExit(f'overlay waiter anchor mismatch: {source.count(old_waiter)}')
+    source = source.replace(old_waiter, new_waiter, 1)
+    changed = True
+
+if changed:
+    path.write_text(source)
