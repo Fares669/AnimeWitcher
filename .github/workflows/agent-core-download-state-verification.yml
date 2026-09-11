@@ -41,56 +41,47 @@ jobs:
           test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
-  dm05-state-authority:
-    name: DM05 JobState authority
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      - name: Apply guarded DM05 patch
-        run: python3 .github/scripts/agent_dm05_overlay_state_patch.py
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.47.1
-          cache: true
-      - name: Prepare
-        run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-      - name: Run DM05 regressions
-        run: >-
-          flutter test
-          test/core/services/download_job_state_authority_test.dart
-          test/core/services/download_job_state_queue_authority_test.dart
-          test/features/library/presentation/downloads_job_state_authority_test.dart
-          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Verify patch cleanliness
-        run: git diff --check
-      - name: Commit verified DM05 fix
-        run: |
-          if git diff --quiet -- lib/core/services/download_service.dart; then
-            echo 'DM05 patch already applied'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add lib/core/services/download_service.dart
-          git commit -m 'fix(downloads): make session overlay JobState authoritative'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-
-  dm24-logical-identity:
-    name: DM24 canonical logical identity
-    needs: dm05-state-authority
+  core-state-chain:
+    name: DM05 -> DM24 -> DM06 -> DM16
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
           fetch-depth: 0
-      - name: Apply guarded DM24 patches
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Prepare once
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Apply DM05 JobState authority patch
+        run: |
+          python3 .github/scripts/agent_dm05_overlay_state_patch.py
+          dart format lib/core/services/download_service.dart
+      - name: Verify DM05
+        run: >-
+          flutter test
+          test/core/services/download_job_state_authority_test.dart
+          test/core/services/download_job_state_queue_authority_test.dart
+          test/features/library/presentation/downloads_job_state_authority_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Commit DM05 locally
+        run: |
+          git diff --check
+          if ! git diff --quiet -- lib/core/services/download_service.dart; then
+            git add lib/core/services/download_service.dart
+            git commit -m 'fix(downloads): make session overlay JobState authoritative'
+          fi
+
+      - name: Apply DM24 logical identity patches
         run: |
           if ! grep -q '_jobStore.allForLogicalId(logicalId)' lib/core/services/download_service.dart; then
             python3 .github/scripts/dm24_start_identity_patch.py
@@ -98,19 +89,11 @@ jobs:
           if ! grep -q 'final String? logicalId;' lib/features/library/presentation/downloads_provider.dart; then
             python3 .github/scripts/dm24_ui_identity_patch.py
           fi
-          python3 .github/scripts/agent_dm24_identity_completion_patch.py
+          if ! grep -q 'final allJobs = await _jobStore.all()' lib/core/services/download_service.dart; then
+            python3 .github/scripts/agent_dm24_identity_completion_patch.py
+          fi
           dart format lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.47.1
-          cache: true
-      - name: Prepare
-        run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-      - name: Run DM24 regressions
+      - name: Verify DM24
         run: >-
           flutter test
           test/core/services/download_job_logical_identity_test.dart
@@ -121,18 +104,79 @@ jobs:
           test/features/library/presentation/downloads_logical_identity_test.dart
           test/core/services/download_job_state_queue_authority_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Analyze changed identity surfaces
+      - name: Analyze DM24 surfaces
         run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart lib/core/services/download_logical_identity.dart lib/core/services/download_job_store.dart lib/features/library/presentation/downloads_provider.dart
-      - name: Verify patch cleanliness
-        run: git diff --check
-      - name: Commit verified DM24 fix
+      - name: Commit DM24 locally
         run: |
-          if git diff --quiet -- lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart; then
-            echo 'DM24 patches already applied'
+          git diff --check
+          if ! git diff --quiet -- lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart; then
+            git add lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart
+            git commit -m 'fix(downloads): canonicalize logical episode identity'
+          fi
+
+      - name: Apply DM06 resource identity patch
+        run: |
+          if ! grep -q 'completion.verificationRejected' lib/core/services/download_service.dart; then
+            python3 .github/scripts/agent_dm06_resource_integrity_patch.py
+            python3 .github/scripts/agent_dm06_probe_method_patch.py
+          fi
+          dart format lib/core/services/download_service.dart lib/core/services/download_resource_identity.dart
+      - name: Verify DM06
+        run: >-
+          flutter test
+          test/core/services/download_resource_identity_test.dart
+          test/core/services/download_resource_identity_service_guard_test.dart
+          test/core/services/download_job_store_test.dart
+          test/core/services/download_source_refresh_integrity_test.dart
+          test/core/services/download_parallel_complete_artifact_guard_test.dart
+          test/core/services/download_range_checkpoint_backpressure_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze DM06 surfaces
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart lib/core/services/download_resource_identity.dart lib/core/services/download_job_store.dart lib/core/services/download_range_transfer.dart
+      - name: Commit DM06 locally
+        run: |
+          git diff --check
+          if ! git diff --quiet -- lib/core/services/download_service.dart; then
+            git add lib/core/services/download_service.dart
+            git commit -m 'fix(downloads): verify remote identity before completion'
+          fi
+
+      - name: Apply DM16 historical progress separation
+        run: |
+          if ! grep -q 'Historical UI progress is not recoverable-byte evidence' lib/core/utils/download_resume.dart; then
+            python3 .github/scripts/agent_dm16_progress_evidence_patch.py
+          fi
+          dart format lib/core/utils/download_resume.dart lib/core/services/download_service.dart
+      - name: Verify DM16
+        run: >-
+          flutter test
+          test/core/services/download_zero_restart_invariant_test.dart
+          test/core/services/download_historical_progress_recovery_test.dart
+          test/core/services/download_durable_byte_contract_guard_test.dart
+          test/core/services/download_durable_byte_provenance_guard_test.dart
+          test/core/services/download_recovery_snapshot_test.dart
+          test/core/services/download_recovery_reconciliation_guard_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze DM16 surfaces
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/utils/download_resume.dart lib/core/services/download_service.dart
+      - name: Commit DM16 locally
+        run: |
+          git diff --check
+          if ! git diff --quiet -- lib/core/utils/download_resume.dart lib/core/services/download_service.dart; then
+            git add lib/core/utils/download_resume.dart lib/core/services/download_service.dart
+            git commit -m 'fix(downloads): separate progress history from resumable bytes'
+          fi
+
+      - name: Full analyzer verification
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Full Flutter regression suite
+        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Final diff verification
+        run: git diff --check
+      - name: Push verified production commits once
+        run: |
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/${{ github.event.pull_request.head.ref }})" ]; then
+            echo 'All production fixes already present'
             exit 0
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart
-          git commit -m 'fix(downloads): canonicalize logical episode identity'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
