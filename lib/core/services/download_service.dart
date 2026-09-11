@@ -1322,23 +1322,32 @@ class DownloadService {
   }
 
   Future<void> _recoverPersistedDownloads() async {
-    final records = await FileDownloader().database.allRecords();
-    diagnosticLog.record('recovery.begin', {'count': records.length});
+    final persistedRecords = await FileDownloader().database.allRecords();
+    final runtimeTasks = await _liveTransferTasks();
+    final inventory = buildDownloadRecoveryInventory(
+      persistedRecords: persistedRecords,
+      runtimeTasks: runtimeTasks,
+    );
+    final records = inventory.records;
+    diagnosticLog.record('recovery.begin', {
+      'count': records.length,
+      'nativeOnly': inventory.nativeOnlyTaskIds.length,
+    });
     for (final record in records) {
       diagnosticLog.record('recovery.record', {
         'taskId': record.task.taskId,
         'status': record.status.name,
         'progress': record.progress,
+        'nativeOnly': inventory.nativeOnlyTaskIds.contains(record.task.taskId),
       });
     }
     final nativeIds = <String>{
-      for (final task in await _liveTransferTasks())
+      for (final task in runtimeTasks)
         if (isLogicalEpisodeDownloadTask(task)) task.taskId,
     };
     final storage = _ref.read(storageServiceProvider);
 
     for (final record in records) {
-      if (!isLogicalEpisodeDownloadTask(record.task)) continue;
       final task = record.task as DownloadTask;
       final trackingUrl = downloadTrackingUrl(task);
       final metadata = await storage.getDownloadMetadata(task.taskId);
@@ -1492,6 +1501,23 @@ class DownloadService {
         }
       } else {
         await _jobStore.put(migratedJob);
+      }
+
+      if (inventory.nativeOnlyTaskIds.contains(task.taskId) &&
+          recoveryPlan.action != DownloadRecoveryAction.ignore) {
+        // The runtime already owns this task but the executor DB projection was
+        // lost. Repair the projection only after durable logical state exists;
+        // this is not a start/enqueue operation and therefore cannot create a
+        // second writer. A user-pause path below may immediately settle it to
+        // paused once ownership release is acknowledged.
+        await FileDownloader().database.updateRecord(
+          TaskRecord(task, TaskStatus.running, progress, expectedBytes),
+        );
+        diagnosticLog.record('recovery.repairedPluginProjection', {
+          'taskId': task.taskId,
+          'progress': progress,
+          'expectedBytes': expectedBytes,
+        });
       }
 
       if (oldJob != null &&
