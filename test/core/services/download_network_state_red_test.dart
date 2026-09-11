@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:animewitcher/core/services/download_job_state.dart';
 import 'package:animewitcher/core/services/download_retry_policy.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
