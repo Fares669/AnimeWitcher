@@ -1,0 +1,46 @@
+name: Diagnose download notification settings test
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Prepare
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Reproduce focused test as-is
+        shell: bash
+        run: |
+          set +e
+          flutter test test/features/settings/presentation/download_concurrency_settings_test.dart --plain-name 'Settings can turn all download notifications off' > /tmp/as-is.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/as-is.log
+          echo "AS_IS_STATUS=$status"
+      - name: Probe whether async write settles later
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('test/features/settings/presentation/download_concurrency_settings_test.dart')
+          s = p.read_text()
+          needle = """    await tester.tap(find.text('كل الإشعارات'));\n    await tester.pumpAndSettle();\n\n    expect(\n      storage.getDownloadNotificationPrefs(),\n      DownloadNotificationPrefs.disabled,\n    );\n"""
+          repl = """    await tester.tap(find.text('كل الإشعارات'));\n    await tester.pumpAndSettle();\n\n    print('PREFS_IMMEDIATE=${storage.getDownloadNotificationPrefs().toJson()}');\n    await tester.runAsync(() async {\n      for (var attempt = 0; attempt < 100; attempt++) {\n        if (storage.getDownloadNotificationPrefs().noneEnabled) return;\n        await Future<void>.delayed(const Duration(milliseconds: 25));\n      }\n    });\n    await tester.pump();\n    print('PREFS_DELAYED=${storage.getDownloadNotificationPrefs().toJson()}');\n\n    expect(\n      storage.getDownloadNotificationPrefs(),\n      DownloadNotificationPrefs.disabled,\n    );\n"""
+          if needle not in s:
+              raise SystemExit('probe anchor not found')
+          p.write_text(s.replace(needle, repl, 1))
+          PY
+          dart format test/features/settings/presentation/download_concurrency_settings_test.dart
+          flutter test test/features/settings/presentation/download_concurrency_settings_test.dart --plain-name 'Settings can turn all download notifications off'
