@@ -69,6 +69,25 @@ TaskStatus downloadJobTaskStatus(DownloadJobState state) {
   };
 }
 
+/// User-visible projection of durable logical state. This intentionally differs
+/// from [downloadJobTaskStatus] for queued work: executor compatibility may
+/// persist it as paused, while the UI must show it as waiting/enqueued.
+TaskStatus downloadJobDisplayStatus(DownloadJobState state) {
+  return switch (state) {
+    DownloadJobState.queued || DownloadJobState.starting => TaskStatus.enqueued,
+    DownloadJobState.running ||
+    DownloadJobState.pausing ||
+    DownloadJobState.assembling ||
+    DownloadJobState.verifying => TaskStatus.running,
+    DownloadJobState.retryWaiting => TaskStatus.waitingToRetry,
+    DownloadJobState.pausedByUser ||
+    DownloadJobState.interrupted ||
+    DownloadJobState.orphaned => TaskStatus.paused,
+    DownloadJobState.completed => TaskStatus.complete,
+    DownloadJobState.canceled => TaskStatus.canceled,
+  };
+}
+
 /// What startup reconciliation should do after deriving the logical state.
 enum DownloadRecoveryAction {
   /// The OS/native downloader still owns the transfer. Attach to it and never

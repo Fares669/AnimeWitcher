@@ -7,6 +7,7 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/download_concurrency.dart';
+import '../../../core/services/download_job_state.dart';
 import '../../../core/services/download_service.dart';
 import '../../../core/utils/download_cleanup.dart';
 import 'download_episode_artwork.dart';
@@ -179,6 +180,7 @@ DownloadItem? downloadItemFromTaskMetadata({
   required Task task,
   required TaskStatus status,
   required Map<String, dynamic> metadata,
+  DownloadJobState? logicalState,
   double progress = 0,
 }) {
   final rawItem = metadata['item'];
@@ -189,10 +191,12 @@ DownloadItem? downloadItemFromTaskMetadata({
   }
   return DownloadItem(
     task: task,
-    status: displayDownloadStatus(
-      persisted: status,
-      queueWaiting: isQueueWaitingMetadata(metadata),
-    ),
+    status: logicalState != null
+        ? downloadJobDisplayStatus(logicalState)
+        : displayDownloadStatus(
+            persisted: status,
+            queueWaiting: isQueueWaitingMetadata(metadata),
+          ),
     progress: storedProgress,
     item: MultimediaItem.fromJson(Map<String, dynamic>.from(rawItem)),
     episode: metadata['episode'] != null
@@ -229,35 +233,49 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   Future<List<DownloadItem>> _refreshList() async {
     final records = await FileDownloader().database.allRecords();
     final storage = ref.read(storageServiceProvider);
+    final downloadService = ref.read(downloadServiceProvider);
 
     final List<DownloadItem> items = [];
 
     for (final record in records) {
-      // Skip non-download tasks and cancelled ones. Failed downloads are kept
-      // and shown as paused so the user can resume instead of starting over.
       if (record.task is! DownloadTask) continue;
-      if (record.status == TaskStatus.canceled) {
-        continue;
-      }
+      final logicalState = await downloadService.logicalJobStateForTask(
+        record.task.taskId,
+      );
 
       var status = record.status;
       var progress = record.progress;
-      if (status == TaskStatus.failed || status == TaskStatus.notFound) {
-        status = TaskStatus.paused;
-        if (progress < 0 || progress > 1) progress = 0.0;
-        unawaited(
-          FileDownloader().database.updateRecord(
-            TaskRecord(
-              record.task,
-              TaskStatus.paused,
-              progress,
-              record.expectedFileSize,
+      if (logicalState != null) {
+        // JobStore is the lifecycle authority. Stale plugin paused/failed/
+        // canceled rows are executor evidence only and cannot redefine intent.
+        if (logicalState == DownloadJobState.canceled ||
+            logicalState == DownloadJobState.orphaned) {
+          continue;
+        }
+        status = downloadJobDisplayStatus(logicalState);
+        if (progress < 0 || progress > 1) {
+          progress = logicalState == DownloadJobState.completed ? 1.0 : 0.0;
+        }
+      } else {
+        // Pre-JobStore migration fallback: legacy rows without a durable job
+        // retain the old plugin-status normalization until they are migrated.
+        if (status == TaskStatus.canceled) continue;
+        if (status == TaskStatus.failed || status == TaskStatus.notFound) {
+          status = TaskStatus.paused;
+          if (progress < 0 || progress > 1) progress = 0.0;
+          unawaited(
+            FileDownloader().database.updateRecord(
+              TaskRecord(
+                record.task,
+                TaskStatus.paused,
+                progress,
+                record.expectedFileSize,
+              ),
             ),
-          ),
-        );
-      } else if (progress < 0 || progress > 1) {
-        // Sentinel progress values from the downloader (failed/paused markers)
-        progress = status == TaskStatus.complete ? 1.0 : 0.0;
+          );
+        } else if (progress < 0 || progress > 1) {
+          progress = status == TaskStatus.complete ? 1.0 : 0.0;
+        }
       }
 
       final metadata = await storage.getDownloadMetadata(record.task.taskId);
@@ -266,6 +284,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         task: record.task,
         status: status,
         metadata: metadata,
+        logicalState: logicalState,
         progress: progress,
       );
       if (item == null) continue;
@@ -314,6 +333,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     if (state.value == null || _deletingIds.contains(update.task.taskId))
       return;
 
+    final logicalState = await ref
+        .read(downloadServiceProvider)
+        .logicalJobStateForTask(update.task.taskId);
+
     // DownloadService already exposes sampled live metrics. Keep the durable
     // list snapshot to the same one-second cadence so the whole downloads page
     // does not rebuild for every native didWriteData packet.
@@ -342,9 +365,19 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         if (update.progress >= 0 && update.progress <= 1) {
           newProgress = update.progress;
         }
+        if (logicalState != null) {
+          newStatus = downloadJobDisplayStatus(logicalState);
+        }
       } else if (update is TaskStatusUpdate) {
-        newStatus = update.status;
-        if (update.status == TaskStatus.complete) newProgress = 1.0;
+        if (logicalState != null) {
+          newStatus = downloadJobDisplayStatus(logicalState);
+          if (logicalState == DownloadJobState.completed) newProgress = 1.0;
+        } else {
+          // Pre-JobStore migration fallback: raw executor status remains the
+          // projection only until a durable logical job exists.
+          newStatus = update.status;
+          if (update.status == TaskStatus.complete) newProgress = 1.0;
+        }
       }
 
       if (newStatus == TaskStatus.canceled) {
@@ -389,9 +422,13 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     } else {
       // New download: show the row as soon as Hive metadata exists, even if
       // FileDownloader has not written the record yet (HQ overflow).
+      final projectedStatus = logicalState != null
+          ? downloadJobDisplayStatus(logicalState)
+          : (update is TaskStatusUpdate ? update.status : null);
       if (update is TaskStatusUpdate &&
           update.task is DownloadTask &&
-          isActiveDownloadStatus(update.status)) {
+          projectedStatus != null &&
+          isActiveDownloadStatus(projectedStatus)) {
         final metadata = await ref
             .read(storageServiceProvider)
             .getDownloadMetadata(update.task.taskId);
@@ -399,8 +436,9 @@ class DownloadsNotifier extends _$DownloadsNotifier {
             ? null
             : downloadItemFromTaskMetadata(
                 task: update.task,
-                status: update.status,
+                status: projectedStatus,
                 metadata: metadata,
+                logicalState: logicalState,
               );
         if (incoming != null) {
           final collapsed = collapseDuplicateDownloads([

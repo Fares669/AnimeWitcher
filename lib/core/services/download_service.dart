@@ -487,6 +487,14 @@ class DownloadService {
 
   Stream<TaskUpdate> get updates => _updatesController.stream;
 
+  /// Read-only logical lifecycle projection for UI surfaces. Executor/plugin
+  /// status remains evidence and must not overwrite a durable JobStore state.
+  Future<DownloadJobState?> logicalJobStateForTask(String taskId) async {
+    final id = taskId.trim();
+    if (id.isEmpty) return null;
+    return (await _jobStore.get(id))?.state;
+  }
+
   void _handleNativeTaskUpdate({
     required String taskId,
     required String trackingUrl,
