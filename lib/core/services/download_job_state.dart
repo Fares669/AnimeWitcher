@@ -75,6 +75,34 @@ DownloadDurableOnlyRecoveryDisposition planDurableOnlyRecoveryDisposition({
       : DownloadDurableOnlyRecoveryDisposition.orphan;
 }
 
+enum DownloadMissingPresentationRecoveryDisposition {
+  recover,
+  settleOwner,
+  orphan,
+  preserveTerminal,
+}
+
+/// Decide what startup may do when the executor/task identity survived but the
+/// AnimeWitcher presentation identity did not. Never restart a hidden transfer:
+/// a live writer is settled first, while terminal logical state is preserved.
+DownloadMissingPresentationRecoveryDisposition planMissingPresentationRecovery({
+  required bool hasPresentationMetadata,
+  required bool hasLiveOwnership,
+  DownloadJobState? authoritativeState,
+}) {
+  if (authoritativeState == DownloadJobState.completed ||
+      authoritativeState == DownloadJobState.canceled ||
+      authoritativeState == DownloadJobState.orphaned) {
+    return DownloadMissingPresentationRecoveryDisposition.preserveTerminal;
+  }
+  if (hasPresentationMetadata) {
+    return DownloadMissingPresentationRecoveryDisposition.recover;
+  }
+  return hasLiveOwnership
+      ? DownloadMissingPresentationRecoveryDisposition.settleOwner
+      : DownloadMissingPresentationRecoveryDisposition.orphan;
+}
+
 /// Build one deterministic startup inventory from every source that can carry
 /// a complete logical task descriptor. Source precedence is deliberate:
 /// persisted executor projection > live runtime ownership > durable snapshot.

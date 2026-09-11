@@ -1529,6 +1529,92 @@ class DownloadService {
           record.status == TaskStatus.waitingToRetry;
       final stillNative =
           nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);
+      final hasLiveOwnership =
+          stillNative || _parallel.hasLiveConnections(task.taskId);
+      final presentationDisposition = planMissingPresentationRecovery(
+        hasPresentationMetadata: metadata?['item'] is Map,
+        hasLiveOwnership: hasLiveOwnership,
+        authoritativeState: oldJob?.state,
+      );
+      if (presentationDisposition ==
+          DownloadMissingPresentationRecoveryDisposition.preserveTerminal) {
+        if (hasLiveOwnership) {
+          try {
+            await _pauseTransfer(task);
+          } catch (_) {
+            // The terminal durable state stays authoritative. A later
+            // reconciliation pass retries settlement without revival.
+          }
+        }
+        _queueWaitingIds.remove(task.taskId);
+        _waitingPayloads.remove(task.taskId);
+        _forgetSessionTask(task.taskId);
+        continue;
+      }
+      if (presentationDisposition !=
+          DownloadMissingPresentationRecoveryDisposition.recover) {
+        final expectedForOrphan = knownDownloadSize(<int?>[
+          record.expectedFileSize,
+          downloadMetadataExpectedBytes(metadata),
+          oldJob?.expectedBytes,
+        ]);
+        if (presentationDisposition ==
+            DownloadMissingPresentationRecoveryDisposition.settleOwner) {
+          final pausingCommitted = await _checkpointLogicalJob(
+            task,
+            state: DownloadJobState.pausing,
+            expectedBytes: expectedForOrphan,
+            userPaused: false,
+            queueWaiting: false,
+          );
+          if (!pausingCommitted) {
+            diagnosticLog.record('recovery.missingPresentationSettling', {
+              'taskId': task.taskId,
+              'reason': 'checkpointFailed',
+            });
+            continue;
+          }
+          var settled = false;
+          try {
+            settled = await _pauseTransfer(task);
+          } catch (_) {
+            settled = false;
+          }
+          if (!settled) {
+            diagnosticLog.record('recovery.missingPresentationSettling', {
+              'taskId': task.taskId,
+              'reason': 'ownershipNotReleased',
+            });
+            continue;
+          }
+        }
+
+        final orphanCommitted = await _checkpointLogicalJob(
+          task,
+          state: DownloadJobState.orphaned,
+          expectedBytes: expectedForOrphan,
+          userPaused: false,
+          queueWaiting: false,
+        );
+        if (!orphanCommitted) {
+          diagnosticLog.record('recovery.missingPresentationSettling', {
+            'taskId': task.taskId,
+            'reason': 'orphanCheckpointFailed',
+          });
+          continue;
+        }
+        _queueWaitingIds.remove(task.taskId);
+        _waitingPayloads.remove(task.taskId);
+        _forgetSessionTask(task.taskId);
+        await FileDownloader().database.updateRecord(
+          TaskRecord(task, TaskStatus.paused, progress, expectedForOrphan),
+        );
+        diagnosticLog.record('recovery.orphanedMissingPresentation', {
+          'taskId': task.taskId,
+          'source': stillNative ? 'runtime' : 'executor',
+        });
+        continue;
+      }
       final userPaused =
           isUserPausedMetadata(metadata) ||
           _userPausedIds.contains(task.taskId) ||
