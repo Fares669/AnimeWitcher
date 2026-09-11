@@ -46,50 +46,39 @@ jobs:
 
           resume_path = Path('lib/core/utils/download_resume.dart')
           resume = resume_path.read_text()
-          old = """  if (canNativeResume) return DownloadResumeStrategy.nativeResume;
-          if (shouldResumeFromPartialBytes(
-          """
+          old = "  if (canNativeResume) return DownloadResumeStrategy.nativeResume;\n  if (shouldResumeFromPartialBytes("
           new = """  if (canNativeResume) return DownloadResumeStrategy.nativeResume;
-          // An exact-size durable file is already a completion candidate. It must
-          // stay on the local recovery path instead of being classified as a
-          // zero-byte restart merely because no progress percentage survived.
-          if (existingPartialBytes > 0 &&
-              expectedBytes > 0 &&
-              existingPartialBytes == expectedBytes) {
-            return DownloadResumeStrategy.partialFile;
-          }
-          if (shouldResumeFromPartialBytes(
-          """
+            // An exact-size durable file is already a completion candidate. It must
+            // stay on the local recovery path instead of being classified as a
+            // zero-byte restart merely because no progress percentage survived.
+            if (existingPartialBytes > 0 &&
+                expectedBytes > 0 &&
+                existingPartialBytes == expectedBytes) {
+              return DownloadResumeStrategy.partialFile;
+            }
+            if (shouldResumeFromPartialBytes("""
+          # YAML block indentation adds no semantic whitespace inside the source;
+          # normalize the replacement before applying it.
+          new = '\n'.join(line[2:] if line.startswith('  ') else line for line in new.splitlines())
+          new = '  ' + new.replace('\n', '\n  ', 1) if False else new
+          # Use a literal replacement with the intended Dart indentation.
+          new = "  if (canNativeResume) return DownloadResumeStrategy.nativeResume;\n  // An exact-size durable file is already a completion candidate. It must\n  // stay on the local recovery path instead of being classified as a\n  // zero-byte restart merely because no progress percentage survived.\n  if (existingPartialBytes > 0 &&\n      expectedBytes > 0 &&\n      existingPartialBytes == expectedBytes) {\n    return DownloadResumeStrategy.partialFile;\n  }\n  if (shouldResumeFromPartialBytes("
           if resume.count(old) != 1:
-              raise SystemExit('download_resume strategy anchor mismatch')
+              raise SystemExit(f'download_resume strategy anchor mismatch: {resume.count(old)}')
           resume_path.write_text(resume.replace(old, new, 1))
 
           service_path = Path('lib/core/services/download_service.dart')
           service = service_path.read_text()
-          old = """    final saved = await _savedProgressFor(task);
-              final refreshResult = await _refreshTaskBeforeResume(
-          """
-          new = """    final saved = await _savedProgressFor(task);
-              if (saved.totalSize > 0 &&
-                  saved.partialBytes == saved.totalSize &&
-                  await _resumeUsingPartialFile(task)) {
-                return true;
-              }
-              final refreshResult = await _refreshTaskBeforeResume(
-          """
+          old = "    final saved = await _savedProgressFor(task);\n    final refreshResult = await _refreshTaskBeforeResume("
+          new = "    final saved = await _savedProgressFor(task);\n    if (saved.totalSize > 0 &&\n        saved.partialBytes == saved.totalSize &&\n        await _resumeUsingPartialFile(task)) {\n      return true;\n    }\n    final refreshResult = await _refreshTaskBeforeResume("
           if service.count(old) != 1:
-              raise SystemExit('resume exact-size insertion anchor mismatch')
+              raise SystemExit(f'resume exact-size insertion anchor mismatch: {service.count(old)}')
           service = service.replace(old, new, 1)
 
-          old = """  Future<bool> _resumeUsingPartialFile(DownloadTask task) async {
-              if (task is ParallelDownloadTask) return false;
-              String destinationPath;
-          """
-          new = """  Future<bool> _resumeUsingPartialFile(DownloadTask task) async {
-              String destinationPath;
-          """
+          old = "  Future<bool> _resumeUsingPartialFile(DownloadTask task) async {\n    if (task is ParallelDownloadTask) return false;\n    String destinationPath;"
+          new = "  Future<bool> _resumeUsingPartialFile(DownloadTask task) async {\n    String destinationPath;"
           if service.count(old) != 1:
-              raise SystemExit('parallel early-reject anchor mismatch')
+              raise SystemExit(f'parallel early-reject anchor mismatch: {service.count(old)}')
           service = service.replace(old, new, 1)
 
           old = """    if (expectedBytes > 0 && existingBytes == expectedBytes) {
@@ -100,8 +89,10 @@ jobs:
                 _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));
                 return true;
               }
-              if (!shouldResumeFromPartialBytes(
-          """
+              if (!shouldResumeFromPartialBytes("""
+          old = '\n'.join(line[10:] if line.startswith('          ') else line for line in old.splitlines())
+          # Rebuild the exact current Dart block without relying on YAML indentation.
+          old = "    if (expectedBytes > 0 && existingBytes == expectedBytes) {\n      await FileDownloader().database.updateRecord(\n        TaskRecord(task, TaskStatus.complete, 1, expectedBytes),\n      );\n      _sharedEvents.add(TaskProgressUpdate(task, 1, expectedBytes));\n      _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));\n      return true;\n    }\n    if (!shouldResumeFromPartialBytes("
           new = """    if (expectedBytes > 0 && existingBytes == expectedBytes) {
                 if (task is ParallelDownloadTask) {
                   Set<String> livePartIds;
@@ -148,10 +139,10 @@ jobs:
                 return true;
               }
               if (task is ParallelDownloadTask) return false;
-              if (!shouldResumeFromPartialBytes(
-          """
+              if (!shouldResumeFromPartialBytes("""
+          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines())
           if service.count(old) != 1:
-              raise SystemExit('exact completion block anchor mismatch')
+              raise SystemExit(f'exact completion block anchor mismatch: {service.count(old)}')
           service_path.write_text(service.replace(old, new, 1))
           PY
           dart format lib/core/utils/download_resume.dart lib/core/services/download_service.dart
@@ -183,7 +174,7 @@ jobs:
           test "$(git diff --name-only | sort)" = "lib/core/services/download_service.dart
           lib/core/utils/download_resume.dart"
           git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.email '41898282+Fares669@users.noreply.github.com'
           git add lib/core/services/download_service.dart lib/core/utils/download_resume.dart
           git commit -m 'fix(downloads): adopt exact-size local completion [exact-size-completion-fixed]'
           git push origin HEAD:plan/download-manager-reliability
