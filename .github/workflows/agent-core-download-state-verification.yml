@@ -1,6 +1,6 @@
 name: Agent DM10 Generation And Ack Fencing
 
-# Re-run after aligning the startup-pause regression guard with the async slot counter.
+# Re-run after aligning startup pause projection guards with JobStore authority.
 on:
   push:
     branches: [plan/download-manager-reliability]
