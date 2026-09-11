@@ -1,4 +1,4 @@
-name: Agent DM09 Network Hold RED
+name: Agent DM09 Network Hold GREEN
 
 on:
   push:
@@ -7,13 +7,14 @@ on:
       - .github/workflows/agent-dm09-network-hold.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  red:
+  complete:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with: {fetch-depth: 0}
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -25,7 +26,7 @@ jobs:
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
           git reset --hard HEAD
-      - name: Verify DM-09 is RED before implementation
+      - name: Reproduce DM-09 RED
         run: |
           set +e
           flutter test \
@@ -37,5 +38,57 @@ jobs:
             exit 1
           fi
           echo 'DM-09 RED reproduced as expected'
-
-# expanded RED covers policy, durable waitingForNetwork, reconnect fencing, and iOS retry-budget separation
+      - name: Apply DM-09 network hold policy
+        run: |
+          python3 .github/scripts/dm09_network_hold_patch.py
+          dart format \
+            lib/core/services/download_retry_policy.dart \
+            lib/core/services/download_job_state.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_retry_policy_test.dart \
+            test/core/services/download_network_state_red_test.dart
+          git diff --check
+      - name: Verify DM-09 and adjacent regressions
+        run: |
+          set -o pipefail
+          flutter test \
+            test/core/services/download_network_state_red_test.dart \
+            test/core/services/download_retry_policy_test.dart \
+            test/core/services/download_job_state_test.dart \
+            test/core/services/download_job_store_test.dart \
+            test/core/services/download_command_outcome_test.dart \
+            test/core/services/download_range_transfer_test.dart \
+            test/core/services/download_range_fast_fail_policy_test.dart \
+            test/core/services/download_range_checkpoint_backpressure_test.dart \
+            test/core/services/download_parallel_test.dart \
+            test/core/services/persistent_parallel_download_auto_recovery_test.dart \
+            test/core/services/download_runtime_ownership_test.dart \
+            test/core/services/download_callback_generation_test.dart \
+            test/core/services/download_recovery_reconciliation_guard_test.dart \
+            test/core/services/download_startup_reconciliation_matrix_test.dart \
+            test/core/services/download_service_queue_test.dart \
+            test/core/services/download_job_state_queue_authority_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key 2>&1 | tee /tmp/dm09-test.log
+      - name: Upload DM-09 diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm09-test-diagnostics
+          path: /tmp/dm09-test.log
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Mark DM-09 complete and push
+        run: |
+          python3 .github/scripts/dm09_mark_complete.py
+          rm -f .github/workflows/agent-dm09-network-hold.yml
+          rm -f .github/scripts/dm09_network_hold_patch.py
+          rm -f .github/scripts/dm09_mark_complete.py
+          git add -A
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "fix(downloads): hold offline transfers until connectivity returns"
+          git push origin HEAD:plan/download-manager-reliability
