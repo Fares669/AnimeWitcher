@@ -2626,19 +2626,15 @@ class PlayerController extends Notifier<PlayerState> {
             directory: settings?.anime4kShaderDirectory ?? '',
           );
       if (_isDisposed) return;
+      String currentVo = '';
       if (!pipeline.isEmpty) {
-        final currentVo = (await platform.getProperty('current-vo')).trim();
-        final gpuDumbMode = (await platform.getProperty('gpu-dumb-mode'))
-            .trim()
-            .toLowerCase();
-        if (!anime4kGpuRendererSupportsShaders(currentVo) ||
-            gpuDumbMode == 'yes') {
+        currentVo = (await platform.getProperty('current-vo')).trim();
+        if (!anime4kGpuRendererSupportsShaders(currentVo)) {
           await platform.setProperty('glsl-shaders', '');
           _anime4kApplied = '';
           if (kDebugMode) {
             debugPrint(
-              'Anime4K: GPU shader stage unavailable '
-              '(vo="$currentVo", gpu-dumb-mode="$gpuDumbMode")',
+              'Anime4K: GPU shader stage unavailable (vo="$currentVo")',
             );
           }
           return;
@@ -2654,6 +2650,32 @@ class PlayerController extends Notifier<PlayerState> {
       // a viewer whether their folder is wrong or their eyes are.
       final applied = await platform.getProperty('glsl-shaders');
       _anime4kApplied = applied.trim();
+      if (pipeline.value.isNotEmpty && _anime4kApplied.isEmpty) {
+        if (kDebugMode) {
+          debugPrint('Anime4K: mpv did not accept the shader chain');
+        }
+        return;
+      }
+
+      // gpu-dumb-mode=auto can legitimately be yes before any custom shader
+      // needs an FBO. Ask mpv to load Anime4K first, then verify that it left
+      // dumb mode; otherwise an idle renderer can make us reject valid shaders.
+      if (!pipeline.isEmpty) {
+        final gpuDumbMode = (await platform.getProperty('gpu-dumb-mode'))
+            .trim()
+            .toLowerCase();
+        if (gpuDumbMode == 'yes') {
+          await platform.setProperty('glsl-shaders', '');
+          _anime4kApplied = '';
+          if (kDebugMode) {
+            debugPrint(
+              'Anime4K: GPU shader stage unavailable '
+              '(vo="$currentVo", gpu-dumb-mode="$gpuDumbMode")',
+            );
+          }
+          return;
+        }
+      }
       if (kDebugMode) {
         debugPrint(
           'Anime4K: asked for ${pipeline.files.length} shaders, '
