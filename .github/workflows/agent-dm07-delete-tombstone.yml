@@ -90,3 +90,5 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m "fix(downloads): make delete tombstone-first and ownership-settled"
           git push origin HEAD:plan/download-manager-reliability
+
+# rerun after aligning stale pre-DM-07 guards with the tombstone transaction
