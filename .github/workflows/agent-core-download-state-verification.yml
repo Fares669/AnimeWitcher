@@ -1,0 +1,71 @@
+name: Core Download State Agent Verification
+
+on:
+  pull_request:
+    branches: [plan/download-manager-reliability]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-download-state-agent-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dm04-recovery-union:
+    name: DM04 recovery union
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Prepare
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Run DM04 focused regressions
+        run: >-
+          flutter test
+          test/core/services/download_recovery_inventory_test.dart
+          test/core/services/download_durable_only_recovery_test.dart
+          test/core/services/download_manifest_startup_inventory_test.dart
+          test/core/services/download_missing_presentation_recovery_test.dart
+          test/core/services/download_recovery_snapshot_test.dart
+          test/core/services/download_recovery_reconciliation_guard_test.dart
+          test/core/services/persistent_parallel_download_manifest_discovery_test.dart
+          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+  dm05-dm24-contracts:
+    name: DM05 and DM24 contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Prepare
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Run logical state and identity regressions
+        run: >-
+          flutter test
+          test/core/services/download_job_state_authority_test.dart
+          test/core/services/download_job_state_queue_authority_test.dart
+          test/core/services/download_job_logical_identity_test.dart
+          test/core/services/download_logical_identity_test.dart
+          test/core/services/download_logical_identity_persistence_test.dart
+          test/core/services/download_logical_identity_start_test.dart
+          test/core/services/download_overlay_logical_identity_test.dart
+          test/features/library/presentation/downloads_job_state_authority_test.dart
+          test/features/library/presentation/downloads_logical_identity_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
