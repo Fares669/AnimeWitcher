@@ -3335,14 +3335,16 @@ class DownloadService {
       if (!await _jobStore.put(seeded)) return null;
       job = seeded;
     } else if (existingBytes > job.durableBytes) {
-      await _jobStore.put(
+      if (!await _jobStore.put(
         job.copyWith(
           durableBytes: existingBytes,
           durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
           expectedBytes: expectedBytes > 0 ? expectedBytes : job.expectedBytes,
           updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
         ),
-      );
+      )) {
+        return null;
+      }
     }
     return _jobStore.beginAttempt(task.taskId, state: DownloadJobState.running);
   }
@@ -4027,7 +4029,7 @@ class DownloadService {
           task,
           knownTotalBytes: expectedBytes,
         );
-        await _jobStore.put(
+        final jobPersisted = await _jobStore.put(
           DownloadJobRecord(
             taskId: transferTask.taskId,
             trackingUrl: trackingUrl ?? url,
@@ -4046,6 +4048,9 @@ class DownloadService {
             ),
           ),
         );
+        if (!jobPersisted) {
+          throw StateError('Failed to persist fresh download intent');
+        }
 
         _waitingPayloads[transferTask.taskId] = _waitingPayloadFor(
           transferTask,
@@ -4214,17 +4219,8 @@ class DownloadService {
         record?.expectedFileSize,
         _telemetry.expectedBytesFor(task.taskId),
       ]);
-      await _ref
-          .read(storageServiceProvider)
-          .patchDownloadMetadata(
-            task.taskId,
-            trackingUrl: downloadTrackingUrl(task),
-            filePath: path,
-            lastProgress: 1,
-            lastExpectedBytes: expectedBytes,
-          );
       if (task is DownloadTask) {
-        await _checkpointLogicalJob(
+        final completedPersisted = await _checkpointLogicalJob(
           task,
           state: DownloadJobState.completed,
           durableBytes: fileBytes > 0 ? fileBytes : null,
@@ -4235,7 +4231,22 @@ class DownloadService {
           userPaused: false,
           queueWaiting: false,
         );
+        if (!completedPersisted) {
+          diagnosticLog.record('completion.persistenceBlocked', {
+            'taskId': task.taskId,
+          });
+          return;
+        }
       }
+      await _ref
+          .read(storageServiceProvider)
+          .patchDownloadMetadata(
+            task.taskId,
+            trackingUrl: downloadTrackingUrl(task),
+            filePath: path,
+            lastProgress: 1,
+            lastExpectedBytes: expectedBytes,
+          );
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[DownloadService] persist filePath failed: $e');
