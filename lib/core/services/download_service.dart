@@ -1410,28 +1410,46 @@ class DownloadService {
         continue;
       }
 
+      var userPauseSettled = !userPaused;
       if (userPaused) {
         _userPausedIds.add(task.taskId);
         _queueWaitingIds.remove(task.taskId);
         _waitingPayloads.remove(task.taskId);
         _rememberSessionTask(task.taskId);
-        if (shouldNativePauseAfterUserPause(
+        final needsNativePause = shouldNativePauseAfterUserPause(
           userPaused: true,
           stillInNativeQueue:
               stillNative || _parallel.hasLiveConnections(task.taskId),
-        )) {
-          try {
-            await _pauseTransfer(task);
-          } catch (_) {}
-        }
-        await FileDownloader().database.updateRecord(
-          TaskRecord(
-            task,
-            TaskStatus.paused,
-            progress,
-            record.expectedFileSize,
-          ),
         );
+        userPauseSettled = !needsNativePause;
+        if (needsNativePause) {
+          try {
+            userPauseSettled = await _pauseTransfer(task);
+          } catch (_) {
+            userPauseSettled = false;
+          }
+        }
+        if (userPauseSettled) {
+          await FileDownloader().database.updateRecord(
+            TaskRecord(
+              task,
+              TaskStatus.paused,
+              progress,
+              record.expectedFileSize,
+            ),
+          );
+        } else {
+          await _checkpointLogicalJob(
+            task,
+            state: DownloadJobState.pausing,
+            expectedBytes: expectedBytes,
+            userPaused: true,
+            queueWaiting: false,
+          );
+          diagnosticLog.record('recovery.pauseSettling', {
+            'taskId': task.taskId,
+          });
+        }
         await storage.patchDownloadMetadata(
           task.taskId,
           queueWaiting: false,
@@ -1482,7 +1500,7 @@ class DownloadService {
         totalSize: expectedBytes,
         status: showAsWaiting
             ? TaskStatus.enqueued
-            : (userPaused
+            : ((userPaused && userPauseSettled)
                   ? TaskStatus.paused
                   : (showAsRunning
                         ? TaskStatus.running
@@ -2727,35 +2745,14 @@ class DownloadService {
           downloadMetadataExpectedBytes(metadata),
         ]);
         if (!didPause) {
-          _userPausedIds.remove(taskId);
-          await _ref
-              .read(storageServiceProvider)
-              .patchDownloadMetadata(
-                taskId,
-                queueWaiting: false,
-                userPaused: false,
-                lastProgress: progress,
-                lastExpectedBytes: totalSize,
-              );
-          await _checkpointLogicalJob(
-            downloadTask,
-            state: DownloadJobState.running,
-            expectedBytes: totalSize,
-            userPaused: false,
-            queueWaiting: false,
-          );
-          _publishProgress(
-            trackingUrl: trackingUrl,
-            taskId: taskId,
-            progress: progress,
-            totalSize: totalSize,
-            status: TaskStatus.running,
-            networkSpeed: current?.networkSpeed ?? 0,
-            timeRemaining: current?.timeRemaining ?? Duration.zero,
-          );
-          _updatesController.add(
-            TaskStatusUpdate(downloadTask, TaskStatus.running),
-          );
+          diagnosticLog.record('pause.settling', {
+            'taskId': taskId,
+            'ownership': (await _runtimeOwnershipFor(taskId)).name,
+          });
+          // Keep the already-persisted `pausing` + userPaused intent. The task
+          // must not become logically/UI paused until ownership release is
+          // proven, and must not be rolled back to running while the user has
+          // an outstanding pause request. A later reconcile/retry can settle it.
           await _syncSessionOverlay(completedSuccess: false);
           await _persistNativeWaitingSnapshot();
           return;
@@ -3642,17 +3639,21 @@ class DownloadService {
         onTimeout: () {},
       );
 
-      if (isInternalDownloaderChunk(task)) {
-        // Verify the child really left the live native set. If the first pause
-        // raced URLSession hand-off, retry the same identity once; never cancel.
-        var ownership = await _runtimeOwnershipFor(task.taskId);
-        if (ownership == DownloadRuntimeOwnership.owned) {
-          if (!await FileDownloader().pause(task)) return false;
-          await Future<void>.delayed(const Duration(milliseconds: 200));
-          ownership = await _runtimeOwnershipFor(task.taskId);
-        }
-        if (ownership != DownloadRuntimeOwnership.notOwned) return false;
+      // Command acceptance and even a paused callback are not sufficient proof
+      // that URLSession released the writer. DM-19 runtime ownership is the
+      // final authority for both ordinary single-file and multipart children.
+      var ownership = await _runtimeOwnershipFor(task.taskId);
+      if (ownership == DownloadRuntimeOwnership.owned) {
+        // A hand-off race can leave the same task alive briefly. Retry pause on
+        // the same identity once; never cancel because that can destroy resume data.
+        final retried = isInternalDownloaderChunk(task)
+            ? await FileDownloader().pause(task)
+            : await _nativeTransport.pause(task);
+        if (!retried) return false;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        ownership = await _runtimeOwnershipFor(task.taskId);
       }
+      if (ownership != DownloadRuntimeOwnership.notOwned) return false;
       return true;
     } finally {
       await listener.cancel();

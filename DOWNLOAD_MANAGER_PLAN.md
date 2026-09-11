@@ -162,7 +162,7 @@
   - **Confirmed root cause:** `init()` itself coalesced only callers that explicitly invoked it; command entry points and foreground reconciliation bypassed that Future, so they could mutate queue/native state while `_recoverPersistedDownloads` was still reconciling persisted ownership.
   - **Verification passed:** readiness unit tests prove exact-Future coalescing and typed fail-then-retry behavior; source guards prove start/pause/resume/cancel and public settings controls await readiness before mutation, foreground reconciliation awaits the same barrier before queue work, and startup observes init failure; download lifecycle/recovery/ownership/multipart regression suites and `flutter analyze --no-fatal-warnings --no-fatal-infos` also pass.
 
-- [ ] **DM-02 — Make single-file pause prove that transport ownership actually stopped**
+- [x] **DM-02 — Make single-file pause prove that transport ownership actually stopped**
   - **Problem:** accepted native pause + missing callback can become logical/UI paused while the worker is still alive.
   - **Root cause:** the 5-second timeout is treated as success for ordinary single-file tasks; startup enforcement of persisted pause can also ignore pause failure and still write plugin `paused`.
   - **Severity / priority:** **P0 / Critical.**
@@ -170,6 +170,10 @@
   - **Proposed fix:** pause remains `pausing/settling` until a generation-matching callback or DM-19 oracle proves ownership release. Startup user-pause enforcement follows the same rule and may not write a DB state that falsely implies settled ownership.
   - **Verification/testing:** accepted pause/no callback/still-live owner; startup after crash between durable pause intent and native pause; pause enforcement fails on relaunch; late completion; repeated pause/resume; iOS background handoff.
   - **Dependencies:** DM-19, DM-21, DM-32.
+  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof applies to ordinary single-file downloads and multipart children; an owned same-identity worker gets one pause retry without cancellation.
+  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, durable user intent remains `pausing` with `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite plugin/UI state to `paused` until release is proven.
+  - **Confirmed root cause:** `_pauseTransfer()` waited for pause/final callbacks but only verified runtime ownership for internal multipart children, so an ordinary single-file task could return success after timeout while its worker remained alive. Startup pause enforcement also ignored the pause result and unconditionally persisted `TaskStatus.paused`.
+  - **Verification passed:** pre-fix RED regression; pause-settlement guard; runtime-ownership, JobStore, recovery-reconciliation and lifecycle-checkpoint regression suites; generated-source-aware `flutter analyze --no-fatal-warnings --no-fatal-infos`; `git diff --check`.
 
 - [ ] **DM-22 — Introduce a two-phase Dart<->Swift ownership handoff for iOS multipart promotion**
   - **Problem:** Swift can select/start a child from `multipartPlans` while Dart still considers the same generation launchable; stale snapshots can re-add consumed work.
