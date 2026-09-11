@@ -1,0 +1,235 @@
+name: Fix restored multipart Range identity
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+
+permissions:
+  contents: write
+
+jobs:
+  tdd-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Add regression test and prove RED
+        shell: bash
+        run: |
+          cat > test/core/services/persistent_parallel_download_range_identity_test.dart <<'DART'
+          import 'dart:convert';
+          import 'dart:io';
+
+          import 'package:animewitcher/core/services/download_parallel.dart';
+          import 'package:animewitcher/core/services/persistent_parallel_download.dart';
+          import 'package:background_downloader/background_downloader.dart';
+          import 'package:flutter_test/flutter_test.dart';
+
+          void main() {
+            TestWidgetsFlutterBinding.ensureInitialized();
+
+            test('restore canonicalizes child Range header from manifest bounds', () async {
+              final directory = await Directory.systemTemp.createTemp(
+                'parallel-range-identity-',
+              );
+              final starts = <DownloadTask>[];
+              final records = <String, TaskRecord>{};
+              final parent = ParallelDownloadTask(
+                taskId: 'episode',
+                url: 'https://example.com/video',
+                filename: 'video.mp4',
+                directory: directory.path,
+                baseDirectory: BaseDirectory.root,
+                chunks: 2,
+                allowPause: true,
+              );
+              final coordinator = PersistentParallelDownload(
+                startPart: (task, progress, size) async {
+                  starts.add(task);
+                  return true;
+                },
+                pausePart: (_) async {},
+                cancelParts: (_) async {},
+                saveRecord: (record) async {
+                  records[record.task.taskId] = record;
+                },
+                recordForId: (id) async => records[id],
+                onUpdate: (_) {},
+                onPartProgress: (_, _, _) {},
+                livePartIds: () async => <String>{},
+                recoveryDelay: const Duration(milliseconds: 10),
+              );
+
+              try {
+                final childDirectory = '${directory.path}/video.mp4.parts';
+                DownloadTask child(int index, int from, int to, String range) =>
+                    DownloadTask(
+                      taskId: 'episode.part.$index',
+                      url: parent.url,
+                      filename: '$index.part',
+                      directory: childDirectory,
+                      baseDirectory: BaseDirectory.root,
+                      headers: <String, String>{
+                        'Range': range,
+                        'Accept-Encoding': 'identity',
+                      },
+                      updates: Updates.statusAndProgress,
+                      retries: kDownloadPartRetries,
+                      allowPause: true,
+                      group: kPersistentDownloadChunkGroup,
+                      metaData: jsonEncode(<String, Object>{
+                        'parentTaskId': parent.taskId,
+                      }),
+                    );
+
+                final first = child(0, 0, 499, 'bytes=0-9');
+                final second = child(1, 500, 999, 'bytes=500-999');
+                final manifest = File(
+                  '${await parent.filePath()}.parts/manifest.json',
+                );
+                await manifest.parent.create(recursive: true);
+                await manifest.writeAsString(
+                  jsonEncode(<String, Object?>{
+                    'schemaVersion': kParallelManifestSchemaVersion,
+                    'parentTaskId': parent.taskId,
+                    'generation': 1,
+                    'checkpointSequence': 1,
+                    'expectedBytes': 1000,
+                    'totalBytes': 1000,
+                    'resourceValidator': null,
+                    'parts': <Map<String, Object?>>[
+                      <String, Object?>{
+                        'task': first.toJson(),
+                        'from': 0,
+                        'to': 499,
+                        'progress': 0.0,
+                        'credibleProgress': 0.0,
+                        'durableBytes': 0,
+                        'complete': false,
+                        'attemptGeneration': 1,
+                        'sourceValidationRequired': false,
+                      },
+                      <String, Object?>{
+                        'task': second.toJson(),
+                        'from': 500,
+                        'to': 999,
+                        'progress': 0.0,
+                        'credibleProgress': 0.0,
+                        'durableBytes': 0,
+                        'complete': false,
+                        'attemptGeneration': 1,
+                        'sourceValidationRequired': false,
+                      },
+                    ],
+                  }),
+                  flush: true,
+                );
+
+                expect(await coordinator.start(parent, 1000), isTrue);
+                expect(starts, hasLength(1));
+                expect(starts.single.headers['Range'], 'bytes=0-499');
+              } finally {
+                await coordinator.dispose();
+                if (await directory.exists()) {
+                  await directory.delete(recursive: true);
+                }
+              }
+            });
+          }
+          DART
+
+          dart format test/core/services/persistent_parallel_download_range_identity_test.dart
+          set +e
+          flutter test test/core/services/persistent_parallel_download_range_identity_test.dart > /tmp/red.log 2>&1
+          red_status=$?
+          set -e
+          cat /tmp/red.log
+          if [ "$red_status" -eq 0 ]; then
+            echo 'Regression test unexpectedly passed before the production fix.'
+            exit 1
+          fi
+          grep -q "bytes=0-499" /tmp/red.log
+          grep -q "bytes=0-9" /tmp/red.log
+          echo 'RED confirmed: restored task Range disagrees with manifest bounds.'
+
+      - name: Apply minimal invariant fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('lib/core/services/persistent_parallel_download.dart')
+          text = path.read_text()
+          old = """class _DownloadPart {\n  _DownloadPart(\n    this.task,\n    this.from,\n    this.to, {\n"""
+          new = """DownloadTask _canonicalMultipartPartTask(\n  DownloadTask task,\n  int from,\n  int to,\n) {\n  final headers = Map<String, String>.from(task.headers)\n    ..removeWhere((key, _) {\n      final normalized = key.toLowerCase();\n      return normalized == 'range' || normalized == 'accept-encoding';\n    });\n  headers['Range'] = 'bytes=$from-$to';\n  headers['Accept-Encoding'] = 'identity';\n  return task.copyWith(headers: headers);\n}\n\nclass _DownloadPart {\n  _DownloadPart(\n    DownloadTask task,\n    this.from,\n    this.to, {\n"""
+          if old not in text:
+              raise SystemExit('constructor anchor not found')
+          text = text.replace(old, new, 1)
+          old_init = """  }) : durableBytes = complete\n"""
+          new_init = """  }) : task = _canonicalMultipartPartTask(task, from, to),\n       durableBytes = complete\n"""
+          if old_init not in text:
+              raise SystemExit('initializer anchor not found')
+          text = text.replace(old_init, new_init, 1)
+          path.write_text(text)
+          PY
+          dart format lib/core/services/persistent_parallel_download.dart
+
+      - name: Prove GREEN and run focused regression suite
+        run: |
+          flutter test test/core/services/persistent_parallel_download_range_identity_test.dart
+          flutter test test/core/services/persistent_parallel_download_test.dart
+          flutter test test/core/services/persistent_parallel_download_pending_start_lease_test.dart
+          flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          flutter test test/core/services/download_range_checkpoint_backpressure_test.dart
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Record incident in source-of-truth plan
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('DOWNLOAD_MANAGER_PLAN.md')
+          text = path.read_text()
+          ids = [int(x) for x in re.findall(r'DM-(\d+)', text)]
+          next_id = max(ids, default=0) + 1
+          heading = '## Phase 1 — Establish trustworthy ownership, byte truth, and startup ordering\n'
+          if heading not in text:
+              raise SystemExit('Phase 1 heading not found')
+          item = f"""\n- [x] **DM-{next_id:02d} — Canonicalize restored multipart child Range identity**\n  - **Problem:** A resumed multipart child can repeatedly receive HTTP 206 yet immediately park, leaving the parent paused and apparently stuck.\n  - **Observed evidence (2026-09-11):** Diagnostic session `1789108917581089-25615` repeatedly resumed `1157823519.part.22`; the child expected 14,310,938 bytes but reopened `bytes=314840648-314874998`, a Range inconsistent with its manifest work-unit size, then emitted `range.failure` with `reason=park`.\n  - **Root cause:** Manifest restore trusted durable `from`/`to` boundaries and independently trusted the serialized child `task.headers`. A stale/corrupt/legacy Range header could therefore disagree with the manifest; `DownloadService._startPart()` supplied the correct part size but `DownloadRangeTransfer` parsed the wrong Range header, so response validation parked the child forever on every resume.\n  - **Fix:** `_DownloadPart` now canonicalizes every child task's `Range` and `Accept-Encoding` from immutable `from`/`to` boundaries at construction. This repairs restored manifests and legacy imports before any writer can start, while preserving validators and all non-Range headers.\n  - **Verification:** Added a behavioral restore regression that deliberately stores `from=0,to=499` with stale `Range: bytes=0-9`; it was observed RED before the fix and GREEN after. Focused multipart, pending-start lease, durable-manifest, Range-checkpoint tests and `flutter analyze --no-fatal-warnings --no-fatal-infos` also pass in the guarded workflow.\n  - **Dependencies:** None; this is an incident fix discovered from a real diagnostic log and is completed before resuming the remaining plan.\n"""
+          text = text.replace(heading, heading + item, 1)
+          path.write_text(text)
+          print(f'Added DM-{next_id:02d}')
+          PY
+
+      - name: Commit verified fix to the existing PR branch
+        shell: bash
+        run: |
+          rm .github/workflows/fix-restored-range-identity.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add DOWNLOAD_MANAGER_PLAN.md \
+            lib/core/services/persistent_parallel_download.dart \
+            test/core/services/persistent_parallel_download_range_identity_test.dart \
+            .github/workflows/fix-restored-range-identity.yml
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'fix(downloads): repair restored multipart range identity'
+          git push origin HEAD:plan/download-manager-reliability
