@@ -84,6 +84,14 @@
 
 ## Phase 1 — Establish trustworthy ownership, byte truth, and startup ordering
 
+- [x] **DM-33 — Canonicalize restored multipart child Range identity**
+  - **Problem:** A resumed multipart child can repeatedly receive HTTP 206 yet immediately park, leaving the parent paused and apparently stuck.
+  - **Observed evidence (2026-09-11):** Diagnostic session `1789108917581089-25615` repeatedly resumed `1157823519.part.22`; the child expected 14,310,938 bytes but reopened `bytes=314840648-314874998`, a Range inconsistent with its manifest work-unit size, then emitted `range.failure` with `reason=park`.
+  - **Root cause:** Manifest restore trusted durable `from`/`to` boundaries and independently trusted the serialized child `task.headers`. A stale/corrupt/legacy Range header could therefore disagree with the manifest; `DownloadService._startPart()` supplied the correct part size but `DownloadRangeTransfer` parsed the wrong Range header, so response validation parked the child forever on every resume.
+  - **Fix:** `_DownloadPart` now canonicalizes every child task's `Range` and `Accept-Encoding` from immutable `from`/`to` boundaries at construction. This repairs restored manifests and legacy imports before any writer can start, while preserving validators and all non-Range headers.
+  - **Verification:** Added a behavioral restore regression that deliberately stores `from=0,to=499` with stale `Range: bytes=0-9`; it was observed RED before the fix and GREEN after. Focused multipart, pending-start lease, durable-manifest, Range-checkpoint tests and `flutter analyze --no-fatal-warnings --no-fatal-infos` also pass in the guarded workflow.
+  - **Dependencies:** None; this is an incident fix discovered from a real diagnostic log and is completed before resuming the remaining plan.
+
 - [x] **DM-01 — Add a generation-bound lease/watchdog for multipart `pending-start` ownership**
   - **Problem:** `startPart()` can return `true` while no running/progress/final callback ever arrives, leaving the child in `currentBatchPendingIds` and blocking subsequent slow-start batches.
   - **Root cause:** reservation-before-enqueue correctly closes one race, but accepted start has no deadline that converts it into verified ownership or rollback.

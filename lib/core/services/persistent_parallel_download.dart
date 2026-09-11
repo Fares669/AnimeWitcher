@@ -3059,9 +3059,20 @@ class _ParallelSession {
   }
 }
 
+DownloadTask _canonicalMultipartPartTask(DownloadTask task, int from, int to) {
+  final headers = Map<String, String>.from(task.headers)
+    ..removeWhere((key, _) {
+      final normalized = key.toLowerCase();
+      return normalized == 'range' || normalized == 'accept-encoding';
+    });
+  headers['Range'] = 'bytes=$from-$to';
+  headers['Accept-Encoding'] = 'identity';
+  return task.copyWith(headers: headers);
+}
+
 class _DownloadPart {
   _DownloadPart(
-    this.task,
+    DownloadTask task,
     this.from,
     this.to, {
     this.progress = 0,
@@ -3071,7 +3082,8 @@ class _DownloadPart {
     double? credibleProgress,
     int? durableBytes,
     this.needsCredibleProgressRepair = false,
-  }) : durableBytes = complete
+  }) : task = _canonicalMultipartPartTask(task, from, to),
+       durableBytes = complete
            ? to - from + 1
            : (durableBytes ?? 0).clamp(0, to - from + 1).toInt(),
        credibleProgress = complete
