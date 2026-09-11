@@ -1369,7 +1369,11 @@ class DownloadService {
       final task =
           job.restoreTaskSnapshot() ??
           _downloadTaskFromMetadataSnapshot(metadata);
-      if (task == null) {
+      final disposition = planDurableOnlyRecoveryDisposition(
+        hasPresentationMetadata: metadata?['item'] is Map,
+        hasRecoverableTaskDescriptor: task != null,
+      );
+      if (disposition == DownloadDurableOnlyRecoveryDisposition.orphan) {
         await _jobStore.checkpoint(
           taskId: job.taskId,
           trackingUrl: job.trackingUrl,
@@ -1381,17 +1385,25 @@ class DownloadService {
           queueWaiting: false,
           fingerprint: job.fingerprint,
         );
-        diagnosticLog.record('recovery.orphanedMissingDescriptor', {
-          'taskId': job.taskId,
-          'source': 'jobStore',
-        });
+        diagnosticLog.record(
+          metadata?['item'] is! Map
+              ? 'recovery.orphanedMissingPresentation'
+              : 'recovery.orphanedMissingDescriptor',
+          {'taskId': job.taskId, 'source': 'jobStore'},
+        );
         continue;
       }
+      final recoverableTask = task!;
       final progress = job.expectedBytes > 0
           ? (job.durableBytes / job.expectedBytes).clamp(0.0, 1.0).toDouble()
           : downloadMetadataProgress(metadata);
       durableRecords.add(
-        TaskRecord(task, TaskStatus.paused, progress, job.expectedBytes),
+        TaskRecord(
+          recoverableTask,
+          TaskStatus.paused,
+          progress,
+          job.expectedBytes,
+        ),
       );
     }
 
