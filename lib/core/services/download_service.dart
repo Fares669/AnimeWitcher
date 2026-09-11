@@ -2182,19 +2182,28 @@ class DownloadService {
     final entries = <DownloadOverlayEntry>[];
     for (final record in records) {
       if (!isLogicalEpisodeDownloadTask(record.task)) continue;
+      final job = await _jobStore.get(record.task.taskId);
       final trackingUrl = downloadTrackingUrl(record.task);
       final live = liveProgress[trackingUrl];
-      final leftoverWaiting = _queueWaitingIds.contains(record.task.taskId);
       final liveRunning = live?.status == TaskStatus.running;
-      final inSession =
-          _sessionOrder.contains(record.task.taskId) ||
-          occupiesDownloadSlot(
-            status: record.status,
-            queueWaiting: leftoverWaiting,
-          ) ||
-          leftoverWaiting ||
-          liveRunning ||
-          record.status == TaskStatus.enqueued;
+      final leftoverWaiting = job != null
+          ? downloadJobQueueWaiting(job.state)
+          : _queueWaitingIds.contains(record.task.taskId);
+      final inSession = job != null
+          ? _sessionOrder.contains(record.task.taskId) ||
+                downloadJobOccupiesSlot(job.state) ||
+                leftoverWaiting ||
+                liveRunning
+          : _sessionOrder.contains(record.task.taskId) ||
+                occupiesDownloadSlot(
+                  status: record.status,
+                  queueWaiting: leftoverWaiting,
+                ) ||
+                leftoverWaiting ||
+                liveRunning ||
+                record.status == TaskStatus.enqueued;
+      // Pre-JobStore migration fallback above is deliberately isolated to
+      // rows that do not yet have durable lifecycle authority.
       if (!inSession) continue;
       _rememberSessionTask(record.task.taskId);
       final isPreferred = preferTaskId == record.task.taskId;
@@ -2215,10 +2224,12 @@ class DownloadService {
       final storedTotal = isPreferred
           ? (totalBytes ?? live?.totalSize ?? record.expectedFileSize)
           : (live?.totalSize ?? record.expectedFileSize);
-      final displayStatus = displayDownloadStatus(
-        persisted: liveRunning ? TaskStatus.running : record.status,
-        queueWaiting: leftoverWaiting && !liveRunning,
-      );
+      final displayStatus = job != null
+          ? downloadJobDisplayStatus(job.state)
+          : displayDownloadStatus(
+              persisted: liveRunning ? TaskStatus.running : record.status,
+              queueWaiting: leftoverWaiting && !liveRunning,
+            );
       final incomingSpeed = isPreferred
           ? (speedBytesPerSecond ?? (live?.networkSpeed ?? 0) * 1000 * 1000)
           : (live?.networkSpeed ?? 0) * 1000 * 1000;

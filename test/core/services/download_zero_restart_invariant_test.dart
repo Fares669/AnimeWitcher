@@ -43,14 +43,14 @@ void main() {
       );
     });
 
-    test('saved progress blocks restart even when native temp is hidden', () {
+    test('stale 42% with zero recoverable bytes allows explicit zero restart', () {
       expect(
         shouldRestartDownloadFromZero(
           existingPartialBytes: 0,
           expectedBytes: 1000,
           savedProgress: 0.42,
         ),
-        isFalse,
+        isTrue,
       );
       expect(
         chooseDownloadResumeStrategy(
@@ -59,7 +59,27 @@ void main() {
           expectedBytes: 1000,
           savedProgress: 0.42,
         ),
-        DownloadResumeStrategy.partialFile,
+        DownloadResumeStrategy.restartFromZero,
+      );
+    });
+
+    test('0.999 presentation sentinel cannot fabricate durable bytes', () {
+      expect(
+        shouldRestartDownloadFromZero(
+          existingPartialBytes: 0,
+          expectedBytes: 1000,
+          savedProgress: 0.999,
+        ),
+        isTrue,
+      );
+      expect(
+        chooseDownloadResumeStrategy(
+          canNativeResume: false,
+          existingPartialBytes: 0,
+          expectedBytes: 1000,
+          savedProgress: 0.999,
+        ),
+        DownloadResumeStrategy.restartFromZero,
       );
     });
 
@@ -80,6 +100,18 @@ void main() {
           savedProgress: 0.65,
         ),
         isFalse,
+      );
+    });
+
+    test('opaque native ownership still wins when no visible bytes survive', () {
+      expect(
+        chooseDownloadResumeStrategy(
+          canNativeResume: true,
+          existingPartialBytes: 0,
+          expectedBytes: 1000,
+          savedProgress: 0.42,
+        ),
+        DownloadResumeStrategy.nativeResume,
       );
     });
 

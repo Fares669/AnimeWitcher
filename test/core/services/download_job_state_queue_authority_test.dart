@@ -122,5 +122,27 @@ void main() {
       expect(body, contains('downloadJobDisplayStatus(job.state)'));
       expect(body, contains('Pre-JobStore migration fallback'));
     });
+
+    test('payload-only session overlay rows still consult JobState', () {
+      final source = File(
+        'lib/core/services/download_service.dart',
+      ).readAsStringSync();
+      final start = source.indexOf('Future<DownloadOverlaySession> _planSessionOverlay(');
+      final end = source.indexOf('Future<void> _syncSessionOverlay(', start);
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
+      final waiterStart = body.indexOf('for (final payload in _waitingPayloads.entries)');
+      expect(waiterStart, greaterThanOrEqualTo(0));
+      final waiterBody = body.substring(waiterStart);
+
+      expect(waiterBody, contains('final job = await _jobStore.get(payload.key)'));
+      expect(
+        waiterBody,
+        contains('if (job != null && !downloadJobQueueWaiting(job.state)) continue;'),
+      );
+      expect(waiterBody, contains('downloadJobDisplayStatus(job.state)'));
+      expect(waiterBody, contains('downloadJobQueueWaiting(job.state)'));
+    });
   });
 }
