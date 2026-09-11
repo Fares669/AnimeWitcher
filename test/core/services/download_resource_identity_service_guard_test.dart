@@ -18,7 +18,7 @@ void main() {
     test('native final expected size never comes from observed file length', () {
       final source = File('lib/core/services/download_service.dart').readAsStringSync();
       final start = source.indexOf('Future<void> _persistCompletedFilePath(Task task)');
-      final end = source.indexOf('Future<void> _handleStatusUpdate(', start);
+      final end = source.indexOf('void _handleStatusUpdate(', start);
       expect(start, greaterThanOrEqualTo(0));
       expect(end, greaterThan(start));
       final body = source.substring(start, end);
