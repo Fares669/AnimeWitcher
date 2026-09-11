@@ -1,0 +1,59 @@
+name: DM03 Typed Transport Outcomes
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - '.github/workflows/dm03-transport-outcomes.yml'
+      - '.github/dm03_transport_outcomes.py'
+
+permissions:
+  contents: write
+
+jobs:
+  dm03-transport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Prove old transport seam lacks typed outcome
+        shell: bash
+        run: |
+          set +e
+          grep -q 'enum DownloadTransportCommandOutcome' lib/core/services/download_transport.dart
+          code=$?
+          test "$code" -ne 0
+      - name: Apply partial DM-03 transport seam
+        run: |
+          python3 .github/dm03_transport_outcomes.py
+          dart format lib/core/services/download_transport.dart test/core/services/download_transport_outcome_test.dart
+      - name: Verify typed transport outcome contract
+        run: flutter test test/core/services/download_transport_outcome_test.dart
+      - name: Verify cancellation and ownership regressions
+        run: |
+          flutter test test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart
+          flutter test test/core/services/download_runtime_ownership_test.dart
+          flutter test test/core/services/download_lifecycle_checkpoint_guard_test.dart
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Commit partial DM-03 progress
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+Fares669@users.noreply.github.com"
+          git rm .github/workflows/dm03-transport-outcomes.yml .github/dm03_transport_outcomes.py
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_transport.dart test/core/services/download_transport_outcome_test.dart
+          git diff --cached --check
+          git commit -m "refactor: add typed transport command outcomes"
+          git push origin HEAD:plan/download-manager-reliability
