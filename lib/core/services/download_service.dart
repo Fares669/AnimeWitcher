@@ -1126,7 +1126,7 @@ class DownloadService {
   /// Persist lifecycle boundaries for the logical episode without turning
   /// hot progress callbacks into Hive writes. DownloadJobStore owns monotonic
   /// byte/identity merging; this service only supplies orchestration evidence.
-  Future<void> _checkpointLogicalJob(
+  Future<bool> _checkpointLogicalJob(
     DownloadTask task, {
     required DownloadJobState state,
     int? durableBytes,
@@ -1145,7 +1145,7 @@ class DownloadService {
         'status': state.name,
         'reason': 'terminalTombstone',
       });
-      return;
+      return false;
     }
     try {
       final accepted = await _jobStore.checkpoint(
@@ -1167,15 +1167,17 @@ class DownloadService {
           'taskId': task.taskId,
           'status': state.name,
         });
-        return;
+        return false;
       }
       if (terminal) _terminalJobIds.add(task.taskId);
+      return true;
     } catch (error) {
       diagnosticLog.record('job.checkpointError', {
         'taskId': task.taskId,
         'status': state.name,
         'errorType': error.runtimeType.toString(),
       });
+      return false;
     }
   }
 
@@ -2567,19 +2569,7 @@ class DownloadService {
 
   Future<void> pauseDownload(String taskId) async {
     diagnosticLog.record('command.pauseDownload', {'taskId': taskId});
-    // Fence callbacks immediately on tap. Native pause/resume-data settlement
-    // can take a moment on iOS, but progress events must not visually undo the
-    // user's pause while that acknowledgement is in flight.
-    _userPausedIds.add(taskId);
-    final stoppedRange = await _rangeTransfers.stop(taskId);
     await _serializeQueue(() async {
-      _userPausedIds.add(taskId);
-      _queueWaitingIds.remove(taskId);
-      _waitingPayloads.remove(taskId);
-      await _ref
-          .read(storageServiceProvider)
-          .patchDownloadMetadata(taskId, queueWaiting: false, userPaused: true);
-
       final recordForId = await FileDownloader().database.recordForId(taskId);
       final tracking = recordForId != null
           ? downloadTrackingUrl(recordForId.task)
@@ -2593,12 +2583,28 @@ class DownloadService {
       }
 
       if (downloadTask != null) {
-        await _checkpointLogicalJob(
+        final checkpointed = await _checkpointLogicalJob(
           downloadTask,
           state: DownloadJobState.pausing,
           userPaused: true,
           queueWaiting: false,
         );
+        if (!checkpointed) {
+          throw StateError('Failed to persist pause intent for $taskId');
+        }
+        // Fence callbacks only after the durable pause intent exists. Ownership
+        // must never be stopped first and then fail to persist the user's intent.
+        _userPausedIds.add(taskId);
+        _queueWaitingIds.remove(taskId);
+        _waitingPayloads.remove(taskId);
+        await _ref
+            .read(storageServiceProvider)
+            .patchDownloadMetadata(
+              taskId,
+              queueWaiting: false,
+              userPaused: true,
+            );
+        final stoppedRange = await _rangeTransfers.stop(taskId);
         // Plugin pause produces URLSession resumeData and drops the
         // transferring task so it no longer occupies a slot. Never cancel —
         // cancel deletes the temp file and forces a restart from byte 0.
@@ -2716,8 +2722,6 @@ class DownloadService {
 
   Future<void> _resumeUserPausedUnlocked(String taskId) async {
     await _reconcileTransferOwnership();
-    _userPausedIds.remove(taskId);
-    _dequeuingPausedIds.remove(taskId);
     DownloadTask? downloadTask = await _liveNativeTaskFor(taskId: taskId);
     if (downloadTask == null) {
       final record = await FileDownloader().database.recordForId(taskId);
@@ -2727,15 +2731,20 @@ class DownloadService {
     }
     if (downloadTask == null) return;
     _rememberSessionTask(taskId);
-    await _ref
-        .read(storageServiceProvider)
-        .patchDownloadMetadata(taskId, queueWaiting: false, userPaused: false);
-    await _checkpointLogicalJob(
+    final checkpointed = await _checkpointLogicalJob(
       downloadTask,
       state: DownloadJobState.starting,
       userPaused: false,
       queueWaiting: false,
     );
+    if (!checkpointed) {
+      throw StateError('Failed to persist resume intent for $taskId');
+    }
+    _userPausedIds.remove(taskId);
+    _dequeuingPausedIds.remove(taskId);
+    await _ref
+        .read(storageServiceProvider)
+        .patchDownloadMetadata(taskId, queueWaiting: false, userPaused: false);
 
     final max = clampDownloadConcurrency(
       _ref.read(storageServiceProvider).getDownloadConcurrency(),
@@ -2908,19 +2917,22 @@ class DownloadService {
     final previous = await FileDownloader().database.recordForId(task.taskId);
     final progress = previous?.progress ?? 0.0;
     final totalSize = previous?.expectedFileSize ?? -1;
-    _queueWaitingIds.add(task.taskId);
-    _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
-    _rememberSessionTask(task.taskId);
-    await _ref
-        .read(storageServiceProvider)
-        .patchDownloadMetadata(task.taskId, queueWaiting: true);
-    await _checkpointLogicalJob(
+    final checkpointed = await _checkpointLogicalJob(
       task,
       state: DownloadJobState.queued,
       expectedBytes: totalSize,
       userPaused: false,
       queueWaiting: true,
     );
+    if (!checkpointed) {
+      throw StateError('Failed to persist queue intent for ${task.taskId}');
+    }
+    _queueWaitingIds.add(task.taskId);
+    _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
+    _rememberSessionTask(task.taskId);
+    await _ref
+        .read(storageServiceProvider)
+        .patchDownloadMetadata(task.taskId, queueWaiting: true);
     await FileDownloader().database.updateRecord(
       TaskRecord(task, TaskStatus.paused, progress, totalSize),
     );

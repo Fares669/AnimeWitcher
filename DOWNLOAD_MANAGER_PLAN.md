@@ -142,6 +142,7 @@
   - **Proposed fix:** critical lifecycle checkpoints return an explicit durable result and must succeed before irreversible ownership side effects. Progress snapshots may remain coalesced/best-effort only when boundary flushes are guaranteed.
   - **Verification/testing:** backend reject/throw during start, enqueue, pause, resume, refresh, completion and cancel; kill after each point; state/intent cannot invert after relaunch.
   - **Dependencies:** DM-20.
+  - **Implementation status (2026-09-11, control-boundary slice):** `_checkpointLogicalJob` now reports explicit commit/reject/error success instead of swallowing failure as `void`. Queue admission persists `queued` before mutating waiter/metadata/plugin projections; user resume persists `starting` before clearing durable/user-paused projections; user pause persists `pausing` before stopping Range/native ownership. A failed authoritative checkpoint throws before those ownership side effects. Remaining DM-21 work is to audit/fence fresh-start, refresh replacement, completion and cancel/delete boundaries plus direct JobStore writes and add backend reject/throw fault-injection coverage.
 
 - [ ] **DM-32 — Gate every public download control behind initialization/recovery readiness**
   - **Problem:** `main.dart` calls `DownloadService.init()` post-frame without awaiting it, while start/pause/resume/cancel do not universally await the same readiness barrier.
