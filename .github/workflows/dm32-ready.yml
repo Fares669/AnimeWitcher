@@ -1,0 +1,70 @@
+name: DM32 Readiness Barrier
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+
+permissions:
+  contents: write
+
+jobs:
+  dm32:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Setup
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Stage readiness tests
+        run: |
+          python3 .github/dm32_ready.py tests
+          dart format lib/core/services/download_service_readiness.dart test/core/services/download_service_readiness_test.dart test/core/services/download_initialization_barrier_guard_test.dart
+      - name: Prove RED command barrier
+        run: |
+          set +e
+          flutter test test/core/services/download_initialization_barrier_guard_test.dart > /tmp/dm32-red.log 2>&1
+          status=$?
+          cat /tmp/dm32-red.log
+          test "$status" -ne 0
+      - name: Apply DM-32
+        run: |
+          python3 .github/dm32_ready.py apply
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/core/services/download_service.dart')
+          text = path.read_text()
+          text = text.replace(
+              r'_readiness =\n      DownloadServiceReadinessBarrier();',
+              '''_readiness =
+                DownloadServiceReadinessBarrier();''',
+          )
+          path.write_text(text)
+          PY
+          dart format lib/core/services/download_service.dart lib/core/services/download_service_readiness.dart lib/main.dart test/core/services/download_service_readiness_test.dart test/core/services/download_initialization_barrier_guard_test.dart
+      - name: Test readiness semantics
+        run: flutter test test/core/services/download_service_readiness_test.dart test/core/services/download_initialization_barrier_guard_test.dart
+      - name: Test lifecycle and recovery regressions
+        run: flutter test test/core/services/download_lifecycle_checkpoint_guard_test.dart test/core/services/download_persistence_boundary_guard_test.dart test/core/services/download_cancel_checkpoint_guard_test.dart test/core/services/download_checkpoint_commit_result_test.dart test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_recovery_fault_injection_test.dart test/core/services/download_startup_reconciliation_matrix_test.dart test/core/services/download_zero_restart_invariant_test.dart test/core/services/download_runtime_ownership_test.dart test/core/services/persistent_parallel_download_test.dart
+      - name: Test durable job store
+        run: flutter test test/core/services/download_job_store_test.dart test/core/services/download_job_store_attempt_test.dart
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dm32-ready.yml .github/dm32_ready.py
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart lib/core/services/download_service_readiness.dart lib/main.dart test/core/services/download_service_readiness_test.dart test/core/services/download_initialization_barrier_guard_test.dart
+          git diff --cached --check
+          git commit -m "fix: gate download controls on startup readiness"
+          git push origin HEAD:plan/download-manager-reliability
