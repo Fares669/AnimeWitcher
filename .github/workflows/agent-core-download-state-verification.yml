@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: core-download-state-agent-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   dm04-recovery-union:
@@ -114,6 +114,17 @@ jobs:
             git commit -m 'fix(downloads): canonicalize logical episode identity'
           fi
 
+      - name: Prove DM06 regression is RED before implementation
+        run: |
+          set +e
+          flutter test test/core/services/download_resource_identity_service_guard_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key > /tmp/dm06-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/dm06-red.log
+          if [ "$status" -eq 0 ]; then
+            echo 'DM06 RED test unexpectedly passed before the integration patch'
+            exit 1
+          fi
       - name: Apply DM06 resource identity patch
         run: |
           if ! grep -q 'completion.verificationRejected' lib/core/services/download_service.dart; then
@@ -141,6 +152,17 @@ jobs:
             git commit -m 'fix(downloads): verify remote identity before completion'
           fi
 
+      - name: Prove DM16 regressions are RED before implementation
+        run: |
+          set +e
+          flutter test test/core/services/download_zero_restart_invariant_test.dart test/core/services/download_historical_progress_recovery_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key > /tmp/dm16-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/dm16-red.log
+          if [ "$status" -eq 0 ]; then
+            echo 'DM16 RED tests unexpectedly passed before the progress-evidence patch'
+            exit 1
+          fi
       - name: Apply DM16 historical progress separation
         run: |
           if ! grep -q 'Historical UI progress is not recoverable-byte evidence' lib/core/utils/download_resume.dart; then
