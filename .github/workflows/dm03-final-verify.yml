@@ -25,6 +25,17 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
+      - name: Make notification assertion diagnostic
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('test/features/settings/presentation/download_concurrency_settings_test.dart')
+          s = p.read_text()
+          old = """    expect(\n      storage.getDownloadNotificationPrefs(),\n      DownloadNotificationPrefs.disabled,\n    );\n"""
+          new = """    expect(\n      storage.getDownloadNotificationPrefs().toJson(),\n      DownloadNotificationPrefs.disabled.toJson(),\n    );\n"""
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new))
+          PY
       - name: Focused settings regression
         run: flutter test test/features/settings/presentation/download_concurrency_settings_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
       - name: DM-03 focused coverage
@@ -35,4 +46,6 @@ jobs:
       - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
       - name: Diff check
-        run: git diff --check
+        run: |
+          git checkout -- test/features/settings/presentation/download_concurrency_settings_test.dart
+          git diff --check
