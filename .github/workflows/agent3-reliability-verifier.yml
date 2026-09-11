@@ -34,4 +34,5 @@ jobs:
             test/core/utils/download_cleanup_containment_red_test.dart \
             test/core/services/persistent_parallel_download_hol_red_test.dart \
             test/core/services/download_network_state_red_test.dart \
+            test/core/services/persistent_parallel_download_storage_headroom_test.dart \
             --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
