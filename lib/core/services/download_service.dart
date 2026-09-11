@@ -2187,6 +2187,9 @@ class DownloadService {
     for (final record in records) {
       if (!isLogicalEpisodeDownloadTask(record.task)) continue;
       final job = await _jobStore.get(record.task.taskId);
+      final metadata = await storage.getDownloadMetadata(record.task.taskId);
+      final logicalId =
+          job?.logicalId ?? logicalDownloadIdFromMetadata(metadata);
       final trackingUrl = downloadTrackingUrl(record.task);
       final live = liveProgress[trackingUrl];
       final liveRunning = live?.status == TaskStatus.running;
@@ -2258,8 +2261,9 @@ class DownloadService {
     final seen = {for (final entry in entries) entry.taskId};
     for (final payload in _waitingPayloads.entries) {
       if (seen.contains(payload.key)) continue;
-      _rememberSessionTask(payload.key);
       final job = await _jobStore.get(payload.key);
+      if (job != null && !downloadJobQueueWaiting(job.state)) continue;
+      _rememberSessionTask(payload.key);
       final payloadLogicalId = (payload.value['logicalId'] as String?)?.trim();
       entries.add(
         DownloadOverlayEntry(
