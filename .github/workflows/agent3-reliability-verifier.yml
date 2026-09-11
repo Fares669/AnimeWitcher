@@ -1,0 +1,47 @@
+name: Agent 3 Reliability Verifier
+
+on:
+  push:
+    branches:
+      - agent3/native-network-platform-reliability
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent3-reliability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused-red-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Prepare bounded DM-27 tmpfs
+        run: |
+          sudo mkdir -p /mnt/agent3-dm27
+          sudo mount -t tmpfs -o size=8m tmpfs /mnt/agent3-dm27
+          sudo chown "$(id -u):$(id -g)" /mnt/agent3-dm27
+          df -h /mnt/agent3-dm27
+
+      - name: Run Agent 3 focused regression tests
+        env:
+          DM27_TEST_ROOT: /mnt/agent3-dm27
+        run: |
+          flutter test \
+            test/core/utils/download_cleanup_containment_red_test.dart \
+            test/core/services/persistent_parallel_download_hol_red_test.dart \
+            test/core/services/download_network_state_red_test.dart \
+            test/core/services/persistent_parallel_download_storage_headroom_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key

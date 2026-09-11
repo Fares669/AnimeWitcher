@@ -1,0 +1,96 @@
+name: Agent 3 iOS Policy Verifier
+
+on:
+  push:
+    branches:
+      - agent3/native-network-platform-reliability
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent3-ios-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dm28-ios-native-policy-red:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Inject DM-28 behavioral XCTest into checkout
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('ios/RunnerTests/RunnerTests.swift')
+          source = path.read_text()
+          marker = '''  override func tearDown() {
+              DownloadNativeWaitingQueue.resetForTests()
+              super.tearDown()
+            }
+          '''
+          test = r'''
+            func testDM28LogicalConcurrencyIsNotSilentlyClamped() {
+              for requested in [1, 5, 6, 10] {
+                DownloadNativeWaitingQueue.resetForTests()
+                DownloadNativeWaitingQueue.persist(from: [
+                  "maxConcurrent": requested,
+                  "transferringTaskIds": [],
+                  "pausedTaskIds": [],
+                  "waiters": [],
+                ])
+                let native = DownloadNativeWaitingQueue.load().maxConcurrent
+                XCTAssertEqual(
+                  native,
+                  requested,
+                  "DM-28: logical concurrency \\(requested) must not silently become \\(native) in native state; platform projection must be explicit"
+                )
+              }
+            }
+          '''
+          if marker not in source:
+              raise SystemExit('RunnerTests tearDown marker not found')
+          path.write_text(source.replace(marker, marker + test, 1))
+          PY
+
+      - name: Install CocoaPods
+        run: |
+          cd ios
+          pod install --repo-update
+
+      - name: Select iOS simulator
+        id: sim
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c '
+          import json,sys
+          data=json.load(sys.stdin)
+          for runtime, devices in data.get("devices", {}).items():
+              if "iOS" not in runtime: continue
+              for d in devices:
+                  if d.get("isAvailable") and d.get("name", "").startswith("iPhone"):
+                      print(d["udid"])
+                      raise SystemExit(0)
+          raise SystemExit(1)
+          ')
+          echo "id=$DEVICE_ID" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$DEVICE_ID" || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+
+      - name: Run DM-28 native policy XCTest
+        run: |
+          xcodebuild test \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.id }}" \
+            -only-testing:RunnerTests/RunnerTests/testDM28LogicalConcurrencyIsNotSilentlyClamped \
+            CODE_SIGNING_ALLOWED=NO
