@@ -1,0 +1,85 @@
+name: DM02 Pause Settlement
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - '.github/workflows/dm02-pause-settlement.yml'
+      - '.github/dm02_pause_settlement.py'
+
+permissions:
+  contents: write
+
+jobs:
+  dm02:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Setup dependencies
+        run: flutter pub get
+      - name: Install RED regression guard
+        run: python3 .github/dm02_pause_settlement.py tests
+      - name: Prove regression is RED before implementation
+        shell: bash
+        run: |
+          set +e
+          flutter test test/core/services/download_pause_settlement_guard_test.dart > /tmp/dm02-red.log 2>&1
+          code=$?
+          cat /tmp/dm02-red.log
+          if [ "$code" -eq 0 ]; then
+            echo 'DM-02 regression unexpectedly passed before implementation'
+            exit 1
+          fi
+      - name: Apply DM-02 implementation
+        run: python3 .github/dm02_pause_settlement.py apply
+      - name: Format changed Dart files
+        run: dart format lib/core/services/download_service.dart test/core/services/download_pause_settlement_guard_test.dart
+      - name: Run DM-02 regression guard
+        run: flutter test test/core/services/download_pause_settlement_guard_test.dart
+      - name: Run ownership and recovery regressions
+        run: |
+          flutter test test/core/services/download_runtime_ownership_test.dart
+          flutter test test/core/services/download_job_store_recovery_test.dart
+          flutter test test/core/services/download_zero_restart_invariant_test.dart
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Mark DM-02 complete with verification notes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('DOWNLOAD_MANAGER_PLAN.md')
+          s = p.read_text()
+          anchor = '- [ ] **DM-02 — Make single-file pause prove that transport ownership actually stopped**'
+          done = '- [x] **DM-02 — Make single-file pause prove that transport ownership actually stopped**'
+          if anchor not in s:
+              raise SystemExit('DM-02 unchecked anchor missing')
+          s = s.replace(anchor, done, 1)
+          dep = '  - **Dependencies:** DM-19, DM-21, DM-32.\n'
+          notes = '''  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof now applies to ordinary single-file downloads and multipart children; an owned same-identity worker receives one pause retry without cancellation.\n  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, the user pause intent remains durably `pausing` and `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite the plugin DB/UI to `paused` until release is proven.\n  - **Confirmed root cause:** `_pauseTransfer()` waited up to five seconds for a pause/final callback but only verified runtime ownership for internal multipart children; ordinary single-file tasks returned success after the timeout. Startup pause enforcement also ignored the boolean result and unconditionally wrote `TaskStatus.paused`.\n  - **Verification passed:** RED→GREEN `download_pause_settlement_guard_test.dart`; runtime-ownership, JobStore recovery, zero-restart invariant regressions; `flutter analyze --no-fatal-warnings --no-fatal-infos`; diff check before commit.\n'''
+          idx = s.find(done)
+          dep_idx = s.find(dep, idx)
+          if dep_idx < 0:
+              raise SystemExit('DM-02 dependency anchor missing')
+          insert_at = dep_idx + len(dep)
+          s = s[:insert_at] + notes + s[insert_at:]
+          p.write_text(s)
+          PY
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dm02-pause-settlement.yml .github/dm02_pause_settlement.py
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart test/core/services/download_pause_settlement_guard_test.dart
+          git diff --cached --check
+          git commit -m "fix: require settled ownership for single-file pause"
+          git push origin HEAD:plan/download-manager-reliability
