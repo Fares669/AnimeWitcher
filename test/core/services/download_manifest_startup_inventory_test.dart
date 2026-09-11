@@ -27,7 +27,10 @@ void main() {
     );
     expect(
       source,
-      contains('final manifestById = <String, ParallelManifestRecoveryEvidence>{'),
+      contains(
+        'final manifestEvidenceById = '
+        '<String, ParallelManifestRecoveryEvidence>{',
+      ),
     );
   });
 
@@ -39,14 +42,14 @@ void main() {
       contains(
         'job.restoreTaskSnapshot() ??\n'
         '          _downloadTaskFromMetadataSnapshot(metadata) ??\n'
-        '          manifestById[job.taskId]?.parentTask',
+        '          manifestEvidenceById[job.taskId]?.parentTask',
       ),
     );
     expect(
       source,
       contains(
         '_downloadTaskFromMetadataSnapshot(metadata) ??\n'
-        '          manifestById[taskId]?.parentTask',
+        '          manifestEvidenceById[taskId]?.parentTask',
       ),
     );
     expect(
