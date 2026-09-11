@@ -58,11 +58,31 @@ void main() {
       expect(partialStart, greaterThanOrEqualTo(0));
       expect(partialEnd, greaterThan(partialStart));
       final partialBody = source.substring(partialStart, partialEnd);
+      final ownershipLookup = partialBody.indexOf(
+        'livePartIds = await _livePartIds();',
+      );
+      final canonicalize = partialBody.indexOf(
+        'canonicalizePartialDownloadFile(',
+      );
       final parallelReject = partialBody.indexOf(
         'if (task is ParallelDownloadTask) return false;',
       );
       final exactComplete = partialBody.indexOf(
         'existingBytes == expectedBytes',
+      );
+
+      expect(
+        ownershipLookup,
+        greaterThanOrEqualTo(0),
+        reason:
+            'multipart completion adoption must prove child ownership is settled',
+      );
+      expect(canonicalize, greaterThanOrEqualTo(0));
+      expect(
+        ownershipLookup,
+        lessThan(canonicalize),
+        reason:
+            'multipart ownership must be checked before any temp-file rename/copy',
       );
       expect(exactComplete, greaterThanOrEqualTo(0));
       expect(
