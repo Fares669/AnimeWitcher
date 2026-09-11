@@ -1,0 +1,35 @@
+name: DM03 Diagnostic
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths: [.github/workflows/dm03-diagnostic.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Locate command callsites and signatures
+        run: |
+          echo '=== definitions/calls ==='
+          rg -n "pauseDownload\(|resumeDownload\(|cancelDownload\(|DownloadCommandOutcome" lib test || true
+          echo '=== plan DM-03 context ==='
+          rg -n -A45 -B5 "DM-03" DOWNLOAD_MANAGER_PLAN.md || true
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Current DM-03 focused test
+        run: flutter test test/core/services/download_command_outcome_test.dart
+      - name: Analyze current head
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
