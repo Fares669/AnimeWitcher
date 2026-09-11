@@ -86,6 +86,45 @@ DownloadCommandOutcome downloadCommandOutcomeForJobState(
   };
 }
 
+
+DownloadCommandOutcome resolvePauseCommandOutcome({
+  required DownloadJobState? state,
+  required DownloadRuntimeOwnership ownership,
+}) {
+  final durable = downloadCommandOutcomeForJobState(state);
+  if (durable != DownloadCommandOutcome.missingState) return durable;
+  return ownership == DownloadRuntimeOwnership.notOwned
+      ? DownloadCommandOutcome.missingState
+      : DownloadCommandOutcome.settlingOwnership;
+}
+
+DownloadCommandOutcome resolveResumeCommandOutcome({
+  required DownloadJobState? state,
+  required DownloadRuntimeOwnership ownership,
+}) {
+  final durable = downloadCommandOutcomeForJobState(state);
+  if (durable != DownloadCommandOutcome.missingState) return durable;
+  return switch (ownership) {
+    DownloadRuntimeOwnership.owned => DownloadCommandOutcome.attached,
+    DownloadRuntimeOwnership.settling || DownloadRuntimeOwnership.unknown =>
+      DownloadCommandOutcome.settlingOwnership,
+    DownloadRuntimeOwnership.notOwned => DownloadCommandOutcome.missingState,
+  };
+}
+
+DownloadCommandOutcome resolveCancelCommandOutcome({
+  required DownloadJobState? state,
+  required DownloadRuntimeOwnership ownership,
+}) {
+  if (ownership != DownloadRuntimeOwnership.notOwned) {
+    return DownloadCommandOutcome.settlingOwnership;
+  }
+  if (state == null || state == DownloadJobState.canceled) {
+    return DownloadCommandOutcome.terminal;
+  }
+  return downloadCommandOutcomeForJobState(state);
+}
+
 class DownloadProgressData {
   final String taskId;
   final double progress;
@@ -2754,14 +2793,11 @@ class DownloadService {
     }
 
     final ownership = await _runtimeOwnershipFor(taskId);
-    if (ownership != DownloadRuntimeOwnership.notOwned) {
-      return DownloadCommandOutcome.settlingOwnership;
-    }
     final job = await _jobStore.get(taskId);
-    if (job == null || job.state == DownloadJobState.canceled) {
-      return DownloadCommandOutcome.terminal;
-    }
-    return downloadCommandOutcomeForJobState(job.state);
+    return resolveCancelCommandOutcome(
+      state: job?.state,
+      ownership: ownership,
+    );
   }
 
   Future<DownloadCommandOutcome> pauseDownloadOutcome(String taskId) async {
@@ -2773,12 +2809,11 @@ class DownloadService {
       return DownloadCommandOutcome.recoverableFailure;
     }
     final job = await _jobStore.get(taskId);
-    final outcome = downloadCommandOutcomeForJobState(job?.state);
-    if (outcome != DownloadCommandOutcome.missingState) return outcome;
     final ownership = await _runtimeOwnershipFor(taskId);
-    return ownership == DownloadRuntimeOwnership.notOwned
-        ? DownloadCommandOutcome.missingState
-        : DownloadCommandOutcome.settlingOwnership;
+    return resolvePauseCommandOutcome(
+      state: job?.state,
+      ownership: ownership,
+    );
   }
 
   Future<DownloadCommandOutcome> resumeDownloadOutcome(String taskId) async {
@@ -2790,15 +2825,11 @@ class DownloadService {
       return DownloadCommandOutcome.recoverableFailure;
     }
     final job = await _jobStore.get(taskId);
-    final outcome = downloadCommandOutcomeForJobState(job?.state);
-    if (outcome != DownloadCommandOutcome.missingState) return outcome;
     final ownership = await _runtimeOwnershipFor(taskId);
-    return switch (ownership) {
-      DownloadRuntimeOwnership.owned => DownloadCommandOutcome.attached,
-      DownloadRuntimeOwnership.settling || DownloadRuntimeOwnership.unknown =>
-        DownloadCommandOutcome.settlingOwnership,
-      DownloadRuntimeOwnership.notOwned => DownloadCommandOutcome.missingState,
-    };
+    return resolveResumeCommandOutcome(
+      state: job?.state,
+      ownership: ownership,
+    );
   }
 
   Future<void> pauseDownload(String taskId) async {
