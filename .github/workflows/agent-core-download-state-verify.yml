@@ -1,0 +1,60 @@
+name: Agent Core Download State Verify
+
+on:
+  push:
+    branches:
+      - agent/core-download-state-recovery-dm04-dm16-20260911
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-core-download-state-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused-download-state:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Focused core download state tests
+        run: >-
+          flutter test
+          test/core/services/download_job_store_test.dart
+          test/core/services/download_recovery_inventory_test.dart
+          test/core/services/download_durable_only_recovery_test.dart
+          test/core/services/download_missing_presentation_recovery_test.dart
+          test/core/services/download_manifest_startup_inventory_test.dart
+          test/core/services/download_job_state_authority_test.dart
+          test/core/services/download_job_state_queue_authority_test.dart
+          test/core/services/download_job_logical_identity_test.dart
+          test/core/services/download_logical_identity_test.dart
+          test/core/services/download_logical_identity_persistence_test.dart
+          test/core/services/download_logical_identity_start_test.dart
+          test/core/services/download_overlay_logical_identity_test.dart
+          test/core/services/download_source_refresh_integrity_test.dart
+          test/core/services/download_zero_restart_invariant_test.dart
+          test/core/services/download_durable_byte_contract_guard_test.dart
+          test/core/services/download_durable_byte_provenance_guard_test.dart
+          test/core/services/download_recovery_reconciliation_guard_test.dart
+          test/core/services/download_recovery_snapshot_test.dart
+          test/core/services/persistent_parallel_download_test.dart
+          test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          test/core/services/persistent_parallel_download_manifest_discovery_test.dart
+          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+          test/features/library/presentation/downloads_job_state_authority_test.dart
+          test/features/library/presentation/downloads_logical_identity_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
