@@ -10,7 +10,7 @@ void main() {
       ).readAsStringSync();
 
       expect(source, contains('logicalJobStateForTask'));
-      expect(source, contains('downloadJobTaskStatus'));
+      expect(source, contains('downloadJobDisplayStatus'));
       expect(source, contains('Pre-JobStore migration fallback'));
 
       final refresh = source.indexOf('Future<List<DownloadItem>> _refreshList()');
@@ -35,7 +35,7 @@ void main() {
       final body = source.substring(handler, remove);
 
       expect(body, contains('logicalJobStateForTask'));
-      expect(body, contains('downloadJobTaskStatus'));
+      expect(body, contains('downloadJobDisplayStatus'));
     });
   });
 }
