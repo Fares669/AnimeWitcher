@@ -31,148 +31,165 @@ jobs:
           git reset --hard HEAD
       - name: Apply hidden-owner recovery policy
         run: |
-          echo 'CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKc3RhdGVfcGF0aCA9IFBhdGgoImxpYi9jb3JlL3NlcnZpY2VzL2Rvd25sb2FkX2pvYl9zdGF0ZS5kYXJ0IikKc3RhdGUgPSBzdGF0ZV9wYXRoLnJlYWRfdGV4dCgpCnN0YXRlX2FuY2hvciA9ICIiIkRvd25sb2FkRHVyYWJsZU9ubHlSZWNvdmVyeURpc3Bvc2l0aW9uIHBsYW5EdXJhYmxlT25seVJlY292ZXJ5RGlzcG9zaXRpb24oewogIHJlcXVpcmVkIGJvb2wgaGFzUHJlc2VudGF0aW9uTWV0YWRhdGEsCiAgcmVxdWlyZWQgYm9vbCBoYXNSZWNvdmVyYWJsZVRhc2tEZXNjcmlwdG9yLAp9KSB7CiAgcmV0dXJuIGhhc1ByZXNlbnRhdGlvbk1ldGFkYXRhICYmIGhhc1JlY292ZXJhYmxlVGFza0Rlc2NyaXB0b3IKICAgICAgPyBEb3dubG9hZER1cmFibGVPbmx5UmVjb3ZlcnlEaXNwb3NpdGlvbi5yZWNvdmVyCiAgICAgIDogRG93bmxvYWREdXJhYmxlT25seVJlY292ZXJ5RGlzcG9zaXRpb24ub3JwaGFuOwp9CgoiIiIKhelper = """enum DownloadMissingPresentationRecoveryDisposition {
-  recover,
-  settleOwner,
-  orphan,
-  preserveTerminal,
-}
+          cat > /tmp/dm04_patch.py <<'PY'
+          from pathlib import Path
 
-/// Decide what startup may do when the executor/task identity survived but the
-/// AnimeWitcher presentation identity did not. Never restart a hidden transfer:
-/// a live writer is settled first, while terminal logical state is preserved.
-DownloadMissingPresentationRecoveryDisposition planMissingPresentationRecovery({
-  required bool hasPresentationMetadata,
-  required bool hasLiveOwnership,
-  DownloadJobState? authoritativeState,
-}) {
-  if (authoritativeState == DownloadJobState.completed ||
-      authoritativeState == DownloadJobState.canceled ||
-      authoritativeState == DownloadJobState.orphaned) {
-    return DownloadMissingPresentationRecoveryDisposition.preserveTerminal;
-  }
-  if (hasPresentationMetadata) {
-    return DownloadMissingPresentationRecoveryDisposition.recover;
-  }
-  return hasLiveOwnership
-      ? DownloadMissingPresentationRecoveryDisposition.settleOwner
-      : DownloadMissingPresentationRecoveryDisposition.orphan;
-}
+          state_path = Path('lib/core/services/download_job_state.dart')
+          state = state_path.read_text()
+          state_anchor = '''DownloadDurableOnlyRecoveryDisposition planDurableOnlyRecoveryDisposition({
+            required bool hasPresentationMetadata,
+            required bool hasRecoverableTaskDescriptor,
+          }) {
+            return hasPresentationMetadata && hasRecoverableTaskDescriptor
+                ? DownloadDurableOnlyRecoveryDisposition.recover
+                : DownloadDurableOnlyRecoveryDisposition.orphan;
+          }
 
-"""
-if "enum DownloadMissingPresentationRecoveryDisposition" not in state:
-    if state.count(state_anchor) != 1:
-        raise SystemExit(f"expected one state insertion anchor, found {state.count(state_anchor)}")
-    state = state.replace(state_anchor, state_anchor + helper, 1)
-state_path.write_text(state)
+          '''
+          helper = '''enum DownloadMissingPresentationRecoveryDisposition {
+            recover,
+            settleOwner,
+            orphan,
+            preserveTerminal,
+          }
 
-service_path = Path("lib/core/services/download_service.dart")
-service = service_path.read_text()
-anchor = """      final stillNative =
-          nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);
-      final userPaused =
-"""
-insert = """      final stillNative =
-          nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);
-      final hasLiveOwnership =
-          stillNative || _parallel.hasLiveConnections(task.taskId);
-      final presentationDisposition = planMissingPresentationRecovery(
-        hasPresentationMetadata: metadata?['item'] is Map,
-        hasLiveOwnership: hasLiveOwnership,
-        authoritativeState: oldJob?.state,
-      );
-      if (presentationDisposition ==
-          DownloadMissingPresentationRecoveryDisposition.preserveTerminal) {
-        if (hasLiveOwnership) {
-          try {
-            await _pauseTransfer(task);
-          } catch (_) {
-            // The terminal JobStore state remains authoritative. A later
-            // reconciliation pass will retry settlement without reviving it.
+          /// Decide what startup may do when the executor/task identity survived but the
+          /// AnimeWitcher presentation identity did not. Never restart a hidden transfer:
+          /// a live writer is settled first, while terminal logical state is preserved.
+          DownloadMissingPresentationRecoveryDisposition planMissingPresentationRecovery({
+            required bool hasPresentationMetadata,
+            required bool hasLiveOwnership,
+            DownloadJobState? authoritativeState,
+          }) {
+            if (authoritativeState == DownloadJobState.completed ||
+                authoritativeState == DownloadJobState.canceled ||
+                authoritativeState == DownloadJobState.orphaned) {
+              return DownloadMissingPresentationRecoveryDisposition.preserveTerminal;
+            }
+            if (hasPresentationMetadata) {
+              return DownloadMissingPresentationRecoveryDisposition.recover;
+            }
+            return hasLiveOwnership
+                ? DownloadMissingPresentationRecoveryDisposition.settleOwner
+                : DownloadMissingPresentationRecoveryDisposition.orphan;
           }
-        }
-        _queueWaitingIds.remove(task.taskId);
-        _waitingPayloads.remove(task.taskId);
-        _forgetSessionTask(task.taskId);
-        continue;
-      }
-      if (presentationDisposition !=
-          DownloadMissingPresentationRecoveryDisposition.recover) {
-        final expectedForOrphan = knownDownloadSize(<int?>[
-          record.expectedFileSize,
-          downloadMetadataExpectedBytes(metadata),
-          oldJob?.expectedBytes,
-        ]);
-        if (presentationDisposition ==
-            DownloadMissingPresentationRecoveryDisposition.settleOwner) {
-          final pausingCommitted = await _checkpointLogicalJob(
-            task,
-            state: DownloadJobState.pausing,
-            expectedBytes: expectedForOrphan,
-            userPaused: false,
-            queueWaiting: false,
-          );
-          if (!pausingCommitted) {
-            diagnosticLog.record('recovery.missingPresentationSettling', {
-              'taskId': task.taskId,
-              'reason': 'checkpointFailed',
-            });
-            continue;
-          }
-          var settled = false;
-          try {
-            settled = await _pauseTransfer(task);
-          } catch (_) {
-            settled = false;
-          }
-          if (!settled) {
-            diagnosticLog.record('recovery.missingPresentationSettling', {
-              'taskId': task.taskId,
-              'reason': 'ownershipNotReleased',
-            });
-            continue;
-          }
-        }
 
-        final orphanCommitted = await _checkpointLogicalJob(
-          task,
-          state: DownloadJobState.orphaned,
-          expectedBytes: expectedForOrphan,
-          userPaused: false,
-          queueWaiting: false,
-        );
-        if (!orphanCommitted) {
-          diagnosticLog.record('recovery.missingPresentationSettling', {
-            'taskId': task.taskId,
-            'reason': 'orphanCheckpointFailed',
-          });
-          continue;
-        }
-        _queueWaitingIds.remove(task.taskId);
-        _waitingPayloads.remove(task.taskId);
-        _forgetSessionTask(task.taskId);
-        await FileDownloader().database.updateRecord(
-          TaskRecord(
-            task,
-            TaskStatus.paused,
-            progress,
-            expectedForOrphan,
-          ),
-        );
-        diagnosticLog.record('recovery.orphanedMissingPresentation', {
-          'taskId': task.taskId,
-          'source': stillNative ? 'runtime' : 'executor',
-        });
-        continue;
-      }
-      final userPaused =
-"""
-if "final presentationDisposition = planMissingPresentationRecovery(" not in service:
-    if service.count(anchor) != 1:
-        raise SystemExit(f"expected one service insertion anchor, found {service.count(anchor)}")
-    service = service.replace(anchor, insert, 1)
-service_path.write_text(service)
-' | base64 -d > /tmp/dm04_patch.py
+          '''
+          if 'enum DownloadMissingPresentationRecoveryDisposition' not in state:
+              count = state.count(state_anchor)
+              if count != 1:
+                  raise SystemExit(f'expected one state insertion anchor, found {count}')
+              state = state.replace(state_anchor, state_anchor + helper, 1)
+          state_path.write_text(state)
+
+          service_path = Path('lib/core/services/download_service.dart')
+          service = service_path.read_text()
+          anchor = '''      final stillNative =
+                    nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);
+                final userPaused =
+          '''
+          insert = '''      final stillNative =
+                    nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);
+                final hasLiveOwnership =
+                    stillNative || _parallel.hasLiveConnections(task.taskId);
+                final presentationDisposition = planMissingPresentationRecovery(
+                  hasPresentationMetadata: metadata?['item'] is Map,
+                  hasLiveOwnership: hasLiveOwnership,
+                  authoritativeState: oldJob?.state,
+                );
+                if (presentationDisposition ==
+                    DownloadMissingPresentationRecoveryDisposition.preserveTerminal) {
+                  if (hasLiveOwnership) {
+                    try {
+                      await _pauseTransfer(task);
+                    } catch (_) {
+                      // The terminal durable state stays authoritative; a later
+                      // reconciliation pass retries settlement without revival.
+                    }
+                  }
+                  _queueWaitingIds.remove(task.taskId);
+                  _waitingPayloads.remove(task.taskId);
+                  _forgetSessionTask(task.taskId);
+                  continue;
+                }
+                if (presentationDisposition !=
+                    DownloadMissingPresentationRecoveryDisposition.recover) {
+                  final expectedForOrphan = knownDownloadSize(<int?>[
+                    record.expectedFileSize,
+                    downloadMetadataExpectedBytes(metadata),
+                    oldJob?.expectedBytes,
+                  ]);
+                  if (presentationDisposition ==
+                      DownloadMissingPresentationRecoveryDisposition.settleOwner) {
+                    final pausingCommitted = await _checkpointLogicalJob(
+                      task,
+                      state: DownloadJobState.pausing,
+                      expectedBytes: expectedForOrphan,
+                      userPaused: false,
+                      queueWaiting: false,
+                    );
+                    if (!pausingCommitted) {
+                      diagnosticLog.record('recovery.missingPresentationSettling', {
+                        'taskId': task.taskId,
+                        'reason': 'checkpointFailed',
+                      });
+                      continue;
+                    }
+                    var settled = false;
+                    try {
+                      settled = await _pauseTransfer(task);
+                    } catch (_) {
+                      settled = false;
+                    }
+                    if (!settled) {
+                      diagnosticLog.record('recovery.missingPresentationSettling', {
+                        'taskId': task.taskId,
+                        'reason': 'ownershipNotReleased',
+                      });
+                      continue;
+                    }
+                  }
+
+                  final orphanCommitted = await _checkpointLogicalJob(
+                    task,
+                    state: DownloadJobState.orphaned,
+                    expectedBytes: expectedForOrphan,
+                    userPaused: false,
+                    queueWaiting: false,
+                  );
+                  if (!orphanCommitted) {
+                    diagnosticLog.record('recovery.missingPresentationSettling', {
+                      'taskId': task.taskId,
+                      'reason': 'orphanCheckpointFailed',
+                    });
+                    continue;
+                  }
+                  _queueWaitingIds.remove(task.taskId);
+                  _waitingPayloads.remove(task.taskId);
+                  _forgetSessionTask(task.taskId);
+                  await FileDownloader().database.updateRecord(
+                    TaskRecord(
+                      task,
+                      TaskStatus.paused,
+                      progress,
+                      expectedForOrphan,
+                    ),
+                  );
+                  diagnosticLog.record('recovery.orphanedMissingPresentation', {
+                    'taskId': task.taskId,
+                    'source': stillNative ? 'runtime' : 'executor',
+                  });
+                  continue;
+                }
+                final userPaused =
+          '''
+          if 'final presentationDisposition = planMissingPresentationRecovery(' not in service:
+              count = service.count(anchor)
+              if count != 1:
+                  raise SystemExit(f'expected one service insertion anchor, found {count}')
+              service = service.replace(anchor, insert, 1)
+          service_path.write_text(service)
+          PY
           python3 /tmp/dm04_patch.py
           dart format lib/core/services/download_job_state.dart lib/core/services/download_service.dart
       - name: Run focused and adjacent recovery tests
