@@ -1,5 +1,6 @@
 name: Agent DM06 Resource Identity Completion
 
+# Rerun after correcting the completion guard's method boundary.
 on:
   push:
     branches: [plan/download-manager-reliability]
