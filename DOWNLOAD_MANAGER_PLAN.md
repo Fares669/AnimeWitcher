@@ -234,7 +234,7 @@
   - **Root cause confirmed (2026-09-11):** the typed resolver treated every non-missing JobStore projection as final before asking the DM-19 runtime ownership oracle. A stale durable projection could therefore mask a still-live/ambiguous executor.
   - **Verification (2026-09-11, complete):** focused RED run `34576649787` produced exactly 7 passing / 2 failing outcome-matrix tests (pause incorrectly returned `paused`; resume incorrectly returned `recoverableFailure`). After the minimal resolver fix, the same focused suite passed in run `34576813200`. Permanent `Flutter Checks` run `34576984871` passed native logger typecheck, generated-source-aware analysis, and the full Flutter test suite on the latest DM-03 head. Existing focused coverage represents the remaining scenario classes: Range transfer/fast-fail/checkpoint paths, multipart manifest/recovery, source-refresh integrity/checkpoint failure boundaries, initialization retry, queue/concurrency behavior, transport outcomes, and native/zero-restart recovery invariants.
 
-- [ ] **DM-04 — Recover from the union of persistence and ownership sources**
+- [x] **DM-04 — Recover from the union of persistence and ownership sources**
   - **Problem:** jobs disappear when plugin DB rows are missing while JobStore, metadata, native ownership, manifest or files survive.
   - **Root cause:** startup/UI inventory is downloader-DB-first.
   - **Severity / priority:** **P0 / Critical.**
@@ -243,6 +243,11 @@
   - **Verification/testing:** remove each source singly and in realistic pairs; user pause; canceled tombstone; native-only owner; manifest-only partials; deterministic FIFO; one logical row/owner.
   - **Dependencies:** DM-19, DM-20, DM-21.
   - **Plan correction (2026-09-11):** removed DM-24 from DM-04 dependencies because it formed the cycle DM-04 → DM-24 → DM-05 → DM-04 and contradicted the documented execution order DM-03 → DM-04 → DM-05 → DM-24. DM-04 establishes union recovery first; DM-24 later canonicalizes logical identity on top of that inventory.
+
+  - **Implementation notes (2026-09-11):** Startup recovery now builds one deterministic inventory from plugin DB records, live runtime/native ownership, JobStore task snapshots, presentation metadata and multipart manifest descriptors. Stronger executor evidence wins duplicate execution identities; JobStore/metadata/manifest-only rows are reconstructed once, missing presentation identity becomes explicit orphan/settling state, and unresolved legacy manifests settle known child writers instead of fabricating a parent. Exact disk/manifest byte reconciliation remains provenance-bound and generation-fenced.
+  - **Confirmed root cause:** startup enumeration was historically downloader-DB-first, so loss of a plugin row could hide a still-recoverable logical download even when durable JobStore, metadata, manifest or live ownership evidence survived.
+  - **Verification passed:** Agent Core Download State Verify run `34602555933` passed `flutter analyze --no-fatal-warnings --no-fatal-infos` plus recovery inventory, durable-only recovery, missing-presentation settlement, manifest-startup inventory, recovery reconciliation/snapshot, runtime ownership, and relevant multipart manifest discovery/durability regressions.
+
 
 ## Phase 2 — One logical state, canonical identity, integrity, and terminal deletion
 
