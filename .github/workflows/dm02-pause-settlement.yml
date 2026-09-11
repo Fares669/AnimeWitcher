@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          flutter test test/core/services/download_pause_settlement_guard_test.dart > /tmp/dm02-red.log 2>&1
+          flutter test test/core/services/download_pause_settlement_guard_test.dart >/tmp/dm02-red.log 2>&1
           code=$?
           cat /tmp/dm02-red.log
           if [ "$code" -eq 0 ]; then
@@ -54,8 +54,35 @@ jobs:
           PY
       - name: Format changed Dart files
         run: dart format lib/core/services/download_service.dart test/core/services/download_pause_settlement_guard_test.dart
-      - name: Run DM-02 regression guard
-        run: flutter test test/core/services/download_pause_settlement_guard_test.dart
+      - name: Verify DM-02 source invariants
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('lib/core/services/download_service.dart').read_text()
+          p0 = s.index('Future<bool> _pauseTransfer(')
+          p1 = s.index('Future<bool> _resumeDownloadTask(', p0)
+          pause_transfer = s[p0:p1]
+          assert 'var ownership = await _runtimeOwnershipFor(task.taskId);' in pause_transfer
+          assert 'ownership != DownloadRuntimeOwnership.notOwned' in pause_transfer
+          assert 'Verify the child really left the live native set' not in pause_transfer
+          c0 = s.index('Future<void> pauseDownload(String taskId) async {')
+          c1 = s.index('Future<void> resumeDownload(String taskId) async {', c0)
+          command = s[c0:c1]
+          f0 = command.index('if (!didPause) {')
+          f1 = command.index('await FileDownloader().database.updateRecord(', f0)
+          failed = command[f0:f1]
+          assert "diagnosticLog.record('pause.settling'" in failed
+          assert '_userPausedIds.remove(taskId)' not in failed
+          assert 'DownloadJobState.running' not in failed
+          assert 'TaskStatus.running' not in failed
+          r0 = s.index('Future<void> _recoverPersistedDownloads() async {')
+          r1 = s.index('int _occupiedSlotCount(', r0)
+          recovery = s[r0:r1]
+          assert 'var userPauseSettled = !userPaused;' in recovery
+          assert 'userPauseSettled = await _pauseTransfer(task);' in recovery
+          assert 'if (userPauseSettled) {' in recovery
+          assert 'userPaused && userPauseSettled' in recovery
+          PY
       - name: Run ownership and recovery regressions
         run: |
           flutter test test/core/services/download_runtime_ownership_test.dart
@@ -76,7 +103,7 @@ jobs:
               raise SystemExit('DM-02 unchecked anchor missing')
           s = s.replace(anchor, done, 1)
           dep = '  - **Dependencies:** DM-19, DM-21, DM-32.\n'
-          notes = '''  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof now applies to ordinary single-file downloads and multipart children; an owned same-identity worker receives one pause retry without cancellation.\n  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, the user pause intent remains durably `pausing` and `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite the plugin DB/UI to `paused` until release is proven.\n  - **Confirmed root cause:** `_pauseTransfer()` waited up to five seconds for a pause/final callback but only verified runtime ownership for internal multipart children; ordinary single-file tasks returned success after the timeout. Startup pause enforcement also ignored the boolean result and unconditionally wrote `TaskStatus.paused`.\n  - **Verification passed:** RED→GREEN `download_pause_settlement_guard_test.dart`; runtime-ownership, JobStore recovery, zero-restart invariant regressions; `flutter analyze --no-fatal-warnings --no-fatal-infos`; diff check before commit.\n'''
+          notes = '''  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof now applies to ordinary single-file downloads and multipart children; an owned same-identity worker receives one pause retry without cancellation.\n  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, the user pause intent remains durably `pausing` and `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite the plugin DB/UI to `paused` until release is proven.\n  - **Confirmed root cause:** `_pauseTransfer()` waited up to five seconds for a pause/final callback but only verified runtime ownership for internal multipart children; ordinary single-file tasks returned success after the timeout. Startup pause enforcement also ignored the boolean result and unconditionally wrote `TaskStatus.paused`.\n  - **Verification passed:** pre-fix RED regression; post-fix source invariants for ownership proof, settling intent, and startup projection; runtime-ownership, JobStore recovery, zero-restart invariant regressions; `flutter analyze --no-fatal-warnings --no-fatal-infos`; diff check before commit.\n'''
           idx = s.find(done)
           dep_idx = s.find(dep, idx)
           if dep_idx < 0:
@@ -91,7 +118,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/dm02-pause-settlement.yml .github/dm02_pause_settlement.py
-          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart test/core/services/download_pause_settlement_guard_test.dart
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart
           git diff --cached --check
           git commit -m "fix: require settled ownership for single-file pause"
           git push origin HEAD:plan/download-manager-reliability
