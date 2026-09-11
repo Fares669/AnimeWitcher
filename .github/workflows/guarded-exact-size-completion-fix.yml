@@ -47,21 +47,6 @@ jobs:
           resume_path = Path('lib/core/utils/download_resume.dart')
           resume = resume_path.read_text()
           old = "  if (canNativeResume) return DownloadResumeStrategy.nativeResume;\n  if (shouldResumeFromPartialBytes("
-          new = """  if (canNativeResume) return DownloadResumeStrategy.nativeResume;
-            // An exact-size durable file is already a completion candidate. It must
-            // stay on the local recovery path instead of being classified as a
-            // zero-byte restart merely because no progress percentage survived.
-            if (existingPartialBytes > 0 &&
-                expectedBytes > 0 &&
-                existingPartialBytes == expectedBytes) {
-              return DownloadResumeStrategy.partialFile;
-            }
-            if (shouldResumeFromPartialBytes("""
-          # YAML block indentation adds no semantic whitespace inside the source;
-          # normalize the replacement before applying it.
-          new = '\n'.join(line[2:] if line.startswith('  ') else line for line in new.splitlines())
-          new = '  ' + new.replace('\n', '\n  ', 1) if False else new
-          # Use a literal replacement with the intended Dart indentation.
           new = "  if (canNativeResume) return DownloadResumeStrategy.nativeResume;\n  // An exact-size durable file is already a completion candidate. It must\n  // stay on the local recovery path instead of being classified as a\n  // zero-byte restart merely because no progress percentage survived.\n  if (existingPartialBytes > 0 &&\n      expectedBytes > 0 &&\n      existingPartialBytes == expectedBytes) {\n    return DownloadResumeStrategy.partialFile;\n  }\n  if (shouldResumeFromPartialBytes("
           if resume.count(old) != 1:
               raise SystemExit(f'download_resume strategy anchor mismatch: {resume.count(old)}')
@@ -75,75 +60,105 @@ jobs:
               raise SystemExit(f'resume exact-size insertion anchor mismatch: {service.count(old)}')
           service = service.replace(old, new, 1)
 
-          old = "  Future<bool> _resumeUsingPartialFile(DownloadTask task) async {\n    if (task is ParallelDownloadTask) return false;\n    String destinationPath;"
-          new = "  Future<bool> _resumeUsingPartialFile(DownloadTask task) async {\n    String destinationPath;"
-          if service.count(old) != 1:
-              raise SystemExit(f'parallel early-reject anchor mismatch: {service.count(old)}')
-          service = service.replace(old, new, 1)
-
-          old = """    if (expectedBytes > 0 && existingBytes == expectedBytes) {
-                await FileDownloader().database.updateRecord(
-                  TaskRecord(task, TaskStatus.complete, 1, expectedBytes),
-                );
-                _sharedEvents.add(TaskProgressUpdate(task, 1, expectedBytes));
-                _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));
-                return true;
-              }
-              if (!shouldResumeFromPartialBytes("""
-          old = '\n'.join(line[10:] if line.startswith('          ') else line for line in old.splitlines())
-          # Rebuild the exact current Dart block without relying on YAML indentation.
-          old = "    if (expectedBytes > 0 && existingBytes == expectedBytes) {\n      await FileDownloader().database.updateRecord(\n        TaskRecord(task, TaskStatus.complete, 1, expectedBytes),\n      );\n      _sharedEvents.add(TaskProgressUpdate(task, 1, expectedBytes));\n      _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));\n      return true;\n    }\n    if (!shouldResumeFromPartialBytes("
-          new = """    if (expectedBytes > 0 && existingBytes == expectedBytes) {
-                if (task is ParallelDownloadTask) {
-                  Set<String> livePartIds;
-                  try {
-                    livePartIds = await _livePartIds();
-                  } catch (_) {
-                    diagnosticLog.record('completion.localArtifactOwnershipUnknown', {
-                      'taskId': task.taskId,
-                    });
-                    return false;
-                  }
-                  if (livePartIds.any(
-                    (id) => id.startsWith('${task.taskId}.part.'),
-                  )) {
-                    diagnosticLog.record('completion.localArtifactOwnedParts', {
-                      'taskId': task.taskId,
-                    });
-                    return false;
-                  }
-                }
-
-                final checkpointed = await _checkpointLogicalJob(
-                  task,
-                  state: DownloadJobState.completed,
-                  durableBytes: expectedBytes,
-                  durableByteProvenance:
-                      DownloadDurableByteProvenance.verifiedFinalFile,
-                  expectedBytes: expectedBytes,
-                  userPaused: false,
-                  queueWaiting: false,
-                );
-                if (!checkpointed) return false;
-
-                await FileDownloader().database.updateRecord(
-                  TaskRecord(task, TaskStatus.complete, 1, expectedBytes),
-                );
-                diagnosticLog.record('completion.adoptedExactLocalArtifact', {
+          start = service.index('  Future<bool> _resumeUsingPartialFile(DownloadTask task) async {')
+          end = service.index('\n  Future<ParallelDownloadTask?> _parallelParentForInternalPart(', start)
+          replacement = """  Future<bool> _resumeUsingPartialFile(DownloadTask task) async {
+            final isParallel = task is ParallelDownloadTask;
+            if (isParallel) {
+              Set<String> livePartIds;
+              try {
+                livePartIds = await _livePartIds();
+              } catch (_) {
+                diagnosticLog.record('completion.localArtifactOwnershipUnknown', {
                   'taskId': task.taskId,
-                  'bytes': expectedBytes,
-                  'parallel': task is ParallelDownloadTask,
                 });
-                _sharedEvents.add(TaskProgressUpdate(task, 1, expectedBytes));
-                _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));
-                return true;
+                return false;
               }
-              if (task is ParallelDownloadTask) return false;
-              if (!shouldResumeFromPartialBytes("""
-          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines())
-          if service.count(old) != 1:
-              raise SystemExit(f'exact completion block anchor mismatch: {service.count(old)}')
-          service_path.write_text(service.replace(old, new, 1))
+              if (livePartIds.any((id) => id.startsWith('${task.taskId}.part.'))) {
+                diagnosticLog.record('completion.localArtifactOwnedParts', {
+                  'taskId': task.taskId,
+                });
+                return false;
+              }
+            }
+
+            String destinationPath;
+            try {
+              destinationPath = await task.filePath();
+            } catch (_) {
+              return false;
+            }
+            if (destinationPath.isEmpty) return false;
+
+            final expectedBytes = (await _savedProgressFor(task)).totalSize;
+            if (isParallel) {
+              final candidate = await findPartialDownloadFile(
+                destinationPath: destinationPath,
+              );
+              if (candidate == null || expectedBytes <= 0) return false;
+              int candidateBytes;
+              try {
+                candidateBytes = await candidate.length();
+              } catch (_) {
+                return false;
+              }
+              if (candidateBytes != expectedBytes) return false;
+            }
+
+            final partial = await canonicalizePartialDownloadFile(
+              destinationPath: destinationPath,
+            );
+            if (partial == null) return false;
+            final existingBytes = partial.bytes;
+            if (expectedBytes > 0 && existingBytes == expectedBytes) {
+              final checkpointed = await _checkpointLogicalJob(
+                task,
+                state: DownloadJobState.completed,
+                durableBytes: expectedBytes,
+                durableByteProvenance:
+                    DownloadDurableByteProvenance.verifiedFinalFile,
+                expectedBytes: expectedBytes,
+                userPaused: false,
+                queueWaiting: false,
+              );
+              if (!checkpointed) return false;
+
+              await FileDownloader().database.updateRecord(
+                TaskRecord(task, TaskStatus.complete, 1, expectedBytes),
+              );
+              diagnosticLog.record('completion.adoptedExactLocalArtifact', {
+                'taskId': task.taskId,
+                'bytes': expectedBytes,
+                'parallel': isParallel,
+              });
+              _sharedEvents.add(TaskProgressUpdate(task, 1, expectedBytes));
+              _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));
+              return true;
+            }
+            if (task is ParallelDownloadTask) return false;
+            if (!shouldResumeFromPartialBytes(
+              existingPartialBytes: existingBytes,
+              expectedBytes: expectedBytes,
+            )) {
+              return false;
+            }
+
+            return _appendRemainingWithDio(
+              task,
+              dest: partial.file,
+              existingBytes: existingBytes,
+              expectedBytes: expectedBytes,
+            );
+          }
+          """
+          # YAML strips the workflow indentation; remove the extra Python-source
+          # indentation that remains inside this triple-quoted Dart replacement.
+          lines = replacement.splitlines()
+          replacement = '\n'.join(
+              line[10:] if i > 0 and line.startswith('          ') else line
+              for i, line in enumerate(lines)
+          )
+          service_path.write_text(service[:start] + replacement + service[end:])
           PY
           dart format lib/core/utils/download_resume.dart lib/core/services/download_service.dart
 
