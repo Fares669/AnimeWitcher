@@ -1,0 +1,83 @@
+name: DM30 Cancel Settlement
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - '.github/workflows/dm30-cancel-settlement.yml'
+      - '.github/dm30_cancel_settlement.py'
+
+permissions:
+  contents: write
+
+jobs:
+  dm30:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Prove pre-fix cancellation ownership regression
+        shell: bash
+        run: |
+          python3 .github/dm30_cancel_settlement.py tests
+          set +e
+          flutter test test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart >/tmp/dm30-red.log 2>&1
+          code=$?
+          cat /tmp/dm30-red.log
+          test "$code" -ne 0
+      - name: Apply DM-30 implementation
+        run: |
+          python3 .github/dm30_cancel_settlement.py apply
+          dart format lib/core/services/download_transport.dart lib/core/services/download_service.dart test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart
+      - name: Verify DM-30 cancellation contract
+        run: flutter test test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart
+      - name: Verify ownership and lifecycle regressions
+        run: |
+          flutter test test/core/services/download_runtime_ownership_test.dart
+          flutter test test/core/services/download_job_store_test.dart
+          flutter test test/core/services/download_lifecycle_checkpoint_guard_test.dart
+          flutter test test/core/services/download_recovery_reconciliation_guard_test.dart
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Mark DM-30 complete
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('DOWNLOAD_MANAGER_PLAN.md')
+          s = p.read_text()
+          anchor = '- [ ] **DM-30 — Preserve ownership evidence until cancel is positively settled**'
+          done = '- [x] **DM-30 — Preserve ownership evidence until cancel is positively settled**'
+          if anchor not in s:
+              raise SystemExit('DM-30 unchecked anchor missing')
+          s = s.replace(anchor, done, 1)
+          dep = '  - **Dependencies:** DM-19, DM-21; DM-07 consumes this settlement protocol.\n'
+          notes = '''  - **Implementation notes (2026-09-11):** Native single-file cancellation now returns an explicit command settlement (`canceled`, `alreadyGone`, `stillOwned`, `unknown`) and never detaches Transfer tracking inside `cancel()`. The service treats command acknowledgement as provisional and waits for the DM-19 runtime oracle to prove `notOwned` before calling `forget()` or deleting plugin/metadata/JobStore/refresh evidence.\n  - **Multipart settlement:** bulk child cancellation now joins Range writers, issues the native cancel, then checks each child through the same runtime ownership oracle before deleting its plugin row. Any owned/settling/unknown child makes cancellation fail closed so `PersistentParallelDownload.cancel()` cannot proceed to delete child files while an old writer may still own them.\n  - **Confirmed root cause:** `NativeSingleDownloadTransport.cancel()` previously called `_detach()` even when `Transfer.cancel()` returned `false`, and `cancelDownload()` unconditionally forgot the handle and destroyed all durable records after issuing cancel commands. The multipart callback likewise deleted child rows without checking whether bulk cancel actually released ownership.\n  - **Verification passed:** pre-fix RED cancellation guards; typed settlement unit matrix; ownership-preservation source guard; runtime ownership, JobStore, lifecycle checkpoint and recovery reconciliation suites; generated-source-aware `flutter analyze --no-fatal-warnings --no-fatal-infos`; `git diff --check`.\n'''
+          idx = s.find(done)
+          dep_idx = s.find(dep, idx)
+          if dep_idx < 0:
+              raise SystemExit('DM-30 dependency anchor missing')
+          insert_at = dep_idx + len(dep)
+          s = s[:insert_at] + notes + s[insert_at:]
+          p.write_text(s)
+          PY
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dm30-cancel-settlement.yml .github/dm30_cancel_settlement.py
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_transport.dart lib/core/services/download_service.dart test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart
+          git diff --cached --check
+          git commit -m "fix: preserve ownership evidence through cancel settlement"
+          git push origin HEAD:plan/download-manager-reliability
