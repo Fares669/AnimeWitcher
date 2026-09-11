@@ -19,7 +19,7 @@ void main() {
       expect(
         range,
         contains(
-          'await output.flush();\n              await onState(written, total, false);',
+          'await output.flush();\n              checkpoints.schedule(written, total, false);',
         ),
       );
       final service = File('lib/core/services/download_service.dart')
