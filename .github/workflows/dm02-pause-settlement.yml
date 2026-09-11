@@ -28,6 +28,13 @@ jobs:
         shell: bash
         run: |
           python3 .github/dm02_pause_settlement.py tests
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('test/core/services/download_pause_settlement_guard_test.dart')
+          s = p.read_text()
+          s = s.replace("'Future<bool> _resumeDownloadTask('", "'Future<void> cancelDownload('")
+          p.write_text(s)
+          PY
           set +e
           flutter test test/core/services/download_pause_settlement_guard_test.dart >/tmp/dm02-red.log 2>&1
           code=$?
@@ -38,20 +45,27 @@ jobs:
           python3 .github/dm02_pause_settlement.py apply
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('lib/core/services/download_service.dart')
-          s = p.read_text()
+          service = Path('lib/core/services/download_service.dart')
+          s = service.read_text()
           bad = '                              : TaskStatus.paused)))),\n      );'
           good = '                              : TaskStatus.paused))),\n      );'
           if s.count(bad) != 1:
               raise SystemExit(f'expected one generated parenthesis tail, found {s.count(bad)}')
-          p.write_text(s.replace(bad, good, 1))
+          service.write_text(s.replace(bad, good, 1))
+
+          test = Path('test/core/services/download_pause_settlement_guard_test.dart')
+          t = test.read_text()
+          t = t.replace("'Future<bool> _resumeDownloadTask('", "'Future<void> cancelDownload('")
+          test.write_text(t)
           PY
-          dart format lib/core/services/download_service.dart
+          dart format lib/core/services/download_service.dart test/core/services/download_pause_settlement_guard_test.dart
       - name: Run focused regressions
         run: |
+          flutter test test/core/services/download_pause_settlement_guard_test.dart
           flutter test test/core/services/download_runtime_ownership_test.dart
-          flutter test test/core/services/download_job_store_recovery_test.dart
-          flutter test test/core/services/download_zero_restart_invariant_test.dart
+          flutter test test/core/services/download_job_store_test.dart
+          flutter test test/core/services/download_recovery_reconciliation_guard_test.dart
+          flutter test test/core/services/download_lifecycle_checkpoint_guard_test.dart
       - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
       - name: Mark DM-02 complete
@@ -66,7 +80,7 @@ jobs:
               raise SystemExit('DM-02 unchecked anchor missing')
           s = s.replace(anchor, done, 1)
           dep = '  - **Dependencies:** DM-19, DM-21, DM-32.\n'
-          notes = '''  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof applies to ordinary single-file downloads and multipart children; an owned same-identity worker gets one pause retry without cancellation.\n  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, durable user intent remains `pausing` with `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite plugin/UI state to `paused` until release is proven.\n  - **Confirmed root cause:** `_pauseTransfer()` waited for pause/final callbacks but only verified runtime ownership for internal multipart children, so an ordinary single-file task could return success after timeout while its worker remained alive. Startup pause enforcement also ignored the pause result and unconditionally persisted `TaskStatus.paused`.\n  - **Verification passed:** pre-fix RED regression; runtime-ownership, JobStore recovery and zero-restart regression suites; `flutter analyze --no-fatal-warnings --no-fatal-infos`; `git diff --check`.\n'''
+          notes = '''  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof applies to ordinary single-file downloads and multipart children; an owned same-identity worker gets one pause retry without cancellation.\n  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, durable user intent remains `pausing` with `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite plugin/UI state to `paused` until release is proven.\n  - **Confirmed root cause:** `_pauseTransfer()` waited for pause/final callbacks but only verified runtime ownership for internal multipart children, so an ordinary single-file task could return success after timeout while its worker remained alive. Startup pause enforcement also ignored the pause result and unconditionally persisted `TaskStatus.paused`.\n  - **Verification passed:** pre-fix RED regression; pause-settlement guard; runtime-ownership, JobStore, recovery-reconciliation and lifecycle-checkpoint regression suites; `flutter analyze --no-fatal-warnings --no-fatal-infos`; `git diff --check`.\n'''
           idx = s.find(done)
           dep_idx = s.find(dep, idx)
           if dep_idx < 0:
@@ -80,7 +94,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/dm02-pause-settlement.yml .github/dm02_pause_settlement.py
-          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart test/core/services/download_pause_settlement_guard_test.dart
           git diff --cached --check
           git commit -m "fix: require settled ownership for single-file pause"
           git push origin HEAD:plan/download-manager-reliability
