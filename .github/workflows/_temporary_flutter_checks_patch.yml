@@ -1,0 +1,28 @@
+name: Temporary Flutter checks patch
+
+on:
+  push:
+    branches:
+      - feat/anime4k-mobile-gpu
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/anime4k-mobile-gpu
+          fetch-depth: 0
+      - name: Apply exact test synchronization patch
+        run: python3 tool/_temporary_flutter_checks_patch.py
+      - name: Commit targeted patch and remove helpers
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "test(download): wait for paused drain settlement"
+          git push origin HEAD:feat/anime4k-mobile-gpu
