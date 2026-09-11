@@ -44,16 +44,23 @@ jobs:
           echo 'DM-09 behavioral RED reproduced as expected'
       - name: Apply DM-09 network hold policy
         run: |
-          python3 .github/scripts/dm09_patch_repair.py
-          python3 .github/scripts/dm09_network_hold_patch.py
-          dart format \
-            lib/core/services/download_retry_policy.dart \
-            lib/core/services/download_job_state.dart \
-            lib/core/services/download_range_transfer.dart \
-            lib/core/services/download_service.dart \
-            test/core/services/download_retry_policy_test.dart \
-            test/core/services/download_network_state_red_test.dart
-          git diff --check
+          set -o pipefail
+          {
+            echo '== repair patch script =='
+            python3 .github/scripts/dm09_patch_repair.py
+            echo '== apply network hold patch =='
+            python3 .github/scripts/dm09_network_hold_patch.py
+            echo '== format patched files =='
+            dart format \
+              lib/core/services/download_retry_policy.dart \
+              lib/core/services/download_job_state.dart \
+              lib/core/services/download_range_transfer.dart \
+              lib/core/services/download_service.dart \
+              test/core/services/download_retry_policy_test.dart \
+              test/core/services/download_network_state_red_test.dart
+            echo '== diff check =='
+            git diff --check
+          } 2>&1 | tee /tmp/dm09-apply.log
       - name: Verify DM-09 and adjacent regressions
         run: |
           set -o pipefail
@@ -82,6 +89,7 @@ jobs:
           name: dm09-test-diagnostics
           path: |
             /tmp/dm09-red.log
+            /tmp/dm09-apply.log
             /tmp/dm09-test.log
           if-no-files-found: ignore
           retention-days: 1
