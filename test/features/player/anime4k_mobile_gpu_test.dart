@@ -19,5 +19,16 @@ void main() {
         isFalse,
       );
     });
+
+    test('native Apple Metal renderer is shader-capable', () {
+      expect(
+        anime4kGpuRendererSupportsShaders('metal'),
+        isTrue,
+        reason:
+            'The Apple backend executes Anime4K as Metal compute passes, so '
+            'it must be treated as a real GPU shader renderer rather than a '
+            'no-op or software fallback.',
+      );
+    });
   });
 }
