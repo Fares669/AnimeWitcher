@@ -98,7 +98,7 @@ void main() {
       );
     });
 
-    test('v3 exact disk provenance round trips explicitly', () {
+    test('current schema exact disk provenance round trips explicitly', () {
       final source = _job(
         durableBytes: 456,
         durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
@@ -107,10 +107,28 @@ void main() {
       final json = source.toJson();
       final decoded = DownloadJobRecord.fromJson(json);
 
-      expect(json['schemaVersion'], 3);
+      expect(json['schemaVersion'], kDownloadJobSchemaVersion);
       expect(json['durableByteProvenance'], 'exactDisk');
       expect(
         decoded?.durableByteProvenance,
+        DownloadDurableByteProvenance.exactDisk,
+      );
+    });
+
+    test('v3 exact disk provenance remains readable after schema upgrade', () {
+      final legacy =
+          _job(
+              durableBytes: 456,
+              durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
+            ).toJson()
+            ..['schemaVersion'] = 3
+            ..remove('taskSnapshot');
+
+      final decoded = DownloadJobRecord.fromJson(legacy);
+
+      expect(decoded, isNotNull);
+      expect(
+        decoded!.durableByteProvenance,
         DownloadDurableByteProvenance.exactDisk,
       );
     });
