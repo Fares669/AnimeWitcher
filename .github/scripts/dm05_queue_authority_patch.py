@@ -192,7 +192,7 @@ new_queue = '''  Future<List<DownloadQueueEntry>> _queueEntries(
         DownloadQueueEntry(
           taskId: taskId,
           status: job != null ? downloadJobTaskStatus(job.state) : record.status,
-          timestamp: (metadata?['timestamp'] as int?) ?? job?.updatedAt ?? 0,
+          timestamp: (metadata?['timestamp'] as int?) ?? job?.updatedAtMillis ?? 0,
           queueWaiting: queueWaiting,
           userPaused: userPaused,
         ),
@@ -238,5 +238,4 @@ for line in remaining:
 
 service_path.write_text(source)
 
-# Touch marker: rerun the guarded DM-05 queue-authority workflow after the RED
-# assertions were corrected to match method definitions rather than call sites.
+# Analyzer fix: DownloadJobRecord orders by updatedAtMillis, not a legacy updatedAt alias.
