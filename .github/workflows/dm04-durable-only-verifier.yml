@@ -1,4 +1,4 @@
-name: DM-04 durable-only verifier
+name: DM-04 recovery verifier
 
 on:
   push:
@@ -9,11 +9,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: dm04-durable-only-${{ github.ref }}
+  group: dm04-recovery-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  durable-only-recovery:
+  recovery-policy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -27,8 +27,9 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run durable-only recovery tests
+      - name: Run DM-04 focused recovery tests
         run: >-
           flutter test
           test/core/services/download_durable_only_recovery_test.dart
+          test/core/services/download_missing_presentation_recovery_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
