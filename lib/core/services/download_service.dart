@@ -53,6 +53,39 @@ DownloadService downloadService(Ref ref) {
   return service;
 }
 
+enum DownloadCommandOutcome {
+  running,
+  attached,
+  queued,
+  paused,
+  settlingOwnership,
+  alreadyComplete,
+  restartRequired,
+  recoverableFailure,
+  serviceUnavailable,
+  missingState,
+  terminal,
+}
+
+DownloadCommandOutcome downloadCommandOutcomeForJobState(
+  DownloadJobState? state,
+) {
+  return switch (state) {
+    DownloadJobState.running ||
+    DownloadJobState.starting ||
+    DownloadJobState.assembling ||
+    DownloadJobState.verifying => DownloadCommandOutcome.running,
+    DownloadJobState.queued => DownloadCommandOutcome.queued,
+    DownloadJobState.retryWaiting ||
+    DownloadJobState.interrupted => DownloadCommandOutcome.recoverableFailure,
+    DownloadJobState.pausing => DownloadCommandOutcome.settlingOwnership,
+    DownloadJobState.pausedByUser => DownloadCommandOutcome.paused,
+    DownloadJobState.completed => DownloadCommandOutcome.alreadyComplete,
+    DownloadJobState.canceled => DownloadCommandOutcome.terminal,
+    DownloadJobState.orphaned || null => DownloadCommandOutcome.missingState,
+  };
+}
+
 class DownloadProgressData {
   final String taskId;
   final double progress;
@@ -3973,7 +4006,40 @@ class DownloadService {
     Map<String, String>? headers,
     int totalBytes = -1,
   }) async {
-    await _awaitCommandReadiness('startDownload');
+    final outcome = await startDownloadOutcome(
+      url: url,
+      filename: filename,
+      directory: directory,
+      item: item,
+      episode: episode,
+      trackingUrl: trackingUrl,
+      headers: headers,
+      totalBytes: totalBytes,
+    );
+    return switch (outcome) {
+      DownloadCommandOutcome.running ||
+      DownloadCommandOutcome.attached ||
+      DownloadCommandOutcome.queued ||
+      DownloadCommandOutcome.alreadyComplete => true,
+      _ => false,
+    };
+  }
+
+  Future<DownloadCommandOutcome> startDownloadOutcome({
+    required String url,
+    required String filename,
+    required String directory, // Relative for mobile/mac, absolute for others
+    required MultimediaItem item,
+    Episode? episode,
+    String? trackingUrl,
+    Map<String, String>? headers,
+    int totalBytes = -1,
+  }) async {
+    try {
+      await _awaitCommandReadiness('startDownload');
+    } catch (_) {
+      return DownloadCommandOutcome.serviceUnavailable;
+    }
     diagnosticLog.record('command.start', {'total': totalBytes});
     if (kDebugMode) {
       debugPrint('[DownloadService] startDownload called');
@@ -4043,11 +4109,11 @@ class DownloadService {
                 await _liveNativeTaskFor(taskId: existingRecord.task.taskId) !=
                     null)) {
           _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);
-          return true;
+          return DownloadCommandOutcome.attached;
         }
 
         if (existingRecord.task is! DownloadTask) {
-          return false;
+          return DownloadCommandOutcome.recoverableFailure;
         }
         final existingTask = existingRecord.task as DownloadTask;
         final live = await _liveNativeTaskFor(
@@ -4058,10 +4124,12 @@ class DownloadService {
             (occupying || isLiveNativeDownloadStatus(existingRecord.status))) {
           await _attachToLiveNativeTask(existingTask, live: live);
           _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);
-          return true;
+          return DownloadCommandOutcome.attached;
         }
         await _resumeUserPausedUnlocked(existingTask.taskId);
-        return true;
+        return downloadCommandOutcomeForJobState(
+          (await _jobStore.get(existingTask.taskId))?.state,
+        );
       }
 
       final tracking = trackingUrl ?? url;
@@ -4100,7 +4168,7 @@ class DownloadService {
               '[DownloadService] Complete record already has a file for $tracking',
             );
           }
-          return true;
+          return DownloadCommandOutcome.alreadyComplete;
         case CompleteDownloadAction.dropAndEnqueue:
           await _dropCompleteRecords(completeRecords);
           break;
@@ -4240,7 +4308,7 @@ class DownloadService {
           );
           await _persistNativeWaitingSnapshot();
           unawaited(_syncSessionOverlay());
-          return true;
+          return DownloadCommandOutcome.queued;
         }
 
         _startingTaskIds.add(transferTask.taskId);
@@ -4277,12 +4345,12 @@ class DownloadService {
           _updatesController.add(
             TaskStatusUpdate(transferTask, TaskStatus.paused),
           );
-          return false;
+          return DownloadCommandOutcome.recoverableFailure;
         }
 
         await _persistNativeWaitingSnapshot();
         unawaited(_syncSessionOverlay());
-        return true;
+        return DownloadCommandOutcome.running;
       } catch (error) {
         _waitingPayloads.remove(task.taskId);
         _forgetSessionTask(task.taskId);
@@ -4297,7 +4365,7 @@ class DownloadService {
         if (kDebugMode) {
           debugPrint('[DownloadService] Failed to enqueue download: $error');
         }
-        return false;
+        return DownloadCommandOutcome.recoverableFailure;
       } finally {
         _startingTaskIds.remove(task.taskId);
       }
