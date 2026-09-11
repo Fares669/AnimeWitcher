@@ -39,6 +39,14 @@ jobs:
       - name: Apply implementation
         run: |
           python3 .github/dm20_reconcile.py apply
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('test/core/services/download_job_store_test.dart')
+          text = p.read_text()
+          text = text.replace("test('v2 exact disk provenance round trips explicitly'", "test('v3 exact disk provenance round trips explicitly'", 1)
+          text = text.replace("expect(json['schemaVersion'], 2);", "expect(json['schemaVersion'], 3);", 1)
+          p.write_text(text)
+          PY
           dart format lib/core/services/download_job_store.dart lib/core/services/download_service.dart test/core/services/download_job_store_test.dart test/core/services/download_recovery_reconciliation_guard_test.dart
       - name: Test DM20
         run: |
