@@ -1,0 +1,42 @@
+name: Agent DM04 Recovery Verifier
+
+on:
+  push:
+    branches:
+      - agent/core-download-state-recovery-20260911
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-dm04:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Run DM04 recovery union regressions
+        run: >-
+          flutter test
+          test/core/services/download_recovery_inventory_test.dart
+          test/core/services/download_durable_only_recovery_test.dart
+          test/core/services/download_manifest_startup_inventory_test.dart
+          test/core/services/download_missing_presentation_recovery_test.dart
+          test/core/services/persistent_parallel_download_manifest_discovery_test.dart
+          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+          test/core/services/download_recovery_snapshot_test.dart
+          test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          test/core/services/persistent_parallel_download_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
