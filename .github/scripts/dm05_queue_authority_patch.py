@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 state_path = Path('lib/core/services/download_job_state.dart')
@@ -215,6 +216,15 @@ source = source.replace(
 source = source.replace(
     '''final occupied = _occupiedSlotCount(\n          await FileDownloader().database.allRecords(),\n        );''',
     '''final occupied = await _occupiedSlotCount(\n          await FileDownloader().database.allRecords(),\n        );''',
+)
+
+# Formatting and indentation changed across several call sites. Convert every
+# remaining invocation after the method itself has been replaced, rather than
+# relying on one exact multiline spelling.
+source = re.sub(
+    r'(?<!await )(?<!Future<int> )_occupiedSlotCount\(',
+    'await _occupiedSlotCount(',
+    source,
 )
 
 # No synchronous call may remain after the async conversion.
