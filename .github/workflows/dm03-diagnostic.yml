@@ -1,4 +1,4 @@
-name: DM03 Diagnostic
+name: DM03 Implementation
 
 on:
   push:
@@ -6,16 +6,236 @@ on:
     paths: [.github/workflows/dm03-diagnostic.yml]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
+  implement:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Locate command callsites and signatures
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Apply typed control outcome slice
+        shell: bash
         run: |
-          echo '=== definitions/calls ==='
-          grep -RInE "pauseDownload\(|resumeDownload\(|cancelDownload\(|DownloadCommandOutcome" lib test || true
-          echo '=== plan DM-03 context ==='
-          grep -n -A60 -B8 "DM-03" DOWNLOAD_MANAGER_PLAN.md || true
+          python3 <<'PY'
+          from pathlib import Path
+
+          service = Path('lib/core/services/download_service.dart')
+          text = service.read_text()
+          marker = '  Future<void> pauseDownload(String taskId) async {'
+          assert text.count(marker) == 1
+          wrappers = r'''  Future<DownloadCommandOutcome> cancelDownloadOutcome(
+            String taskId,
+            String trackingUrl, {
+            bool notifyContinuedProcessing = true,
+          }) async {
+            try {
+              await cancelDownload(
+                taskId,
+                trackingUrl,
+                notifyContinuedProcessing: notifyContinuedProcessing,
+              );
+            } on DownloadServiceUnavailableException {
+              return DownloadCommandOutcome.serviceUnavailable;
+            } catch (_) {
+              return DownloadCommandOutcome.recoverableFailure;
+            }
+
+            final ownership = await _runtimeOwnershipFor(taskId);
+            if (ownership != DownloadRuntimeOwnership.notOwned) {
+              return DownloadCommandOutcome.settlingOwnership;
+            }
+            final job = await _jobStore.get(taskId);
+            if (job == null || job.state == DownloadJobState.canceled) {
+              return DownloadCommandOutcome.terminal;
+            }
+            return downloadCommandOutcomeForJobState(job.state);
+          }
+
+          Future<DownloadCommandOutcome> pauseDownloadOutcome(String taskId) async {
+            try {
+              await pauseDownload(taskId);
+            } on DownloadServiceUnavailableException {
+              return DownloadCommandOutcome.serviceUnavailable;
+            } catch (_) {
+              return DownloadCommandOutcome.recoverableFailure;
+            }
+            final job = await _jobStore.get(taskId);
+            final outcome = downloadCommandOutcomeForJobState(job?.state);
+            if (outcome != DownloadCommandOutcome.missingState) return outcome;
+            final ownership = await _runtimeOwnershipFor(taskId);
+            return ownership == DownloadRuntimeOwnership.notOwned
+                ? DownloadCommandOutcome.missingState
+                : DownloadCommandOutcome.settlingOwnership;
+          }
+
+          Future<DownloadCommandOutcome> resumeDownloadOutcome(String taskId) async {
+            try {
+              await resumeDownload(taskId);
+            } on DownloadServiceUnavailableException {
+              return DownloadCommandOutcome.serviceUnavailable;
+            } catch (_) {
+              return DownloadCommandOutcome.recoverableFailure;
+            }
+            final job = await _jobStore.get(taskId);
+            final outcome = downloadCommandOutcomeForJobState(job?.state);
+            if (outcome != DownloadCommandOutcome.missingState) return outcome;
+            final ownership = await _runtimeOwnershipFor(taskId);
+            return switch (ownership) {
+              DownloadRuntimeOwnership.owned => DownloadCommandOutcome.attached,
+              DownloadRuntimeOwnership.settling ||
+              DownloadRuntimeOwnership.unknown =>
+                DownloadCommandOutcome.settlingOwnership,
+              DownloadRuntimeOwnership.notOwned => DownloadCommandOutcome.missingState,
+            };
+          }
+
+'''
+          text = text.replace(marker, wrappers + marker)
+          service.write_text(text)
+
+          provider = Path('lib/features/library/presentation/downloads_provider.dart')
+          text = provider.read_text()
+          old = '''  Future<void> pauseDownload(String taskId) async {
+    _setOptimisticStatus(taskId, TaskStatus.paused);
+    try {
+      await ref.read(downloadServiceProvider).pauseDownload(taskId);
+    } catch (_) {
+      state = AsyncData(await _refreshList());
+    }
+  }
+
+  Future<void> resumeDownload(String taskId) async {
+    // Queue state is the only universally correct immediate state: if a slot is
+    // free DownloadService will replace it with running almost immediately;
+    // otherwise the user sees في الانتظار instead of a dead play button.
+    _setOptimisticStatus(taskId, TaskStatus.enqueued);
+    try {
+      await ref.read(downloadServiceProvider).resumeDownload(taskId);
+    } catch (_) {
+      state = AsyncData(await _refreshList());
+    }
+  }
+'''
+          assert text.count(old) == 1
+          new = '''  Future<void> pauseDownload(String taskId) async {
+    final outcome = await ref
+        .read(downloadServiceProvider)
+        .pauseDownloadOutcome(taskId);
+    if (outcome == DownloadCommandOutcome.paused) {
+      _setOptimisticStatus(taskId, TaskStatus.paused);
+      return;
+    }
+    state = AsyncData(await _refreshList());
+  }
+
+  Future<void> resumeDownload(String taskId) async {
+    final outcome = await ref
+        .read(downloadServiceProvider)
+        .resumeDownloadOutcome(taskId);
+    switch (outcome) {
+      case DownloadCommandOutcome.running:
+      case DownloadCommandOutcome.attached:
+        _setOptimisticStatus(taskId, TaskStatus.running);
+      case DownloadCommandOutcome.queued:
+        _setOptimisticStatus(taskId, TaskStatus.enqueued);
+      default:
+        state = AsyncData(await _refreshList());
+    }
+  }
+'''
+          provider.write_text(text.replace(old, new))
+
+          dialog = Path('lib/features/details/presentation/widgets/download_progress_dialog.dart')
+          text = dialog.read_text()
+          assert text.count('await service.cancelDownload(data.taskId, widget.trackingUrl);') == 1
+          text = text.replace(
+              'await service.cancelDownload(data.taskId, widget.trackingUrl);',
+              'final outcome = await service.cancelDownloadOutcome(\n'
+              '        data.taskId,\n'
+              '        widget.trackingUrl,\n'
+              '      );\n'
+              '      if (outcome != DownloadCommandOutcome.terminal &&\n'
+              '          outcome != DownloadCommandOutcome.alreadyComplete) {\n'
+              '        if (mounted) setState(() => _dismissRequested = false);\n'
+              '        return;\n'
+              '      }')
+          assert text.count('await service.resumeDownload(data.taskId);') == 1
+          assert text.count('await service.pauseDownload(data.taskId);') == 1
+          text = text.replace('await service.resumeDownload(data.taskId);', 'await service.resumeDownloadOutcome(data.taskId);')
+          text = text.replace('await service.pauseDownload(data.taskId);', 'await service.pauseDownloadOutcome(data.taskId);')
+          dialog.write_text(text)
+
+          guard = Path('test/core/services/download_control_outcome_guard_test.dart')
+          guard.write_text(r'''import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  test('DM-03 exposes typed pause resume and cancel outcomes', () {
+    final source = File('lib/core/services/download_service.dart').readAsStringSync();
+    expect(source, contains('Future<DownloadCommandOutcome> pauseDownloadOutcome('));
+    expect(source, contains('Future<DownloadCommandOutcome> resumeDownloadOutcome('));
+    expect(source, contains('Future<DownloadCommandOutcome> cancelDownloadOutcome('));
+    expect(source, contains('DownloadRuntimeOwnership.unknown =>'));
+  });
+
+  test('DM-03 callers do not project pause or resume before typed settlement', () {
+    final provider = File(
+      'lib/features/library/presentation/downloads_provider.dart',
+    ).readAsStringSync();
+    final dialog = File(
+      'lib/features/details/presentation/widgets/download_progress_dialog.dart',
+    ).readAsStringSync();
+    expect(provider, contains('.pauseDownloadOutcome(taskId)'));
+    expect(provider, contains('.resumeDownloadOutcome(taskId)'));
+    expect(dialog, contains('cancelDownloadOutcome('));
+    expect(dialog, contains('resumeDownloadOutcome(data.taskId)'));
+    expect(dialog, contains('pauseDownloadOutcome(data.taskId)'));
+  });
+}
+''')
+
+          plan = Path('DOWNLOAD_MANAGER_PLAN.md')
+          text = plan.read_text()
+          anchor = '- **Still required before `[x]`:** typed pause/resume/cancel service outcomes, migrate launcher/provider/UI callers off bool/void APIs, remove the remaining acceptance-vs-state ambiguity where practical, and execute the full command × state × ownership × restart scenario matrix above.'
+          assert text.count(anchor) == 1
+          replacement = anchor + '''
+  - Progress 2026-09-11: added typed `pauseDownloadOutcome`, `resumeDownloadOutcome`, and `cancelDownloadOutcome` adapters. They classify service-unavailable/persistence failures separately and consult durable JobStore state plus the runtime ownership oracle so unknown/settling ownership cannot be reported as paused/terminal.
+  - Progress 2026-09-11: migrated Downloads provider pause/resume and the progress dialog controls to the typed adapters. Provider no longer projects paused/enqueued before command settlement; ambiguous outcomes force a durable refresh instead.
+  - Remaining before `[x]`: migrate the remove-download cleanup path and launcher/start compatibility caller, then execute the full scenario matrix (missing DB/JobStore-only/native & Range failures/missing manifest/source refresh/queue full/unknown owner/init failure/already complete). Legacy void methods remain only as compatibility implementation details for now.'''
+          plan.write_text(text.replace(anchor, replacement))
+          PY
+
+          dart format lib/core/services/download_service.dart \
+            lib/features/library/presentation/downloads_provider.dart \
+            lib/features/details/presentation/widgets/download_progress_dialog.dart \
+            test/core/services/download_control_outcome_guard_test.dart
+
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Verify focused DM-03 and lifecycle guards
+        run: |
+          flutter test test/core/services/download_command_outcome_test.dart test/core/services/download_control_outcome_guard_test.dart
+          flutter test test/core/services/download_initialization_barrier_guard_test.dart test/core/services/download_pause_settlement_guard_test.dart test/core/services/download_cancel_checkpoint_guard_test.dart test/core/services/download_lifecycle_checkpoint_guard_test.dart
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Commit verified slice
+        run: |
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_service.dart \
+            lib/features/library/presentation/downloads_provider.dart \
+            lib/features/details/presentation/widgets/download_progress_dialog.dart \
+            test/core/services/download_control_outcome_guard_test.dart \
+            DOWNLOAD_MANAGER_PLAN.md
+          git commit -m 'refactor(downloads): expose typed control outcomes'
+          git push
