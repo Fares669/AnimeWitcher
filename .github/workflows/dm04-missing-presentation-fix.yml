@@ -36,16 +36,16 @@ jobs:
 
           state_path = Path('lib/core/services/download_job_state.dart')
           state = state_path.read_text()
-          state_anchor = '''DownloadDurableOnlyRecoveryDisposition planDurableOnlyRecoveryDisposition({
-            required bool hasPresentationMetadata,
-            required bool hasRecoverableTaskDescriptor,
-          }) {
-            return hasPresentationMetadata && hasRecoverableTaskDescriptor
-                ? DownloadDurableOnlyRecoveryDisposition.recover
-                : DownloadDurableOnlyRecoveryDisposition.orphan;
-          }
-
-          '''
+          state_anchor = (
+              'DownloadDurableOnlyRecoveryDisposition planDurableOnlyRecoveryDisposition({\n'
+              '  required bool hasPresentationMetadata,\n'
+              '  required bool hasRecoverableTaskDescriptor,\n'
+              '}) {\n'
+              '  return hasPresentationMetadata && hasRecoverableTaskDescriptor\n'
+              '      ? DownloadDurableOnlyRecoveryDisposition.recover\n'
+              '      : DownloadDurableOnlyRecoveryDisposition.orphan;\n'
+              '}\n\n'
+          )
           helper = '''enum DownloadMissingPresentationRecoveryDisposition {
             recover,
             settleOwner,
@@ -75,6 +75,12 @@ jobs:
           }
 
           '''
+          # The workflow indentation is stripped by YAML before this here-doc reaches Python.
+          # Normalize the helper's deliberate script indentation before inserting it.
+          helper = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in helper.splitlines()
+          ) + '\n'
           if 'enum DownloadMissingPresentationRecoveryDisposition' not in state:
               count = state.count(state_anchor)
               if count != 1:
@@ -84,10 +90,11 @@ jobs:
 
           service_path = Path('lib/core/services/download_service.dart')
           service = service_path.read_text()
-          anchor = '''      final stillNative =
-                    nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);
-                final userPaused =
-          '''
+          anchor = (
+              '      final stillNative =\n'
+              '          nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);\n'
+              '      final userPaused =\n'
+          )
           insert = '''      final stillNative =
                     nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);
                 final hasLiveOwnership =
@@ -103,7 +110,7 @@ jobs:
                     try {
                       await _pauseTransfer(task);
                     } catch (_) {
-                      // The terminal durable state stays authoritative; a later
+                      // The terminal durable state stays authoritative. A later
                       // reconciliation pass retries settlement without revival.
                     }
                   }
@@ -183,6 +190,10 @@ jobs:
                 }
                 final userPaused =
           '''
+          insert = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in insert.splitlines()
+          ) + '\n'
           if 'final presentationDisposition = planMissingPresentationRecovery(' not in service:
               count = service.count(anchor)
               if count != 1:
