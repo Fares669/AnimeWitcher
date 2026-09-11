@@ -1,5 +1,7 @@
 import 'package:background_downloader/background_downloader.dart';
 
+import 'download_parallel.dart';
+
 /// Logical state of one episode download.
 ///
 /// This deliberately does not mirror [TaskStatus]. Native downloader status,
@@ -44,6 +46,56 @@ class DownloadRecoveryPlan {
 
   bool get shouldRequeue => action == DownloadRecoveryAction.requeue;
   bool get isNativeOwned => action == DownloadRecoveryAction.keepNative;
+}
+
+class DownloadRecoveryInventory {
+  const DownloadRecoveryInventory({
+    required this.records,
+    required this.nativeOnlyTaskIds,
+  });
+
+  final List<TaskRecord> records;
+  final Set<String> nativeOnlyTaskIds;
+}
+
+/// Build one deterministic startup inventory from the persisted executor
+/// projection plus tasks the runtime still owns. Persisted records win when
+/// both sources know the same execution identity. Native-only logical tasks are
+/// synthesized as running projections so recovery can attach to the existing
+/// writer instead of starting a second transfer. Multipart children remain
+/// implementation details and never become logical episode rows.
+DownloadRecoveryInventory buildDownloadRecoveryInventory({
+  required Iterable<TaskRecord> persistedRecords,
+  required Iterable<Task> runtimeTasks,
+}) {
+  final records = <TaskRecord>[];
+  final knownIds = <String>{};
+
+  for (final record in persistedRecords) {
+    if (!isLogicalEpisodeDownloadTask(record.task)) continue;
+    final taskId = record.task.taskId;
+    if (!knownIds.add(taskId)) continue;
+    records.add(record);
+  }
+
+  final missingRuntimeTasks = <DownloadTask>[];
+  for (final task in runtimeTasks) {
+    if (!isLogicalEpisodeDownloadTask(task)) continue;
+    if (!knownIds.add(task.taskId)) continue;
+    missingRuntimeTasks.add(task as DownloadTask);
+  }
+  missingRuntimeTasks.sort((a, b) => a.taskId.compareTo(b.taskId));
+
+  final nativeOnlyTaskIds = <String>{};
+  for (final task in missingRuntimeTasks) {
+    nativeOnlyTaskIds.add(task.taskId);
+    records.add(TaskRecord(task, TaskStatus.running, 0, -1));
+  }
+
+  return DownloadRecoveryInventory(
+    records: List<TaskRecord>.unmodifiable(records),
+    nativeOnlyTaskIds: Set<String>.unmodifiable(nativeOnlyTaskIds),
+  );
 }
 
 /// Derive one deterministic startup decision from all durable/native evidence.
