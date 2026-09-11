@@ -251,7 +251,7 @@
 
 ## Phase 2 — One logical state, canonical identity, integrity, and terminal deletion
 
-- [ ] **DM-05 — Make `DownloadJobState` the sole logical lifecycle authority**
+- [x] **DM-05 — Make `DownloadJobState` the sole logical lifecycle authority**
   - **Problem:** plugin `TaskStatus.paused` currently represents user pause, interruption/failure parking and queue compatibility; side flags in multiple stores disambiguate it.
   - **Root cause:** executor status is also being used as application state.
   - **Severity / priority:** **P1 / High architectural prerequisite.**
@@ -259,6 +259,10 @@
   - **Proposed fix:** plugin/native statuses become execution evidence only. Persist explicit logical/user/queue state and centralize projection to UI/plugin/native compatibility states.
   - **Verification/testing:** every logical state x plugin status x owner evidence x metadata flags, with reordered events; no user-pause inference from plugin paused alone.
   - **Dependencies:** DM-03, DM-04.
+
+  - **Implementation notes (2026-09-11):** JobStore schema v6 makes `DownloadJobState` the only durable lifecycle authority. `userPaused` and `queueWaiting` remain compatibility projections derived from state; schema-v5 side flags migrate once into explicit state. Startup recovery ignores stale metadata/plugin replicas whenever a JobStore row exists and recovery UI status is projected from logical state.
+  - **Confirmed root cause:** `_recoverPersistedDownloads()` recomputed pause intent from stale metadata/in-memory flags after JobState-first planning, and JobStore could serialize contradictory side flags. A stale pause replica could therefore override an authoritative running job after relaunch.
+  - **Verification passed:** contradictory-flag migration/write regression, startup recovery authority regression, existing DM-05 state/queue/provider guards, JobStore/recovery/runtime ownership suites, and analyzer.
 
 - [ ] **DM-24 — Introduce one canonical logical episode identity separate from execution `taskId`**
   - **Problem:** duplicate detection/adoption uses inconsistent combinations of taskId, tracking URL, episode URL and target file.

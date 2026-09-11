@@ -1275,19 +1275,15 @@ class DownloadService {
 
   Future<void> _restoreAuthoritativeJobIntent() async {
     for (final job in await _jobStore.all()) {
-      final paused =
-          job.userPaused ||
-          job.state == DownloadJobState.pausing ||
-          job.state == DownloadJobState.pausedByUser;
-      final terminal =
-          job.state == DownloadJobState.completed ||
-          job.state == DownloadJobState.canceled ||
-          job.state == DownloadJobState.orphaned;
-      if (paused) _userPausedIds.add(job.taskId);
-      if (job.queueWaiting || job.state == DownloadJobState.queued) {
+      if (downloadJobHasUserPauseIntent(job.state)) {
+        _userPausedIds.add(job.taskId);
+      }
+      if (downloadJobQueueWaiting(job.state)) {
         _queueWaitingIds.add(job.taskId);
       }
-      if (terminal) _terminalJobIds.add(job.taskId);
+      if (downloadJobIsTerminal(job.state)) {
+        _terminalJobIds.add(job.taskId);
+      }
     }
   }
 
@@ -1634,7 +1630,7 @@ class DownloadService {
       final legacyQueueWaiting = isQueueWaitingMetadata(metadata);
       final queueWaiting = oldJob == null
           ? legacyQueueWaiting
-          : oldJob.queueWaiting || oldJob.state == DownloadJobState.queued;
+          : downloadJobQueueWaiting(oldJob.state);
       if (queueWaiting) {
         _queueWaitingIds.add(task.taskId);
         _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
@@ -1772,12 +1768,10 @@ class DownloadService {
         });
         continue;
       }
-      final userPaused =
-          isUserPausedMetadata(metadata) ||
-          _userPausedIds.contains(task.taskId) ||
-          oldJob?.userPaused == true ||
-          oldJob?.state == DownloadJobState.pausedByUser ||
-          oldJob?.state == DownloadJobState.pausing;
+      final userPaused = oldJob != null
+          ? downloadJobHasUserPauseIntent(oldJob.state)
+          : isUserPausedMetadata(metadata) ||
+                _userPausedIds.contains(task.taskId);
       final recoveryPlan = planDownloadRecoveryWithJobAuthority(
         persisted: record.status,
         queueWaiting: queueWaiting,
@@ -1832,8 +1826,8 @@ class DownloadService {
         durableBytes: durableBytes,
         durableByteProvenance: durableByteProvenance,
         expectedBytes: expectedBytes,
-        userPaused: userPaused,
-        queueWaiting: recoveryPlan.shouldRequeue,
+        userPaused: downloadJobHasUserPauseIntent(recoveryPlan.state),
+        queueWaiting: downloadJobQueueWaiting(recoveryPlan.state),
         updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
         taskSnapshot: oldJob?.taskSnapshot ?? task.toJson(),
         fingerprint:
@@ -1988,25 +1982,14 @@ class DownloadService {
         await _enqueueExistingTaskAsWaiterUnlocked(task);
       }
 
-      final showAsWaiting = _queueWaitingIds.contains(task.taskId);
-      final showAsRunning =
-          !userPaused &&
-          ((record.status == TaskStatus.running && stillNative) ||
-              (shouldContinue && !showAsWaiting));
+      final projectedJob = await _jobStore.get(task.taskId);
+      final projectedState = projectedJob?.state ?? recoveryPlan.state;
       _publishProgress(
         trackingUrl: trackingUrl,
         taskId: task.taskId,
         progress: progress,
         totalSize: expectedBytes,
-        status: showAsWaiting
-            ? TaskStatus.enqueued
-            : ((userPaused && userPauseSettled)
-                  ? TaskStatus.paused
-                  : (showAsRunning
-                        ? TaskStatus.running
-                        : (stillNative && wasRunning
-                              ? record.status
-                              : TaskStatus.paused))),
+        status: downloadJobDisplayStatus(projectedState),
       );
     }
 

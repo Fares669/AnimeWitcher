@@ -32,6 +32,31 @@ bool downloadJobQueueWaiting(DownloadJobState state) =>
 bool downloadJobUserPaused(DownloadJobState state) =>
     state == DownloadJobState.pausedByUser;
 
+/// Durable user-pause intent is encoded in logical state only.
+bool downloadJobHasUserPauseIntent(DownloadJobState state) =>
+    state == DownloadJobState.pausing || state == DownloadJobState.pausedByUser;
+
+bool downloadJobIsTerminal(DownloadJobState state) =>
+    state == DownloadJobState.completed ||
+    state == DownloadJobState.canceled ||
+    state == DownloadJobState.orphaned;
+
+/// One-time migration for pre-v6 side flags. Pause wins over queue.
+DownloadJobState migrateLegacyDownloadJobState({
+  required DownloadJobState state,
+  required bool userPaused,
+  required bool queueWaiting,
+}) {
+  if (downloadJobIsTerminal(state)) return state;
+  if (userPaused) {
+    return state == DownloadJobState.pausing
+        ? DownloadJobState.pausing
+        : DownloadJobState.pausedByUser;
+  }
+  if (queueWaiting) return DownloadJobState.queued;
+  return state;
+}
+
 bool downloadJobOccupiesSlot(DownloadJobState state) {
   return switch (state) {
     DownloadJobState.starting ||

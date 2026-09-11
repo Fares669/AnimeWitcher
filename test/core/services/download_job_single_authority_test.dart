@@ -46,31 +46,34 @@ Map<String, Object?> _rawJob({
 
 void main() {
   group('DM-05 sole logical lifecycle authority', () {
-    test('store normalizes compatibility flags from DownloadJobState', () async {
-      final store = DownloadJobStore(_MemoryBackend());
-      expect(
-        await store.put(
-          const DownloadJobRecord(
-            taskId: 'task-1',
-            trackingUrl: 'episode://1',
-            state: DownloadJobState.running,
-            generation: 1,
-            durableBytes: 0,
-            expectedBytes: 100,
-            userPaused: true,
-            queueWaiting: true,
-            updatedAtMillis: 1,
+    test(
+      'store normalizes compatibility flags from DownloadJobState',
+      () async {
+        final store = DownloadJobStore(_MemoryBackend());
+        expect(
+          await store.put(
+            const DownloadJobRecord(
+              taskId: 'task-1',
+              trackingUrl: 'episode://1',
+              state: DownloadJobState.running,
+              generation: 1,
+              durableBytes: 0,
+              expectedBytes: 100,
+              userPaused: true,
+              queueWaiting: true,
+              updatedAtMillis: 1,
+            ),
           ),
-        ),
-        isTrue,
-      );
+          isTrue,
+        );
 
-      final stored = await store.get('task-1');
-      expect(stored, isNotNull);
-      expect(stored!.state, DownloadJobState.running);
-      expect(stored.userPaused, isFalse);
-      expect(stored.queueWaiting, isFalse);
-    });
+        final stored = await store.get('task-1');
+        expect(stored, isNotNull);
+        expect(stored!.state, DownloadJobState.running);
+        expect(stored.userPaused, isFalse);
+        expect(stored.queueWaiting, isFalse);
+      },
+    );
 
     test('legacy pause flag migrates once into explicit logical state', () {
       final record = DownloadJobRecord.fromJson(
@@ -97,25 +100,27 @@ void main() {
       expect(record.queueWaiting, isFalse);
     });
 
-    test('startup recovery does not let legacy pause metadata override JobStore', () {
-      final source = File(
-        'lib/core/services/download_service.dart',
-      ).readAsStringSync();
-      expect(
-        source,
-        contains(
-          'final userPaused = oldJob != null\n'
-          '          ? downloadJobHasUserPauseIntent(oldJob.state)\n'
-          '          : isUserPausedMetadata(metadata) ||',
-        ),
-      );
-      expect(source, isNot(contains('oldJob?.userPaused == true')));
-      expect(
-        source,
-        contains(
-          'final projectedState = projectedJob?.state ?? recoveryPlan.state;',
-        ),
-      );
-    });
+    test(
+      'startup recovery does not let legacy pause metadata override JobStore',
+      () {
+        final source = File('lib/core/services/download_service.dart')
+            .readAsStringSync();
+        expect(
+          source,
+          contains(
+            'final userPaused = oldJob != null\n'
+            '          ? downloadJobHasUserPauseIntent(oldJob.state)\n'
+            '          : isUserPausedMetadata(metadata) ||',
+          ),
+        );
+        expect(source, isNot(contains('oldJob?.userPaused == true')));
+        expect(
+          source,
+          contains(
+            'final projectedState = projectedJob?.state ?? recoveryPlan.state;',
+          ),
+        );
+      },
+    );
   });
 }

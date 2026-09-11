@@ -5,7 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'download_job_state.dart';
 
-const int kDownloadJobSchemaVersion = 5;
+const int kDownloadJobSchemaVersion = 6;
 
 /// Provenance for [DownloadJobRecord.durableBytes].
 ///
@@ -229,8 +229,8 @@ class DownloadJobRecord {
       durableByteProvenance,
     ).name,
     'expectedBytes': expectedBytes,
-    'userPaused': userPaused,
-    'queueWaiting': queueWaiting,
+    'userPaused': downloadJobHasUserPauseIntent(state),
+    'queueWaiting': downloadJobQueueWaiting(state),
     'updatedAtMillis': updatedAtMillis,
     if (taskSnapshot != null)
       'taskSnapshot': Map<String, dynamic>.from(taskSnapshot!),
@@ -255,6 +255,14 @@ class DownloadJobRecord {
     final durableBytes = _intValue(map['durableBytes']);
     if (generation < 0 || durableBytes < 0) return null;
     final schemaVersion = _intValue(map['schemaVersion'], fallback: 1);
+    var state = _jobStateValue(map['state']);
+    if (schemaVersion < 6) {
+      state = migrateLegacyDownloadJobState(
+        state: state,
+        userPaused: map['userPaused'] == true,
+        queueWaiting: map['queueWaiting'] == true,
+      );
+    }
     final durableByteProvenance = _durableByteProvenanceValue(
       map['durableByteProvenance'],
       durableBytes: durableBytes,
@@ -265,13 +273,13 @@ class DownloadJobRecord {
       taskId: taskId,
       logicalId: _nonEmptyString(map['logicalId']),
       trackingUrl: trackingUrl,
-      state: _jobStateValue(map['state']),
+      state: state,
       generation: generation,
       durableBytes: durableBytes,
       durableByteProvenance: durableByteProvenance,
       expectedBytes: _intValue(map['expectedBytes'], fallback: -1),
-      userPaused: map['userPaused'] == true,
-      queueWaiting: map['queueWaiting'] == true,
+      userPaused: downloadJobHasUserPauseIntent(state),
+      queueWaiting: downloadJobQueueWaiting(state),
       updatedAtMillis: _intValue(map['updatedAtMillis']),
       taskSnapshot: map['taskSnapshot'] is Map
           ? Map<String, dynamic>.from(map['taskSnapshot'] as Map)
@@ -448,6 +456,8 @@ class DownloadJobStore {
           );
     final durable = next.copyWith(
       logicalId: incomingLogicalId ?? currentLogicalId,
+      userPaused: downloadJobHasUserPauseIntent(next.state),
+      queueWaiting: downloadJobQueueWaiting(next.state),
       durableByteProvenance: _normalizedDurableByteProvenance(
         next.durableBytes,
         next.durableByteProvenance,
