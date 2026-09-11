@@ -16,26 +16,32 @@ jobs:
         with:
           ref: plan/download-manager-reliability
 
-      - name: Update stale checkpoint signature assertions
+      - name: Update stale reliability assertions
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          files = [
+
+          signature_files = [
               Path('test/core/services/download_runtime_stability_review_test.dart'),
               Path('test/core/services/download_source_refresh_integrity_test.dart'),
           ]
-          old = 'Future<void> _checkpointLogicalJob('
-          new = 'Future<bool> _checkpointLogicalJob('
-          total = 0
-          for path in files:
+          old_signature = 'Future<void> _checkpointLogicalJob('
+          new_signature = 'Future<bool> _checkpointLogicalJob('
+          for path in signature_files:
               text = path.read_text()
-              count = text.count(old)
+              count = text.count(old_signature)
               if count != 1:
-                  raise SystemExit(f'{path}: expected exactly one stale signature, found {count}')
-              path.write_text(text.replace(old, new, 1))
-              total += count
-          if total != 2:
-              raise SystemExit(f'expected two guarded replacements, got {total}')
+                  raise SystemExit(f'{path}: expected exactly one stale checkpoint signature, found {count}')
+              path.write_text(text.replace(old_signature, new_signature, 1))
+
+          runtime_review = Path('test/core/services/download_runtime_stability_review_test.dart')
+          text = runtime_review.read_text()
+          old_schema = "kParallelManifestSchemaVersion = 4"
+          new_schema = "kParallelManifestSchemaVersion = 5"
+          count = text.count(old_schema)
+          if count != 1:
+              raise SystemExit(f'{runtime_review}: expected exactly one stale schema assertion, found {count}')
+          runtime_review.write_text(text.replace(old_schema, new_schema, 1))
           PY
 
       - uses: subosito/flutter-action@v2
@@ -79,5 +85,5 @@ jobs:
           if extra:
               raise SystemExit(f'unexpected changed files: {sorted(extra)}')
           PY
-          git commit -m "test(downloads): align checkpoint guards with fail-closed contract"
+          git commit -m "test(downloads): align reliability guards with current contracts"
           git push origin HEAD:plan/download-manager-reliability
