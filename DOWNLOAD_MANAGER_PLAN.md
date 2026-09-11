@@ -264,7 +264,7 @@
   - **Confirmed root cause:** `_recoverPersistedDownloads()` recomputed pause intent from stale metadata/in-memory flags after JobState-first planning, and JobStore could serialize contradictory side flags. A stale pause replica could therefore override an authoritative running job after relaunch.
   - **Verification passed:** contradictory-flag migration/write regression, startup recovery authority regression, existing DM-05 state/queue/provider guards, JobStore/recovery/runtime ownership suites, and analyzer.
 
-- [ ] **DM-24 — Introduce one canonical logical episode identity separate from execution `taskId`**
+- [x] **DM-24 — Introduce one canonical logical episode identity separate from execution `taskId`**
   - **Problem:** duplicate detection/adoption uses inconsistent combinations of taskId, tracking URL, episode URL and target file.
   - **Root cause:** execution-attempt identity and logical-download identity are not formally separated.
   - **Severity / priority:** **P1 / High; P0 if duplicate start is reproduced.**
@@ -272,6 +272,10 @@
   - **Proposed fix:** define stable logical download ID/key and map one or more execution task IDs/generations to it. Adoption of a differently named live task atomically moves/aliases all projections.
   - **Verification/testing:** DB lost while native live; same episode new taskId; same filename different episode; source URL rotates; duplicate taps; relaunch during adoption; no cross-episode collapse.
   - **Dependencies:** DM-05.
+  - **Implementation notes (2026-09-11):** Canonical logical episode identity is persisted in JobStore/metadata and projected through queue/overlay paths. Start/adoption now resolves exact logical identity first, migrates legacy JobStore rows whose metadata reconstructs that identity, repairs a missing executor projection from the durable task snapshot, and only then permits URL fallback for evidence that genuinely has no logical identity. Known different logical IDs are fenced from URL/filename collapse.
+  - **Confirmed root cause:** legacy JobStore rows without `logicalId` were invisible to `allForLogicalId()` even when presentation metadata could reconstruct the episode identity. The tracking-URL fallback that followed could therefore miss the correct execution or collide with another logical episode.
+  - **Verification passed:** prior RED reproduction plus GREEN legacy-adoption/different-logical-ID fencing, canonical identity persistence/overlay/provider suites, DM-05 lifecycle-authority regressions, and analyzer.
+
 
 - [ ] **DM-06 — Strengthen resource identity and final completion verification**
   - **Problem:** current file length may become the expected length; same-size resource replacement can pass size-only checks; fingerprint validator fields are not consistently populated end-to-end.
