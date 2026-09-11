@@ -138,23 +138,36 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
         quality: widget.quality,
         directory: widget.shaderDirectory,
       );
+      String currentVo = '';
       if (!pipeline.isEmpty) {
-        final currentVo = (await platform.getProperty('current-vo')).trim();
+        currentVo = (await platform.getProperty('current-vo')).trim();
+        if (!anime4kGpuRendererSupportsShaders(currentVo)) {
+          throw StateError(
+            'Anime4K GPU shaders are unavailable on this renderer '
+            '(vo=$currentVo).',
+          );
+        }
+      }
+
+      // gpu-dumb-mode=auto is expected to be "yes" before a custom shader is
+      // loaded. Asking mpv for it before this line rejects a perfectly valid
+      // renderer. Load the chain first, then verify that mpv left dumb mode.
+      await platform.setProperty('glsl-shaders', pipeline.value);
+      final applied = (await platform.getProperty('glsl-shaders')).trim();
+      if (pipeline.value.isNotEmpty && applied.isEmpty) {
+        throw StateError('mpv did not accept the Anime4K shader chain.');
+      }
+      if (!pipeline.isEmpty) {
         final gpuDumbMode = (await platform.getProperty('gpu-dumb-mode'))
             .trim()
             .toLowerCase();
-        if (!anime4kGpuRendererSupportsShaders(currentVo) ||
-            gpuDumbMode == 'yes') {
+        if (gpuDumbMode == 'yes') {
+          await platform.setProperty('glsl-shaders', '');
           throw StateError(
             'Anime4K GPU shaders are unavailable on this renderer '
             '(vo=$currentVo, gpu-dumb-mode=$gpuDumbMode).',
           );
         }
-      }
-      await platform.setProperty('glsl-shaders', pipeline.value);
-      final applied = (await platform.getProperty('glsl-shaders')).trim();
-      if (pipeline.value.isNotEmpty && applied.isEmpty) {
-        throw StateError('mpv did not accept the Anime4K shader chain.');
       }
       if (mounted && _error != null) setState(() => _error = null);
     } catch (error) {
