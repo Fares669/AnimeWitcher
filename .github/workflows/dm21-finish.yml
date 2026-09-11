@@ -39,7 +39,7 @@ jobs:
       - name: Apply implementation
         run: |
           python3 .github/dm21_finish.py apply
-          dart format lib/core/services/download_service.dart test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_checkpoint_commit_result_test.dart
+          dart format lib/core/services/download_service.dart test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_checkpoint_commit_result_test.dart test/core/services/download_lifecycle_checkpoint_guard_test.dart
       - name: Test DM-21 boundaries
         run: flutter test test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_checkpoint_commit_result_test.dart test/core/services/download_lifecycle_checkpoint_guard_test.dart test/core/services/download_persistence_boundary_guard_test.dart test/core/services/download_cancel_checkpoint_guard_test.dart
       - name: Test durable store
@@ -53,7 +53,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/dm21-finish.yml .github/dm21_finish.py
-          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_checkpoint_commit_result_test.dart
+          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_service.dart test/core/services/download_source_refresh_checkpoint_guard_test.dart test/core/services/download_checkpoint_commit_result_test.dart test/core/services/download_lifecycle_checkpoint_guard_test.dart
           git diff --cached --check
           git commit -m "fix: fail closed on remaining download lifecycle boundaries"
           git push origin HEAD:plan/download-manager-reliability
