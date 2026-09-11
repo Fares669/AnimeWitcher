@@ -1,0 +1,37 @@
+name: Agent DM07 Delete Tombstone RED
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - .github/workflows/agent-dm07-delete-tombstone.yml
+      - test/core/services/download_delete_tombstone_guard_test.dart
+
+jobs:
+  red:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Prepare
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Confirm DM-07 RED
+        run: |
+          set +e
+          flutter test test/core/services/download_delete_tombstone_guard_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "DM-07 unexpectedly passed before production fix"
+            exit 1
+          fi
+          echo "DM-07 RED reproduced as expected"
