@@ -238,6 +238,21 @@ class ActiveDownloadsNotifier extends _$ActiveDownloadsNotifier {
   void remove(String url) => state = {...state}..remove(url);
 }
 
+enum DownloadLifecycleCheckpointCommit { committed, rejected, failed }
+
+@visibleForTesting
+Future<DownloadLifecycleCheckpointCommit> commitAuthoritativeDownloadCheckpoint(
+  Future<bool> Function() checkpoint,
+) async {
+  try {
+    return await checkpoint()
+        ? DownloadLifecycleCheckpointCommit.committed
+        : DownloadLifecycleCheckpointCommit.rejected;
+  } catch (_) {
+    return DownloadLifecycleCheckpointCommit.failed;
+  }
+}
+
 class DownloadService {
   final diagnosticLog = DownloadDiagnosticLog(
     () async => Directory(
@@ -1147,8 +1162,8 @@ class DownloadService {
       });
       return false;
     }
-    try {
-      final accepted = await _jobStore.checkpoint(
+    final commit = await commitAuthoritativeDownloadCheckpoint(
+      () => _jobStore.checkpoint(
         taskId: task.taskId,
         trackingUrl: downloadTrackingUrl(task),
         state: state,
@@ -1161,24 +1176,19 @@ class DownloadService {
           expectedBytes: expectedBytes ?? -1,
           finalUrl: task.url,
         ),
+      ),
+    );
+    if (commit != DownloadLifecycleCheckpointCommit.committed) {
+      diagnosticLog.record(
+        commit == DownloadLifecycleCheckpointCommit.rejected
+            ? 'job.checkpointRejected'
+            : 'job.checkpointError',
+        {'taskId': task.taskId, 'status': state.name, 'result': commit.name},
       );
-      if (!accepted) {
-        diagnosticLog.record('job.checkpointRejected', {
-          'taskId': task.taskId,
-          'status': state.name,
-        });
-        return false;
-      }
-      if (terminal) _terminalJobIds.add(task.taskId);
-      return true;
-    } catch (error) {
-      diagnosticLog.record('job.checkpointError', {
-        'taskId': task.taskId,
-        'status': state.name,
-        'errorType': error.runtimeType.toString(),
-      });
       return false;
     }
+    if (terminal) _terminalJobIds.add(task.taskId);
+    return true;
   }
 
   Future<void> _recoverPersistedDownloads() async {
@@ -3439,6 +3449,23 @@ class DownloadService {
         ((task is ParallelDownloadTask || partialBytes > 0) &&
             metadata?.supportsRanges != true)) {
       return (task: task, refreshed: false);
+    }
+
+    // Source replacement changes executor/manifest identity. Persist an
+    // interrupted write-ahead boundary first so a storage failure cannot let
+    // the old durable state race a newly installed URL. DM-11/DM-31 later
+    // make the source capability itself transactional and generation-aware.
+    final refreshCheckpointed = await _checkpointLogicalJob(
+      task,
+      state: DownloadJobState.interrupted,
+      expectedBytes: expectedBytes,
+      userPaused: false,
+      queueWaiting: false,
+    );
+    if (!refreshCheckpointed) {
+      throw StateError(
+        'Failed to persist source refresh boundary for ${task.taskId}',
+      );
     }
 
     if (task is ParallelDownloadTask) {

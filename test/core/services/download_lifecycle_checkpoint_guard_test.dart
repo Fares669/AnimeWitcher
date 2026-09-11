@@ -12,11 +12,16 @@ void main() {
       expect(source, contains('Future<bool> _checkpointLogicalJob('));
       expect(
         source,
-        contains(
-          "return false;\n    }\n    try {\n      final accepted = await _jobStore.checkpoint(",
-        ),
+        contains('final commit = await commitAuthoritativeDownloadCheckpoint('),
       );
-      expect(source, contains("return true;\n    } catch (error)"));
+      expect(
+        source,
+        contains('if (commit != DownloadLifecycleCheckpointCommit.committed)'),
+      );
+      expect(
+        source,
+        contains('if (terminal) _terminalJobIds.add(task.taskId);'),
+      );
 
       final pauseStart = source.indexOf(
         'Future<void> pauseDownload(String taskId)',
