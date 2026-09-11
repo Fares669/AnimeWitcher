@@ -1322,7 +1322,35 @@ class DownloadService {
               finalUrl: task.url,
             ),
       );
-      await _jobStore.put(migratedJob);
+      if (oldJob != null && durableBytes < oldJob.durableBytes) {
+        final reason = switch (recoveryBytes.source) {
+          DownloadRecoveryByteSource.multipartManifest =>
+            DownloadByteReconciliationReason.multipartManifestRollback,
+          DownloadRecoveryByteSource.exactDisk when durableBytes == 0 =>
+            DownloadByteReconciliationReason.noSurvivingBytes,
+          DownloadRecoveryByteSource.exactDisk =>
+            DownloadByteReconciliationReason.exactDiskLoss,
+          _ => DownloadByteReconciliationReason.nativeRecoverabilityLoss,
+        };
+        final reconciled = await _jobStore.reconcileDurableBytes(
+          oldJob.attemptToken,
+          durableBytes: durableBytes,
+          evidenceProvenance:
+              durableByteProvenance == DownloadDurableByteProvenance.none
+              ? DownloadDurableByteProvenance.exactDisk
+              : durableByteProvenance,
+          reason: reason,
+          fingerprint: migratedJob.fingerprint,
+        );
+        if (reconciled != null) {
+          final corrected = migratedJob.copyWith(
+            generation: reconciled.generation,
+          );
+          await _jobStore.put(corrected);
+        }
+      } else {
+        await _jobStore.put(migratedJob);
+      }
 
       if (oldJob != null &&
           recoveryPlan.action == DownloadRecoveryAction.ignore) {

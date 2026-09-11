@@ -4,7 +4,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'download_job_state.dart';
 
-const int kDownloadJobSchemaVersion = 2;
+const int kDownloadJobSchemaVersion = 3;
 
 /// Provenance for [DownloadJobRecord.durableBytes].
 ///
@@ -19,6 +19,14 @@ enum DownloadDurableByteProvenance {
   rangeFlushed,
   multipartManifest,
   nativeRecoverable,
+}
+
+/// Why authoritative recovery evidence deliberately lowered durable bytes.
+enum DownloadByteReconciliationReason {
+  exactDiskLoss,
+  noSurvivingBytes,
+  multipartManifestRollback,
+  nativeRecoverabilityLoss,
 }
 
 extension DownloadDurableByteProvenanceRules on DownloadDurableByteProvenance {
@@ -121,6 +129,9 @@ class DownloadJobRecord {
     required this.queueWaiting,
     required this.updatedAtMillis,
     this.fingerprint,
+    this.lastByteReconciliationReason,
+    this.lastByteReconciliationProvenance,
+    this.lastByteReconciliationAtMillis,
   });
 
   final String taskId;
@@ -134,6 +145,9 @@ class DownloadJobRecord {
   final bool queueWaiting;
   final int updatedAtMillis;
   final DownloadResourceFingerprint? fingerprint;
+  final DownloadByteReconciliationReason? lastByteReconciliationReason;
+  final DownloadDurableByteProvenance? lastByteReconciliationProvenance;
+  final int? lastByteReconciliationAtMillis;
 
   DownloadAttemptToken get attemptToken =>
       DownloadAttemptToken(taskId: taskId, generation: generation);
@@ -150,6 +164,9 @@ class DownloadJobRecord {
     int? updatedAtMillis,
     DownloadResourceFingerprint? fingerprint,
     bool clearFingerprint = false,
+    DownloadByteReconciliationReason? lastByteReconciliationReason,
+    DownloadDurableByteProvenance? lastByteReconciliationProvenance,
+    int? lastByteReconciliationAtMillis,
   }) => DownloadJobRecord(
     taskId: taskId,
     trackingUrl: trackingUrl ?? this.trackingUrl,
@@ -162,6 +179,13 @@ class DownloadJobRecord {
     queueWaiting: queueWaiting ?? this.queueWaiting,
     updatedAtMillis: updatedAtMillis ?? this.updatedAtMillis,
     fingerprint: clearFingerprint ? null : (fingerprint ?? this.fingerprint),
+    lastByteReconciliationReason:
+        lastByteReconciliationReason ?? this.lastByteReconciliationReason,
+    lastByteReconciliationProvenance:
+        lastByteReconciliationProvenance ??
+        this.lastByteReconciliationProvenance,
+    lastByteReconciliationAtMillis:
+        lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -180,6 +204,13 @@ class DownloadJobRecord {
     'queueWaiting': queueWaiting,
     'updatedAtMillis': updatedAtMillis,
     if (fingerprint != null) 'fingerprint': fingerprint!.toJson(),
+    if (lastByteReconciliationReason != null)
+      'lastByteReconciliationReason': lastByteReconciliationReason!.name,
+    if (lastByteReconciliationProvenance != null)
+      'lastByteReconciliationProvenance':
+          lastByteReconciliationProvenance!.name,
+    if (lastByteReconciliationAtMillis != null)
+      'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,
   };
 
   static DownloadJobRecord? fromJson(Object? raw) {
@@ -211,6 +242,15 @@ class DownloadJobRecord {
       queueWaiting: map['queueWaiting'] == true,
       updatedAtMillis: _intValue(map['updatedAtMillis']),
       fingerprint: DownloadResourceFingerprint.fromJson(map['fingerprint']),
+      lastByteReconciliationReason: _byteReconciliationReasonValue(
+        map['lastByteReconciliationReason'],
+      ),
+      lastByteReconciliationProvenance: _optionalDurableByteProvenanceValue(
+        map['lastByteReconciliationProvenance'],
+      ),
+      lastByteReconciliationAtMillis: _nullableIntValue(
+        map['lastByteReconciliationAtMillis'],
+      ),
     );
   }
 }
@@ -494,6 +534,58 @@ class DownloadJobStore {
     );
   });
 
+  /// Apply stronger recovery evidence that proves fewer bytes survived.
+  ///
+  /// This is intentionally separate from [put], [checkpoint], and
+  /// [updateForAttempt], which remain monotonic. A successful downward
+  /// correction advances the generation so callbacks from the pre-correction
+  /// writer can no longer resurrect the discarded high-water mark.
+  Future<DownloadAttemptToken?> reconcileDurableBytes(
+    DownloadAttemptToken token, {
+    required int durableBytes,
+    required DownloadDurableByteProvenance evidenceProvenance,
+    required DownloadByteReconciliationReason reason,
+    DownloadResourceFingerprint? fingerprint,
+    int? updatedAtMillis,
+  }) => _serialize(() async {
+    if (durableBytes < 0) return null;
+    if (evidenceProvenance == DownloadDurableByteProvenance.none ||
+        evidenceProvenance == DownloadDurableByteProvenance.legacyUnknown) {
+      return null;
+    }
+    final current = await get(token.taskId);
+    if (current == null || current.generation != token.generation) return null;
+    if (current.state == DownloadJobState.completed) return null;
+    if (durableBytes >= current.durableBytes) return null;
+
+    final oldFingerprint = current.fingerprint;
+    if (oldFingerprint != null &&
+        fingerprint != null &&
+        !oldFingerprint.compatibleWith(fingerprint)) {
+      return null;
+    }
+
+    final now = updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch;
+    final next = current.copyWith(
+      generation: current.generation + 1,
+      durableBytes: durableBytes,
+      durableByteProvenance: _normalizedDurableByteProvenance(
+        durableBytes,
+        evidenceProvenance,
+      ),
+      fingerprint: fingerprint,
+      updatedAtMillis: now,
+      lastByteReconciliationReason: reason,
+      lastByteReconciliationProvenance: evidenceProvenance,
+      lastByteReconciliationAtMillis: now,
+    );
+
+    // Deliberately bypass only the normal byte-monotonicity check. All
+    // identity/generation checks were performed above while serialized.
+    await backend.write(token.taskId, next.toJson());
+    return next.attemptToken;
+  });
+
   Future<void> remove(String taskId) =>
       _serialize(() => backend.delete(taskId.trim()));
 
@@ -513,6 +605,34 @@ DownloadDurableByteProvenance _normalizedDurableByteProvenance(
   return provenance == DownloadDurableByteProvenance.none
       ? DownloadDurableByteProvenance.legacyUnknown
       : provenance;
+}
+
+DownloadByteReconciliationReason? _byteReconciliationReasonValue(
+  Object? value,
+) {
+  final name = value?.toString();
+  if (name == null || name.isEmpty) return null;
+  for (final reason in DownloadByteReconciliationReason.values) {
+    if (reason.name == name) return reason;
+  }
+  return null;
+}
+
+DownloadDurableByteProvenance? _optionalDurableByteProvenanceValue(
+  Object? value,
+) {
+  final name = value?.toString();
+  if (name == null || name.isEmpty) return null;
+  for (final provenance in DownloadDurableByteProvenance.values) {
+    if (provenance.name == name) return provenance;
+  }
+  return null;
+}
+
+int? _nullableIntValue(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse(value?.toString() ?? '');
 }
 
 DownloadDurableByteProvenance _durableByteProvenanceValue(

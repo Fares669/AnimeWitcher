@@ -123,7 +123,7 @@
   - **Implementation status (2026-09-11, final provenance audit):** Startup/saved-progress reconciliation now reads exact multipart `durableBytesFor()` counters instead of reconstructing bytes from percentage. Positive `legacyUnknown` JobStore bytes are excluded from recovery truth (covering vanished native-temp evidence), Range progress is flushed before checkpoint callbacks and tagged `rangeFlushed`, visible partial seeding is tagged `exactDisk`, and completion records bytes only from a verified visible final file. A schema-v4 behavioral restore test proves a `0.999` legacy child has zero durable authority until disk evidence repairs it.
   - **Verification passed:** guarded RED→GREEN durable-byte contract tests, JobStore provenance/migration tests, multipart schema-v5 plus schema-v4 `0.999` restore behavior, Range transfer/fast-fail suites, pending-start lease and runtime-ownership regressions, and `flutter analyze --no-fatal-warnings --no-fatal-infos` all passed before this item was checked off.
 
-- [ ] **DM-20 — Permit authoritative downward byte correction when stronger evidence proves loss**
+- [x] **DM-20 — Permit authoritative downward byte correction when stronger evidence proves loss**
   - **Problem:** JobStore normally rejects decreasing `durableBytes`, even when exact disk or a valid manifest rollback proves fewer recoverable bytes survived.
   - **Root cause:** normal-attempt monotonicity and recovery reconciliation use the same write semantics.
   - **Severity / priority:** **P0 / Critical.**
@@ -131,6 +131,8 @@
   - **Proposed fix:** retain monotonic writes for ordinary callbacks but add a narrowly scoped reconciliation operation that may lower bytes only with stronger evidence, a generation/fingerprint check, and an auditable provenance/reason.
   - **Verification/testing:** JobStore 70MB vs disk 40MB; JobStore >0 vs zero surviving bytes; truncated partial; manifest rollback; stale callback after correction; incompatible identity.
   - **Dependencies:** DM-29.
+  - **Implementation status (2026-09-11):** Added a dedicated serialized `reconcileDurableBytes` path that permits only authoritative downward corrections, validates the active generation and compatible resource fingerprint, persists reconciliation reason/evidence/timestamp, and atomically advances generation to fence stale callbacks. Ordinary `put`, `checkpoint`, and `updateForAttempt` remain monotonic. Startup recovery now uses this path when exact disk/manifest evidence proves fewer bytes survived than JobStore.
+  - **Verification passed:** RED→GREEN reconciliation tests prove 700→400 correction, >0→0 survivor loss, generation fencing of stale callbacks, rejection of weak evidence/incompatible fingerprints, persistence of audit reason/evidence, preservation of ordinary monotonic writes, startup recovery integration, existing JobStore/recovery helper regressions, and `flutter analyze --no-fatal-warnings --no-fatal-infos`.
 
 - [ ] **DM-21 — Make authoritative lifecycle checkpoints fail closed at control boundaries**
   - **Problem:** start/queue/pause/resume/cancel/completion can continue after JobStore checkpoint rejection or storage exception.

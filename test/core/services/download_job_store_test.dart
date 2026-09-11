@@ -98,7 +98,7 @@ void main() {
       );
     });
 
-    test('v2 exact disk provenance round trips explicitly', () {
+    test('v3 exact disk provenance round trips explicitly', () {
       final source = _job(
         durableBytes: 456,
         durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
@@ -107,7 +107,7 @@ void main() {
       final json = source.toJson();
       final decoded = DownloadJobRecord.fromJson(json);
 
-      expect(json['schemaVersion'], 2);
+      expect(json['schemaVersion'], 3);
       expect(json['durableByteProvenance'], 'exactDisk');
       expect(
         decoded?.durableByteProvenance,
@@ -313,6 +313,178 @@ void main() {
       expect(loaded?.state, DownloadJobState.running);
       expect(loaded?.durableBytes, 500);
     });
+
+    test(
+      'authoritative reconciliation may lower bytes and fences stale callbacks',
+      () async {
+        const fingerprint = DownloadResourceFingerprint(
+          strongEtag: '"same"',
+          expectedBytes: 1000,
+        );
+        expect(
+          await store.put(
+            _job(
+              generation: 3,
+              durableBytes: 700,
+              durableByteProvenance:
+                  DownloadDurableByteProvenance.nativeRecoverable,
+              fingerprint: fingerprint,
+            ),
+          ),
+          isTrue,
+        );
+
+        final reconciled = await store.reconcileDurableBytes(
+          const DownloadAttemptToken(taskId: 'episode-1', generation: 3),
+          durableBytes: 400,
+          evidenceProvenance: DownloadDurableByteProvenance.exactDisk,
+          reason: DownloadByteReconciliationReason.exactDiskLoss,
+          fingerprint: fingerprint,
+          updatedAtMillis: 42,
+        );
+
+        expect(reconciled?.generation, 4);
+        final saved = await store.get('episode-1');
+        expect(saved?.durableBytes, 400);
+        expect(
+          saved?.durableByteProvenance,
+          DownloadDurableByteProvenance.exactDisk,
+        );
+        expect(
+          saved?.lastByteReconciliationReason,
+          DownloadByteReconciliationReason.exactDiskLoss,
+        );
+        expect(
+          saved?.lastByteReconciliationProvenance,
+          DownloadDurableByteProvenance.exactDisk,
+        );
+        expect(saved?.lastByteReconciliationAtMillis, 42);
+        expect(
+          await store.updateForAttempt(
+            const DownloadAttemptToken(taskId: 'episode-1', generation: 3),
+            durableBytes: 800,
+            durableByteProvenance:
+                DownloadDurableByteProvenance.nativeRecoverable,
+          ),
+          isFalse,
+        );
+        expect((await store.get('episode-1'))?.durableBytes, 400);
+      },
+    );
+
+    test(
+      'authoritative reconciliation can prove zero surviving bytes',
+      () async {
+        expect(
+          await store.put(
+            _job(
+              generation: 5,
+              durableBytes: 700,
+              durableByteProvenance:
+                  DownloadDurableByteProvenance.nativeRecoverable,
+            ),
+          ),
+          isTrue,
+        );
+        final token = await store.reconcileDurableBytes(
+          const DownloadAttemptToken(taskId: 'episode-1', generation: 5),
+          durableBytes: 0,
+          evidenceProvenance: DownloadDurableByteProvenance.exactDisk,
+          reason: DownloadByteReconciliationReason.noSurvivingBytes,
+        );
+        expect(token?.generation, 6);
+        final saved = await store.get('episode-1');
+        expect(saved?.durableBytes, 0);
+        expect(
+          saved?.durableByteProvenance,
+          DownloadDurableByteProvenance.none,
+        );
+        expect(
+          saved?.lastByteReconciliationProvenance,
+          DownloadDurableByteProvenance.exactDisk,
+        );
+        expect(
+          saved?.lastByteReconciliationReason,
+          DownloadByteReconciliationReason.noSurvivingBytes,
+        );
+      },
+    );
+
+    test(
+      'reconciliation rejects weak evidence and incompatible identity',
+      () async {
+        const original = DownloadResourceFingerprint(
+          strongEtag: '"v1"',
+          expectedBytes: 1000,
+        );
+        expect(
+          await store.put(
+            _job(
+              generation: 2,
+              durableBytes: 700,
+              durableByteProvenance:
+                  DownloadDurableByteProvenance.nativeRecoverable,
+              fingerprint: original,
+            ),
+          ),
+          isTrue,
+        );
+
+        expect(
+          await store.reconcileDurableBytes(
+            const DownloadAttemptToken(taskId: 'episode-1', generation: 2),
+            durableBytes: 400,
+            evidenceProvenance: DownloadDurableByteProvenance.legacyUnknown,
+            reason: DownloadByteReconciliationReason.exactDiskLoss,
+            fingerprint: original,
+          ),
+          isNull,
+        );
+        expect(
+          await store.reconcileDurableBytes(
+            const DownloadAttemptToken(taskId: 'episode-1', generation: 2),
+            durableBytes: 400,
+            evidenceProvenance: DownloadDurableByteProvenance.exactDisk,
+            reason: DownloadByteReconciliationReason.exactDiskLoss,
+            fingerprint: const DownloadResourceFingerprint(
+              strongEtag: '"v2"',
+              expectedBytes: 1000,
+            ),
+          ),
+          isNull,
+        );
+        final saved = await store.get('episode-1');
+        expect(saved?.durableBytes, 700);
+        expect(saved?.generation, 2);
+      },
+    );
+
+    test(
+      'ordinary writes remain monotonic after reconciliation API exists',
+      () async {
+        expect(
+          await store.put(
+            _job(
+              generation: 2,
+              durableBytes: 700,
+              durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
+            ),
+          ),
+          isTrue,
+        );
+        expect(
+          await store.checkpoint(
+            taskId: 'episode-1',
+            trackingUrl: 'https://example.test/watch/1',
+            state: DownloadJobState.running,
+            durableBytes: 400,
+            durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
+          ),
+          isTrue,
+        );
+        expect((await store.get('episode-1'))?.durableBytes, 700);
+      },
+    );
 
     test('durable bytes never go backwards across a newer attempt', () async {
       expect(await store.put(_job(generation: 2, durableBytes: 700)), isTrue);
