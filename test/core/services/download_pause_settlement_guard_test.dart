@@ -59,7 +59,7 @@ void main() {
     final recovery = methodBody(
       source,
       'Future<void> _recoverPersistedDownloads() async {',
-      'int _occupiedSlotCount(',
+      'Future<int> _occupiedSlotCount(',
     );
 
     expect(recovery, contains('var userPauseSettled = !userPaused;'));
