@@ -48,6 +48,7 @@ jobs:
             test/core/services/download_callback_generation_test.dart
       - name: Verify DM-10 and adjacent regressions
         run: |
+          set -o pipefail
           flutter test \
             test/core/services/download_callback_generation_test.dart \
             test/core/services/download_job_store_test.dart \
@@ -62,7 +63,15 @@ jobs:
             test/core/services/download_resource_identity_service_guard_test.dart \
             test/core/services/download_resource_identity_test.dart \
             test/core/services/download_recovery_reconciliation_guard_test.dart \
-            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key 2>&1 | tee /tmp/dm10-test.log
+      - name: Upload DM-10 test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm10-test-diagnostics
+          path: /tmp/dm10-test.log
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
       - name: Mark complete and push
