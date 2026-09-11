@@ -46,6 +46,59 @@ void main() {
       expect(legacyComment, greaterThan(logicalLookup));
     });
 
+    test('legacy adoption migrates reconstructable identity before URL fallback', () {
+      final service = File(
+        'lib/core/services/download_service.dart',
+      ).readAsStringSync();
+      final start = service.indexOf(
+        'Future<DownloadCommandOutcome> startDownloadOutcome({',
+      );
+      final complete = service.indexOf(
+        'Future<List<TaskRecord>> _completeRecordsForEpisode(',
+        start,
+      );
+      final body = service.substring(start, complete);
+
+      final allJobs = body.indexOf('final allJobs = await _jobStore.all()');
+      final reconstructed = body.indexOf('logicalDownloadIdFromMetadata(metadata)');
+      final legacyFallback = body.indexOf('Pre-logical-identity migration fallback');
+      expect(allJobs, greaterThanOrEqualTo(0));
+      expect(reconstructed, greaterThan(allJobs));
+      expect(legacyFallback, greaterThan(reconstructed));
+      expect(body, contains('if (candidateLogicalId != logicalId) continue;'));
+      expect(body, contains('logicalId: logicalId'));
+    });
+
+    test('known different logical ids cannot collapse through tracking URL', () {
+      final service = File(
+        'lib/core/services/download_service.dart',
+      ).readAsStringSync();
+      final start = service.indexOf(
+        'Future<DownloadCommandOutcome> startDownloadOutcome({',
+      );
+      final complete = service.indexOf(
+        'Future<List<TaskRecord>> _completeRecordsForEpisode(',
+        start,
+      );
+      final body = service.substring(start, complete);
+      final fallback = body.lastIndexOf('Pre-logical-identity migration fallback');
+      expect(fallback, greaterThanOrEqualTo(0));
+      final fallbackBody = body.substring(fallback);
+
+      final identityFence = fallbackBody.indexOf(
+        'if (candidateLogicalId != null)',
+      );
+      final urlMatch = fallbackBody.indexOf(
+        'if (candidateTracking == (trackingUrl ?? url))',
+      );
+      expect(identityFence, greaterThanOrEqualTo(0));
+      expect(urlMatch, greaterThan(identityFence));
+      expect(
+        fallbackBody.substring(identityFence, urlMatch),
+        contains('if (candidateLogicalId != logicalId) continue;'),
+      );
+    });
+
     test('complete-record matching prefers canonical identity over filename', () {
       final service = File(
         'lib/core/services/download_service.dart',
