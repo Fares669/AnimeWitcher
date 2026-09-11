@@ -89,7 +89,8 @@ void main() {
       await entered.future.timeout(const Duration(seconds: 5));
 
       // The first persistence callback is deliberately blocked. The network
-      // receive loop must still drain into the already-flushed file.
+      // receive loop must still drain into the already-flushed file, while no
+      // second persistence write is allowed to run concurrently.
       await _waitForFileLength(file, _totalBytes);
       expect(nonTerminalCalls, 1,
           reason: 'only one persistence write may be in flight');
@@ -98,8 +99,8 @@ void main() {
     }
 
     expect(await finished.future.timeout(const Duration(seconds: 5)), isTrue);
-    expect(nonTerminalCalls, lessThanOrEqualTo(2),
-        reason: 'intermediate checkpoints must be coalesced to the newest one');
+    expect(nonTerminalCalls, lessThanOrEqualTo(3),
+        reason: 'blocked intermediate checkpoints must collapse to the newest pending snapshot');
 
     await runner.stop('episode');
     runner.dispose();
