@@ -282,7 +282,7 @@ void main() {
 
       await completePart(first, <int>[0, 1, 2, 3, 4]);
       await waitUntil(() => coordinator.activeConnectionCount == 0);
-      await Future<void>.delayed(const Duration(milliseconds: 25));
+      await waitUntil(() => settled.contains(parent.taskId));
       expect(records[first.taskId]?.status, TaskStatus.complete);
       expect(settled, contains(parent.taskId));
       expect(
