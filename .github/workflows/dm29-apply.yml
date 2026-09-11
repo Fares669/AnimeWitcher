@@ -1,4 +1,4 @@
-name: Apply verified DM-29 multipart byte truth
+name: Diagnose DM-29 multipart recovery
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  apply-and-verify:
+  diagnose-recovery:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -29,33 +29,41 @@ jobs:
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
 
-      - name: Apply verified migration
+      - name: Apply candidate migration
         run: |
           git show 04dc8b7c3035691f2627549cf64c0935f263fd04:.github/dm29_slice3.py > /tmp/dm29_slice3.py
           python3 /tmp/dm29_slice3.py
           dart format lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
 
-      - name: Verify multipart byte-truth guard
-        run: flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
-
-      - name: Verify multipart behavior
-        run: flutter test test/core/services/persistent_parallel_download_test.dart
-
-      - name: Verify multipart recovery
-        run: flutter test test/core/services/persistent_parallel_download_recovery_test.dart
-
-      - name: Verify pending-start lease
-        run: flutter test test/core/services/persistent_parallel_download_pending_start_lease_test.dart
-
-      - name: Analyze
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos
-
-      - name: Commit verified slice and self-clean
+      - name: Capture recovery failure
+        id: recovery
+        shell: bash
         run: |
+          set +e
+          flutter test test/core/services/persistent_parallel_download_recovery_test.dart > /tmp/recovery.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          cat /tmp/recovery.log
+          exit 0
+
+      - name: Persist diagnostic and self-clean
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '# DM-29 multipart recovery diagnostic'
+            echo
+            echo "exit_status=${{ steps.recovery.outputs.status }}"
+            echo
+            echo '```text'
+            tail -220 /tmp/recovery.log 2>/dev/null || true
+            echo '```'
+          } > DM29_RECOVERY_DIAGNOSTIC.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/dm29-apply.yml DM29_DIAGNOSTIC.md
-          git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
-          git diff --cached --check
-          git commit -m "fix: persist exact multipart durable bytes"
+          git rm .github/workflows/dm29-apply.yml
+          rm -f DM29_DIAGNOSTIC.md
+          git add -A DM29_DIAGNOSTIC.md DM29_RECOVERY_DIAGNOSTIC.md .github/workflows/dm29-apply.yml
+          git diff --cached --check || true
+          git commit -m "chore: capture DM-29 recovery diagnostic" || exit 0
           git push origin HEAD:plan/download-manager-reliability
