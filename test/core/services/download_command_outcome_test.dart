@@ -93,28 +93,93 @@ void main() {
       );
     });
 
-    test('JobStore authority wins over stale ownership for pause/resume', () {
-      for (final ownership in DownloadRuntimeOwnership.values) {
-        expect(
-          resolvePauseCommandOutcome(
-            state: DownloadJobState.pausedByUser,
-            ownership: ownership,
-          ),
-          DownloadCommandOutcome.paused,
-        );
+    test('pause never reports settled while runtime ownership is ambiguous', () {
+      for (final state in [
+        DownloadJobState.pausedByUser,
+        DownloadJobState.retryWaiting,
+        DownloadJobState.interrupted,
+      ]) {
+        for (final ownership in [
+          DownloadRuntimeOwnership.owned,
+          DownloadRuntimeOwnership.settling,
+          DownloadRuntimeOwnership.unknown,
+        ]) {
+          expect(
+            resolvePauseCommandOutcome(state: state, ownership: ownership),
+            DownloadCommandOutcome.settlingOwnership,
+          );
+        }
+      }
+      expect(
+        resolvePauseCommandOutcome(
+          state: DownloadJobState.pausedByUser,
+          ownership: DownloadRuntimeOwnership.notOwned,
+        ),
+        DownloadCommandOutcome.paused,
+      );
+      expect(
+        resolvePauseCommandOutcome(
+          state: DownloadJobState.interrupted,
+          ownership: DownloadRuntimeOwnership.notOwned,
+        ),
+        DownloadCommandOutcome.recoverableFailure,
+      );
+    });
+
+    test('resume uses runtime ownership before transient durable state', () {
+      for (final state in [
+        DownloadJobState.retryWaiting,
+        DownloadJobState.interrupted,
+        DownloadJobState.pausedByUser,
+      ]) {
         expect(
           resolveResumeCommandOutcome(
-            state: DownloadJobState.retryWaiting,
-            ownership: ownership,
+            state: state,
+            ownership: DownloadRuntimeOwnership.owned,
           ),
-          DownloadCommandOutcome.recoverableFailure,
+          DownloadCommandOutcome.attached,
         );
+        for (final ownership in [
+          DownloadRuntimeOwnership.settling,
+          DownloadRuntimeOwnership.unknown,
+        ]) {
+          expect(
+            resolveResumeCommandOutcome(state: state, ownership: ownership),
+            DownloadCommandOutcome.settlingOwnership,
+          );
+        }
+      }
+      expect(
+        resolveResumeCommandOutcome(
+          state: DownloadJobState.retryWaiting,
+          ownership: DownloadRuntimeOwnership.notOwned,
+        ),
+        DownloadCommandOutcome.recoverableFailure,
+      );
+      expect(
+        resolveResumeCommandOutcome(
+          state: DownloadJobState.pausedByUser,
+          ownership: DownloadRuntimeOwnership.notOwned,
+        ),
+        DownloadCommandOutcome.paused,
+      );
+    });
+
+    test('terminal durable states remain terminal for resume', () {
+      for (final ownership in DownloadRuntimeOwnership.values) {
         expect(
           resolveResumeCommandOutcome(
             state: DownloadJobState.completed,
             ownership: ownership,
           ),
           DownloadCommandOutcome.alreadyComplete,
+        );
+        expect(
+          resolveResumeCommandOutcome(
+            state: DownloadJobState.canceled,
+            ownership: ownership,
+          ),
+          DownloadCommandOutcome.terminal,
         );
       }
     });
@@ -176,5 +241,4 @@ void main() {
       );
     });
   });
-
 }
