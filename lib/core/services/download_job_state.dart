@@ -52,29 +52,32 @@ class DownloadRecoveryInventory {
   const DownloadRecoveryInventory({
     required this.records,
     required this.nativeOnlyTaskIds,
+    required this.durableOnlyTaskIds,
   });
 
   final List<TaskRecord> records;
   final Set<String> nativeOnlyTaskIds;
+  final Set<String> durableOnlyTaskIds;
 }
 
-/// Build one deterministic startup inventory from the persisted executor
-/// projection plus tasks the runtime still owns. Persisted records win when
-/// both sources know the same execution identity. Native-only logical tasks are
-/// synthesized as running projections so recovery can attach to the existing
-/// writer instead of starting a second transfer. Multipart children remain
+/// Build one deterministic startup inventory from every source that can carry
+/// a complete logical task descriptor. Source precedence is deliberate:
+/// persisted executor projection > live runtime ownership > durable snapshot.
+/// A lower-priority replica can fill a missing row but can never replace a
+/// stronger source for the same execution identity. Multipart children remain
 /// implementation details and never become logical episode rows.
 DownloadRecoveryInventory buildDownloadRecoveryInventory({
   required Iterable<TaskRecord> persistedRecords,
   required Iterable<Task> runtimeTasks,
+  Iterable<TaskRecord> durableRecords = const <TaskRecord>[],
+  Map<String, int> orderByTaskId = const <String, int>{},
 }) {
   final records = <TaskRecord>[];
   final knownIds = <String>{};
 
   for (final record in persistedRecords) {
     if (!isLogicalEpisodeDownloadTask(record.task)) continue;
-    final taskId = record.task.taskId;
-    if (!knownIds.add(taskId)) continue;
+    if (!knownIds.add(record.task.taskId)) continue;
     records.add(record);
   }
 
@@ -92,9 +95,38 @@ DownloadRecoveryInventory buildDownloadRecoveryInventory({
     records.add(TaskRecord(task, TaskStatus.running, 0, -1));
   }
 
+  final durableOnlyTaskIds = <String>{};
+  final missingDurableRecords = <TaskRecord>[];
+  for (final record in durableRecords) {
+    if (!isLogicalEpisodeDownloadTask(record.task)) continue;
+    if (!knownIds.add(record.task.taskId)) continue;
+    durableOnlyTaskIds.add(record.task.taskId);
+    missingDurableRecords.add(record);
+  }
+  missingDurableRecords.sort((a, b) => a.task.taskId.compareTo(b.task.taskId));
+  records.addAll(missingDurableRecords);
+
+  // Preserve executor order when no durable FIFO evidence exists. Once at
+  // least one timestamp is available, order all logical rows deterministically
+  // and put unknown-age legacy rows after known FIFO entries.
+  if (orderByTaskId.isNotEmpty) {
+    records.sort((a, b) {
+      final aOrder = orderByTaskId[a.task.taskId];
+      final bOrder = orderByTaskId[b.task.taskId];
+      if (aOrder != null || bOrder != null) {
+        if (aOrder == null) return 1;
+        if (bOrder == null) return -1;
+        final byOrder = aOrder.compareTo(bOrder);
+        if (byOrder != 0) return byOrder;
+      }
+      return a.task.taskId.compareTo(b.task.taskId);
+    });
+  }
+
   return DownloadRecoveryInventory(
     records: List<TaskRecord>.unmodifiable(records),
     nativeOnlyTaskIds: Set<String>.unmodifiable(nativeOnlyTaskIds),
+    durableOnlyTaskIds: Set<String>.unmodifiable(durableOnlyTaskIds),
   );
 }
 

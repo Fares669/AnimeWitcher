@@ -1,10 +1,11 @@
 import 'dart:async';
 
+import 'package:background_downloader/background_downloader.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'download_job_state.dart';
 
-const int kDownloadJobSchemaVersion = 3;
+const int kDownloadJobSchemaVersion = 4;
 
 /// Provenance for [DownloadJobRecord.durableBytes].
 ///
@@ -128,6 +129,7 @@ class DownloadJobRecord {
     required this.userPaused,
     required this.queueWaiting,
     required this.updatedAtMillis,
+    this.taskSnapshot,
     this.fingerprint,
     this.lastByteReconciliationReason,
     this.lastByteReconciliationProvenance,
@@ -144,6 +146,7 @@ class DownloadJobRecord {
   final bool userPaused;
   final bool queueWaiting;
   final int updatedAtMillis;
+  final Map<String, dynamic>? taskSnapshot;
   final DownloadResourceFingerprint? fingerprint;
   final DownloadByteReconciliationReason? lastByteReconciliationReason;
   final DownloadDurableByteProvenance? lastByteReconciliationProvenance;
@@ -151,6 +154,17 @@ class DownloadJobRecord {
 
   DownloadAttemptToken get attemptToken =>
       DownloadAttemptToken(taskId: taskId, generation: generation);
+
+  DownloadTask? restoreTaskSnapshot() {
+    final raw = taskSnapshot;
+    if (raw == null) return null;
+    try {
+      final restored = Task.createFromJson(Map<String, dynamic>.from(raw));
+      return restored is DownloadTask ? restored : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   DownloadJobRecord copyWith({
     String? trackingUrl,
@@ -162,6 +176,8 @@ class DownloadJobRecord {
     bool? userPaused,
     bool? queueWaiting,
     int? updatedAtMillis,
+    Map<String, dynamic>? taskSnapshot,
+    bool clearTaskSnapshot = false,
     DownloadResourceFingerprint? fingerprint,
     bool clearFingerprint = false,
     DownloadByteReconciliationReason? lastByteReconciliationReason,
@@ -178,6 +194,9 @@ class DownloadJobRecord {
     userPaused: userPaused ?? this.userPaused,
     queueWaiting: queueWaiting ?? this.queueWaiting,
     updatedAtMillis: updatedAtMillis ?? this.updatedAtMillis,
+    taskSnapshot: clearTaskSnapshot
+        ? null
+        : (taskSnapshot ?? this.taskSnapshot),
     fingerprint: clearFingerprint ? null : (fingerprint ?? this.fingerprint),
     lastByteReconciliationReason:
         lastByteReconciliationReason ?? this.lastByteReconciliationReason,
@@ -203,6 +222,8 @@ class DownloadJobRecord {
     'userPaused': userPaused,
     'queueWaiting': queueWaiting,
     'updatedAtMillis': updatedAtMillis,
+    if (taskSnapshot != null)
+      'taskSnapshot': Map<String, dynamic>.from(taskSnapshot!),
     if (fingerprint != null) 'fingerprint': fingerprint!.toJson(),
     if (lastByteReconciliationReason != null)
       'lastByteReconciliationReason': lastByteReconciliationReason!.name,
@@ -241,6 +262,9 @@ class DownloadJobRecord {
       userPaused: map['userPaused'] == true,
       queueWaiting: map['queueWaiting'] == true,
       updatedAtMillis: _intValue(map['updatedAtMillis']),
+      taskSnapshot: map['taskSnapshot'] is Map
+          ? Map<String, dynamic>.from(map['taskSnapshot'] as Map)
+          : null,
       fingerprint: DownloadResourceFingerprint.fromJson(map['fingerprint']),
       lastByteReconciliationReason: _byteReconciliationReasonValue(
         map['lastByteReconciliationReason'],
@@ -400,6 +424,7 @@ class DownloadJobStore {
       expectedBytes: next.expectedBytes > 0
           ? next.expectedBytes
           : current?.expectedBytes,
+      taskSnapshot: next.taskSnapshot ?? current?.taskSnapshot,
       fingerprint: fingerprint,
     );
     await backend.write(taskId, durable.toJson());
@@ -422,6 +447,7 @@ class DownloadJobStore {
     int? expectedBytes,
     bool? userPaused,
     bool? queueWaiting,
+    Map<String, dynamic>? taskSnapshot,
     DownloadResourceFingerprint? fingerprint,
     int? updatedAtMillis,
   }) => _serialize(() async {
@@ -459,6 +485,7 @@ class DownloadJobStore {
             userPaused: userPaused ?? false,
             queueWaiting: queueWaiting ?? false,
             updatedAtMillis: now,
+            taskSnapshot: taskSnapshot,
             fingerprint: fingerprint,
           )
         : current.copyWith(
@@ -469,6 +496,7 @@ class DownloadJobStore {
             userPaused: userPaused ?? current.userPaused,
             queueWaiting: queueWaiting ?? current.queueWaiting,
             updatedAtMillis: now,
+            taskSnapshot: taskSnapshot,
             fingerprint: fingerprint,
           );
     return _putUnlocked(next);

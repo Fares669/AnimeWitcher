@@ -131,7 +131,6 @@ DownloadCommandOutcome resolveCancelCommandOutcome({
   return downloadCommandOutcomeForJobState(state);
 }
 
-
 class DownloadProgressData {
   final String taskId;
   final double progress;
@@ -1250,6 +1249,21 @@ class DownloadService {
     });
   }
 
+  DownloadTask? _downloadTaskFromMetadataSnapshot(
+    Map<String, dynamic>? metadata,
+  ) {
+    final raw = metadata?['taskSnapshot'];
+    if (raw is! Map) return null;
+    try {
+      final restored = Task.createFromJson(Map<String, dynamic>.from(raw));
+      return restored is DownloadTask && isLogicalEpisodeDownloadTask(restored)
+          ? restored
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _restoreAuthoritativeJobIntent() async {
     for (final job in await _jobStore.all()) {
       final paused =
@@ -1302,6 +1316,7 @@ class DownloadService {
         expectedBytes: expectedBytes,
         userPaused: userPaused,
         queueWaiting: queueWaiting,
+        taskSnapshot: task.toJson(),
         fingerprint: DownloadResourceFingerprint(
           expectedBytes: expectedBytes ?? -1,
           finalUrl: task.url,
@@ -1322,16 +1337,116 @@ class DownloadService {
   }
 
   Future<void> _recoverPersistedDownloads() async {
+    final storage = _ref.read(storageServiceProvider);
     final persistedRecords = await FileDownloader().database.allRecords();
     final runtimeTasks = await _liveTransferTasks();
+    final jobs = await _jobStore.all();
+    final metadataById = await storage.getAllDownloadMetadata();
+
+    final durableRecords = <TaskRecord>[];
+    final orderByTaskId = <String, int>{};
+    final knownExecutorIds = <String>{
+      for (final record in persistedRecords) record.task.taskId,
+      for (final task in runtimeTasks) task.taskId,
+    };
+
+    for (final entry in metadataById.entries) {
+      final timestamp = entry.value['timestamp'];
+      if (timestamp is num) orderByTaskId[entry.key] = timestamp.toInt();
+    }
+    final jobById = <String, DownloadJobRecord>{
+      for (final job in jobs) job.taskId: job,
+    };
+    for (final job in jobs) {
+      orderByTaskId.putIfAbsent(job.taskId, () => job.updatedAtMillis);
+      if (knownExecutorIds.contains(job.taskId) ||
+          job.state == DownloadJobState.completed ||
+          job.state == DownloadJobState.canceled ||
+          job.state == DownloadJobState.orphaned) {
+        continue;
+      }
+      final metadata = metadataById[job.taskId];
+      final task =
+          job.restoreTaskSnapshot() ??
+          _downloadTaskFromMetadataSnapshot(metadata);
+      if (task == null) {
+        await _jobStore.checkpoint(
+          taskId: job.taskId,
+          trackingUrl: job.trackingUrl,
+          state: DownloadJobState.orphaned,
+          durableBytes: job.durableBytes,
+          durableByteProvenance: job.durableByteProvenance,
+          expectedBytes: job.expectedBytes,
+          userPaused: job.userPaused,
+          queueWaiting: false,
+          fingerprint: job.fingerprint,
+        );
+        diagnosticLog.record('recovery.orphanedMissingDescriptor', {
+          'taskId': job.taskId,
+          'source': 'jobStore',
+        });
+        continue;
+      }
+      final progress = job.expectedBytes > 0
+          ? (job.durableBytes / job.expectedBytes).clamp(0.0, 1.0).toDouble()
+          : downloadMetadataProgress(metadata);
+      durableRecords.add(
+        TaskRecord(task, TaskStatus.paused, progress, job.expectedBytes),
+      );
+    }
+
+    // Metadata can survive even if both executor DB and JobStore were lost.
+    // New-format rows carry a complete task snapshot and are recoverable; old
+    // rows become explicit orphans instead of guessing URL/headers/path.
+    for (final entry in metadataById.entries) {
+      final taskId = entry.key;
+      if (knownExecutorIds.contains(taskId) ||
+          jobById.containsKey(taskId) ||
+          durableRecords.any((record) => record.task.taskId == taskId)) {
+        continue;
+      }
+      final metadata = entry.value;
+      final task = _downloadTaskFromMetadataSnapshot(metadata);
+      final trackingUrl = (metadata['trackingUrl'] as String?)?.trim() ?? '';
+      if (task == null) {
+        if (trackingUrl.isNotEmpty) {
+          await _jobStore.checkpoint(
+            taskId: taskId,
+            trackingUrl: trackingUrl,
+            state: DownloadJobState.orphaned,
+            expectedBytes: downloadMetadataExpectedBytes(metadata),
+            userPaused: isUserPausedMetadata(metadata),
+            queueWaiting: false,
+          );
+          diagnosticLog.record('recovery.orphanedMissingDescriptor', {
+            'taskId': taskId,
+            'source': 'metadata',
+          });
+        }
+        continue;
+      }
+      final expected = downloadMetadataExpectedBytes(metadata);
+      durableRecords.add(
+        TaskRecord(
+          task,
+          TaskStatus.paused,
+          downloadMetadataProgress(metadata),
+          expected,
+        ),
+      );
+    }
+
     final inventory = buildDownloadRecoveryInventory(
       persistedRecords: persistedRecords,
       runtimeTasks: runtimeTasks,
+      durableRecords: durableRecords,
+      orderByTaskId: orderByTaskId,
     );
     final records = inventory.records;
     diagnosticLog.record('recovery.begin', {
       'count': records.length,
       'nativeOnly': inventory.nativeOnlyTaskIds.length,
+      'durableOnly': inventory.durableOnlyTaskIds.length,
     });
     for (final record in records) {
       diagnosticLog.record('recovery.record', {
@@ -1345,7 +1460,6 @@ class DownloadService {
       for (final task in runtimeTasks)
         if (isLogicalEpisodeDownloadTask(task)) task.taskId,
     };
-    final storage = _ref.read(storageServiceProvider);
 
     for (final record in records) {
       final task = record.task as DownloadTask;
@@ -1466,6 +1580,7 @@ class DownloadService {
         userPaused: userPaused,
         queueWaiting: recoveryPlan.shouldRequeue,
         updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+        taskSnapshot: oldJob?.taskSnapshot ?? task.toJson(),
         fingerprint:
             oldJob?.fingerprint ??
             DownloadResourceFingerprint(
@@ -1501,6 +1616,18 @@ class DownloadService {
         }
       } else {
         await _jobStore.put(migratedJob);
+      }
+
+      if (inventory.durableOnlyTaskIds.contains(task.taskId) &&
+          recoveryPlan.action != DownloadRecoveryAction.ignore) {
+        await FileDownloader().database.updateRecord(
+          TaskRecord(task, TaskStatus.paused, progress, expectedBytes),
+        );
+        diagnosticLog.record('recovery.repairedDurableProjection', {
+          'taskId': task.taskId,
+          'progress': progress,
+          'expectedBytes': expectedBytes,
+        });
       }
 
       if (inventory.nativeOnlyTaskIds.contains(task.taskId) &&
@@ -3599,6 +3726,7 @@ class DownloadService {
         userPaused: false,
         queueWaiting: false,
         updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+        taskSnapshot: task.toJson(),
         fingerprint: DownloadResourceFingerprint(
           expectedBytes: expectedBytes,
           finalUrl: task.url,
@@ -4388,6 +4516,7 @@ class DownloadService {
             userPaused: false,
             queueWaiting: !startNow,
             updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+            taskSnapshot: transferTask.toJson(),
             fingerprint: DownloadResourceFingerprint(
               expectedBytes: expectedBytes,
               finalUrl: url,
@@ -4408,6 +4537,7 @@ class DownloadService {
           episode: episode,
           trackingUrl: trackingUrl ?? url,
           filePath: path,
+          taskSnapshot: transferTask.toJson(),
           queueWaiting: !startNow,
         );
         _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);

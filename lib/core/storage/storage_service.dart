@@ -1412,6 +1412,7 @@ class StorageService {
     Episode? episode,
     String? trackingUrl,
     String? filePath,
+    Map<String, dynamic>? taskSnapshot,
     bool? queueWaiting,
     bool? userPaused,
     double? lastProgress,
@@ -1425,6 +1426,8 @@ class StorageService {
       if (trackingUrl != null && trackingUrl.isNotEmpty)
         'trackingUrl': trackingUrl,
       if (filePath != null && filePath.isNotEmpty) 'filePath': filePath,
+      if (taskSnapshot != null)
+        'taskSnapshot': Map<String, dynamic>.from(taskSnapshot),
       if (queueWaiting != null) kDownloadQueueWaitingMetadataKey: queueWaiting,
       if (userPaused != null) kDownloadUserPausedMetadataKey: userPaused,
       if (lastProgress != null) kDownloadLastProgressMetadataKey: lastProgress,
@@ -1437,6 +1440,7 @@ class StorageService {
     String taskId, {
     String? trackingUrl,
     String? filePath,
+    Map<String, dynamic>? taskSnapshot,
     bool? queueWaiting,
     bool? userPaused,
     double? lastProgress,
@@ -1451,6 +1455,9 @@ class StorageService {
     }
     if (filePath != null && filePath.isNotEmpty) {
       map['filePath'] = filePath;
+    }
+    if (taskSnapshot != null) {
+      map['taskSnapshot'] = Map<String, dynamic>.from(taskSnapshot);
     }
     if (queueWaiting != null) {
       map[kDownloadQueueWaitingMetadataKey] = queueWaiting;
@@ -1472,6 +1479,18 @@ class StorageService {
     final data = box.get(taskId);
     if (data == null) return null;
     return Map<String, dynamic>.from(data as Map);
+  }
+
+  Future<Map<String, Map<String, dynamic>>> getAllDownloadMetadata() async {
+    final box = await Hive.openBox<dynamic>(kDownloadMetadataBox);
+    final result = <String, Map<String, dynamic>>{};
+    for (final key in box.keys) {
+      if (key is! String) continue;
+      final raw = box.get(key);
+      if (raw is! Map) continue;
+      result[key] = Map<String, dynamic>.from(raw);
+    }
+    return result;
   }
 
   Future<void> removeDownloadMetadata(String taskId) async {
