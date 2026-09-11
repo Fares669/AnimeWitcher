@@ -34,6 +34,7 @@ import 'download_retry_policy.dart';
 import 'download_host_profile.dart';
 import 'download_job_state.dart';
 import 'download_job_store.dart';
+import 'download_logical_identity.dart';
 import 'download_service_readiness.dart';
 import 'download_url_refresh.dart';
 import 'download_plugin_compat.dart';
@@ -2140,6 +2141,8 @@ class DownloadService {
     _sessionOrder.remove(taskId);
   }
 
+  // Pre-logical-identity migration fallback: mutable executor keys are
+  // consulted only when no canonical logical identity survives.
   String _overlayEpisodeKeyFromParts({
     required String taskId,
     required String trackingUrl,
@@ -2178,11 +2181,15 @@ class DownloadService {
     double? speedBytesPerSecond,
   }) async {
     final records = await FileDownloader().database.allRecords();
+    final storage = _ref.read(storageServiceProvider);
     final liveProgress = _ref.read(downloadProgressProvider);
     final entries = <DownloadOverlayEntry>[];
     for (final record in records) {
       if (!isLogicalEpisodeDownloadTask(record.task)) continue;
       final job = await _jobStore.get(record.task.taskId);
+      final metadata = await storage.getDownloadMetadata(record.task.taskId);
+      final logicalId =
+          job?.logicalId ?? logicalDownloadIdFromMetadata(metadata);
       final trackingUrl = downloadTrackingUrl(record.task);
       final live = liveProgress[trackingUrl];
       final liveRunning = live?.status == TaskStatus.running;
@@ -2247,7 +2254,7 @@ class DownloadService {
           progress: storedProgress,
           totalBytes: storedTotal,
           speedBytesPerSecond: speed,
-          episodeKey: _overlayEpisodeKeyForTask(record.task),
+          episodeKey: logicalId ?? _overlayEpisodeKeyForTask(record.task),
         ),
       );
     }
@@ -2255,19 +2262,25 @@ class DownloadService {
     for (final payload in _waitingPayloads.entries) {
       if (seen.contains(payload.key)) continue;
       _rememberSessionTask(payload.key);
+      final job = await _jobStore.get(payload.key);
+      final payloadLogicalId = (payload.value['logicalId'] as String?)?.trim();
       entries.add(
         DownloadOverlayEntry(
           taskId: payload.key,
-          status: TaskStatus.enqueued,
+          status: job != null
+              ? downloadJobDisplayStatus(job.state)
+              : TaskStatus.enqueued,
           displayName: payload.value['displayName'] as String? ?? '',
-          queueWaiting: true,
-          episodeKey: _overlayEpisodeKeyFromParts(
-            taskId: payload.key,
-            trackingUrl: payload.value['metaData'] as String? ?? '',
-            url: payload.value['url'] as String? ?? '',
-            directory: payload.value['directory'] as String? ?? '',
-            filename: payload.value['filename'] as String? ?? '',
-          ),
+          queueWaiting: job != null ? downloadJobQueueWaiting(job.state) : true,
+          episodeKey: payloadLogicalId != null && payloadLogicalId.isNotEmpty
+              ? payloadLogicalId
+              : _overlayEpisodeKeyFromParts(
+                  taskId: payload.key,
+                  trackingUrl: payload.value['metaData'] as String? ?? '',
+                  url: payload.value['url'] as String? ?? '',
+                  directory: payload.value['directory'] as String? ?? '',
+                  filename: payload.value['filename'] as String? ?? '',
+                ),
         ),
       );
     }
@@ -2601,6 +2614,14 @@ class DownloadService {
     DownloadTask task,
   ) async {
     final payload = Map<String, Object>.from(_waitingPayloadFor(task));
+    final job = await _jobStore.get(task.taskId);
+    final metadata = await _ref
+        .read(storageServiceProvider)
+        .getDownloadMetadata(task.taskId);
+    final logicalId = job?.logicalId ?? logicalDownloadIdFromMetadata(metadata);
+    if (logicalId != null && logicalId.isNotEmpty) {
+      payload['logicalId'] = logicalId;
+    }
     if (task is! ParallelDownloadTask) {
       try {
         final resume = await BackgroundDownloaderCompat.resumeDataForTaskId(
@@ -4673,7 +4694,14 @@ class DownloadService {
     } catch (_) {
       return DownloadCommandOutcome.serviceUnavailable;
     }
-    diagnosticLog.record('command.start', {'total': totalBytes});
+    final logicalId = DownloadLogicalIdentity.fromMedia(
+      item: item,
+      episode: episode,
+    ).key;
+    diagnosticLog.record('command.start', {
+      'total': totalBytes,
+      'logicalId': logicalId,
+    });
     if (kDebugMode) {
       debugPrint('[DownloadService] startDownload called');
       debugPrint('[DownloadService] - URL: $url');
@@ -4710,9 +4738,48 @@ class DownloadService {
     final isIOS = Platform.isIOS;
 
     return _serializeQueue(() async {
-      // Prevention: Check if task is ALREADY running (using database for robustness)
+      // Canonical logical identity is the primary duplicate/adoption key. A
+      // signed URL, filename or execution taskId may rotate between attempts.
       final records = await FileDownloader().database.allRecords();
-      final existingRecord = records.firstWhereOrNull(
+      final recordsById = <String, TaskRecord>{
+        for (final record in records) record.task.taskId: record,
+      };
+      final logicalJobs = await _jobStore.allForLogicalId(logicalId);
+      DownloadJobRecord? existingLogicalJob;
+      TaskRecord? existingRecord;
+      for (final job in logicalJobs.reversed) {
+        if (job.state == DownloadJobState.completed ||
+            job.state == DownloadJobState.canceled ||
+            job.state == DownloadJobState.orphaned) {
+          continue;
+        }
+        final projected = recordsById[job.taskId];
+        if (projected != null && isLogicalEpisodeDownloadTask(projected.task)) {
+          existingLogicalJob = job;
+          existingRecord = projected;
+          break;
+        }
+        final restored = job.restoreTaskSnapshot();
+        if (restored == null || !isLogicalEpisodeDownloadTask(restored))
+          continue;
+        final progress = job.expectedBytes > 0
+            ? (job.durableBytes / job.expectedBytes).clamp(0.0, 1.0)
+            : 0.0;
+        existingLogicalJob = job;
+        existingRecord = TaskRecord(
+          restored,
+          downloadJobTaskStatus(job.state),
+          progress,
+          job.expectedBytes,
+        );
+        // Repair a lost executor projection; this does not start a writer.
+        await FileDownloader().database.updateRecord(existingRecord);
+        break;
+      }
+
+      // Pre-logical-identity migration fallback: old rows may not yet have a
+      // canonical key. Keep the historical tracking-URL lookup only for them.
+      existingRecord ??= records.firstWhereOrNull(
         (r) =>
             (isLogicalEpisodeDownloadTask(r.task)) &&
             (r.status == TaskStatus.failed ||
@@ -4732,10 +4799,17 @@ class DownloadService {
           );
         }
 
-        final occupying = occupiesDownloadSlot(
-          status: existingRecord.status,
-          queueWaiting: _queueWaitingIds.contains(existingRecord.task.taskId),
-        );
+        final authoritativeJob =
+            existingLogicalJob ??
+            await _jobStore.get(existingRecord.task.taskId);
+        final occupying = authoritativeJob != null
+            ? downloadJobOccupiesSlot(authoritativeJob.state)
+            : occupiesDownloadSlot(
+                status: existingRecord.status,
+                queueWaiting: _queueWaitingIds.contains(
+                  existingRecord.task.taskId,
+                ),
+              );
         if (occupying &&
             (_parallel.isActive(existingRecord.task.taskId) ||
                 _rangeTransfers.isActive(existingRecord.task.taskId) ||
@@ -4768,6 +4842,7 @@ class DownloadService {
       final tracking = trackingUrl ?? url;
       final completeRecords = await _completeRecordsForEpisode(
         records,
+        logicalId: logicalId,
         trackingUrl: tracking,
         item: item,
         episode: episode,
@@ -4889,6 +4964,7 @@ class DownloadService {
         final jobPersisted = await _jobStore.put(
           DownloadJobRecord(
             taskId: transferTask.taskId,
+            logicalId: logicalId,
             trackingUrl: trackingUrl ?? url,
             state: startNow
                 ? DownloadJobState.starting
@@ -4920,6 +4996,7 @@ class DownloadService {
           episode: episode,
           trackingUrl: trackingUrl ?? url,
           filePath: path,
+          logicalId: logicalId,
           taskSnapshot: transferTask.toJson(),
           queueWaiting: !startNow,
         );
@@ -5009,6 +5086,7 @@ class DownloadService {
 
   Future<List<TaskRecord>> _completeRecordsForEpisode(
     List<TaskRecord> records, {
+    required String logicalId,
     required String trackingUrl,
     required MultimediaItem item,
     Episode? episode,
@@ -5019,6 +5097,15 @@ class DownloadService {
     final matches = <TaskRecord>[];
     for (final record in records) {
       if (record.status != TaskStatus.complete) continue;
+      final metadata = await storage.getDownloadMetadata(record.task.taskId);
+      final candidateLogicalId = logicalDownloadIdFromMetadata(metadata);
+      if (candidateLogicalId != null) {
+        if (candidateLogicalId == logicalId) matches.add(record);
+        continue;
+      }
+
+      // Pre-logical-identity migration fallback. Only rows that genuinely lack
+      // reconstructable presentation identity may use URL/path heuristics.
       final recordUrl = downloadTrackingUrl(record.task);
       var matched =
           recordUrl == trackingUrl ||
@@ -5029,25 +5116,22 @@ class DownloadService {
             filename: filename,
             directory: directory,
           );
-      if (!matched) {
-        final metadata = await storage.getDownloadMetadata(record.task.taskId);
-        if (metadata != null) {
-          final storedTracking = (metadata['trackingUrl'] as String?)?.trim();
-          matched =
-              (storedTracking != null && storedTracking == trackingUrl) ||
-              metadataMatchesDownload(
-                item: item,
-                episode: episode,
-                candidateItem: MultimediaItem.fromJson(
-                  Map<String, dynamic>.from(metadata['item'] as Map),
-                ),
-                candidateEpisode: metadata['episode'] != null
-                    ? Episode.fromJson(
-                        Map<String, dynamic>.from(metadata['episode'] as Map),
-                      )
-                    : null,
-              );
-        }
+      if (!matched && metadata != null && metadata['item'] is Map) {
+        final storedTracking = (metadata['trackingUrl'] as String?)?.trim();
+        matched =
+            (storedTracking != null && storedTracking == trackingUrl) ||
+            metadataMatchesDownload(
+              item: item,
+              episode: episode,
+              candidateItem: MultimediaItem.fromJson(
+                Map<String, dynamic>.from(metadata['item'] as Map),
+              ),
+              candidateEpisode: metadata['episode'] is Map
+                  ? Episode.fromJson(
+                      Map<String, dynamic>.from(metadata['episode'] as Map),
+                    )
+                  : null,
+            );
       }
       if (matched) matches.add(record);
     }
