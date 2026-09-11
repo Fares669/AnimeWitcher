@@ -214,7 +214,7 @@
   - **Confirmed root cause:** `NativeSingleDownloadTransport.cancel()` previously called `_detach()` even when `Transfer.cancel()` returned `false`, and `cancelDownload()` unconditionally forgot the handle and destroyed all durable records after issuing cancel commands. The multipart callback likewise deleted child rows without checking whether bulk cancel actually released ownership.
   - **Verification passed:** pre-fix RED cancellation guards; typed settlement unit matrix; ownership-preservation source guard; runtime ownership, JobStore, lifecycle checkpoint and recovery reconciliation suites; generated-source-aware `flutter analyze --no-fatal-warnings --no-fatal-infos`; `git diff --check`.
 
-- [ ] **DM-03 — Return explicit typed outcomes for start/resume/pause/cancel**
+- [x] **DM-03 — Return explicit typed outcomes for start/resume/pause/cancel**
   - **Problem:** callers receive void/boolean results that cannot distinguish running, attached, queued, settling, missing state, restart required, persistence failure or terminal state.
   - **Root cause:** command APIs expose transport-command acceptance rather than logical operation outcome.
   - **Severity / priority:** **P0 / Critical.**
@@ -230,8 +230,9 @@
   - **Caller migration (partial):** Downloads-provider pause/resume and progress-dialog pause/resume/cancel now consume typed outcomes. Provider no longer projects paused/enqueued before settlement; ambiguous outcomes force a durable refresh.
   - **Still required before `[x]`:** migrate the remove-download cleanup path and launcher/start compatibility caller, then execute the full command × state × ownership × restart matrix. Legacy void methods remain compatibility implementation details until that migration is complete.
   - **Progress (2026-09-11, caller migration):** Migrated destructive remove cleanup to `cancelDownloadOutcome()` and fail-closed ownership settlement. Timeout/unknown/settling outcomes now preserve the durable row, metadata, and files instead of deleting evidence while a writer may still own the task. Migrated `DownloadLauncher` from the legacy `startDownload()->bool` wrapper to `startDownloadOutcome()` with explicit accepted outcomes (`running/attached/queued/alreadyComplete`) and distinct user-facing handling for service-unavailable, restart-required, and settling ownership.
-  - **Progress (2026-09-11, outcome matrix):** Extracted pure pause/resume/cancel outcome resolvers and added an explicit command × durable-state × runtime-ownership matrix. The matrix proves JobStore authority for durable paused/retry/completed states, fail-closed unknown/settling ownership, live-owner attach on missing resume state, and terminal cancel only after ownership release.
-  - **Still required before `[x]` (current):** obtain green analyzer/full test CI on the latest branch head and verify the remaining scenario-specific failure paths (native resume failure, Range failure, missing multipart manifest, source-refresh failure, initialization failure/queue pressure) are represented by focused tests or add the missing coverage.
+  - **Progress (2026-09-11, outcome matrix):** Extracted pure pause/resume/cancel outcome resolvers and added an explicit command × durable-state × runtime-ownership matrix. Final TDD exposed one remaining ordering defect: transient durable states (`pausedByUser` / `retryWaiting` / `interrupted`) could short-circuit runtime ownership and report `paused`/`recoverableFailure` while a writer was still live or ownership was unknown. Non-terminal pause/resume outcomes now consult runtime ownership first: a live owner attaches on resume, unknown/settling ownership fails closed, and only independently proven `notOwned` permits the durable transient result; completed/canceled remain terminal.
+  - **Root cause confirmed (2026-09-11):** the typed resolver treated every non-missing JobStore projection as final before asking the DM-19 runtime ownership oracle. A stale durable projection could therefore mask a still-live/ambiguous executor.
+  - **Verification (2026-09-11, complete):** focused RED run `34576649787` produced exactly 7 passing / 2 failing outcome-matrix tests (pause incorrectly returned `paused`; resume incorrectly returned `recoverableFailure`). After the minimal resolver fix, the same focused suite passed in run `34576813200`. Permanent `Flutter Checks` run `34576984871` passed native logger typecheck, generated-source-aware analysis, and the full Flutter test suite on the latest DM-03 head. Existing focused coverage represents the remaining scenario classes: Range transfer/fast-fail/checkpoint paths, multipart manifest/recovery, source-refresh integrity/checkpoint failure boundaries, initialization retry, queue/concurrency behavior, transport outcomes, and native/zero-restart recovery invariants.
 
 - [ ] **DM-04 — Recover from the union of persistence and ownership sources**
   - **Problem:** jobs disappear when plugin DB rows are missing while JobStore, metadata, native ownership, manifest or files survive.
@@ -240,7 +241,8 @@
   - **Expected files/areas:** DownloadService, JobStore, storage metadata, transport/native ownership, multipart manifests, UI inventory, startup tests.
   - **Proposed fix:** construct one idempotent logical inventory from JobStore + plugin DB + Transfer/native ownership + metadata + manifests + safe app-owned filesystem evidence. Reconstruct missing projections or mark explicit orphan/settling states.
   - **Verification/testing:** remove each source singly and in realistic pairs; user pause; canceled tombstone; native-only owner; manifest-only partials; deterministic FIFO; one logical row/owner.
-  - **Dependencies:** DM-19, DM-20, DM-21, DM-24.
+  - **Dependencies:** DM-19, DM-20, DM-21.
+  - **Plan correction (2026-09-11):** removed DM-24 from DM-04 dependencies because it formed the cycle DM-04 → DM-24 → DM-05 → DM-04 and contradicted the documented execution order DM-03 → DM-04 → DM-05 → DM-24. DM-04 establishes union recovery first; DM-24 later canonicalizes logical identity on top of that inventory.
 
 ## Phase 2 — One logical state, canonical identity, integrity, and terminal deletion
 
