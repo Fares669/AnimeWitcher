@@ -86,7 +86,6 @@ DownloadCommandOutcome downloadCommandOutcomeForJobState(
   };
 }
 
-
 DownloadCommandOutcome resolvePauseCommandOutcome({
   required DownloadJobState? state,
   required DownloadRuntimeOwnership ownership,
@@ -1168,7 +1167,9 @@ class DownloadService {
   Future<void> applyNotificationSettings(
     DownloadNotificationPrefs prefs,
   ) async {
-    await _awaitCommandReadiness('applyNotificationSettings');
+    // Notification preferences are configuration, not download lifecycle
+    // ownership. Persist them even while startup recovery is still settling;
+    // _initialize() reads the same persisted value before recovery begins.
     await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);
     _configureDownloadNotifications(prefs);
   }
@@ -2794,10 +2795,7 @@ class DownloadService {
 
     final ownership = await _runtimeOwnershipFor(taskId);
     final job = await _jobStore.get(taskId);
-    return resolveCancelCommandOutcome(
-      state: job?.state,
-      ownership: ownership,
-    );
+    return resolveCancelCommandOutcome(state: job?.state, ownership: ownership);
   }
 
   Future<DownloadCommandOutcome> pauseDownloadOutcome(String taskId) async {
@@ -2810,10 +2808,7 @@ class DownloadService {
     }
     final job = await _jobStore.get(taskId);
     final ownership = await _runtimeOwnershipFor(taskId);
-    return resolvePauseCommandOutcome(
-      state: job?.state,
-      ownership: ownership,
-    );
+    return resolvePauseCommandOutcome(state: job?.state, ownership: ownership);
   }
 
   Future<DownloadCommandOutcome> resumeDownloadOutcome(String taskId) async {
@@ -2826,10 +2821,7 @@ class DownloadService {
     }
     final job = await _jobStore.get(taskId);
     final ownership = await _runtimeOwnershipFor(taskId);
-    return resolveResumeCommandOutcome(
-      state: job?.state,
-      ownership: ownership,
-    );
+    return resolveResumeCommandOutcome(state: job?.state, ownership: ownership);
   }
 
   Future<void> pauseDownload(String taskId) async {

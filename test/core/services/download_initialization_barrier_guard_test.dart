@@ -27,11 +27,6 @@ void main() {
         'Future<void> applyNotificationSettings(',
       ),
       (
-        'applyNotificationSettings',
-        'Future<void> applyNotificationSettings(',
-        'void _configureDownloadNotifications(',
-      ),
-      (
         'cancelDownload',
         'Future<void> cancelDownload(',
         'Future<void> pauseDownload(',
@@ -61,6 +56,26 @@ void main() {
         reason: '$name bypasses initialization/recovery readiness',
       );
     }
+  });
+
+  test('notification preferences do not wait for download recovery', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final body = methodBody(
+      source,
+      'Future<void> applyNotificationSettings(',
+      'void _configureDownloadNotifications(',
+    );
+
+    expect(
+      body,
+      isNot(contains("_awaitCommandReadiness('applyNotificationSettings')")),
+      reason: 'notification configuration must not be blocked by job recovery',
+    );
+    final persist = body.indexOf('.setDownloadNotificationPrefs(prefs)');
+    final configure = body.indexOf('_configureDownloadNotifications(prefs)');
+    expect(persist, greaterThanOrEqualTo(0));
+    expect(configure, greaterThan(persist));
   });
 
   test(
