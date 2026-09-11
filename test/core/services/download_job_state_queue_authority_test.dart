@@ -48,9 +48,17 @@ void main() {
         'lib/core/services/download_service.dart',
       ).readAsStringSync();
 
-      final occupiedStart = source.indexOf(' _occupiedSlotCount(');
-      final queueStart = source.indexOf(' _queueEntries(');
-      final syncStart = source.indexOf(' _syncQueueToCapUnlocked(');
+      // Match method definitions, not earlier call sites. The queue synchronizer
+      // calls both helpers before their declarations in this large service.
+      final occupiedStart = source.indexOf(
+        'Future<int> _occupiedSlotCount(List<TaskRecord> records) async',
+      );
+      final queueStart = source.indexOf(
+        'Future<List<DownloadQueueEntry>> _queueEntries(',
+      );
+      final syncStart = source.indexOf(
+        'Future<void> _syncQueueToCapUnlocked()',
+      );
       expect(occupiedStart, greaterThanOrEqualTo(0));
       expect(queueStart, greaterThan(occupiedStart));
       expect(syncStart, greaterThan(queueStart));
