@@ -37,16 +37,6 @@ jobs:
           test "$code" -ne 0
       - name: Apply DM-03 logical start outcome
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('.github/dm03_start_outcome.py')
-          s = p.read_text()
-          old = """    count = segment.count(old)\n    if count != 1:\n        raise SystemExit(f'{label}: expected 1 match, got {count}')\n    segment = segment.replace(old, new, 1)\n"""
-          new = """    count = segment.count(old)\n    expected = 2 if label == 'existing active attach' else 1\n    if count != expected:\n        raise SystemExit(f'{label}: expected {expected} match(es), got {count}')\n    segment = segment.replace(old, new, 1)\n"""
-          if old not in s:
-              raise SystemExit('patch-loop anchor missing')
-          p.write_text(s.replace(old, new, 1))
-          PY
           python3 .github/dm03_start_outcome.py
           dart format lib/core/services/download_service.dart test/core/services/download_command_outcome_test.dart test/core/services/download_start_outcome_guard_test.dart
       - name: Verify command outcome matrix and start contract
