@@ -37,3 +37,5 @@ jobs:
             exit 1
           fi
           echo 'DM-09 RED reproduced as expected'
+
+# expanded RED covers policy, durable waitingForNetwork, reconnect fencing, and iOS retry-budget separation
