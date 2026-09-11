@@ -75,7 +75,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dm13-scheduler-diagnostics
+          name: dm13-scheduler-diagnostics-rerun
           path: |
             /tmp/dm13-red.log
             /tmp/dm13-test.log
