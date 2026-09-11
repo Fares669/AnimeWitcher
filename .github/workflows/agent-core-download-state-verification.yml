@@ -80,3 +80,59 @@ jobs:
           git add lib/core/services/download_service.dart
           git commit -m 'fix(downloads): make session overlay JobState authoritative'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
+  dm24-logical-identity:
+    name: DM24 canonical logical identity
+    needs: dm05-state-authority
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+      - name: Apply guarded DM24 patches
+        run: |
+          if ! grep -q '_jobStore.allForLogicalId(logicalId)' lib/core/services/download_service.dart; then
+            python3 .github/scripts/dm24_start_identity_patch.py
+          fi
+          if ! grep -q 'final String? logicalId;' lib/features/library/presentation/downloads_provider.dart; then
+            python3 .github/scripts/dm24_ui_identity_patch.py
+          fi
+          python3 .github/scripts/agent_dm24_identity_completion_patch.py
+          dart format lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Prepare
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Run DM24 regressions
+        run: >-
+          flutter test
+          test/core/services/download_job_logical_identity_test.dart
+          test/core/services/download_logical_identity_test.dart
+          test/core/services/download_logical_identity_persistence_test.dart
+          test/core/services/download_logical_identity_start_test.dart
+          test/core/services/download_overlay_logical_identity_test.dart
+          test/features/library/presentation/downloads_logical_identity_test.dart
+          test/core/services/download_job_state_queue_authority_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze changed identity surfaces
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart lib/core/services/download_logical_identity.dart lib/core/services/download_job_store.dart lib/features/library/presentation/downloads_provider.dart
+      - name: Verify patch cleanliness
+        run: git diff --check
+      - name: Commit verified DM24 fix
+        run: |
+          if git diff --quiet -- lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart; then
+            echo 'DM24 patches already applied'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart
+          git commit -m 'fix(downloads): canonicalize logical episode identity'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
