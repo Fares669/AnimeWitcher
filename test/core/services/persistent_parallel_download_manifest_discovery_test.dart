@@ -63,7 +63,14 @@ void main() {
   });
 
   test('legacy manifest remains explicit unresolved evidence, not guessed parent', () async {
+    // Freeze the coordinator before rewriting its durable checkpoint. Otherwise
+    // an in-flight progress persist may legitimately replace this synthetic v5
+    // fixture with a fresh v6 checkpoint while discovery is running.
+    await coordinator.dispose();
+
     final manifest = await manifestFile();
+    final temp = File('${manifest.path}.tmp');
+    if (await temp.exists()) await temp.delete();
     final snapshot =
         jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
     snapshot['schemaVersion'] = 5;
@@ -81,7 +88,9 @@ void main() {
     expect(found.parentTask, isNull);
     expect(found.childTasks, hasLength(2));
     expect(
-      found.childTasks.every((task) => task.taskId.startsWith('${parent.taskId}.part.')),
+      found.childTasks.every(
+        (task) => task.taskId.startsWith('${parent.taskId}.part.'),
+      ),
       isTrue,
     );
   });
