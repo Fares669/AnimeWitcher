@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:skystream/core/domain/entity/multimedia_item.dart';
-import 'package:skystream/core/services/download_logical_identity.dart';
+import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/services/download_logical_identity.dart';
 
 void main() {
   MultimediaItem item({
