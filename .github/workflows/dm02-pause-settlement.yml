@@ -40,6 +40,18 @@ jobs:
           fi
       - name: Apply DM-02 implementation
         run: python3 .github/dm02_pause_settlement.py apply
+      - name: Correct generated startup projection parentheses
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('lib/core/services/download_service.dart')
+          s = p.read_text()
+          bad = '                              : TaskStatus.paused)))),\n      );'
+          good = '                              : TaskStatus.paused))),\n      );'
+          if s.count(bad) != 1:
+              raise SystemExit(f'expected one generated parenthesis tail, found {s.count(bad)}')
+          p.write_text(s.replace(bad, good, 1))
+          PY
       - name: Format changed Dart files
         run: dart format lib/core/services/download_service.dart test/core/services/download_pause_settlement_guard_test.dart
       - name: Run DM-02 regression guard
