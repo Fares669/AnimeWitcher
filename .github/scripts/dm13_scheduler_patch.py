@@ -4,12 +4,36 @@ path = Path('lib/core/services/persistent_parallel_download.dart')
 text = path.read_text()
 
 old_pump = '''        Future<void>.microtask(() async {
-                    final sessions = List<_ParallelSession>.from(_sessions.values);
-                    for (final session in sessions) {
-                      if (_disposed) return;
-                      if (!session.active || session.deleted) continue;
-                      await session.serialize(() async {
-                        if (_disposed || !session.active || session.deleted) return;
+              final sessions = List<_ParallelSession>.from(_sessions.values);
+              for (final session in sessions) {
+                if (_disposed) return;
+                if (!session.active || session.deleted) continue;
+                await session.serialize(() async {
+                  if (_disposed || !session.active || session.deleted) return;
+                  try {
+                    if (!await _pumpSession(session)) {
+                      _scheduleCoordinatorRecovery(session);
+                    } else {
+                      await _persist(session);
+                    }
+                  } catch (_) {
+                    // Coordinator bookkeeping is not a user-visible pause.
+                    // Keep native owners untouched and reconcile them shortly.
+                    _scheduleCoordinatorRecovery(session);
+                  }
+                });
+              }
+            })'''
+new_pump = '''        Future<void>.microtask(() async {
+              final sessions = List<_ParallelSession>.from(_sessions.values);
+              await Future.wait<void>(
+                sessions
+                    .where((session) => session.active && !session.deleted)
+                    .map(
+                      (session) => session.serialize(() async {
+                        if (_disposed || !session.active || session.deleted) {
+                          return;
+                        }
                         try {
                           if (!await _pumpSession(session)) {
                             _scheduleCoordinatorRecovery(session);
@@ -17,41 +41,15 @@ old_pump = '''        Future<void>.microtask(() async {
                             await _persist(session);
                           }
                         } catch (_) {
-                          // Coordinator bookkeeping is not a user-visible pause.
-                          // Keep native owners untouched and reconcile them shortly.
+                          // One slow/failing session must not head-of-line block
+                          // unrelated sessions. Per-session serialization still
+                          // preserves ordering inside each logical download.
                           _scheduleCoordinatorRecovery(session);
                         }
-                      });
-                    }
-                  })'''
-new_pump = '''        Future<void>.microtask(() async {
-                    final sessions = List<_ParallelSession>.from(_sessions.values);
-                    await Future.wait<void>(
-                      sessions
-                          .where((session) => session.active && !session.deleted)
-                          .map(
-                            (session) => session.serialize(() async {
-                              if (_disposed ||
-                                  !session.active ||
-                                  session.deleted) {
-                                return;
-                              }
-                              try {
-                                if (!await _pumpSession(session)) {
-                                  _scheduleCoordinatorRecovery(session);
-                                } else {
-                                  await _persist(session);
-                                }
-                              } catch (_) {
-                                // One slow/failing session must not head-of-line block
-                                // unrelated sessions. Per-session serialization still
-                                // preserves ordering inside each logical download.
-                                _scheduleCoordinatorRecovery(session);
-                              }
-                            }),
-                          ),
-                    );
-                  })'''
+                      }),
+                    ),
+              );
+            })'''
 if text.count(old_pump) != 1:
     raise SystemExit(f'DM-13 pump anchor count={text.count(old_pump)}')
 text = text.replace(old_pump, new_pump, 1)
