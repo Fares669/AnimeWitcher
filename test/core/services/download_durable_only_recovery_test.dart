@@ -59,7 +59,7 @@ void main() {
       final guardedBlock = source.substring(disposition, durableProjection);
       expect(
         guardedBlock,
-        contains('hasPresentationMetadata: metadata != null'),
+        contains("hasPresentationMetadata: metadata?['item'] is Map"),
       );
       expect(
         guardedBlock,
