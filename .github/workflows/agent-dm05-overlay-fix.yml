@@ -1,0 +1,62 @@
+name: Agent DM05 Overlay Fix
+
+on:
+  push:
+    branches:
+      - agent/core-download-state-recovery-20260911
+    paths:
+      - .github/scripts/agent_dm05_overlay_state_patch.py
+      - .github/workflows/agent-dm05-overlay-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: agent/core-download-state-recovery-20260911
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Apply DM05 overlay authority fix
+        run: |
+          python3 .github/scripts/agent_dm05_overlay_state_patch.py
+          dart format lib/core/services/download_service.dart
+      - name: Run DM05 regressions
+        run: >-
+          flutter test
+          test/core/services/download_job_state_authority_test.dart
+          test/core/services/download_job_state_queue_authority_test.dart
+          test/features/library/presentation/downloads_job_state_authority_test.dart
+          test/core/services/download_job_state_test.dart
+          test/core/services/download_startup_reconciliation_matrix_test.dart
+          test/core/services/download_concurrency_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Verify scoped diff
+        run: |
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "lib/core/services/download_service.dart"
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_service.dart
+          git commit -m "fix(downloads): make session overlay JobState-first"
+          git pull --rebase origin agent/core-download-state-recovery-20260911
+          git push origin HEAD:agent/core-download-state-recovery-20260911
