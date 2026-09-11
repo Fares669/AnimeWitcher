@@ -5,6 +5,7 @@ SERVICE = Path('lib/core/services/download_service.dart')
 PLAN = Path('DOWNLOAD_MANAGER_PLAN.md')
 SOURCE_TEST = Path('test/core/services/download_source_refresh_checkpoint_guard_test.dart')
 RESULT_TEST = Path('test/core/services/download_checkpoint_commit_result_test.dart')
+LIFECYCLE_TEST = Path('test/core/services/download_lifecycle_checkpoint_guard_test.dart')
 
 mode = sys.argv[1]
 
@@ -99,6 +100,17 @@ elif mode == 'apply':
     replacement = '''    // Source replacement changes executor/manifest identity. Persist an\n    // interrupted write-ahead boundary first so a storage failure cannot let\n    // the old durable state race a newly installed URL. DM-11/DM-31 later\n    // make the source capability itself transactional and generation-aware.\n    final refreshCheckpointed = await _checkpointLogicalJob(\n      task,\n      state: DownloadJobState.interrupted,\n      expectedBytes: expectedBytes,\n      userPaused: false,\n      queueWaiting: false,\n    );\n    if (!refreshCheckpointed) {\n      throw StateError(\n        'Failed to persist source refresh boundary for ${task.taskId}',\n      );\n    }\n\n    if (task is ParallelDownloadTask) {\n      final replaced = await _parallel.replaceSource(\n'''
     text = replace_once(text, anchor, replacement, 'source refresh boundary')
     SERVICE.write_text(text)
+
+    lifecycle = LIFECYCLE_TEST.read_text()
+    stale = '''      expect(\n        source,\n        contains(\n          "return false;\\n    }\\n    try {\\n      final accepted = await _jobStore.checkpoint(",\n        ),\n      );\n      expect(source, contains("return true;\\n    } catch (error)"));\n'''
+    updated = '''      expect(\n        source,\n        contains('final commit = await commitAuthoritativeDownloadCheckpoint('),\n      );\n      expect(\n        source,\n        contains('if (commit != DownloadLifecycleCheckpointCommit.committed)'),\n      );\n      expect(source, contains('if (terminal) _terminalJobIds.add(task.taskId);'));\n'''
+    lifecycle = replace_once(
+        lifecycle,
+        stale,
+        updated,
+        'lifecycle checkpoint semantic guard',
+    )
+    LIFECYCLE_TEST.write_text(lifecycle)
 
     plan = PLAN.read_text()
     plan = replace_once(
