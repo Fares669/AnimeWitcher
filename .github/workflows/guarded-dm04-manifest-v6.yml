@@ -45,35 +45,10 @@ jobs:
       - name: Add RED manifest descriptor test
         if: steps.guard.outputs.skip != 'true'
         shell: bash
+        env:
+          PATCH_SCRIPT_B64: ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnBhdGggPSBQYXRoKCd0ZXN0L2NvcmUvc2VydmljZXMvcGVyc2lzdGVudF9wYXJhbGxlbF9kb3dubG9hZF90ZXN0LmRhcnQnKQp0ZXh0ID0gcGF0aC5yZWFkX3RleHQoKQptYXJrZXIgPSAiICB0ZXN0KCdmaXZlIHBhcnRzIGNvdmVyIGVhY2ggYnl0ZSBvbmNlJywgKCkgYXN5bmMge1xuIgp0ZXN0ID0gciIiIiAgdGVzdCgnbXVsdGlwYXJ0IG1hbmlmZXN0IHBlcnNpc3RzIGEgcmVjb25zdHJ1Y3RhYmxlIHBhcmVudCBkZXNjcmlwdG9yJywgKCkgYXN5bmMgewogICAgZXhwZWN0KGF3YWl0IGNvb3JkaW5hdG9yLnN0YXJ0KHBhcmVudCwgMTAwKSwgaXNUcnVlKTsKICAgIGZpbmFsIG1hbmlmZXN0ID0gRmlsZSgnJHthd2FpdCBwYXJlbnQuZmlsZVBhdGgoKX0ucGFydHMvbWFuaWZlc3QuanNvbicpOwogICAgZmluYWwgZGVjb2RlZCA9IGpzb25EZWNvZGUoYXdhaXQgbWFuaWZlc3QucmVhZEFzU3RyaW5nKCkpIGFzIE1hcDxTdHJpbmcsIGR5bmFtaWM+OwoKICAgIGV4cGVjdChkZWNvZGVkWydzY2hlbWFWZXJzaW9uJ10sIDYpOwogICAgZXhwZWN0KGRlY29kZWRbJ3BhcmVudFRhc2snXSwgaXNBPE1hcD4oKSk7CiAgICBmaW5hbCByZXN0b3JlZCA9IFRhc2suY3JlYXRlRnJvbUpzb24oCiAgICAgIE1hcDxTdHJpbmcsIGR5bmFtaWM+LmZyb20oZGVjb2RlZFsncGFyZW50VGFzayddIGFzIE1hcCksCiAgICApOwogICAgZXhwZWN0KHJlc3RvcmVkLCBpc0E8UGFyYWxsZWxEb3dubG9hZFRhc2s+KCkpOwogICAgZXhwZWN0KHJlc3RvcmVkLnRhc2tJZCwgcGFyZW50LnRhc2tJZCk7CiAgICBleHBlY3QocmVzdG9yZWQudXJsLCBwYXJlbnQudXJsKTsKICAgIGV4cGVjdChyZXN0b3JlZC5maWxlbmFtZSwgcGFyZW50LmZpbGVuYW1lKTsKICB9KTsKCiIiIgppZiBtYXJrZXIgbm90IGluIHRleHQ6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCd0ZXN0IGluc2VydGlvbiBtYXJrZXIgbm90IGZvdW5kJykKaWYgJ211bHRpcGFydCBtYW5pZmVzdCBwZXJzaXN0cyBhIHJlY29uc3RydWN0YWJsZSBwYXJlbnQgZGVzY3JpcHRvcicgaW4gdGV4dDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ1JFRCB0ZXN0IGFscmVhZHkgcHJlc2VudCcpCnBhdGgud3JpdGVfdGV4dCh0ZXh0LnJlcGxhY2UobWFya2VyLCB0ZXN0ICsgbWFya2VyLCAxKSkK
         run: |
-          python3 <<'PY'
-          from pathlib import Path
-          path = Path('test/core/services/persistent_parallel_download_test.dart')
-          text = path.read_text()
-          marker = "  test('five parts cover each byte once', () async {\n"
-          test = r'''  test('multipart manifest persists a reconstructable parent descriptor', () async {
-    expect(await coordinator.start(parent, 100), isTrue);
-    final manifest = File('${await parent.filePath()}.parts/manifest.json');
-    final decoded = jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
-
-    expect(decoded['schemaVersion'], 6);
-    expect(decoded['parentTask'], isA<Map>());
-    final restored = Task.createFromJson(
-      Map<String, dynamic>.from(decoded['parentTask'] as Map),
-    );
-    expect(restored, isA<ParallelDownloadTask>());
-    expect(restored.taskId, parent.taskId);
-    expect(restored.url, parent.url);
-    expect(restored.filename, parent.filename);
-  });
-
-'''
-          if marker not in text:
-              raise SystemExit('test insertion marker not found')
-          if 'multipart manifest persists a reconstructable parent descriptor' in text:
-              raise SystemExit('RED test already present')
-          path.write_text(text.replace(marker, test + marker, 1))
-          PY
+          printf '%s' "$PATCH_SCRIPT_B64" | base64 --decode | python3
           dart format test/core/services/persistent_parallel_download_test.dart
 
       - name: Prove RED before implementation
@@ -91,172 +66,9 @@ jobs:
       - name: Implement manifest v6 descriptor and safe discovery
         if: steps.guard.outputs.skip != 'true'
         shell: bash
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          path = Path('lib/core/services/persistent_parallel_download.dart')
-          text = path.read_text()
-
-          old_comment = '''/// Version 4 also persists whether a child must bypass old native resumeData
-/// after its parent source URL was refreshed. Version 5 adds exact per-part
-/// durable byte counters. Floating-point progress remains presentation/history
-/// only and is never recovery byte authority.
-const int kParallelManifestSchemaVersion = 5;
-'''
-          new_comment = '''/// Version 4 also persists whether a child must bypass old native resumeData
-/// after its parent source URL was refreshed. Version 5 adds exact per-part
-/// durable byte counters. Version 6 persists the logical parent task descriptor
-/// so a surviving app-owned manifest can rebuild the logical startup inventory
-/// without guessing a URL, headers, filename or base directory. Floating-point
-/// progress remains presentation/history only and is never recovery byte authority.
-const int kParallelManifestSchemaVersion = 6;
-
-class ParallelManifestRecoveryEvidence {
-  const ParallelManifestRecoveryEvidence({
-    required this.task,
-    required this.expectedBytes,
-    required this.durableBytes,
-    required this.updatedAtMillis,
-    required this.manifestPath,
-  });
-
-  final ParallelDownloadTask task;
-  final int expectedBytes;
-  final int durableBytes;
-  final int updatedAtMillis;
-  final String manifestPath;
-
-  double get progress => expectedBytes > 0
-      ? (durableBytes / expectedBytes).clamp(0.0, 1.0).toDouble()
-      : 0.0;
-}
-
-Future<ParallelManifestRecoveryEvidence?> readParallelManifestRecoveryEvidence(
-  File manifest, {
-  required Directory trustedRoot,
-}) async {
-  try {
-    if (!await manifest.exists() || !await trustedRoot.exists()) return null;
-    final rootPath = p.normalize(p.absolute(trustedRoot.path));
-    final manifestPath = p.normalize(p.absolute(manifest.path));
-    if (!p.isWithin(rootPath, manifestPath) ||
-        p.basename(manifestPath) != 'manifest.json' ||
-        !p.basename(p.dirname(manifestPath)).endsWith('.parts')) {
-      return null;
-    }
-
-    final decoded = jsonDecode(await manifest.readAsString());
-    if (decoded is! Map) return null;
-    final json = Map<String, dynamic>.from(decoded);
-    final schemaVersion = (json['schemaVersion'] as num?)?.toInt() ?? 1;
-    if (schemaVersion < 6 || schemaVersion > kParallelManifestSchemaVersion) {
-      return null;
-    }
-    final rawParent = json['parentTask'];
-    if (rawParent is! Map) return null;
-    final restored = Task.createFromJson(Map<String, dynamic>.from(rawParent));
-    if (restored is! ParallelDownloadTask) return null;
-    final parentTaskId = json['parentTaskId']?.toString().trim() ?? '';
-    if (parentTaskId.isEmpty || parentTaskId != restored.taskId) return null;
-
-    final targetPath = p.normalize(p.absolute(await restored.filePath()));
-    if (!p.isWithin(rootPath, targetPath)) return null;
-    final expectedManifestPath = p.normalize(
-      p.absolute('$targetPath.parts${p.separator}manifest.json'),
-    );
-    if (expectedManifestPath != manifestPath) return null;
-
-    final expectedBytes = ((json['expectedBytes'] ?? json['totalBytes']) as num?)
-            ?.toInt() ??
-        -1;
-    var durableBytes = 0;
-    final rawParts = json['parts'];
-    if (rawParts is List) {
-      for (final rawPart in rawParts) {
-        if (rawPart is! Map) continue;
-        final bytes = (rawPart['durableBytes'] as num?)?.toInt() ?? 0;
-        if (bytes > 0) durableBytes += bytes;
-      }
-    }
-    if (expectedBytes > 0 && durableBytes > expectedBytes) {
-      durableBytes = expectedBytes;
-    }
-    final stat = await manifest.stat();
-    final updatedAtMillis =
-        (json['updatedAtMillis'] as num?)?.toInt() ??
-        stat.modified.millisecondsSinceEpoch;
-    return ParallelManifestRecoveryEvidence(
-      task: restored,
-      expectedBytes: expectedBytes,
-      durableBytes: durableBytes,
-      updatedAtMillis: updatedAtMillis,
-      manifestPath: manifestPath,
-    );
-  } catch (_) {
-    return null;
-  }
-}
-
-Future<List<ParallelManifestRecoveryEvidence>> discoverParallelManifestRecovery(
-  Directory trustedRoot,
-) async {
-  if (!await trustedRoot.exists()) return const <ParallelManifestRecoveryEvidence>[];
-  final byTaskId = <String, ParallelManifestRecoveryEvidence>{};
-  await for (final entity in trustedRoot.list(recursive: true, followLinks: false)) {
-    if (entity is! File || p.basename(entity.path) != 'manifest.json') continue;
-    if (!p.basename(p.dirname(entity.path)).endsWith('.parts')) continue;
-    final evidence = await readParallelManifestRecoveryEvidence(
-      entity,
-      trustedRoot: trustedRoot,
-    );
-    if (evidence == null) continue;
-    final previous = byTaskId[evidence.task.taskId];
-    if (previous == null || evidence.updatedAtMillis > previous.updatedAtMillis) {
-      byTaskId[evidence.task.taskId] = evidence;
-    }
-  }
-  final result = byTaskId.values.toList(growable: false)
-    ..sort((a, b) {
-      final age = a.updatedAtMillis.compareTo(b.updatedAtMillis);
-      if (age != 0) return age;
-      return a.task.taskId.compareTo(b.task.taskId);
-    });
-  return result;
-}
-'''
-          if text.count(old_comment) != 1:
-              raise SystemExit(f'manifest version block expected once, found {text.count(old_comment)}')
-          text = text.replace(old_comment, new_comment, 1)
-
-          old_payload = """      'schemaVersion': kParallelManifestSchemaVersion,\n      'parentTaskId': session.task.taskId,\n      'generation': session.generation,\n"""
-          new_payload = """      'schemaVersion': kParallelManifestSchemaVersion,\n      'parentTaskId': session.task.taskId,\n      'parentTask': session.task.toJson(),\n      'updatedAtMillis': DateTime.now().millisecondsSinceEpoch,\n      'generation': session.generation,\n"""
-          if text.count(old_payload) != 1:
-              raise SystemExit(f'manifest payload block expected once, found {text.count(old_payload)}')
-          text = text.replace(old_payload, new_payload, 1)
-          path.write_text(text)
-
-          test_path = Path('test/core/services/persistent_parallel_download_test.dart')
-          tests = test_path.read_text()
-          marker = "  test('five parts cover each byte once', () async {\n"
-          extra = r'''  test('manifest discovery accepts only trusted v6 parent descriptors', () async {
-    expect(await coordinator.start(parent, 100), isTrue);
-    final manifest = File('${await parent.filePath()}.parts/manifest.json');
-
-    final evidence = await readParallelManifestRecoveryEvidence(
-      manifest,
-      trustedRoot: directory,
-    );
-    expect(evidence, isNotNull);
-    expect(evidence!.task.taskId, parent.taskId);
-    expect(evidence.expectedBytes, 100);
-    expect(evidence.durableBytes, 0);
-
-    final discovered = await discoverParallelManifestRecovery(directory);
-    expect(discovered.map((item) => item.task.taskId), [parent.taskId]);
-
-    final legacy = jsonDecode(await manifest.readAsString()) as Map<String, dynamic>
-      ..['schemaVersion'] = 5
-      ..remove('parentTask');
+        env:
+          PATCH_SCRIPT_B64: ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnBhdGggPSBQYXRoKCdsaWIvY29yZS9zZXJ2aWNlcy9wZXJzaXN0ZW50X3BhcmFsbGVsX2Rvd25sb2FkLmRhcnQnKQp0ZXh0ID0gcGF0aC5yZWFkX3RleHQoKQoKb2xkX2NvbW1lbnQgPSAiIiIvLy8gVmVyc2lvbiA0IGFsc28gcGVyc2lzdHMgd2hldGhlciBhIGNoaWxkIG11c3QgYnlwYXNzIG9sZCBuYXRpdmUgcmVzdW1lRGF0YQovLy8gYWZ0ZXIgaXRzIHBhcmVudCBzb3VyY2UgVVJMIHdhcyByZWZyZXNoZWQuIFZlcnNpb24gNSBhZGRzIGV4YWN0IHBlci1wYXJ0Ci8vLyBkdXJhYmxlIGJ5dGUgY291bnRlcnMuIEZsb2F0aW5nLXBvaW50IHByb2dyZXNzIHJlbWFpbnMgcHJlc2VudGF0aW9uL2hpc3RvcnkKLy8vIG9ubHkgYW5kIGlzIG5ldmVyIHJlY292ZXJ5IGJ5dGUgYXV0aG9yaXR5Lgpjb25zdCBpbnQga1BhcmFsbGVsTWFuaWZlc3RTY2hlbWFWZXJzaW9uID0gNTsKIiIiCm5ld19jb21tZW50ID0gIiIiLy8vIFZlcnNpb24gNCBhbHNvIHBlcnNpc3RzIHdoZXRoZXIgYSBjaGlsZCBtdXN0IGJ5cGFzcyBvbGQgbmF0aXZlIHJlc3VtZURhdGEKLy8vIGFmdGVyIGl0cyBwYXJlbnQgc291cmNlIFVSTCB3YXMgcmVmcmVzaGVkLiBWZXJzaW9uIDUgYWRkcyBleGFjdCBwZXItcGFydAovLy8gZHVyYWJsZSBieXRlIGNvdW50ZXJzLiBWZXJzaW9uIDYgcGVyc2lzdHMgdGhlIGxvZ2ljYWwgcGFyZW50IHRhc2sgZGVzY3JpcHRvcgovLy8gc28gYSBzdXJ2aXZpbmcgYXBwLW93bmVkIG1hbmlmZXN0IGNhbiByZWJ1aWxkIHRoZSBsb2dpY2FsIHN0YXJ0dXAgaW52ZW50b3J5Ci8vLyB3aXRob3V0IGd1ZXNzaW5nIGEgVVJMLCBoZWFkZXJzLCBmaWxlbmFtZSBvciBiYXNlIGRpcmVjdG9yeS4gRmxvYXRpbmctcG9pbnQKLy8vIHByb2dyZXNzIHJlbWFpbnMgcHJlc2VudGF0aW9uL2hpc3Rvcnkgb25seSBhbmQgaXMgbmV2ZXIgcmVjb3ZlcnkgYnl0ZSBhdXRob3JpdHkuCmNvbnN0IGludCBrUGFyYWxsZWxNYW5pZmVzdFNjaGVtYVZlcnNpb24gPSA2OwoKY2xhc3MgUGFyYWxsZWxNYW5pZmVzdFJlY292ZXJ5RXZpZGVuY2UgewogIGNvbnN0IFBhcmFsbGVsTWFuaWZlc3RSZWNvdmVyeUV2aWRlbmNlKHsKICAgIHJlcXVpcmVkIHRoaXMudGFzaywKICAgIHJlcXVpcmVkIHRoaXMuZXhwZWN0ZWRCeXRlcywKICAgIHJlcXVpcmVkIHRoaXMuZHVyYWJsZUJ5dGVzLAogICAgcmVxdWlyZWQgdGhpcy51cGRhdGVkQXRNaWxsaXMsCiAgICByZXF1aXJlZCB0aGlzLm1hbmlmZXN0UGF0aCwKICB9KTsKCiAgZmluYWwgUGFyYWxsZWxEb3dubG9hZFRhc2sgdGFzazsKICBmaW5hbCBpbnQgZXhwZWN0ZWRCeXRlczsKICBmaW5hbCBpbnQgZHVyYWJsZUJ5dGVzOwogIGZpbmFsIGludCB1cGRhdGVkQXRNaWxsaXM7CiAgZmluYWwgU3RyaW5nIG1hbmlmZXN0UGF0aDsKCiAgZG91YmxlIGdldCBwcm9ncmVzcyA9PiBleHBlY3RlZEJ5dGVzID4gMAogICAgICA/IChkdXJhYmxlQnl0ZXMgLyBleHBlY3RlZEJ5dGVzKS5jbGFtcCgwLjAsIDEuMCkudG9Eb3VibGUoKQogICAgICA6IDAuMDsKfQoKRnV0dXJlPFBhcmFsbGVsTWFuaWZlc3RSZWNvdmVyeUV2aWRlbmNlPz4gcmVhZFBhcmFsbGVsTWFuaWZlc3RSZWNvdmVyeUV2aWRlbmNlKAogIEZpbGUgbWFuaWZlc3QsIHsKICByZXF1aXJlZCBEaXJlY3RvcnkgdHJ1c3RlZFJvb3QsCn0pIGFzeW5jIHsKICB0cnkgewogICAgaWYgKCFhd2FpdCBtYW5pZmVzdC5leGlzdHMoKSB8fCAhYXdhaXQgdHJ1c3RlZFJvb3QuZXhpc3RzKCkpIHJldHVybiBudWxsOwogICAgZmluYWwgcm9vdFBhdGggPSBwLm5vcm1hbGl6ZShwLmFic29sdXRlKHRydXN0ZWRSb290LnBhdGgpKTsKICAgIGZpbmFsIG1hbmlmZXN0UGF0aCA9IHAubm9ybWFsaXplKHAuYWJzb2x1dGUobWFuaWZlc3QucGF0aCkpKTsKICAgIGlmICghcC5pc1dpdGhpbihyb290UGF0aCwgbWFuaWZlc3RQYXRoKSB8fAogICAgICAgIHAuYmFzZW5hbWUobWFuaWZlc3RQYXRoKSAhPSAnbWFuaWZlc3QuanNvbicgfHwKICAgICAgICAhcC5iYXNlbmFtZShwLmRpcm5hbWUobWFuaWZlc3RQYXRoKSkuZW5kc1dpdGgoJy5wYXJ0cycpKSB7CiAgICAgIHJldHVybiBudWxsOwogICAgfQoKICAgIGZpbmFsIGRlY29kZWQgPSBqc29uRGVjb2RlKGF3YWl0IG1hbmlmZXN0LnJlYWRBc1N0cmluZygpKTsKICAgIGlmIChkZWNvZGVkIGlzISBNYXApIHJldHVybiBudWxsOwogICAgZmluYWwganNvbiA9IE1hcDxTdHJpbmcsIGR5bmFtaWM+LmZyb20oZGVjb2RlZCk7CiAgICBmaW5hbCBzY2hlbWFWZXJzaW9uID0gKGpzb25bJ3NjaGVtYVZlcnNpb24nXSBhcyBudW0/KSA/LnRvSW50KCkgPz8gMTsKICAgIGlmIChzY2hlbWFWZXJzaW9uIDwgNiB8fCBzY2hlbWFWZXJzaW9uID4ga1BhcmFsbGVsTWFuaWZlc3RTY2hlbWFWZXJzaW9uKSB7CiAgICAgIHJldHVybiBudWxsOwogICAgfQogICAgZmluYWwgcmF3UGFyZW50ID0ganNvblsncGFyZW50VGFzayddOwogICAgaWYgKHJhd1BhcmVudCBpcyEgTWFwKSByZXR1cm4gbnVsbDsKICAgIGZpbmFsIHJlc3RvcmVkID0gVGFzay5jcmVhdGVGcm9tSnNvbihNYXA8U3RyaW5nLCBkeW5hbWljPi5mcm9tKHJhd1BhcmVudCkpOwogICAgaWYgKHJlc3RvcmVkIGlzISBQYXJhbGxlbERvd25sb2FkVGFzaykgcmV0dXJuIG51bGw7CiAgICBmaW5hbCBwYXJlbnRUYXNrSWQgPSBqc29uWydwYXJlbnRUYXNrSWQnXT8udG9TdHJpbmcoKS50cmltKCkgPz8gJyc7CiAgICBpZiAocGFyZW50VGFza0lkLmlzRW1wdHkgfHwgcGFyZW50VGFza0lkICE9IHJlc3RvcmVkLnRhc2tJZCkgcmV0dXJuIG51bGw7CgogICAgZmluYWwgdGFyZ2V0UGF0aCA9IHAubm9ybWFsaXplKHAuYWJzb2x1dGUoYXdhaXQgcmVzdG9yZWQuZmlsZVBhdGgoKSkpOwogICAgaWYgKCFwLmlzV2l0aGluKHJvb3RQYXRoLCB0YXJnZXRQYXRoKSkgcmV0dXJuIG51bGw7CiAgICBmaW5hbCBleHBlY3RlZE1hbmlmZXN0UGF0aCA9IHAubm9ybWFsaXplKAogICAgICBwLmFic29sdXRlKCckdGFyZ2V0UGF0aC5wYXJ0cyR7cC5zZXBhcmF0b3J9bWFuaWZlc3QuanNvbicpLAogICAgKTsKICAgIGlmIChleHBlY3RlZE1hbmlmZXN0UGF0aCAhPSBtYW5pZmVzdFBhdGgpIHJldHVybiBudWxsOwoKICAgIGZpbmFsIGV4cGVjdGVkQnl0ZXMgPQogICAgICAgICgoanNvblsnZXhwZWN0ZWRCeXRlcyddID8/IGpzb25bJ3RvdGFsQnl0ZXMnXSkgYXMgbnVtPyk/LnRvSW50KCkgPz8gLTE7CiAgICB2YXIgZHVyYWJsZUJ5dGVzID0gMDsKICAgIGZpbmFsIHJhd1BhcnRzID0ganNvblsncGFydHMnXTsKICAgIGlmIChyYXdQYXJ0cyBpcyBMaXN0KSB7CiAgICAgIGZvciAoZmluYWwgcmF3UGFydCBpbiByYXdQYXJ0cykgewogICAgICAgIGlmIChyYXdQYXJ0IGlzISBNYXApIGNvbnRpbnVlOwogICAgICAgIGZpbmFsIGJ5dGVzID0gKHJhd1BhcnRbJ2R1cmFibGVCeXRlcyddIGFzIG51bT8pPy50b0ludCgpID8/IDA7CiAgICAgICAgaWYgKGJ5dGVzID4gMCkgZHVyYWJsZUJ5dGVzICs9IGJ5dGVzOwogICAgICB9CiAgICB9CiAgICBpZiAoZXhwZWN0ZWRCeXRlcyA+IDAgJiYgZHVyYWJsZUJ5dGVzID4gZXhwZWN0ZWRCeXRlcykgewogICAgICBkdXJhYmxlQnl0ZXMgPSBleHBlY3RlZEJ5dGVzOwogICAgfQogICAgZmluYWwgc3RhdCA9IGF3YWl0IG1hbmlmZXN0LnN0YXQoKTsKICAgIGZpbmFsIHVwZGF0ZWRBdE1pbGxpcyA9CiAgICAgICAgKGpzb25bJ3VwZGF0ZWRBdE1pbGxpcyddIGFzIG51bT8pPy50b0ludCgpID8/CiAgICAgICAgc3RhdC5tb2RpZmllZC5taWxsaXNlY29uZHNTaW5jZUVwb2NoOwogICAgcmV0dXJuIFBhcmFsbGVsTWFuaWZlc3RSZWNvdmVyeUV2aWRlbmNlKAogICAgICB0YXNrOiByZXN0b3JlZCwKICAgICAgZXhwZWN0ZWRCeXRlczogZXhwZWN0ZWRCeXRlcywKICAgICAgZHVyYWJsZUJ5dGVzOiBkdXJhYmxlQnl0ZXMsCiAgICAgIHVwZGF0ZWRBdE1pbGxpczogdXBkYXRlZEF0TWlsbGlzLAogICAgICBtYW5pZmVzdFBhdGg6IG1hbmlmZXN0UGF0aCwKICAgICApOwogIH0gY2F0Y2ggKF8pIHsKICAgIHJldHVybiBudWxsOwogIH0KfQoKRnV0dXJlPExpc3Q8UGFyYWxsZWxNYW5pZmVzdFJlY292ZXJ5RXZpZGVuY2U+PiBkaXNjb3ZlclBhcmFsbGVsTWFuaWZlc3RSZWNvdmVyeSgKICBEaXJlY3RvcnkgdHJ1c3RlZFJvb3QsCikgYXN5bmMgewogIGlmICghYXdhaXQgdHJ1c3RlZFJvb3QuZXhpc3RzKCkpIHsKICAgIHJldHVybiBjb25zdCA8UGFyYWxsZWxNYW5pZmVzdFJlY292ZXJ5RXZpZGVuY2U+W107CiAgfQogIGZpbmFsIGJ5VGFza0lkID0gPFN0cmluZywgUGFyYWxsZWxNYW5pZmVzdFJlY292ZXJ5RXZpZGVuY2U+e307CiAgYXdhaXQgZm9yIChmaW5hbCBlbnRpdHkgaW4gdHJ1c3RlZFJvb3QubGlzdCgKICAgIHJlY3Vyc2l2ZTogdHJ1ZSwKICAgIGZvbGxvd0xpbmtzOiBmYWxzZSwKICApKSB7CiAgICBpZiAoZW50aXR5IGlzISBGaWxlIHx8IHAuYmFzZW5hbWUoZW50aXR5LnBhdGgpICE9ICdtYW5pZmVzdC5qc29uJykgY29udGludWU7CiAgICBpZiAoIXAuYmFzZW5hbWUocC5kaXJuYW1lKGVudGl0eS5wYXRoKSkuZW5kc1dpdGgoJy5wYXJ0cycpKSBjb250aW51ZTsKICAgIGZpbmFsIGV2aWRlbmNlID0gYXdhaXQgcmVhZFBhcmFsbGVsTWFuaWZlc3RSZWNvdmVyeUV2aWRlbmNlKAogICAgICBlbnRpdHksCiAgICAgIHRydXN0ZWRSb290OiB0cnVzdGVkUm9vdCwKICAgICApOwogICAgaWYgKGV2aWRlbmNlID09IG51bGwpIGNvbnRpbnVlOwogICAgZmluYWwgcHJldmlvdXMgPSBieVRhc2tJZFtldmlkZW5jZS50YXNrLnRhc2tJZF07CiAgICBpZiAocHJldmlvdXMgPT0gbnVsbCB8fAogICAgICAgIGV2aWRlbmNlLnVwZGF0ZWRBdE1pbGxpcyA+IHByZXZpb3VzLnVwZGF0ZWRBdE1pbGxpcykgewogICAgICBieVRhc2tJZFtldmlkZW5jZS50YXNrLnRhc2tJZF0gPSBldmlkZW5jZTsKICAgIH0KICB9CiAgZmluYWwgcmVzdWx0ID0gYnlUYXNrSWQudmFsdWVzLnRvTGlzdChncm93YWJsZTogZmFsc2UpCiAgICAuLnNvcnQoKGEsIGIpIHsKICAgICAgZmluYWwgYWdlID0gYS51cGRhdGVkQXRNaWxsaXMuY29tcGFyZVRvKGIudXBkYXRlZEF0TWlsbGlzKTsKICAgICAgaWYgKGFnZSAhPSAwKSByZXR1cm4gYWdlOwogICAgICByZXR1cm4gYS50YXNrLnRhc2tJZC5jb21wYXJlVG8oYi50YXNrLnRhc2tJZCk7CiAgICB9KTsKICByZXR1cm4gcmVzdWx0Owp9CiIiIgppZiB0ZXh0LmNvdW50KG9sZF9jb21tZW50KSAhPSAxOgogICAgcmFpc2UgU3lzdGVtRXhpdChmJ21hbmlmZXN0IHZlcnNpb24gYmxvY2sgZXhwZWN0ZWQgb25jZSwgZm91bmQge3RleHQuY291bnQob2xkX2NvbW1lbnQpfScpCnRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkX2NvbW1lbnQsIG5ld19jb21tZW50LCAxKQoKb2xkX3BheWxvYWQgPSAiIiIgICAgICAnc2NoZW1hVmVyc2lvbic6IGtQYXJhbGxlbE1hbmlmZXN0U2NoZW1hVmVyc2lvbiwKICAgICAgJ3BhcmVudFRhc2tJZCc6IHNlc3Npb24udGFzay50YXNrSWQsCiAgICAgICdnZW5lcmF0aW9uJzogc2Vzc2lvbi5nZW5lcmF0aW9uLAoiIiIKbmV3X3BheWxvYWQgPSAiIiIgICAgICAnc2NoZW1hVmVyc2lvbic6IGtQYXJhbGxlbE1hbmlmZXN0U2NoZW1hVmVyc2lvbiwKICAgICAgJ3BhcmVudFRhc2tJZCc6IHNlc3Npb24udGFzay50YXNrSWQsCiAgICAgICdwYXJlbnRUYXNrJzogc2Vzc2lvbi50YXNrLnRvSnNvbigpLAogICAgICAndXBkYXRlZEF0TWlsbGlzJzogRGF0ZVRpbWUubm93KCkubWlsbGlzZWNvbmRzU2luY2VFcG9jaCwKICAgICAgJ2dlbmVyYXRpb24nOiBzZXNzaW9uLmdlbmVyYXRpb24sCiIiIgppZiB0ZXh0LmNvdW50KG9sZF9wYXlsb2FkKSAhPSAxOgogICAgcmFpc2UgU3lzdGVtRXhpdChmJ21hbmlmZXN0IHBheWxvYWQgYmxvY2sgZXhwZWN0ZWQgb25jZSwgZm91bmQge3RleHQuY291bnQob2xkX3BheWxvYWQpfScpCnRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkX3BheWxvYWQsIG5ld19wYXlsb2FkLCAxKQpwYXRoLndyaXRlX3RleHQodGV4dCkKCnRlc3RfcGF0aCA9IFBhdGgoJ3Rlc3QvY29yZS9zZXJ2aWNlcy9wZXJzaXN0ZW50X3BhcmFsbGVsX2Rvd25sb2FkX3Rlc3QuZGFydCcpCnRlc3RzID0gdGVzdF9wYXRoLnJlYWRfdGV4dCgpCm1hcmtlciA9ICIgIHRlc3QoJ2ZpdmUgcGFydHMgY292ZXIgZWFjaCBieXRlIG9uY2UnLCAoKSBhc3luYyB7XG4iCmV4dHJhID0gciIiIiAgdGVzdCgnbWFuaWZlc3QgZGlzY292ZXJ5IGFjY2VwdHMgb25seSB0cnVzdGVkIHY2IHBhcmVudCBkZXNjcmlwdG9ycycsICgpIGFzeW5jIHsKICAgIGV4cGVjdChhd2FpdCBjb29yZGluYXRvci5zdGFydChwYXJlbnQsIDEwMCksIGlzVHJ1ZSk7CiAgICBmaW5hbCBtYW5pZmVzdCA9IEZpbGUoJyR7YXdhaXQgcGFyZW50LmZpbGVQYXRoKCl9LnBhcnRzL21hbmlmZXN0Lmpzb24nKTsKCiAgICBmaW5hbCBldmlkZW5jZSA9IGF3YWl0IHJlYWRQYXJhbGxlbE1hbmlmZXN0UmVjb3ZlcnlFdmlkZW5jZSgKICAgICAgbWFuaWZlc3QsCiAgICAgIHRydXN0ZWRSb290OiBkaXJlY3RvcnksCiAgICApOwogICAgZXhwZWN0KGV2aWRlbmNlLCBpc05vdE51bGwpOwogICAgZXhwZWN0KGV2aWRlbmNlIS50YXNrLnRhc2tJZCwgcGFyZW50LnRhc2tJZCk7CiAgICBleHBlY3QoZXZpZGVuY2UuZXhwZWN0ZWRCeXRlcywgMTAwKTsKICAgIGV4cGVjdChldmlkZW5jZS5kdXJhYmxlQnl0ZXMsIDApOwoKICAgIGZpbmFsIGRpc2NvdmVyZWQgPSBhd2FpdCBkaXNjb3ZlclBhcmFsbGVsTWFuaWZlc3RSZWNvdmVyeShkaXJlY3RvcnkpOwogICAgZXhwZWN0KGRpc2NvdmVyZWQubWFwKChpdGVtKSA9PiBpdGVtLnRhc2sudGFza0lkKSwgW3BhcmVudC50YXNrSWRdKTsKCiAgICBmaW5hbCBsZWdhY3kgPQogICAgICAgIGpzb25EZWNvZGUoYXdhaXQgbWFuaWZlc3QucmVhZEFzU3RyaW5nKCkpIGFzIE1hcDxTdHJpbmcsIGR5bmFtaWM+CiAgICAgICAgICAuLl['schemaVersion'] = 5
+          ..remove('parentTask');
     await manifest.writeAsString(jsonEncode(legacy), flush: true);
     expect(
       await readParallelManifestRecoveryEvidence(
@@ -285,9 +97,13 @@ Future<List<ParallelManifestRecoveryEvidence>> discoverParallelManifestRecovery(
 
     final outside = await Directory.systemTemp.createTemp('parallel-outside-');
     try {
-      final outsideManifest = File('${outside.path}/video.mp4.parts/manifest.json');
+      final outsideManifest =
+          File('${outside.path}/video.mp4.parts/manifest.json');
       await outsideManifest.parent.create(recursive: true);
-      await outsideManifest.writeAsString(await manifest.readAsString(), flush: true);
+      await outsideManifest.writeAsString(
+        await manifest.readAsString(),
+        flush: true,
+      );
       expect(
         await readParallelManifestRecoveryEvidence(
           outsideManifest,
@@ -300,42 +116,8 @@ Future<List<ParallelManifestRecoveryEvidence>> discoverParallelManifestRecovery(
     }
   });
 
-'''
-          if marker not in tests:
-              raise SystemExit('extra test insertion marker not found')
-          tests = tests.replace(marker, extra + marker, 1)
-          test_path.write_text(tests)
-          PY
-          dart format lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_test.dart
-
-      - name: Focused manifest tests
-        if: steps.guard.outputs.skip != 'true'
-        run: flutter test test/core/services/persistent_parallel_download_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-
-      - name: Recovery inventory regressions
-        if: steps.guard.outputs.skip != 'true'
-        run: flutter test test/core/services/download_recovery_inventory_test.dart test/core/services/download_job_store_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-
-      - name: Full test suite
-        if: steps.guard.outputs.skip != 'true'
-        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-
-      - name: Analyze
-        if: steps.guard.outputs.skip != 'true'
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos
-
-      - name: Verify and commit
-        if: steps.guard.outputs.skip != 'true'
-        shell: bash
-        run: |
-          git rm .github/workflows/guarded-dm04-manifest-v6.yml
-          git add lib/core/services/persistent_parallel_download.dart test/core/services/persistent_parallel_download_test.dart
-          git diff --cached --check
-          changed="$(git diff --cached --name-only | sort)"
-          expected="$(printf '%s\n' '.github/workflows/guarded-dm04-manifest-v6.yml' 'lib/core/services/persistent_parallel_download.dart' 'test/core/services/persistent_parallel_download_test.dart' | sort)"
-          printf 'Staged files:\n%s\n' "$changed"
-          test "$changed" = "$expected"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat(downloads): persist recoverable multipart parent manifests [dm04-manifest-v6]'
-          git push origin HEAD:plan/download-manager-reliability
+"""
+if marker not in tests:
+    raise SystemExit('extra test insertion marker not found')
+tests = tests.replace(marker, extra + marker, 1)
+test_path.write_text(tests)
