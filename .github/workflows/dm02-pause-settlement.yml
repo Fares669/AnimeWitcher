@@ -23,7 +23,11 @@ jobs:
           channel: stable
           flutter-version: 3.47.1
           cache: true
-      - run: flutter pub get
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
       - name: Prove pre-fix regression
         shell: bash
         run: |
@@ -55,26 +59,7 @@ jobs:
           flutter test test/core/services/download_recovery_reconciliation_guard_test.dart
           flutter test test/core/services/download_lifecycle_checkpoint_guard_test.dart
       - name: Analyze
-        id: analyze
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          flutter analyze --no-fatal-warnings --no-fatal-infos >/tmp/dm02-analyze.log 2>&1
-          code=$?
-          cat /tmp/dm02-analyze.log
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit "$code"
-      - name: Upload analyzer diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dm02-analyzer-${{ github.run_id }}
-          path: /tmp/dm02-analyze.log
-          if-no-files-found: error
-      - name: Require analyzer success
-        if: steps.analyze.outcome == 'failure'
-        run: exit 1
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
       - name: Mark DM-02 complete
         run: |
           python3 - <<'PY'
@@ -87,7 +72,7 @@ jobs:
               raise SystemExit('DM-02 unchecked anchor missing')
           s = s.replace(anchor, done, 1)
           dep = '  - **Dependencies:** DM-19, DM-21, DM-32.\n'
-          notes = '''  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof applies to ordinary single-file downloads and multipart children; an owned same-identity worker gets one pause retry without cancellation.\n  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, durable user intent remains `pausing` with `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite plugin/UI state to `paused` until release is proven.\n  - **Confirmed root cause:** `_pauseTransfer()` waited for pause/final callbacks but only verified runtime ownership for internal multipart children, so an ordinary single-file task could return success after timeout while its worker remained alive. Startup pause enforcement also ignored the pause result and unconditionally persisted `TaskStatus.paused`.\n  - **Verification passed:** pre-fix RED regression; pause-settlement guard; runtime-ownership, JobStore, recovery-reconciliation and lifecycle-checkpoint regression suites; `flutter analyze --no-fatal-warnings --no-fatal-infos`; `git diff --check`.\n'''
+          notes = '''  - **Implementation notes (2026-09-11):** Single-file pause now treats native pause acceptance/callback as provisional and requires the DM-19 runtime ownership oracle to prove `notOwned` before projecting a settled pause. The same ownership proof applies to ordinary single-file downloads and multipart children; an owned same-identity worker gets one pause retry without cancellation.\n  - **Unsettled ownership behavior:** If ownership remains `owned`, `settling`, or `unknown`, durable user intent remains `pausing` with `userPaused=true`; the service no longer rolls the request back to `running` or publishes a false `paused`. Startup recovery uses the same rule and does not rewrite plugin/UI state to `paused` until release is proven.\n  - **Confirmed root cause:** `_pauseTransfer()` waited for pause/final callbacks but only verified runtime ownership for internal multipart children, so an ordinary single-file task could return success after timeout while its worker remained alive. Startup pause enforcement also ignored the pause result and unconditionally persisted `TaskStatus.paused`.\n  - **Verification passed:** pre-fix RED regression; pause-settlement guard; runtime-ownership, JobStore, recovery-reconciliation and lifecycle-checkpoint regression suites; generated-source-aware `flutter analyze --no-fatal-warnings --no-fatal-infos`; `git diff --check`.\n'''
           idx = s.find(done)
           dep_idx = s.find(dep, idx)
           if dep_idx < 0:
