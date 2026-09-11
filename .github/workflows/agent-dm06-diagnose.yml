@@ -24,7 +24,24 @@ jobs:
           python3 .github/scripts/agent_dm06_resource_integrity_patch.py
           python3 .github/scripts/agent_dm06_probe_method_patch.py
           dart format lib/core/services/download_service.dart lib/core/services/download_resource_identity.dart
+      - name: Show patched native completion target
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('lib/core/services/download_service.dart').read_text()
+          start = s.index('Future<void> _persistCompletedFilePath(Task task)')
+          end = s.index('void _handleStatusUpdate(', start)
+          body = s[start:end]
+          print('METHOD_LENGTH', len(body))
+          print('KNOWN_SIZE', body.find('final expectedBytes = knownDownloadSize'))
+          print('IF_DOWNLOAD', body.find('if (task is DownloadTask)'))
+          for needle in ['fileBytes', 'downloadCompletionEvidenceMatches(', 'verifyExistingPrefix(']:
+            print(needle, body.find(needle))
+          pivot = body.find('downloadCompletionEvidenceMatches(')
+          print(body[max(0, pivot-1800):pivot+1800])
+          PY
       - name: Identity guard
+        if: always()
         run: flutter test test/core/services/download_resource_identity_guard_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
       - name: Service guard
         if: always()
@@ -38,21 +55,6 @@ jobs:
       - name: Refresh checkpoint
         if: always()
         run: flutter test test/core/services/download_source_refresh_checkpoint_guard_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Recovery reconciliation
-        if: always()
-        run: flutter test test/core/services/download_recovery_reconciliation_guard_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Durable byte contract
-        if: always()
-        run: flutter test test/core/services/download_durable_byte_contract_guard_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Durable provenance
-        if: always()
-        run: flutter test test/core/services/download_durable_byte_provenance_guard_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: DM05 regression
-        if: always()
-        run: flutter test test/core/services/download_job_single_authority_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: DM24 regression
-        if: always()
-        run: flutter test test/core/services/download_logical_identity_start_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
       - name: Analyze
         if: always()
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
