@@ -1,23 +1,19 @@
-name: Core Download State Agent Verification
+name: Agent DM10 Generation And Ack Fencing
 
 on:
-  pull_request:
+  push:
     branches: [plan/download-manager-reliability]
-  workflow_dispatch:
+    paths: [.github/workflows/agent-core-download-state-verification.yml]
 
 permissions:
   contents: write
 
-concurrency:
-  group: core-download-state-agent-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  dm04-recovery-union:
-    name: DM04 recovery union
+  complete:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with: {fetch-depth: 0}
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -28,179 +24,55 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run DM04 focused regressions
-        run: >-
-          flutter test
-          test/core/services/download_recovery_inventory_test.dart
-          test/core/services/download_durable_only_recovery_test.dart
-          test/core/services/download_manifest_startup_inventory_test.dart
-          test/core/services/download_missing_presentation_recovery_test.dart
-          test/core/services/download_recovery_snapshot_test.dart
-          test/core/services/download_recovery_reconciliation_guard_test.dart
-          test/core/services/persistent_parallel_download_manifest_discovery_test.dart
-          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
-          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-
-  core-state-chain:
-    name: DM05 -> DM24 -> DM06 -> DM16
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-          fetch-depth: 0
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.47.1
-          cache: true
-      - name: Prepare once
-        run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-      - name: Apply DM05 JobState authority patch
-        run: |
-          python3 .github/scripts/agent_dm05_overlay_state_patch.py
-          dart format lib/core/services/download_service.dart
-      - name: Verify DM05
-        run: >-
-          flutter test
-          test/core/services/download_job_state_authority_test.dart
-          test/core/services/download_job_state_queue_authority_test.dart
-          test/features/library/presentation/downloads_job_state_authority_test.dart
-          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Commit DM05 locally
-        run: |
-          git diff --check
-          if ! git diff --quiet -- lib/core/services/download_service.dart; then
-            git add lib/core/services/download_service.dart
-            git commit -m 'fix(downloads): make session overlay JobState authoritative'
-          fi
-
-      - name: Apply DM24 logical identity patches
-        run: |
-          if ! grep -q '_jobStore.allForLogicalId(logicalId)' lib/core/services/download_service.dart; then
-            python3 .github/scripts/dm24_start_identity_patch.py
-          fi
-          if ! grep -q 'final String? logicalId;' lib/features/library/presentation/downloads_provider.dart; then
-            python3 .github/scripts/dm24_ui_identity_patch.py
-          fi
-          if ! grep -q 'final allJobs = await _jobStore.all()' lib/core/services/download_service.dart; then
-            python3 .github/scripts/agent_dm24_identity_completion_patch.py
-          fi
-          dart format lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart
-      - name: Verify DM24
-        run: >-
-          flutter test
-          test/core/services/download_job_logical_identity_test.dart
-          test/core/services/download_logical_identity_test.dart
-          test/core/services/download_logical_identity_persistence_test.dart
-          test/core/services/download_logical_identity_start_test.dart
-          test/core/services/download_overlay_logical_identity_test.dart
-          test/features/library/presentation/downloads_logical_identity_test.dart
-          test/core/services/download_job_state_queue_authority_test.dart
-          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Analyze DM24 surfaces
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart lib/core/services/download_logical_identity.dart lib/core/services/download_job_store.dart lib/features/library/presentation/downloads_provider.dart
-      - name: Commit DM24 locally
-        run: |
-          git diff --check
-          if ! git diff --quiet -- lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart; then
-            git add lib/core/services/download_service.dart lib/features/library/presentation/downloads_provider.dart
-            git commit -m 'fix(downloads): canonicalize logical episode identity'
-          fi
-
-      - name: Prove DM06 regression is RED before implementation
+          git reset --hard HEAD
+      - name: Confirm DM-10 RED
         run: |
           set +e
-          flutter test test/core/services/download_resource_identity_service_guard_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key > /tmp/dm06-red.log 2>&1
+          flutter test \
+            test/core/services/download_callback_generation_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
           status=$?
           set -e
-          cat /tmp/dm06-red.log
           if [ "$status" -eq 0 ]; then
-            echo 'DM06 RED test unexpectedly passed before the integration patch'
+            echo "DM-10 RED unexpectedly passed before the production fix"
             exit 1
           fi
-      - name: Apply DM06 resource identity patch
+          echo "DM-10 RED reproduced as expected"
+      - name: Apply DM-10 minimal generation and acknowledgement fix
         run: |
-          if ! grep -q 'completion.verificationRejected' lib/core/services/download_service.dart; then
-            python3 .github/scripts/agent_dm06_resource_integrity_patch.py
-            python3 .github/scripts/agent_dm06_probe_method_patch.py
-          fi
-          dart format lib/core/services/download_service.dart lib/core/services/download_resource_identity.dart
-      - name: Verify DM06
-        run: >-
-          flutter test
-          test/core/services/download_resource_identity_test.dart
-          test/core/services/download_resource_identity_service_guard_test.dart
-          test/core/services/download_job_store_test.dart
-          test/core/services/download_source_refresh_integrity_test.dart
-          test/core/services/download_parallel_complete_artifact_guard_test.dart
-          test/core/services/download_range_checkpoint_backpressure_test.dart
-          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Analyze DM06 surfaces
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart lib/core/services/download_resource_identity.dart lib/core/services/download_job_store.dart lib/core/services/download_range_transfer.dart
-      - name: Commit DM06 locally
+          python3 .github/scripts/dm10_generation_ack_patch.py
+          dart format \
+            lib/core/services/download_job_store.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_callback_generation_test.dart
+      - name: Verify DM-10 and adjacent regressions
         run: |
-          git diff --check
-          if ! git diff --quiet -- lib/core/services/download_service.dart; then
-            git add lib/core/services/download_service.dart
-            git commit -m 'fix(downloads): verify remote identity before completion'
-          fi
-
-      - name: Prove DM16 regressions are RED before implementation
-        run: |
-          set +e
-          flutter test test/core/services/download_zero_restart_invariant_test.dart test/core/services/download_historical_progress_recovery_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key > /tmp/dm16-red.log 2>&1
-          status=$?
-          set -e
-          cat /tmp/dm16-red.log
-          if [ "$status" -eq 0 ]; then
-            echo 'DM16 RED tests unexpectedly passed before the progress-evidence patch'
-            exit 1
-          fi
-      - name: Apply DM16 historical progress separation
-        run: |
-          if ! grep -q 'Historical UI progress is not recoverable-byte evidence' lib/core/utils/download_resume.dart; then
-            python3 .github/scripts/agent_dm16_progress_evidence_patch.py
-          fi
-          python3 .github/scripts/agent_dm16_legacy_resume_test_patch.py
-          dart format lib/core/utils/download_resume.dart lib/core/services/download_service.dart test/core/utils/download_resume_test.dart
-      - name: Verify DM16
-        run: >-
-          flutter test
-          test/core/services/download_zero_restart_invariant_test.dart
-          test/core/services/download_historical_progress_recovery_test.dart
-          test/core/services/download_durable_byte_contract_guard_test.dart
-          test/core/services/download_durable_byte_provenance_guard_test.dart
-          test/core/services/download_recovery_snapshot_test.dart
-          test/core/services/download_recovery_reconciliation_guard_test.dart
-          test/core/utils/download_resume_test.dart
-          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Analyze DM16 surfaces
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/utils/download_resume.dart lib/core/services/download_service.dart
-      - name: Commit DM16 locally
-        run: |
-          git diff --check
-          if ! git diff --quiet -- lib/core/utils/download_resume.dart lib/core/services/download_service.dart test/core/utils/download_resume_test.dart; then
-            git add lib/core/utils/download_resume.dart lib/core/services/download_service.dart test/core/utils/download_resume_test.dart
-            git commit -m 'fix(downloads): separate progress history from resumable bytes'
-          fi
-
-      - name: Full analyzer verification
+          flutter test \
+            test/core/services/download_callback_generation_test.dart \
+            test/core/services/download_job_store_test.dart \
+            test/core/services/download_pause_settlement_guard_test.dart \
+            test/core/services/download_cancel_checkpoint_guard_test.dart \
+            test/core/services/download_cancel_ownership_guard_test.dart \
+            test/core/services/download_cancel_settlement_test.dart \
+            test/core/services/download_runtime_ownership_test.dart \
+            test/core/services/download_control_outcome_guard_test.dart \
+            test/core/services/download_source_refresh_checkpoint_guard_test.dart \
+            test/core/services/download_source_refresh_integrity_test.dart \
+            test/core/services/download_resource_identity_service_guard_test.dart \
+            test/core/services/download_resource_identity_test.dart \
+            test/core/services/download_recovery_reconciliation_guard_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
-      - name: Full Flutter regression suite
-        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Final diff verification
-        run: git diff --check
-      - name: Push verified production commits once
+      - name: Mark complete and push
         run: |
-          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/${{ github.event.pull_request.head.ref }})" ]; then
-            echo 'All production fixes already present'
-            exit 0
-          fi
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          python3 .github/scripts/dm10_mark_complete.py
+          rm -f .github/workflows/agent-core-download-state-verification.yml
+          rm -f .github/scripts/dm10_generation_ack_patch.py
+          rm -f .github/scripts/dm10_mark_complete.py
+          git add -A
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "fix(downloads): fence control callbacks by generation and ownership"
+          git push origin HEAD:plan/download-manager-reliability
