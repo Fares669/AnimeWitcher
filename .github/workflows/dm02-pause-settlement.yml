@@ -32,8 +32,17 @@ jobs:
           from pathlib import Path
           p = Path('test/core/services/download_pause_settlement_guard_test.dart')
           s = p.read_text()
-          s = s.replace("'Future<bool> _resumeDownloadTask('", "'Future<void> cancelDownload('")
-          p.write_text(s)
+          old = """    final body = methodBody(
+              source,
+              'Future<bool> _pauseTransfer(',
+              'Future<bool> _resumeDownloadTask(',
+            );"""
+          new = """    final start = source.indexOf('Future<bool> _pauseTransfer(');
+            expect(start, greaterThanOrEqualTo(0));
+            final body = source.substring(start);"""
+          if old not in s:
+              raise SystemExit('pauseTransfer guard block missing')
+          p.write_text(s.replace(old, new, 1))
           PY
           set +e
           flutter test test/core/services/download_pause_settlement_guard_test.dart >/tmp/dm02-red.log 2>&1
@@ -55,8 +64,17 @@ jobs:
 
           test = Path('test/core/services/download_pause_settlement_guard_test.dart')
           t = test.read_text()
-          t = t.replace("'Future<bool> _resumeDownloadTask('", "'Future<void> cancelDownload('")
-          test.write_text(t)
+          old = """    final body = methodBody(
+              source,
+              'Future<bool> _pauseTransfer(',
+              'Future<bool> _resumeDownloadTask(',
+            );"""
+          new = """    final start = source.indexOf('Future<bool> _pauseTransfer(');
+            expect(start, greaterThanOrEqualTo(0));
+            final body = source.substring(start);"""
+          if old not in t:
+              raise SystemExit('pauseTransfer guard block missing after apply')
+          test.write_text(t.replace(old, new, 1))
           PY
           dart format lib/core/services/download_service.dart test/core/services/download_pause_settlement_guard_test.dart
       - name: Run focused regressions
