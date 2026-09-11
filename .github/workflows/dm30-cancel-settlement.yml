@@ -42,7 +42,21 @@ jobs:
           python3 .github/dm30_cancel_settlement.py apply
           dart format lib/core/services/download_transport.dart lib/core/services/download_service.dart test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart
       - name: Verify DM-30 cancellation contract
-        run: flutter test test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart
+        shell: bash
+        run: |
+          set +e
+          flutter test test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart > /tmp/dm30-green.log 2>&1
+          code=$?
+          cat /tmp/dm30-green.log
+          cp /tmp/dm30-green.log dm30-green.log
+          exit "$code"
+      - name: Upload DM-30 failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm30-green-log
+          path: dm30-green.log
+          if-no-files-found: ignore
       - name: Verify ownership and lifecycle regressions
         run: |
           flutter test test/core/services/download_runtime_ownership_test.dart
@@ -75,7 +89,7 @@ jobs:
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+Fares669@users.noreply.github.com"
           git rm .github/workflows/dm30-cancel-settlement.yml .github/dm30_cancel_settlement.py
           git add DOWNLOAD_MANAGER_PLAN.md lib/core/services/download_transport.dart lib/core/services/download_service.dart test/core/services/download_cancel_settlement_test.dart test/core/services/download_cancel_ownership_guard_test.dart
           git diff --cached --check
