@@ -1,0 +1,59 @@
+name: DM24 JobStore Identity Fix
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/scripts/dm24_jobstore_patch.py
+      - .github/workflows/dm24-jobstore-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-jobstore-identity:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Apply JobStore logical identity migration
+        run: |
+          python3 .github/scripts/dm24_jobstore_patch.py
+          dart format lib/core/services/download_job_store.dart
+      - name: Run focused logical identity tests
+        run: >-
+          flutter test
+          test/core/services/download_logical_identity_test.dart
+          test/core/services/download_job_logical_identity_test.dart
+          test/core/services/download_job_store_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Verify scoped diff
+        run: |
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "lib/core/services/download_job_store.dart"
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_job_store.dart
+          git commit -m "feat(downloads): persist logical episode identity"
+          git pull --rebase origin plan/download-manager-reliability
+          git push origin HEAD:plan/download-manager-reliability
