@@ -168,7 +168,8 @@ jobs:
           if ! grep -q 'Historical UI progress is not recoverable-byte evidence' lib/core/utils/download_resume.dart; then
             python3 .github/scripts/agent_dm16_progress_evidence_patch.py
           fi
-          dart format lib/core/utils/download_resume.dart lib/core/services/download_service.dart
+          python3 .github/scripts/agent_dm16_legacy_resume_test_patch.py
+          dart format lib/core/utils/download_resume.dart lib/core/services/download_service.dart test/core/utils/download_resume_test.dart
       - name: Verify DM16
         run: >-
           flutter test
@@ -178,14 +179,15 @@ jobs:
           test/core/services/download_durable_byte_provenance_guard_test.dart
           test/core/services/download_recovery_snapshot_test.dart
           test/core/services/download_recovery_reconciliation_guard_test.dart
+          test/core/utils/download_resume_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
       - name: Analyze DM16 surfaces
         run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/utils/download_resume.dart lib/core/services/download_service.dart
       - name: Commit DM16 locally
         run: |
           git diff --check
-          if ! git diff --quiet -- lib/core/utils/download_resume.dart lib/core/services/download_service.dart; then
-            git add lib/core/utils/download_resume.dart lib/core/services/download_service.dart
+          if ! git diff --quiet -- lib/core/utils/download_resume.dart lib/core/services/download_service.dart test/core/utils/download_resume_test.dart; then
+            git add lib/core/utils/download_resume.dart lib/core/services/download_service.dart test/core/utils/download_resume_test.dart
             git commit -m 'fix(downloads): separate progress history from resumable bytes'
           fi
 
