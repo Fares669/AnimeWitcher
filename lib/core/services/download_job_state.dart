@@ -303,10 +303,10 @@ DownloadRecoveryPlan planDownloadRecoveryWithJobAuthority({
       break;
   }
 
-  // Keep legacy userPaused=true as migration evidence too. A pause is safer to
-  // preserve than to accidentally turn into network activity after relaunch.
+  // Legacy userPaused is migration evidence only when no JobStore authority
+  // exists (handled above). Once a durable logical state exists, replicas such
+  // as metadata/plugin status may not override it.
   if (authoritativeUserPaused ||
-      userPaused ||
       authoritativeState == DownloadJobState.pausedByUser ||
       authoritativeState == DownloadJobState.pausing) {
     return const DownloadRecoveryPlan(
