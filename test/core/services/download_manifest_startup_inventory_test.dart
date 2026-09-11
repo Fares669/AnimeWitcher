@@ -32,6 +32,10 @@ void main() {
         '<String, ParallelManifestRecoveryEvidence>{',
       ),
     );
+    expect(
+      source,
+      contains('await _parallel.restore(manifestEvidence.parentTask!)'),
+    );
   });
 
   test('manifest is descriptor fallback and never overrides stronger sources', () {
@@ -86,5 +90,15 @@ void main() {
       source,
       contains('TaskRecord(\n          parentTask,\n          TaskStatus.paused,'),
     );
+  });
+
+  test('unresolved legacy manifests settle known child writers before ignore', () {
+    final source = File('lib/core/services/download_service.dart').readAsStringSync();
+
+    expect(
+      source,
+      contains("diagnosticLog.record('recovery.unresolvedManifestOwnership'"),
+    );
+    expect(source, contains('await _pauseTransfer(childTask)'));
   });
 }
