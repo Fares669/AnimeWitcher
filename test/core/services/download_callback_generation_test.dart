@@ -182,9 +182,9 @@ void main() {
         cancelStart,
       );
       final cancel = source.substring(cancelStart, cancelEnd);
-      expect(cancel, contains('_jobStore.beginOperation('));
+      expect(cancel, contains('_jobStore.tombstoneForDeletion('));
       expect(
-        cancel.indexOf('_jobStore.beginOperation('),
+        cancel.indexOf('_jobStore.tombstoneForDeletion('),
         lessThan(cancel.indexOf('await _rangeTransfers.stop(taskId);')),
       );
 
