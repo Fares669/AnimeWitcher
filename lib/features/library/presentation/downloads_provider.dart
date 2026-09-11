@@ -439,6 +439,32 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       }
     }
 
+    // Active rows may only disappear after the service proves that every
+    // writer released ownership. Command acknowledgement alone is not enough:
+    // an iOS URLSession/Range writer can still be settling after cancel.
+    for (final item in toRemove.values) {
+      if (!shouldCancelDownload(item.status)) continue;
+      final trackingUrl = downloadTrackingUrl(item.task);
+      final outcome = await downloadService
+          .cancelDownloadOutcome(item.task.taskId, trackingUrl)
+          .timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => DownloadCommandOutcome.settlingOwnership,
+          );
+      final safeToDestroy = switch (outcome) {
+        DownloadCommandOutcome.terminal ||
+        DownloadCommandOutcome.alreadyComplete ||
+        DownloadCommandOutcome.missingState => true,
+        _ => false,
+      };
+      if (!safeToDestroy) {
+        // Fail closed. Keep the visible/durable row and all file/metadata
+        // evidence so a later reconcile/retry can finish ownership settlement.
+        state = AsyncData(await _refreshList());
+        return;
+      }
+    }
+
     final droppedIds = toRemove.keys.toSet();
     _deletingIds.addAll(droppedIds);
     for (final id in droppedIds) {
@@ -458,8 +484,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       ref.read(downloadChunkProgressProvider.notifier).remove(item.id);
     }
 
-    // Capture possible final/partial paths before cancel removes metadata. This
-    // is cleanup-only work: the card is already gone and controls are free.
+    // Capture possible final/partial paths after ownership release but before
+    // metadata cleanup removes the information needed to find them.
     final filesToDelete = <String, File>{};
     for (final item in toRemove.values) {
       try {
@@ -474,20 +500,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       } catch (_) {}
     }
 
-    // Stop ownership and tombstone DB/Hive first. Every step is best-effort so
-    // one stale URLSession worker can never prevent the logical delete.
+    // Ownership is settled above. Destructive DB/Hive/file cleanup is now
+    // safe and remains best-effort so stale presentation artifacts cannot
+    // prevent an otherwise proven logical delete.
     for (final item in toRemove.values) {
-      final trackingUrl = downloadTrackingUrl(item.task);
-      if (shouldCancelDownload(item.status)) {
-        try {
-          await downloadService
-              .cancelDownload(item.task.taskId, trackingUrl)
-              .timeout(const Duration(seconds: 3));
-        } catch (_) {
-          // Timeout only releases the UI cleanup path; cancelDownload continues
-          // settling its native Future in the background.
-        }
-      }
       try {
         await FileDownloader().database.deleteRecordWithId(item.task.taskId);
       } catch (_) {}
