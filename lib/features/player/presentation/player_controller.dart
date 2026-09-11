@@ -2601,8 +2601,12 @@ class PlayerController extends Notifier<PlayerState> {
   Future<void> applyAnime4kShaders() async {
     if (_isDisposed) return;
     if (!anime4kAvailableOn(
-      isDesktopPlatform:
-          Platform.isWindows || Platform.isMacOS || Platform.isLinux,
+      isNativePlatform:
+          Platform.isWindows ||
+          Platform.isMacOS ||
+          Platform.isLinux ||
+          Platform.isAndroid ||
+          Platform.isIOS,
       usingAdaptiveBackend: state.useExoPlayer,
     )) {
       return;
@@ -2622,6 +2626,24 @@ class PlayerController extends Notifier<PlayerState> {
             directory: settings?.anime4kShaderDirectory ?? '',
           );
       if (_isDisposed) return;
+      if (!pipeline.isEmpty) {
+        final currentVo = (await platform.getProperty('current-vo')).trim();
+        final gpuDumbMode = (await platform.getProperty('gpu-dumb-mode'))
+            .trim()
+            .toLowerCase();
+        if (!anime4kGpuRendererSupportsShaders(currentVo) ||
+            gpuDumbMode == 'yes') {
+          await platform.setProperty('glsl-shaders', '');
+          _anime4kApplied = '';
+          if (kDebugMode) {
+            debugPrint(
+              'Anime4K: GPU shader stage unavailable '
+              '(vo="$currentVo", gpu-dumb-mode="$gpuDumbMode")',
+            );
+          }
+          return;
+        }
+      }
       // An empty string is how mpv is told to run no shaders, so this both
       // applies a mode and turns one off.
       await platform.setProperty('glsl-shaders', pipeline.value);

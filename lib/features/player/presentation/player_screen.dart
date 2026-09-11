@@ -20,7 +20,9 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/immersive_mode.dart';
 import '../../../../core/utils/window_controls_visibility.dart';
 import '../../../../core/providers/device_info_provider.dart';
+import '../../../../core/storage/settings_repository.dart';
 import '../../../../features/settings/presentation/player_settings_provider.dart';
+import '../data/anime4k.dart';
 import 'widgets/animewitcher_player_controls.dart';
 import 'widgets/hotstar_player_style.dart';
 import 'widgets/player_ltr.dart';
@@ -160,7 +162,40 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       // _applyPlaybackProperties / applySubtitleSettings as well.
       native.setProperty('sub-visibility', 'no');
     }
-    _videoController = VideoController(_player);
+    // Anime4K is a GPU render-stage effect. Make the shader-capable mpv
+    // output explicit whenever the feature is enabled so Android cannot fall
+    // back to a direct decoder surface that bypasses GLSL. Read the persisted
+    // setting synchronously: PlayerSettings is async and can still be loading
+    // during a cold-start player launch.
+    final settingsStorage = ref.read(settingsRepositoryProvider);
+    final storedAnime4kMode = Anime4kModeName.fromName(
+      settingsStorage.getPlayerSetting<String>(
+        'player_anime4k_mode',
+        defaultValue: Anime4kMode.off.name,
+      ),
+    );
+    final storedAnime4kEnabled = anime4kEnabledFrom(
+      stored: settingsStorage.getPlayerSetting<bool>('player_anime4k_enabled'),
+      mode: storedAnime4kMode,
+    );
+    final forceAnime4kGpuPath =
+        storedAnime4kEnabled &&
+        (Platform.isWindows ||
+            Platform.isMacOS ||
+            Platform.isLinux ||
+            Platform.isAndroid ||
+            Platform.isIOS);
+    _videoController = VideoController(
+      _player,
+      configuration: VideoControllerConfiguration(
+        vo: forceAnime4kGpuPath
+            ? (Platform.isAndroid ? 'gpu' : 'libmpv')
+            : null,
+        // auto-safe keeps Android hardware decoding where mpv can interop it
+        // safely while still routing the final image through vo=gpu.
+        hwdec: forceAnime4kGpuPath && Platform.isAndroid ? 'auto-safe' : null,
+      ),
+    );
 
     // Phase 8: Initialize video_view engine (ExoPlayer on Android, AVPlayer on iOS/macOS)
     _videoViewController = vv.VideoController(autoPlay: true);

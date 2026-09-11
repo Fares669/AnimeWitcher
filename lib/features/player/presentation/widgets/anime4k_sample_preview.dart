@@ -126,17 +126,39 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     final player = _player;
     if (player == null) return;
     final platform = player.platform;
-    if (platform is! NativePlayer) return;
+    if (platform is! NativePlayer) {
+      if (mounted) {
+        setState(() => _error = 'Anime4K requires the native mpv player.');
+      }
+      return;
+    }
     try {
       final pipeline = await const Anime4kShaderLibrary().pipeline(
         mode: widget.mode,
         quality: widget.quality,
         directory: widget.shaderDirectory,
       );
+      if (!pipeline.isEmpty) {
+        final currentVo = (await platform.getProperty('current-vo')).trim();
+        final gpuDumbMode = (await platform.getProperty('gpu-dumb-mode'))
+            .trim()
+            .toLowerCase();
+        if (!anime4kGpuRendererSupportsShaders(currentVo) ||
+            gpuDumbMode == 'yes') {
+          throw StateError(
+            'Anime4K GPU shaders are unavailable on this renderer '
+            '(vo=$currentVo, gpu-dumb-mode=$gpuDumbMode).',
+          );
+        }
+      }
       await platform.setProperty('glsl-shaders', pipeline.value);
-    } catch (_) {
-      // A shader that will not load leaves the sample as it is, which is
-      // still a truthful picture of what that mode is doing here.
+      final applied = (await platform.getProperty('glsl-shaders')).trim();
+      if (pipeline.value.isNotEmpty && applied.isEmpty) {
+        throw StateError('mpv did not accept the Anime4K shader chain.');
+      }
+      if (mounted && _error != null) setState(() => _error = null);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
     }
   }
 

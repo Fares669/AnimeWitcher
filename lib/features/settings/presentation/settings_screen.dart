@@ -408,9 +408,13 @@ class SettingsScreen extends ConsumerWidget {
                 .read(playerSettingsProvider.notifier)
                 .setPrefetchNextEpisode(!playerSettings.prefetchNextEpisode),
           ),
-          // Desktop only. Offering it on a phone would be offering a
-          // setting that cannot run there — see anime4kAvailableOn.
-          if (Platform.isWindows || Platform.isMacOS || Platform.isLinux)
+          // Native media_kit/libmpv platforms can run Anime4K through
+          // mpv's GPU shader stage. The adaptive backend is rejected at playback.
+          if (Platform.isWindows ||
+              Platform.isMacOS ||
+              Platform.isLinux ||
+              Platform.isAndroid ||
+              Platform.isIOS)
             SettingsTile(
               icon: Icons.auto_awesome_rounded,
               title: 'Anime4K',

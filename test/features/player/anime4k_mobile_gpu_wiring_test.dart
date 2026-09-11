@@ -13,13 +13,12 @@ void main() {
   });
 
   test('Android player explicitly uses mpv GPU output for Anime4K', () {
-    final source = File(
-      'lib/features/player/presentation/player_screen.dart',
-    ).readAsStringSync();
+    final source = File('lib/features/player/presentation/player_screen.dart')
+        .readAsStringSync();
 
     expect(source, contains("'player_anime4k_enabled'"));
     expect(source, contains("'player_anime4k_mode'"));
-    expect(source, contains("vo: forceAnime4kGpuPath ? 'gpu' : null"));
+    expect(source, contains("Platform.isAndroid ? 'gpu' : 'libmpv'"));
   });
 
   test('player verifies a real mpv GPU renderer before applying shaders', () {

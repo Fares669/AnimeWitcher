@@ -5,10 +5,7 @@ void main() {
   group('Anime4K mobile GPU availability', () {
     test('native mobile playback can offer Anime4K', () {
       expect(
-        anime4kAvailableOn(
-          isDesktopPlatform: false,
-          usingAdaptiveBackend: false,
-        ),
+        anime4kAvailableOn(isNativePlatform: true, usingAdaptiveBackend: false),
         isTrue,
         reason:
             'Android/iOS use media_kit NativePlayer/libmpv GPU rendering, so '
@@ -18,10 +15,7 @@ void main() {
 
     test('adaptive video_view playback still cannot offer Anime4K', () {
       expect(
-        anime4kAvailableOn(
-          isDesktopPlatform: false,
-          usingAdaptiveBackend: true,
-        ),
+        anime4kAvailableOn(isNativePlatform: true, usingAdaptiveBackend: true),
         isFalse,
       );
     });

@@ -86,20 +86,25 @@ extension Anime4kModeName on Anime4kMode {
 
 /// Whether this device can be offered Anime4K at all.
 ///
-/// Desktop only, and only on the mpv backend. The shaders are a real load on
-/// a GPU — the network sizes are described by their own project in multiples
-/// of processing time — and a phone playing a 1080p stream has neither the
-/// thermal room nor a screen large enough to show what the work bought. The
-/// adaptive backend used for DRM and some live streams has no GLSL stage at
-/// all, so there is nothing to offer there either.
-///
-/// Judged by platform rather than by window size: a narrow window on a
-/// desktop still has the card behind it, and a tablet-sized phone does not.
+/// Anime4K needs the native media_kit/libmpv renderer because mpv applies the
+/// GLSL chain in its GPU video-output stage. Android, iOS, macOS, Windows and
+/// Linux are eligible; the adaptive video_view backend is not because it has
+/// no mpv GLSL stage.
 bool anime4kAvailableOn({
-  required bool isDesktopPlatform,
+  required bool isNativePlatform,
   required bool usingAdaptiveBackend,
 }) {
-  return isDesktopPlatform && !usingAdaptiveBackend;
+  return isNativePlatform && !usingAdaptiveBackend;
+}
+
+/// Whether mpv's active video output can execute custom GLSL shaders.
+///
+/// mpv documents custom shaders for gpu, gpu-next and libmpv. Keeping this
+/// check separate lets the player reject a fallback/software/no-shader output
+/// instead of accepting the setting while drawing an unchanged picture.
+bool anime4kGpuRendererSupportsShaders(String currentVo) {
+  final vo = currentVo.trim().toLowerCase();
+  return vo == 'gpu' || vo == 'gpu-next' || vo == 'libmpv';
 }
 
 /// Whether the feature is on, for a setting that may predate the flag.
