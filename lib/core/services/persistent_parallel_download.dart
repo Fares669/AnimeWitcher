@@ -32,9 +32,11 @@ const Duration kParallelProgressPersistInterval = Duration(seconds: 1);
 /// cannot silently assemble bytes from a different resource generation.
 /// Version 4 also persists whether a child must bypass old native resumeData
 /// after its parent source URL was refreshed. Version 5 adds exact per-part
-/// durable byte counters. Floating-point progress remains presentation/history
-/// only and is never recovery byte authority.
-const int kParallelManifestSchemaVersion = 5;
+/// durable byte counters. Version 6 also persists the complete logical parent
+/// task descriptor so a manifest can participate in startup inventory even if
+/// executor/JobStore projections were lost. Floating-point progress remains
+/// presentation/history only and is never recovery byte authority.
+const int kParallelManifestSchemaVersion = 6;
 
 /// Validate response metadata from a native multipart child. A full HTTP
 /// 200 is safe only when this child already represents the entire resource;
@@ -2647,6 +2649,7 @@ class PersistentParallelDownload {
     final payload = jsonEncode({
       'schemaVersion': kParallelManifestSchemaVersion,
       'parentTaskId': session.task.taskId,
+      'parentTask': session.task.toJson(),
       'generation': session.generation,
       'checkpointSequence': session.checkpointSequence,
       'expectedBytes': session.size,
