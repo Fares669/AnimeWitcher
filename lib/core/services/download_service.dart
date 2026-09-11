@@ -34,6 +34,7 @@ import 'download_retry_policy.dart';
 import 'download_host_profile.dart';
 import 'download_job_state.dart';
 import 'download_job_store.dart';
+import 'download_service_readiness.dart';
 import 'download_url_refresh.dart';
 import 'download_plugin_compat.dart';
 import 'download_transport.dart';
@@ -261,7 +262,7 @@ class DownloadService {
   );
 
   Future<void> setDiagnosticLogging(bool enabled) async {
-    await init();
+    await _awaitCommandReadiness('setDiagnosticLogging');
     final previous = diagnosticLog.enabled;
     try {
       await diagnosticLog.configure(enabled);
@@ -290,7 +291,8 @@ class DownloadService {
   StreamSubscription<TaskUpdate>? _updatesSubscription;
   bool _isInitialized = false;
   bool _disposed = false;
-  Future<void>? _initializing;
+  final DownloadServiceReadinessBarrier _readiness =
+      DownloadServiceReadinessBarrier();
   late final PersistentParallelDownload _parallel;
   late final DownloadRangeTransfer _rangeTransfers;
   late final NativeSingleDownloadTransport _nativeTransport;
@@ -609,13 +611,41 @@ class DownloadService {
     // lifetime and cannot be re-subscribed after cancellation.
   }
 
-  Future<void> init() => _initializing ??= _initialize().catchError((
-    Object error,
-    StackTrace stack,
-  ) {
-    _initializing = null;
-    Error.throwWithStackTrace(error, stack);
-  });
+  Future<void> init() {
+    if (_disposed) {
+      return Future<void>.error(DownloadServiceUnavailableException.disposed());
+    }
+    return _readiness.ensureReady(_initialize);
+  }
+
+  Future<void> _awaitCommandReadiness(String command) async {
+    try {
+      await init();
+    } on DownloadServiceUnavailableException catch (error) {
+      diagnosticLog.record('command.serviceUnavailable', {
+        'command': command,
+        'reason': error.reason.name,
+        'retryable': error.retryable,
+        if (error.cause != null)
+          'causeType': error.cause.runtimeType.toString(),
+      });
+      rethrow;
+    }
+  }
+
+  Future<bool> _awaitLifecycleReadiness(String event) async {
+    try {
+      await init();
+      return true;
+    } on DownloadServiceUnavailableException catch (error) {
+      diagnosticLog.record('lifecycle.serviceUnavailable', {
+        'event': event,
+        'reason': error.reason.name,
+        'retryable': error.retryable,
+      });
+      return false;
+    }
+  }
 
   Future<void> _initialize() async {
     if (_isInitialized) {
@@ -674,6 +704,10 @@ class DownloadService {
     // 4. Bridge FileDownloader updates into a shared broadcast stream (once),
     //    then let this instance listen to that broadcast proxy.
     _fdSubscription ??= FileDownloader().updates.listen(_sharedEvents.add);
+    // A previous initialization attempt may have failed after installing
+    // this instance listener. Cancel it before retrying so deliberate retry
+    // cannot duplicate callback consumers.
+    await _updatesSubscription?.cancel();
     _updatesSubscription = _sharedEvents.stream.listen((update) {
       diagnosticLog.record('task.update', {
         'taskId': update.task.taskId,
@@ -1028,6 +1062,9 @@ class DownloadService {
   /// holding queue. Every episode is OS-enqueued; extras wait as
   /// **في الانتظار**. Dart still promotes leftover waiters when a slot frees.
   Future<void> applyQueueSettings({required int maxConcurrent}) async {
+    if (configureHoldingQueueForTesting == null) {
+      await _awaitCommandReadiness('applyQueueSettings');
+    }
     await applyDownloadQueueSettings(
       maxConcurrent: maxConcurrent,
       persist: _ref.read(storageServiceProvider).setDownloadConcurrency,
@@ -1048,6 +1085,7 @@ class DownloadService {
   Future<void> applyNotificationSettings(
     DownloadNotificationPrefs prefs,
   ) async {
+    await _awaitCommandReadiness('applyNotificationSettings');
     await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);
     _configureDownloadNotifications(prefs);
   }
@@ -1542,7 +1580,7 @@ class DownloadService {
   /// Promote leftover parked waiters only if native does not already own
   /// that episode. Never pause/re-enqueue/restart URLSession here.
   Future<void> onAppForegrounded() async {
-    if (!_isInitialized) return;
+    if (!await _awaitLifecycleReadiness('foreground')) return;
     await _serializeQueue(() async {
       await _reconcileTransferOwnership();
       await _attachUiToLiveNativeTasks();
@@ -2511,6 +2549,7 @@ class DownloadService {
     String trackingUrl, {
     bool notifyContinuedProcessing = true,
   }) async {
+    await _awaitCommandReadiness('cancelDownload');
     diagnosticLog.record('command.cancel', {'taskId': taskId});
     // Persist terminal intent before stopping any writer. The durable row is
     // removed only after native/plugin cleanup below has returned; DM-07 will
@@ -2612,6 +2651,7 @@ class DownloadService {
   }
 
   Future<void> pauseDownload(String taskId) async {
+    await _awaitCommandReadiness('pauseDownload');
     diagnosticLog.record('command.pauseDownload', {'taskId': taskId});
     await _serializeQueue(() async {
       final recordForId = await FileDownloader().database.recordForId(taskId);
@@ -2758,6 +2798,7 @@ class DownloadService {
   }
 
   Future<void> resumeDownload(String taskId) async {
+    await _awaitCommandReadiness('resumeDownload');
     diagnosticLog.record('command.resumeDownload', {'taskId': taskId});
     await _serializeQueue(() async {
       await _resumeUserPausedUnlocked(taskId);
@@ -3879,6 +3920,7 @@ class DownloadService {
     Map<String, String>? headers,
     int totalBytes = -1,
   }) async {
+    await _awaitCommandReadiness('startDownload');
     diagnosticLog.record('command.start', {'total': totalBytes});
     if (kDebugMode) {
       debugPrint('[DownloadService] startDownload called');
