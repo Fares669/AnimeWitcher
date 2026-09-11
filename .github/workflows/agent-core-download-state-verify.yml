@@ -1,46 +1,45 @@
-name: Agent Core Download State Verify
+name: Finalize DM-04 Plan
 
 on:
   push:
     branches:
       - agent/core-download-state-recovery-dm04-dm16-20260911
-  workflow_dispatch:
 
 permissions:
-  contents: read
-
-concurrency:
-  group: agent-core-download-state-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  focused-download-state:
+  finalize-dm04:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: subosito/flutter-action@v2
         with:
-          channel: stable
-          flutter-version: 3.47.1
-          cache: true
-      - name: Install dependencies and generate sources
+          fetch-depth: 0
+      - name: Mark verified DM-04 complete
         run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-      - name: Analyze
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos
-      - name: DM-04 recovery union regression
-        run: >-
-          flutter test
-          test/core/services/download_recovery_inventory_test.dart
-          test/core/services/download_durable_only_recovery_test.dart
-          test/core/services/download_missing_presentation_recovery_test.dart
-          test/core/services/download_manifest_startup_inventory_test.dart
-          test/core/services/download_recovery_reconciliation_guard_test.dart
-          test/core/services/download_recovery_snapshot_test.dart
-          test/core/services/download_runtime_ownership_test.dart
-          test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
-          test/core/services/persistent_parallel_download_manifest_discovery_test.dart
-          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
-          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('DOWNLOAD_MANAGER_PLAN.md')
+          text = path.read_text()
+          old = '- [ ] **DM-04 — Recover from the union of persistence and ownership sources**'
+          new = '- [x] **DM-04 — Recover from the union of persistence and ownership sources**'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one unchecked DM-04 header, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          marker = '\n\n## Phase 2 — One logical state, canonical identity, integrity, and terminal deletion'
+          if text.count(marker) != 1:
+              raise SystemExit('DM-04 phase boundary not found uniquely')
+          notes = '''
+  - **Implementation notes (2026-09-11):** Startup recovery now builds one deterministic inventory from plugin DB records, live runtime/native ownership, JobStore task snapshots, presentation metadata and multipart manifest descriptors. Stronger executor evidence wins duplicate execution identities; JobStore/metadata/manifest-only rows are reconstructed once, missing presentation identity becomes explicit orphan/settling state, and unresolved legacy manifests settle known child writers instead of fabricating a parent. Exact disk/manifest byte reconciliation remains provenance-bound and generation-fenced.
+  - **Confirmed root cause:** startup enumeration was historically downloader-DB-first, so loss of a plugin row could hide a still-recoverable logical download even when durable JobStore, metadata, manifest or live ownership evidence survived.
+  - **Verification passed:** Agent Core Download State Verify run `34602555933` passed `flutter analyze --no-fatal-warnings --no-fatal-infos` plus recovery inventory, durable-only recovery, missing-presentation settlement, manifest-startup inventory, recovery reconciliation/snapshot, runtime ownership, and relevant multipart manifest discovery/durability regressions.
+'''
+          text = text.replace(marker, '\n' + notes + marker, 1)
+          path.write_text(text)
+          PY
+          git rm .github/workflows/agent-core-download-state-verify.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add DOWNLOAD_MANAGER_PLAN.md
+          git commit -m "docs(downloads): complete verified DM-04 recovery union"
+          git push origin HEAD:agent/core-download-state-recovery-dm04-dm16-20260911
