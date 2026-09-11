@@ -91,10 +91,14 @@ DownloadCommandOutcome resolvePauseCommandOutcome({
   required DownloadRuntimeOwnership ownership,
 }) {
   final durable = downloadCommandOutcomeForJobState(state);
-  if (durable != DownloadCommandOutcome.missingState) return durable;
-  return ownership == DownloadRuntimeOwnership.notOwned
-      ? DownloadCommandOutcome.missingState
-      : DownloadCommandOutcome.settlingOwnership;
+  if (durable == DownloadCommandOutcome.alreadyComplete ||
+      durable == DownloadCommandOutcome.terminal) {
+    return durable;
+  }
+  if (ownership != DownloadRuntimeOwnership.notOwned) {
+    return DownloadCommandOutcome.settlingOwnership;
+  }
+  return durable;
 }
 
 DownloadCommandOutcome resolveResumeCommandOutcome({
@@ -102,12 +106,15 @@ DownloadCommandOutcome resolveResumeCommandOutcome({
   required DownloadRuntimeOwnership ownership,
 }) {
   final durable = downloadCommandOutcomeForJobState(state);
-  if (durable != DownloadCommandOutcome.missingState) return durable;
+  if (durable == DownloadCommandOutcome.alreadyComplete ||
+      durable == DownloadCommandOutcome.terminal) {
+    return durable;
+  }
   return switch (ownership) {
     DownloadRuntimeOwnership.owned => DownloadCommandOutcome.attached,
     DownloadRuntimeOwnership.settling || DownloadRuntimeOwnership.unknown =>
       DownloadCommandOutcome.settlingOwnership,
-    DownloadRuntimeOwnership.notOwned => DownloadCommandOutcome.missingState,
+    DownloadRuntimeOwnership.notOwned => durable,
   };
 }
 
@@ -123,6 +130,7 @@ DownloadCommandOutcome resolveCancelCommandOutcome({
   }
   return downloadCommandOutcomeForJobState(state);
 }
+
 
 class DownloadProgressData {
   final String taskId;
