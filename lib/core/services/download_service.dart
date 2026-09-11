@@ -362,10 +362,8 @@ class DownloadService {
 
   final Ref _ref;
   final Dio _dio;
-  final Set<String> _cancellingUrls = {};
   final Set<String> _userPausedIds = {};
   final Set<String> _dequeuingPausedIds = {};
-  final Set<String> _restackingWaiterIds = {};
   late final DownloadContinuedProcessingService _continuedProcessing;
   final _updatesController = StreamController<TaskUpdate>.broadcast();
   StreamSubscription<TaskUpdate>? _updatesSubscription;
@@ -516,9 +514,7 @@ class DownloadService {
         writtenBytes < 0) {
       return;
     }
-    if (_userPausedIds.contains(taskId) ||
-        _terminalJobIds.contains(taskId) ||
-        _cancellingUrls.contains(trackingUrl)) {
+    if (_userPausedIds.contains(taskId) || _terminalJobIds.contains(taskId)) {
       return;
     }
 
@@ -839,31 +835,6 @@ class DownloadService {
         return;
       }
 
-      // Restacking later HQ waiters behind a resumed episode. Swallow only
-      // the cancel/fail from the old native task so re-enqueue events pass.
-      if (_restackingWaiterIds.contains(update.task.taskId)) {
-        if (update is TaskStatusUpdate &&
-            (update.status == TaskStatus.canceled ||
-                update.status == TaskStatus.failed ||
-                update.status == TaskStatus.notFound)) {
-          return;
-        }
-        if (update is TaskProgressUpdate &&
-            (update.progress < 0 || update.progress > 1)) {
-          return;
-        }
-      }
-
-      // User-initiated cancels are cleaned up in [cancelDownload]; ignore their
-      // follow-up events so they cannot race with pause-on-failure handling.
-      if (_cancellingUrls.contains(trackingUrl)) {
-        if (update is TaskStatusUpdate &&
-            update.status == TaskStatus.canceled) {
-          _updatesController.add(update);
-        }
-        return;
-      }
-
       // Ghost cancel/fail from HQ dequeue while URLSession still owns this
       // episode: attach, do not park as paused. A real fail/system-cancel
       // parks that one file and the queue continues — never finish the
@@ -871,9 +842,32 @@ class DownloadService {
       if (update is TaskStatusUpdate &&
           shouldParkSystemCanceledDownload(
             status: update.status,
-            userCancel: _cancellingUrls.contains(trackingUrl),
+            userCancel: _terminalJobIds.contains(update.task.taskId),
           )) {
         unawaited(_retainLiveNativeOrPause(update, trackingUrl));
+        return;
+      }
+
+      // Completion is the one terminal callback that may be safe even when it
+      // belongs to an older executor generation, but only after DM-06 proves
+      // the final artifact against independent resource evidence. Never publish
+      // `complete` to UI/listeners before that verification commits JobStore.
+      if (update is TaskStatusUpdate && update.status == TaskStatus.complete) {
+        unawaited(_handleVerifiedCompleteUpdate(update, trackingUrl));
+        return;
+      }
+
+      // A delayed pause acknowledgement from an earlier control generation
+      // cannot regress a writer that is already owned by the resumed/current
+      // execution. Runtime ownership is the acknowledgement, not elapsed time.
+      if (update is TaskStatusUpdate &&
+          update.status == TaskStatus.paused &&
+          (_rangeTransfers.isActive(update.task.taskId) ||
+              _parallel.isActive(update.task.taskId) ||
+              _nativeTransport.owns(update.task.taskId))) {
+        diagnosticLog.record('callback.stalePauseIgnored', {
+          'taskId': update.task.taskId,
+        });
         return;
       }
 
@@ -2027,7 +2021,6 @@ class DownloadService {
       }
     }
     occupying.addAll(_startingTaskIds);
-    occupying.removeAll(_restackingWaiterIds);
     return occupying.length;
   }
 
@@ -2827,6 +2820,20 @@ class DownloadService {
     TaskStatusUpdate update,
     String trackingUrl,
   ) async {
+    final authoritative = await _jobStore.get(update.task.taskId);
+    if (authoritative != null &&
+        (authoritative.state == DownloadJobState.queued ||
+            authoritative.state == DownloadJobState.pausing ||
+            authoritative.state == DownloadJobState.pausedByUser ||
+            downloadJobIsTerminal(authoritative.state))) {
+      diagnosticLog.record('callback.staleTerminalIgnored', {
+        'taskId': update.task.taskId,
+        'callback': update.status.name,
+        'state': authoritative.state.name,
+        'generation': authoritative.generation,
+      });
+      return;
+    }
     if (update.task is DownloadTask) {
       final live = await _liveNativeTaskFor(
         taskId: update.task.taskId,
@@ -2953,6 +2960,47 @@ class DownloadService {
     }
     // Navigate to the Downloads tab (LibraryScreen)
     _ref.read(appRouterProvider).go('/library');
+  }
+
+  Future<void> _handleVerifiedCompleteUpdate(
+    TaskStatusUpdate update,
+    String trackingUrl,
+  ) async {
+    final current = _ref.read(downloadProgressProvider)[trackingUrl];
+    if (!isCompleteDownloadCredible(
+      progress: current?.progress,
+      expectedBytes: current?.totalSize ?? -1,
+    )) {
+      diagnosticLog.record('callback.stubCompleteIgnored', {
+        'taskId': update.task.taskId,
+      });
+      await _attachUiToLiveNativeTasks();
+      return;
+    }
+
+    await _persistCompletedFilePath(update.task);
+    final job = await _jobStore.get(update.task.taskId);
+    if (job?.state != DownloadJobState.completed) {
+      diagnosticLog.record('callback.completeVerificationRejected', {
+        'taskId': update.task.taskId,
+        'generation': job?.generation,
+        'state': job?.state.name,
+      });
+      return;
+    }
+
+    _updatesController.add(update);
+    if (update.task is ParallelDownloadTask) {
+      BackgroundDownloaderCompat.updateSyntheticNotification(
+        update.task,
+        update.status,
+      );
+    }
+    _rememberSessionTask(update.task.taskId);
+    _queueWaitingIds.remove(update.task.taskId);
+    _waitingPayloads.remove(update.task.taskId);
+    await _syncSessionOverlay(completedSuccess: true);
+    _handleStatusUpdate(update, trackingUrl);
   }
 
   void _handleStatusUpdate(TaskStatusUpdate update, String trackingUrl) {
@@ -3161,6 +3209,13 @@ class DownloadService {
         : await _liveNativeTaskFor(taskId: taskId, trackingUrl: trackingUrl);
     if (existingJob != null &&
         existingJob.state != DownloadJobState.completed) {
+      final cancelOperation = await _jobStore.beginOperation(
+        taskId,
+        state: existingJob.state,
+      );
+      if (cancelOperation == null) {
+        throw StateError('Failed to fence cancel operation for $taskId');
+      }
       if (cancelTask != null) {
         final cancelPersisted = await _checkpointLogicalJob(
           cancelTask,
@@ -3191,7 +3246,6 @@ class DownloadService {
     }
 
     // Project the tombstone only after durable cancel intent is secured.
-    _cancellingUrls.add(trackingUrl);
     _terminalJobIds.add(taskId);
     _queueWaitingIds.remove(taskId);
     _waitingPayloads.remove(taskId);
@@ -3205,73 +3259,65 @@ class DownloadService {
     _expectedSizePersistedIds.remove(taskId);
 
     await _rangeTransfers.stop(taskId);
-    try {
-      await _serializeQueue(() async {
-        _queueWaitingIds.remove(taskId);
-        _waitingPayloads.remove(taskId);
-        _forgetSessionTask(taskId);
-        final ids = <String>{taskId};
-        for (final task in await FileDownloader().allTasks(allGroups: true)) {
-          if (task.taskId == taskId ||
-              downloadTrackingUrl(task) == trackingUrl) {
-            ids.add(task.taskId);
-          }
+    await _serializeQueue(() async {
+      _queueWaitingIds.remove(taskId);
+      _waitingPayloads.remove(taskId);
+      _forgetSessionTask(taskId);
+      final ids = <String>{taskId};
+      for (final task in await FileDownloader().allTasks(allGroups: true)) {
+        if (task.taskId == taskId || downloadTrackingUrl(task) == trackingUrl) {
+          ids.add(task.taskId);
         }
-        if (parentRecord?.task is ParallelDownloadTask) {
-          await _parallel.cancel(parentRecord!.task as ParallelDownloadTask);
-        } else if (parentRecord?.task is DownloadTask &&
-            isNativeSingleDownloadTask(parentRecord!.task)) {
-          final settlement = await _nativeTransport.cancel(
-            parentRecord.task as DownloadTask,
-          );
-          diagnosticLog.record('cancel.commandSettlement', {
-            'taskId': taskId,
-            'settlement': settlement.name,
-          });
-          // Do not issue a second bulk cancel for this same single-file owner.
-          ids.remove(taskId);
-        }
-        if (ids.isNotEmpty) {
-          await FileDownloader().cancelTasksWithIds(ids.toList());
-        }
+      }
+      if (parentRecord?.task is ParallelDownloadTask) {
+        await _parallel.cancel(parentRecord!.task as ParallelDownloadTask);
+      } else if (parentRecord?.task is DownloadTask &&
+          isNativeSingleDownloadTask(parentRecord!.task)) {
+        final settlement = await _nativeTransport.cancel(
+          parentRecord.task as DownloadTask,
+        );
+        diagnosticLog.record('cancel.commandSettlement', {
+          'taskId': taskId,
+          'settlement': settlement.name,
+        });
+        // Do not issue a second bulk cancel for this same single-file owner.
+        ids.remove(taskId);
+      }
+      if (ids.isNotEmpty) {
+        await FileDownloader().cancelTasksWithIds(ids.toList());
+      }
 
-        // Command acknowledgement is not ownership acknowledgement. Keep the
-        // durable cancel tombstone, plugin row, metadata and Transfer handle if
-        // the runtime oracle cannot independently prove release. A later
-        // reconcile/repeated cancel can settle cleanup safely.
-        final cancelOwnership = await _waitForCancelOwnershipRelease(taskId);
-        if (cancelOwnership != DownloadRuntimeOwnership.notOwned) {
-          diagnosticLog.record('cancel.ownershipUnsettled', {
-            'taskId': taskId,
-            'ownership': cancelOwnership.name,
-          });
-          await _persistNativeWaitingSnapshot();
-          if (notifyContinuedProcessing) {
-            await _syncSessionOverlay(completedSuccess: false);
-          }
-          return;
-        }
-        _nativeTransport.forget(taskId);
-        _userPausedIds.remove(taskId);
-        _dequeuingPausedIds.remove(taskId);
-        _ref.read(activeDownloadsProvider.notifier).remove(trackingUrl);
-        _ref.read(downloadProgressProvider.notifier).remove(trackingUrl);
-        // Proactive cleanup
-        await FileDownloader().database.deleteRecordWithId(taskId);
-        await _ref.read(storageServiceProvider).removeDownloadMetadata(taskId);
-        await _jobStore.remove(taskId);
-        await _ref.read(downloadUrlRefreshStoreProvider).remove(trackingUrl);
-        await _syncQueueToCapUnlocked();
+      // Command acknowledgement is not ownership acknowledgement. Keep the
+      // durable cancel tombstone, plugin row, metadata and Transfer handle if
+      // the runtime oracle cannot independently prove release. A later
+      // reconcile/repeated cancel can settle cleanup safely.
+      final cancelOwnership = await _waitForCancelOwnershipRelease(taskId);
+      if (cancelOwnership != DownloadRuntimeOwnership.notOwned) {
+        diagnosticLog.record('cancel.ownershipUnsettled', {
+          'taskId': taskId,
+          'ownership': cancelOwnership.name,
+        });
+        await _persistNativeWaitingSnapshot();
         if (notifyContinuedProcessing) {
           await _syncSessionOverlay(completedSuccess: false);
         }
-      });
-    } finally {
-      // Small delay to let final updates clear
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _cancellingUrls.remove(trackingUrl);
-      });
-    }
+        return;
+      }
+      _nativeTransport.forget(taskId);
+      _userPausedIds.remove(taskId);
+      _dequeuingPausedIds.remove(taskId);
+      _ref.read(activeDownloadsProvider.notifier).remove(trackingUrl);
+      _ref.read(downloadProgressProvider.notifier).remove(trackingUrl);
+      // Proactive cleanup
+      await FileDownloader().database.deleteRecordWithId(taskId);
+      await _ref.read(storageServiceProvider).removeDownloadMetadata(taskId);
+      await _jobStore.remove(taskId);
+      await _ref.read(downloadUrlRefreshStoreProvider).remove(trackingUrl);
+      await _syncQueueToCapUnlocked();
+      if (notifyContinuedProcessing) {
+        await _syncSessionOverlay(completedSuccess: false);
+      }
+    });
   }
 
   Future<DownloadCommandOutcome> cancelDownloadOutcome(
@@ -3347,6 +3393,13 @@ class DownloadService {
         );
         if (!checkpointed) {
           throw StateError('Failed to persist pause intent for $taskId');
+        }
+        final pauseOperation = await _jobStore.beginOperation(
+          taskId,
+          state: DownloadJobState.pausing,
+        );
+        if (pauseOperation == null) {
+          throw StateError('Failed to fence pause operation for $taskId');
         }
         // Fence callbacks only after the durable pause intent exists. Ownership
         // must never be stopped first and then fail to persist the user's intent.
@@ -3424,13 +3477,17 @@ class DownloadService {
               lastProgress: progress,
               lastExpectedBytes: totalSize,
             );
-        await _checkpointLogicalJob(
-          downloadTask,
+        final pauseCommitted = await _jobStore.updateForAttempt(
+          pauseOperation,
           state: DownloadJobState.pausedByUser,
           expectedBytes: totalSize,
           userPaused: true,
           queueWaiting: false,
         );
+        if (!pauseCommitted) {
+          diagnosticLog.record('pause.superseded', {'taskId': taskId});
+          return;
+        }
         _publishProgress(
           trackingUrl: trackingUrl,
           taskId: taskId,
@@ -3476,6 +3533,13 @@ class DownloadService {
     if (!checkpointed) {
       throw StateError('Failed to persist resume intent for $taskId');
     }
+    final resumeOperation = await _jobStore.beginOperation(
+      taskId,
+      state: DownloadJobState.starting,
+    );
+    if (resumeOperation == null) {
+      throw StateError('Failed to fence resume operation for $taskId');
+    }
     _userPausedIds.remove(taskId);
     _dequeuingPausedIds.remove(taskId);
     await _ref
@@ -3496,7 +3560,9 @@ class DownloadService {
       queueOrder: _queueOrder(),
     );
 
-    await _cancelNativeWaitersForRestackUnlocked(plan.waitersToRestack);
+    final waitersReadyForRestack = await _cancelNativeWaitersForRestackUnlocked(
+      plan.waitersToRestack,
+    );
 
     final reservedEarlier = <String>{};
     try {
@@ -3577,7 +3643,7 @@ class DownloadService {
         await _enqueueExistingTaskAsWaiterUnlocked(downloadTask);
       }
 
-      for (final waiterId in plan.waitersToRestack) {
+      for (final waiterId in waitersReadyForRestack) {
         final record = byId[waiterId];
         if (record == null || record.task is! DownloadTask) continue;
         await _enqueueExistingTaskAsWaiterUnlocked(record.task as DownloadTask);
@@ -3585,10 +3651,6 @@ class DownloadService {
     } finally {
       _startingTaskIds.removeAll(reservedEarlier);
     }
-
-    Future<void>.delayed(const Duration(milliseconds: 800), () {
-      _restackingWaiterIds.removeAll(plan.waitersToRestack);
-    });
 
     await _persistNativeWaitingSnapshot();
     await _syncSessionOverlay();
@@ -3612,11 +3674,28 @@ class DownloadService {
     return false;
   }
 
-  Future<void> _cancelNativeWaitersForRestackUnlocked(List<String> ids) async {
-    if (ids.isEmpty) return;
+  Future<List<String>> _cancelNativeWaitersForRestackUnlocked(
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return const <String>[];
+
+    final ready = <String>[];
+    for (final id in ids) {
+      final job = await _jobStore.get(id);
+      if (job == null) {
+        ready.add(id);
+        continue;
+      }
+      final token = await _jobStore.beginOperation(
+        id,
+        state: DownloadJobState.queued,
+      );
+      if (token != null) ready.add(id);
+    }
+
     final liveIds = <String>{};
     for (final task in await FileDownloader().allTasks(allGroups: true)) {
-      if (!ids.contains(task.taskId)) continue;
+      if (!ready.contains(task.taskId)) continue;
       final record = await FileDownloader().database.recordForId(task.taskId);
       if (record != null &&
           reservesDownloadSlot(
@@ -3627,11 +3706,27 @@ class DownloadService {
       }
       liveIds.add(task.taskId);
     }
-    if (liveIds.isEmpty) return;
-    _restackingWaiterIds.addAll(liveIds);
+    if (liveIds.isEmpty) return List<String>.unmodifiable(ready);
+
     try {
       await FileDownloader().cancelTasksWithIds(liveIds.toList());
-    } catch (_) {}
+    } catch (_) {
+      for (final id in liveIds) {
+        ready.remove(id);
+      }
+      return List<String>.unmodifiable(ready);
+    }
+
+    for (final id in liveIds) {
+      final ownership = await _waitForCancelOwnershipRelease(id);
+      if (ownership == DownloadRuntimeOwnership.notOwned) continue;
+      ready.remove(id);
+      diagnosticLog.record('restack.ownershipUnsettled', {
+        'taskId': id,
+        'ownership': ownership.name,
+      });
+    }
+    return List<String>.unmodifiable(ready);
   }
 
   Future<void> _enqueueExistingTaskAsWaiterUnlocked(DownloadTask task) async {
@@ -3742,6 +3837,15 @@ class DownloadService {
         await _attachToLiveNativeTask(task, live: live);
         return true;
       }
+    }
+
+    final currentJob = await _jobStore.get(task.taskId);
+    if (currentJob != null) {
+      final execution = await _jobStore.beginOperation(
+        task.taskId,
+        state: DownloadJobState.starting,
+      );
+      if (execution == null) return false;
     }
 
     final saved = await _savedProgressFor(task);
@@ -3958,7 +4062,7 @@ class DownloadService {
           if (record?.task is! ParallelDownloadTask) return;
           var parent = record!.task as ParallelDownloadTask;
           final trackingUrl = downloadTrackingUrl(parent);
-          if (_cancellingUrls.contains(trackingUrl)) return;
+          if (_terminalJobIds.contains(parentTaskId)) return;
 
           final descriptor = await _ref
               .read(downloadUrlRefreshStoreProvider)
@@ -4100,7 +4204,7 @@ class DownloadService {
           Future<void>.delayed(Duration.zero, () async {
             if (_disposed ||
                 _userPausedIds.contains(task.taskId) ||
-                _cancellingUrls.contains(downloadTrackingUrl(task))) {
+                _terminalJobIds.contains(task.taskId)) {
               return;
             }
             await _serializeQueue(() async {
@@ -4306,6 +4410,15 @@ class DownloadService {
     if (!refreshCheckpointed) {
       throw StateError(
         'Failed to persist source refresh boundary for ${task.taskId}',
+      );
+    }
+    final refreshOperation = await _jobStore.beginOperation(
+      task.taskId,
+      state: DownloadJobState.interrupted,
+    );
+    if (refreshOperation == null) {
+      throw StateError(
+        'Failed to fence source refresh operation for ${task.taskId}',
       );
     }
 
@@ -5282,6 +5395,15 @@ class DownloadService {
         _updatesController.add(
           TaskStatusUpdate(transferTask, TaskStatus.enqueued),
         );
+        final startOperation = await _jobStore.beginOperation(
+          transferTask.taskId,
+          state: DownloadJobState.starting,
+        );
+        if (startOperation == null) {
+          throw StateError(
+            'Failed to fence start operation for ${transferTask.taskId}',
+          );
+        }
         final success = await _enqueueTransfer(transferTask, expectedBytes);
         if (kDebugMode) {
           debugPrint(

@@ -340,7 +340,7 @@
   - **Verification/testing:** offline->online, Wi-Fi<->cellular, DNS/captive network, long offline, intermittent progress, retry exhaustion, pause/cancel offline, 408/425/429/5xx, multiple tasks recovering together.
   - **Dependencies:** DM-05, DM-03.
 
-- [ ] **DM-10 — Replace time-based correctness fences with generations/acks**
+- [x] **DM-10 — Replace time-based correctness fences with generations/acks**
   - **Problem:** late callbacks can cross pause/resume/restack/retry/refresh/cancel boundaries; fixed delays cannot prove causality.
   - **Root cause:** attempt generation exists in some paths but not every logical/native operation.
   - **Severity / priority:** **P1 / High.**
@@ -348,6 +348,9 @@
   - **Proposed fix:** every ownership-changing operation carries an operation/generation token; only current-token callbacks mutate logical state, except independently verified safe terminal bytes. Remove correctness dependence on arbitrary suppression windows.
   - **Verification/testing:** callbacks delayed 0.8s/5s/30s; old failure after successful resume; old complete after source change; cancel then running; native background promotion vs foreground recovery.
   - **Dependencies:** DM-01, DM-19, DM-05.
+  - **Implementation notes (2026-09-11):** Ownership-changing pause, resume, cancel, retry/resume execution, waiter restack, fresh start and source replacement now advance the durable JobStore generation before executor effects. Token-aware callbacks from superseded generations are rejected; native callbacks without an operation id are fenced by authoritative logical state plus runtime ownership acknowledgement. Completion is published only after DM-06 resource verification commits the durable completed state.
+  - **Confirmed root cause:** cancel/restack still depended on 500 ms / 800 ms suppression sets, while several native control operations changed ownership without advancing the durable generation. A callback delayed beyond those windows could therefore cross into a newer operation; canceled/orphaned rows could also be reopened by a newer write.
+  - **Verification passed:** RED→GREEN canceled-tombstone reopening, pause→resume stale callback, retry stale failure, source-level removal of the 500 ms/800 ms correctness windows, ownership-acknowledged restack, generation-before-effect guards for pause/cancel/source refresh, verified-completion-before-publication, adjacent pause/cancel/runtime ownership/source-refresh/JobStore regressions, and analyzer.
 
 - [ ] **DM-11 — Define crash-safe write ordering and convergence across all replicas**
   - **Problem:** JobStore, plugin DB, metadata, refresh descriptor, manifest/files and native queue can be individually valid yet mutually inconsistent after a crash.

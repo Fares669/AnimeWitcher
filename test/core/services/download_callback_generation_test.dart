@@ -5,7 +5,8 @@ import 'package:animewitcher/core/services/download_job_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _MemoryBackend implements DownloadJobBackend {
-  final Map<String, Map<String, dynamic>> values = <String, Map<String, dynamic>>{};
+  final Map<String, Map<String, dynamic>> values =
+      <String, Map<String, dynamic>>{};
 
   @override
   Future<void> delete(String taskId) async => values.remove(taskId);
@@ -51,19 +52,27 @@ void main() {
       store = DownloadJobStore(_MemoryBackend());
     });
 
-    test('canceled tombstone cannot be reopened by a newer running generation', () async {
-      expect(
-        await store.put(_job(state: DownloadJobState.canceled, generation: 4)),
-        isTrue,
-      );
+    test(
+      'canceled tombstone cannot be reopened by a newer running generation',
+      () async {
+        expect(
+          await store.put(
+            _job(state: DownloadJobState.canceled, generation: 4),
+          ),
+          isTrue,
+        );
 
-      expect(
-        await store.put(_job(state: DownloadJobState.running, generation: 5)),
-        isFalse,
-      );
-      expect(await store.beginAttempt('episode-1'), isNull);
-      expect((await store.get('episode-1'))?.state, DownloadJobState.canceled);
-    });
+        expect(
+          await store.put(_job(state: DownloadJobState.running, generation: 5)),
+          isFalse,
+        );
+        expect(await store.beginAttempt('episode-1'), isNull);
+        expect(
+          (await store.get('episode-1'))?.state,
+          DownloadJobState.canceled,
+        );
+      },
+    );
 
     test('pause callback from the previous generation cannot regress a resumed job', () async {
       expect(await store.put(_job(generation: 1)), isTrue);
@@ -88,36 +97,40 @@ void main() {
       expect((await store.get('episode-1'))?.state, DownloadJobState.starting);
     });
 
-    test('old retry failure cannot park a newer execution generation', () async {
-      expect(await store.put(_job(generation: 7)), isTrue);
-      final oldAttempt = await store.beginAttempt(
-        'episode-1',
-        state: DownloadJobState.running,
-      );
-      final retry = await store.beginAttempt(
-        'episode-1',
-        state: DownloadJobState.retryWaiting,
-      );
-      expect(oldAttempt?.generation, 8);
-      expect(retry?.generation, 9);
+    test(
+      'old retry failure cannot park a newer execution generation',
+      () async {
+        expect(await store.put(_job(generation: 7)), isTrue);
+        final oldAttempt = await store.beginAttempt(
+          'episode-1',
+          state: DownloadJobState.running,
+        );
+        final retry = await store.beginAttempt(
+          'episode-1',
+          state: DownloadJobState.retryWaiting,
+        );
+        expect(oldAttempt?.generation, 8);
+        expect(retry?.generation, 9);
 
-      expect(
-        await store.updateForAttempt(
-          oldAttempt!,
-          state: DownloadJobState.interrupted,
-        ),
-        isFalse,
-      );
-      expect((await store.get('episode-1'))?.generation, 9);
-      expect(
-        (await store.get('episode-1'))?.state,
-        DownloadJobState.retryWaiting,
-      );
-    });
+        expect(
+          await store.updateForAttempt(
+            oldAttempt!,
+            state: DownloadJobState.interrupted,
+          ),
+          isFalse,
+        );
+        expect((await store.get('episode-1'))?.generation, 9);
+        expect(
+          (await store.get('episode-1'))?.state,
+          DownloadJobState.retryWaiting,
+        );
+      },
+    );
   });
 
   group('DM-10 service callback fences', () {
-    final source = File('lib/core/services/download_service.dart').readAsStringSync();
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
 
     test('cancel and restack correctness do not depend on fixed suppression windows', () {
       expect(source, isNot(contains('_cancellingUrls')));
@@ -128,7 +141,9 @@ void main() {
       );
       expect(
         source,
-        isNot(contains('Future<void>.delayed(const Duration(milliseconds: 800)')),
+        isNot(
+          contains('Future<void>.delayed(const Duration(milliseconds: 800)'),
+        ),
       );
 
       final restackStart = source.indexOf(
@@ -147,8 +162,13 @@ void main() {
     });
 
     test('ownership-changing commands advance durable generation before executor effects', () {
-      final pauseStart = source.indexOf('Future<void> pauseDownload(String taskId) async {');
-      final pauseEnd = source.indexOf('Future<void> resumeDownload(String taskId) async {', pauseStart);
+      final pauseStart = source.indexOf(
+        'Future<void> pauseDownload(String taskId) async {',
+      );
+      final pauseEnd = source.indexOf(
+        'Future<void> resumeDownload(String taskId) async {',
+        pauseStart,
+      );
       final pause = source.substring(pauseStart, pauseEnd);
       expect(pause, contains('_jobStore.beginOperation('));
       expect(
@@ -157,7 +177,10 @@ void main() {
       );
 
       final cancelStart = source.indexOf('Future<void> cancelDownload(');
-      final cancelEnd = source.indexOf('Future<DownloadCommandOutcome> cancelDownloadOutcome(', cancelStart);
+      final cancelEnd = source.indexOf(
+        'Future<DownloadCommandOutcome> cancelDownloadOutcome(',
+        cancelStart,
+      );
       final cancel = source.substring(cancelStart, cancelEnd);
       expect(cancel, contains('_jobStore.beginOperation('));
       expect(
@@ -168,7 +191,10 @@ void main() {
       final refreshStart = source.indexOf(
         'Future<({DownloadTask task, bool refreshed})> _refreshTaskBeforeResume(',
       );
-      final refreshEnd = source.indexOf('Future<List<Task>> _liveTransferTasks()', refreshStart);
+      final refreshEnd = source.indexOf(
+        'Future<List<Task>> _liveTransferTasks()',
+        refreshStart,
+      );
       final refresh = source.substring(refreshStart, refreshEnd);
       expect(refresh, contains('_jobStore.beginOperation('));
       expect(
@@ -177,27 +203,40 @@ void main() {
       );
     });
 
-    test('complete callback is verified before it is published as accepted', () {
-      final listener = source.indexOf('_sharedEvents.stream.listen((update) {');
-      final accepted = source.indexOf('_updatesController.add(update);', listener);
-      final completionFence = source.indexOf(
-        '_handleVerifiedCompleteUpdate(update, trackingUrl)',
-        listener,
-      );
-      expect(completionFence, greaterThan(listener));
-      expect(completionFence, lessThan(accepted));
+    test(
+      'complete callback is verified before it is published as accepted',
+      () {
+        final listener = source.indexOf(
+          '_sharedEvents.stream.listen((update) {',
+        );
+        final accepted = source.indexOf(
+          '_updatesController.add(update);',
+          listener,
+        );
+        final completionFence = source.indexOf(
+          '_handleVerifiedCompleteUpdate(update, trackingUrl)',
+          listener,
+        );
+        expect(completionFence, greaterThan(listener));
+        expect(completionFence, lessThan(accepted));
 
-      final helper = source.indexOf('Future<void> _handleVerifiedCompleteUpdate(');
-      final statusHandler = source.indexOf('void _handleStatusUpdate(', helper);
-      expect(helper, greaterThanOrEqualTo(0));
-      expect(statusHandler, greaterThan(helper));
-      final body = source.substring(helper, statusHandler);
-      expect(body, contains('await _persistCompletedFilePath(update.task);'));
-      expect(body, contains('job?.state != DownloadJobState.completed'));
-      expect(
-        body.indexOf('await _persistCompletedFilePath(update.task);'),
-        lessThan(body.indexOf('_updatesController.add(update);')),
-      );
-    });
+        final helper = source.indexOf(
+          'Future<void> _handleVerifiedCompleteUpdate(',
+        );
+        final statusHandler = source.indexOf(
+          'void _handleStatusUpdate(',
+          helper,
+        );
+        expect(helper, greaterThanOrEqualTo(0));
+        expect(statusHandler, greaterThan(helper));
+        final body = source.substring(helper, statusHandler);
+        expect(body, contains('await _persistCompletedFilePath(update.task);'));
+        expect(body, contains('job?.state != DownloadJobState.completed'));
+        expect(
+          body.indexOf('await _persistCompletedFilePath(update.task);'),
+          lessThan(body.indexOf('_updatesController.add(update);')),
+        );
+      },
+    );
   });
 }

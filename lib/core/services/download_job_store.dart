@@ -412,8 +412,10 @@ class DownloadJobStore {
       return false;
     }
     if (current != null) {
-      if (current.state == DownloadJobState.completed &&
-          next.state != DownloadJobState.completed) {
+      // Every terminal logical state is generation-fenced. A newer
+      // executor callback may never reopen a canceled/orphaned/completed job;
+      // only the explicit tombstone/file cleanup transaction may remove it.
+      if (downloadJobIsTerminal(current.state) && next.state != current.state) {
         return false;
       }
       if (next.generation < current.generation) return false;
@@ -551,11 +553,40 @@ class DownloadJobStore {
     String taskId, {
     DownloadJobState state = DownloadJobState.starting,
     int? updatedAtMillis,
-  }) => _serialize(() async {
+  }) => _serialize(
+    () => _beginGenerationUnlocked(
+      taskId,
+      state: state,
+      updatedAtMillis: updatedAtMillis,
+    ),
+  );
+
+  /// Advance the same durable generation fence for an ownership-changing
+  /// control operation (pause/resume/cancel/restack/source replacement).
+  ///
+  /// Native callbacks do not all carry an operation id, so service-side
+  /// state/ownership acknowledgement still gates their projection. Advancing
+  /// this generation additionally makes every token-aware Range/multipart
+  /// callback from the previous operation stale before the executor effect.
+  Future<DownloadAttemptToken?> beginOperation(
+    String taskId, {
+    required DownloadJobState state,
+    int? updatedAtMillis,
+  }) => _serialize(
+    () => _beginGenerationUnlocked(
+      taskId,
+      state: state,
+      updatedAtMillis: updatedAtMillis,
+    ),
+  );
+
+  Future<DownloadAttemptToken?> _beginGenerationUnlocked(
+    String taskId, {
+    required DownloadJobState state,
+    int? updatedAtMillis,
+  }) async {
     final current = await get(taskId);
-    if (current == null || current.state == DownloadJobState.completed) {
-      return null;
-    }
+    if (current == null || downloadJobIsTerminal(current.state)) return null;
     final next = current.copyWith(
       state: state,
       generation: current.generation + 1,
@@ -563,7 +594,7 @@ class DownloadJobStore {
     );
     if (!await _putUnlocked(next)) return null;
     return next.attemptToken;
-  });
+  }
 
   /// Apply one callback/result only when it belongs to the active generation.
   /// This is the durable counterpart of [DownloadAttemptFence].
