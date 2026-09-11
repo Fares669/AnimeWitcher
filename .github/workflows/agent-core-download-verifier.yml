@@ -40,6 +40,7 @@ jobs:
           test/core/services/download_manifest_startup_inventory_test.dart
           test/core/services/download_missing_presentation_recovery_test.dart
           test/core/services/persistent_parallel_download_manifest_discovery_test.dart
+          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
           test/core/services/download_job_state_authority_test.dart
           test/core/services/download_job_state_queue_authority_test.dart
           test/features/library/presentation/downloads_job_state_authority_test.dart
