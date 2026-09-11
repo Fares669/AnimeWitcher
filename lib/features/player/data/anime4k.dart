@@ -97,14 +97,18 @@ bool anime4kAvailableOn({
   return isNativePlatform && !usingAdaptiveBackend;
 }
 
-/// Whether mpv's active video output can execute custom GLSL shaders.
+/// Whether the active renderer can execute Anime4K GPU shaders.
 ///
-/// mpv documents custom shaders for gpu, gpu-next and libmpv. Keeping this
-/// check separate lets the player reject a fallback/software/no-shader output
-/// instead of accepting the setting while drawing an unchanged picture.
+/// mpv documents custom shaders for gpu, gpu-next and libmpv. Apple can also
+/// use the native Metal compute backend. Keeping this check separate lets the
+/// player reject fallback/software/no-shader outputs instead of accepting the
+/// setting while drawing an unchanged picture.
 bool anime4kGpuRendererSupportsShaders(String currentVo) {
   final vo = currentVo.trim().toLowerCase();
-  return vo == 'gpu' || vo == 'gpu-next' || vo == 'libmpv';
+  return vo == 'gpu' ||
+      vo == 'gpu-next' ||
+      vo == 'libmpv' ||
+      vo == 'metal';
 }
 
 /// Whether the feature is on, for a setting that may predate the flag.
@@ -286,7 +290,7 @@ String anime4kListSeparator({required bool onWindows}) => onWindows ? ';' : ':';
 ///
 /// Only the separator itself is escaped — both characters are legal inside a
 /// filename on their own platform. On Windows the drive colon is left exactly
-/// as it is: escaping it produced `C\:\shaders\...`, which is not a path any
+/// as it is: escaping it produced `C\\:\\shaders\\...`, which is not a path any
 /// system can open.
 ///
 /// Getting this wrong does not fail loudly. mpv takes the string, finds
