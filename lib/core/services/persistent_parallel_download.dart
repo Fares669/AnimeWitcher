@@ -31,8 +31,10 @@ const Duration kParallelProgressPersistInterval = Duration(seconds: 1);
 /// observed from a validated child response, so later/relaunched ranges
 /// cannot silently assemble bytes from a different resource generation.
 /// Version 4 also persists whether a child must bypass old native resumeData
-/// after its parent source URL was refreshed.
-const int kParallelManifestSchemaVersion = 4;
+/// after its parent source URL was refreshed. Version 5 adds exact per-part
+/// durable byte counters. Floating-point progress remains presentation/history
+/// only and is never recovery byte authority.
+const int kParallelManifestSchemaVersion = 5;
 
 /// Validate response metadata from a native multipart child. A full HTTP
 /// 200 is safe only when this child already represents the entire resource;
@@ -279,6 +281,7 @@ class PersistentParallelDownload {
     _cancelTailStallWatch(part);
     part.progress = repaired;
     part.credibleProgress = repaired;
+    part.durableBytes = durableBytes;
     part.speed = 0;
     part.recoveryAttempts = 0;
     part.tailRecoveryAttempted = false;
@@ -673,8 +676,10 @@ class PersistentParallelDownload {
                 part.complete = true;
                 part.progress = 1;
                 part.credibleProgress = 1;
+                part.durableBytes = part.size;
               } else if (bytes > 0 && bytes < part.size) {
                 part.credibleProgress = bytes / part.size;
+                part.durableBytes = bytes;
               }
             } catch (_) {}
           }
@@ -872,6 +877,7 @@ class PersistentParallelDownload {
             part.complete = true;
             part.progress = 1;
             part.credibleProgress = 1;
+            part.durableBytes = part.size;
             _activeConnectionIds.remove(part.task.taskId);
             part.launched = false;
             await saveRecord(
@@ -883,6 +889,7 @@ class PersistentParallelDownload {
             final diskProgress = saved.bytes / part.size;
             if (diskProgress > part.credibleProgress) {
               part.credibleProgress = diskProgress;
+              part.durableBytes = saved.bytes;
             }
           }
           if (part.complete) {
@@ -1414,6 +1421,7 @@ class PersistentParallelDownload {
       part.complete = true;
       part.progress = 1;
       part.credibleProgress = 1;
+      part.durableBytes = part.size;
       await saveRecord(
         TaskRecord(part.task, TaskStatus.complete, 1, part.size),
       );
@@ -1428,6 +1436,7 @@ class PersistentParallelDownload {
     // or any of its already-completed siblings.
     part.progress = part.size > 0 ? savedBytes / part.size : 0;
     part.credibleProgress = part.progress;
+    part.durableBytes = savedBytes;
     part.recoveryAttempts = 0;
     await saveRecord(
       TaskRecord(part.task, TaskStatus.paused, part.progress, part.size),
@@ -1474,6 +1483,7 @@ class PersistentParallelDownload {
     part.complete = true;
     part.progress = 1;
     part.credibleProgress = 1;
+    part.durableBytes = part.size;
     await saveRecord(TaskRecord(part.task, TaskStatus.complete, 1, part.size));
     onPartProgress(session.task.taskId, part.task.taskId, 1);
     return true;
@@ -1601,6 +1611,7 @@ class PersistentParallelDownload {
         if (diskProgress <= part.credibleProgress) continue;
 
         part.credibleProgress = diskProgress;
+        part.durableBytes = bytes;
         if (part.progress >= kParallelNativeCompletionSentinel ||
             diskProgress > part.progress) {
           part.progress = diskProgress;
@@ -2190,6 +2201,7 @@ class PersistentParallelDownload {
             part.complete = true;
             part.progress = 1;
             part.credibleProgress = 1;
+            part.durableBytes = part.size;
             await saveRecord(
               TaskRecord(part.task, TaskStatus.complete, 1, part.size),
             );
@@ -2738,6 +2750,7 @@ class PersistentParallelDownload {
     part.complete = false;
     part.progress = 0;
     part.credibleProgress = 0;
+    part.durableBytes = 0;
     part.speed = 0;
     part.recoveryAttempts = 0;
     part.tailRecoveryAttempted = false;
@@ -2976,14 +2989,8 @@ class _ParallelSession {
   Future<void> parentRecordWrite = Future<void>.value();
 
   int get size => parts.fold(0, (sum, part) => sum + part.size);
-  int get creditedBytes => parts.fold<int>(
-    0,
-    (sum, part) =>
-        sum +
-        (part.complete
-            ? part.size
-            : (part.size * part.credibleProgress).floor()),
-  );
+  int get creditedBytes =>
+      parts.fold<int>(0, (sum, part) => sum + part.durableBytes);
   double get progress =>
       parts.fold<double>(
         0,
@@ -3059,8 +3066,12 @@ class _DownloadPart {
     this.attemptGeneration = 0,
     this.sourceValidationRequired = false,
     double? credibleProgress,
+    int? durableBytes,
     this.needsCredibleProgressRepair = false,
-  }) : credibleProgress = complete
+  }) : durableBytes = complete
+           ? to - from + 1
+           : (durableBytes ?? 0).clamp(0, to - from + 1).toInt(),
+       credibleProgress = complete
            ? 1
            : (credibleProgress ??
                      (progress >= kParallelNativeCompletionSentinel
@@ -3077,9 +3088,12 @@ class _DownloadPart {
   /// complete callback is pending, so it is not used for parent byte totals.
   double progress;
 
-  /// Byte-credible progress used by the logical episode/UI. A 0.999 sentinel
-  /// never advances this field by itself.
+  /// Presentation/history progress. It can be informed by native callbacks but
+  /// is never persisted as byte authority.
   double credibleProgress;
+
+  /// Exact recoverable bytes proven by a visible part file or completion.
+  int durableBytes;
 
   bool complete;
   int attemptGeneration;
@@ -3106,9 +3120,11 @@ class _DownloadPart {
     final rawProgress = (json['progress'] as num).toDouble();
     final savedCredible = json['credibleProgress'];
     final hasSavedCredible = savedCredible is num;
+    final savedDurableBytes = json['durableBytes'];
+    final hasSavedDurableBytes = savedDurableBytes is num;
     final legacyTailSentinel =
         !complete &&
-        !hasSavedCredible &&
+        (!hasSavedCredible || !hasSavedDurableBytes) &&
         rawProgress >= kParallelNativeCompletionSentinel;
     return _DownloadPart(
       restored.copyWith(retries: kDownloadPartRetries),
@@ -3121,7 +3137,11 @@ class _DownloadPart {
       credibleProgress: complete
           ? 1
           : (hasSavedCredible ? savedCredible.toDouble() : null),
-      needsCredibleProgressRepair: legacyTailSentinel,
+      durableBytes: complete
+          ? (json['to'] as int) - (json['from'] as int) + 1
+          : (hasSavedDurableBytes ? savedDurableBytes.toInt() : 0),
+      needsCredibleProgressRepair:
+          legacyTailSentinel || (!complete && !hasSavedDurableBytes),
     );
   }
 
@@ -3131,6 +3151,7 @@ class _DownloadPart {
     'to': to,
     'progress': progress,
     'credibleProgress': credibleProgress,
+    'durableBytes': durableBytes,
     'complete': complete,
     'attemptGeneration': attemptGeneration,
     'sourceValidationRequired': sourceValidationRequired,
