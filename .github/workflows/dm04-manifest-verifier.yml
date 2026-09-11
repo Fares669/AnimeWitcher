@@ -5,6 +5,7 @@ on:
     branches: [plan/download-manager-reliability]
     paths:
       - test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+      - test/core/services/persistent_parallel_download_manifest_discovery_test.dart
       - lib/core/services/persistent_parallel_download.dart
       - .github/workflows/dm04-manifest-verifier.yml
   workflow_dispatch:
@@ -31,8 +32,9 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run manifest parent recovery regression
+      - name: Run manifest recovery regressions
         run: >-
           flutter test
           test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+          test/core/services/persistent_parallel_download_manifest_discovery_test.dart
           --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
