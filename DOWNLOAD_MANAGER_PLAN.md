@@ -317,7 +317,7 @@
   - **Verification/testing:** 401/403/404; native resume only; visible partial; changed size/validator/content; descriptor expired; provider unavailable; refresh during crash/relaunch.
   - **Dependencies:** DM-03, DM-06, DM-20, DM-31.
 
-- [ ] **DM-16 — Separate historical presentation progress from recoverable-byte evidence**
+- [x] **DM-16 — Separate historical presentation progress from recoverable-byte evidence**
   - **Problem:** `savedProgress > 0` currently prevents zero restart even if no bytes or native resume data survive.
   - **Root cause:** a UI high-water mark is treated as evidence of recoverable data.
   - **Severity / priority:** **P1 / High; directly involved in resume deadlocks.**
@@ -325,6 +325,9 @@
   - **Proposed fix:** recovery decisions consume only provenance-bearing byte/owner evidence. Historical percentage stays presentation metadata, can reconcile downward, and cannot independently block a safe restart.
   - **Verification/testing:** stale 42% + zero evidence => explicit restart/recovery outcome; visible partial still protected; native opaque resume known/unknown; late regressive callback; 0.999 sentinel; post-DM20 correction.
   - **Dependencies:** DM-20, DM-29, DM-05, DM-06.
+  - **Implementation notes (2026-09-11):** Resume/restart decisions now consume native-resume ownership and surviving local bytes only. Historical percentage remains a presentation high-water mark for UI continuity, but cannot fabricate durable bytes or block a safe zero-byte restart; multipart follows the same rule.
+  - **Confirmed root cause:** `savedProgress > 0` was used as a recovery-evidence fence in both the generic resume helpers and multipart resume path, so stale UI progress could strand a task even after all native resume data and local bytes were gone.
+  - **Verification passed:** RED→GREEN stale-42% and 0.999-sentinel zero-restart coverage, legacy resume-helper expectations, multipart historical-progress guard, visible-partial/native-resume protections, DM-20 byte reconciliation, DM-06 resource-identity regressions, runtime ownership regressions, and analyzer.
 
 ## Phase 3 — Deterministic retries, callback fencing, persistence, and concurrency
 

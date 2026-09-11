@@ -3779,7 +3779,9 @@ class DownloadService {
         await _parallel.importLegacy(task, data.data);
         return _parallel.start(task, saved.totalSize);
       }
-      if (saved.progress > 0 || saved.partialBytes > 0) return false;
+      // A historical percentage can survive after all multipart manifests and
+      // bytes are gone. Only actual surviving bytes may block a zero restart.
+      if (saved.partialBytes > 0) return false;
       return _enqueueTransfer(task, saved.totalSize);
     }
 

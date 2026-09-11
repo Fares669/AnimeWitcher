@@ -40,8 +40,8 @@ bool shouldResumeFromPartialBytes({
   return true;
 }
 
-/// Prefer native resume data, then leftover bytes. Restart from 0 only when
-/// there is nothing to keep — never when pause/fail/kill left progress.
+/// Prefer native resume data, then durable leftover bytes. Historical UI
+/// progress never substitutes for recoverable bytes and cannot block restart.
 DownloadResumeStrategy chooseDownloadResumeStrategy({
   required bool canNativeResume,
   required int existingPartialBytes,
@@ -63,7 +63,8 @@ DownloadResumeStrategy chooseDownloadResumeStrategy({
   )) {
     return DownloadResumeStrategy.partialFile;
   }
-  if (savedProgress > 0) return DownloadResumeStrategy.partialFile;
+  // Historical UI progress is not recoverable-byte evidence. If native resume
+  // data and durable local bytes are both absent, a clean restart is safe.
   return DownloadResumeStrategy.restartFromZero;
 }
 
@@ -77,7 +78,8 @@ bool shouldRestartDownloadFromZero({
   // Exact-size files may be completed downloads whose last callback was lost.
   // Oversized files also contain saved data and must never be overwritten.
   if (existingPartialBytes > 0) return false;
-  if (savedProgress > 0) return false;
+  // savedProgress is presentation history only and deliberately does not fence
+  // a zero-byte restart. Durable bytes/native ownership are checked elsewhere.
   return true;
 }
 
@@ -270,8 +272,8 @@ Future<int> appendDownloadChunks({
   return written;
 }
 
-/// Resumes a paused/failed/killed download. Never starts over from byte 0
-/// when resume data, a partial file, or saved progress exists.
+/// Resumes a paused/failed/killed download. Native resume data and durable
+/// local bytes are recovery evidence; saved progress remains presentation only.
 Future<bool> resumeOrRestartDownload({
   required Future<bool> Function() canResume,
   required Future<bool> Function() resume,
