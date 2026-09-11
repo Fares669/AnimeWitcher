@@ -81,6 +81,15 @@ jobs:
           if old_headroom not in s:
               raise SystemExit('DM-27 recheck accounting shim drift')
           s = s.replace(old_headroom, new_headroom, 1)
+          nullable_fixes = {
+              '          await output.close();': '          await output!.close();',
+              '          await output.writeFrom(bytes);': '          await output!.writeFrom(bytes);',
+              '      await output.flush();': '      await output!.flush();',
+          }
+          for old_call, new_call in nullable_fixes.items():
+              if old_call not in s:
+                  raise SystemExit(f'DM-27 nullable output shim drift: {old_call}')
+              s = s.replace(old_call, new_call, 1)
           p.write_text(s)
           PY
 
