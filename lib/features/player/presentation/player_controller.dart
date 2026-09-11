@@ -164,7 +164,6 @@ class PlayerState {
     this.skipSegments = const [],
   });
 
-  // Derived from uiPhase — no separate field needed.
   bool get isLoading => const {
     PlaybackUiPhaseKind.bootstrapping,
     PlaybackUiPhaseKind.fetchingSources,
@@ -339,20 +338,15 @@ class PlayerController extends Notifier<PlayerState> {
     StreamResult stream, {
     required bool isLive,
   }) {
-    // Preserve the current product behavior: video_view is the native live path.
     if (_videoViewController == null || Platform.isLinux || !isLive) {
       return false;
     }
 
-    // AVPlayer/Windows native backends do not handle DASH playback reliably here.
-    // Check both the resolved URL and the original stream URL to catch proxied
-    // or query-param-based MPD streams that lack a .mpd extension in the resolved URL.
     if ((Platform.isMacOS || Platform.isIOS || Platform.isWindows) &&
         (_isDashStreamUrl(playUrl) || _isDashStreamUrl(stream.url))) {
       return false;
     }
 
-    // Only Android currently implements the video_view DRM path end-to-end.
     if (!Platform.isAndroid && _streamRequiresNativeDrm(stream)) {
       return false;
     }
@@ -360,11 +354,6 @@ class PlayerController extends Notifier<PlayerState> {
     return true;
   }
 
-  /// Build the header map handed to the player (mpv + video_view). Clones
-  /// the plugin's headers so we never mutate the StreamResult, and injects a
-  /// real browser User-Agent when the plugin didn't supply one — see
-  /// http_defaults.dart for why this matters (resolve/playback identity
-  /// match + per-platform libmpv default-UA divergence).
   Map<String, String> _buildPlaybackHeaders(StreamResult stream) {
     final headers = <String, String>{...?stream.headers};
     final hasUserAgent = headers.keys.any(
@@ -378,17 +367,11 @@ class PlayerController extends Notifier<PlayerState> {
 
   bool get _videoViewSupportsMergedExternalSubtitles => Platform.isAndroid;
 
-  // Track last saved position for threshold-based saving.
   Duration _lastSavedPosition = Duration.zero;
-  static const double _saveThresholdPercent = 0.05; // 5% of video
-
-  // Keep the last valid local/native engine timeline. Some engines clear
-  // position/duration just before a file is closed; using these values prevents
-  // the final save from being dropped when teardown briefly reports 0/0.
+  static const double _saveThresholdPercent = 0.05;
   int _lastKnownPlaybackPositionMs = 0;
   int _lastKnownPlaybackDurationMs = 0;
 
-  // Subscriptions to prevent leaks
   StreamSubscription<dynamic>? _errorSub;
   StreamSubscription<dynamic>? _playingSub;
   StreamSubscription<dynamic>? _positionSub;
@@ -399,43 +382,18 @@ class PlayerController extends Notifier<PlayerState> {
   StreamSubscription<dynamic>? _logSub;
   StreamSubscription<dynamic>? _trackSub;
 
-  // Stall Watchdog state
   Duration? _lastPosition;
   DateTime? _lastPositionUpdateTime;
   bool _isRecoveringFromStall = false;
-  // Backstop timer for the stall-recovery flag. Primary path: clear the
-  // flag in `_endStallRecovery()` immediately after `changeStream(...)`
-  // completes. Backstop fires only if changeStream hangs longer than 10 s.
-  // Without this, the flag was solely time-based — chained errors firing
-  // at 9-s intervals would silently skip every other reconnect attempt
-  // because the guard at the call sites bailed without scheduling a new
-  // recovery (H-PLAYER-2).
   Timer? _stallRecoveryGuardTimer;
-
   final List<DateTime> _bufferDepletionTimes = [];
-
-  // Seek/buffer watchdog. The silent-stall watchdog below deliberately ignores
-  // buffering, so a seek that lands outside the cache could sit on the
-  // spinner forever. This one escalates: nudge the seek, re-open the same
-  // source at the same position, then fail over to the next source.
   Timer? _bufferWatchdogTimer;
   DateTime? _bufferingSince;
   Duration? _bufferingStartPosition;
   int _bufferRecoveryStage = 0;
-
   Timer? _stallTimer;
-  // Hide-debounce for the buffering overlay. Without this, a 250-350 ms
-  // network blip would show the overlay (300 ms past the show-debounce)
-  // then immediately hide it the moment buffering ends — visible flicker
-  // (H-PLAYER-6). Keeping the overlay up for an extra ~200 ms after
-  // buffering ends absorbs sub-second re-buffers without strobing.
   Timer? _bufferingHideTimer;
 
-  /// Set [_isRecoveringFromStall] true, schedule a 10 s backstop clear,
-  /// and run [perform]. If [perform] returns a Future, the flag clears as
-  /// soon as the future completes (so a quick recovery doesn't block the
-  /// next legitimate retry for 10 s). The backstop only fires if perform
-  /// hangs (rare, but possible if changeStream gets wedged on a dead host).
   void _beginStallRecovery({Future<void>? perform}) {
     _isRecoveringFromStall = true;
     _stallRecoveryGuardTimer?.cancel();
@@ -454,30 +412,15 @@ class PlayerController extends Notifier<PlayerState> {
   int? _pendingResumeSeekPosition;
   bool _isApplyingPendingResumeSeek = false;
   double _lastNonZeroVolumeLevel = 1.0;
-
-  /// MyAnimeList id for the anime being played, resolved from the catalog or
-  /// from the title. Needed to submit a viewer's marks back to AniSkip.
   int? _resolvedMalId;
   final List<SubtitleFile> _userAddedExternalSubtitles = [];
   bool _hasConfirmedPlaybackFrame = false;
-
-  // RC1 — when a stream fails to start with a decode/codec error (common on
-  // weak TV hardware decoders like FireTV's MediaCodec), we retry the same
-  // source once with hardware decoding off. This flag forces `hwdec: no` in
-  // _applyPlaybackProperties for the rest of the session. Reset only on a new
-  // item (init), not per-source, because a broken HW decoder affects every
-  // source equally.
   bool _forceSoftwareDecode = false;
-
   bool _suppressNextEpisodeDetection = false;
   bool _isNextEpisodeOverlayForced = false;
   bool _userDismissedOverlay = false;
   bool _manualSelectionPending = false;
-  // Audio tracks that have already failed with decode errors for the current
-  // stream. When one track fails, we try the next one before source-switching.
   final Set<String> _failedAudioTrackIds = {};
-  // Last real audio track that was actively playing (mpv resets state.track.audio
-  // to "no" before the error event fires, so we track it here via stream.track).
   String? _lastKnownAudioTrackId;
   DateTime? _audioFailoverLastTime;
 
@@ -511,8 +454,6 @@ class PlayerController extends Notifier<PlayerState> {
     if (!backgrounded &&
         _hasConfirmedPlaybackFrame &&
         state.uiPhase.kind == PlaybackUiPhaseKind.bufferingRuntime) {
-      // Returning to foreground while buffering/reconnecting — kick reconnect
-      // through the same budget gate as the error paths.
       _requestMidPlaybackReconnect(preferImmediate: true);
     }
   }
@@ -600,13 +541,7 @@ class PlayerController extends Notifier<PlayerState> {
 
   void _confirmPlaybackStarted() {
     _hasConfirmedPlaybackFrame = true;
-    _manualSelectionPending = false; // source played — no longer pending
-    // Do NOT reset _suppressNextEpisodeDetection here. At the moment position
-    // first exceeds zero, _player.state.duration may still hold the previous
-    // episode's value (mpv resets it asynchronously). Resetting here would
-    // cause the next-episode detection to see remaining ≈ 0 and show the
-    // overlay for the newly loaded episode. It is reset in _setupDurationListener
-    // once a valid non-zero duration for the new episode arrives.
+    _manualSelectionPending = false;
     _markSourceAttempt(state.currentStreamIndex, SourceAttemptStatus.playing);
     state = state.copyWith(uiPhase: const PlaybackUiPhase.idle());
   }
@@ -626,8 +561,6 @@ class PlayerController extends Notifier<PlayerState> {
   @override
   PlayerState build() {
     ref.keepAlive();
-    // Safety net: if the provider is somehow disposed without
-    // disposeController() being called, clean up subscriptions.
     ref.onDispose(() {
       _isDisposed = true;
       ++_sourceSessionSerial;
@@ -654,27 +587,15 @@ class PlayerController extends Notifier<PlayerState> {
       (_item.contentType == MultimediaContentType.series ||
           _item.contentType == MultimediaContentType.anime);
 
-  /// True when the episode picker has something to offer: a series, or a movie
-  /// or special with several rows to switch between (مترجم / مدبلج). Those are
-  /// not series, but their variants still belong in the picker.
   bool get hasEpisodePicker =>
       isSeries || (_isInitialized && (_item.episodes?.length ?? 0) > 1);
   MultimediaItem? get multimediaItem => _isInitialized ? _item : null;
   String? get currentEpisodeUrl => _episode?.url ?? _videoUrl;
   Episode? get currentEpisode => _episode ?? _resolveCurrentEpisode();
 
-  Episode? get nextEpisode {
-    return _adjacentEpisode(1);
-  }
+  Episode? get nextEpisode => _adjacentEpisode(1);
+  Episode? get previousEpisode => _adjacentEpisode(-1);
 
-  Episode? get previousEpisode {
-    return _adjacentEpisode(-1);
-  }
-
-  /// The next episode the provider has not marked filler.
-  ///
-  /// Null when the rest of the list is filler, which the callers read as
-  /// "nothing to jump to" and fall back to the plain next episode.
   Episode? get nextStoryEpisodeOrNull {
     if (!isSeries) return null;
     return nextStoryEpisode(
@@ -694,8 +615,6 @@ class PlayerController extends Notifier<PlayerState> {
     );
   }
 
-  /// The player header keeps the series title on its primary line. The player
-  /// controls render the active episode's label and creative title beneath it.
   String _titleWithEpisode(Episode _) => _item.title;
 
   Future<void> init({
@@ -708,14 +627,12 @@ class PlayerController extends Notifier<PlayerState> {
     VideoController? videoViewController,
   }) async {
     _isDisposed = false;
-    // The provider survives routes. Never reuse a previous route's source ID.
     state = PlayerState(sourceSessionId: ++_sourceSessionSerial);
     unawaited(_logSub?.cancel());
     _logSub = null;
     _hasConfirmedPlaybackFrame = false;
     _manualSelectionPending = false;
     _revertMessage = null;
-    // New item — reset session-scoped recovery flags.
     _forceSoftwareDecode = false;
     _isAppBackgrounded = false;
     _midPlaybackRetryCount = 0;
@@ -790,9 +707,6 @@ class PlayerController extends Notifier<PlayerState> {
       _setSourceAttemptsFromStreams(<StreamResult>[selectedSource]);
       await loadStreamAtIndex(0, sourceSessionId: sourceSessionId);
     } else {
-      // Some picker entries are intermediate provider URLs. Preserve the
-      // user's exact selection and let the provider resolve that one entry
-      // inside the player, matching the existing episode-switch behavior.
       if (selectedSource?.requiresResolution ?? false) {
         _videoUrl = selectedSource!.url;
       }
@@ -802,9 +716,6 @@ class PlayerController extends Notifier<PlayerState> {
     await applySubtitleSettings();
     if (_isDisposed || !identical(_player, player)) return;
 
-    // Restore the persisted default playback speed for this session.
-    // Skipped at 1.0× (engine default — no-op) and on live streams (rate
-    // changes on a live source are usually ignored / fight back).
     final settings = ref.read(playerSettingsProvider).asData?.value;
     final defaultSpeed = settings?.defaultPlaybackSpeed ?? 1.0;
     if (defaultSpeed != 1.0 && !state.isLive) {
@@ -813,13 +724,9 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   void _maybeFetchSkipSegments() {
-    // Downloaded episodes used to bail out here, which left them with no skip
-    // button at all. They now go through the same path: the cache answers
-    // offline, and the online sources still run when there is a connection.
     unawaited(_fetchAndLogSkipSegments());
   }
 
-  /// Cache keys for the episode playing, offline-safe key first.
   List<String> _skipCacheKeys() {
     final keys = <String>[];
     final episode = _episode;
@@ -838,8 +745,6 @@ class PlayerController extends Notifier<PlayerState> {
     return keys;
   }
 
-  /// Episode length in seconds, or null while the media is still opening.
-  /// AniSkip uses it to scale crowd-sourced timestamps to this exact file.
   int? _currentDurationSeconds() {
     final dur = state.useExoPlayer
         ? Duration(
@@ -849,12 +754,6 @@ class PlayerController extends Notifier<PlayerState> {
     return dur > Duration.zero ? dur.inSeconds : null;
   }
 
-  /// Skip segments are looked up as soon as playback starts, which is
-  /// usually before the engine reports a duration. Without a length AniSkip
-  /// hands back every submission it has for the episode — including entries
-  /// timed against other releases, which overlap each other. Waiting the
-  /// couple of seconds it takes for the duration to land gets the set that
-  /// actually matches this file.
   Future<int?> _awaitDurationSeconds({
     Duration timeout = const Duration(seconds: 4),
   }) async {
@@ -867,15 +766,9 @@ class PlayerController extends Notifier<PlayerState> {
       final value = _currentDurationSeconds();
       if (value != null) return value;
     }
-    // The engine is still opening the file. The catalog knows the runtime,
-    // which is close enough for AniSkip to match a submission, and beats
-    // making the viewer wait for a skip button that arrives after the
-    // opening has already played.
     return _catalogRuntimeSeconds();
   }
 
-  /// Episode runtime in seconds as published by the catalog (`awDuration` is
-  /// in minutes), or null when it isn't known.
   int? _catalogRuntimeSeconds() {
     final raw = _item.syncData?['awDuration']?.trim();
     final minutes = raw == null ? null : int.tryParse(raw);
@@ -886,16 +779,9 @@ class PlayerController extends Notifier<PlayerState> {
   Future<void> _fetchAndLogSkipSegments() async {
     if (_episode == null) return;
     if (state.isLive || _item.contentType == MultimediaContentType.livestream) {
-      if (kDebugMode) {
-        debugPrint(
-          'Skip Segments: Bypassed lookup (livestreams are not supported)',
-        );
-      }
       return;
     }
 
-    // A single master switch for the whole feature — AniSkip and the legacy
-    // sources all feed the same skip button, so one "off" means no lookups.
     final skipEnabled =
         ref
             .read(settingsRepositoryProvider)
@@ -904,12 +790,7 @@ class PlayerController extends Notifier<PlayerState> {
               defaultValue: true,
             ) ??
         true;
-    if (!skipEnabled) {
-      if (kDebugMode) {
-        debugPrint('Skip Segments: Disabled in settings.');
-      }
-      return;
-    }
+    if (!skipEnabled) return;
 
     final malId = int.tryParse(
       (_item.syncData?['malId'] ?? _item.syncData?['mal_id'] ?? '').trim(),
@@ -923,83 +804,33 @@ class PlayerController extends Notifier<PlayerState> {
         _item.syncData?['anilistId'] == null &&
         _item.syncData?['anilist_id'] == null;
 
-    // Anything resolved on a previous play (or when the episode was
-    // downloaded) is on disk, so show it straight away. This is the only
-    // path that works with no connection.
     final cache = ref.read(skipSegmentCacheProvider);
     final cached = cache.readAny(_skipCacheKeys());
     if (cached.isNotEmpty) {
       state = state.copyWith(skipSegments: cached);
-      if (kDebugMode) {
-        debugPrint('Skip Segments: ${cached.length} restored from cache');
-      }
     }
 
-    // A title alone is still workable: AniSkip is keyed by MyAnimeList id,
-    // and the title resolves to one through AniList. The catalog provider
-    // identifies most anime by title only, so bailing here would disable
-    // intro/credits skipping for nearly everything.
-    if (hasNoIds && _item.title.trim().isEmpty) {
-      if (kDebugMode) {
-        debugPrint(
-          'Skip Segments: Bypassed lookup (no IDs and no title available)',
-        );
-      }
-      return;
-    }
+    if (hasNoIds && _item.title.trim().isEmpty) return;
 
-    if (kDebugMode) {
-      debugPrint('=============================================');
-      debugPrint('SKIP SEGMENTS (AniSkip/IntroDB/chapters)');
-      debugPrint(
-        'ids: mal=$malId tmdb=${state.tmdbId} imdb=${state.imdbId} '
-        'anilist=${_item.syncData?['anilist'] ?? _item.syncData?['anilistId'] ?? _item.syncData?['anilist_id']}',
-      );
-      debugPrint('syncData keys: ${_item.syncData?.keys.toList()}');
-    }
-
-    // Each source keeps its own list; they are merged by priority at the end
-    // so a lower-priority one can fill the episodes a better one has no data
-    // for, without ever contradicting it.
     var introDbSegments = const <SkipSegment>[];
     var aniSkipSegments = const <SkipSegment>[];
     var chapterSegments = const <SkipSegment>[];
     final int season = _episode!.season > 0 ? _episode!.season : 1;
     final int episodeNum = _episode!.episode > 0 ? _episode!.episode : 1;
 
-    // 1. Fetch from IntroDB (for both Anime and Western TV Shows/Movies).
-    // Runs under the master toggle: its own legacy flag had no UI, so it
-    // could never be switched on.
     if (state.tmdbId != null || state.imdbId != null) {
       try {
-        final introDb = ref.read(introDbServiceProvider);
-        final segments = await introDb.getSkipSegments(
+        introDbSegments = await ref.read(introDbServiceProvider).getSkipSegments(
           tmdbId: state.tmdbId,
           imdbId: state.imdbId,
           season: season,
           episode: episodeNum,
         );
-        if (_isDisposed) return;
-        introDbSegments = segments;
-        if (kDebugMode) {
-          debugPrint('IntroDB returned ${segments.length} segments:');
-          for (final s in segments) {
-            debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
-          }
-        }
-      } catch (e) {
-        if (kDebugMode) debugPrint('IntroDB error: $e');
-      }
-    } else {
-      if (kDebugMode) {
-        debugPrint('IntroDB: Bypassed lookup (no TMDB/IMDb id available)');
-      }
+      } catch (_) {}
     }
 
     if (_isDisposed) return;
 
-    // 2. Check if the media is anime or animated to run AnimeSkip logic.
-    // A MyAnimeList id is itself proof of anime — MAL indexes nothing else.
     final isAnime =
         _item.contentType == MultimediaContentType.anime ||
         malId != null ||
@@ -1013,74 +844,33 @@ class PlayerController extends Notifier<PlayerState> {
             ));
 
     if (isAnime) {
-      // 2a. AniSkip (api.aniskip.com) — keyless and MAL-keyed, so it is the
-      // primary anime source. Its data is anime-specific, so it replaces
-      // whatever IntroDB returned for the same episode.
-      // The provider usually hands us a title and nothing else, so fall
-      // back to resolving the MyAnimeList id from it.
       var resolvedMalId = malId;
       if (resolvedMalId == null && _item.title.trim().isNotEmpty) {
         resolvedMalId = await ref
             .read(malIdResolverProvider)
             .resolve(_item.title);
         if (_isDisposed) return;
-        if (kDebugMode) {
-          debugPrint(
-            'AniSkip: resolved MAL id $resolvedMalId from title '
-            '"${_item.title}"',
-          );
-        }
       }
-      // Recorded after the fallback, not before it: the catalog hands us a
-      // title and no ids for most anime, so an id assigned before this line
-      // was null exactly when the lookup had just succeeded — which left the
-      // MAL-keyed segment cache and the IntroDB lookup below switched off
-      // for every episode whose id came from its title.
       _resolvedMalId = resolvedMalId;
 
       if (resolvedMalId != null) {
         try {
           final durationSec = await _awaitDurationSeconds();
           if (_isDisposed) return;
-          if (kDebugMode) {
-            debugPrint(
-              'AniSkip: querying mal=$resolvedMalId season=$season '
-              'episode=$episodeNum durationSec=$durationSec',
-            );
-          }
-          final aniSkip = ref.read(aniSkipServiceProvider);
-          final segments = await aniSkip.getSkipSegments(
-            malId: resolvedMalId,
-            season: season,
-            episode: episodeNum,
-            duration: durationSec,
-          );
+          aniSkipSegments = await ref
+              .read(aniSkipServiceProvider)
+              .getSkipSegments(
+                malId: resolvedMalId,
+                season: season,
+                episode: episodeNum,
+                duration: durationSec,
+              );
           if (_isDisposed) return;
-          aniSkipSegments = segments;
-          if (kDebugMode) {
-            debugPrint('AniSkip returned ${segments.length} segments:');
-            for (final s in segments) {
-              debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
-            }
-          }
-        } catch (e) {
-          if (kDebugMode) debugPrint('AniSkip error: $e');
-        }
-      } else {
-        if (kDebugMode) {
-          debugPrint(
-            'AniSkip: Bypassed lookup (no MyAnimeList id could be resolved)',
-          );
-        }
+        } catch (_) {}
       }
 
       if (_isDisposed) return;
 
-      // 2b. IntroDB, reached through the ids ani.zip keeps against the
-      // MyAnimeList one. It is a separate database from AniSkip — where
-      // AniSkip waits for a viewer to submit an episode, this one carries
-      // the licensed catalogue — and anime never reached it before, because
-      // no anime source hands out a TMDB or IMDb id.
       if (introDbSegments.isEmpty && resolvedMalId != null) {
         try {
           final ids = await ref
@@ -1100,24 +890,11 @@ class PlayerController extends Notifier<PlayerState> {
                   duration: durationSec,
                 );
             if (_isDisposed) return;
-            if (kDebugMode) {
-              debugPrint(
-                'IntroDB via ani.zip ($ids) returned '
-                '${introDbSegments.length} segments',
-              );
-            }
           }
-        } catch (e) {
-          if (kDebugMode) debugPrint('IntroDB via ani.zip error: $e');
-        }
-      }
-    } else {
-      if (kDebugMode) {
-        debugPrint('AniSkip: Bypassed lookup (media is not anime/animated)');
+        } catch (_) {}
       }
     }
-    // 3. The file's own chapter markers. Per-file data, so it covers the
-    // episodes no crowd-sourced service has, and it costs no network call.
+
     final durationSec = await _awaitDurationSeconds();
     if (_isDisposed) return;
     try {
@@ -1126,36 +903,16 @@ class PlayerController extends Notifier<PlayerState> {
         durationSec: durationSec?.toDouble(),
       );
       if (_isDisposed) return;
-      if (kDebugMode) {
-        debugPrint('Chapters returned ${chapterSegments.length} segments:');
-        for (final s in chapterSegments) {
-          debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('Chapters error: $e');
-    }
+    } catch (_) {}
 
-    // Best source first. Anything overlapping a segment an earlier source
-    // already supplied is dropped, so the later ones only fill gaps.
-    // viewer's own marks outrank every database.
     final merged = SkipSegment.merge(<List<SkipSegment>>[
       aniSkipSegments,
       introDbSegments,
       chapterSegments,
     ], durationSec: durationSec?.toDouble());
 
-    if (kDebugMode) {
-      debugPrint('Merged ${merged.length} skip segments:');
-      for (final s in merged) {
-        debugPrint('  - ${s.type.name}: ${s.startTime} -> ${s.endTime}');
-      }
-      debugPrint('=============================================');
-    }
-
     if (merged.isNotEmpty && !_isDisposed) {
       state = state.copyWith(skipSegments: merged);
-      // Keep them for the next play, which may be offline.
       unawaited(cache.write(_skipCacheKeys(), merged));
     }
   }
@@ -1184,8 +941,6 @@ class PlayerController extends Notifier<PlayerState> {
           _enterStartupPhase(kind: PlaybackUiPhaseKind.bufferingInitial);
         }
 
-        // Re-enable next-episode detection once ExoPlayer reports a confirmed
-        // non-zero duration (mirrors the media_kit _setupDurationListener fix).
         if ((info.duration > 0 || info.isLive) &&
             _suppressNextEpisodeDetection) {
           _suppressNextEpisodeDetection = false;
@@ -1215,10 +970,6 @@ class PlayerController extends Notifier<PlayerState> {
       _onBufferingChanged(isLoading);
       if (isLoading) {
         _handleBufferStall();
-        // Buffering started — cancel any pending HIDE (we're back in
-        // buffering state, the overlay should stay/come up). Schedule the
-        // SHOW debounce; 400 ms swallows sub-half-second blips without
-        // flashing the overlay (H-PLAYER-6).
         _bufferingHideTimer?.cancel();
         _stallTimer?.cancel();
         _stallTimer = Timer(const Duration(milliseconds: 400), () {
@@ -1229,11 +980,7 @@ class PlayerController extends Notifier<PlayerState> {
           }
         });
       } else {
-        // Buffering ended — cancel the show timer first (in case the blip
-        // ended within the 400 ms window, never show the overlay at all).
         _stallTimer?.cancel();
-        // Then defer the hide by 200 ms so a rapid re-buffer doesn't
-        // strobe the overlay off→on→off.
         if (_hasConfirmedPlaybackFrame &&
             state.uiPhase.kind == PlaybackUiPhaseKind.bufferingRuntime) {
           _bufferingHideTimer?.cancel();
@@ -1251,18 +998,9 @@ class PlayerController extends Notifier<PlayerState> {
       if (error != null) {
         pendingVideoViewSubtitleIdsBeforeReload = null;
         selectNewestVideoViewSubtitleAfterReload = false;
-        if (kDebugMode) debugPrint("VideoView Player Error: $error");
-        if (_isAppBackgrounded) {
-          if (kDebugMode) {
-            debugPrint(
-              "VideoView: Ignoring transient error while backgrounded.",
-            );
-          }
-          return;
-        }
+        if (_isAppBackgrounded) return;
         if (!_hasConfirmedPlaybackFrame ||
             (_videoViewController!.position.value) == 0) {
-          // Error before playback confirmed — try next source.
           _markSourceAttempt(
             state.currentStreamIndex,
             SourceAttemptStatus.failed,
@@ -1279,14 +1017,8 @@ class PlayerController extends Notifier<PlayerState> {
             unawaited(retryNextStream(sourceSessionId: state.sourceSessionId));
           }
         } else {
-          // Error during active playback.
           if (state.isLive && state.currentStream != null) {
-            if (_isRecoveringFromStall) return; // already reconnecting
-            if (kDebugMode) {
-              debugPrint(
-                "VideoView live stream error. Triggering reconnect...",
-              );
-            }
+            if (_isRecoveringFromStall) return;
             _enterRuntimePhase(kind: PlaybackUiPhaseKind.reconnectingLive);
             _beginStallRecovery(
               perform: changeStream(state.currentStream!, resetPosition: true),
@@ -1317,18 +1049,11 @@ class PlayerController extends Notifier<PlayerState> {
           VideoControllerPlaybackState.playing;
       if (!playing) {
         saveProgress();
-        // Bug 2 (ExoPlayer branch): clear buffering overlay on pause.
-        // See media_kit branch in _setupEventDrivenProgressSaving for
-        // rationale.
         _stallTimer?.cancel();
         _bufferingHideTimer?.cancel();
         if (state.uiPhase.kind == PlaybackUiPhaseKind.bufferingRuntime) {
           _setIdlePhase();
         }
-      } else {
-        // Do NOT call _confirmPlaybackStarted() here — ExoPlayer/AVPlayer fires
-        // playbackState=playing when it starts buffering, before any frames arrive.
-        // Confirmation happens via position listener (position > 0).
       }
     });
 
@@ -1377,9 +1102,6 @@ class PlayerController extends Notifier<PlayerState> {
           (_item.contentType == MultimediaContentType.series ||
               _item.contentType == MultimediaContentType.anime)) {
         final remainingSecs = (durationMs - posMs) / 1000;
-
-        // Show next episode overlay if within last 15 seconds or video ended.
-        // It persists until the user dismisses it or loads a new episode.
         if (remainingSecs <= 15.0) {
           final currentEp = _episode ?? _resolveCurrentEpisode();
           List<Episode>? episodes = _item.episodes;
@@ -1416,10 +1138,7 @@ class PlayerController extends Notifier<PlayerState> {
                 nextEpisodeServerName: next.serverName,
               );
             }
-            // After the card, never before it: a prefetch that throws must
-            // not be able to take the next-episode prompt down with it.
             _warmNextEpisodeSources(next);
-            // Ensure it persists if video completes and resets position
             _isNextEpisodeOverlayForced = true;
           }
           return;
@@ -1472,6 +1191,7 @@ class PlayerController extends Notifier<PlayerState> {
         nextEpisodeNumber: next.episode,
         nextEpisodeSeason: next.season,
         nextEpisodeRuntime: next.runtime,
+        nextEpisodeDescription: next.description,
         nextEpisodeIsFinal: next.isFinal,
         nextEpisodeServerName: next.serverName,
       );
@@ -1495,8 +1215,6 @@ class PlayerController extends Notifier<PlayerState> {
         if (_pendingResumeSeekPosition != null) {
           unawaited(_flushPendingResumeSeek());
         }
-        // Safe point to re-enable next-episode detection: the new episode's
-        // duration is now confirmed, so remaining-time calculations are valid.
         if (_suppressNextEpisodeDetection) {
           _suppressNextEpisodeDetection = false;
         }
@@ -1510,8 +1228,6 @@ class PlayerController extends Notifier<PlayerState> {
       _onBufferingChanged(isBuffering);
       if (isBuffering) {
         _handleBufferStall();
-        // Cancel pending hide and arm the show debounce. See ExoPlayer
-        // branch comment above for the 400 ms / 200 ms rationale.
         _bufferingHideTimer?.cancel();
         _stallTimer?.cancel();
         _stallTimer = Timer(const Duration(milliseconds: 400), () {
@@ -1536,12 +1252,10 @@ class PlayerController extends Notifier<PlayerState> {
     });
   }
 
-  /// Current playback position regardless of which backend is in use.
   Duration get _currentPosition => state.useExoPlayer
       ? Duration(milliseconds: _videoViewController?.position.value ?? 0)
       : _player.state.position;
 
-  /// Called whenever the backend flips its buffering flag.
   void _onBufferingChanged(bool isBuffering) {
     if (!isBuffering) {
       _resetBufferWatchdog();
@@ -1555,23 +1269,17 @@ class PlayerController extends Notifier<PlayerState> {
     );
   }
 
-  /// Escalating recovery for seeks that land outside the cache and spin.
-  ///
-  /// 12 s → re-issue the seek and kick play.
-  /// 25 s → re-open the same source at the same position.
-  /// 45 s → fail over to the next source.
   void _checkBufferWatchdog() {
     final since = _bufferingSince;
     if (since == null) return;
-    if (!_hasConfirmedPlaybackFrame) return; // startup has its own handling
-    if (state.isLive) return; // live reconnect is handled elsewhere
+    if (!_hasConfirmedPlaybackFrame) return;
+    if (state.isLive) return;
     if (_isRecoveringFromStall) return;
 
     final position = _currentPosition;
     final startedAt = _bufferingStartPosition;
     if (startedAt != null &&
         (position - startedAt).abs() > const Duration(seconds: 1)) {
-      // Playback moved on its own — treat this as a fresh buffering window.
       _bufferingSince = DateTime.now();
       _bufferingStartPosition = position;
       _bufferRecoveryStage = 0;
@@ -1582,9 +1290,6 @@ class PlayerController extends Notifier<PlayerState> {
     if (_bufferRecoveryStage == 0 &&
         stuckFor >= PlaybackRecoveryPolicy.bufferNudgeAfter) {
       _bufferRecoveryStage = 1;
-      if (kDebugMode) {
-        debugPrint('Watchdog: buffering 12s — re-issuing seek to $position');
-      }
       unawaited(() async {
         await _safeSeekTo(position.inMilliseconds);
         await play();
@@ -1597,9 +1302,6 @@ class PlayerController extends Notifier<PlayerState> {
       _bufferRecoveryStage = 2;
       final current = state.currentStream;
       if (current == null) return;
-      if (kDebugMode) {
-        debugPrint('Watchdog: buffering 25s — reopening source at $position');
-      }
       _enterRuntimePhase(kind: PlaybackUiPhaseKind.bufferingRuntime);
       _beginStallRecovery(perform: changeStream(current, resetPosition: false));
       return;
@@ -1608,9 +1310,6 @@ class PlayerController extends Notifier<PlayerState> {
     if (_bufferRecoveryStage == 2 &&
         stuckFor >= PlaybackRecoveryPolicy.failoverSourceAfter) {
       _bufferRecoveryStage = 3;
-      if (kDebugMode) {
-        debugPrint('Watchdog: buffering 45s — moving to the next source');
-      }
       _resetBufferWatchdog();
       _resetMidPlaybackReconnect();
       _revertMessage = _playerText(
@@ -1622,33 +1321,21 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   void _handleBufferStall() {
-    if (!_hasConfirmedPlaybackFrame) {
-      return; // ignore stalls during source health check
-    }
+    if (!_hasConfirmedPlaybackFrame) return;
     if (_isLiveStream(_videoUrl)) return;
 
     final now = DateTime.now();
     _bufferDepletionTimes.add(now);
-
-    // Keep only stalls in the last 60 seconds
     _bufferDepletionTimes.removeWhere(
       (t) => now.difference(t) > const Duration(seconds: 60),
     );
 
     if (_bufferDepletionTimes.length >= 2 && !state.isAdaptiveBufferingActive) {
-      if (kDebugMode) {
-        debugPrint(
-          "Multiple buffer stalls detected. Activating adaptive buffering.",
-        );
-      }
       state = state.copyWith(isAdaptiveBufferingActive: true);
-
-      // Re-apply properties with aggressive buffering
       if (_player.platform is NativePlayer) {
         final settings = ref.read(playerSettingsProvider).asData?.value;
         final readahead = (settings?.readaheadSeconds ?? 180) * 2;
         final native = _player.platform as NativePlayer;
-        // Double the readahead and cache for VOD if stalled
         if (_player.state.duration > Duration.zero) {
           native.setProperty('demuxer-readahead-secs', '$readahead');
           native.setProperty('cache-secs', '$readahead');
@@ -1658,9 +1345,6 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   void _setupErrorListener() {
-    // Record the last real audio track so we know which one failed when the
-    // error fires (mpv resets state.track.audio to "no" before the error
-    // event propagates, making state.track.audio unreliable at error time).
     _trackSub?.cancel();
     _trackSub = _player.stream.track.listen((track) {
       final id = track.audio.id.toString();
@@ -1670,18 +1354,11 @@ class PlayerController extends Notifier<PlayerState> {
     });
 
     _errorSub = _player.stream.error.listen((error) {
-      if (kDebugMode) debugPrint("Player Error: $error");
-      if (error.toString().toLowerCase().contains("abort")) return;
+      if (error.toString().toLowerCase().contains('abort')) return;
 
       final isAudioDecodeError = error.toString().toLowerCase().contains(
         'decoding audio',
       );
-
-      // Video decode errors (h264 hardware-accelerator failures, PPS/SPS state
-      // loss after an audio track switch) are transient during active playback:
-      // the decoder self-heals on the next keyframe. Restarting the entire
-      // source would be far worse than letting the stall watchdog handle a
-      // truly broken stream (position stuck for 5 s → watchdog calls play()).
       final isVideoDecodeError = error.toString().toLowerCase().contains(
         'decoding video',
       );
@@ -1689,26 +1366,10 @@ class PlayerController extends Notifier<PlayerState> {
           !state.isLive &&
           _hasConfirmedPlaybackFrame &&
           _player.state.position > Duration.zero) {
-        if (kDebugMode) {
-          debugPrint(
-            '[Player] Ignoring transient video decode error during confirmed playback.',
-          );
-        }
         return;
       }
 
-      // HE-AAC (AAC+SBR) streams trigger "Error decoding audio" because
-      // FFmpeg initializes the codec in AAC-LC mode and then encounters SBR
-      // extension data. Rather than switching the whole source, try each
-      // audio rendition in turn — the next track is typically stereo AAC-LC
-      // and decodes correctly (matches what the user gets by manually
-      // switching the audio track in the UI).
-      //
-      // mpv resets state.track.audio to the "no" sentinel before the error
-      // event fires, so we use _lastKnownAudioTrackId (recorded via
-      // stream.track above) to identify which track actually failed.
       if (isAudioDecodeError && !state.isLive) {
-        // Debounce: ignore duplicate errors within 500 ms.
         final now = DateTime.now();
         if (_audioFailoverLastTime != null &&
             now.difference(_audioFailoverLastTime!) <
@@ -1720,9 +1381,6 @@ class PlayerController extends Notifier<PlayerState> {
         if (_lastKnownAudioTrackId != null) {
           _failedAudioTrackIds.add(_lastKnownAudioTrackId!);
         } else {
-          // stream.track hasn't fired yet (error came in before the first
-          // track-change event). Mark the first real track as failed so we
-          // don't loop back to it.
           final firstReal = _player.state.tracks.audio.firstWhereOrNull(
             (t) => t.id != 'no' && t.id != 'auto',
           );
@@ -1737,23 +1395,9 @@ class PlayerController extends Notifier<PlayerState> {
               !_failedAudioTrackIds.contains(t.id.toString()),
         );
         if (nextTrack != null) {
-          if (kDebugMode) {
-            debugPrint(
-              '[Player] Audio decode error on track $_lastKnownAudioTrackId'
-              ' — trying next: ${nextTrack.id} (${nextTrack.language})',
-            );
-          }
           _lastKnownAudioTrackId = nextTrack.id.toString();
           _player.setAudioTrack(nextTrack).catchError((_) {});
           return;
-        }
-        // All audio tracks exhausted. Disable audio rather than restarting
-        // the entire source — video was playing correctly and a restart would
-        // lose the playback position and show a spinner for no benefit.
-        if (kDebugMode) {
-          debugPrint(
-            '[Player] All audio tracks failed — disabling audio to preserve video playback.',
-          );
         }
         final noTrack = _player.state.tracks.audio.firstWhereOrNull(
           (t) => t.id == 'no',
@@ -1766,13 +1410,6 @@ class PlayerController extends Notifier<PlayerState> {
 
       if (!_hasConfirmedPlaybackFrame ||
           _player.state.position == Duration.zero) {
-        // RC1: a source that fails to produce its first frame with a
-        // decode/codec/hardware error is usually the hardware decoder
-        // choking (FireTV MediaCodec rejecting a profile the phone
-        // accepts). Before burning through every source, flip to software
-        // decoding once and retry the SAME source. If it still fails,
-        // _forceSoftwareDecode is already set so we fall through to the
-        // next source.
         final errLower = error.toString().toLowerCase();
         final looksLikeDecodeFailure =
             errLower.contains('decod') ||
@@ -1786,17 +1423,10 @@ class PlayerController extends Notifier<PlayerState> {
             !_forceSoftwareDecode &&
             state.currentStream != null) {
           _forceSoftwareDecode = true;
-          if (kDebugMode) {
-            debugPrint(
-              '[Player] Decode/HW error before first frame — retrying '
-              'current source with software decoding.',
-            );
-          }
           unawaited(changeStream(state.currentStream!, resetPosition: true));
           return;
         }
 
-        // Error before playback confirmed — try next source.
         _markSourceAttempt(
           state.currentStreamIndex,
           SourceAttemptStatus.failed,
@@ -1813,34 +1443,17 @@ class PlayerController extends Notifier<PlayerState> {
           retryNextStream(sourceSessionId: state.sourceSessionId);
         }
       } else {
-        // Error during active playback.
-        if (_isAppBackgrounded) {
-          if (kDebugMode) {
-            debugPrint('[Player] Ignoring transient error while backgrounded.');
-          }
-          return;
-        }
+        if (_isAppBackgrounded) return;
         if (state.isLive && state.currentStream != null) {
-          if (_isRecoveringFromStall) return; // watchdog already reconnecting
-          if (kDebugMode) {
-            debugPrint("Live stream error. Triggering reconnect...");
-          }
+          if (_isRecoveringFromStall) return;
           _enterRuntimePhase(kind: PlaybackUiPhaseKind.reconnectingLive);
           _beginStallRecovery(
             perform: changeStream(state.currentStream!, resetPosition: true),
           );
           return;
         }
-        // During active playback, seamlessly reconnect/refresh the same source
-        // up to 3 times before considering failover to a different source.
         if (_isReconnectingCurrentStream) return;
         if (state.currentStream != null) {
-          if (kDebugMode) {
-            debugPrint(
-              '[Player] Mid-playback error — requesting seamless reconnect '
-              '($_midPlaybackRetryCount/${PlaybackRecoveryPolicy.maxMidPlaybackRetries}).',
-            );
-          }
           _requestMidPlaybackReconnect();
           return;
         }
@@ -1867,16 +1480,8 @@ class PlayerController extends Notifier<PlayerState> {
       final waitingOnBackoff = _midPlaybackRetryTimer != null;
       final buffering =
           state.uiPhase.kind == PlaybackUiPhaseKind.bufferingRuntime;
-      if (_isReconnectingCurrentStream && !waitingOnBackoff) {
-        // An in-flight reopen is already talking to the network.
-        return;
-      }
+      if (_isReconnectingCurrentStream && !waitingOnBackoff) return;
       if (_isReconnectingCurrentStream || buffering || waitingOnBackoff) {
-        if (kDebugMode) {
-          debugPrint(
-            '[Player] Network restored — triggering immediate stream reconnect.',
-          );
-        }
         _requestMidPlaybackReconnect(preferImmediate: true);
       }
     });
@@ -1924,11 +1529,8 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     _isReconnectingCurrentStream = true;
-    if (consumeRetryBudget) {
-      _midPlaybackRetryCount++;
-    }
+    if (consumeRetryBudget) _midPlaybackRetryCount++;
 
-    // Check connectivity first
     bool hasConnection = true;
     try {
       final results = await Connectivity().checkConnectivity();
@@ -1938,11 +1540,6 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     if (!hasConnection) {
-      if (kDebugMode) {
-        debugPrint(
-          '[Player] Device is offline — waiting for network reconnection.',
-        );
-      }
       if (consumeRetryBudget && _midPlaybackRetryCount > 0) {
         _midPlaybackRetryCount--;
       }
@@ -1960,7 +1557,7 @@ class PlayerController extends Notifier<PlayerState> {
     try {
       final stream = state.currentStream!;
       final playUrl = await _resolveStreamUrl(stream, forceRefresh: true);
-      if (playUrl == null) throw Exception("Failed to re-resolve stream URL");
+      if (playUrl == null) throw Exception('Failed to re-resolve stream URL');
       if (_isDisposed) return;
 
       final current = state.currentStream ?? stream;
@@ -1992,18 +1589,8 @@ class PlayerController extends Notifier<PlayerState> {
       if (holdPosition) {
         await _seekThenPlay(oldPos.inMilliseconds);
       }
-      if (kDebugMode) {
-        debugPrint(
-          '[Player] Reconnect successful at position ${oldPos.inSeconds}s.',
-        );
-      }
       _isReconnectingCurrentStream = false;
     } catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-          '[Player] Reconnect attempt $_midPlaybackRetryCount failed: $e',
-        );
-      }
       _isReconnectingCurrentStream = false;
       if (!consumeRetryBudget) return;
       if (PlaybackRecoveryPolicy.isPermanentPlaybackError(e) ||
@@ -2032,22 +1619,11 @@ class PlayerController extends Notifier<PlayerState> {
     _playingSub = _player.stream.playing.listen((isPlaying) {
       if (!isPlaying) {
         saveProgress();
-        // Bug 2: clear any in-flight buffering overlay when the user
-        // pauses. Without this, "seek → buffering starts → user pauses
-        // before buffer fills" leaves the spinner stuck on top of a
-        // paused video forever. The spinner is meaningful for an active
-        // playback stall, not for an intentional pause — the next seek/
-        // play will arm it again if needed.
         _stallTimer?.cancel();
         _bufferingHideTimer?.cancel();
         if (state.uiPhase.kind == PlaybackUiPhaseKind.bufferingRuntime) {
           _setIdlePhase();
         }
-      } else {
-        // Do NOT call _confirmPlaybackStarted() here — media_kit fires
-        // playing=true as soon as open() is called, before any frames arrive.
-        // Confirmation happens in _positionSub (position > 0) and
-        // Real playback confirmation comes from position/frame signals.
       }
     });
 
@@ -2058,9 +1634,6 @@ class PlayerController extends Notifier<PlayerState> {
             _item.contentType == MultimediaContentType.livestream ||
             _isLiveStream(_videoUrl);
         if (isLive && state.currentStream != null) {
-          if (kDebugMode) {
-            debugPrint("Live stream reached EOF. Forcing auto-reconnect...");
-          }
           _enterRuntimePhase(kind: PlaybackUiPhaseKind.reconnectingLive);
           unawaited(changeStream(state.currentStream!, resetPosition: true));
         }
@@ -2072,8 +1645,6 @@ class PlayerController extends Notifier<PlayerState> {
       _maybeConfirmPlaybackStarted(pos.inMilliseconds);
 
       final now = DateTime.now();
-
-      // --- Stall Watchdog Logic ---
       if (_player.state.playing && !state.isBuffering && !state.isLoading) {
         if (_lastPosition != null && _lastPosition == pos) {
           final stallDuration = _lastPositionUpdateTime != null
@@ -2081,16 +1652,6 @@ class PlayerController extends Notifier<PlayerState> {
               : Duration.zero;
 
           if (stallDuration.inSeconds >= 5 && !_isRecoveringFromStall) {
-            if (kDebugMode) {
-              debugPrint(
-                "Watchdog: Silent stall detected (5s). Kicking engine...",
-              );
-            }
-
-            // Recovery: reconnect live streams from scratch; kick VOD.
-            // For live we hand changeStream to the recovery helper so the
-            // flag clears the instant the reconnect resolves. For VOD,
-            // _player.play() is sync — fall back to the time-based backstop.
             if (state.isLive && state.currentStream != null) {
               _beginStallRecovery(
                 perform: changeStream(
@@ -2116,7 +1677,6 @@ class PlayerController extends Notifier<PlayerState> {
         _lastPosition = pos;
         _lastPositionUpdateTime = now;
       }
-      // -----------------------------
 
       if (pos.inMilliseconds > 0) {
         _lastKnownPlaybackPositionMs = pos.inMilliseconds;
@@ -2136,7 +1696,6 @@ class PlayerController extends Notifier<PlayerState> {
         _lastSavedPosition = pos;
       }
 
-      // Next Episode Detection (Series only, trigger 15s before end)
       if (!_suppressNextEpisodeDetection &&
           (_item.contentType == MultimediaContentType.series ||
               _item.contentType == MultimediaContentType.anime)) {
@@ -2144,8 +1703,6 @@ class PlayerController extends Notifier<PlayerState> {
         final posMs = pos.inMilliseconds;
         final remainingSecs = (durationMs - posMs) / 1000;
 
-        // Show next episode overlay if within last 15 seconds or video ended.
-        // It persists until the user dismisses it or loads a new episode.
         if (remainingSecs <= 15.0) {
           final currentEp = _episode ?? _resolveCurrentEpisode();
           List<Episode>? episodes = _item.episodes;
@@ -2182,19 +1739,16 @@ class PlayerController extends Notifier<PlayerState> {
                 nextEpisodeServerName: next.serverName,
               );
             }
-            // After the card, never before it: a prefetch that throws must
-            // not be able to take the next-episode prompt down with it.
             _warmNextEpisodeSources(next);
-            // Ensure it persists if video completes and resets position
             _isNextEpisodeOverlayForced = true;
           }
           return;
         }
 
-        if (remainingSecs > 15.0) {
-          if (state.showNextEpisodeOverlay && !_isNextEpisodeOverlayForced) {
-            state = state.copyWith(showNextEpisodeOverlay: false);
-          }
+        if (remainingSecs > 15.0 &&
+            state.showNextEpisodeOverlay &&
+            !_isNextEpisodeOverlayForced) {
+          state = state.copyWith(showNextEpisodeOverlay: false);
         }
       }
     });
@@ -2205,23 +1759,12 @@ class PlayerController extends Notifier<PlayerState> {
         PlaybackUiPhaseKind.fetchingSources,
     bool forceNewSourceSession = true,
   }) async {
-    // Any stream-level transition (new episode, source retry, manual
-    // quality switch) should re-arm the next-episode overlay. Without
-    // this, a dismiss near end-of-episode followed by a source retry
-    // (which preserves position) leaves the overlay suppressed for the
-    // remainder of that episode — the user has no way to advance until
-    // playback naturally completes (H-PLAYER-7). The position listener
-    // self-heals once `remainingSecs > 15`, but inside the narrow
-    // last-15s window during a retry it would otherwise stay stuck.
-
     final sourceSessionId = forceNewSourceSession
         ? _beginSourceSession(resetAttempts: true)
         : state.sourceSessionId;
 
     switch (requestedPhaseKind) {
       case PlaybackUiPhaseKind.loadingNextEpisode:
-        // Enhancement: Use startup (blocking) phase so the screen goes dark
-        // instead of showing controls over the previous episode's frame.
         _enterStartupPhase(kind: PlaybackUiPhaseKind.loadingNextEpisode);
         break;
       case PlaybackUiPhaseKind.switchingSource:
@@ -2233,8 +1776,6 @@ class PlayerController extends Notifier<PlayerState> {
       default:
         _enterStartupPhase(kind: requestedPhaseKind);
     }
-
-    state = state.copyWith();
 
     if (await _handleSpecialProviders()) return;
 
@@ -2251,12 +1792,9 @@ class PlayerController extends Notifier<PlayerState> {
 
     try {
       if (_videoUrl.isNotEmpty) {
-        state = state.copyWith();
         final rawStreams = await activeProvider.loadStreams(_videoUrl);
         if (!_isCurrentSourceSession(sourceSessionId)) return;
         if (rawStreams.isNotEmpty) {
-          // A source explicitly chosen in AnimeWitcher's picker must not be
-          // replaced by saved-source or network quality preferences.
           final explicitSelection = activeProvider.isExplicitStreamSelection(
             _videoUrl,
           );
@@ -2273,8 +1811,6 @@ class PlayerController extends Notifier<PlayerState> {
               ? 1
               : (streams.length > 3 ? 3 : streams.length);
 
-          // Issue 1: Mark ALL batch candidates as `trying` before parallel check,
-          // so the UI shows the correct status for each source being checked.
           _setSourceAttemptsFromStreams(streams);
           if (checkCount > 1) {
             final batchIndices = {
@@ -2294,9 +1830,6 @@ class PlayerController extends Notifier<PlayerState> {
           }
 
           _enterStartupPhase(kind: PlaybackUiPhaseKind.checkingSources);
-
-          // PERFORMANCE: Parallel check the first few streams (health check)
-          // This avoids waiting for a timeout on a dead stream if a working one is available
           final workingIndex = await _findFirstWorkingStream(
             streams,
             startIndex: initialIndex,
@@ -2313,7 +1846,7 @@ class PlayerController extends Notifier<PlayerState> {
         }
       }
     } catch (e) {
-      if (kDebugMode) debugPrint("Error loading streams: $e");
+      if (kDebugMode) debugPrint('Error loading streams: $e');
     }
 
     if (!_isCurrentSourceSession(sourceSessionId)) return;
@@ -2393,15 +1926,13 @@ class PlayerController extends Notifier<PlayerState> {
         if (foundIndex != -1) return foundIndex;
       }
     } catch (e) {
-      if (kDebugMode) debugPrint("Error checking saved stream quality: $e");
+      if (kDebugMode) debugPrint('Error checking saved stream quality: $e');
     }
     return 0;
   }
 
   Episode? _resolveCurrentEpisode() {
     if (_episode != null) return _episode;
-    // Movies with مترجم / مدبلج variants are not series but still play one of
-    // several rows, so resolve those too.
     if (!hasEpisodePicker) return null;
     return _item.episodes?.firstWhereOrNull((e) => e.url == _videoUrl);
   }
@@ -2420,11 +1951,8 @@ class PlayerController extends Notifier<PlayerState> {
     final seenUrls = <String>{};
 
     for (final sub in [...?streamSubtitles, ..._userAddedExternalSubtitles]) {
-      if (seenUrls.add(sub.url)) {
-        merged.add(sub);
-      }
+      if (seenUrls.add(sub.url)) merged.add(sub);
     }
-
     return merged;
   }
 
@@ -2455,8 +1983,6 @@ class PlayerController extends Notifier<PlayerState> {
     if (!_isCurrentSourceSession(sourceSessionId)) return;
     _resolvedPlayUrl = playUrl;
     if (useVideoView) {
-      // Pause media_kit so it stops consuming bandwidth while video_view plays.
-      // (media_kit.open() will replace it if the user switches back.)
       if (!state.useExoPlayer) {
         await _player.pause();
         if (!_isCurrentSourceSession(sourceSessionId)) return;
@@ -2471,9 +1997,6 @@ class PlayerController extends Notifier<PlayerState> {
           forceM3u8Extension: true,
         );
         _resolvedPlayUrl = finalUrl;
-        if (kDebugMode) {
-          debugPrint("[PLAYER] Proxied non-standard HLS: $finalUrl");
-        }
       }
 
       if (Platform.isWindows) {
@@ -2516,8 +2039,6 @@ class PlayerController extends Notifier<PlayerState> {
       return;
     }
 
-    // Close video_view before handing off to media_kit so ExoPlayer/AVPlayer
-    // stops buffering and releases its surface while media_kit plays.
     if (state.useExoPlayer) {
       _videoViewController?.close();
     }
@@ -2526,12 +2047,6 @@ class PlayerController extends Notifier<PlayerState> {
     _lastKnownAudioTrackId = null;
     _audioFailoverLastTime = null;
 
-    // FFmpeg's HLS demuxer opens audio rendition playlists as separate
-    // AVFormatContext instances that do NOT inherit parent HTTP headers on any
-    // platform. For HLS with cookie-auth audio renditions, we pre-process the
-    // master playlist to keep only the DEFAULT audio track and proxy all URLs
-    // through localhost (so the proxy injects cookies for every sub-request).
-    // Keeping 1 audio track instead of 11 reduces probe time from ~27s to ~3s.
     String mediaKitUrl = playUrl;
     final lowerPlayUrl = playUrl.toLowerCase();
     final isHlsUrl =
@@ -2556,23 +2071,12 @@ class PlayerController extends Notifier<PlayerState> {
       if (!_isCurrentSourceSession(sourceSessionId)) return;
       if (simplified != null) {
         mediaKitUrl = LocalProxyService.instance.serveM3u8(simplified);
-        if (kDebugMode) {
-          debugPrint(
-            '[PLAYER] Serving simplified HLS master (1 audio track): $mediaKitUrl',
-          );
-        }
       } else {
-        // Fallback: full proxy if pre-fetch failed (e.g. network error)
         mediaKitUrl = LocalProxyService.instance.getProxyUrl(
           playUrl,
           headers: headers,
           options: proxyOptions,
         );
-        if (kDebugMode) {
-          debugPrint(
-            '[PLAYER] Proxying HLS through localhost (master pre-fetch failed): $mediaKitUrl',
-          );
-        }
       }
     }
 
@@ -2584,20 +2088,8 @@ class PlayerController extends Notifier<PlayerState> {
     _scheduleAutoSubtitleSelection();
   }
 
-  /// What mpv reported for `glsl-shaders` after the last apply, for the
-  /// debug line below: a value mpv rejected and one it accepted are
-  /// indistinguishable from the outside otherwise.
   String _anime4kApplied = '';
 
-  /// Hands mpv the Anime4K pipeline the settings ask for, or clears it.
-  ///
-  /// Only mpv can do this. The adaptive backend used for DRM and some live
-  /// streams has no GLSL stage at all, so on that path this does nothing
-  /// rather than pretending to — which is also why the setting says it is
-  /// for the built-in player.
-  ///
-  /// Called when a file opens and again when the setting changes, so turning
-  /// a mode on takes effect on what is already playing.
   Future<void> applyAnime4kShaders() async {
     if (_isDisposed) return;
     if (!anime4kAvailableOn(
@@ -2626,13 +2118,37 @@ class PlayerController extends Notifier<PlayerState> {
             directory: settings?.anime4kShaderDirectory ?? '',
           );
       if (_isDisposed) return;
+
+      String currentVo = '';
       if (!pipeline.isEmpty) {
-        final currentVo = (await platform.getProperty('current-vo')).trim();
+        currentVo = (await platform.getProperty('current-vo')).trim();
+        if (!anime4kGpuRendererSupportsShaders(currentVo)) {
+          await platform.setProperty('glsl-shaders', '');
+          _anime4kApplied = '';
+          if (kDebugMode) {
+            debugPrint(
+              'Anime4K: GPU shader stage unavailable (vo="$currentVo")',
+            );
+          }
+          return;
+        }
+      }
+
+      await platform.setProperty('glsl-shaders', pipeline.value);
+      final applied = await platform.getProperty('glsl-shaders');
+      _anime4kApplied = applied.trim();
+      if (pipeline.value.isNotEmpty && _anime4kApplied.isEmpty) {
+        if (kDebugMode) {
+          debugPrint('Anime4K: mpv did not accept the shader chain');
+        }
+        return;
+      }
+
+      if (!pipeline.isEmpty) {
         final gpuDumbMode = (await platform.getProperty('gpu-dumb-mode'))
             .trim()
             .toLowerCase();
-        if (!anime4kGpuRendererSupportsShaders(currentVo) ||
-            gpuDumbMode == 'yes') {
+        if (gpuDumbMode == 'yes') {
           await platform.setProperty('glsl-shaders', '');
           _anime4kApplied = '';
           if (kDebugMode) {
@@ -2644,52 +2160,35 @@ class PlayerController extends Notifier<PlayerState> {
           return;
         }
       }
-      // An empty string is how mpv is told to run no shaders, so this both
-      // applies a mode and turns one off.
-      await platform.setProperty('glsl-shaders', pipeline.value);
 
-      // Read it back. mpv accepts a malformed list without complaint and
-      // simply renders nothing different, so "did it take" is a question
-      // only the property itself can answer — and the answer is what tells
-      // a viewer whether their folder is wrong or their eyes are.
-      final applied = await platform.getProperty('glsl-shaders');
-      _anime4kApplied = applied.trim();
       if (kDebugMode) {
         debugPrint(
           'Anime4K: asked for ${pipeline.files.length} shaders, '
           'mpv holds "$_anime4kApplied"'
-          '${pipeline.missing.isEmpty ? '' : ', missing '
-                    '${pipeline.missing.join(", ")}'}',
+          '${pipeline.missing.isEmpty ? '' : ', missing ${pipeline.missing.join(", ")}'}',
         );
       }
     } catch (e) {
-      // A shader that will not load must not take playback down with it.
       if (kDebugMode) debugPrint('Anime4K shaders not applied: $e');
     }
   }
 
   Future<void> seekTo(Duration position, {bool fast = false}) async {
     if (!state.canSeek) return;
-
     _isNextEpisodeOverlayForced = false;
-
     final clamped = position < Duration.zero ? Duration.zero : position;
-
     if (state.useExoPlayer && _videoViewController != null) {
       _videoViewController!.seekTo(clamped.inMilliseconds, fast: fast);
       return;
     }
-
     await _player.seek(clamped);
   }
 
   Future<void> seekRelative(Duration amount, {bool fast = false}) async {
     if (!state.canSeek) return;
-
     final currentPosition = state.useExoPlayer
         ? Duration(milliseconds: _videoViewController?.position.value ?? 0)
         : _player.state.position;
-
     await seekTo(currentPosition + amount, fast: fast);
   }
 
@@ -2737,7 +2236,6 @@ class PlayerController extends Notifier<PlayerState> {
       return _videoViewController!.playbackState.value ==
           VideoControllerPlaybackState.playing;
     }
-
     return _player.state.playing;
   }
 
@@ -2849,9 +2347,7 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   Future<bool> _isStreamCandidateHealthy(StreamResult stream) async {
-    if (AppUtils.isLocalFile(stream.url)) {
-      return true;
-    }
+    if (AppUtils.isLocalFile(stream.url)) return true;
 
     final uri = Uri.parse(stream.url);
     final headers = <String, String>{...?stream.headers};
@@ -2870,9 +2366,7 @@ class PlayerController extends Notifier<PlayerState> {
           )) {
         return true;
       }
-    } catch (_) {
-      // Fall back to a ranged GET below.
-    }
+    } catch (_) {}
 
     final client = http.Client();
     try {
@@ -2885,9 +2379,7 @@ class PlayerController extends Notifier<PlayerState> {
       final prefix = <int>[];
       await for (final chunk in resp.stream) {
         final remaining = 512 - prefix.length;
-        if (remaining > 0) {
-          prefix.addAll(chunk.take(remaining));
-        }
+        if (remaining > 0) prefix.addAll(chunk.take(remaining));
         break;
       }
       return isLikelyPlayableHttpResponse(
@@ -2911,9 +2403,7 @@ class PlayerController extends Notifier<PlayerState> {
     sourceSessionId ??= state.sourceSessionId;
     if (_isDisposed) return;
     if (index < 0 || index >= state.streams.length) return;
-    if (!_isCurrentSourceSession(sourceSessionId)) {
-      return;
-    }
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
 
     final stream = state.streams[index];
     final subtitles = _effectiveExternalSubtitles(stream.subtitles);
@@ -2934,9 +2424,6 @@ class PlayerController extends Notifier<PlayerState> {
           _isLiveStream(stream.url),
     );
 
-    // Issue 1: Manual source selection after playback is confirmed should not
-    // block the screen — use a non-blocking runtime phase so the current frame
-    // stays visible while the new source opens.
     if (manualSelection && _hasConfirmedPlaybackFrame) {
       _enterRuntimePhase(kind: PlaybackUiPhaseKind.switchingSource);
     } else {
@@ -2945,10 +2432,8 @@ class PlayerController extends Notifier<PlayerState> {
 
     try {
       final playUrl = await _resolveStreamUrl(stream);
-      if (playUrl == null) throw Exception("Failed to resolve stream URL");
-      if (!_isCurrentSourceSession(sourceSessionId)) {
-        return;
-      }
+      if (playUrl == null) throw Exception('Failed to resolve stream URL');
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
 
       final resolvedIsLive = _detectResolvedLiveState(playUrl);
       final useVideoView = _canUseVideoViewForStream(
@@ -2956,9 +2441,7 @@ class PlayerController extends Notifier<PlayerState> {
         stream,
         isLive: resolvedIsLive,
       );
-      if (!_isCurrentSourceSession(sourceSessionId)) {
-        return;
-      }
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       state = state.copyWith(isLive: resolvedIsLive, isSeekable: !useVideoView);
       if (state.useExoPlayer != useVideoView && _hasConfirmedPlaybackFrame) {
         _enterRuntimePhase(kind: PlaybackUiPhaseKind.switchingEngine);
@@ -2970,9 +2453,7 @@ class PlayerController extends Notifier<PlayerState> {
         stream,
         useVideoView: useVideoView,
       );
-      if (!_isCurrentSourceSession(sourceSessionId)) {
-        return;
-      }
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
 
       var holdForResume = false;
       final opened = await PlaybackResume.openWhenReady(
@@ -2998,14 +2479,9 @@ class PlayerController extends Notifier<PlayerState> {
         await _flushPendingResumeSeek();
       }
     } catch (e) {
-      if (!_isCurrentSourceSession(sourceSessionId)) {
-        return;
-      }
-      if (kDebugMode) debugPrint("Stream $index failed: $e");
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       _markSourceAttempt(index, SourceAttemptStatus.failed);
       if (manualSelection) {
-        // Issue 2: Don't show "all sources failed" for a manual pick — revert
-        // silently to the previously playing source instead.
         revertToPreviousStream(
           _playerText(
             english: 'Selected source is not playable. Reverting back to previous source.',
@@ -3018,8 +2494,6 @@ class PlayerController extends Notifier<PlayerState> {
     }
   }
 
-  /// Jumps back to the live edge. For DVR streams, seeks to the end of the
-  /// known duration; for pure live streams, forces a full reconnect.
   Future<void> goLive() async {
     if (!state.isLive || state.currentStream == null) return;
     final dur = state.useExoPlayer
@@ -3053,15 +2527,8 @@ class PlayerController extends Notifier<PlayerState> {
             : matchingIndex,
       );
     }
+    if (manualSelection && !isRevert) _manualSelectionPending = true;
 
-    // Track that this is a user-initiated switch so the error listeners can
-    // revert to the previous source instead of falling through to retryNextStream.
-    if (manualSelection && !isRevert) {
-      _manualSelectionPending = true;
-    }
-
-    // Capture current position before we switch engines/streams.
-    // Read from whichever engine is currently active.
     final oldPos = state.useExoPlayer
         ? Duration(milliseconds: _videoViewController?.position.value ?? 0)
         : _player.state.position;
@@ -3071,7 +2538,7 @@ class PlayerController extends Notifier<PlayerState> {
 
     try {
       final playUrl = await _resolveStreamUrl(stream);
-      if (playUrl == null) throw Exception("Failed to resolve stream URL");
+      if (playUrl == null) throw Exception('Failed to resolve stream URL');
       final subtitles = _effectiveExternalSubtitles(stream.subtitles);
 
       final resolvedIsLive = _detectResolvedLiveState(playUrl);
@@ -3111,7 +2578,6 @@ class PlayerController extends Notifier<PlayerState> {
       }
     } catch (e) {
       _manualSelectionPending = false;
-      if (kDebugMode) debugPrint("Change stream failed: $e");
       if (isRevert) {
         state = state.copyWith(
           errorMessage: _playerText(
@@ -3137,15 +2603,12 @@ class PlayerController extends Notifier<PlayerState> {
       return;
     }
 
-    // Find the next index that isn't already failed
     int nextIndex = state.currentStreamIndex + 1;
     while (nextIndex < state.streams.length) {
       final attempt = state.sourceAttempts.firstWhereOrNull(
         (e) => e.index == nextIndex,
       );
-      if (attempt == null || attempt.status != SourceAttemptStatus.failed) {
-        break;
-      }
+      if (attempt == null || attempt.status != SourceAttemptStatus.failed) break;
       nextIndex++;
     }
 
@@ -3153,30 +2616,19 @@ class PlayerController extends Notifier<PlayerState> {
       final nextAttempt = state.sourceAttempts.firstWhereOrNull(
         (e) => e.index == nextIndex,
       );
-      // If nextIndex already passed the health check in a prior batch (status=trying),
-      // reuse it directly — no need to re-check.
       final alreadyHealthChecked =
           nextAttempt?.status == SourceAttemptStatus.trying;
-
-      // Whether any candidate beyond nextIndex has already been health-checked.
       final hasNextChecked = state.sourceAttempts.any(
         (e) => e.index > nextIndex && e.status != SourceAttemptStatus.pending,
       );
-
       int targetIndex = nextIndex;
 
       if (alreadyHealthChecked) {
-        // Fast path: nextIndex was already confirmed healthy in the previous batch.
         _enterStartupPhase(kind: PlaybackUiPhaseKind.checkingSources);
       } else if (!hasNextChecked && state.streams.length > nextIndex + 1) {
-        // Batch path: entering a new, unchecked window — run parallel health check.
         final checkCount = (state.streams.length - nextIndex) > 3
             ? 3
             : (state.streams.length - nextIndex);
-
-        // Mark all batch candidates as `trying` BEFORE the parallel check so the
-        // source list shows the correct status, and enter a counter-free phase so
-        // "Source X of N" doesn't linger from the previous failed source.
         final batchIndices = {
           for (int i = 0; i < checkCount; i++)
             (nextIndex + i) % state.streams.length,
@@ -3198,7 +2650,6 @@ class PlayerController extends Notifier<PlayerState> {
           sourceSessionId: sourceSessionId,
         );
       } else {
-        // Single next source (last in list, or all others already checked).
         _enterStartupPhase(kind: PlaybackUiPhaseKind.checkingSources);
       }
 
@@ -3207,15 +2658,12 @@ class PlayerController extends Notifier<PlayerState> {
         loadStreamAtIndex(targetIndex, sourceSessionId: sourceSessionId),
       );
     } else {
-      // All sources exhausted — always show the blocking error overlay regardless
-      // of whether playback had started. The overlay has a "Go Back" button.
       _enterAllSourcesFailedPhase();
     }
   }
 
   void revertToPreviousStream(String message) {
     if (state.previousStream == null) {
-      // No previous stream to revert to — skip to the next available source.
       retryNextStream(sourceSessionId: state.sourceSessionId);
       return;
     }
@@ -3223,7 +2671,6 @@ class PlayerController extends Notifier<PlayerState> {
     changeStream(state.previousStream!, isRevert: true);
   }
 
-  /// Consumed by the UI to show a one-time snackbar/toast. Null after read.
   String? _revertMessage;
   String? consumeRevertMessage() {
     final msg = _revertMessage;
@@ -3231,9 +2678,6 @@ class PlayerController extends Notifier<PlayerState> {
     return msg;
   }
 
-  /// Reset per-episode playback state before an in-place episode swap.
-  /// This prevents the previous episode's resume position and skip segments
-  /// from leaking into the newly selected episode.
   void _resetPerEpisodeState() {
     _hasMarkedWatched = false;
     _lastKnownPlaybackPositionMs = 0;
@@ -3271,16 +2715,8 @@ class PlayerController extends Notifier<PlayerState> {
         );
   }
 
-  /// Asks the provider for the next episode's sources while this one is
-  /// still playing, so choosing "next" does not begin with a wait.
-  ///
-  /// The episode the viewer actually reaches depends on the filler setting,
-  /// so warm that one rather than the one merely adjacent.
   void _warmNextEpisodeSources(Episode next) {
     if (_isDisposed) return;
-    // Nothing here is worth an exception reaching the caller: this is work
-    // done ahead of a request nobody has made yet, and the real request
-    // reports its own failures.
     try {
       final settings = ref.read(playerSettingsProvider).asData?.value;
       if (settings != null && !settings.prefetchNextEpisode) return;
@@ -3294,15 +2730,10 @@ class PlayerController extends Notifier<PlayerState> {
       final provider = ref.read(activeProviderProvider);
       if (provider == null) return;
       ref.read(streamSourcePrefetchProvider).warm(provider, target.url);
-    } catch (e) {
-      if (kDebugMode) debugPrint('Next-episode prefetch skipped: $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> playNextEpisode({StreamResult? selectedSource}) async {
-    // Filler is stepped over only when the viewer asked for that, and only
-    // when a story episode actually follows — a season that ends in filler
-    // still plays on rather than stopping dead.
     final behaviour =
         ref.read(playerSettingsProvider).asData?.value.fillerBehaviour ??
         FillerBehaviour.note;
@@ -3314,11 +2745,8 @@ class PlayerController extends Notifier<PlayerState> {
         this.nextEpisode;
     if (nextEpisode == null) return;
 
-    // A source chosen for the episode we were about to play does not apply
-    // to the one filler-skipping landed on.
     if (nextEpisode.url != this.nextEpisode?.url) selectedSource = null;
 
-    // Smart Next Episode: downloaded files bypass network source selection.
     final downloadService = ref.read(downloadServiceProvider);
     final localFile = await downloadService.getDownloadedFile(
       _item,
@@ -3336,7 +2764,6 @@ class PlayerController extends Notifier<PlayerState> {
             ? selectedSource!.url
             : nextEpisode.url);
 
-    // Save current episode's progress BEFORE updating _episode/_videoUrl.
     saveProgress();
     await pause();
 
@@ -3357,8 +2784,6 @@ class PlayerController extends Notifier<PlayerState> {
     );
 
     if (useDirectSelectedSource) {
-      // `selectedSource` is already promoted to non-null by the
-      // `useDirectSelectedSource` guard computed above, so no `!` is needed.
       final sourceSessionId = _beginSourceSession(resetAttempts: true);
       state = state.copyWith(
         streams: <StreamResult>[selectedSource],
@@ -3433,8 +2858,6 @@ class PlayerController extends Notifier<PlayerState> {
     );
 
     if (useDirectSelectedSource) {
-      // `selectedSource` is already promoted to non-null by the
-      // `useDirectSelectedSource` guard computed above, so no `!` is needed.
       final sourceSessionId = _beginSourceSession(resetAttempts: true);
       state = state.copyWith(
         streams: <StreamResult>[selectedSource],
@@ -3452,7 +2875,6 @@ class PlayerController extends Notifier<PlayerState> {
 
   void saveProgress() {
     try {
-      // Read position/duration from whichever engine is currently active.
       int pos;
       int dur;
       if (state.useExoPlayer && _videoViewController != null) {
@@ -3463,9 +2885,6 @@ class PlayerController extends Notifier<PlayerState> {
         dur = _player.state.duration.inMilliseconds;
       }
 
-      // Closing a downloaded/local file can clear the engine timeline before
-      // the final pause/dispose callback. Fall back only when the current
-      // duration is invalid, so an intentional seek to 0 is still respected.
       if (dur < 30000 && _lastKnownPlaybackDurationMs >= 30000) {
         dur = _lastKnownPlaybackDurationMs;
         if (pos <= 0 && _lastKnownPlaybackPositionMs > 0) {
@@ -3477,7 +2896,6 @@ class PlayerController extends Notifier<PlayerState> {
       final isLivestream =
           _item.contentType == MultimediaContentType.livestream;
 
-      // Livestreams: save to history without progress (position=0, duration=0)
       if (isLivestream) {
         final pId =
             _item.provider ??
@@ -3490,7 +2908,7 @@ class PlayerController extends Notifier<PlayerState> {
               itemToSave,
               0,
               0,
-              lastStreamUrl: null, // Don't save temporary links for livestreams
+              lastStreamUrl: null,
               lastEpisodeUrl: null,
             );
         return;
@@ -3503,7 +2921,6 @@ class PlayerController extends Notifier<PlayerState> {
           (_item.contentType == MultimediaContentType.series ||
           _item.contentType == MultimediaContentType.anime);
       final currentEpisode = _resolveCurrentEpisode();
-      // Mark watched locally once playback reaches 90%.
       if (progressPercent >= 90) {
         if (!_hasMarkedWatched) {
           if (isSeries && currentEpisode != null) {
@@ -3530,7 +2947,6 @@ class PlayerController extends Notifier<PlayerState> {
           continueNotifier.remove(_item.url);
           return;
         } else if (currentEpisode != null) {
-          // Find next episode
           List<Episode> episodes = _item.episodes ?? const <Episode>[];
           if (currentEpisode.dubStatus != DubStatus.none) {
             episodes = episodes
@@ -3540,7 +2956,6 @@ class PlayerController extends Notifier<PlayerState> {
           final currentIndex = episodes.indexOf(currentEpisode);
           if (currentIndex != -1 && currentIndex < episodes.length - 1) {
             final nextEpisode = episodes[currentIndex + 1];
-            // Save NEXT episode as current progress (reset to 0)
             continueNotifier.saveProgress(
               itemToSave,
               0,
@@ -3560,14 +2975,12 @@ class PlayerController extends Notifier<PlayerState> {
             );
             return;
           } else {
-            // Last episode of the series completed
             continueNotifier.remove(_item.url);
             return;
           }
         }
       }
 
-      // 3. Normal local progress saving.
       if (progressPercent > 5 || isSeries) {
         final pId =
             _item.provider ??
@@ -3597,12 +3010,11 @@ class PlayerController extends Notifier<PlayerState> {
             );
       }
     } catch (e) {
-      if (kDebugMode) debugPrint("History save failed: $e");
+      if (kDebugMode) debugPrint('History save failed: $e');
     }
   }
 
   void disposeController({Player? player}) {
-    // A departing route can finish its animation after another player opens.
     if (player != null && _isInitialized && !identical(_player, player)) return;
     if (_isDisposed) return;
     _isDisposed = true;
@@ -3625,18 +3037,12 @@ class PlayerController extends Notifier<PlayerState> {
     _completedSub?.cancel();
     _rateSub?.cancel();
     _logSub?.cancel();
-    // _trackSub was previously only cancelled in the ref.onDispose safety
-    // net (line ~661). If the controller is disposed via this explicit path
-    // it would leak the subscription — fixes audit finding H3.
     _trackSub?.cancel();
     _connectivitySub?.cancel();
     _connectivitySub = null;
     _midPlaybackRetryTimer?.cancel();
     _midPlaybackRetryTimer = null;
 
-    // Best-effort cleanup of subtitle temp files we wrote into the OS temp
-    // dir. Don't await — the player has to close fast, and the next launch
-    // will catch any leftovers. Fixes audit finding H5.
     unawaited(_cleanupSubtitleTempFiles());
 
     if (_isInitialized) saveProgress();
@@ -3649,10 +3055,6 @@ class PlayerController extends Notifier<PlayerState> {
     });
   }
 
-  // Walks the OS temp dir and deletes any subtitle file the app's subtitle
-  // download pipeline wrote (naming convention: `sub_*` or `temp_sub_*`).
-  // Pattern-based rather than tracked-set-based because the search flow runs
-  // in a separate provider and tracking handoff is fragile.
   Future<void> _cleanupSubtitleTempFiles() async {
     try {
       final tempDir = await getTemporaryDirectory();
@@ -3663,9 +3065,7 @@ class PlayerController extends Notifier<PlayerState> {
         if (name.startsWith('sub_') || name.startsWith('temp_sub_')) {
           try {
             await entity.delete();
-          } catch (_) {
-            // Another player session may already have deleted it. Ignore.
-          }
+          } catch (_) {}
         }
       }
     } catch (e) {
@@ -3680,11 +3080,7 @@ class PlayerController extends Notifier<PlayerState> {
     int? sourceSessionId,
   }) async {
     if (streams.isEmpty) return 0;
-
-    // Safety check for start index
     final int start = startIndex.clamp(0, streams.length - 1);
-
-    // Extract candidates (circular if needed, though usually not)
     final candidates = <int>[];
     for (int i = 0; i < limit; i++) {
       final idx = (start + i) % streams.length;
@@ -3698,18 +3094,8 @@ class PlayerController extends Notifier<PlayerState> {
           !_isCurrentSourceSession(sourceSessionId)) {
         return start;
       }
-      if (kDebugMode) {
-        debugPrint(
-          "Starting parallel health check for ${candidates.length} streams",
-        );
-      }
-      // Early-exit parallel check: all candidates start simultaneously, but we
-      // resolve as soon as the highest-priority healthy result is available.
-      // Example with [0,1,2]: if 0 passes → done immediately (don't wait for 1,2).
-      // If 0 fails and 1 passes → done (don't wait for 2).
-      // If 0 and 2 have results but 1 is still in flight → wait (1 outranks 2).
       final completer = Completer<int>();
-      final results = <int, bool>{}; // idx → isHealthy
+      final results = <int, bool>{};
 
       for (final idx in candidates) {
         unawaited(
@@ -3720,22 +3106,13 @@ class PlayerController extends Notifier<PlayerState> {
                   _markSourceAttempt(idx, SourceAttemptStatus.failed);
                 }
                 results[idx] = isHealthy;
-
-                // Walk candidates in preference order; stop at the first one
-                // whose result we have and which is healthy.
                 for (final c in candidates) {
-                  if (!results.containsKey(c)) {
-                    break; // still waiting for a higher-priority one
-                  }
+                  if (!results.containsKey(c)) break;
                   if (results[c]!) {
-                    if (kDebugMode) {
-                      debugPrint("Stream $c is healthy (early-exit)");
-                    }
                     completer.complete(c);
                     return;
                   }
                 }
-                // All results are in and all failed → fall back to start
                 if (results.length == candidates.length &&
                     !completer.isCompleted) {
                   completer.complete(start);
@@ -3759,10 +3136,10 @@ class PlayerController extends Notifier<PlayerState> {
       }
       return winner;
     } catch (e) {
-      if (kDebugMode) debugPrint("Parallel check failed: $e");
+      if (kDebugMode) debugPrint('Parallel check failed: $e');
     }
 
-    return start; // Fallback to initial
+    return start;
   }
 
   Future<String?> _resolveStreamUrl(
@@ -3795,86 +3172,30 @@ class PlayerController extends Notifier<PlayerState> {
   void _replaceCurrentStream(StreamResult updated) {
     final streams = List<StreamResult>.from(state.streams);
     final index = state.currentStreamIndex;
-    if (index >= 0 && index < streams.length) {
-      streams[index] = updated;
-    }
+    if (index >= 0 && index < streams.length) streams[index] = updated;
     state = state.copyWith(streams: streams, currentStream: updated);
   }
 
-  /// Applies per-playback MPV properties (headers, cookies, DRM).
   Future<void> _applyPlaybackProperties(
     Map<String, String> headers,
     StreamResult stream, {
     required bool useVideoView,
   }) async {
-    // Debug: log what DRM fields the stream has so failures are traceable.
-    if (kDebugMode) {
-      debugPrint(
-        '[Player] Opening stream — url=${stream.url} '
-        'source=${stream.source} '
-        'isLive=${_isLiveStream(stream.url)} '
-        'drmKid=${stream.drmKid} drmKey=${stream.drmKey} '
-        'licenseUrl=${stream.licenseUrl}',
-      );
-      debugPrint('[Player] Headers for stream: $headers');
-      // Enable mpv internal log for every stream so HLS variant selection
-      // and segment fetch errors appear in logcat regardless of live/VOD.
-      _logSub ??= _player.stream.log.listen((log) {
-        // Always forward warn/error/fatal; also forward verbose hls/lavf lines
-        // that match keywords useful for diagnosing auth / track selection issues.
-        if (log.level == 'warn' ||
-            log.level == 'error' ||
-            log.level == 'fatal' ||
-            log.text.contains('hls') ||
-            log.text.contains('m3u8') ||
-            log.text.contains('variant') ||
-            log.text.contains('rendition') ||
-            log.text.contains('opening') ||
-            log.text.contains('Opening') ||
-            log.text.contains('lavf') ||
-            log.text.contains('audio') ||
-            log.text.contains('video') ||
-            log.text.contains('track') ||
-            log.text.contains('stream') ||
-            log.text.contains('codec') ||
-            log.text.contains('403') ||
-            log.text.contains('404') ||
-            log.text.contains('401') ||
-            log.text.contains('redirect') ||
-            log.text.contains('cookie') ||
-            log.text.contains('header') ||
-            log.text.contains('http://') ||
-            log.text.contains('https://')) {
-          debugPrint('[MPV/${log.level}] ${log.text}');
-        }
-      });
-    }
-
     if (_player.platform is NativePlayer) {
       final native = _player.platform as NativePlayer;
-
       final lowerHeaders = headers.map((k, v) => MapEntry(k.toLowerCase(), v));
 
-      // Propagate ALL provided headers to MPV (Critical for cookies/auth)
       if (lowerHeaders.isNotEmpty) {
         final List<String> headerFields = [];
         lowerHeaders.forEach((key, value) {
-          // FFmpeg/libavformat "headers" option standard is CRLF terminated strings.
-          // Comma-separated list is also accepted by MPV but CRLF is more robust.
           headerFields.add('$key: $value');
         });
-
         if (headerFields.isNotEmpty) {
-          // Join with \r\n and ensure it ends with \r\n
           final fields = '${headerFields.join('\r\n')}\r\n';
-          if (kDebugMode) {
-            debugPrint('Player: Setting http-header-fields: $fields');
-          }
           await native.setProperty('http-header-fields', fields);
         }
       }
 
-      // Also set dedicated properties for better compatibility
       if (lowerHeaders.containsKey('user-agent')) {
         await native.setProperty('user-agent', lowerHeaders['user-agent']!);
       }
@@ -3882,11 +3203,6 @@ class PlayerController extends Notifier<PlayerState> {
         await native.setProperty('referrer', lowerHeaders['referer']!);
       }
 
-      // 0. Hardware decoding preference
-      // Use auto-safe on Windows: 'auto' enables D3D11VA which can crash during
-      // DASH manifest negotiation before codec parameters are fully known.
-      // RC1: once a decode/codec failure has forced software decoding for this
-      // session (weak TV decoder etc.), always use 'no' regardless of setting.
       final settings = ref.read(playerSettingsProvider).asData?.value;
       if (_forceSoftwareDecode) {
         await native.setProperty('hwdec', 'no');
@@ -3899,37 +3215,10 @@ class PlayerController extends Notifier<PlayerState> {
         await native.setProperty('hwdec', 'no');
       }
 
-      // RC3: disable TLS cert verification for VOD too (was previously only
-      // set on the live path). The libmpv builds differ per platform — the
-      // shinchiro Windows build and the bundled macOS build ship
-      // differently-aged CA bundles, so a stream whose cert chain validates
-      // on Windows can fail the TLS handshake on macOS. Disabling cert
-      // verification removes that per-build divergence. This matches the
-      // existing posture (live already did this; usesCleartextTraffic is on).
       await native.setProperty('tls-verify', 'no');
-
-      // 1. Performance tuning & Anti-Looping
       await native.setProperty('cache', 'yes');
 
-      // Accumulates demuxer-lavf-o options; applied as one combined call below
-      // to prevent later additions (e.g. DRM key) from silently overwriting
-      // earlier ones (e.g. live reconnect seg_max_retry).
       final demuxerLavfOpts = <String>[];
-
-      // Propagate auth headers to lavf's internal HTTP client.
-      // http-header-fields only covers mpv's stream layer; lavf's HLS demuxer
-      // fetches EXT-X-MAP init segments, child playlists, and alternate audio
-      // rendition playlists through its own HTTP context.
-      //
-      // We use 'headers=Cookie: VALUE\r\n' (not 'cookies=VALUE') because:
-      // - cookies= is parsed as Set-Cookie syntax: 't_hash_t=A; ott=nf; hd=on'
-      //   treats '; ott=nf' as a cookie attribute, so only 't_hash_t' is sent.
-      //   The CDN needs the full cookie string including ott and hd.
-      // - A single-header headers= entry with CRLF only at the END is safe from
-      //   mpv's comma-list parser (embedded mid-value CRLF would split incorrectly).
-      // - demuxer-lavf-o only supports ONE 'headers=' key (later overwrites earlier),
-      //   so we pack only Cookie here; Referer is covered by http-header-fields for
-      //   the top-level fetch and is less critical for CDN segment auth.
       if (lowerHeaders.containsKey('cookie')) {
         demuxerLavfOpts.add('headers=Cookie: ${lowerHeaders['cookie']!}\r\n');
       }
@@ -3937,38 +3226,22 @@ class PlayerController extends Notifier<PlayerState> {
       final isLivePattern =
           _isLiveStream(stream.url) ||
           _item.contentType == MultimediaContentType.livestream;
-      if (kDebugMode) {
-        debugPrint(
-          'Stream Type (isLivePattern): $isLivePattern, URL: ${stream.url}',
-        );
-      }
       if (isLivePattern) {
-        // Live TV: small buffer to absorb network jitter, not the large VOD buffer
         await native.setProperty('demuxer-readahead-secs', '8');
         await native.setProperty('cache-secs', '8');
         await native.setProperty('cache', 'yes');
         await native.setProperty('cache-pause-initial', 'yes');
         await native.setProperty('cache-pause-wait', '2');
-
-        // Network
         await native.setProperty('network-timeout', '30');
         await native.setProperty('tls-verify', 'no');
-
-        // Reconnect
         await native.setProperty(
           'stream-lavf-o',
           'reconnect_on_network_error=1,reconnect_delay_max=5,reconnect_on_eof=1,reconnect_streamed=1',
         );
-
-        // HLS/DASH segment retry — collected for combined application below.
         demuxerLavfOpts.add('seg_max_retry=5');
-
-        // Playback
         await native.setProperty('framedrop', 'decoder');
         await native.setProperty('hr-seek-framedrop', 'yes');
         await native.setProperty('hwdec', 'auto-safe');
-
-        // H.264 resilience: wait for clean keyframe after reconnect
         await native.setProperty('vd-lavc-skiploopfilter', 'nonkey');
         await native.setProperty('vd-lavc-skipframe', 'nonref');
       } else {
@@ -3980,85 +3253,41 @@ class PlayerController extends Notifier<PlayerState> {
         await native.setProperty('cache-pause', 'yes');
         await native.setProperty('cache-pause-wait', '2');
         await native.setProperty('network-timeout', '30');
-
-        // Tell FFmpeg's HTTP stream handler to treat the connection as
-        // byte-seekable and automatically reconnect on network switches or
-        // dropped sockets. This propagates seekability all the way to the
-        // demuxer so mpv maintains its back-cache (demuxer-max-back-bytes)
-        // and performs instant cache-based backward seeks. Without this,
-        // streams routed through the local proxy are treated as "linear" —
-        // mpv refuses backward seeks and has to re-read forward to reach
-        // the target position.
-        // force-seekable=yes is a belt-and-suspenders override at the player
-        // level; seekable=1 fixes it at the stream/demuxer level.
-        // icy=0 disables FFmpeg's SHOUTcast/ICY detection header
-        // (Icy-MetaData: 1) which some CDNs interpret as an audio-only ICY
-        // stream request, causing 29-second audio-without-video playback.
         await native.setProperty(
           'stream-lavf-o',
           'seekable=1,icy=0,reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=10',
         );
         await native.setProperty('force-seekable', 'yes');
-
-        // Force mpv to select the highest-bandwidth HLS variant so it never
-        // picks an audio-only rendition when the master playlist lists one first.
-        // Do not switch this to auto: data-saver-style auto-select has been
-        // observed to lock onto the audio group on some AnimeWitcher masters.
         await native.setProperty('hls-bitrate', 'max');
-
-        // Allow segment URLs with any file extension (ts, mp4, m4s, no-ext…).
-        // FFmpeg's HLS demuxer silently drops segments whose extension isn't on
-        // its whitelist, causing audio-only playback when video segments use
-        // non-standard extensions.
         demuxerLavfOpts.add('allowed_extensions=ALL');
-        demuxerLavfOpts.add(
-          'icy=0',
-        ); // suppress Icy-MetaData:1 on segment fetches too
+        demuxerLavfOpts.add('icy=0');
 
-        // HLS manifests declare codec/language via EXT-X-MEDIA and EXT-X-MAP
-        // tags, so FFmpeg doesn't need deep probing to detect streams. The
-        // global 32MB/30s values cause ~27s delay when all audio renditions are
-        // probed through the local proxy before video starts.
         final isHlsStream =
             stream.url.toLowerCase().contains('.m3u8') ||
             stream.url.toLowerCase().contains('/hls/');
         if (isHlsStream) {
-          // 5 MB covers a full 1080p fMP4 video segment for codec detection.
-          // 2 s per rendition keeps startup fast even with many audio tracks
-          // (e.g. 11 tracks × 2 s ≈ 22 s worst-case; fast CDNs finish sooner).
-          await native.setProperty('demuxer-lavf-probesize', '5242880'); // 5 MB
-          await native.setProperty('demuxer-lavf-analyzeduration', '2'); // 2 s
+          await native.setProperty('demuxer-lavf-probesize', '5242880');
+          await native.setProperty('demuxer-lavf-analyzeduration', '2');
         } else {
-          await native.setProperty(
-            'demuxer-lavf-probesize',
-            '33554432',
-          ); // 32MB
-          await native.setProperty('demuxer-lavf-analyzeduration', '30'); // 30s
+          await native.setProperty('demuxer-lavf-probesize', '33554432');
+          await native.setProperty('demuxer-lavf-analyzeduration', '30');
         }
       }
 
-      // Adaptive demuxer cache based on device profile.
-      // DASH streams on desktop are capped lower to prevent OOM from aggressive
-      // segment pre-fetch combined with high-bitrate representations.
       final profile = ref.read(deviceProfileProvider).asData?.value;
       final isDashStream = _isDashStreamUrl(stream.url);
-      // Bound mpv memory aggressively enough for iOS/phones while preserving
-      // a larger desktop cache. High-bitrate streams are still protected by
-      // mpv's adaptive read-ahead; this only caps the maximum resident cache.
-      String cacheSize = "192MiB"; // phones
+      String cacheSize = '192MiB';
       if (profile != null) {
         if (profile.isTv) {
-          cacheSize = "128MiB";
+          cacheSize = '128MiB';
         } else if (profile.isDesktopOS) {
-          cacheSize = isDashStream ? "256MiB" : "512MiB";
+          cacheSize = isDashStream ? '256MiB' : '512MiB';
         } else if (profile.isTablet) {
-          cacheSize = "256MiB";
+          cacheSize = '256MiB';
         }
       }
 
       await native.setProperty('demuxer-max-bytes', cacheSize);
-      // Keep backward-seek cache useful without allowing it to rival the
-      // forward cache in memory usage.
       final backCacheSize = profile?.isTv == true
           ? '64MiB'
           : profile?.isDesktopOS == true
@@ -4068,110 +3297,47 @@ class PlayerController extends Notifier<PlayerState> {
           : '64MiB';
       await native.setProperty('demuxer-max-back-bytes', backCacheSize);
 
-      // 2. Resolve ClearKey Hex Keys
       String? keyHex = stream.drmKey;
-
       if (keyHex == null && stream.licenseUrl != null) {
         final extractedKeys = await _extractKeysFromLicenseUrl(
           stream.licenseUrl!,
           headers: stream.headers,
         );
-        if (extractedKeys != null) {
-          keyHex = extractedKeys['key'];
-        }
+        if (extractedKeys != null) keyHex = extractedKeys['key'];
       }
 
-      if (keyHex != null) {
-        // FFmpeg's DASH demuxer natively expects cenc_decryption_key.
-        // It's usually the 32-character hex KEY.
-        if (kDebugMode) {
-          debugPrint(
-            '[DRM] Injecting cenc_decryption_key via demuxer-lavf-o: $keyHex',
-          );
-        }
-
-        if (!useVideoView) {
-          // Collected into demuxerLavfOpts and applied below to prevent
-          // overwriting live reconnect options (seg_max_retry) set earlier.
-          demuxerLavfOpts.add('cenc_decryption_key=$keyHex');
-        } else {
-          // If using VideoView on Android, we'd pass DRM keys to the native side here.
-        }
+      if (keyHex != null && !useVideoView) {
+        demuxerLavfOpts.add('cenc_decryption_key=$keyHex');
       }
 
-      // 3. Apply all demuxer-lavf-o options in a single combined call.
-      //    Multiple setProperty('demuxer-lavf-o', ...) calls overwrite each
-      //    other; joining here ensures live and DRM settings coexist.
       if (demuxerLavfOpts.isNotEmpty) {
         await native.setProperty('demuxer-lavf-o', demuxerLavfOpts.join(','));
       }
 
       try {
         final tempDir = await getTemporaryDirectory();
-        // Use p.join to produce a platform-correct path; on Windows the mixed
-        // forward/back-slash path produced by string concatenation can confuse
-        // libmpv's internal path parser.
         final cookieFile = File(p.join(tempDir.path, 'mpv_cookies.txt'));
-        if (!await cookieFile.exists()) {
-          await cookieFile.create();
-        }
+        if (!await cookieFile.exists()) await cookieFile.create();
         await native.setProperty('cookies-file', cookieFile.path);
-
-        // Set a writable cache dir so mpv can persist its seek-backward and
-        // init-segment cache to disk. Without this, mpv logs "Failed to create
-        // file cache" and must re-fetch EXT-X-MAP init segments every time they
-        // are needed; if the CDN expires the init segment URL (404) before the
-        // next re-fetch, audio/video stops (typically ~20 s into playback).
         await native.setProperty('cache-dir', tempDir.path);
-      } catch (e) {
-        if (kDebugMode) debugPrint('Failed to set cache-dir/cookies-file: $e');
-      }
+      } catch (_) {}
 
-      // Re-assert: disable native MPV subtitle rendering on the video
-      // surface. MPV resets sub-visibility when a new file is opened,
-      // so we must set it again after every stream load.
       await native.setProperty('sub-visibility', 'no');
     }
   }
 
-  /// Fetches [masterUrl], proxies all audio rendition URIs and variant stream
-  /// URLs through localhost, and returns a rewritten playlist.
-  ///
-  /// Keeps up to [_kMaxProxiedAudioTracks] audio renditions. When there are
-  /// more renditions than that limit, only the highest-priority ones are kept —
-  /// which prevents FFmpeg from probing every rendition (11 tracks × ~5 s =
-  /// 55 s startup delay).
-  ///
-  /// Priority scoring:
-  ///   lang param match  +4   (e.g. URL has ?lang=eng → prefer LANGUAGE="en*")
-  ///   DEFAULT=YES       +2
-  ///   AUTOSELECT=YES    +1
-  ///
-  /// The top-ranked track is emitted first and forced to DEFAULT=YES so mpv
-  /// selects it automatically. This prevents picking an HE-AAC/5.1 original-
-  /// language track when the user requested a stereo AAC-LC dubbed track.
-  ///
-  /// Returns null if the master playlist can't be fetched.
   Future<String?> _buildSimplifiedMasterPlaylist(
     String masterUrl,
     Map<String, String> headers,
     ProxyOptions proxyOptions,
   ) async {
-    // No hard limit on audio tracks — we proxy ALL renditions so auth cookies
-    // reach every track. Probe time is controlled by demuxer-lavf-analyzeduration
-    // (set to 2 s for HLS below); worst case N tracks × 2 s = manageable startup.
-
     try {
       final response = await http.get(Uri.parse(masterUrl), headers: headers);
       if (response.statusCode < 200 || response.statusCode >= 300) return null;
 
       final baseUri = Uri.parse(masterUrl);
       final lines = response.body.split('\n');
-
-      // Extract the lang hint from the URL (e.g. ?lang=eng → 'eng').
       final langHint = baseUri.queryParameters['lang']?.toLowerCase();
-
-      // Score every audio rendition line so we can rank them.
       final allAudio = <(String line, int score)>[];
       for (final line in lines) {
         final t = line.trim();
@@ -4187,7 +3353,6 @@ class PlayerController extends Notifier<PlayerState> {
             caseSensitive: false,
           ).firstMatch(t);
           if (m != null) {
-            // Match across ISO 639-1/2 variants: 'eng' matches 'en' and vice-versa.
             final lang = m.group(1)!.toLowerCase();
             if (lang.startsWith(langHint) || langHint.startsWith(lang)) {
               score += 4;
@@ -4197,11 +3362,8 @@ class PlayerController extends Notifier<PlayerState> {
         allAudio.add((t, score));
       }
 
-      // Sort descending by score; keep all (lang-preferred first, then DEFAULT)
       allAudio.sort((a, b) => b.$2.compareTo(a.$2));
       final kept = allAudio;
-
-      // Rebuild the playlist, replacing audio lines in score-sorted order.
       final result = <String>[];
       int audioEmitted = 0;
       for (final line in lines) {
@@ -4209,7 +3371,6 @@ class PlayerController extends Notifier<PlayerState> {
 
         if (t.startsWith('#EXT-X-MEDIA:') && t.contains('TYPE=AUDIO')) {
           if (audioEmitted < kept.length) {
-            // Proxy the URI= attribute.
             var out = kept[audioEmitted].$1.replaceAllMapped(
               RegExp(r'URI="([^"]+)"'),
               (m) {
@@ -4218,7 +3379,6 @@ class PlayerController extends Notifier<PlayerState> {
               },
             );
             if (audioEmitted == 0) {
-              // Top-ranked track must be DEFAULT so mpv picks it first.
               out = out.contains('DEFAULT=')
                   ? out.replaceFirst(RegExp(r'DEFAULT=\w+'), 'DEFAULT=YES')
                   : out.replaceFirst(
@@ -4226,17 +3386,14 @@ class PlayerController extends Notifier<PlayerState> {
                       '#EXT-X-MEDIA:DEFAULT=YES,',
                     );
             } else {
-              // Non-primary tracks must not override the top track as default.
               out = out.replaceFirst(RegExp(r'DEFAULT=YES'), 'DEFAULT=NO');
             }
             result.add(out);
             audioEmitted++;
           }
-          // Any audio line beyond our limit is dropped.
           continue;
         }
 
-        // Non-comment, non-empty lines are variant stream URLs — proxy them.
         if (t.isNotEmpty && !t.startsWith('#')) {
           final resolved = baseUri.resolve(t).toString();
           result.add(
@@ -4251,101 +3408,57 @@ class PlayerController extends Notifier<PlayerState> {
 
         result.add(line);
       }
-
-      if (kDebugMode) {
-        debugPrint(
-          '[PLAYER] Simplified HLS master: kept ${kept.length}/${allAudio.length} audio tracks',
-        );
-      }
       return result.join('\n');
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[PLAYER] _buildSimplifiedMasterPlaylist error: $e');
-      }
+    } catch (_) {
       return null;
     }
   }
 
-  /// Fetches a ClearKey license from [licenseUrl] and returns the FIRST
-  /// kid and key found as a map: {'kid': '...', 'key': '...'} in hex format.
-  /// If the response is not parseable, returns null.
   Future<Map<String, String>?> _extractKeysFromLicenseUrl(
     String licenseUrl, {
     Map<String, String>? headers,
   }) async {
     try {
-      if (kDebugMode) {
-        debugPrint('[DRM] Fetching ClearKey license from $licenseUrl');
-      }
       final response = await http.get(Uri.parse(licenseUrl), headers: headers);
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        if (kDebugMode) {
-          debugPrint('[DRM] License server returned ${response.statusCode}');
-        }
-        return null;
-      }
-
+      if (response.statusCode < 200 || response.statusCode >= 300) return null;
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       final keys = body['keys'] as List<dynamic>?;
-      if (keys == null || keys.isEmpty) {
-        if (kDebugMode) debugPrint('[DRM] No keys array in license response');
-        return null;
-      }
+      if (keys == null || keys.isEmpty) return null;
 
-      // MPV's libdash only supports a single kid:key pair reliably via Laurl redirect.
       for (final entry in keys) {
         final kid = entry['kid'] as String?;
         final k = entry['k'] as String?;
         if (kid == null || k == null) continue;
-
-        // Base64url → hex conversion.
         final kidHex = _base64UrlToHex(kid);
         final keyHex = _base64UrlToHex(k);
         if (kidHex != null && keyHex != null) {
           return {'kid': kidHex, 'key': keyHex};
         }
       }
-
       return null;
-    } catch (e) {
-      if (kDebugMode) debugPrint('[DRM] Error fetching/parsing license: $e');
+    } catch (_) {
       return null;
     }
   }
 
-  /// Converts a Base64url-encoded string to a lowercase hex string.
   String? _base64UrlToHex(String base64url) {
     try {
-      // Add padding if needed.
       String padded = base64url;
       final rem = padded.length % 4;
       if (rem == 2) padded += '==';
       if (rem == 3) padded += '=';
       final bytes = base64Url.decode(padded);
       return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[DRM] base64url decode failed for "$base64url": $e');
-      }
+    } catch (_) {
       return null;
     }
   }
 
   bool _isLiveStream(String url) {
     if (url.isEmpty) return false;
-
-    // Items explicitly marked as livestream in provider metadata
     if (_item.contentType == MultimediaContentType.livestream) return true;
-
     final lower = url.toLowerCase();
-
-    // Local files are definitely VOD.
-    if (lower.startsWith('/')) {
-      return false;
-    }
-
-    // Live protocols
+    if (lower.startsWith('/')) return false;
     if (lower.startsWith('rtmp://') ||
         lower.startsWith('rtsp://') ||
         lower.startsWith('mms://') ||
@@ -4353,21 +3466,15 @@ class PlayerController extends Notifier<PlayerState> {
         lower.startsWith('rtp://')) {
       return true;
     }
-
-    // IPTV specific path/query patterns
     if (lower.contains('/live/') ||
         lower.contains('/iptv/') ||
         lower.contains('stream.m3u8') ||
         lower.contains('chunklist')) {
       return true;
     }
-
-    // Xtream Codes API patterns
     if (lower.contains('type=m3u8') || lower.contains('output=m3u8')) {
       return true;
     }
-
-    // Default to VOD for bandwidth protection
     return false;
   }
 
@@ -4375,7 +3482,6 @@ class PlayerController extends Notifier<PlayerState> {
     final sourceSessionId = state.sourceSessionId;
     if (position <= 0 || !_isCurrentSourceSession(sourceSessionId)) return;
 
-    // ExoPlayer path: wait until the item reports a duration, then seek.
     if (state.useExoPlayer && _videoViewController != null) {
       final controller = _videoViewController!;
       try {
@@ -4405,13 +3511,10 @@ class PlayerController extends Notifier<PlayerState> {
             ? position.clamp(0, durationMs)
             : position;
         controller.seekTo(targetMs);
-      } catch (e) {
-        if (kDebugMode) debugPrint("ExoPlayer seek failed: $e");
-      }
+      } catch (_) {}
       return;
     }
 
-    // media_kit path: wait for duration to be known before seeking.
     try {
       var duration = _player.state.duration;
       if (duration == Duration.zero) {
@@ -4419,32 +3522,17 @@ class PlayerController extends Notifier<PlayerState> {
             .firstWhere((d) => d != Duration.zero)
             .timeout(const Duration(seconds: 8));
       }
-
       if (!_isCurrentSourceSession(sourceSessionId)) return;
       final maxMs = duration.inMilliseconds;
       if (maxMs <= 0) return;
-
       final targetMs = position.clamp(0, maxMs);
       await _player.seek(Duration(milliseconds: targetMs));
-    } on TimeoutException catch (e) {
-      if (kDebugMode) {
-        debugPrint("Timeout waiting for duration: $e");
-      }
-
-      // Best-effort fallback: some streams can seek before duration is reported.
+    } on TimeoutException {
       try {
         if (!_isCurrentSourceSession(sourceSessionId)) return;
         await _player.seek(Duration(milliseconds: position));
-      } catch (seekError) {
-        if (kDebugMode) {
-          debugPrint("Fallback seek failed: $seekError");
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint("Seek failed: $e");
-      }
-    }
+      } catch (_) {}
+    } catch (_) {}
   }
 
   Future<void> _seekThenPlay(int positionMs) async {
@@ -4474,8 +3562,7 @@ class PlayerController extends Notifier<PlayerState> {
     _isApplyingPendingResumeSeek = true;
     try {
       await _seekThenPlay(pos);
-    } catch (e) {
-      if (kDebugMode) debugPrint('Resume seek failed: $e');
+    } catch (_) {
     } finally {
       if (_isCurrentSourceSession(sourceSessionId)) {
         _pendingResumeSeekPosition = null;
@@ -4539,11 +3626,7 @@ class PlayerController extends Notifier<PlayerState> {
         _hasRefreshedCloudProgress = true;
         try {
           await account.syncContinueWatchingItem(mainUrl);
-        } catch (error) {
-          if (kDebugMode) {
-            debugPrint('[Player] Cloud progress sync deferred: $error');
-          }
-        }
+        } catch (_) {}
         final afterSync = localPosition();
         if (PlaybackResume.shouldHoldUntilSeeked(afterSync)) {
           return afterSync;
@@ -4565,17 +3648,9 @@ class PlayerController extends Notifier<PlayerState> {
       await ref
           .read(animeWitcherAccountServiceProvider)
           .syncContinueWatchingItem(_item.url);
-    } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[Player] Cloud progress sync deferred: $error');
-      }
-    }
+    } catch (_) {}
   }
 
-  /// [persist] = true marks this as a user-driven speed change that should
-  /// be remembered for the next playback session. Transient sites — the
-  /// space-hold 2× boost and its revert — pass false so a momentary
-  /// long-press doesn't permanently change the user's default speed.
   Future<void> setPlaybackSpeed(double rate, {bool persist = false}) async {
     final appliedRate = rate.clamp(0.5, state.maxPlaybackSpeed);
 
@@ -4615,7 +3690,6 @@ class PlayerController extends Notifier<PlayerState> {
           ref.read(playerSettingsProvider).asData?.value ??
           const PlayerSettings();
 
-      // MPV sub properties
       await native.setProperty(
         'sub-font-size',
         settings.subtitleSize.toString(),
@@ -4625,7 +3699,6 @@ class PlayerController extends Notifier<PlayerState> {
         settings.subtitlePosition.round().toString(),
       );
 
-      // Colors are in MPV hex format (e.g. #RRGGBB or #AARRGGBB)
       String colorToMpvHex(int color, [double opacity = 1.0]) {
         final alpha = (opacity * 255).toInt().toRadixString(16).padLeft(2, '0');
         final rgb = color.toRadixString(16).padLeft(8, '0').substring(2);
@@ -4648,8 +3721,6 @@ class PlayerController extends Notifier<PlayerState> {
         await native.setProperty('sub-back-color', '#00000000');
       }
 
-      // Re-assert: keep native MPV subtitle rendering disabled.
-      // Setting sub-* properties above may implicitly re-enable it.
       await native.setProperty('sub-visibility', 'no');
     }
   }
@@ -4658,7 +3729,6 @@ class PlayerController extends Notifier<PlayerState> {
     if (state.useExoPlayer && _videoViewController != null) {
       return _videoViewController!.volume.value.clamp(0.0, 1.0);
     }
-
     return (_player.state.volume / 100).clamp(0.0, 2.0);
   }
 
@@ -4667,28 +3737,18 @@ class PlayerController extends Notifier<PlayerState> {
       _videoViewController!.setVolume(value.clamp(0.0, 1.0));
       return;
     }
-
     await _player.setVolume((value * 100).clamp(0.0, 200.0));
   }
 
-  // Volume lives entirely in the player engine (mpv/ExoPlayer's own gain),
-  // never the OS output level — muting or turning volume down in-app must
-  // not touch system volume, which would affect every other app too.
   Future<double> getVolumeLevel() async {
     final value = _getEngineVolumeLevel();
-    if (value > 0) {
-      _lastNonZeroVolumeLevel = value;
-    }
+    if (value > 0) _lastNonZeroVolumeLevel = value;
     return value;
   }
 
   Future<double> setVolumeLevel(double value) async {
     final target = value.clamp(0.0, state.supportsVolumeBoost ? 2.0 : 1.0);
-
-    if (target > 0) {
-      _lastNonZeroVolumeLevel = target;
-    }
-
+    if (target > 0) _lastNonZeroVolumeLevel = target;
     await _setEngineVolumeLevel(target);
     return target;
   }
@@ -4703,17 +3763,12 @@ class PlayerController extends Notifier<PlayerState> {
 
   Future<double> toggleMute() async {
     final current = await getVolumeLevel();
-    if (current > 0) {
-      return setVolumeLevel(0.0);
-    }
-
+    if (current > 0) return setVolumeLevel(0.0);
     return setVolumeLevel(_lastNonZeroVolumeLevel);
   }
 
   Future<void> loadExternalSubtitleFile({String? filePath}) async {
-    if (state.useExoPlayer && !state.supportsExternalSubtitleLoading) {
-      return;
-    }
+    if (state.useExoPlayer && !state.supportsExternalSubtitleLoading) return;
 
     String? path = filePath;
     if (path == null) {
@@ -4729,8 +3784,8 @@ class PlayerController extends Notifier<PlayerState> {
     if (path != null) {
       final ext = p.extension(path).toLowerCase().replaceAll('.', '');
       final baseName = p.basenameWithoutExtension(path).trim();
-      final label = baseName.isNotEmpty ? baseName : "External ($ext)";
-      final newSub = SubtitleFile(url: path, label: label, lang: "und");
+      final label = baseName.isNotEmpty ? baseName : 'External ($ext)';
+      final newSub = SubtitleFile(url: path, label: label, lang: 'und');
 
       state = state.copyWith(
         externalSubtitles: _effectiveExternalSubtitles(
