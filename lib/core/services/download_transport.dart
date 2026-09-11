@@ -17,6 +17,22 @@ enum DownloadRuntimeOwnership { owned, notOwned, settling, unknown }
 /// acknowledgement before forgetting handles or deleting durable evidence.
 enum DownloadCancelSettlement { canceled, alreadyGone, stillOwned, unknown }
 
+/// Low-level result of issuing a non-terminal transport command. This is kept
+/// separate from DownloadService's logical/user-visible command outcome: an
+/// accepted executor command is not proof that the requested logical state has
+/// been durably reached.
+enum DownloadTransportCommandOutcome { accepted, rejected, unavailable }
+
+DownloadTransportCommandOutcome resolveDownloadTransportCommandOutcome({
+  required bool commandAccepted,
+  bool transportAvailable = true,
+}) {
+  if (!transportAvailable) return DownloadTransportCommandOutcome.unavailable;
+  return commandAccepted
+      ? DownloadTransportCommandOutcome.accepted
+      : DownloadTransportCommandOutcome.rejected;
+}
+
 DownloadCancelSettlement resolveDownloadCancelCommand({
   required bool hadTrackedOwner,
   required bool commandSucceeded,
@@ -70,9 +86,15 @@ Set<TransferHint> animeDownloadTransferHints({required int expectedBytes}) {
 
 abstract interface class DownloadTransport {
   bool owns(String taskId);
+
+  // Legacy bool commands stay temporarily available while DM-03 migrates all
+  // DownloadService/UI callers. New orchestration must consume the typed seam.
   Future<bool> start(DownloadTask task);
   Future<bool> pause(DownloadTask task);
   Future<bool> resume(DownloadTask task);
+  Future<DownloadTransportCommandOutcome> startOutcome(DownloadTask task);
+  Future<DownloadTransportCommandOutcome> pauseOutcome(DownloadTask task);
+  Future<DownloadTransportCommandOutcome> resumeOutcome(DownloadTask task);
   Future<DownloadCancelSettlement> cancel(DownloadTask task);
   Stream<TaskUpdate> updatesFor(String taskId);
   Future<void> dispose();
@@ -172,6 +194,42 @@ class NativeSingleDownloadTransport implements DownloadTransport {
     } catch (_) {
       return false;
     }
+  }
+
+  @override
+  Future<DownloadTransportCommandOutcome> startOutcome(
+    DownloadTask task,
+  ) async {
+    if (!isNativeSingleDownloadTask(task)) {
+      return DownloadTransportCommandOutcome.unavailable;
+    }
+    return resolveDownloadTransportCommandOutcome(
+      commandAccepted: await start(task),
+    );
+  }
+
+  @override
+  Future<DownloadTransportCommandOutcome> pauseOutcome(
+    DownloadTask task,
+  ) async {
+    if (!isNativeSingleDownloadTask(task)) {
+      return DownloadTransportCommandOutcome.unavailable;
+    }
+    return resolveDownloadTransportCommandOutcome(
+      commandAccepted: await pause(task),
+    );
+  }
+
+  @override
+  Future<DownloadTransportCommandOutcome> resumeOutcome(
+    DownloadTask task,
+  ) async {
+    if (!isNativeSingleDownloadTask(task)) {
+      return DownloadTransportCommandOutcome.unavailable;
+    }
+    return resolveDownloadTransportCommandOutcome(
+      commandAccepted: await resume(task),
+    );
   }
 
   @override

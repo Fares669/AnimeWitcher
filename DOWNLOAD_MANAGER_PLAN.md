@@ -214,6 +214,8 @@
   - **Proposed fix:** define typed outcomes such as `running/attached`, `queued`, `paused`, `settlingOwnership`, `alreadyComplete`, `restartRequired`, `recoverableFailure`, `serviceUnavailable`, `missingState`, `terminal`. UI changes only after a durable service outcome.
   - **Verification/testing:** missing DB; JobStore-only job; failed native resume; failed Range; missing manifest; source refresh failure; queue full; unknown owner; initialization failure; already complete.
   - **Dependencies:** DM-19, DM-21, DM-30; conservative outcomes can land earlier.
+  - **Progress (2026-09-11, partial):** Added a typed transport-command seam (`DownloadTransportCommandOutcome.accepted/rejected/unavailable`) plus typed `startOutcome/pauseOutcome/resumeOutcome` methods. Legacy bool transport methods are intentionally retained only as a compatibility bridge while the service/UI migration is completed; this prevents a flag-day API break while making new orchestration distinguish executor availability from command rejection.
+  - **Verification (partial):** pure outcome matrix test + native transport wrapper compilation + generated-source-aware analyzer. **Still required before `[x]`:** introduce the logical `DownloadCommandOutcome` at DownloadService, map start/attach/queue/already-complete/readiness/missing-state/ownership-settling/failure/terminal branches, migrate launcher/provider/UI callers, then add the full scenario matrix listed above.
 
 - [ ] **DM-04 — Recover from the union of persistence and ownership sources**
   - **Problem:** jobs disappear when plugin DB rows are missing while JobStore, metadata, native ownership, manifest or files survive.
