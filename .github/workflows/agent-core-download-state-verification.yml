@@ -1,6 +1,6 @@
 name: Agent DM10 Generation And Ack Fencing
 
-# Re-run after repairing the remaining DM-10 restack timer projection.
+# Re-run after aligning the startup-pause regression guard with the async slot counter.
 on:
   push:
     branches: [plan/download-manager-reliability]
