@@ -1,0 +1,31 @@
+name: DM-04 verifier
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dm04-verifier-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dm04:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Run DM-04 recovery inventory regression
+        run: flutter test test/core/services/download_recovery_inventory_test.dart
