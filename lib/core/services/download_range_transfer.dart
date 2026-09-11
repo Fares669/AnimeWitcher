@@ -755,6 +755,7 @@ class DownloadRangeTransfer {
               lastReportedWritten: lastReportedWritten,
               elapsed: progressClock.elapsed,
             )) {
+              await output.flush();
               await onState(written, total, false);
               lastReportedWritten = written;
               progressClock.reset();
@@ -821,7 +822,11 @@ class DownloadRangeTransfer {
       // [written] if the bounded automatic reconnects were exhausted.
     } finally {
       try {
-        await output?.close();
+        if (output != null) {
+          await output.flush();
+          await output.close();
+          output = null;
+        }
       } catch (error) {
         operation.failure = DownloadRangeFailure(
           action: isNoSpaceDownloadError(error)

@@ -632,6 +632,38 @@ void main() {
   );
 
   test(
+    'schema-v4 0.999 progress has zero durable authority after restore',
+    () async {
+      expect(await coordinator.start(parent, 25), isTrue);
+      await coordinator.pause(parent);
+      await coordinator.dispose();
+
+      final manifest = File('${await parent.filePath()}.parts/manifest.json');
+      final snapshot = Map<String, dynamic>.from(
+        jsonDecode(await manifest.readAsString()) as Map,
+      );
+      snapshot['schemaVersion'] = 4;
+      final parts = (snapshot['parts'] as List)
+          .map((raw) => Map<String, dynamic>.from(raw as Map))
+          .toList();
+      parts.first['complete'] = false;
+      parts.first['progress'] = 0.999;
+      parts.first['credibleProgress'] = 0.999;
+      for (final part in parts) {
+        part.remove('durableBytes');
+      }
+      snapshot['parts'] = parts;
+      await manifest.writeAsString(jsonEncode(snapshot), flush: true);
+
+      starts.clear();
+      coordinator = create();
+      expect(await coordinator.start(parent, 25), isTrue);
+      expect(coordinator.durableBytesFor(parent.taskId), 0);
+      expect(starts, isNotEmpty);
+    },
+  );
+
+  test(
     'recovers a durable temp manifest left by process termination',
     () async {
       expect(await coordinator.start(parent, 25), isTrue);

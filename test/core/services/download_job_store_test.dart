@@ -55,6 +55,34 @@ DownloadJobRecord _job({
 );
 
 void main() {
+  test(
+    'legacy unknown positive bytes are not authoritative recovery truth',
+    () {
+      final record = DownloadJobRecord(
+        taskId: 'legacy-native',
+        trackingUrl: 'https://example.com/episode',
+        state: DownloadJobState.interrupted,
+        generation: 1,
+        durableBytes: 370,
+        durableByteProvenance: DownloadDurableByteProvenance.legacyUnknown,
+        expectedBytes: 1000,
+        userPaused: false,
+        queueWaiting: false,
+        updatedAtMillis: 1,
+      );
+      expect(authoritativeDownloadJobBytes(record), -1);
+      expect(
+        authoritativeDownloadJobBytes(
+          record.copyWith(
+            durableByteProvenance:
+                DownloadDurableByteProvenance.nativeRecoverable,
+          ),
+        ),
+        370,
+      );
+    },
+  );
+
   group('durable byte provenance codec', () {
     test('v1 positive durable bytes migrate as legacy unknown evidence', () {
       final legacy = _job(durableBytes: 456).toJson()

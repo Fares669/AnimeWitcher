@@ -21,6 +21,17 @@ enum DownloadDurableByteProvenance {
   nativeRecoverable,
 }
 
+extension DownloadDurableByteProvenanceRules on DownloadDurableByteProvenance {
+  bool get isAuthoritative =>
+      this != DownloadDurableByteProvenance.legacyUnknown;
+}
+
+int authoritativeDownloadJobBytes(DownloadJobRecord? record) {
+  if (record == null || !record.durableByteProvenance.isAuthoritative)
+    return -1;
+  return record.durableBytes < 0 ? -1 : record.durableBytes;
+}
+
 const String kDownloadJobStoreBox = 'download_job_store_v1';
 
 /// Durable identity of the remote object whose bytes are stored locally.

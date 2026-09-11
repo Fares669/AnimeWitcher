@@ -1130,6 +1130,7 @@ class DownloadService {
     DownloadTask task, {
     required DownloadJobState state,
     int? durableBytes,
+    DownloadDurableByteProvenance? durableByteProvenance,
     int? expectedBytes,
     bool? userPaused,
     bool? queueWaiting,
@@ -1152,6 +1153,7 @@ class DownloadService {
         trackingUrl: downloadTrackingUrl(task),
         state: state,
         durableBytes: durableBytes,
+        durableByteProvenance: durableByteProvenance,
         expectedBytes: expectedBytes,
         userPaused: userPaused,
         queueWaiting: queueWaiting,
@@ -1277,15 +1279,26 @@ class DownloadService {
         downloadMetadataExpectedBytes(metadata),
         oldJob?.expectedBytes,
       ]);
-      final manifestBytes = task is ParallelDownloadTask && expectedBytes > 0
-          ? (progress * expectedBytes).floor()
+      final manifestBytes = task is ParallelDownloadTask
+          ? (_parallel.durableBytesFor(task.taskId) ?? -1)
           : -1;
       final recoveryBytes = selectDownloadRecoveryBytes(
         exactDiskBytes: saved.partialBytes > 0 ? saved.partialBytes : -1,
-        currentGenerationJobBytes: oldJob?.durableBytes ?? -1,
+        currentGenerationJobBytes: authoritativeDownloadJobBytes(oldJob),
         multipartManifestBytes: manifestBytes,
       );
       final durableBytes = recoveryBytes.bytes;
+      final durableByteProvenance = switch (recoveryBytes.source) {
+        DownloadRecoveryByteSource.verifiedFinalFile =>
+          DownloadDurableByteProvenance.verifiedFinalFile,
+        DownloadRecoveryByteSource.exactDisk =>
+          DownloadDurableByteProvenance.exactDisk,
+        DownloadRecoveryByteSource.jobStore =>
+          oldJob?.durableByteProvenance ?? DownloadDurableByteProvenance.none,
+        DownloadRecoveryByteSource.multipartManifest =>
+          DownloadDurableByteProvenance.multipartManifest,
+        DownloadRecoveryByteSource.none => DownloadDurableByteProvenance.none,
+      };
       _telemetry.seed(
         task.taskId,
         transferredBytes: durableBytes,
@@ -1297,6 +1310,7 @@ class DownloadService {
         state: recoveryPlan.state,
         generation: oldJob?.generation ?? 0,
         durableBytes: durableBytes,
+        durableByteProvenance: durableByteProvenance,
         expectedBytes: expectedBytes,
         userPaused: userPaused,
         queueWaiting: recoveryPlan.shouldRequeue,
@@ -1997,15 +2011,12 @@ class DownloadService {
         }
       }
     } catch (_) {}
-    final manifestBytes =
-        task is ParallelDownloadTask &&
-            parallelProgress != null &&
-            totalSize > 0
-        ? (parallelProgress * totalSize).floor()
+    final manifestBytes = task is ParallelDownloadTask
+        ? (_parallel.durableBytesFor(task.taskId) ?? -1)
         : -1;
     final recoveryBytes = selectDownloadRecoveryBytes(
       exactDiskBytes: exactDiskBytes,
-      currentGenerationJobBytes: job?.durableBytes ?? -1,
+      currentGenerationJobBytes: authoritativeDownloadJobBytes(job),
       multipartManifestBytes: manifestBytes,
     );
     _telemetry.seed(
@@ -2763,6 +2774,7 @@ class DownloadService {
             downloadTask,
             state: DownloadJobState.interrupted,
             durableBytes: saved.partialBytes,
+            durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
             expectedBytes: saved.totalSize,
             userPaused: false,
             queueWaiting: false,
@@ -3171,6 +3183,7 @@ class DownloadService {
                   ? DownloadJobState.completed
                   : DownloadJobState.running,
               durableBytes: written,
+              durableByteProvenance: DownloadDurableByteProvenance.rangeFlushed,
               expectedBytes: total,
               queueWaiting: false,
             )) {
@@ -3194,6 +3207,7 @@ class DownloadService {
                   ? DownloadJobState.pausedByUser
                   : DownloadJobState.interrupted,
               durableBytes: written,
+              durableByteProvenance: DownloadDurableByteProvenance.rangeFlushed,
               expectedBytes: total,
             )) {
           return;
@@ -3241,6 +3255,7 @@ class DownloadService {
             activeToken,
             state: DownloadJobState.completed,
             durableBytes: failure.resourceSize,
+            durableByteProvenance: DownloadDurableByteProvenance.rangeFlushed,
             expectedBytes: failure.resourceSize,
           );
           await FileDownloader().database.updateRecord(
@@ -3267,6 +3282,7 @@ class DownloadService {
         state: DownloadJobState.interrupted,
         generation: 0,
         durableBytes: existingBytes,
+        durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
         expectedBytes: expectedBytes,
         userPaused: false,
         queueWaiting: false,
@@ -3282,6 +3298,7 @@ class DownloadService {
       await _jobStore.put(
         job.copyWith(
           durableBytes: existingBytes,
+          durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
           expectedBytes: expectedBytes > 0 ? expectedBytes : job.expectedBytes,
           updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
         ),
@@ -4170,7 +4187,10 @@ class DownloadService {
         await _checkpointLogicalJob(
           task,
           state: DownloadJobState.completed,
-          durableBytes: expectedBytes > 0 ? expectedBytes : fileBytes,
+          durableBytes: fileBytes > 0 ? fileBytes : null,
+          durableByteProvenance: fileBytes > 0
+              ? DownloadDurableByteProvenance.verifiedFinalFile
+              : null,
           expectedBytes: expectedBytes,
           userPaused: false,
           queueWaiting: false,

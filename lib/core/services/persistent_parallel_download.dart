@@ -215,6 +215,9 @@ class PersistentParallelDownload {
   /// Native 0.999 completion sentinels are intentionally excluded.
   double? progressFor(String id) => _sessions[id]?.progress;
 
+  /// Exact recoverable bytes proven by the current multipart manifest/disk.
+  int? durableBytesFor(String id) => _sessions[id]?.creditedBytes;
+
   /// Fresh, generation-fenced Range children that iOS may start directly on
   /// the already-running background URLSession while Dart is suspended. The
   /// native cap is the session's *currently proven* active width, never the
