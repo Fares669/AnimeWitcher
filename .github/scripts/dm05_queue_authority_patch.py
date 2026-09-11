@@ -237,3 +237,6 @@ for line in remaining:
         raise SystemExit(f'unconverted occupied-slot call: {line}')
 
 service_path.write_text(source)
+
+# Touch marker: rerun the guarded DM-05 queue-authority workflow after the RED
+# assertions were corrected to match method definitions rather than call sites.
