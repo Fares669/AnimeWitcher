@@ -29,6 +29,24 @@ jobs:
       - name: Apply DM-07 tombstone-first delete transaction
         run: |
           python3 .github/scripts/dm07_delete_tombstone_patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/core/services/download_job_store.dart')
+          text = path.read_text()
+          repairs = {
+              '  runtime owner. This is the only transition allowed to convert another\n':
+                  '  /// runtime owner. This is the only transition allowed to convert another\n',
+              '  terminal state (for example completed) into canceled. Ordinary writes\n':
+                  '  /// terminal state (for example completed) into canceled. Ordinary writes\n',
+              "  remain protected by [_putUnlocked]'s terminal fence.\n":
+                  "  /// remain protected by [_putUnlocked]'s terminal fence.\n",
+          }
+          for old, new in repairs.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'DM-07 comment repair drift: {old!r} count={text.count(old)}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
           dart format \
             lib/core/services/download_job_store.dart \
             lib/core/services/download_service.dart \
