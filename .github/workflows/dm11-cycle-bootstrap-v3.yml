@@ -75,52 +75,52 @@ jobs:
                   raise SystemExit(f'DM-11 helper block drift: {label}')
               script = script[:block_start] + replacement.rstrip() + script[block_end:]
 
-          replace_labeled_block(
-              'copyWith body',
-              '''copy_line = (
-    "    lastByteReconciliationAtMillis:\\n"
-    "        lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\\n"
-)
-replace_once(
-    copy_line,
-    copy_line
-    + "    replicaTransaction: clearReplicaTransaction\\n"
-    + "        ? null\\n"
-    + "        : (replicaTransaction ?? this.replicaTransaction),\\n",
-    'copyWith body',
-)''',
-          )
-          replace_labeled_block(
-              'toJson',
-              '''json_line = (
-    "    if (lastByteReconciliationAtMillis != null)\\n"
-    "      'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,\\n"
-)
-replace_once(
-    json_line,
-    json_line
-    + "    if (replicaTransaction != null)\\n"
-    + "      'replicaTransaction': replicaTransaction!.toJson(),\\n",
-    'toJson',
-)''',
-          )
-          replace_labeled_block(
-              'fromJson',
-              '''from_json = (
-    "      lastByteReconciliationAtMillis: _nullableIntValue(\\n"
-    "        map['lastByteReconciliationAtMillis'],\\n"
-    "      ),\\n"
-)
-replace_once(
-    from_json,
-    from_json
-    + "      replicaTransaction: DownloadReplicaTransaction.fromJson(\\n"
-    + "        map['replicaTransaction'],\\n"
-    + "      ),\\n",
-    'fromJson',
-)''',
-          )
+          copy_replacement = '\n'.join([
+              'copy_line = (',
+              '    "    lastByteReconciliationAtMillis:\\n"',
+              '    "        lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\\n"',
+              ')',
+              'replace_once(',
+              '    copy_line,',
+              '    copy_line',
+              '    + "    replicaTransaction: clearReplicaTransaction\\n"',
+              '    + "        ? null\\n"',
+              '    + "        : (replicaTransaction ?? this.replicaTransaction),\\n",',
+              "    'copyWith body',",
+              ')',
+          ])
+          json_replacement = '\n'.join([
+              'json_line = (',
+              '    "    if (lastByteReconciliationAtMillis != null)\\n"',
+              '    "      \'lastByteReconciliationAtMillis\': lastByteReconciliationAtMillis,\\n"',
+              ')',
+              'replace_once(',
+              '    json_line,',
+              '    json_line',
+              '    + "    if (replicaTransaction != null)\\n"',
+              '    + "      \'replicaTransaction\': replicaTransaction!.toJson(),\\n",',
+              "    'toJson',",
+              ')',
+          ])
+          from_json_replacement = '\n'.join([
+              'from_json = (',
+              '    "      lastByteReconciliationAtMillis: _nullableIntValue(\\n"',
+              '    "        map[\'lastByteReconciliationAtMillis\'],\\n"',
+              '    "      ),\\n"',
+              ')',
+              'replace_once(',
+              '    from_json,',
+              '    from_json',
+              '    + "      replicaTransaction: DownloadReplicaTransaction.fromJson(\\n"',
+              '    + "        map[\'replicaTransaction\'],\\n"',
+              '    + "      ),\\n",',
+              "    'fromJson',",
+              ')',
+          ])
 
+          replace_labeled_block('copyWith body', copy_replacement)
+          replace_labeled_block('toJson', json_replacement)
+          replace_labeled_block('fromJson', from_json_replacement)
           exec(compile(script, '<dm11-foundation-v3>', 'exec'), {'__name__': '__main__'})
           PY
           dart format lib/core/services/download_job_store.dart
