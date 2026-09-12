@@ -131,4 +131,52 @@ void main() {
     expect(restored, isNotNull);
     expect(restored!.replicaTransaction, isNull);
   });
+
+  test(
+    'fresh-start intent creates first durable row with relaunch recovery payload',
+    () async {
+      final seed = record(generation: 0).copyWith(
+        state: DownloadJobState.starting,
+      );
+      final token = await store.beginReplicaTransactionFromSeed(
+        seed,
+        operation: DownloadReplicaOperation.start,
+        state: DownloadJobState.starting,
+        intentData: const <String, Object?>{
+          'refreshDescriptor': <String, Object?>{
+            'providerId': 'provider-a',
+            'source': 'server-a',
+            'quality': '1080p',
+            'refreshUrl': 'https://example.test/refresh',
+          },
+        },
+        updatedAtMillis: 20,
+      );
+
+      expect(token, isNotNull);
+      expect(token!.generation, 1);
+
+      final relaunched = DownloadJobStore(backend);
+      final persisted = await relaunched.get('episode-1');
+      expect(persisted, isNotNull);
+      expect(persisted!.generation, token.generation);
+      expect(
+        persisted.replicaTransaction!.operation,
+        DownloadReplicaOperation.start,
+      );
+      expect(
+        persisted.replicaTransaction!.phase,
+        DownloadReplicaTransactionPhase.intent,
+      );
+      expect(
+        persisted.replicaTransaction!.intentData['refreshDescriptor'],
+        const <String, Object?>{
+          'providerId': 'provider-a',
+          'source': 'server-a',
+          'quality': '1080p',
+          'refreshUrl': 'https://example.test/refresh',
+        },
+      );
+    },
+  );
 }
