@@ -8,7 +8,7 @@ void main() {
 
   test('exact-size multipart adoption still requires writer settlement', () {
     final start = source.indexOf('Future<bool> _adoptExactSizePart(');
-    final end = source.indexOf('Future<void> _afterAdoptedPart(', start);
+    final end = source.indexOf('void _capSessionAt(', start);
     expect(start, greaterThanOrEqualTo(0), reason: 'missing adoption seam');
     expect(end, greaterThan(start), reason: 'missing adoption boundary');
     final body = source.substring(start, end);
