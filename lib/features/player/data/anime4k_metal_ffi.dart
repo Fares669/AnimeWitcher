@@ -9,6 +9,8 @@ typedef _ConfigureNative = Int32 Function(Uint64, Pointer<Utf8>);
 typedef _ConfigureDart = int Function(int, Pointer<Utf8>);
 typedef _StatusNative = Int32 Function(Uint64);
 typedef _StatusDart = int Function(int);
+typedef _SetBypassNative = Int32 Function(Uint64, Int32);
+typedef _SetBypassDart = int Function(int, int);
 typedef _TelemetryNative = Int32 Function(
   Uint64,
   Pointer<Uint8>,
@@ -29,6 +31,7 @@ class Anime4kMetalFfiBindings implements Anime4kMetalNativeBindings {
       _status = library.lookupFunction<_StatusNative, _StatusDart>(
         'animewitcher_anime4k_metal_status',
       ),
+      _setBypass = _tryLookupSetBypass(library),
       _telemetry = _tryLookupTelemetry(library),
       _disable = library.lookupFunction<_DisableNative, _DisableDart>(
         'animewitcher_anime4k_metal_disable',
@@ -36,8 +39,21 @@ class Anime4kMetalFfiBindings implements Anime4kMetalNativeBindings {
 
   final _ConfigureDart _configure;
   final _StatusDart _status;
+  final _SetBypassDart? _setBypass;
   final _TelemetryDart? _telemetry;
   final _DisableDart _disable;
+
+  static _SetBypassDart? _tryLookupSetBypass(DynamicLibrary library) {
+    try {
+      return library.lookupFunction<_SetBypassNative, _SetBypassDart>(
+        'animewitcher_anime4k_metal_set_bypass',
+      );
+    } catch (_) {
+      // The Eco bypass symbol is optional for compatibility with older Apple
+      // builds. Returning 0 makes callers fail closed without disabling Metal.
+      return null;
+    }
+  }
 
   static _TelemetryDart? _tryLookupTelemetry(DynamicLibrary library) {
     try {
@@ -72,6 +88,17 @@ class Anime4kMetalFfiBindings implements Anime4kMetalNativeBindings {
 
   @override
   int status(int handle) => _status(handle);
+
+  @override
+  int setBypass(int handle, bool bypass) {
+    final setBypass = _setBypass;
+    if (setBypass == null) return 0;
+    try {
+      return setBypass(handle, bypass ? 1 : 0);
+    } catch (_) {
+      return 0;
+    }
+  }
 
   @override
   String? telemetry(int handle) {
