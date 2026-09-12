@@ -111,10 +111,9 @@ struct Anime4KMetalShaderTests {
     }
 
     /// When called with `OUTPUT_DIR shader1.glsl ...`, translate every pass in
-    /// the real pinned corpus into an individual `.metal` file. The CI helper
-    /// then feeds those files to Apple's Metal compiler. Keeping MSL emission
-    /// here means corpus verification exercises the exact production parser and
-    /// translator rather than a second implementation in the shell script.
+    /// the real pinned corpus into individual FP32 and mixed-FP16 `.metal`
+    /// files. Apple CI compiles both policies, so mixed precision cannot become
+    /// a paper-only optimization that fails on a real Anime4K shader family.
     private static func emitCorpusMetalSourcesIfRequested() throws {
         let arguments = Array(CommandLine.arguments.dropFirst())
         guard !arguments.isEmpty else { return }
@@ -159,19 +158,22 @@ struct Anime4KMetalShaderTests {
                     options: .regularExpression
                 )
             for (index, pass) in passes.enumerated() {
-                let filename = String(
-                    format: "%@-%03d-%@.metal",
-                    shaderBase,
-                    index,
-                    pass.functionName
-                )
-                let output = outputDirectory.appendingPathComponent(filename)
-                try pass.metalSource.write(
-                    to: output,
-                    atomically: true,
-                    encoding: .utf8
-                )
-                generatedPasses += 1
+                for precision in Anime4KMetalPrecisionPolicy.allCases {
+                    let filename = String(
+                        format: "%@-%03d-%@-%@.metal",
+                        shaderBase,
+                        index,
+                        precision.rawValue,
+                        pass.functionName
+                    )
+                    let output = outputDirectory.appendingPathComponent(filename)
+                    try pass.metalSource(precision: precision).write(
+                        to: output,
+                        atomically: true,
+                        encoding: .utf8
+                    )
+                    generatedPasses += 1
+                }
             }
         }
 
@@ -180,7 +182,7 @@ struct Anime4KMetalShaderTests {
         }
         print(
             "Anime4K corpus translation: \(arguments.count - 1) files, " +
-            "\(generatedPasses) Metal passes"
+            "\(generatedPasses) Metal precision/pass combinations"
         )
     }
 }
