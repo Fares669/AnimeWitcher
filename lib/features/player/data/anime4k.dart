@@ -146,6 +146,10 @@ String _fileName(_Family family, Anime4kQuality quality) {
   };
 }
 
+bool _isOptionalOptimization(_Family family) =>
+    family == _Family.autoDownscalePreX2 ||
+    family == _Family.autoDownscalePreX4;
+
 /// The steps of each mode, as Anime4K's optimized shader ordering describes
 /// them. The AutoDownscalePre passes sit before the final upscale so a frame
 /// that is already large enough for the target display is reduced before
@@ -210,15 +214,27 @@ List<_Family> _steps(Anime4kMode mode) {
 
 /// What a mode resolved to against a real folder.
 class Anime4kChain {
-  const Anime4kChain({required this.files, required this.missing});
+  const Anime4kChain({
+    required this.files,
+    required this.missing,
+    this.optionalMissing = const <String>[],
+  });
 
   /// The filenames to hand mpv, in order. Empty when nothing usable was
   /// found, which the caller treats as "leave the shaders off".
   final List<String> files;
 
-  /// Steps that had no file in the folder at any size. Shown to the viewer so
-  /// a half-finished download is visible rather than silently doing less.
+  /// Required steps that had no file in the folder at any size. Shown to the
+  /// viewer so a half-finished download is visible rather than silently doing
+  /// less useful work.
   final List<String> missing;
+
+  /// Optional performance-only stages that were unavailable.
+  ///
+  /// A chain without AutoDownscale still produces a correct picture, so these
+  /// do not make [isComplete] false. Keeping them separate lets diagnostics
+  /// explain why a pipeline may be heavier without falsely calling it broken.
+  final List<String> optionalMissing;
 
   bool get isEmpty => files.isEmpty;
   bool get isComplete => missing.isEmpty && files.isNotEmpty;
@@ -265,6 +281,7 @@ Anime4kChain resolveAnime4kChain({
   final files = <String>[];
   final used = <String>{};
   final missing = <String>[];
+  final optionalMissing = <String>[];
 
   for (final family in _steps(mode)) {
     String? chosen;
@@ -285,7 +302,10 @@ Anime4kChain resolveAnime4kChain({
     if (chosen == null) {
       if (!familyPresent) {
         final wanted = _fileName(family, quality);
-        if (!missing.contains(wanted)) missing.add(wanted);
+        final target = _isOptionalOptimization(family)
+            ? optionalMissing
+            : missing;
+        if (!target.contains(wanted)) target.add(wanted);
       }
       continue;
     }
@@ -297,10 +317,18 @@ Anime4kChain resolveAnime4kChain({
   // sense guarding a restore or upscale that is actually there.
   if (files.length == 1 &&
       files.first == _fileName(_Family.clampHighlights, quality)) {
-    return Anime4kChain(files: const <String>[], missing: missing);
+    return Anime4kChain(
+      files: const <String>[],
+      missing: missing,
+      optionalMissing: optionalMissing,
+    );
   }
 
-  return Anime4kChain(files: files, missing: missing);
+  return Anime4kChain(
+    files: files,
+    missing: missing,
+    optionalMissing: optionalMissing,
+  );
 }
 
 /// The character mpv splits its file-list options on.
