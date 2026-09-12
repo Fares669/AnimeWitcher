@@ -169,6 +169,10 @@ Anime4kMetalTelemetry _telemetry({
   double p95 = 5,
   int processed = 120,
   int late = 0,
+  int inputWidth = 1280,
+  int inputHeight = 720,
+  int processingWidth = 1280,
+  int processingHeight = 720,
   Anime4kThermalLevel thermal = Anime4kThermalLevel.nominal,
   bool lowPower = false,
 }) {
@@ -177,6 +181,10 @@ Anime4kMetalTelemetry _telemetry({
     p95FrameTimeMs: p95,
     processedFrames: processed,
     lateOrDroppedFrames: late,
+    inputWidth: inputWidth,
+    inputHeight: inputHeight,
+    processingWidth: processingWidth,
+    processingHeight: processingHeight,
     thermalLevel: thermal,
     lowPowerMode: lowPower,
   );
