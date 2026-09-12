@@ -113,6 +113,10 @@ jobs:
           old_stream_source = '''current.stream.timeout(
             kDownloadRangeStreamIdleTimeout,
           )'''
+          if old_stream_source not in range_source:
+              old_stream_source = '''current.stream.timeout(
+              kDownloadRangeStreamIdleTimeout,
+            )'''
           new_stream_source = '''_cancelRangeStream(
             current.stream.timeout(kDownloadRangeStreamIdleTimeout),
             operation.token,
