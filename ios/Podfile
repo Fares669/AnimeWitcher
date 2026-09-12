@@ -24,6 +24,7 @@ def flutter_root
 end
 
 require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+require_relative '../scripts/anime4k_media_kit_patch'
 
 flutter_ios_podfile_setup
 
@@ -34,6 +35,17 @@ target 'Runner' do
   target 'RunnerTests' do
     inherit! :search_paths
   end
+end
+
+pre_install do |_installer|
+  patch_anime4k_media_kit_video(
+    plugin_dir: File.expand_path(
+      '.symlinks/plugins/media_kit_video/ios/media_kit_video/Sources/media_kit_video/plugin',
+      __dir__
+    ),
+    native_dir: File.expand_path('../native/anime4k_metal', __dir__),
+    platform: :ios
+  )
 end
 
 
