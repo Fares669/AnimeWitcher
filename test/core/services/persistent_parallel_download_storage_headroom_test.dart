@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:animewitcher/core/services/persistent_parallel_download.dart';
 import 'package:background_downloader/background_downloader.dart';
@@ -131,36 +130,45 @@ void main() {
         await Future<void>.delayed(Duration.zero);
       }
 
-      final df = await Process.run('df', <String>['-Pk', directory.path]);
-      expect(df.exitCode, 0, reason: '${df.stderr}');
-      final lines = (df.stdout as String)
-          .trim()
-          .split('\n')
-          .where((line) => line.trim().isNotEmpty)
-          .toList(growable: false);
-      expect(lines.length, greaterThanOrEqualTo(2));
-      final columns = lines.last.trim().split(RegExp(r'\s+'));
-      final availableKiB = int.parse(columns[3]);
-      const leaveBeforeFinalPartKiB = 8;
-      expect(
-        availableKiB,
-        greaterThan(leaveBeforeFinalPartKiB + 16),
-        reason: 'CI bounded tmpfs must have enough room for verified parts',
-      );
-
+      // Fill the bounded tmpfs until the kernel itself reports ENOSPC instead
+      // of estimating free space from df. Then release exactly two 4 KiB
+      // pages: the final part consumes one page, leaving at most one page for
+      // an 8 KiB staging file. This makes the assembly failure deterministic
+      // despite sparse-file and filesystem-accounting differences.
       final filler = File('${directory.path}.filler');
       final output = await filler.open(mode: FileMode.write);
+      final block = List<int>.filled(4096, 3);
+      var hitEnospc = false;
       try {
-        var remaining = (availableKiB - leaveBeforeFinalPartKiB) * 1024;
-        final block = List<int>.filled(1024 * 1024, 3);
-        while (remaining > 0) {
-          final count = math.min(remaining, block.length);
-          await output.writeFrom(block, 0, count);
-          remaining -= count;
+        while (true) {
+          try {
+            await output.writeFrom(block);
+          } on FileSystemException catch (error) {
+            expect(
+              error.osError?.errorCode,
+              28,
+              reason: 'bounded Linux tmpfs must fail with ENOSPC',
+            );
+            hitEnospc = true;
+            break;
+          }
         }
-        await output.flush();
       } finally {
-        await output.close();
+        try {
+          await output.close();
+        } on FileSystemException {
+          // Closing a descriptor after ENOSPC may surface the same writeback
+          // error; the file length below is the authoritative allocation.
+        }
+      }
+      expect(hitEnospc, isTrue);
+      final fillerLength = await filler.length();
+      expect(fillerLength, greaterThan(16 * 1024));
+      final trimmer = await filler.open(mode: FileMode.append);
+      try {
+        await trimmer.truncate(fillerLength - 8192);
+      } finally {
+        await trimmer.close();
       }
 
       final lastTask = starts.last;
