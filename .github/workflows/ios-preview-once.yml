@@ -1,11 +1,15 @@
 name: iOS Preview One Shot
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - feat/anime4k-ios-performance
     paths:
       - .github/workflows/ios-preview-once.yml
+      - native/anime4k_metal/**
+      - scripts/anime4k_*
+      - ios/Podfile
 
 permissions:
   contents: read
