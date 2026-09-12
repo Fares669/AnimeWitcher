@@ -1,7 +1,7 @@
 import 'package:animewitcher/features/player/data/anime4k.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const _fullFolder = <String>[
+final _fullFolder = <String>[
   'Anime4K_Clamp_Highlights.glsl',
   for (final suffix in <String>['S', 'M', 'L', 'VL', 'UL']) ...<String>[
     'Anime4K_Restore_CNN_$suffix.glsl',
