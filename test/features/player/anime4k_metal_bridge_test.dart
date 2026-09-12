@@ -97,13 +97,17 @@ void main() {
       expect(state, Anime4kNativeMetalState.failed);
     });
 
-    test('decodes per-player native telemetry for the Eco governor', () {
+    test('decodes live native dimensions with telemetry for the Eco governor', () {
       final bindings = _FakeBindings(
         telemetryJson: jsonEncode(<String, Object>{
           'averageFrameTimeMs': 8.25,
           'p95FrameTimeMs': 12.5,
           'processedFrames': 120,
           'lateOrDroppedFrames': 3,
+          'inputWidth': 1280,
+          'inputHeight': 720,
+          'processingWidth': 1178,
+          'processingHeight': 662,
           'thermalLevel': 'fair',
           'lowPowerMode': true,
         }),
@@ -118,6 +122,10 @@ void main() {
       expect(telemetry.p95FrameTimeMs, 12.5);
       expect(telemetry.processedFrames, 120);
       expect(telemetry.lateOrDroppedFrames, 3);
+      expect(telemetry.inputWidth, 1280);
+      expect(telemetry.inputHeight, 720);
+      expect(telemetry.processingWidth, 1178);
+      expect(telemetry.processingHeight, 662);
       expect(telemetry.thermalLevel, Anime4kThermalLevel.fair);
       expect(telemetry.lowPowerMode, isTrue);
     });
