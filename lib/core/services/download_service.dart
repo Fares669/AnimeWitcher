@@ -2248,7 +2248,11 @@ class DownloadService {
         await storage.removeDownloadMetadata(job.taskId);
       } catch (_) {}
       try {
-        await refreshStore.remove(job.trackingUrl);
+        await refreshStore.removeForOwnerGeneration(
+          job.trackingUrl,
+          job.taskId,
+          job.generation,
+        );
       } catch (_) {}
       final restored = job.restoreTaskSnapshot();
       if (restored != null) {
@@ -3603,7 +3607,14 @@ class DownloadService {
       _ref.read(downloadProgressProvider.notifier).remove(trackingUrl);
       await FileDownloader().database.deleteRecordWithId(taskId);
       await storage.removeDownloadMetadata(taskId);
-      await _ref.read(downloadUrlRefreshStoreProvider).remove(trackingUrl);
+      final cancelJob = await _jobStore.get(taskId);
+      await _ref
+          .read(downloadUrlRefreshStoreProvider)
+          .removeForOwnerGeneration(
+            trackingUrl,
+            taskId,
+            cancelJob?.generation ?? 0,
+          );
       // Keep the canceled JobStore row. It is the durable fence against late
       // complete/running callbacks and is GC'd only by the age+ownership policy.
       await _syncQueueToCapUnlocked();
@@ -5290,6 +5301,29 @@ class DownloadService {
     }
   }
 
+  Future<bool> _commitRefreshDescriptorForGeneration(
+    DownloadUrlRefreshDescriptor descriptor, {
+    required String trackingUrl,
+    required String ownerTaskId,
+    required String logicalId,
+    required int generation,
+    bool claimOwnership = false,
+  }) {
+    final owned = DownloadUrlRefreshDescriptor(
+      trackingUrl: trackingUrl,
+      providerId: descriptor.providerId,
+      source: descriptor.source,
+      quality: descriptor.quality,
+      refreshUrl: descriptor.refreshUrl,
+      updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+      generation: generation,
+      ownerTaskId: ownerTaskId,
+      logicalId: logicalId,
+    );
+    final store = _ref.read(downloadUrlRefreshStoreProvider);
+    return claimOwnership ? store.claimOwnership(owned) : store.save(owned);
+  }
+
   Future<bool> startDownload({
     required String url,
     required String filename,
@@ -5299,6 +5333,7 @@ class DownloadService {
     String? trackingUrl,
     Map<String, String>? headers,
     int totalBytes = -1,
+    DownloadUrlRefreshDescriptor? refreshDescriptor,
   }) async {
     final outcome = await startDownloadOutcome(
       url: url,
@@ -5309,6 +5344,7 @@ class DownloadService {
       trackingUrl: trackingUrl,
       headers: headers,
       totalBytes: totalBytes,
+      refreshDescriptor: refreshDescriptor,
     );
     return switch (outcome) {
       DownloadCommandOutcome.running ||
@@ -5328,6 +5364,7 @@ class DownloadService {
     String? trackingUrl,
     Map<String, String>? headers,
     int totalBytes = -1,
+    DownloadUrlRefreshDescriptor? refreshDescriptor,
   }) async {
     try {
       await _awaitCommandReadiness('startDownload');
@@ -5658,6 +5695,9 @@ class DownloadService {
         stallTimeout: const Duration(seconds: 45),
       );
 
+      int? refreshDescriptorGeneration;
+      String? refreshDescriptorOwnerTaskId;
+
       if (kDebugMode) debugPrint('[DownloadService] Enqueuing task...');
 
       // Create the directory if it doesn't exist
@@ -5709,6 +5749,7 @@ class DownloadService {
           task,
           knownTotalBytes: expectedBytes,
         );
+        refreshDescriptorOwnerTaskId = transferTask.taskId;
         final jobPersisted = await _jobStore.put(
           DownloadJobRecord(
             taskId: transferTask.taskId,
@@ -5729,6 +5770,21 @@ class DownloadService {
         );
         if (!jobPersisted) {
           throw StateError('Failed to persist fresh download intent');
+        }
+
+        if (!startNow && refreshDescriptor != null) {
+          final committed = await _commitRefreshDescriptorForGeneration(
+            refreshDescriptor,
+            trackingUrl: trackingUrl ?? url,
+            ownerTaskId: transferTask.taskId,
+            logicalId: logicalId,
+            generation: 0,
+            claimOwnership: true,
+          );
+          if (!committed) {
+            throw StateError('A newer refresh descriptor owns this download');
+          }
+          refreshDescriptorGeneration = 0;
         }
 
         _waitingPayloads[transferTask.taskId] = _waitingPayloadFor(
@@ -5781,6 +5837,20 @@ class DownloadService {
             'Failed to fence start operation for ${transferTask.taskId}',
           );
         }
+        if (refreshDescriptor != null) {
+          final committed = await _commitRefreshDescriptorForGeneration(
+            refreshDescriptor,
+            trackingUrl: trackingUrl ?? url,
+            ownerTaskId: transferTask.taskId,
+            logicalId: logicalId,
+            generation: startOperation.generation,
+            claimOwnership: true,
+          );
+          if (!committed) {
+            throw StateError('A newer refresh descriptor owns this download');
+          }
+          refreshDescriptorGeneration = startOperation.generation;
+        }
         final success = await _enqueueTransfer(transferTask, expectedBytes);
         if (kDebugMode) {
           debugPrint(
@@ -5822,6 +5892,16 @@ class DownloadService {
         _forgetSessionTask(task.taskId);
         final storage = _ref.read(storageServiceProvider);
         await storage.removeDownloadMetadata(task.taskId);
+        if (refreshDescriptorGeneration != null &&
+            refreshDescriptorOwnerTaskId != null) {
+          await _ref
+              .read(downloadUrlRefreshStoreProvider)
+              .removeForOwnerGeneration(
+                trackingUrl ?? url,
+                refreshDescriptorOwnerTaskId,
+                refreshDescriptorGeneration,
+              );
+        }
         // A start that never established recoverable ownership must not leave
         // an authoritative JobStore row that resurrects itself on relaunch.
         await _jobStore.remove(task.taskId);

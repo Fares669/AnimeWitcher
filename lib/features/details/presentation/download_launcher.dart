@@ -16,10 +16,12 @@ import '../../../core/router/app_router.dart';
 import '../../../shared/widgets/loading_dialog.dart';
 import '../../../shared/widgets/custom_widgets.dart';
 import '../../../shared/widgets/loading_indicator.dart';
+
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
+
 import 'source_picker.dart';
 part 'download_launcher.g.dart';
 
@@ -298,20 +300,6 @@ class DownloadLauncher {
                     );
                   }
 
-                  final refreshStore = _ref.read(
-                    downloadUrlRefreshStoreProvider,
-                  );
-                  await refreshStore.save(
-                    DownloadUrlRefreshDescriptor(
-                      trackingUrl: resolveUrl,
-                      providerId: providerId,
-                      source: stream.source,
-                      quality: stream.quality,
-                      refreshUrl: stream.refreshUrl,
-                      updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
-                    ),
-                  );
-
                   final outcome = await downloadService.startDownloadOutcome(
                     url: stream.url,
                     filename: filename,
@@ -321,6 +309,15 @@ class DownloadLauncher {
                     trackingUrl: resolveUrl,
                     headers: stream.headers,
                     totalBytes: metadata.size ?? -1,
+                    refreshDescriptor: DownloadUrlRefreshDescriptor(
+                      trackingUrl: resolveUrl,
+                      providerId: providerId,
+                      source: stream.source,
+                      quality: stream.quality,
+                      refreshUrl: stream.refreshUrl,
+                      updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+                      generation: 0,
+                    ),
                   );
                   final accepted = switch (outcome) {
                     DownloadCommandOutcome.running ||
@@ -330,36 +327,26 @@ class DownloadLauncher {
                     _ => false,
                   };
 
-                  if (!accepted) {
-                    await refreshStore.remove(resolveUrl);
-                  }
                   if (!accepted && finalContext.mounted) {
                     final message = switch (outcome) {
                       DownloadCommandOutcome.serviceUnavailable => appText(
                         finalContext,
-                        english:
-                            'The download service is not ready yet. Please try again.',
-                        arabic:
-                            'خدمة التنزيل غير جاهزة بعد. حاول مرة أخرى.',
+                        english: 'The download service is not ready yet. Please try again.',
+                        arabic: 'خدمة التنزيل غير جاهزة بعد. حاول مرة أخرى.',
                       ),
                       DownloadCommandOutcome.restartRequired => appText(
                         finalContext,
-                        english:
-                            'The download needs the app to restart before it can continue.',
-                        arabic:
-                            'يحتاج التنزيل إلى إعادة تشغيل التطبيق قبل المتابعة.',
+                        english: 'The download needs the app to restart before it can continue.',
+                        arabic: 'يحتاج التنزيل إلى إعادة تشغيل التطبيق قبل المتابعة.',
                       ),
                       DownloadCommandOutcome.settlingOwnership => appText(
                         finalContext,
-                        english:
-                            'The previous download worker is still stopping. Please retry shortly.',
-                        arabic:
-                            'ما زال عامل التنزيل السابق يتوقف. حاول مرة أخرى بعد قليل.',
+                        english: 'The previous download worker is still stopping. Please retry shortly.',
+                        arabic: 'ما زال عامل التنزيل السابق يتوقف. حاول مرة أخرى بعد قليل.',
                       ),
                       _ => appText(
                         finalContext,
-                        english:
-                            'Failed to start download. Please retry or select another source.',
+                        english: 'Failed to start download. Please retry or select another source.',
                         arabic:
                             'فشل بدء التنزيل. حاول مجددًا أو اختر مصدرًا آخر.',
                       ),
