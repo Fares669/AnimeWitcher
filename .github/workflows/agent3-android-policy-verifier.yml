@@ -31,12 +31,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+
       - name: Install Flutter dependencies
         run: flutter pub get
 
       - name: Merge Android debug manifest
         working-directory: android
-        run: ./gradlew :app:processDebugMainManifest --stacktrace
+        run: gradle :app:processDebugMainManifest --stacktrace
 
       - name: Verify Android 14 download execution declarations
         run: |
@@ -73,4 +77,4 @@ jobs:
 
       - name: Compile Android debug sources
         working-directory: android
-        run: ./gradlew :app:compileDebugKotlin --stacktrace
+        run: gradle :app:compileDebugKotlin --stacktrace
