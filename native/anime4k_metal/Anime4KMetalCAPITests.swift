@@ -36,20 +36,24 @@ struct Anime4KMetalCAPITests {
         let data = try JSONSerialization.data(withJSONObject: configuration)
         let json = String(decoding: data, as: UTF8.self)
 
-        let configured = json.withCString { pointer in
-            Anime4KMetalDartAPI.configure(
-                handleAddress: handleAddress,
-                configurationJSON: pointer
+        func configureReady() {
+            let configured = json.withCString { pointer in
+                Anime4KMetalDartAPI.configure(
+                    handleAddress: handleAddress,
+                    configurationJSON: pointer
+                )
+            }
+            precondition(
+                configured == Anime4KMetalDartStatus.ready.rawValue,
+                "valid per-player configuration must become ready"
+            )
+            precondition(
+                Anime4KMetalDartAPI.status(handleAddress: handleAddress)
+                    == Anime4KMetalDartStatus.ready.rawValue
             )
         }
-        precondition(
-            configured == Anime4KMetalDartStatus.ready.rawValue,
-            "valid per-player configuration must become ready"
-        )
-        precondition(
-            Anime4KMetalDartAPI.status(handleAddress: handleAddress)
-                == Anime4KMetalDartStatus.ready.rawValue
-        )
+
+        configureReady()
 
         precondition(
             Anime4KMetalDartAPI.setBypass(
@@ -126,6 +130,22 @@ struct Anime4KMetalCAPITests {
             ) == 0,
             "invalid bypass handles must fail closed"
         )
+
+        // Simulate a post-configure native failure/removal. The C API must not
+        // keep reporting its cached configure-time `ready` value because Dart
+        // relies on status polling to restore the exact mpv GLSL pipeline.
+        guard let nativeHandle = OpaquePointer(bitPattern: UInt(handleAddress)) else {
+            preconditionFailure("test handle must be representable")
+        }
+        Anime4KMediaKitBridge.shared.disable(handle: nativeHandle)
+        precondition(
+            Anime4KMetalDartAPI.status(handleAddress: handleAddress)
+                == Anime4KMetalDartStatus.failed.rawValue,
+            "runtime disappearing asynchronously must invalidate cached ready status"
+        )
+
+        // A subsequent explicit configuration can recover the same player.
+        configureReady()
 
         Anime4KMetalDartAPI.disable(handleAddress: handleAddress)
         precondition(
