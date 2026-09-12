@@ -175,6 +175,10 @@ jobs:
             lib/core/services/download_continued_processing_service.dart \
             lib/core/services/download_transport.dart
           git commit -m 'fix(downloads): join teardown and align Android execution policy (DM-17 DM-28)'
+          # build_runner can touch tracked generated files outside the production
+          # patch. Drop only those remaining worktree edits after the production
+          # commit so rebase is clean; the committed DM-17/DM-28 changes remain.
+          git restore --worktree .
           git pull --rebase origin plan/download-manager-reliability
 
           flutter test test/core/services/download_teardown_barrier_test.dart \
