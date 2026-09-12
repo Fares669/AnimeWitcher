@@ -62,5 +62,41 @@ void main() {
       expect(patch, contains('Anime4KMetalFXScaler.swift'));
       expect(workflow, contains('native/anime4k_metal/Anime4KMetalFXScaler.swift'));
     });
+
+    test('benchmark toggle is hidden, debug-only, and restricted to Eco', () {
+      final controller = File(
+        'lib/features/player/presentation/player_controller_base.dart',
+      ).readAsStringSync();
+      final bridge = File(
+        'lib/features/player/data/anime4k_metal_bridge.dart',
+      ).readAsStringSync();
+      final capi = File(
+        'native/anime4k_metal/Anime4KMetalCAPI.swift',
+      ).readAsStringSync();
+
+      expect(
+        controller,
+        contains("bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT')"),
+      );
+      expect(controller, contains('settings?.anime4kEcoEnabled ?? false'));
+      expect(controller, contains("'restoreDenoiseMetalFXSpatial'"));
+      expect(controller, contains("'fullAnime4K'"));
+      expect(bridge, contains("'upscaleStrategy': upscaleStrategy"));
+      expect(capi, contains('upscaleStrategy'));
+      expect(capi, contains('Anime4KAppleUpscaleStrategy'));
+    });
+
+    test('experiment removes Anime4K upscale stages before MetalFX', () {
+      final runtime = File(
+        'native/anime4k_metal/Anime4KMetalRuntime.swift',
+      ).readAsStringSync();
+
+      expect(runtime, contains('experimentalShaderPaths'));
+      expect(runtime, contains('Anime4K_Upscale_CNN_x2_'));
+      expect(runtime, contains('Anime4K_Upscale_Denoise_CNN_x2_'));
+      expect(runtime, contains('Anime4K_AutoDownscalePre_x2.glsl'));
+      expect(runtime, contains('Anime4K_AutoDownscalePre_x4.glsl'));
+      expect(runtime, contains('Anime4K_Restore_CNN_'));
+    });
   });
 }
