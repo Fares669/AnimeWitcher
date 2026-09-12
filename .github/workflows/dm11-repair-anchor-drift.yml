@@ -129,3 +129,5 @@ jobs:
           git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11)'
           git pull --rebase origin plan/download-manager-reliability
           git push origin HEAD:plan/download-manager-reliability
+
+# Trigger marker: 2026-09-12 DM-11 foundation retry
