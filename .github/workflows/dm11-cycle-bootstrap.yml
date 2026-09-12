@@ -74,34 +74,274 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import textwrap
 
-          source = Path('.github/workflows/dm11-replica-transaction-foundation.yml').read_text()
-          step = source.split('      - name: Apply durable replica transaction journal\n', 1)[1]
-          start = "          python3 - <<'PY'\n"
-          end = "\n          PY\n"
-          script = textwrap.dedent(step.split(start, 1)[1].split(end, 1)[0])
+          p = Path('lib/core/services/download_job_store.dart')
+          s = p.read_text()
+          if 'enum DownloadReplicaOperation' in s:
+              print('DM-11 transaction model already present')
+              raise SystemExit(0)
 
-          replacements = [
-              (
-                  "    lastByteReconciliationAtMillis:\n                  lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\n              );",
-                  "    lastByteReconciliationAtMillis:\n        lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\n  );",
-              ),
-              (
-                  "    if (lastByteReconciliationAtMillis != null)\n                'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,\n            };",
-                  "    if (lastByteReconciliationAtMillis != null)\n      'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,\n  };",
-              ),
-              (
-                  "      lastByteReconciliationAtMillis: _nullableIntValue(\n                  map['lastByteReconciliationAtMillis'],\n                ),\n              );",
-                  "      lastByteReconciliationAtMillis: _nullableIntValue(\n        map['lastByteReconciliationAtMillis'],\n      ),\n    );",
-              ),
-          ]
-          for old, new in replacements:
-              if old not in script:
-                  raise SystemExit('DM-11 extracted patch anchor drift')
-              script = script.replace(old, new, 1)
+          def replace_once(old, new, label):
+              global s
+              if old not in s:
+                  raise SystemExit(f'DM-11 {label} anchor drift')
+              s = s.replace(old, new, 1)
 
-          exec(compile(script, '<dm11-foundation>', 'exec'), {'__name__': '__main__'})
+          replace_once(
+              'const int kDownloadJobSchemaVersion = 6;',
+              'const int kDownloadJobSchemaVersion = 7;',
+              'schema',
+          )
+
+          enum_anchor = '''enum DownloadByteReconciliationReason {
+            exactDiskLoss,
+            noSurvivingBytes,
+            multipartManifestRollback,
+            nativeRecoverabilityLoss,
+          }
+          '''
+          enum_insert = enum_anchor + r'''
+
+          /// Correctness-critical transition whose intent must survive a crash before
+          /// executor and projection replicas converge. A null transaction means the
+          /// current generation is fully committed across the replicas DownloadService
+          /// is responsible for projecting.
+          enum DownloadReplicaOperation {
+            start,
+            pause,
+            resume,
+            cancel,
+            complete,
+            sourceRefresh,
+            nativeHandoff,
+          }
+
+          enum DownloadReplicaTransactionPhase {
+            intent,
+            executorAcknowledged,
+            projecting,
+          }
+
+          class DownloadReplicaTransaction {
+            const DownloadReplicaTransaction({
+              required this.operation,
+              required this.phase,
+              required this.generation,
+            });
+
+            final DownloadReplicaOperation operation;
+            final DownloadReplicaTransactionPhase phase;
+            final int generation;
+
+            DownloadReplicaTransaction copyWith({
+              DownloadReplicaTransactionPhase? phase,
+            }) => DownloadReplicaTransaction(
+              operation: operation,
+              phase: phase ?? this.phase,
+              generation: generation,
+            );
+
+            Map<String, Object?> toJson() => <String, Object?>{
+              'operation': operation.name,
+              'phase': phase.name,
+              'generation': generation,
+            };
+
+            static DownloadReplicaTransaction? fromJson(Object? raw) {
+              if (raw is! Map) return null;
+              final map = Map<String, dynamic>.from(raw);
+              final operationName = _nonEmptyString(map['operation']);
+              final phaseName = _nonEmptyString(map['phase']);
+              final generation = _intValue(map['generation'], fallback: -1);
+              if (operationName == null || phaseName == null || generation < 0) {
+                return null;
+              }
+              DownloadReplicaOperation? operation;
+              for (final value in DownloadReplicaOperation.values) {
+                if (value.name == operationName) {
+                  operation = value;
+                  break;
+                }
+              }
+              DownloadReplicaTransactionPhase? phase;
+              for (final value in DownloadReplicaTransactionPhase.values) {
+                if (value.name == phaseName) {
+                  phase = value;
+                  break;
+                }
+              }
+              if (operation == null || phase == null) return null;
+              return DownloadReplicaTransaction(
+                operation: operation,
+                phase: phase,
+                generation: generation,
+              );
+            }
+          }
+          '''
+          replace_once(enum_anchor, enum_insert, 'enum')
+
+          replace_once(
+              '''    this.lastByteReconciliationReason,
+              this.lastByteReconciliationProvenance,
+              this.lastByteReconciliationAtMillis,
+            });''',
+              '''    this.lastByteReconciliationReason,
+              this.lastByteReconciliationProvenance,
+              this.lastByteReconciliationAtMillis,
+              this.replicaTransaction,
+            });''',
+              'constructor',
+          )
+
+          replace_once(
+              '''  final int? lastByteReconciliationAtMillis;
+
+            DownloadAttemptToken get attemptToken =>''',
+              '''  final int? lastByteReconciliationAtMillis;
+            final DownloadReplicaTransaction? replicaTransaction;
+
+            DownloadAttemptToken get attemptToken =>''',
+              'field',
+          )
+
+          replace_once(
+              '''    DownloadDurableByteProvenance? lastByteReconciliationProvenance,
+              int? lastByteReconciliationAtMillis,
+            }) => DownloadJobRecord(''',
+              '''    DownloadDurableByteProvenance? lastByteReconciliationProvenance,
+              int? lastByteReconciliationAtMillis,
+              DownloadReplicaTransaction? replicaTransaction,
+              bool clearReplicaTransaction = false,
+            }) => DownloadJobRecord(''',
+              'copyWith signature',
+          )
+
+          replace_once(
+              '''    lastByteReconciliationAtMillis:
+                  lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,
+              );''',
+              '''    lastByteReconciliationAtMillis:
+                  lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,
+              replicaTransaction: clearReplicaTransaction
+                  ? null
+                  : (replicaTransaction ?? this.replicaTransaction),
+            );''',
+              'copyWith body',
+          )
+
+          replace_once(
+              '''    if (lastByteReconciliationAtMillis != null)
+                'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,
+            };''',
+              '''    if (lastByteReconciliationAtMillis != null)
+                'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,
+              if (replicaTransaction != null)
+                'replicaTransaction': replicaTransaction!.toJson(),
+            };''',
+              'toJson',
+          )
+
+          replace_once(
+              '''      lastByteReconciliationAtMillis: _nullableIntValue(
+                  map['lastByteReconciliationAtMillis'],
+                ),
+              );''',
+              '''      lastByteReconciliationAtMillis: _nullableIntValue(
+                  map['lastByteReconciliationAtMillis'],
+                ),
+              replicaTransaction: DownloadReplicaTransaction.fromJson(
+                map['replicaTransaction'],
+              ),
+            );''',
+              'fromJson',
+          )
+
+          store_anchor = '''  Future<DownloadJobRecord?> get(String taskId) async {
+            final id = taskId.trim();
+            if (id.isEmpty) return null;
+            return DownloadJobRecord.fromJson(await backend.read(id));
+          }
+          '''
+          store_insert = store_anchor + r'''
+
+          /// Persist write-ahead intent before any ownership-changing executor effect.
+          /// The transaction generation is the same generation used to fence callbacks.
+          Future<DownloadAttemptToken?> beginReplicaTransaction(
+            String taskId, {
+            required DownloadReplicaOperation operation,
+            required DownloadJobState state,
+            int? updatedAtMillis,
+          }) => _serialize(() async {
+            final current = await get(taskId);
+            if (current == null || downloadJobIsTerminal(current.state)) return null;
+            final generation = current.generation + 1;
+            final next = current.copyWith(
+              state: state,
+              generation: generation,
+              updatedAtMillis:
+                  updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
+              replicaTransaction: DownloadReplicaTransaction(
+                operation: operation,
+                phase: DownloadReplicaTransactionPhase.intent,
+                generation: generation,
+              ),
+            );
+            if (!await _putUnlocked(next)) return null;
+            return next.attemptToken;
+          });
+
+          /// Advance only the current transaction. Old-process acknowledgements cannot
+          /// move a newer generation forward after relaunch or retry.
+          Future<bool> advanceReplicaTransaction(
+            DownloadAttemptToken token,
+            DownloadReplicaTransactionPhase phase, {
+            int? updatedAtMillis,
+          }) => _serialize(() async {
+            final current = await get(token.taskId);
+            final tx = current?.replicaTransaction;
+            if (current == null ||
+                current.generation != token.generation ||
+                tx == null ||
+                tx.generation != token.generation) {
+              return false;
+            }
+            if (phase.index < tx.phase.index) return false;
+            return _putUnlocked(
+              current.copyWith(
+                updatedAtMillis:
+                    updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
+                replicaTransaction: tx.copyWith(phase: phase),
+              ),
+            );
+          });
+
+          /// Clear the write-ahead journal only after executor acknowledgement and all
+          /// ancillary projections for this generation have completed successfully.
+          Future<bool> commitReplicaTransaction(
+            DownloadAttemptToken token, {
+            int? updatedAtMillis,
+          }) => _serialize(() async {
+            final current = await get(token.taskId);
+            final tx = current?.replicaTransaction;
+            if (current == null ||
+                current.generation != token.generation ||
+                tx == null ||
+                tx.generation != token.generation ||
+                tx.phase != DownloadReplicaTransactionPhase.projecting) {
+              return false;
+            }
+            return _putUnlocked(
+              current.copyWith(
+                updatedAtMillis:
+                    updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
+                clearReplicaTransaction: true,
+              ),
+            );
+          });
+          '''
+          replace_once(store_anchor, store_insert, 'store insertion')
+          p.write_text(s)
           PY
           dart format lib/core/services/download_job_store.dart
           git diff --check
@@ -116,7 +356,7 @@ jobs:
           flutter analyze --no-fatal-warnings --no-fatal-infos
           git diff --check
 
-      - name: Commit verified foundation
+      - name: Commit and rebase verified foundation
         run: |
           if git diff --quiet -- lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart; then
             echo 'DM-11 transaction foundation already verified; nothing to commit.'
@@ -127,4 +367,16 @@ jobs:
           git add lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
           git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11 foundation)'
           git pull --rebase origin plan/download-manager-reliability
-          git push origin HEAD:plan/download-manager-reliability
+
+      - name: Re-verify rebased foundation
+        run: |
+          flutter test \
+            test/core/services/download_replica_transaction_test.dart \
+            test/core/services/download_recovery_fault_injection_test.dart \
+            test/core/services/download_relaunch_chaos_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Push verified foundation
+        run: git push origin HEAD:plan/download-manager-reliability
