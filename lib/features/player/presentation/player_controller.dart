@@ -18,6 +18,24 @@ import 'player_controller_base.dart' as base;
 export 'player_controller_base.dart'
     hide PlayerController, playerControllerProvider;
 
+/// Publishes the most recent Apple Eco sample independently of player/dialog
+/// lifetimes so settings can observe live diagnostics without polling or
+/// creating another playback session.
+class Anime4kDiagnosticsController
+    extends Notifier<Anime4kPerformanceSnapshot?> {
+  @override
+  Anime4kPerformanceSnapshot? build() => null;
+
+  void publish(Anime4kPerformanceSnapshot? snapshot) {
+    state = snapshot;
+  }
+}
+
+final anime4kDiagnosticsProvider =
+    NotifierProvider<Anime4kDiagnosticsController, Anime4kPerformanceSnapshot?>(
+      Anime4kDiagnosticsController.new,
+    );
+
 /// Adds the Apple Anime4K Eco runtime orchestration on top of the established
 /// player implementation. Keeping the existing controller intact in
 /// [player_controller_base.dart] makes the performance work narrowly scoped:
@@ -30,6 +48,7 @@ class PlayerController extends base.PlayerController {
   int? _anime4kEcoHandle;
   Anime4kQuality? _anime4kEcoEffectiveQuality;
   Anime4kPerformanceSnapshot? _anime4kPerformanceSnapshot;
+  late Anime4kDiagnosticsController _anime4kDiagnostics;
   bool _anime4kEcoSampleInFlight = false;
   bool _anime4kForceMpvFallback = false;
 
@@ -41,6 +60,7 @@ class PlayerController extends base.PlayerController {
   @override
   base.PlayerState build() {
     final initial = super.build();
+    _anime4kDiagnostics = ref.read(anime4kDiagnosticsProvider.notifier);
 
     ref.listen(playerSettingsProvider, (previous, next) {
       final before = previous?.asData?.value;
@@ -52,6 +72,7 @@ class PlayerController extends base.PlayerController {
       _anime4kForceMpvFallback = false;
       _anime4kEcoEffectiveQuality = null;
       _anime4kEcoGovernor = Anime4kEcoGovernor();
+      _publishAnime4kPerformanceSnapshot(null);
       unawaited(applyAnime4kShaders());
     });
 
@@ -197,7 +218,7 @@ class PlayerController extends base.PlayerController {
         source: source,
         output: output,
       );
-      _anime4kPerformanceSnapshot = decision.snapshot;
+      _publishAnime4kPerformanceSnapshot(decision.snapshot);
 
       if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {
         final configured = await _applyAnime4kEcoQuality(
@@ -232,6 +253,13 @@ class PlayerController extends base.PlayerController {
     } finally {
       _anime4kEcoSampleInFlight = false;
     }
+  }
+
+  void _publishAnime4kPerformanceSnapshot(
+    Anime4kPerformanceSnapshot? snapshot,
+  ) {
+    _anime4kPerformanceSnapshot = snapshot;
+    _anime4kDiagnostics.publish(snapshot);
   }
 
   Future<bool> _applyAnime4kEcoQuality({
@@ -295,6 +323,7 @@ class PlayerController extends base.PlayerController {
     }
     _anime4kEcoHandle = null;
     _anime4kEcoEffectiveQuality = null;
+    _publishAnime4kPerformanceSnapshot(null);
     await platform.setProperty('glsl-shaders', pipeline.value);
   }
 
@@ -303,7 +332,7 @@ class PlayerController extends base.PlayerController {
     _anime4kEcoTimer = null;
     _anime4kEcoGovernor = Anime4kEcoGovernor();
     _anime4kEcoEffectiveQuality = null;
-    _anime4kPerformanceSnapshot = null;
+    _publishAnime4kPerformanceSnapshot(null);
 
     if (!clearNativeBypass) return;
     final metalBridge = _anime4kEcoMetalBridge;
@@ -323,7 +352,7 @@ class PlayerController extends base.PlayerController {
     }
     _anime4kEcoHandle = null;
     _anime4kEcoEffectiveQuality = null;
-    _anime4kPerformanceSnapshot = null;
+    _publishAnime4kPerformanceSnapshot(null);
     _anime4kEcoSampleInFlight = false;
   }
 
