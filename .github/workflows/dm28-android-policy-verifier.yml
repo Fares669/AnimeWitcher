@@ -166,10 +166,9 @@ jobs:
               if (isAndroid) {
                 try {
                   notificationPermissionGranted =
-                      await FileDownloader().permissions.status(
-                            PermissionType.notifications,
-                          ) ==
-                          PermissionStatus.granted;
+                      (await FileDownloader().permissions.status(
+                        PermissionType.notifications,
+                      )).isGranted;
                 } catch (_) {
                   // UIDT cannot safely assume its mandatory visible notification
                   // when permission state cannot be proven. Fall back to the
@@ -242,9 +241,8 @@ jobs:
         run: |
           flutter test test/core/services/dm28_android_policy_test.dart test/core/services/download_transport_test.dart
 
-      - name: Merge Android debug manifest
-        working-directory: android
-        run: ./gradlew :app:processDebugMainManifest --stacktrace
+      - name: Build Android debug app and merged manifest
+        run: flutter build apk --debug --no-pub
 
       - name: Verify Android 14 download execution declarations
         run: |
@@ -253,7 +251,7 @@ jobs:
           import xml.etree.ElementTree as ET
 
           ns = '{http://schemas.android.com/apk/res/android}'
-          candidates = list(Path('android/app/build/intermediates').rglob('AndroidManifest.xml'))
+          candidates = list(Path('build/app/intermediates').rglob('AndroidManifest.xml'))
           if not candidates:
               raise SystemExit('no merged AndroidManifest.xml produced')
           merged = max(candidates, key=lambda p: p.stat().st_size)
@@ -275,10 +273,6 @@ jobs:
           print('merged manifest:', merged)
           print('UIDT services:', uidt)
           PY
-
-      - name: Compile Android debug sources
-        working-directory: android
-        run: ./gradlew :app:compileDebugKotlin --stacktrace
 
       - name: Generate Dart sources and analyze
         run: |
