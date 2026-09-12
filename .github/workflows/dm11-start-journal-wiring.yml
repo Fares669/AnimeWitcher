@@ -71,6 +71,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git pull --rebase origin plan/download-manager-reliability
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
           flutter test \
