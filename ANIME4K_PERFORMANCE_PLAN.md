@@ -65,7 +65,7 @@
   - RED evidence: Flutter Checks run `34679670753` passed Analyze/native typecheck and failed 17 focused stage-quality assertions before implementation.
   - GREEN verification: Flutter Checks run `34680067875` passed Analyze, full Test, and native logger typecheck on commit `83c5c1a`.
 
-- [ ] **AKP-04 — Shader manifest and deterministic cache key**
+- [x] **AKP-04 — Shader manifest and deterministic cache key**
   - Files:
     - Create `lib/features/player/data/anime4k_shader_manifest.dart`
     - Modify `lib/features/player/data/anime4k_shader_library.dart`
@@ -75,8 +75,9 @@
   - Pipeline resolution consumes the manifest instead of rescanning the directory for every apply/preview.
   - Expose a stable ordered pipeline hash for Metal pipeline-cache keys.
   - RED/GREEN tests cover stable hashes, changed content invalidation, missing directory, and deterministic ordering.
+  - Verification: Flutter Checks run `34680484820` passed Analyze, full Test, and native typecheck.
 
-- [ ] **AKP-05 — Atomic and integrity-checked Anime4K download**
+- [x] **AKP-05 — Atomic and integrity-checked Anime4K download**
   - Files:
     - Modify `lib/features/player/data/anime4k_download.dart`
     - Modify/create downloader tests under `test/features/player/`
@@ -86,8 +87,9 @@
   - Atomically replace the active shader folder only after validation succeeds.
   - A failed/cancelled update leaves the previous shader set untouched.
   - RED/GREEN tests cover corrupt archive, partial archive, duplicate entry, and successful atomic swap.
+  - Verification: RED run `34680785075`; GREEN Flutter Checks `34680909065`. Real release verification later corrected three pinned entries to the actual official ZIP bytes and verified all 23 files.
 
-- [ ] **AKP-06 — Full v4.0.1 GLSL→MSL compatibility verification**
+- [x] **AKP-06 — Full v4.0.1 GLSL→MSL compatibility verification**
   - Files:
     - Extend `native/anime4k_metal/Anime4KMetalShaderTests.swift`
     - Add a CI helper script under `scripts/`
@@ -95,8 +97,10 @@
   - Parse actual downloaded/pinned v4.0.1 shader text and compile generated MSL with Metal on Apple CI.
   - Fail closed on unsupported directives/syntax.
   - Keep Apache-2.0 NOTICE intact.
+  - Regression: official release AutoDownscale shaders use CRLF; parser now splits with Foundation newline semantics instead of Swift `Character` `\n` splitting.
+  - Verification: platform run `34682216965` passed the corpus gate: 23/23 pinned files, 265 generated Metal passes, all 265 compiled by Apple's Metal compiler.
 
-- [ ] **AKP-07 — Native Metal runtime core**
+- [x] **AKP-07 — Native Metal runtime core**
   - Files:
     - Create `native/anime4k_metal/Anime4KMetalRuntime.swift`
     - Create native runtime tests/fixtures
@@ -105,6 +109,8 @@
   - Compile only when pipeline/hash/dimensions/precision change.
   - Return original frame on disabled/failure and publish explicit native status/error.
   - No `waitUntilCompleted()` in steady-state playback.
+  - Preserve shader-file boundaries so each mpv shader file feeds its final output as `MAIN` to the next file rather than flattening A+A/B+B semantics.
+  - Verification: native runtime contract step passed on platform run `34682216965` after the 265-pass corpus gate.
 
 - [ ] **AKP-08 — media_kit Apple render-path integration**
   - Files:
