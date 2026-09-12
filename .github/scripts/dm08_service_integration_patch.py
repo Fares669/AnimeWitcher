@@ -159,13 +159,13 @@ if old in text:
 elif 'taskCanResume proves opaque native ownership existed' not in text:
     raise SystemExit('resumeOrRestartDownload marker not found')
 
-old = '''  Future<({DownloadTask task, bool refreshed})> _refreshTaskBeforeResume(
+old_signature = '''  Future<({DownloadTask task, bool refreshed})> _refreshTaskBeforeResume(
     DownloadTask task, {
     required int expectedBytes,
     required int partialBytes,
   }) async {
 '''
-new = '''  Future<({DownloadTask task, bool refreshed, bool restartRequired})>
+new_signature = '''  Future<({DownloadTask task, bool refreshed, bool restartRequired})>
   _refreshTaskBeforeResume(
     DownloadTask task, {
     required int expectedBytes,
@@ -173,12 +173,16 @@ new = '''  Future<({DownloadTask task, bool refreshed, bool restartRequired})>
     bool hasOpaqueNativeResume = false,
   }) async {
 '''
-if old in text:
-    text = text.replace(old, new, 1)
+if old_signature in text:
+    text = text.replace(old_signature, new_signature, 1)
 elif 'bool hasOpaqueNativeResume = false' not in text:
     raise SystemExit('_refreshTaskBeforeResume signature not found')
 
-old = '''    // Native single-file resume data may be the only durable representation of
+method_start = text.index('  Future<({DownloadTask task, bool refreshed, bool restartRequired})>')
+method_end = text.index('\n  Future<List<Task>> _liveTransferTasks()', method_start)
+method = text[method_start:method_end]
+
+legacy_guard = '''    // Native single-file resume data may be the only durable representation of
     // its bytes. Do not replace that URL unless a visible partial prefix exists.
     // Multipart manifests own their own durable child files, so they are safe.
     if (task is! ParallelDownloadTask && partialBytes <= 0) {
@@ -186,22 +190,16 @@ old = '''    // Native single-file resume data may be the only durable represent
     }
 
 '''
-if old in text:
-    text = text.replace(old, '', 1)
-
-text = text.replace(
+method = method.replace(legacy_guard, '', 1)
+method = method.replace(
     'return (task: task, refreshed: false);',
     'return (task: task, refreshed: false, restartRequired: false);',
 )
-text = text.replace(
-    ': (task: replaced, refreshed: true);',
-    ': (task: replaced, refreshed: true, restartRequired: false);',
-)
-text = text.replace(
-    '? (task: task, refreshed: false)\n          : (task: replaced, refreshed: true, restartRequired: false);',
+method = method.replace(
+    '? (task: task, refreshed: false)\n          : (task: replaced, refreshed: true);',
     '? (task: task, refreshed: false, restartRequired: false)\n          : (task: replaced, refreshed: true, restartRequired: false);',
 )
-text = text.replace(
+method = method.replace(
     'return (task: updated, refreshed: true);',
     'return (task: updated, refreshed: true, restartRequired: false);',
 )
@@ -215,7 +213,12 @@ validation = '''    if (metadata?.size == null ||
     }
 
 '''
-insert = validation + '''    if (task is! ParallelDownloadTask &&
+if 'only resumable bytes are opaque native resume data' not in method:
+    if validation not in method:
+        raise SystemExit('refreshed source validation marker not found')
+    method = method.replace(
+        validation,
+        validation + '''    if (task is! ParallelDownloadTask &&
         hasOpaqueNativeResume &&
         partialBytes <= 0) {
       // We proved the old source needs replacement and also proved that the
@@ -226,16 +229,12 @@ insert = validation + '''    if (task is! ParallelDownloadTask &&
       return (task: task, refreshed: false, restartRequired: true);
     }
 
-'''
-if validation in text and 'only resumable bytes are opaque native resume data' not in text:
-    text = text.replace(validation, insert, 1)
+''',
+        1,
+    )
 
-# Normalize any missed two-field tuple returns inside this method after broad
-# replacements above. Fail closed if a legacy tuple remains.
-method_start = text.index('_refreshTaskBeforeResume(')
-method_end = text.index('\n  Future<List<Task>> _liveTransferTasks()', method_start)
-method = text[method_start:method_end]
-if '(task: task, refreshed: false)' in method or '(task: updated, refreshed: true)' in method:
+if '(task: task, refreshed: false)' in method or '(task: updated, refreshed: true)' in method or '(task: replaced, refreshed: true)' in method:
     raise SystemExit('legacy refresh tuple remains')
 
+text = text[:method_start] + method + text[method_end:]
 path.write_text(text)
