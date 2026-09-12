@@ -1,0 +1,78 @@
+name: Verify DM-08 service refresh integration
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm08-refresh-service-integration.yml
+      - .github/scripts/dm08_service_integration_patch.py
+      - test/core/services/download_source_refresh_service_wiring_test.dart
+      - test/core/services/download_source_refresh_capability_test.dart
+      - lib/core/services/download_service.dart
+      - lib/core/utils/download_resume.dart
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm08-refresh-service-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: Generate sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Apply DM-08 service integration patch
+        run: |
+          python3 .github/scripts/dm08_service_integration_patch.py
+          dart format lib/core/services/download_service.dart test/core/services/download_source_refresh_service_wiring_test.dart
+          git diff --check
+      - name: Verify DM-08 service wiring and capability behavior
+        run: |
+          flutter test test/core/services/download_source_refresh_service_wiring_test.dart test/core/services/download_source_refresh_capability_test.dart test/core/utils/download_resume_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Commit verified DM-08 service integration
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- lib/core/services/download_service.dart; then
+            echo 'DM-08 service integration already present.'
+            echo 'needs_push=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'needs_push=true' >> "$GITHUB_OUTPUT"
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_service.dart
+          git commit -m 'fix(downloads): surface DM-08 unsafe source migration'
+          git stash push --include-untracked -m 'dm08-service-generated-before-rebase' || true
+          git pull --rebase origin plan/download-manager-reliability
+      - name: Reverify and push
+        if: steps.commit.outputs.needs_push == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          flutter test test/core/services/download_source_refresh_service_wiring_test.dart test/core/services/download_source_refresh_capability_test.dart test/core/utils/download_resume_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+          git push origin HEAD:plan/download-manager-reliability
