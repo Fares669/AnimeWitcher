@@ -128,6 +128,22 @@ enum Anime4KMetalDartAPI {
         return requiredBytes
     }
 
+    /// Enables/disables a temporary per-player pass-through state without
+    /// destroying the configured runtime. This is intentionally separate from
+    /// `disable`: Eco needs telemetry to remain alive while critical thermal
+    /// pressure cools down so it can observe recovery and resume progressively.
+    static func setBypass(handleAddress: UInt64, bypass: Bool) -> Int32 {
+        guard handleAddress != 0,
+              status(handleAddress: handleAddress) == Anime4KMetalDartStatus.ready.rawValue,
+              let handle = OpaquePointer(bitPattern: UInt(handleAddress)) else {
+            return 0
+        }
+        return Anime4KMediaKitBridge.shared.setBypass(
+            handle: handle,
+            bypass: bypass
+        ) ? 1 : 0
+    }
+
     static func disable(handleAddress: UInt64) {
         if let handle = OpaquePointer(bitPattern: UInt(handleAddress)) {
             Anime4KMediaKitBridge.shared.disable(handle: handle)
@@ -190,6 +206,17 @@ func animewitcherAnime4KMetalTelemetry(
         handleAddress: handleAddress,
         buffer: buffer,
         capacity: capacity
+    )
+}
+
+@_cdecl("animewitcher_anime4k_metal_set_bypass")
+func animewitcherAnime4KMetalSetBypass(
+    _ handleAddress: UInt64,
+    _ bypass: Int32
+) -> Int32 {
+    Anime4KMetalDartAPI.setBypass(
+        handleAddress: handleAddress,
+        bypass: bypass != 0
     )
 }
 
