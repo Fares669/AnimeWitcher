@@ -157,6 +157,22 @@ jobs:
         run: bash scripts/configure_ios_google_sign_in.sh
       - name: Build iOS
         run: flutter build ios --release --no-codesign
+      - name: Verify Anime4K C ABI symbols in iOS framework
+        run: |
+          binary="build/ios/iphoneos/Runner.app/Frameworks/media_kit_video.framework/media_kit_video"
+          test -f "$binary"
+          nm -gU "$binary" > /tmp/anime4k-ios-symbols.txt
+          for symbol in \
+            animewitcher_anime4k_metal_configure \
+            animewitcher_anime4k_metal_status \
+            animewitcher_anime4k_metal_telemetry \
+            animewitcher_anime4k_metal_set_bypass \
+            animewitcher_anime4k_metal_disable; do
+            grep -Eq "[[:space:]]_${symbol}$" /tmp/anime4k-ios-symbols.txt || {
+              echo "missing retained Anime4K C ABI symbol: $symbol" >&2
+              exit 1
+            }
+          done
 
   macos:
     name: macOS compile
@@ -180,3 +196,20 @@ jobs:
           dart run build_runner build --delete-conflicting-outputs
       - name: Build macOS
         run: flutter build macos --release
+      - name: Verify Anime4K C ABI symbols in macOS framework
+        run: |
+          binary="$(find build/macos -type f -name media_kit_video -path '*media_kit_video.framework/*' | head -n 1)"
+          test -n "$binary"
+          test -f "$binary"
+          nm -gU "$binary" > /tmp/anime4k-macos-symbols.txt
+          for symbol in \
+            animewitcher_anime4k_metal_configure \
+            animewitcher_anime4k_metal_status \
+            animewitcher_anime4k_metal_telemetry \
+            animewitcher_anime4k_metal_set_bypass \
+            animewitcher_anime4k_metal_disable; do
+            grep -Eq "[[:space:]]_${symbol}$" /tmp/anime4k-macos-symbols.txt || {
+              echo "missing retained Anime4K C ABI symbol: $symbol" >&2
+              exit 1
+            }
+          done

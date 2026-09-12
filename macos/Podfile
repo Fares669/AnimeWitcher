@@ -61,5 +61,6 @@ post_install do |installer|
       config.build_settings['MACOSX_DEPLOYMENT_TARGET'] = '12.0'
     end
     flutter_additional_macos_build_settings(target)
+    retain_anime4k_metal_capi_symbols(target)
   end
 end
