@@ -6,6 +6,7 @@ class Anime4KMediaKitPatchError < StandardError; end
 
 ANIME4K_MEDIA_KIT_SUPPORT_FILES = %w[
   Anime4KMetalShader.swift
+  Anime4KMetalTelemetry.swift
   Anime4KMetalRuntime.swift
   Anime4KMediaKitBridge.swift
 ].freeze
