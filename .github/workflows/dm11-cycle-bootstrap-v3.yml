@@ -130,7 +130,10 @@ jobs:
           replace_labeled_block('copyWith body', copy_replacement)
           replace_labeled_block('toJson', json_replacement)
           replace_labeled_block('fromJson', from_json_replacement)
-          replace_labeled_block('store insertion', store_replacement)
+          store_marker = "replace_once(store_anchor, store_insert, 'store insertion')"
+          if store_marker not in script:
+              raise SystemExit('DM-11 store insertion helper marker drift')
+          script = script.replace(store_marker, store_replacement, 1)
           exec(compile(script, '<dm11-foundation-v3>', 'exec'), {'__name__': '__main__'})
           PY
           dart format lib/core/services/download_job_store.dart
