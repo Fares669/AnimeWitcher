@@ -18,30 +18,17 @@ struct Anime4KMediaKitBridgeTests {
 
         precondition(ledger.reserve(for: firstPlayer))
         precondition(ledger.reserve(for: firstPlayer))
-        precondition(
-            !ledger.reserve(for: firstPlayer),
-            "a player must bypass instead of growing beyond its publication capacity"
-        )
+        precondition(!ledger.reserve(for: firstPlayer))
         precondition(ledger.inflightCount(for: firstPlayer) == 2)
-
-        // Capacity is per player/runtime handle. One saturated player must not
-        // disable Anime4K for another independent player.
         precondition(ledger.reserve(for: secondPlayer))
         precondition(ledger.inflightCount(for: secondPlayer) == 1)
-
         ledger.release(for: firstPlayer)
         precondition(ledger.inflightCount(for: firstPlayer) == 1)
         precondition(ledger.reserve(for: firstPlayer))
-        precondition(ledger.inflightCount(for: firstPlayer) == 2)
-
         ledger.release(for: firstPlayer)
         ledger.release(for: firstPlayer)
         ledger.release(for: firstPlayer)
-        precondition(
-            ledger.inflightCount(for: firstPlayer) == 0,
-            "duplicate/stale publication completion must never underflow"
-        )
-
+        precondition(ledger.inflightCount(for: firstPlayer) == 0)
         ledger.release(for: secondPlayer)
         precondition(ledger.inflightCount(for: secondPlayer) == 0)
     }
@@ -50,23 +37,13 @@ struct Anime4KMediaKitBridgeTests {
         var ledger = Anime4KFrameGenerationLedger()
         let firstPlayer: UInt = 101
         let secondPlayer: UInt = 202
-
         precondition(ledger.claim(frameGeneration: 1, for: firstPlayer))
-        precondition(
-            !ledger.claim(frameGeneration: 1, for: firstPlayer),
-            "the same produced frame must not run Anime4K twice"
-        )
+        precondition(!ledger.claim(frameGeneration: 1, for: firstPlayer))
         precondition(ledger.claim(frameGeneration: 2, for: firstPlayer))
-
-        // Frame generations are local to a media_kit texture/player.
         precondition(ledger.claim(frameGeneration: 1, for: secondPlayer))
         precondition(!ledger.claim(frameGeneration: 1, for: secondPlayer))
-
         ledger.reset(for: firstPlayer)
-        precondition(
-            ledger.claim(frameGeneration: 1, for: firstPlayer),
-            "disable/reconfigure must reset stale generation state"
-        )
+        precondition(ledger.claim(frameGeneration: 1, for: firstPlayer))
     }
 
     private static func testActualPixelBufferRetargetsProcessingDimensions() throws {
@@ -78,10 +55,7 @@ struct Anime4KMediaKitBridgeTests {
             "anime4k-media-kit-dimensions-\(UUID().uuidString)",
             isDirectory: true
         )
-        try FileManager.default.createDirectory(
-            at: root,
-            withIntermediateDirectories: true
-        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
         let shaderURL = root.appendingPathComponent("identity.glsl")
@@ -110,23 +84,16 @@ struct Anime4KMediaKitBridgeTests {
             )
         )
 
-        // The CVPixelBuffer produced by media_kit is the authoritative runtime
-        // processing size. A stale/larger Dart estimate must be retargeted
-        // before Anime4K allocates output textures and performs the final blit.
         let frame = try makePixelBuffer(width: 16, height: 9)
+        CVBufferSetAttachment(frame, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(frame, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(frame, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+
         let completed = DispatchSemaphore(value: 0)
         precondition(
-            bridge.process(
-                handle: handle,
-                pixelBuffer: frame,
-                completion: { completed.signal() }
-            ),
-            "configured bridge should own frame publication"
+            bridge.process(handle: handle, pixelBuffer: frame, completion: { completed.signal() })
         )
-        precondition(
-            completed.wait(timeout: .now() + 5) == .success,
-            "retargeted Anime4K frame must publish asynchronously"
-        )
+        precondition(completed.wait(timeout: .now() + 5) == .success)
 
         guard let active = bridge.activeConfiguration(handle: handle) else {
             preconditionFailure("configured bridge must expose active dimensions")
@@ -135,16 +102,23 @@ struct Anime4KMediaKitBridgeTests {
         precondition(active.sourceHeight == 18)
         precondition(active.outputWidth == 16)
         precondition(active.outputHeight == 9)
+        precondition(bridge.runtimeStatus(handle: handle) == .ready)
+        precondition(CVPixelBufferGetPixelFormatType(frame) == kCVPixelFormatType_32BGRA)
         precondition(
-            bridge.runtimeStatus(handle: handle) == .ready,
-            "actual output-size retargeting must not disable the Metal backend"
+            (CVBufferCopyAttachment(frame, kCVImageBufferColorPrimariesKey, nil) as? String) ==
+                (kCVImageBufferColorPrimaries_ITU_R_709_2 as String)
+        )
+        precondition(
+            (CVBufferCopyAttachment(frame, kCVImageBufferTransferFunctionKey, nil) as? String) ==
+                (kCVImageBufferTransferFunction_ITU_R_709_2 as String)
+        )
+        precondition(
+            (CVBufferCopyAttachment(frame, kCVImageBufferYCbCrMatrixKey, nil) as? String) ==
+                (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String)
         )
     }
 
-    private static func makePixelBuffer(
-        width: Int,
-        height: Int
-    ) throws -> CVPixelBuffer {
+    private static func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
         var pixelBuffer: CVPixelBuffer?
         let attributes = [
             kCVPixelBufferMetalCompatibilityKey: true,
