@@ -72,11 +72,28 @@ DownloadRuntimeOwnership resolveDownloadRuntimeOwnership({
   return DownloadRuntimeOwnership.notOwned;
 }
 
-/// Anime episodes are explicit user downloads. User-initiated is always useful;
-/// largeFile is added when size is unknown or the episode is large enough to
-/// benefit from background_downloader's long-running transfer policy.
-Set<TransferHint> animeDownloadTransferHints({required int expectedBytes}) {
-  final hints = <TransferHint>{TransferHint.userInitiated};
+/// Android 14+ UIDT requires a user-visible notification. When notifications
+/// are disabled in-app or permission is denied, fall back to the normal
+/// resumable WorkManager path instead of requesting userInitiated priority.
+bool shouldUseUserInitiatedDownloadHint({
+  required bool isAndroid,
+  required bool notificationsConfigured,
+  required bool notificationPermissionGranted,
+}) {
+  if (!isAndroid) return true;
+  return notificationsConfigured && notificationPermissionGranted;
+}
+
+/// Anime episodes remain pause/resume capable for long-running WorkManager
+/// fallback even when Android UIDT cannot be used.
+Set<TransferHint> animeDownloadTransferHints({
+  required int expectedBytes,
+  bool useUserInitiated = true,
+}) {
+  final hints = <TransferHint>{};
+  if (useUserInitiated) {
+    hints.add(TransferHint.userInitiated);
+  }
   if (expectedBytes <= 0 ||
       expectedBytes >= kDownloadLargeFileHintThresholdBytes) {
     hints.add(TransferHint.largeFile);

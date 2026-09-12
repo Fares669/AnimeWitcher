@@ -337,6 +337,22 @@ Future<DownloadLifecycleCheckpointCommit> commitAuthoritativeDownloadCheckpoint(
   }
 }
 
+@visibleForTesting
+class DownloadServiceTeardownBarrier {
+  Future<void> _tail = Future<void>.value();
+
+  Future<void> wait() => _tail;
+
+  Future<void> run(Future<void> Function() teardown) {
+    final next = _tail.then<void>(
+      (_) => teardown(),
+      onError: (Object _, StackTrace __) => teardown(),
+    );
+    _tail = next.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return next;
+  }
+}
+
 class DownloadService {
   final diagnosticLog = DownloadDiagnosticLog(
     () async => Directory(
@@ -362,6 +378,8 @@ class DownloadService {
   // each DownloadService instance can listen via the broadcast proxy instead.
   static StreamSubscription<TaskUpdate>? _fdSubscription;
   static final _sharedEvents = StreamController<TaskUpdate>.broadcast();
+  static final DownloadServiceTeardownBarrier _teardownBarrier =
+      DownloadServiceTeardownBarrier();
 
   final Ref _ref;
   final Dio _dio;
@@ -380,6 +398,7 @@ class DownloadService {
   bool _networkAvailable = true;
   bool _isInitialized = false;
   bool _disposed = false;
+  Future<void>? _disposeFuture;
   final DownloadServiceReadinessBarrier _readiness =
       DownloadServiceReadinessBarrier();
   late final PersistentParallelDownload _parallel;
@@ -455,6 +474,7 @@ class DownloadService {
           isInternalDownloaderChunk(task) &&
           !_rangeTransfers.isActive(task.taskId),
       onPausedDrainSettled: (parentTaskId) {
+        if (_disposed) return;
         diagnosticLog.record('parallel.pauseDrainQueueRelease', {
           'taskId': parentTaskId,
         });
@@ -482,12 +502,14 @@ class DownloadService {
         }
       },
       onHostPressure: (url, ceiling) {
+        if (_disposed) return;
         diagnosticLog.record('parallel.hostPressure', {'count': ceiling});
         unawaited(
           _hostProfiles.recordPressure(url: url, fallbackCeiling: ceiling),
         );
       },
       onHostSample: (url, connections, bytesPerSecond) {
+        if (_disposed) return;
         unawaited(
           _hostProfiles.recordSuccess(
             url: url,
@@ -668,7 +690,7 @@ class DownloadService {
     double? speedBytesPerSecond,
     bool completed = false,
   }) {
-    if (_terminalJobIds.contains(parentTaskId)) return;
+    if (_disposed || _terminalJobIds.contains(parentTaskId)) return;
     final parentUserPaused = _userPausedIds.contains(parentTaskId);
     diagnosticLog.record('chunk.update', {
       'taskId': chunkTaskId,
@@ -711,18 +733,25 @@ class DownloadService {
   }
 
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
-    unawaited(_parallelFailures.close());
-    unawaited(_parallel.dispose());
-    _rangeTransfers.dispose();
+    _disposeFuture ??= _teardownBarrier.run(_disposeResources);
+  }
+
+  Future<void> _disposeResources() async {
+    await _updatesSubscription?.cancel();
+    _updatesSubscription = null;
+    await _connectivitySubscription?.cancel();
+    _connectivitySubscription = null;
+    await _rangeTransfers.dispose();
+    await _parallel.dispose();
+    await _nativeTransport.dispose();
+    await _continuedProcessing.dispose();
+    await _parallelFailures.close();
+    await _updatesController.close();
     _telemetry.clear();
     _expectedSizePersistedIds.clear();
     _terminalJobIds.clear();
-    unawaited(_nativeTransport.dispose());
-    _updatesSubscription?.cancel();
-    _connectivitySubscription?.cancel();
-    unawaited(_continuedProcessing.dispose());
-    _updatesController.close();
     // Do NOT cancel _fdSubscription — it matches FileDownloader()'s singleton
     // lifetime and cannot be re-subscribed after cancellation.
   }
@@ -871,7 +900,13 @@ class DownloadService {
     if (_disposed) {
       return Future<void>.error(DownloadServiceUnavailableException.disposed());
     }
-    return _readiness.ensureReady(_initialize);
+    return _readiness.ensureReady(() async {
+      await _teardownBarrier.wait();
+      if (_disposed) {
+        throw DownloadServiceUnavailableException.disposed();
+      }
+      await _initialize();
+    });
   }
 
   Future<void> _awaitCommandReadiness(String command) async {
@@ -5605,7 +5640,21 @@ class DownloadService {
         allowPause: true,
         group: kLogicalDownloadGroup,
         metaData: trackingUrl ?? url,
-        transferHints: animeDownloadTransferHints(expectedBytes: totalBytes),
+        transferHints: animeDownloadTransferHints(
+          expectedBytes: totalBytes,
+          useUserInitiated: shouldUseUserInitiatedDownloadHint(
+            isAndroid: Platform.isAndroid,
+            notificationsConfigured: !shouldClearDownloadNotificationConfigs(
+              _ref.read(storageServiceProvider).getDownloadNotificationPrefs(),
+            ),
+            notificationPermissionGranted:
+                !Platform.isAndroid ||
+                await FileDownloader().permissions.status(
+                      PermissionType.notifications,
+                    ) ==
+                    PermissionStatus.granted,
+          ),
+        ),
         stallTimeout: const Duration(seconds: 45),
       );
 

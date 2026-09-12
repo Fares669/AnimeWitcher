@@ -137,6 +137,22 @@ class DownloadRangeFailure {
 /// Before appending to an existing partial file we also verify a saved prefix
 /// against the current resource. If the origin exposes a strong ETag or
 /// Last-Modified validator, all remaining requests carry it as `If-Range`.
+Stream<T> _cancelRangeStream<T>(Stream<T> source, CancelToken token) async* {
+  final iterator = StreamIterator<T>(source);
+  try {
+    while (!token.isCancelled) {
+      final moved = await Future.any<Object?>([
+        iterator.moveNext(),
+        token.whenCancel.then<Object?>((_) => null),
+      ]);
+      if (token.isCancelled || moved != true) break;
+      yield iterator.current;
+    }
+  } finally {
+    await iterator.cancel();
+  }
+}
+
 class DownloadRangeTransfer {
   DownloadRangeTransfer(this.dio, {math.Random? random, this.diagnosticLog})
     : _random = random ?? math.Random();
@@ -147,6 +163,7 @@ class DownloadRangeTransfer {
   final _operations = <String, _RangeOperation>{};
   final _lastFailures = <String, DownloadRangeFailure>{};
   final _maxConnectTimesByOrigin = <String, Duration>{};
+  bool _disposed = false;
 
   bool isActive(String id) => _operations.containsKey(id);
   Set<String> get activeTaskIds => _operations.keys.toSet();
@@ -191,10 +208,15 @@ class DownloadRangeTransfer {
     return true;
   }
 
-  void dispose() {
-    for (final operation in _operations.values) {
+  Future<void> dispose() async {
+    _disposed = true;
+    final operations = _operations.values.toList(growable: false);
+    for (final operation in operations) {
       operation.token.cancel('Service disposed');
     }
+    await Future.wait<void>(
+      operations.map((operation) => operation.done.future),
+    );
   }
 
   Future<bool> start({
@@ -210,6 +232,7 @@ class DownloadRangeTransfer {
     Future<void> Function(DownloadRangeFailure failure)? onFailure,
     bool canRefreshUrl = false,
   }) async {
+    if (_disposed) return false;
     if (_operations.containsKey(id)) return true;
     _lastFailures.remove(id);
     final operation = _RangeOperation(id: id, canRefreshUrl: canRefreshUrl);
@@ -742,8 +765,9 @@ class DownloadRangeTransfer {
       while (!operation.token.isCancelled && written < total) {
         Object? streamError;
         try {
-          await for (final bytes in current.stream.timeout(
-            kDownloadRangeStreamIdleTimeout,
+          await for (final bytes in _cancelRangeStream(
+            current.stream.timeout(kDownloadRangeStreamIdleTimeout),
+            operation.token,
           )) {
             if (operation.token.isCancelled) break;
             if (written + bytes.length > total) {
