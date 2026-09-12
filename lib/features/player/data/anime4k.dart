@@ -150,6 +150,27 @@ bool _isOptionalOptimization(_Family family) =>
     family == _Family.autoDownscalePreX2 ||
     family == _Family.autoDownscalePreX4;
 
+bool _isCnnFamily(_Family family) {
+  return family == _Family.restore ||
+      family == _Family.restoreSoft ||
+      family == _Family.upscale ||
+      family == _Family.upscaleDenoise;
+}
+
+bool _isX2Upscale(_Family family) =>
+    family == _Family.upscale || family == _Family.upscaleDenoise;
+
+/// Once a frame has already gone through a 2x CNN upscale, later CNN passes
+/// work on four times as many pixels. Drop two network tiers for those stages
+/// to keep the later passes from dominating frame time, while S remains the
+/// floor. The user's selected quality is still used for the expensive first
+/// pass and is always a hard upper bound.
+Anime4kQuality _lateStageQuality(Anime4kQuality requested) {
+  final index = Anime4kQuality.values.indexOf(requested);
+  final lateIndex = (index - 2).clamp(0, Anime4kQuality.values.length - 1);
+  return Anime4kQuality.values[lateIndex];
+}
+
 /// The steps of each mode, as Anime4K's optimized shader ordering describes
 /// them. The AutoDownscalePre passes sit before the final upscale so a frame
 /// that is already large enough for the target display is reduced before
@@ -240,31 +261,29 @@ class Anime4kChain {
   bool get isComplete => missing.isEmpty && files.isNotEmpty;
 }
 
-/// The sizes to try for a step, starting at [preferred] and stepping down.
+/// The sizes to try for a CNN step, starting at [ceiling] and stepping down.
 ///
-/// Someone who downloaded only the S shaders should still get an upscale
-/// rather than nothing, and a chain that quietly runs one size smaller is a
-/// better answer than a mode that refuses to start.
-List<Anime4kQuality> _sizeOrder(Anime4kQuality preferred) {
-  final index = Anime4kQuality.values.indexOf(preferred);
+/// The user's selected quality is a hard ceiling. Missing files may degrade to
+/// a smaller/faster network, but the resolver must never silently climb to a
+/// larger one just to fill another stage.
+List<Anime4kQuality> _sizeOrder(Anime4kQuality ceiling) {
+  final index = Anime4kQuality.values.indexOf(ceiling);
   return <Anime4kQuality>[
-    preferred,
-    // Down first: smaller is faster and always safe to fall back to.
-    for (var i = index - 1; i >= 0; i--) Anime4kQuality.values[i],
-    for (var i = index + 1; i < Anime4kQuality.values.length; i++)
-      Anime4kQuality.values[i],
+    for (var i = index; i >= 0; i--) Anime4kQuality.values[i],
   ];
 }
 
 /// Builds the shader chain for [mode] from the files actually present.
 ///
-/// [available] is the filenames in the viewer's shader folder. A step is
-/// satisfied by the preferred size when it is there, by the nearest size when
-/// it is not, and skipped when the family is missing entirely.
+/// [available] is the filenames in the viewer's shader folder. CNN work before
+/// the first successful 2x upscale uses [quality]. CNN work after that upscale
+/// uses a smaller stage-aware ceiling because it runs over many more pixels.
+/// Missing CNN files may fall downward only; they never exceed the viewer's
+/// selected quality.
 ///
 /// A file is never used twice: Anime4K states a shader may appear once in a
-/// pipeline, so a repeated step takes the next size instead. That is also why
-/// mode A's second upscale is normally a smaller network than its first.
+/// pipeline. At the S floor, a repeated pass is therefore skipped rather than
+/// silently upgrading to a larger network.
 Anime4kChain resolveAnime4kChain({
   required Anime4kMode mode,
   required Anime4kQuality quality,
@@ -282,16 +301,19 @@ Anime4kChain resolveAnime4kChain({
   final used = <String>{};
   final missing = <String>[];
   final optionalMissing = <String>[];
+  var hasUpscaled = false;
 
   for (final family in _steps(mode)) {
+    final stageQuality = hasUpscaled && _isCnnFamily(family)
+        ? _lateStageQuality(quality)
+        : quality;
     String? chosen;
-    // Whether the folder holds this family at all, separately from whether
-    // an unused one is left. A step dropped because its only file is already
-    // in the chain is the one-use rule working, not a download to finish —
-    // telling the viewer a file they can see in the folder is "missing" would
-    // send them looking for it.
+    // Whether the folder holds a usable candidate for this stage separately
+    // from whether that exact shader was already consumed. A repeated step at
+    // the S floor can legitimately have no unused candidate; that is the
+    // one-use rule working, not a missing download.
     var familyPresent = false;
-    for (final size in _sizeOrder(quality)) {
+    for (final size in _sizeOrder(stageQuality)) {
       final name = _fileName(family, size);
       if (!present.contains(name)) continue;
       familyPresent = true;
@@ -301,7 +323,7 @@ Anime4kChain resolveAnime4kChain({
     }
     if (chosen == null) {
       if (!familyPresent) {
-        final wanted = _fileName(family, quality);
+        final wanted = _fileName(family, stageQuality);
         final target = _isOptionalOptimization(family)
             ? optionalMissing
             : missing;
@@ -311,6 +333,7 @@ Anime4kChain resolveAnime4kChain({
     }
     used.add(chosen);
     files.add(chosen);
+    if (_isX2Upscale(family)) hasUpscaled = true;
   }
 
   // Clamp_Highlights on its own does nothing worth a pipeline; it only makes
