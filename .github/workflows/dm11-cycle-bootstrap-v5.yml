@@ -98,12 +98,38 @@ jobs:
           path: dm11-focused.log
           if-no-files-found: error
           retention-days: 1
-      - name: Verify DM-11 regressions and analyzer
+      - name: Verify DM-11 regressions
+        id: regressions
+        shell: bash
         run: |
-          flutter test test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-          flutter analyze --no-fatal-warnings --no-fatal-infos
+          set -o pipefail
+          flutter test test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key 2>&1 | tee dm11-regressions.log
+      - name: Upload DM-11 regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm11-regressions-log-${{ github.run_attempt }}
+          path: dm11-regressions.log
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Verify DM-11 analyzer
+        id: analyzer
+        if: always() && steps.focused.outcome == 'success'
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter analyze --no-fatal-warnings --no-fatal-infos 2>&1 | tee dm11-analyzer.log
           git diff --check
+      - name: Upload DM-11 analyzer log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm11-analyzer-log-${{ github.run_attempt }}
+          path: dm11-analyzer.log
+          if-no-files-found: warn
+          retention-days: 1
       - name: Commit verified foundation
+        if: steps.regressions.outcome == 'success' && steps.analyzer.outcome == 'success'
         run: |
           if git diff --quiet -- lib/core/services/download_job_store.dart; then
             echo 'DM-11 foundation already present; nothing to commit.'
@@ -115,9 +141,11 @@ jobs:
           git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11 foundation)'
           git pull --rebase origin plan/download-manager-reliability
       - name: Re-verify rebased foundation
+        if: steps.regressions.outcome == 'success' && steps.analyzer.outcome == 'success'
         run: |
           flutter test test/core/services/download_replica_transaction_test.dart test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
           flutter analyze --no-fatal-warnings --no-fatal-infos
           git diff --check
       - name: Push verified foundation
+        if: steps.regressions.outcome == 'success' && steps.analyzer.outcome == 'success'
         run: git push origin HEAD:plan/download-manager-reliability
