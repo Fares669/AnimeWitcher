@@ -116,6 +116,12 @@ final class Anime4KMediaKitBridge {
         disable(key: handleKey(handle))
     }
 
+    func telemetry(handle: OpaquePointer) -> Anime4KMetalRuntimeTelemetry? {
+        let key = handleKey(handle)
+        let runtime = lock.anime4kWithLock { runtimes[key] }
+        return runtime?.telemetry
+    }
+
     /// Returns true only when this bridge owns asynchronous frame publication.
     /// A false result means TextureHW must immediately publish the untouched
     /// mpv buffer itself.
@@ -127,7 +133,10 @@ final class Anime4KMediaKitBridge {
         let key = handleKey(handle)
         guard let runtime = lock.anime4kWithLock({ () -> Anime4KMetalRuntime? in
             guard let runtime = runtimes[key] else { return nil }
-            guard publicationLedger.reserve(for: key) else { return nil }
+            guard publicationLedger.reserve(for: key) else {
+                runtime.recordLateOrDroppedFrame()
+                return nil
+            }
             return runtime
         }) else {
             // Saturation is deliberately non-blocking: TextureHW publishes the
