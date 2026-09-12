@@ -54,6 +54,7 @@ VIDEO_OUTPUT_FIXTURE = <<~'SWIFT'
     private var texture: ResizableTextureProtocol!
     private let registry: FlutterTextureRegistry
     private var textureId: Int64 = -1
+    private var disposed: Bool = false
 
     private func _updateCallback() {
       let size = videoSize
@@ -174,6 +175,22 @@ Dir.mktmpdir('anime4k-media-kit-patch') do |root|
   frame_available = video_source.index('registry.textureFrameAvailable')
   assert(async_render && frame_available && async_render < frame_available, 'VideoOutput must publish only from render completion')
   assert(!video_source.include?("texture.render(size)\n      DispatchQueue.main.sync"), 'old immediate publication path must be removed')
+  assert(
+    video_source.include?('private var anime4kRenderInFlight: Bool = false'),
+    'async Anime4K render must gate one publication at a time'
+  )
+  assert(
+    video_source.include?('private var anime4kRenderPending: Bool = false'),
+    'updates arriving during Metal work must collapse into one pending render'
+  )
+  assert(
+    video_source.include?('if anime4kRenderInFlight {'),
+    'VideoOutput must not start another async Anime4K render while one is in flight'
+  )
+  assert(
+    video_source.include?('anime4kRenderPending = true'),
+    'overlapping update callbacks must mark a latest-frame render pending'
+  )
 
   copied = NATIVE_FILES.map { |name| File.join(ios_plugin, 'anime4k', name) }
   copied.each { |path| assert(File.file?(path), "native support missing: #{path}") }

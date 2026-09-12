@@ -171,6 +171,12 @@ def patch_anime4k_media_kit_video(plugin_root:, native_dir:, platform:)
           'media_kit VideoOutput publication marker changed'
   end
 
+  video_state_needle = "  private var disposed: Bool = false\n"
+  unless sources[:video].scan(video_state_needle).length == 1
+    raise Anime4KMediaKitPatchError,
+          'media_kit VideoOutput state marker changed'
+  end
+
   context_enter = platform == :ios ? 'EAGLContext.setCurrent(context)' : 'CGLSetCurrentContext(context)'
   context_exit = platform == :ios ? 'EAGLContext.setCurrent(nil)' : 'CGLSetCurrentContext(nil)'
 
@@ -318,14 +324,48 @@ def patch_anime4k_media_kit_video(plugin_root:, native_dir:, platform:)
   )
 
   video_source = sources[:video].sub(
+    video_state_needle,
+    <<~'SWIFT'.lines.map { |line| "  #{line}" }.join
+      private var disposed: Bool = false
+      private var anime4kRenderInFlight: Bool = false
+      private var anime4kRenderPending: Bool = false
+    SWIFT
+  )
+  video_source = video_source.sub(
     video_needle,
     <<~'SWIFT'.lines.map { |line| "    #{line}" }.join
       // AnimeWitcherAnime4KCompletionPublication
-      texture.render(size) { [weak self] in
-        DispatchQueue.main.async {
-          guard let that = self else { return }
-          that.registry.textureFrameAvailable(that.textureId)
+      if Anime4KMediaKitBridge.shared.runtimeStatus(handle: handle) == .ready {
+        if anime4kRenderInFlight {
+          anime4kRenderPending = true
+          return
         }
+
+        anime4kRenderInFlight = true
+        texture.render(size) { [weak self] in
+          guard let that = self else { return }
+
+          DispatchQueue.main.async {
+            that.registry.textureFrameAvailable(that.textureId)
+          }
+
+          that.worker.enqueue { [weak self] in
+            guard let that = self else { return }
+            that.anime4kRenderInFlight = false
+            if that.anime4kRenderPending {
+              that.anime4kRenderPending = false
+              that._updateCallback()
+            }
+          }
+        }
+        return
+      }
+
+      texture.render(size)
+      DispatchQueue.main.sync { [weak self] in
+        guard let that = self else { return }
+        // Textures must be marked as available from the main thread
+        that.registry.textureFrameAvailable(that.textureId)
       }
     SWIFT
   )
