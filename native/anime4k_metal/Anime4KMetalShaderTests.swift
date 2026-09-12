@@ -4,6 +4,7 @@ import Foundation
 struct Anime4KMetalShaderTests {
     static func main() throws {
         try testSyntheticFixture()
+        try testMixedFP16PrecisionContract()
         try testCRLFLineEndings()
         try emitCorpusMetalSourcesIfRequested()
         print("Anime4KMetalShaderTests: PASS")
@@ -49,6 +50,39 @@ struct Anime4KMetalShaderTests {
             // Expected: the translator must fail closed instead of silently
             // producing a no-op Metal pipeline.
         }
+    }
+
+    private static func testMixedFP16PrecisionContract() throws {
+        let source = """
+        //!DESC Anime4K-Precision-Pass
+        //!HOOK MAIN
+        //!BIND MAIN
+        vec4 hook() {
+            vec4 color = MAIN_tex(MAIN_pos);
+            return color;
+        }
+        """
+        let shader = try Anime4KMetalShader.parse(source)[0]
+
+        let fp32 = shader.metalSource(precision: .fp32)
+        precondition(fp32.contains("using vec4 = float4;"))
+        precondition(fp32.contains("using mat4 = float4x4;"))
+        precondition(fp32.contains("texture2d<float, access::sample> MAIN"))
+        precondition(fp32.contains("texture2d<float, access::write> output"))
+
+        let mixed = shader.metalSource(precision: .mixedFP16)
+        precondition(
+            mixed.contains("using vec2 = float2;"),
+            "texture coordinates and dimensions must stay FP32"
+        )
+        precondition(mixed.contains("using vec4 = half4;"))
+        precondition(mixed.contains("using mat4 = half4x4;"))
+        precondition(mixed.contains("texture2d<half, access::sample> MAIN"))
+        precondition(mixed.contains("texture2d<half, access::write> output"))
+        precondition(
+            mixed.contains("float2 mtlPos"),
+            "normalized texture coordinates must remain FP32"
+        )
     }
 
     /// GitHub's v4.0.1 release ZIP stores AutoDownscalePre with CRLF line
