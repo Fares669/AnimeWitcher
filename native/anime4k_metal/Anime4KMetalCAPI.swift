@@ -220,7 +220,7 @@ enum Anime4KMetalDartAPI {
 }
 
 @_cdecl("animewitcher_anime4k_metal_configure")
-func animewitcherAnime4KMetalConfigure(
+public func animewitcherAnime4KMetalConfigure(
     _ handleAddress: UInt64,
     _ configurationJSON: UnsafePointer<CChar>?
 ) -> Int32 {
@@ -231,12 +231,12 @@ func animewitcherAnime4KMetalConfigure(
 }
 
 @_cdecl("animewitcher_anime4k_metal_status")
-func animewitcherAnime4KMetalStatus(_ handleAddress: UInt64) -> Int32 {
+public func animewitcherAnime4KMetalStatus(_ handleAddress: UInt64) -> Int32 {
     Anime4KMetalDartAPI.status(handleAddress: handleAddress)
 }
 
 @_cdecl("animewitcher_anime4k_metal_telemetry")
-func animewitcherAnime4KMetalTelemetry(
+public func animewitcherAnime4KMetalTelemetry(
     _ handleAddress: UInt64,
     _ buffer: UnsafeMutablePointer<UInt8>?,
     _ capacity: Int32
@@ -249,7 +249,7 @@ func animewitcherAnime4KMetalTelemetry(
 }
 
 @_cdecl("animewitcher_anime4k_metal_set_bypass")
-func animewitcherAnime4KMetalSetBypass(
+public func animewitcherAnime4KMetalSetBypass(
     _ handleAddress: UInt64,
     _ bypass: Int32
 ) -> Int32 {
@@ -260,6 +260,6 @@ func animewitcherAnime4KMetalSetBypass(
 }
 
 @_cdecl("animewitcher_anime4k_metal_disable")
-func animewitcherAnime4KMetalDisable(_ handleAddress: UInt64) {
+public func animewitcherAnime4KMetalDisable(_ handleAddress: UInt64) {
     Anime4KMetalDartAPI.disable(handleAddress: handleAddress)
 }
