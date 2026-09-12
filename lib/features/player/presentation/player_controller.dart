@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 
 import '../../settings/presentation/player_settings_provider.dart';
 import '../data/anime4k.dart';
+import '../data/anime4k_color_signal.dart';
 import '../data/anime4k_eco_governor.dart';
 import '../data/anime4k_metal_bridge.dart';
 import '../data/anime4k_metal_ffi.dart';
@@ -104,12 +105,71 @@ class PlayerController extends base.PlayerController {
     return bridge;
   }
 
+  Future<Anime4kColorSignal> _readAnime4kColorSignal(
+    NativePlayer platform,
+  ) async {
+    String? gamma;
+    String? colorSystem;
+
+    // mpv can publish video metadata a few frames after open(). Use the same
+    // bounded startup tolerance as the Metal dimension path, then fail closed
+    // if the transfer is still ambiguous.
+    for (var attempt = 0; attempt < 5; attempt++) {
+      try {
+        gamma = (await platform.getProperty('video-params/gamma')).trim();
+      } catch (_) {
+        gamma = null;
+      }
+      try {
+        colorSystem = (await platform.getProperty('video-params/colormatrix'))
+            .trim();
+      } catch (_) {
+        colorSystem = null;
+      }
+
+      final signal = classifyAnime4kColorSignal(
+        transfer: gamma,
+        colorSystem: colorSystem,
+      );
+      if (signal != Anime4kColorSignal.unknown) return signal;
+      if (attempt < 4) {
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        if (isDisposed) return Anime4kColorSignal.unknown;
+      }
+    }
+    return Anime4kColorSignal.unknown;
+  }
+
   @override
   Future<void> applyAnime4kShaders() async {
     try {
       if (_anime4kForceMpvFallback && _isApplePlatform) {
         await _applyResolvedMpvFallback();
         return;
+      }
+
+      // The native Apple path is intentionally SDR-only until HDR output is
+      // validated end-to-end. Unknown metadata is treated like unsupported HDR
+      // rather than risking silent clipping/tone shifts. This check happens
+      // before base Metal configuration, so an HDR frame is never handed to
+      // the native Anime4K pipeline first.
+      if (_isApplePlatform && !currentState.useExoPlayer) {
+        final settings = ref.read(playerSettingsProvider).asData?.value;
+        final platform = player.platform;
+        if (settings != null &&
+            settings.anime4kEnabled &&
+            settings.anime4kMode != Anime4kMode.off &&
+            platform is NativePlayer) {
+          final colorSignal = await _readAnime4kColorSignal(platform);
+          if (isDisposed) return;
+          final colorState = colorSignal == Anime4kColorSignal.sdr
+              ? Anime4kNativeMetalState.ready
+              : Anime4kNativeMetalState.unsupportedHdr;
+          if (colorState == Anime4kNativeMetalState.unsupportedHdr) {
+            await _applyResolvedMpvFallback(platform: platform);
+            return;
+          }
+        }
       }
 
       await super.applyAnime4kShaders();
@@ -298,9 +358,10 @@ class PlayerController extends base.PlayerController {
     return true;
   }
 
-  Future<void> _applyResolvedMpvFallback() async {
-    final platform = player.platform;
-    if (platform is! NativePlayer) return;
+  Future<void> _applyResolvedMpvFallback({NativePlayer? platform}) async {
+    final nativePlatform = platform ??
+        (player.platform is NativePlayer ? player.platform as NativePlayer : null);
+    if (nativePlatform == null) return;
     final settings =
         ref.read(playerSettingsProvider).asData?.value ??
         const PlayerSettings();
@@ -314,8 +375,19 @@ class PlayerController extends base.PlayerController {
           directory: settings.anime4kShaderDirectory,
         );
 
-    final metalBridge = _anime4kEcoMetalBridge;
-    final handle = _anime4kEcoHandle;
+    // Disable by the real per-player handle, not only the Eco-owned handle.
+    // The base controller and this wrapper both speak to the same native C API,
+    // so this also retires Metal left active by a previous SDR configuration.
+    final metalBridge = _ecoMetalBridge();
+    var handle = _anime4kEcoHandle;
+    if (handle == null) {
+      try {
+        final resolvedHandle = await nativePlatform.handle;
+        if (resolvedHandle > 0) handle = resolvedHandle;
+      } catch (_) {
+        handle = null;
+      }
+    }
     _anime4kEcoTimer?.cancel();
     _anime4kEcoTimer = null;
     if (metalBridge != null && handle != null) {
@@ -324,7 +396,33 @@ class PlayerController extends base.PlayerController {
     _anime4kEcoHandle = null;
     _anime4kEcoEffectiveQuality = null;
     _publishAnime4kPerformanceSnapshot(null);
-    await platform.setProperty('glsl-shaders', pipeline.value);
+
+    if (pipeline.isEmpty) {
+      await nativePlatform.setProperty('glsl-shaders', '');
+      return;
+    }
+
+    String currentVo = '';
+    try {
+      currentVo = (await nativePlatform.getProperty('current-vo')).trim();
+    } catch (_) {
+      currentVo = '';
+    }
+    if (!anime4kGpuRendererSupportsShaders(currentVo)) {
+      await nativePlatform.setProperty('glsl-shaders', '');
+      return;
+    }
+
+    await nativePlatform.setProperty('glsl-shaders', pipeline.value);
+    final applied = (await nativePlatform.getProperty('glsl-shaders')).trim();
+    if (pipeline.value.isNotEmpty && applied.isEmpty) return;
+
+    final gpuDumbMode = (await nativePlatform.getProperty('gpu-dumb-mode'))
+        .trim()
+        .toLowerCase();
+    if (gpuDumbMode == 'yes') {
+      await nativePlatform.setProperty('glsl-shaders', '');
+    }
   }
 
   Future<void> _stopAnime4kEco({required bool clearNativeBypass}) async {
