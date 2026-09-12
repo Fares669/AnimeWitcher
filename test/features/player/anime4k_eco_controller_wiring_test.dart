@@ -69,6 +69,28 @@ void main() {
       );
     });
 
+    test('Eco publishes diagnostics and clears stale fallback state', () {
+      expect(source, contains('final anime4kDiagnosticsProvider'));
+      expect(
+        source,
+        contains('_publishAnime4kPerformanceSnapshot(decision.snapshot)'),
+      );
+
+      final fallback = source.indexOf('Future<void> _applyResolvedMpvFallback()');
+      expect(fallback, greaterThanOrEqualTo(0));
+      expect(
+        source.indexOf('_publishAnime4kPerformanceSnapshot(null)', fallback),
+        greaterThan(fallback),
+      );
+
+      final disable = source.indexOf('void _disableAnime4kMetal()');
+      expect(disable, greaterThanOrEqualTo(0));
+      expect(
+        source.indexOf('_publishAnime4kPerformanceSnapshot(null)', disable),
+        greaterThan(disable),
+      );
+    });
+
     test('Eco uses requested quality as a ceiling and applies native bypass explicitly', () {
       expect(source, contains('settings.anime4kEcoEnabled'));
       expect(source, contains('Anime4kEcoGovernor'));
