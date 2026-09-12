@@ -19,6 +19,43 @@ enum DownloadResumeStrategy {
   restartFromZero,
 }
 
+/// Recovery action to use when a resumable task may need a refreshed source.
+///
+/// Native resume data can embed the old signed URL and is opaque to Dart. A
+/// source replacement must therefore never silently discard opaque bytes. Only
+/// a same-source native resume, a visible prefix, or multipart-owned child bytes
+/// can be migrated automatically. Otherwise the caller must surface an explicit
+/// restart-required outcome.
+enum DownloadSourceRefreshResumeAction {
+  nativeResume,
+  visiblePrefix,
+  multipartRefresh,
+  restartFromZero,
+  restartRequired,
+}
+
+DownloadSourceRefreshResumeAction planDownloadSourceRefreshResume({
+  required bool sourceRefreshRequired,
+  required bool canNativeResumeCurrentSource,
+  required bool hasOpaqueNativeResume,
+  required int visiblePartialBytes,
+  required bool isMultipart,
+}) {
+  if (!sourceRefreshRequired && canNativeResumeCurrentSource) {
+    return DownloadSourceRefreshResumeAction.nativeResume;
+  }
+  if (isMultipart) {
+    return DownloadSourceRefreshResumeAction.multipartRefresh;
+  }
+  if (visiblePartialBytes > 0) {
+    return DownloadSourceRefreshResumeAction.visiblePrefix;
+  }
+  if (hasOpaqueNativeResume) {
+    return DownloadSourceRefreshResumeAction.restartRequired;
+  }
+  return DownloadSourceRefreshResumeAction.restartFromZero;
+}
+
 /// Native status checkpoints can report -1/0 when the response size is not
 /// available. Those sentinels must not erase a previously known file length.
 int knownDownloadSize(Iterable<int?> candidates) {
