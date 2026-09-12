@@ -44,6 +44,10 @@ class Anime4kPerformanceLog {
     required bool ecoEnabled,
     required bool metalFxExperiment,
     String? colorSignal,
+    String? colorTransfer,
+    String? colorSystem,
+    String? metalState,
+    String? playerBackend,
     String? reason,
   }) {
     return _append(<String, Object?>{
@@ -53,6 +57,10 @@ class Anime4kPerformanceLog {
       'requestedQuality': requestedQuality.name,
       'ecoEnabled': ecoEnabled,
       'colorSignal': colorSignal,
+      'colorTransfer': colorTransfer,
+      'colorSystem': colorSystem,
+      'metalState': metalState,
+      'playerBackend': playerBackend,
       'reason': reason,
       'metalFxExperiment': metalFxExperiment,
     });

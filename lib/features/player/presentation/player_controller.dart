@@ -54,6 +54,9 @@ class PlayerController extends base.PlayerController {
   late Anime4kPerformanceLog _anime4kPerformanceLog;
   bool _anime4kEcoSampleInFlight = false;
   bool _anime4kForceMpvFallback = false;
+  String? _anime4kLastColorTransfer;
+  String? _anime4kLastColorSystem;
+  Anime4kColorSignal? _anime4kLastColorSignal;
 
   Anime4kPerformanceSnapshot? get anime4kPerformanceSnapshot =>
       _anime4kPerformanceSnapshot;
@@ -130,10 +133,13 @@ class PlayerController extends base.PlayerController {
         colorSystem = null;
       }
 
+      _anime4kLastColorTransfer = gamma;
+      _anime4kLastColorSystem = colorSystem;
       final signal = classifyAnime4kColorSignal(
         transfer: gamma,
         colorSystem: colorSystem,
       );
+      _anime4kLastColorSignal = signal;
       if (signal != Anime4kColorSignal.unknown) return signal;
       if (attempt < 4) {
         await Future<void>.delayed(const Duration(milliseconds: 60));
@@ -141,6 +147,15 @@ class PlayerController extends base.PlayerController {
       }
     }
     return Anime4kColorSignal.unknown;
+  }
+
+  Future<String?> _readAnime4kPlayerBackend(NativePlayer platform) async {
+    try {
+      final backend = (await platform.getProperty('current-vo')).trim();
+      return backend.isEmpty ? null : backend;
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -211,7 +226,6 @@ class PlayerController extends base.PlayerController {
       if (!_isApplePlatform ||
           settings == null ||
           !settings.anime4kEnabled ||
-          !settings.anime4kEcoEnabled ||
           settings.anime4kMode == Anime4kMode.off ||
           settings.anime4kShaderDirectory.trim().isEmpty ||
           currentState.useExoPlayer) {
@@ -235,9 +249,16 @@ class PlayerController extends base.PlayerController {
 
       _anime4kEcoHandle = handle;
       _anime4kEcoEffectiveQuality ??= settings.anime4kQuality;
-      _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
-        unawaited(_sampleAnime4kEco());
-      });
+      if (settings.anime4kEcoEnabled) {
+        _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+          unawaited(_sampleAnime4kEco());
+        });
+      } else {
+        _anime4kEcoTimer?.cancel();
+        _anime4kEcoTimer = null;
+      }
+      // One immediate sample is useful in both Manual Metal and Eco. Only Eco
+      // keeps the periodic feedback loop alive after this diagnostic sample.
       unawaited(_sampleAnime4kEco());
     } catch (error) {
       // Settings can become available before a playback session initializes.
@@ -261,21 +282,52 @@ class PlayerController extends base.PlayerController {
     }
 
     var backend = Anime4kBackend.mpvGlsl;
+    String? metalState;
+    String? playerBackend;
     final platform = player.platform;
     if (_isApplePlatform && platform is NativePlayer) {
+      playerBackend = await _readAnime4kPlayerBackend(platform);
       try {
         final bridge = _ecoMetalBridge();
-        final handle = await platform.handle;
-        if (bridge != null &&
-            handle > 0 &&
-            bridge.status(handle: handle) == Anime4kNativeMetalState.ready) {
-          backend = settings.anime4kEcoEnabled
-              ? Anime4kBackend.metalEco
-              : Anime4kBackend.metal;
+        if (bridge == null) {
+          metalState = 'ffi-unavailable';
+        } else {
+          final handle = await platform.handle;
+          if (handle <= 0) {
+            metalState = 'invalid-handle';
+          } else {
+            final state = bridge.status(handle: handle);
+            metalState = state.name;
+            if (state == Anime4kNativeMetalState.ready) {
+              backend = settings.anime4kEcoEnabled
+                  ? Anime4kBackend.metalEco
+                  : Anime4kBackend.metal;
+            }
+          }
         }
       } catch (_) {
         backend = Anime4kBackend.mpvGlsl;
+        metalState ??= 'status-error';
       }
+    }
+
+    if (backend != Anime4kBackend.mpvGlsl) {
+      unawaited(
+        _anime4kPerformanceLog.recordRoute(
+          backend: backend,
+          mode: settings.anime4kMode,
+          requestedQuality: settings.anime4kQuality,
+          ecoEnabled: settings.anime4kEcoEnabled,
+          metalFxExperiment: _anime4kMetalFxExperimentEnabled,
+          colorSignal: _anime4kLastColorSignal?.name,
+          colorTransfer: _anime4kLastColorTransfer,
+          colorSystem: _anime4kLastColorSystem,
+          metalState: metalState,
+          playerBackend: playerBackend,
+          reason: 'metal-ready',
+        ),
+      );
+      return;
     }
 
     unawaited(
@@ -285,6 +337,11 @@ class PlayerController extends base.PlayerController {
         requestedQuality: settings.anime4kQuality,
         ecoEnabled: settings.anime4kEcoEnabled,
         metalFxExperiment: _anime4kMetalFxExperimentEnabled,
+        colorSignal: _anime4kLastColorSignal?.name,
+        colorTransfer: _anime4kLastColorTransfer,
+        colorSystem: _anime4kLastColorSystem,
+        metalState: metalState,
+        playerBackend: playerBackend,
         reason: 'post-apply',
       ),
     );
@@ -300,7 +357,6 @@ class PlayerController extends base.PlayerController {
       final handle = _anime4kEcoHandle;
       if (settings == null ||
           !settings.anime4kEnabled ||
-          !settings.anime4kEcoEnabled ||
           platform is! NativePlayer ||
           metalBridge == null ||
           handle == null) {
