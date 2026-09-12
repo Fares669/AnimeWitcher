@@ -1,24 +1,49 @@
 name: Anime4K platform build verification
 
 on:
-  push:
-    branches:
-      - feat/anime4k-mobile-gpu
-      - feat/anime4k-ios-performance
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
-  group: anime4k-platform-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  android:
-    name: Android compile
+  quality:
+    name: Flutter analyze & tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Test
+        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+  android:
+    name: Android compile
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
       - name: Generate
         run: |
           flutter pub get
@@ -29,6 +54,7 @@ jobs:
 
   ios:
     name: iOS compile (unsigned)
+    needs: quality
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -115,6 +141,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.1
+          cache: true
       - name: Generate
         run: |
           flutter pub get
@@ -132,6 +160,7 @@ jobs:
 
   macos:
     name: macOS compile
+    needs: quality
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -141,6 +170,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.1
+          cache: true
       - name: Generate
         run: |
           flutter config --enable-macos-desktop
