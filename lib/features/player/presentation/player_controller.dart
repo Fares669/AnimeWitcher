@@ -272,7 +272,7 @@ class PlayerController extends base.PlayerController {
 
   bool get _anime4kMetalFxExperimentEnabled {
     final settings = ref.read(playerSettingsProvider).asData?.value;
-    return bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&
+    return const bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&
         (settings?.anime4kEcoEnabled ?? false);
   }
 

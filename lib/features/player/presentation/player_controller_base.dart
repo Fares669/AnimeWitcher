@@ -2695,7 +2695,7 @@ class PlayerController extends Notifier<PlayerState> {
     try {
       final settings = ref.read(playerSettingsProvider).asData?.value;
       final useMetalFxExperiment =
-          bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&
+          const bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&
           (settings?.anime4kEcoEnabled ?? false);
       final upscaleStrategy = useMetalFxExperiment
           ? 'restoreDenoiseMetalFXSpatial'
