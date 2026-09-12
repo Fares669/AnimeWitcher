@@ -282,6 +282,11 @@ if 'onAssemblyFailure: assemblyFailures.add' not in t:
     t = t.replace(ctor_test_anchor, ctor_test_add, 1)
 assertion_anchor = '      expect(statuses, isNot(contains(TaskStatus.complete)));\n'
 assertion_add = """      expect(statuses, isNot(contains(TaskStatus.complete)));
+      await waitUntil(
+        'typed storage failure projection',
+        () => assemblyFailures.isNotEmpty || target.existsSync(),
+      );
+      expect(await target.exists(), isFalse);
       expect(assemblyFailures, hasLength(1));
       expect(
         assemblyFailures.single.reason,
