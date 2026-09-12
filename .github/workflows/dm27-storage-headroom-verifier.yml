@@ -6,6 +6,8 @@ on:
       - plan/download-manager-reliability
     paths:
       - .github/workflows/dm27-storage-headroom-verifier.yml
+      - .github/scripts/apply_dm27.py
+      - test/core/services/persistent_parallel_download_storage_headroom_test.dart
 
 permissions:
   contents: write
