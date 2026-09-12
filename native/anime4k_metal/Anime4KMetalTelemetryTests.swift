@@ -9,6 +9,7 @@ struct Anime4KMetalTelemetryTests {
         precondition(empty.averageFrameTimeMs == 0)
         precondition(empty.p95FrameTimeMs == 0)
         precondition(empty.processedFrames == 0)
+        precondition(empty.skippedDuplicateFrames == 0)
         precondition(empty.lateOrDroppedFrames == 0)
 
         telemetry.recordCompletedFrame(milliseconds: 4)
@@ -18,6 +19,7 @@ struct Anime4KMetalTelemetryTests {
 
         var snapshot = telemetry.snapshot
         precondition(snapshot.processedFrames == 4)
+        precondition(snapshot.skippedDuplicateFrames == 0)
         precondition(abs(snapshot.averageFrameTimeMs - 9.0) < 0.0001)
         precondition(abs(snapshot.p95FrameTimeMs - 15.0) < 0.0001)
 
@@ -29,9 +31,18 @@ struct Anime4KMetalTelemetryTests {
         precondition(abs(snapshot.averageFrameTimeMs - 9.25) < 0.0001)
         precondition(abs(snapshot.p95FrameTimeMs - 15.0) < 0.0001)
 
+        telemetry.recordSkippedDuplicateFrame()
+        telemetry.recordSkippedDuplicateFrame()
+        telemetry.recordSkippedDuplicateFrame()
+        snapshot = telemetry.snapshot
+        precondition(snapshot.processedFrames == 5)
+        precondition(snapshot.skippedDuplicateFrames == 3)
+        precondition(snapshot.lateOrDroppedFrames == 0)
+
         telemetry.recordLateOrDroppedFrame()
         telemetry.recordLateOrDroppedFrame()
         snapshot = telemetry.snapshot
+        precondition(snapshot.skippedDuplicateFrames == 3)
         precondition(snapshot.lateOrDroppedFrames == 2)
 
         print("Anime4KMetalTelemetryTests: PASS")
