@@ -47,6 +47,7 @@ jobs:
             "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
             "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
             "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}",
+            "ANIME4K_METALFX_EXPERIMENT": "true",
             "ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_SERVER_CLIENT_ID }}",
             "ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID": "${{ secrets.ANIMEWITCHER_GOOGLE_IOS_CLIENT_ID || '296971789988-0ksnaln8k2epsuejesllrr497jnd5if5.apps.googleusercontent.com' }}"
           }
