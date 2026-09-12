@@ -34,22 +34,30 @@ struct Anime4KMetalRuntimeTelemetryIntegrationTests {
             Anime4KMetalRuntimeConfiguration(
                 shaderPaths: [shaderURL.path],
                 pipelineHash: "telemetry-integration",
-                sourceWidth: 16,
-                sourceHeight: 16,
-                outputWidth: 16,
-                outputHeight: 16
+                sourceWidth: 32,
+                sourceHeight: 18,
+                outputWidth: 32,
+                outputHeight: 18
             )
         )
 
         var snapshot = runtime.telemetry
         precondition(snapshot.processedFrames == 0)
         precondition(snapshot.lateOrDroppedFrames == 0)
+        precondition(snapshot.inputWidth == 32)
+        precondition(snapshot.inputHeight == 18)
+        precondition(snapshot.processingWidth == 32)
+        precondition(snapshot.processingHeight == 18)
+        precondition(runtime.compileGeneration == 1)
 
-        let input = try makePixelBuffer(width: 16, height: 16)
+        // media_kit's CVPixelBuffer is the authoritative runtime output size.
+        // A stale/larger Dart estimate must not make Anime4K allocate/process
+        // oversized intermediates or fail the bridge's final same-size blit.
+        let input = try makePixelBuffer(width: 16, height: 9)
         let completed = DispatchSemaphore(value: 0)
         let submission = runtime.process(pixelBuffer: input) { output in
             precondition(CVPixelBufferGetWidth(output) == 16)
-            precondition(CVPixelBufferGetHeight(output) == 16)
+            precondition(CVPixelBufferGetHeight(output) == 9)
             completed.signal()
         }
         precondition(submission == .submitted)
@@ -57,11 +65,19 @@ struct Anime4KMetalRuntimeTelemetryIntegrationTests {
             completed.wait(timeout: .now() + 5) == .success,
             "telemetry frame must complete asynchronously"
         )
+        precondition(
+            runtime.compileGeneration == 1,
+            "runtime-size retargeting must reuse compiled Metal pipelines"
+        )
 
         snapshot = runtime.telemetry
         precondition(snapshot.processedFrames == 1)
         precondition(snapshot.averageFrameTimeMs >= 0)
         precondition(snapshot.p95FrameTimeMs >= 0)
+        precondition(snapshot.inputWidth == 32)
+        precondition(snapshot.inputHeight == 18)
+        precondition(snapshot.processingWidth == 16)
+        precondition(snapshot.processingHeight == 9)
 
         runtime.recordLateOrDroppedFrame()
         snapshot = runtime.telemetry
