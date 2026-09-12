@@ -10,6 +10,7 @@ on:
       - .github/scripts/dm11_verifier_patch.py
       - lib/core/services/download_url_refresh.dart
       - lib/core/services/download_service.dart
+      - test/core/services/download_url_refresh_generation_test.dart
       - test/core/services/download_replica_transaction_test.dart
 
 permissions:
@@ -91,7 +92,9 @@ jobs:
           retention-days: 1
       - name: Commit verified foundation
         if: steps.regressions.outcome == 'success' && steps.analyzer.outcome == 'success'
+        shell: bash
         run: |
+          set -euo pipefail
           if git diff --quiet -- lib/core/services/download_job_store.dart; then
             echo 'DM-11 foundation already present; nothing to commit.'
             exit 0
@@ -100,10 +103,17 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add lib/core/services/download_job_store.dart
           git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11 foundation)'
+          echo 'Workspace changes left by source generation/analyzer before rebase:'
+          git status --short
+          git stash push --include-untracked -m 'dm11-ci-generated-before-rebase' || true
           git pull --rebase origin plan/download-manager-reliability
       - name: Re-verify rebased foundation
         if: steps.regressions.outcome == 'success' && steps.analyzer.outcome == 'success'
+        shell: bash
         run: |
+          set -euo pipefail
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
           flutter test test/core/services/download_replica_transaction_test.dart test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
           flutter analyze --no-fatal-warnings --no-fatal-infos
           git diff --check
