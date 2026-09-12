@@ -22,29 +22,7 @@ jobs:
       - name: RED - expose overlapping async render scheduling
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('scripts/test_anime4k_media_kit_patch.rb')
-          text = path.read_text()
-
-          field_needle = "    private var textureId: Int64 = -1\n"
-          if text.count(field_needle) != 1:
-              raise SystemExit('fixture textureId marker changed')
-          text = text.replace(
-              field_needle,
-              field_needle + "    private var disposed: Bool = false\n",
-              1,
-          )
-
-          assertion_needle = "  assert(!video_source.include?(\"texture.render(size)\\n      DispatchQueue.main.sync\"), 'old immediate publication path must be removed')\n"
-          if text.count(assertion_needle) != 1:
-              raise SystemExit('video assertion marker changed')
-          assertions = assertion_needle + """  assert(\n    video_source.include?('private var anime4kRenderInFlight: Bool = false'),\n    'async Anime4K render must gate one publication at a time'\n  )\n  assert(\n    video_source.include?('private var anime4kRenderPending: Bool = false'),\n    'updates arriving during Metal work must collapse into one pending render'\n  )\n  assert(\n    video_source.include?('if anime4kRenderInFlight {'),\n    'VideoOutput must not start another async Anime4K render while one is in flight'\n  )\n  assert(\n    video_source.include?('anime4kRenderPending = true'),\n    'overlapping update callbacks must mark a latest-frame render pending'\n  )\n"""
-          text = text.replace(assertion_needle, assertions, 1)
-          path.write_text(text)
-          PY
-
+          python3 scripts/apply_anime4k_mailbox_fix.py red
           set +e
           ruby scripts/test_anime4k_media_kit_patch.rb > /tmp/anime4k-mailbox-red.log 2>&1
           status=$?
@@ -53,78 +31,9 @@ jobs:
           test "$status" -ne 0
           grep -q 'async Anime4K render must gate one publication at a time' /tmp/anime4k-mailbox-red.log
 
-      - name: GREEN - coalesce updates behind one in-flight Anime4K render
-        shell: bash
+      - name: GREEN - coalesce async render updates
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('scripts/anime4k_media_kit_patch.rb')
-          text = path.read_text()
-
-          validation_needle = """  unless sources[:video].scan(video_needle).length == 1\n    raise Anime4KMediaKitPatchError,\n          'media_kit VideoOutput publication marker changed'\n  end\n"""
-          if text.count(validation_needle) != 1:
-              raise SystemExit('VideoOutput validation marker changed')
-          validation = validation_needle + """\n  video_state_needle = \"  private var disposed: Bool = false\\n\"\n  unless sources[:video].scan(video_state_needle).length == 1\n    raise Anime4KMediaKitPatchError,\n          'media_kit VideoOutput state marker changed'\n  end\n"""
-          text = text.replace(validation_needle, validation, 1)
-
-          start_marker = "  video_source = sources[:video].sub(\n    video_needle,"
-          start = text.find(start_marker)
-          end_marker = "\n\n  anime4k_sync_support_files(plugin_dir: plugin_dir, native_dir: native_dir)"
-          end = text.find(end_marker, start)
-          if start < 0 or end < 0:
-              raise SystemExit('VideoOutput replacement block changed')
-
-          replacement = r'''  video_source = sources[:video].sub(
-    video_state_needle,
-    <<~'SWIFT'.lines.map { |line| "  #{line}" }.join
-      private var disposed: Bool = false
-      private var anime4kRenderInFlight: Bool = false
-      private var anime4kRenderPending: Bool = false
-    SWIFT
-  )
-  video_source = video_source.sub(
-    video_needle,
-    <<~'SWIFT'.lines.map { |line| "    #{line}" }.join
-      // AnimeWitcherAnime4KCompletionPublication
-      if Anime4KMediaKitBridge.shared.runtimeStatus(handle: handle) == .ready {
-        if anime4kRenderInFlight {
-          anime4kRenderPending = true
-          return
-        }
-
-        anime4kRenderInFlight = true
-        texture.render(size) { [weak self] in
-          guard let that = self else { return }
-
-          DispatchQueue.main.async {
-            that.registry.textureFrameAvailable(that.textureId)
-          }
-
-          that.worker.enqueue { [weak self] in
-            guard let that = self else { return }
-            that.anime4kRenderInFlight = false
-            if that.anime4kRenderPending {
-              that.anime4kRenderPending = false
-              that._updateCallback()
-            }
-          }
-        }
-        return
-      }
-
-      texture.render(size)
-      DispatchQueue.main.sync { [weak self] in
-        guard let that = self else { return }
-        // Textures must be marked as available from the main thread
-        that.registry.textureFrameAvailable(that.textureId)
-      }
-    SWIFT
-  )'''
-          text = text[:start] + replacement + text[end:]
-          path.write_text(text)
-          PY
-
+          python3 scripts/apply_anime4k_mailbox_fix.py green
           ruby scripts/test_anime4k_media_kit_patch.rb
 
       - name: Verify native Anime4K contracts
@@ -141,7 +50,6 @@ jobs:
             native/anime4k_metal/Anime4KMetalRuntimeTests.swift \
             -o /tmp/anime4k_metal_runtime_tests
           /tmp/anime4k_metal_runtime_tests
-
           swiftc \
             -framework CoreVideo \
             -framework Metal \
