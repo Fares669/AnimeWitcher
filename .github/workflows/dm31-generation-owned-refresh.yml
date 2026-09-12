@@ -1,0 +1,58 @@
+name: Verify DM-31 generation-owned refresh descriptors
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm31-generation-owned-refresh.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm31-generation-owned-refresh-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: Apply DM-31 production patch
+        run: |
+          python3 .github/scripts/dm31_patch_v2.py
+          dart format lib/core/services/download_url_refresh.dart lib/features/details/presentation/download_launcher.dart lib/core/services/download_service.dart
+          git diff --check
+      - name: Verify DM-31 focused behavior
+        run: |
+          flutter test test/core/services/download_refresh_descriptor_ownership_guard_test.dart test/core/services/download_url_refresh_generation_test.dart test/core/services/download_url_refresh_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Commit verified DM-31 production changes
+        run: |
+          if git diff --quiet -- lib/core/services/download_url_refresh.dart lib/features/details/presentation/download_launcher.dart lib/core/services/download_service.dart; then
+            echo 'DM-31 production patch already present.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_url_refresh.dart lib/features/details/presentation/download_launcher.dart lib/core/services/download_service.dart
+          git commit -m 'fix(downloads): generation-fence refresh descriptors (DM-31)'
+          git pull --rebase origin plan/download-manager-reliability
+      - name: Reverify and push
+        run: |
+          flutter test test/core/services/download_refresh_descriptor_ownership_guard_test.dart test/core/services/download_url_refresh_generation_test.dart test/core/services/download_url_refresh_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+          git push origin HEAD:plan/download-manager-reliability
