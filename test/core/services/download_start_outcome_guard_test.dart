@@ -31,7 +31,18 @@ void main() {
     expect(source, contains('DownloadCommandOutcome.serviceUnavailable'));
     expect(source, contains('DownloadCommandOutcome.restartRequired'));
     expect(source, contains('DownloadCommandOutcome.settlingOwnership'));
-    expect(source, contains('await refreshStore.remove(resolveUrl)'));
   });
 
+  test('DM-31 launcher delegates refresh descriptor lifecycle to service', () {
+    final source = File(
+      'lib/features/details/presentation/download_launcher.dart',
+    ).readAsStringSync();
+
+    expect(
+      source,
+      contains('refreshDescriptor: DownloadUrlRefreshDescriptor('),
+    );
+    expect(source, isNot(contains('await refreshStore.save(')));
+    expect(source, isNot(contains('await refreshStore.remove(resolveUrl)')));
+  });
 }
