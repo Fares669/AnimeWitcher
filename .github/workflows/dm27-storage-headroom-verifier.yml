@@ -173,6 +173,6 @@ jobs:
           git config user.name 'openai-download-agent'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add pubspec.yaml pubspec.lock lib/core/services/persistent_parallel_download.dart lib/core/services/download_service.dart test/core/services/persistent_parallel_download_storage_headroom_test.dart DOWNLOAD_MANAGER_PLAN.md
-          git rm .github/scripts/apply_dm27.py .github/workflows/dm27-storage-headroom-verifier.yml
+          git rm -f .github/scripts/apply_dm27.py .github/workflows/dm27-storage-headroom-verifier.yml
           git commit -m 'fix(download): preserve multipart parts on storage exhaustion (DM-27)'
           git push origin HEAD:plan/download-manager-reliability
