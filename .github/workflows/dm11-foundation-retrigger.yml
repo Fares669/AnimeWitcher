@@ -1,0 +1,29 @@
+name: Retrigger current DM-11 foundation
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm11-foundation-retrigger.yml
+
+permissions:
+  contents: write
+
+jobs:
+  retrigger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - name: Retrigger guarded DM-11 RED-to-GREEN workflow
+        run: |
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          printf '\n# retriggered after current branch revalidation\n' >> .github/workflows/dm11-replica-transaction-foundation.yml
+          git add .github/workflows/dm11-replica-transaction-foundation.yml
+          git commit -m 'ci(downloads): retrigger current DM-11 transaction foundation'
+          git pull --rebase origin plan/download-manager-reliability
+          git push origin HEAD:plan/download-manager-reliability
