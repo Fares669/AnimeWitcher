@@ -66,6 +66,7 @@ final class Anime4KMediaKitBridge {
     private let copyQueue: MTLCommandQueue?
     private var textureCache: CVMetalTextureCache?
     private var runtimes: [UInt: Anime4KMetalRuntime] = [:]
+    private var configurations: [UInt: Anime4KMetalRuntimeConfiguration] = [:]
     private var bypassedRuntimeKeys: Set<UInt> = []
     private var publicationLedger = Anime4KMetalPublicationLedger(capacity: 3)
 
@@ -105,11 +106,15 @@ final class Anime4KMediaKitBridge {
         }
         do {
             try runtime.configure(configuration)
-            lock.anime4kWithLock { runtimes[key] = runtime }
+            lock.anime4kWithLock {
+                runtimes[key] = runtime
+                configurations[key] = configuration
+            }
         } catch {
             runtime.disable()
             lock.anime4kWithLock {
                 _ = runtimes.removeValue(forKey: key)
+                _ = configurations.removeValue(forKey: key)
                 bypassedRuntimeKeys.remove(key)
             }
             throw error
@@ -127,6 +132,16 @@ final class Anime4KMediaKitBridge {
         let key = handleKey(handle)
         let runtime = lock.anime4kWithLock { runtimes[key] }
         return runtime?.status
+    }
+
+    /// Returns the configuration the native render path is actually using.
+    /// Unlike the initial Dart estimate, output dimensions are retargeted to
+    /// media_kit's live CVPixelBuffer size before a frame is processed.
+    func activeConfiguration(
+        handle: OpaquePointer
+    ) -> Anime4KMetalRuntimeConfiguration? {
+        let key = handleKey(handle)
+        return lock.anime4kWithLock { configurations[key] }
     }
 
     /// Temporarily bypasses Anime4K frame processing while preserving the
@@ -162,8 +177,58 @@ final class Anime4KMediaKitBridge {
         completion: @escaping () -> Void
     ) -> Bool {
         let key = handleKey(handle)
+        guard let prepared = lock.anime4kWithLock({ () -> (
+            runtime: Anime4KMetalRuntime,
+            configuration: Anime4KMetalRuntimeConfiguration
+        )? in
+            guard let runtime = runtimes[key],
+                  let configuration = configurations[key],
+                  !bypassedRuntimeKeys.contains(key) else {
+                return nil
+            }
+            return (runtime, configuration)
+        }) else {
+            return false
+        }
+
+        let frameWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let frameHeight = CVPixelBufferGetHeight(pixelBuffer)
+        guard frameWidth > 0, frameHeight > 0 else { return false }
+
+        if prepared.configuration.outputWidth != frameWidth ||
+            prepared.configuration.outputHeight != frameHeight {
+            let retargeted = Anime4KMetalRuntimeConfiguration(
+                shaderPaths: prepared.configuration.shaderPaths,
+                pipelineHash: prepared.configuration.pipelineHash,
+                sourceWidth: prepared.configuration.sourceWidth,
+                sourceHeight: prepared.configuration.sourceHeight,
+                outputWidth: frameWidth,
+                outputHeight: frameHeight,
+                precision: prepared.configuration.precision
+            )
+            do {
+                // Resize/reconfigure only when the real media_kit surface
+                // changes. Identical frames keep the existing output pool and
+                // intermediate texture working set untouched.
+                try prepared.runtime.configure(retargeted)
+                let stillCurrent = lock.anime4kWithLock { () -> Bool in
+                    guard let current = runtimes[key], current === prepared.runtime else {
+                        return false
+                    }
+                    configurations[key] = retargeted
+                    return true
+                }
+                guard stillCurrent else { return false }
+            } catch {
+                disable(key: key)
+                return false
+            }
+        }
+
         guard let runtime = lock.anime4kWithLock({ () -> Anime4KMetalRuntime? in
-            guard let runtime = runtimes[key] else { return nil }
+            guard let runtime = runtimes[key], runtime === prepared.runtime else {
+                return nil
+            }
             // Intentional Eco bypass is not a late/dropped frame. It is a
             // deliberate pass-through while thermal pressure recovers.
             if bypassedRuntimeKeys.contains(key) { return nil }
@@ -329,6 +394,7 @@ final class Anime4KMediaKitBridge {
     private func disable(key: UInt) {
         let runtime = lock.anime4kWithLock { () -> Anime4KMetalRuntime? in
             bypassedRuntimeKeys.remove(key)
+            _ = configurations.removeValue(forKey: key)
             return runtimes.removeValue(forKey: key)
         }
         runtime?.disable()
