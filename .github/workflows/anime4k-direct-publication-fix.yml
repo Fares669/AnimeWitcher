@@ -1,0 +1,235 @@
+name: Anime4K Direct Publication Fix
+
+on:
+  push:
+    branches:
+      - feat/anime4k-ios-performance
+    paths:
+      - .github/workflows/anime4k-direct-publication-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/anime4k-ios-performance
+          fetch-depth: 0
+
+      - name: Apply direct media_kit destination patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              return text.replace(old, new, 1)
+
+          runtime_path = Path('native/anime4k_metal/Anime4KMetalRuntime.swift')
+          runtime = runtime_path.read_text()
+          runtime = replace_once(
+              runtime,
+              '''    func process(
+                  pixelBuffer inputBuffer: CVPixelBuffer,
+                  completion: @escaping (CVPixelBuffer) -> Void
+              ) -> Anime4KMetalRuntimeSubmission {''',
+              '''    func process(
+                  pixelBuffer inputBuffer: CVPixelBuffer,
+                  destinationPixelBuffer: CVPixelBuffer? = nil,
+                  completion: @escaping (CVPixelBuffer) -> Void
+              ) -> Anime4KMetalRuntimeSubmission {''',
+              'runtime destination parameter',
+          )
+          runtime = replace_once(
+              runtime,
+              '''        do {
+                  var outputBuffer: CVPixelBuffer?
+                  let outputResult = CVPixelBufferPoolCreatePixelBuffer(
+                      kCFAllocatorDefault,
+                      snapshot.pool,
+                      &outputBuffer
+                  )
+                  guard outputResult == kCVReturnSuccess, let outputBuffer else {
+                      throw Anime4KMetalRuntimeError.outputBufferCreation(outputResult)
+                  }
+          ''',
+              '''        do {
+                  let outputBuffer: CVPixelBuffer
+                  if let destinationPixelBuffer {
+                      guard CVPixelBufferGetWidth(destinationPixelBuffer) == snapshot.configuration.outputWidth,
+                            CVPixelBufferGetHeight(destinationPixelBuffer) == snapshot.configuration.outputHeight else {
+                          throw Anime4KMetalRuntimeError.invalidDimensions
+                      }
+                      outputBuffer = destinationPixelBuffer
+                  } else {
+                      var pooledOutputBuffer: CVPixelBuffer?
+                      let outputResult = CVPixelBufferPoolCreatePixelBuffer(
+                          kCFAllocatorDefault,
+                          snapshot.pool,
+                          &pooledOutputBuffer
+                      )
+                      guard outputResult == kCVReturnSuccess, let pooledOutputBuffer else {
+                          throw Anime4KMetalRuntimeError.outputBufferCreation(outputResult)
+                      }
+                      outputBuffer = pooledOutputBuffer
+                  }
+          ''',
+              'runtime destination allocation',
+          )
+          runtime_path.write_text(runtime)
+
+          bridge_path = Path('native/anime4k_metal/Anime4KMediaKitBridge.swift')
+          bridge = bridge_path.read_text()
+          bridge = replace_once(
+              bridge,
+              '''    private let device: MTLDevice?
+              private let copyQueue: MTLCommandQueue?
+              private var textureCache: CVMetalTextureCache?
+          ''',
+              '''    private let device: MTLDevice?
+          ''',
+              'bridge copy resources',
+          )
+          bridge = replace_once(
+              bridge,
+              '''    private init() {
+                  let device = MTLCreateSystemDefaultDevice()
+                  self.device = device
+                  self.copyQueue = device?.makeCommandQueue()
+
+                  if let device = device {
+                      var cache: CVMetalTextureCache?
+                      let result = CVMetalTextureCacheCreate(
+                          kCFAllocatorDefault,
+                          nil,
+                          device,
+                          nil,
+                          &cache
+                      )
+                      if result == kCVReturnSuccess {
+                          textureCache = cache
+                      }
+                  }
+              }
+          ''',
+              '''    private init() {
+                  self.device = MTLCreateSystemDefaultDevice()
+              }
+          ''',
+              'bridge init copy resources',
+          )
+
+          start = bridge.index('        let decisionLock = NSLock()')
+          end = bridge.index('    private func releasePublication(for key: UInt) {')
+          replacement = '''        let decisionLock = NSLock()
+              var decisionKnown = false
+              var accepted = false
+              var completedBeforeDecision = false
+
+              let submission = runtime.process(
+                  pixelBuffer: pixelBuffer,
+                  destinationPixelBuffer: pixelBuffer
+              ) { _ in
+                  var shouldPublish = false
+                  decisionLock.lock()
+                  if decisionKnown {
+                      shouldPublish = accepted
+                  } else {
+                      completedBeforeDecision = true
+                  }
+                  decisionLock.unlock()
+
+                  if shouldPublish {
+                      publicationCompletion()
+                  }
+              }
+
+              decisionLock.lock()
+              decisionKnown = true
+              accepted = submission == .submitted
+              let publishEarlyCompletion = accepted && completedBeforeDecision
+              decisionLock.unlock()
+
+              guard accepted else {
+                  releasePublication(for: key)
+                  return false
+              }
+
+              if publishEarlyCompletion {
+                  publicationCompletion()
+              }
+              return true
+          }
+
+          '''
+          bridge = bridge[:start] + replacement + bridge[end:]
+          bridge = bridge.replace(
+              '''/// `Anime4KMetalRuntime` can release a compute slot as soon as its processed
+          /// output is ready, while the bridge may still be blitting that output into
+          /// media_kit's destination IOSurface. Keeping a second per-player ledger here
+          /// prevents those final publishes from allowing the runtime output pool to grow
+          /// without bound when the copy/presentation side is slower than compute.''',
+              '''/// The reservation spans the complete asynchronous Metal publication into
+          /// media_kit's destination IOSurface. It keeps per-player frame ownership bounded
+          /// while Flutter catches up with the texture registry.'''
+          )
+          bridge = bridge.replace(
+              '''        // The reservation spans runtime compute plus the final bridge blit into
+              // media_kit's owned destination. media_kit's existing three-buffer
+              // manager then owns that destination until Flutter consumes it.''',
+              '''        // The runtime final-writes directly into media_kit's owned destination.
+              // The reservation remains held until that command buffer completes.'''
+          )
+          bridge_path.write_text(bridge)
+          PY
+
+          grep -q 'destinationPixelBuffer:' native/anime4k_metal/Anime4KMetalRuntime.swift
+          grep -q 'destinationPixelBuffer: pixelBuffer' native/anime4k_metal/Anime4KMediaKitBridge.swift
+          ! grep -q 'copyProcessedFrame(' native/anime4k_metal/Anime4KMediaKitBridge.swift
+          ! grep -q 'copyQueue' native/anime4k_metal/Anime4KMediaKitBridge.swift
+
+      - name: Test native Anime4K runtime
+        run: |
+          swiftc \
+            -framework CoreVideo \
+            -framework Metal \
+            -framework MetalFX \
+            native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
+            native/anime4k_metal/Anime4KMetalRuntime.swift \
+            native/anime4k_metal/Anime4KMediaKitBridge.swift \
+            native/anime4k_metal/Anime4KMetalRuntimeTests.swift \
+            -o /tmp/anime4k_metal_runtime_tests
+          /tmp/anime4k_metal_runtime_tests
+
+      - name: Test media_kit bridge
+        run: |
+          swiftc \
+            -framework CoreVideo \
+            -framework Metal \
+            -framework MetalFX \
+            native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
+            native/anime4k_metal/Anime4KMetalRuntime.swift \
+            native/anime4k_metal/Anime4KMediaKitBridge.swift \
+            native/anime4k_metal/Anime4KMediaKitBridgeTests.swift \
+            -o /tmp/anime4k_media_kit_bridge_tests
+          /tmp/anime4k_media_kit_bridge_tests
+          ruby scripts/test_anime4k_media_kit_patch.rb
+
+      - name: Commit verified fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add native/anime4k_metal/Anime4KMetalRuntime.swift native/anime4k_metal/Anime4KMediaKitBridge.swift
+          git diff --cached --check
+          git commit -m 'perf: publish Anime4K directly into media_kit surface'
+          git push origin HEAD:feat/anime4k-ios-performance
