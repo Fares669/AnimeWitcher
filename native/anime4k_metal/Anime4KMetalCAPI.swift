@@ -81,6 +81,53 @@ enum Anime4KMetalDartAPI {
         return (statuses[handleAddress] ?? .unavailable).rawValue
     }
 
+    /// Two-phase C ABI: call with nil/zero to query the required NUL-terminated
+    /// UTF-8 byte count, then call again with a buffer of at least that size.
+    /// Returns 0 for invalid/unconfigured handles or serialization failure.
+    static func telemetry(
+        handleAddress: UInt64,
+        buffer: UnsafeMutablePointer<UInt8>?,
+        capacity: Int32
+    ) -> Int32 {
+        guard handleAddress != 0,
+              let handle = OpaquePointer(bitPattern: UInt(handleAddress)),
+              status(handleAddress: handleAddress) == Anime4KMetalDartStatus.ready.rawValue,
+              let runtime = Anime4KMediaKitBridge.shared.telemetry(handle: handle) else {
+            return 0
+        }
+
+        let processInfo = ProcessInfo.processInfo
+        let object: [String: Any] = [
+            "averageFrameTimeMs": runtime.averageFrameTimeMs,
+            "p95FrameTimeMs": runtime.p95FrameTimeMs,
+            "processedFrames": runtime.processedFrames,
+            "lateOrDroppedFrames": runtime.lateOrDroppedFrames,
+            "thermalLevel": thermalLevel(processInfo.thermalState),
+            "lowPowerMode": processInfo.isLowPowerModeEnabled,
+        ]
+
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object),
+              data.count < Int(Int32.max) else {
+            return 0
+        }
+
+        let required = data.count + 1
+        guard required <= Int(Int32.max) else { return 0 }
+        let requiredBytes = Int32(required)
+        guard let buffer, capacity >= requiredBytes else {
+            return requiredBytes
+        }
+
+        data.withUnsafeBytes { raw in
+            if let baseAddress = raw.baseAddress {
+                buffer.initialize(from: baseAddress.assumingMemoryBound(to: UInt8.self), count: data.count)
+            }
+        }
+        buffer[data.count] = 0
+        return requiredBytes
+    }
+
     static func disable(handleAddress: UInt64) {
         if let handle = OpaquePointer(bitPattern: UInt(handleAddress)) {
             Anime4KMediaKitBridge.shared.disable(handle: handle)
@@ -98,6 +145,23 @@ enum Anime4KMetalDartAPI {
         lock.unlock()
         return status.rawValue
     }
+
+    private static func thermalLevel(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal:
+            return "nominal"
+        case .fair:
+            return "fair"
+        case .serious:
+            return "serious"
+        case .critical:
+            return "critical"
+        @unknown default:
+            // Unknown future thermal pressure fails conservatively toward the
+            // strongest Eco reaction rather than overstressing the device.
+            return "critical"
+        }
+    }
 }
 
 @_cdecl("animewitcher_anime4k_metal_configure")
@@ -114,6 +178,19 @@ func animewitcherAnime4KMetalConfigure(
 @_cdecl("animewitcher_anime4k_metal_status")
 func animewitcherAnime4KMetalStatus(_ handleAddress: UInt64) -> Int32 {
     Anime4KMetalDartAPI.status(handleAddress: handleAddress)
+}
+
+@_cdecl("animewitcher_anime4k_metal_telemetry")
+func animewitcherAnime4KMetalTelemetry(
+    _ handleAddress: UInt64,
+    _ buffer: UnsafeMutablePointer<UInt8>?,
+    _ capacity: Int32
+) -> Int32 {
+    Anime4KMetalDartAPI.telemetry(
+        handleAddress: handleAddress,
+        buffer: buffer,
+        capacity: capacity
+    )
 }
 
 @_cdecl("animewitcher_anime4k_metal_disable")
