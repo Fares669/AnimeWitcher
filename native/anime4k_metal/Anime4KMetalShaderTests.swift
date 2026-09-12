@@ -3,6 +3,12 @@ import Foundation
 @main
 struct Anime4KMetalShaderTests {
     static func main() throws {
+        try testSyntheticFixture()
+        try emitCorpusMetalSourcesIfRequested()
+        print("Anime4KMetalShaderTests: PASS")
+    }
+
+    private static func testSyntheticFixture() throws {
         let source = """
         //!DESC Anime4K-Test-Pass
         //!HOOK MAIN
@@ -34,13 +40,98 @@ struct Anime4KMetalShaderTests {
         precondition(metal.contains("texture2d<float, access::write> output"))
 
         do {
-            _ = try Anime4KMetalShader.parse("//!HOOK MAIN\nvec4 hook() { return vec4(0); }")
+            _ = try Anime4KMetalShader.parse(
+                "//!HOOK MAIN\nvec4 hook() { return vec4(0); }"
+            )
             preconditionFailure("malformed shader without DESC should fail")
         } catch {
             // Expected: the translator must fail closed instead of silently
             // producing a no-op Metal pipeline.
         }
+    }
 
-        print("Anime4KMetalShaderTests: PASS")
+    /// When called with `OUTPUT_DIR shader1.glsl ...`, translate every pass in
+    /// the real pinned corpus into an individual `.metal` file. The CI helper
+    /// then feeds those files to Apple's Metal compiler. Keeping MSL emission
+    /// here means corpus verification exercises the exact production parser and
+    /// translator rather than a second implementation in the shell script.
+    private static func emitCorpusMetalSourcesIfRequested() throws {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        guard !arguments.isEmpty else { return }
+        guard arguments.count >= 2 else {
+            throw CorpusVerificationError.usage
+        }
+
+        let outputDirectory = URL(
+            fileURLWithPath: arguments[0],
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: outputDirectory,
+            withIntermediateDirectories: true
+        )
+
+        var generatedPasses = 0
+        for path in arguments.dropFirst() {
+            let url = URL(fileURLWithPath: path)
+            let data = try Data(contentsOf: url)
+            guard let source = String(data: data, encoding: .utf8) else {
+                throw CorpusVerificationError.notUTF8(path)
+            }
+            let passes = try Anime4KMetalShader.parse(source)
+            guard !passes.isEmpty else {
+                throw CorpusVerificationError.noPasses(path)
+            }
+
+            let shaderBase = url.deletingPathExtension().lastPathComponent
+                .replacingOccurrences(
+                    of: "[^A-Za-z0-9_-]",
+                    with: "_",
+                    options: .regularExpression
+                )
+            for (index, pass) in passes.enumerated() {
+                let filename = String(
+                    format: "%@-%03d-%@.metal",
+                    shaderBase,
+                    index,
+                    pass.functionName
+                )
+                let output = outputDirectory.appendingPathComponent(filename)
+                try pass.metalSource.write(
+                    to: output,
+                    atomically: true,
+                    encoding: .utf8
+                )
+                generatedPasses += 1
+            }
+        }
+
+        guard generatedPasses > 0 else {
+            throw CorpusVerificationError.noGeneratedPasses
+        }
+        print(
+            "Anime4K corpus translation: \(arguments.count - 1) files, " +
+            "\(generatedPasses) Metal passes"
+        )
+    }
+}
+
+enum CorpusVerificationError: Error, LocalizedError {
+    case usage
+    case notUTF8(String)
+    case noPasses(String)
+    case noGeneratedPasses
+
+    var errorDescription: String? {
+        switch self {
+        case .usage:
+            return "usage: Anime4KMetalShaderTests OUTPUT_DIR shader.glsl ..."
+        case .notUTF8(let path):
+            return "Anime4K corpus shader is not UTF-8: \(path)"
+        case .noPasses(let path):
+            return "Anime4K corpus shader parsed to zero passes: \(path)"
+        case .noGeneratedPasses:
+            return "Anime4K corpus produced no Metal passes"
+        }
     }
 }
