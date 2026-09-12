@@ -23,7 +23,7 @@ void main() {
 
   test('player verifies a real mpv GPU renderer before applying shaders', () {
     final source = File(
-      'lib/features/player/presentation/player_controller.dart',
+      'lib/features/player/presentation/player_controller_base.dart',
     ).readAsStringSync();
 
     expect(source, contains("getProperty('current-vo')"));
@@ -34,7 +34,7 @@ void main() {
 
   test('player checks gpu-dumb-mode only after asking mpv to load shaders', () {
     final source = File(
-      'lib/features/player/presentation/player_controller.dart',
+      'lib/features/player/presentation/player_controller_base.dart',
     ).readAsStringSync();
 
     // Apple routing deliberately materializes a guarded GLSL value so Metal
