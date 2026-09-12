@@ -1,3 +1,4 @@
+# Retrigger after DM-28 verifier stabilization; the job itself preserves RED -> GREEN evidence.
 name: DM-28 iOS concurrency verifier
 
 on:
