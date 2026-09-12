@@ -123,7 +123,15 @@ bool anime4kEnabledFrom({required bool? stored, required Anime4kMode mode}) {
 }
 
 /// One shader in a pipeline, as a family plus whether it takes a size.
-enum _Family { clampHighlights, restore, restoreSoft, upscale, upscaleDenoise }
+enum _Family {
+  clampHighlights,
+  restore,
+  restoreSoft,
+  upscale,
+  upscaleDenoise,
+  autoDownscalePreX2,
+  autoDownscalePreX4,
+}
 
 String _fileName(_Family family, Anime4kQuality quality) {
   return switch (family) {
@@ -133,11 +141,15 @@ String _fileName(_Family family, Anime4kQuality quality) {
     _Family.upscale => 'Anime4K_Upscale_CNN_x2_${quality.suffix}.glsl',
     _Family.upscaleDenoise =>
       'Anime4K_Upscale_Denoise_CNN_x2_${quality.suffix}.glsl',
+    _Family.autoDownscalePreX2 => 'Anime4K_AutoDownscalePre_x2.glsl',
+    _Family.autoDownscalePreX4 => 'Anime4K_AutoDownscalePre_x4.glsl',
   };
 }
 
-/// The steps of each mode, as Anime4K's own documentation describes them:
-/// "Restore -> Upscale -> Upscale", "Upscale_Denoise -> Upscale", and so on.
+/// The steps of each mode, as Anime4K's optimized shader ordering describes
+/// them. The AutoDownscalePre passes sit before the final upscale so a frame
+/// that is already large enough for the target display is reduced before
+/// another expensive CNN stage runs.
 ///
 /// Clamp_Highlights leads every pipeline; it is what keeps the restore passes
 /// from ringing around bright edges.
@@ -148,17 +160,23 @@ List<_Family> _steps(Anime4kMode mode) {
       _Family.clampHighlights,
       _Family.restore,
       _Family.upscale,
+      _Family.autoDownscalePreX2,
+      _Family.autoDownscalePreX4,
       _Family.upscale,
     ],
     Anime4kMode.b => const <_Family>[
       _Family.clampHighlights,
       _Family.restoreSoft,
       _Family.upscale,
+      _Family.autoDownscalePreX2,
+      _Family.autoDownscalePreX4,
       _Family.upscale,
     ],
     Anime4kMode.c => const <_Family>[
       _Family.clampHighlights,
       _Family.upscaleDenoise,
+      _Family.autoDownscalePreX2,
+      _Family.autoDownscalePreX4,
       _Family.upscale,
     ],
     Anime4kMode.aa => const <_Family>[
@@ -166,6 +184,8 @@ List<_Family> _steps(Anime4kMode mode) {
       _Family.restore,
       _Family.upscale,
       _Family.restore,
+      _Family.autoDownscalePreX2,
+      _Family.autoDownscalePreX4,
       _Family.upscale,
     ],
     Anime4kMode.bb => const <_Family>[
@@ -173,12 +193,16 @@ List<_Family> _steps(Anime4kMode mode) {
       _Family.restoreSoft,
       _Family.upscale,
       _Family.restoreSoft,
+      _Family.autoDownscalePreX2,
+      _Family.autoDownscalePreX4,
       _Family.upscale,
     ],
     Anime4kMode.ca => const <_Family>[
       _Family.clampHighlights,
       _Family.upscaleDenoise,
       _Family.restore,
+      _Family.autoDownscalePreX2,
+      _Family.autoDownscalePreX4,
       _Family.upscale,
     ],
   };
