@@ -101,6 +101,12 @@ swiftc \
   "$ROOT/native/anime4k_metal/Anime4KMetalShaderTests.swift" \
   -o "$SWIFT_TEST"
 
+PRECISION_TEST="$TMP/anime4k_metal_precision_tests"
+swiftc \
+  "$ROOT/native/anime4k_metal/Anime4KMetalPrecisionTests.swift" \
+  -o "$PRECISION_TEST"
+"$PRECISION_TEST"
+
 # macOS still ships Bash 3.2, which has no `mapfile`. Populate arrays with a
 # portable read loop so the exact same verifier works on Apple CI and locally.
 SHADERS=()
