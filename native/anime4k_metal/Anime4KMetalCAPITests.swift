@@ -1,0 +1,79 @@
+import Foundation
+
+@main
+struct Anime4KMetalCAPITests {
+    static func main() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "anime4k-capi-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let shaderURL = root.appendingPathComponent("identity.glsl")
+        try """
+        //!DESC Anime4K-CAPI-Identity
+        //!HOOK MAIN
+        //!BIND MAIN
+        vec4 hook() {
+            return MAIN_tex(MAIN_pos);
+        }
+        """.write(to: shaderURL, atomically: true, encoding: .utf8)
+
+        let handleAddress: UInt64 = 0xA41E4
+        let configuration: [String: Any] = [
+            "shaderPaths": [shaderURL.path],
+            "pipelineHash": "capi-test",
+            "sourceWidth": 8,
+            "sourceHeight": 8,
+            "outputWidth": 8,
+            "outputHeight": 8,
+            "precision": "mixedFP16",
+        ]
+        let data = try JSONSerialization.data(withJSONObject: configuration)
+        let json = String(decoding: data, as: UTF8.self)
+
+        let configured = json.withCString { pointer in
+            Anime4KMetalDartAPI.configure(
+                handleAddress: handleAddress,
+                configurationJSON: pointer
+            )
+        }
+        precondition(
+            configured == Anime4KMetalDartStatus.ready.rawValue,
+            "valid per-player configuration must become ready"
+        )
+        precondition(
+            Anime4KMetalDartAPI.status(handleAddress: handleAddress)
+                == Anime4KMetalDartStatus.ready.rawValue
+        )
+
+        Anime4KMetalDartAPI.disable(handleAddress: handleAddress)
+        precondition(
+            Anime4KMetalDartAPI.status(handleAddress: handleAddress)
+                == Anime4KMetalDartStatus.disabled.rawValue,
+            "explicit disable must clear the per-player Metal runtime"
+        )
+
+        let malformed = "{not-json".withCString { pointer in
+            Anime4KMetalDartAPI.configure(
+                handleAddress: handleAddress,
+                configurationJSON: pointer
+            )
+        }
+        precondition(
+            malformed == Anime4KMetalDartStatus.failed.rawValue,
+            "malformed configuration must fail closed"
+        )
+        precondition(
+            Anime4KMetalDartAPI.status(handleAddress: handleAddress)
+                == Anime4KMetalDartStatus.failed.rawValue
+        )
+
+        Anime4KMetalDartAPI.disable(handleAddress: handleAddress)
+        print("Anime4KMetalCAPITests: PASS")
+    }
+}
