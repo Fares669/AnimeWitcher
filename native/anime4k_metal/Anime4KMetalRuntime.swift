@@ -37,6 +37,53 @@ enum Anime4KMetalRuntimeSubmission: Equatable {
     case busy
 }
 
+struct Anime4KMetalSlotLease: Equatable {
+    let slot: Int
+    let epoch: UInt64
+}
+
+/// Keeps the finite GPU working set bounded across configure/disable cycles.
+/// A slot owned by an older command buffer never becomes reusable merely
+/// because a new pipeline configuration was installed.
+struct Anime4KMetalSlotLedger {
+    private let capacity: Int
+    private var availableSlots: [Int]
+    private var inflightEpochBySlot: [Int: UInt64] = [:]
+    private(set) var epoch: UInt64 = 0
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        self.availableSlots = Array(0..<capacity)
+    }
+
+    var availableCount: Int { availableSlots.count }
+    var inflightCount: Int { inflightEpochBySlot.count }
+
+    mutating func reserve() -> Anime4KMetalSlotLease? {
+        guard !availableSlots.isEmpty else { return nil }
+        let slot = availableSlots.removeFirst()
+        inflightEpochBySlot[slot] = epoch
+        return Anime4KMetalSlotLease(slot: slot, epoch: epoch)
+    }
+
+    mutating func advanceEpoch() {
+        epoch &+= 1
+        availableSlots = (0..<capacity).filter {
+            inflightEpochBySlot[$0] == nil
+        }
+    }
+
+    mutating func release(_ lease: Anime4KMetalSlotLease) {
+        guard inflightEpochBySlot[lease.slot] == lease.epoch else {
+            return
+        }
+        inflightEpochBySlot.removeValue(forKey: lease.slot)
+        guard !availableSlots.contains(lease.slot) else { return }
+        availableSlots.append(lease.slot)
+        availableSlots.sort()
+    }
+}
+
 enum Anime4KMetalRuntimeError: Error, LocalizedError {
     case invalidDimensions
     case commandQueueUnavailable
@@ -118,7 +165,7 @@ final class Anime4KMetalRuntime {
     private var compiledGroups: [CompiledGroup] = []
     private var activeConfiguration: Anime4KMetalRuntimeConfiguration?
     private var outputPool: CVPixelBufferPool?
-    private var availableSlots: [Int]
+    private var slotLedger: Anime4KMetalSlotLedger
     private var slotTextures: [[TextureKey: MTLTexture]]
     private var _status: Anime4KMetalRuntimeStatus = .disabled
     private var _compileGeneration = 0
@@ -206,7 +253,7 @@ final class Anime4KMetalRuntime {
         self.linearSampler = linear
         self.finalCopyPipeline = copyPipeline
         self.maxInflightFrames = maxInflightFrames
-        self.availableSlots = Array(0..<maxInflightFrames)
+        self.slotLedger = Anime4KMetalSlotLedger(capacity: maxInflightFrames)
         self.slotTextures = Array(repeating: [:], count: maxInflightFrames)
     }
 
@@ -263,7 +310,7 @@ final class Anime4KMetalRuntime {
                 outputPool = pool
                 activeConfiguration = configuration
                 slotTextures = Array(repeating: [:], count: maxInflightFrames)
-                availableSlots = Array(0..<maxInflightFrames)
+                slotLedger.advanceEpoch()
                 _compileGeneration += 1
                 _status = .ready
             }
@@ -273,7 +320,7 @@ final class Anime4KMetalRuntime {
                 outputPool = nil
                 activeConfiguration = nil
                 slotTextures = Array(repeating: [:], count: maxInflightFrames)
-                availableSlots = Array(0..<maxInflightFrames)
+                slotLedger.advanceEpoch()
                 _status = .failed(String(describing: error))
             }
             throw error
@@ -286,7 +333,7 @@ final class Anime4KMetalRuntime {
             outputPool = nil
             activeConfiguration = nil
             slotTextures = Array(repeating: [:], count: maxInflightFrames)
-            availableSlots = Array(0..<maxInflightFrames)
+            slotLedger.advanceEpoch()
             _status = .disabled
         }
     }
@@ -297,7 +344,7 @@ final class Anime4KMetalRuntime {
         completion: @escaping (CVPixelBuffer) -> Void
     ) -> Anime4KMetalRuntimeSubmission {
         let snapshot: (
-            slot: Int,
+            lease: Anime4KMetalSlotLease,
             groups: [CompiledGroup],
             configuration: Anime4KMetalRuntimeConfiguration,
             pool: CVPixelBufferPool
@@ -307,11 +354,10 @@ final class Anime4KMetalRuntime {
                   let pool = outputPool else {
                 return nil
             }
-            guard !availableSlots.isEmpty else {
+            guard let lease = slotLedger.reserve() else {
                 return nil
             }
-            let slot = availableSlots.removeFirst()
-            return (slot, compiledGroups, configuration, pool)
+            return (lease, compiledGroups, configuration, pool)
         }
 
         guard let snapshot else {
@@ -357,7 +403,7 @@ final class Anime4KMetalRuntime {
                     native: nativeTexture,
                     outputWidth: snapshot.configuration.outputWidth,
                     outputHeight: snapshot.configuration.outputHeight,
-                    slot: snapshot.slot,
+                    slot: snapshot.lease.slot,
                     commandBuffer: commandBuffer
                 )
             }
@@ -367,18 +413,22 @@ final class Anime4KMetalRuntime {
                 commandBuffer: commandBuffer
             )
 
-            // Capture every CoreVideo/Metal object until GPU completion. This
-            // prevents IOSurface reuse while Metal is still reading/writing.
-            commandBuffer.addCompletedHandler { [weak self, inputBuffer, outputBuffer, inputTextureRef, outputTextureRef] buffer in
+            // The completion intentionally retains `self`, the source/output
+            // CVPixelBuffers and their CVMetalTexture wrappers until GPU work
+            // has completed. The runtime may be removed from the bridge while
+            // this command is in flight; frame publication must still finish.
+            commandBuffer.addCompletedHandler { [inputBuffer, outputBuffer, inputTextureRef, outputTextureRef] buffer in
                 _ = inputBuffer
                 _ = inputTextureRef
                 _ = outputTextureRef
-                guard let self else { return }
                 self.stateLock.withLock {
-                    self.availableSlots.append(snapshot.slot)
-                    if buffer.status == .error {
+                    let belongsToCurrentEpoch =
+                        snapshot.lease.epoch == self.slotLedger.epoch
+                    self.slotLedger.release(snapshot.lease)
+                    if belongsToCurrentEpoch && buffer.status == .error {
                         self._status = .failed(
-                            buffer.error.map(String.init(describing:)) ?? "Metal command failed"
+                            buffer.error.map(String.init(describing:)) ??
+                                "Metal command failed"
                         )
                     }
                 }
@@ -388,8 +438,12 @@ final class Anime4KMetalRuntime {
             return .submitted
         } catch {
             stateLock.withLock {
-                availableSlots.append(snapshot.slot)
-                _status = .failed(String(describing: error))
+                let belongsToCurrentEpoch =
+                    snapshot.lease.epoch == slotLedger.epoch
+                slotLedger.release(snapshot.lease)
+                if belongsToCurrentEpoch {
+                    _status = .failed(String(describing: error))
+                }
             }
             completion(inputBuffer)
             return .bypassed
@@ -638,6 +692,11 @@ final class Anime4KMetalRuntime {
 
     private func failAndThrow<T>(_ error: Anime4KMetalRuntimeError) throws -> T {
         stateLock.withLock {
+            compiledGroups = []
+            outputPool = nil
+            activeConfiguration = nil
+            slotTextures = Array(repeating: [:], count: maxInflightFrames)
+            slotLedger.advanceEpoch()
             _status = .failed(String(describing: error))
         }
         throw error
