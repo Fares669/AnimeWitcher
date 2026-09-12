@@ -76,7 +76,12 @@ void main() {
         contains('_publishAnime4kPerformanceSnapshot(decision.snapshot)'),
       );
 
-      final fallback = source.indexOf('Future<void> _applyResolvedMpvFallback()');
+      // The fallback accepts an optional NativePlayer so HDR can fail closed
+      // before base Metal configuration while Eco can still reuse the same
+      // exact mpv restore path after a runtime failure.
+      final fallback = source.indexOf(
+        'Future<void> _applyResolvedMpvFallback({NativePlayer? platform})',
+      );
       expect(fallback, greaterThanOrEqualTo(0));
       expect(
         source.indexOf('_publishAnime4kPerformanceSnapshot(null)', fallback),
