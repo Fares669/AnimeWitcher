@@ -5,6 +5,7 @@ on:
     branches:
       - plan/download-manager-reliability
     paths:
+      - .github/workflows/dm08-final-acceptance.yml
       - lib/core/services/download_service.dart
       - lib/core/utils/download_resume.dart
 
@@ -65,7 +66,7 @@ jobs:
           if old not in text:
               raise SystemExit('DM-08 checklist marker not found')
           text = text.replace(old, new, 1)
-          marker = '  - **Dependencies:** DM-17, DM-21, DM-22, DM-23, DM-24, DM-28, DM-31.\n'
+          marker = '  - **Dependencies:** DM-03, DM-06, DM-20, DM-31.\n'
           notes = (
               marker
               + '  - **Implementation notes (2026-09-13):** Resume now distinguishes same-source native adoption, visible-prefix migration, multipart-owned bytes, clean zero-evidence restart, and opaque native-only ownership. A validated source replacement cannot silently discard opaque native resume bytes; that path surfaces `restartRequired` instead.\n'
