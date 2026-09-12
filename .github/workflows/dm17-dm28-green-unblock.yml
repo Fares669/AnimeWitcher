@@ -1,4 +1,5 @@
 name: DM-17 + DM-28 staged GREEN unblock
+# Manually retriggered by the download-manager plan executor after dependency validation.
 
 on:
   push:
