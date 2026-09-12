@@ -73,24 +73,29 @@ class DownloadReplicaTransaction {
     required this.operation,
     required this.phase,
     required this.generation,
+    this.intentData = const <String, Object?>{},
   });
 
   final DownloadReplicaOperation operation;
   final DownloadReplicaTransactionPhase phase;
   final int generation;
+  final Map<String, Object?> intentData;
 
   DownloadReplicaTransaction copyWith({
     DownloadReplicaTransactionPhase? phase,
+    Map<String, Object?>? intentData,
   }) => DownloadReplicaTransaction(
     operation: operation,
     phase: phase ?? this.phase,
     generation: generation,
+    intentData: intentData ?? this.intentData,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
     'operation': operation.name,
     'phase': phase.name,
     'generation': generation,
+    if (intentData.isNotEmpty) 'intentData': intentData,
   };
 
   static DownloadReplicaTransaction? fromJson(Object? raw) {
@@ -118,10 +123,15 @@ class DownloadReplicaTransaction {
       }
     }
     if (operation == null || phase == null) return null;
+    final rawIntentData = map['intentData'];
+    final intentData = rawIntentData is Map
+        ? Map<String, Object?>.from(rawIntentData)
+        : const <String, Object?>{};
     return DownloadReplicaTransaction(
       operation: operation,
       phase: phase,
       generation: generation,
+      intentData: intentData,
     );
   }
 }
@@ -507,6 +517,7 @@ class DownloadJobStore {
     String taskId, {
     required DownloadReplicaOperation operation,
     required DownloadJobState state,
+    Map<String, Object?> intentData = const <String, Object?>{},
     int? updatedAtMillis,
   }) => _serialize(() async {
     final current = await get(taskId);
@@ -520,6 +531,39 @@ class DownloadJobStore {
         operation: operation,
         phase: DownloadReplicaTransactionPhase.intent,
         generation: generation,
+        intentData: Map<String, Object?>.from(intentData),
+      ),
+    );
+    if (!await _putUnlocked(next)) return null;
+    return next.attemptToken;
+  });
+
+  /// Atomically creates the first durable job row together with its write-ahead
+  /// replica intent. This closes the fresh-start crash window where a job row
+  /// could exist without enough information to rebuild a required replica.
+  Future<DownloadAttemptToken?> beginReplicaTransactionFromSeed(
+    DownloadJobRecord seed, {
+    required DownloadReplicaOperation operation,
+    required DownloadJobState state,
+    Map<String, Object?> intentData = const <String, Object?>{},
+    int? updatedAtMillis,
+  }) => _serialize(() async {
+    final taskId = seed.taskId.trim();
+    final trackingUrl = seed.trackingUrl.trim();
+    if (taskId.isEmpty || trackingUrl.isEmpty) return null;
+    if (seed.generation < 0 || seed.durableBytes < 0) return null;
+    if (await get(taskId) != null) return null;
+
+    final generation = seed.generation + 1;
+    final next = seed.copyWith(
+      state: state,
+      generation: generation,
+      updatedAtMillis: updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
+      replicaTransaction: DownloadReplicaTransaction(
+        operation: operation,
+        phase: DownloadReplicaTransactionPhase.intent,
+        generation: generation,
+        intentData: Map<String, Object?>.from(intentData),
       ),
     );
     if (!await _putUnlocked(next)) return null;
