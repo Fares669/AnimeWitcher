@@ -133,7 +133,12 @@ old = '''    return resumeOrRestartDownload(
     );
 '''
 new = '''    if (canNativeResume && !refreshResult.refreshed) {
-      final resumed = await _nativeTransport.resume(task);
+      var resumed = false;
+      try {
+        resumed = await _nativeTransport.resume(task);
+      } catch (_) {
+        resumed = false;
+      }
       if (resumed) return true;
       if (saved.partialBytes <= 0) {
         // taskCanResume proves opaque native ownership existed, but the executor
