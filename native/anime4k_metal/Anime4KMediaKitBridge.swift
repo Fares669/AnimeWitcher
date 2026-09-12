@@ -120,6 +120,15 @@ final class Anime4KMediaKitBridge {
         disable(key: handleKey(handle))
     }
 
+    /// Returns the live runtime state rather than a configure-time cached Dart
+    /// status. C API polling uses this to detect asynchronous command-buffer or
+    /// final-publication failures and restore the mpv fallback immediately.
+    func runtimeStatus(handle: OpaquePointer) -> Anime4KMetalRuntimeStatus? {
+        let key = handleKey(handle)
+        let runtime = lock.anime4kWithLock { runtimes[key] }
+        return runtime?.status
+    }
+
     /// Temporarily bypasses Anime4K frame processing while preserving the
     /// configured runtime and telemetry. Eco uses this for critical thermal
     /// protection so ProcessInfo telemetry can observe recovery and resume the
