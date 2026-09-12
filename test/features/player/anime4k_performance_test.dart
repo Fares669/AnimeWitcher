@@ -105,6 +105,152 @@ void main() {
     });
   });
 
+  group('Anime4K adaptive Eco state machine', () {
+    Anime4kAdaptivePolicy policy() => Anime4kAdaptivePolicy(
+      downgradeSamples: 3,
+      recoverySamples: 4,
+      cooldownSamples: 2,
+    );
+
+    Anime4kEffectivePlan sample(
+      Anime4kAdaptivePolicy policy, {
+      bool ecoEnabled = true,
+      Anime4kQuality requestedQuality = Anime4kQuality.ul,
+      Anime4kThermalLevel thermal = Anime4kThermalLevel.nominal,
+      bool lowPower = false,
+      double frameTimeMs = 8,
+      double frameBudgetMs = 16.67,
+      int lateOrDroppedFrames = 0,
+    }) {
+      return policy.update(
+        ecoEnabled: ecoEnabled,
+        mode: Anime4kMode.a,
+        requestedQuality: requestedQuality,
+        thermalLevel: thermal,
+        lowPowerMode: lowPower,
+        rollingFrameTimeMs: frameTimeMs,
+        frameBudgetMs: frameBudgetMs,
+        lateOrDroppedFrames: lateOrDroppedFrames,
+      );
+    }
+
+    test('manual mode resets adaptation and preserves the requested quality', () {
+      final state = policy();
+      for (var i = 0; i < 3; i++) {
+        sample(state, frameTimeMs: 16);
+      }
+      expect(state.effectiveQuality, Anime4kQuality.l);
+
+      final manual = sample(
+        state,
+        ecoEnabled: false,
+        requestedQuality: Anime4kQuality.m,
+        thermal: Anime4kThermalLevel.critical,
+        lowPower: true,
+        frameTimeMs: 100,
+        lateOrDroppedFrames: 20,
+      );
+
+      expect(manual.effectiveQuality, Anime4kQuality.m);
+      expect(manual.bypass, isFalse);
+      expect(state.effectiveQuality, Anime4kQuality.m);
+    });
+
+    test('frame pressure must be sustained before one-tier downgrade', () {
+      final state = policy();
+
+      expect(sample(state, frameTimeMs: 16).effectiveQuality, Anime4kQuality.ul);
+      expect(sample(state, frameTimeMs: 16).effectiveQuality, Anime4kQuality.ul);
+      expect(sample(state, frameTimeMs: 16).effectiveQuality, Anime4kQuality.l);
+    });
+
+    test('one healthy sample breaks an unhealthy streak', () {
+      final state = policy();
+
+      sample(state, frameTimeMs: 16);
+      sample(state, frameTimeMs: 16);
+      sample(state, frameTimeMs: 5);
+      expect(sample(state, frameTimeMs: 16).effectiveQuality, Anime4kQuality.ul);
+      expect(sample(state, frameTimeMs: 16).effectiveQuality, Anime4kQuality.ul);
+    });
+
+    test('late or dropped frames participate in the same sustained pressure', () {
+      final state = policy();
+
+      sample(state, lateOrDroppedFrames: 1);
+      sample(state, lateOrDroppedFrames: 2);
+      final pressured = sample(state, lateOrDroppedFrames: 1);
+
+      expect(pressured.effectiveQuality, Anime4kQuality.l);
+    });
+
+    test('cooldown prevents consecutive samples from cascading quality', () {
+      final state = policy();
+      for (var i = 0; i < 3; i++) {
+        sample(state, frameTimeMs: 16);
+      }
+      expect(state.effectiveQuality, Anime4kQuality.l);
+
+      sample(state, frameTimeMs: 16);
+      sample(state, frameTimeMs: 16);
+      expect(state.effectiveQuality, Anime4kQuality.l);
+    });
+
+    test('critical thermal bypasses immediately and recovery is progressive', () {
+      final state = policy();
+      final critical = sample(
+        state,
+        thermal: Anime4kThermalLevel.critical,
+      );
+      expect(critical.bypass, isTrue);
+      expect(critical.effectiveQuality, Anime4kQuality.s);
+
+      for (var i = 0; i < 3; i++) {
+        final recovering = sample(state, frameTimeMs: 5);
+        expect(recovering.bypass, isTrue);
+      }
+      final resumed = sample(state, frameTimeMs: 5);
+      expect(resumed.bypass, isFalse);
+      expect(resumed.effectiveQuality, Anime4kQuality.s);
+
+      for (var i = 0; i < 4; i++) {
+        sample(state, frameTimeMs: 5);
+      }
+      expect(state.effectiveQuality, Anime4kQuality.m);
+    });
+
+    test('serious thermal or Low Power Mode clamps to S without bypass', () {
+      for (final input in <({Anime4kThermalLevel thermal, bool lowPower})>[
+        (thermal: Anime4kThermalLevel.serious, lowPower: false),
+        (thermal: Anime4kThermalLevel.nominal, lowPower: true),
+      ]) {
+        final state = policy();
+        final plan = sample(
+          state,
+          thermal: input.thermal,
+          lowPower: input.lowPower,
+        );
+        expect(plan.effectiveQuality, Anime4kQuality.s);
+        expect(plan.bypass, isFalse);
+        expect(plan.reduceLateStages, isTrue);
+      }
+    });
+
+    test('healthy recovery never exceeds the viewer requested ceiling', () {
+      final state = policy();
+      sample(state, thermal: Anime4kThermalLevel.serious);
+
+      for (var i = 0; i < 20; i++) {
+        sample(
+          state,
+          requestedQuality: Anime4kQuality.m,
+          frameTimeMs: 5,
+        );
+      }
+      expect(state.effectiveQuality, Anime4kQuality.m);
+    });
+  });
+
   test('performance snapshot carries diagnostics without platform dependencies', () {
     const snapshot = Anime4kPerformanceSnapshot(
       backend: Anime4kBackend.metalEco,
