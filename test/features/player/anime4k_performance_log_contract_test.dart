@@ -101,14 +101,48 @@ void main() {
 
       final text = await log.readLatest();
       expect(text, isNotNull);
-      expect(text, contains('"type":"session"'));
-      expect(text, contains('"isPhysicalDevice":true'));
-      expect(text, contains('"type":"route"'));
-      expect(text, contains('"backend":"metalEco"'));
-      expect(text, contains('"type":"snapshot"'));
-      expect(text, contains('"averageFrameTimeMs":4.25'));
-      expect(text, contains('"p95FrameTimeMs":5.75'));
-      expect(text, contains('"skippedDuplicateFrames":120'));
+      expect(text, contains('\"type\":\"session\"'));
+      expect(text, contains('\"isPhysicalDevice\":true'));
+      expect(text, contains('\"type\":\"route\"'));
+      expect(text, contains('\"backend\":\"metalEco\"'));
+      expect(text, contains('\"type\":\"snapshot\"'));
+      expect(text, contains('\"averageFrameTimeMs\":4.25'));
+      expect(text, contains('\"p95FrameTimeMs\":5.75'));
+      expect(text, contains('\"skippedDuplicateFrames\":120'));
+    });
+
+    test('physical-device diagnosis logs raw color state and samples manual Metal', () {
+      final logSource = File(
+        'lib/features/player/data/anime4k_performance_log.dart',
+      ).readAsStringSync();
+      final controller = File(
+        'lib/features/player/presentation/player_controller.dart',
+      ).readAsStringSync();
+
+      expect(logSource, contains("'colorTransfer': colorTransfer"));
+      expect(logSource, contains("'colorSystem': colorSystem"));
+      expect(logSource, contains("'metalState': metalState"));
+      expect(logSource, contains("'playerBackend': playerBackend"));
+
+      final postApplyStart = controller.indexOf(
+        'Future<void> _recordAnime4kPostApplyRoute',
+      );
+      final sampleStart = controller.indexOf('Future<void> _sampleAnime4kEco');
+      expect(postApplyStart, greaterThanOrEqualTo(0));
+      expect(sampleStart, greaterThan(postApplyStart));
+
+      final setupBody = controller.substring(postApplyStart, sampleStart);
+      expect(setupBody, contains("reason: 'metal-ready'"));
+      expect(setupBody, contains('metalState:'));
+      expect(setupBody, contains('playerBackend:'));
+
+      final sampleEnd = controller.indexOf(
+        'void _publishAnime4kPerformanceSnapshot',
+        sampleStart,
+      );
+      expect(sampleEnd, greaterThan(sampleStart));
+      final sampleBody = controller.substring(sampleStart, sampleEnd);
+      expect(sampleBody, isNot(contains('!settings.anime4kEcoEnabled')));
     });
   });
 }
