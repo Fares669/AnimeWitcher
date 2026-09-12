@@ -49,10 +49,32 @@ jobs:
           import xml.etree.ElementTree as ET
 
           ns = '{http://schemas.android.com/apk/res/android}'
-          candidates = list(Path('android/app/build/intermediates').rglob('AndroidManifest.xml'))
+          roots = [
+              Path('build/app/intermediates'),
+              Path('android/app/build/intermediates'),
+          ]
+          candidates = []
+          for root_dir in roots:
+              if root_dir.exists():
+                  candidates.extend(root_dir.rglob('AndroidManifest.xml'))
+          candidates = [
+              p for p in candidates
+              if 'merged_manifests' in p.parts or 'packaged_manifests' in p.parts
+          ]
           if not candidates:
-              raise SystemExit('no merged AndroidManifest.xml produced')
-          merged = max(candidates, key=lambda p: p.stat().st_size)
+              searched = ', '.join(str(p) for p in roots)
+              raise SystemExit(f'no merged AndroidManifest.xml produced under: {searched}')
+
+          def rank(path: Path):
+              text = str(path).lower()
+              return (
+                  'debug' in text,
+                  'processdebugmainmanifest' in text,
+                  'merged_manifests' in path.parts,
+                  path.stat().st_size,
+              )
+
+          merged = max(candidates, key=rank)
           root = ET.parse(merged).getroot()
           permissions = {
               e.attrib.get(ns + 'name', '')
