@@ -86,6 +86,20 @@ void main() {
       expect(capi, contains('Anime4KAppleUpscaleStrategy'));
     });
 
+    test('benchmark toggle uses const environment lookup for AOT Apple builds', () {
+      const lookup =
+          "const bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT')";
+      final baseController = File(
+        'lib/features/player/presentation/player_controller_base.dart',
+      ).readAsStringSync();
+      final ecoController = File(
+        'lib/features/player/presentation/player_controller.dart',
+      ).readAsStringSync();
+
+      expect(baseController, contains(lookup));
+      expect(ecoController, contains(lookup));
+    });
+
     test('iOS benchmark preview enables the hidden experiment flag', () {
       final previewWorkflow = File(
         '.github/workflows/ios-preview-once.yml',
