@@ -11,7 +11,30 @@ abstract class Anime4kMetalNativeBindings {
 
   int status(int handle);
 
+  /// Returns a small UTF-8 JSON snapshot for one player, or null when the
+  /// optional telemetry symbol is unavailable. Telemetry must never decide
+  /// whether the renderer itself can run.
+  String? telemetry(int handle);
+
   void disable(int handle);
+}
+
+class Anime4kMetalTelemetry {
+  const Anime4kMetalTelemetry({
+    required this.averageFrameTimeMs,
+    required this.p95FrameTimeMs,
+    required this.processedFrames,
+    required this.lateOrDroppedFrames,
+    required this.thermalLevel,
+    required this.lowPowerMode,
+  });
+
+  final double averageFrameTimeMs;
+  final double p95FrameTimeMs;
+  final int processedFrames;
+  final int lateOrDroppedFrames;
+  final Anime4kThermalLevel thermalLevel;
+  final bool lowPowerMode;
 }
 
 /// Serializes one player's resolved Anime4K pipeline for the native Metal
@@ -63,6 +86,59 @@ class Anime4kMetalBridge {
       return _stateFromNative(_bindings.status(handle));
     } catch (_) {
       return Anime4kNativeMetalState.failed;
+    }
+  }
+
+  Anime4kMetalTelemetry? telemetry({required int handle}) {
+    if (handle <= 0) return null;
+    try {
+      final raw = _bindings.telemetry(handle);
+      if (raw == null || raw.trim().isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+
+      final average = decoded['averageFrameTimeMs'];
+      final p95 = decoded['p95FrameTimeMs'];
+      final processed = decoded['processedFrames'];
+      final lateOrDropped = decoded['lateOrDroppedFrames'];
+      final thermal = decoded['thermalLevel'];
+      final lowPower = decoded['lowPowerMode'];
+      if (average is! num ||
+          p95 is! num ||
+          processed is! num ||
+          lateOrDropped is! num ||
+          thermal is! String ||
+          lowPower is! bool) {
+        return null;
+      }
+
+      final thermalLevel = switch (thermal.trim().toLowerCase()) {
+        'nominal' => Anime4kThermalLevel.nominal,
+        'fair' => Anime4kThermalLevel.fair,
+        'serious' => Anime4kThermalLevel.serious,
+        'critical' => Anime4kThermalLevel.critical,
+        _ => null,
+      };
+      if (thermalLevel == null ||
+          average.isNegative ||
+          p95.isNegative ||
+          processed.isNegative ||
+          lateOrDropped.isNegative) {
+        return null;
+      }
+
+      return Anime4kMetalTelemetry(
+        averageFrameTimeMs: average.toDouble(),
+        p95FrameTimeMs: p95.toDouble(),
+        processedFrames: processed.toInt(),
+        lateOrDroppedFrames: lateOrDropped.toInt(),
+        thermalLevel: thermalLevel,
+        lowPowerMode: lowPower,
+      );
+    } catch (_) {
+      // Diagnostics/adaptation are optional. Bad telemetry must not interfere
+      // with video playback or force a backend switch.
+      return null;
     }
   }
 
