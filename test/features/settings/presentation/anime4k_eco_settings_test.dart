@@ -43,13 +43,13 @@ void main() {
         'lib/features/settings/presentation/widgets/anime4k_dialog.dart',
       ).readAsStringSync();
 
-      expect(source, contains('anime4kPerformanceSnapshot'));
+      expect(source, contains('ref.watch(anime4kDiagnosticsProvider)'));
       expect(source, contains("english: 'Requested quality'"));
       expect(source, contains("english: 'Effective quality'"));
       expect(source, contains("english: 'Backend'"));
-      expect(source, contains('_anime4kDiagnosticsTimer'));
-      expect(source, contains('Timer.periodic(const Duration(seconds: 1)'));
-      expect(source, contains('_anime4kDiagnosticsTimer?.cancel()'));
+      expect(source, contains('diagnostics.requestedQuality.suffix'));
+      expect(source, contains('diagnostics.effectiveQuality.suffix'));
+      expect(source, contains('diagnostics.backend'));
     });
   });
 }
