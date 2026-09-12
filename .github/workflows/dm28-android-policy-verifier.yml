@@ -41,7 +41,7 @@ jobs:
       - name: Inject DM-28 transfer-hint policy tests
         run: |
           cat > test/core/services/dm28_android_policy_test.dart <<'DART'
-          import 'package:anime_witcher/core/services/download_transport.dart';
+          import 'package:animewitcher/core/services/download_transport.dart';
           import 'package:background_downloader/background_downloader.dart';
           import 'package:flutter_test/flutter_test.dart';
 
