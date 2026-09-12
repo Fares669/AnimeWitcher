@@ -35,6 +35,20 @@ jobs:
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
+      # This focused integration contract stays before the full corpus so TDD
+      # failures in runtime telemetry surface quickly instead of after all 265
+      # generated Metal passes have compiled.
+      - name: Test Anime4K runtime telemetry integration
+        run: |
+          swiftc \
+            -framework CoreVideo \
+            -framework Metal \
+            native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalRuntime.swift \
+            native/anime4k_metal/Anime4KMetalRuntimeTelemetryIntegrationTests.swift \
+            -o /tmp/anime4k_metal_runtime_telemetry_tests
+          /tmp/anime4k_metal_runtime_telemetry_tests
       # These native gates do not need Flutter. Run them first so parser/runtime
       # regressions fail in seconds instead of after downloading the SDK.
       - name: Verify full Anime4K v4.0.1 Metal corpus
