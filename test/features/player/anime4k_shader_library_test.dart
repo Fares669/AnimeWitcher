@@ -125,15 +125,15 @@ void main() {
     test('a partial folder runs what it can and names the rest', () async {
       _touch('Anime4K_Clamp_Highlights.glsl');
       _touch('Anime4K_Upscale_CNN_x2_M.glsl');
-      // No restore shader at any size.
+      // No restore shader and no S shader for the cheaper late upscale.
 
       final result = await pipeline();
       expect(result.files, contains('Anime4K_Upscale_CNN_x2_M.glsl'));
-      // Only the restore is reported: mode A's second upscale is dropped
-      // because the one upscale file is already in the chain, which is not
-      // something the viewer can fix by downloading more.
-      expect(result.missing, <String>['Anime4K_Restore_CNN_M.glsl']);
-      expect(result.value, isNotEmpty, reason: 'it still upscales');
+      expect(result.missing, <String>[
+        'Anime4K_Restore_CNN_M.glsl',
+        'Anime4K_Upscale_CNN_x2_S.glsl',
+      ]);
+      expect(result.value, isNotEmpty, reason: 'it still upscales once');
     });
   });
 }

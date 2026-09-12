@@ -113,6 +113,10 @@ class PlayerSettings {
   /// control that could bring them back.
   final bool anime4kEnabled;
 
+  /// Apple-only adaptive mode. The saved manual quality remains the viewer's
+  /// ceiling; Eco may lower effective work at runtime but never rewrites it.
+  final bool anime4kEcoEnabled;
+
   /// Which Anime4K pipeline to run while it is enabled.
   final Anime4kMode anime4kMode;
 
@@ -128,6 +132,7 @@ class PlayerSettings {
     this.fillerBehaviour = FillerBehaviour.note,
     this.prefetchNextEpisode = true,
     this.anime4kEnabled = false,
+    this.anime4kEcoEnabled = false,
     this.anime4kMode = Anime4kMode.off,
     this.anime4kQuality = Anime4kQuality.m,
     this.anime4kShaderDirectory = '',
@@ -210,6 +215,7 @@ class PlayerSettings {
     FillerBehaviour? fillerBehaviour,
     bool? prefetchNextEpisode,
     bool? anime4kEnabled,
+    bool? anime4kEcoEnabled,
     Anime4kMode? anime4kMode,
     Anime4kQuality? anime4kQuality,
     String? anime4kShaderDirectory,
@@ -265,6 +271,7 @@ class PlayerSettings {
       fillerBehaviour: fillerBehaviour ?? this.fillerBehaviour,
       prefetchNextEpisode: prefetchNextEpisode ?? this.prefetchNextEpisode,
       anime4kEnabled: anime4kEnabled ?? this.anime4kEnabled,
+      anime4kEcoEnabled: anime4kEcoEnabled ?? this.anime4kEcoEnabled,
       anime4kMode: anime4kMode ?? this.anime4kMode,
       anime4kQuality: anime4kQuality ?? this.anime4kQuality,
       anime4kShaderDirectory:
@@ -479,6 +486,12 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
       stored: storage.getPlayerSetting<bool>('player_anime4k_enabled'),
       mode: anime4kMode,
     );
+    final anime4kEcoEnabled =
+        storage.getPlayerSetting<bool>(
+          'player_anime4k_eco_enabled',
+          defaultValue: false,
+        ) ??
+        false;
     final anime4kQuality = Anime4kQualitySuffix.fromName(
       storage.getPlayerSetting<String>(
         'player_anime4k_quality',
@@ -539,6 +552,7 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
       prefetchNextEpisode: prefetchNextEpisode,
       autoSkipCredits: autoSkipCredits,
       anime4kEnabled: anime4kEnabled,
+      anime4kEcoEnabled: anime4kEcoEnabled,
       anime4kMode: anime4kMode,
       anime4kQuality: anime4kQuality,
       anime4kShaderDirectory: anime4kShaderDirectory,
@@ -701,6 +715,11 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
   Future<void> setAnime4kEnabled(bool val) async {
     await _repository.setPlayerSetting('player_anime4k_enabled', val);
     state = AsyncData(state.requireValue.copyWith(anime4kEnabled: val));
+  }
+
+  Future<void> setAnime4kEcoEnabled(bool val) async {
+    await _repository.setPlayerSetting('player_anime4k_eco_enabled', val);
+    state = AsyncData(state.requireValue.copyWith(anime4kEcoEnabled: val));
   }
 
   Future<void> setAnime4kMode(Anime4kMode val) async {

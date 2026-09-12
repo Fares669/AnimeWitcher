@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
@@ -9,6 +10,7 @@ import 'package:animewitcher/core/utils/localized_text.dart';
 import '../../../../shared/widgets/glass_dialog.dart';
 import '../../../player/data/anime4k.dart';
 import '../../../player/data/anime4k_download.dart';
+import '../../../player/data/anime4k_performance_log.dart';
 import '../../../player/data/anime4k_shader_library.dart';
 import '../../../player/presentation/player_controller.dart';
 import '../../../player/presentation/widgets/anime4k_sample_preview.dart';
@@ -25,6 +27,92 @@ void showAnime4kDialog(BuildContext context, WidgetRef ref) {
   showGlassDialog<void>(
     context: context,
     builder: (context) => const _Anime4kDialog(),
+  );
+}
+
+Future<void> showAnime4kPerformanceLogDialog(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final log = ref.read(anime4kPerformanceLogProvider);
+  final text = await log.readLatest();
+  final path = await log.latestLogPath();
+  if (!context.mounted) return;
+
+  await showGlassDialog<void>(
+    context: context,
+    builder: (dialogContext) {
+      final theme = Theme.of(dialogContext);
+      final colors = theme.colorScheme;
+      final displayText = text?.trim().isNotEmpty == true
+          ? text!
+          : appText(
+              dialogContext,
+              english: 'No Anime4K performance log has been recorded yet.',
+              arabic: 'لم يتم تسجيل سجل أداء Anime4K بعد.',
+            );
+      return AlertDialog(
+        surfaceTintColor: Colors.transparent,
+        title: Text(
+          appText(
+            dialogContext,
+            english: 'Anime4K performance log',
+            arabic: 'سجل أداء Anime4K',
+          ),
+        ),
+        content: SizedBox(
+          width: 680,
+          height: 420,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (path != null) ...[
+                Text(
+                  path,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              Expanded(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: colors.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(12),
+                    child: SelectableText(
+                      displayText,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          if (text != null && text.isNotEmpty)
+            TextButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: text));
+              },
+              icon: const Icon(Icons.copy_rounded),
+              label: Text(
+                appText(dialogContext, english: 'Copy', arabic: 'نسخ'),
+              ),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop<void>(dialogContext),
+            child: Text(
+              appText(dialogContext, english: 'Close', arabic: 'إغلاق'),
+            ),
+          ),
+        ],
+      );
+    },
   );
 }
 
@@ -147,6 +235,7 @@ class _Anime4kDialogState extends ConsumerState<_Anime4kDialog> {
         (value) => value.asData?.value ?? const PlayerSettings(),
       ),
     );
+    final diagnostics = ref.watch(anime4kDiagnosticsProvider);
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final folder = settings.anime4kShaderDirectory.trim();
@@ -337,6 +426,75 @@ class _Anime4kDialogState extends ConsumerState<_Anime4kDialog> {
                 },
               ),
 
+              if (settings.anime4kEnabled &&
+                  (Platform.isIOS || Platform.isMacOS)) ...[
+                SwitchListTile(
+                  value: settings.anime4kEcoEnabled,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    appText(
+                      context,
+                      english: 'Eco / Auto',
+                      arabic: 'اقتصادي / تلقائي',
+                    ),
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  subtitle: Text(
+                    appText(
+                      context,
+                      english:
+                          'Keeps your selected quality as the ceiling and may '
+                          'reduce GPU work when the device is hot, in Low Power '
+                          'Mode, or missing the frame budget.',
+                      arabic:
+                          'يحافظ على الجودة التي اخترتها كسقف أعلى، وقد يقلل '
+                          'حمل الـGPU عند ارتفاع الحرارة أو تشغيل وضع الطاقة '
+                          'المنخفضة أو ضغط زمن الإطار.',
+                    ),
+                  ),
+                  onChanged: (on) async {
+                    await ref
+                        .read(playerSettingsProvider.notifier)
+                        .setAnime4kEcoEnabled(on);
+                    await _reapply();
+                  },
+                ),
+                if (settings.anime4kEcoEnabled && diagnostics != null) ...[
+                  const SizedBox(height: 4),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colors.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${appText(context, english: 'Requested quality', arabic: 'الجودة المطلوبة')}: '
+                            '${diagnostics.requestedQuality.suffix}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${appText(context, english: 'Effective quality', arabic: 'الجودة الفعلية')}: '
+                            '${diagnostics.effectiveQuality.suffix}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${appText(context, english: 'Backend', arabic: 'المعالج')}: '
+                            '${diagnostics.backend.name}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+
               if (settings.anime4kEnabled) ...[
                 const SizedBox(height: 8),
                 Text(
@@ -428,6 +586,17 @@ class _Anime4kDialogState extends ConsumerState<_Anime4kDialog> {
         ),
       ),
       actions: [
+        TextButton.icon(
+          onPressed: () => showAnime4kPerformanceLogDialog(context, ref),
+          icon: const Icon(Icons.article_outlined),
+          label: Text(
+            appText(
+              context,
+              english: 'Performance log',
+              arabic: 'سجل الأداء',
+            ),
+          ),
+        ),
         TextButton(
           onPressed: () => Navigator.pop<void>(context),
           child: Text(appText(context, english: 'Done', arabic: 'تم')),

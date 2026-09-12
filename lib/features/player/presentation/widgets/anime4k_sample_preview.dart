@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -11,20 +14,65 @@ import 'package:path_provider/path_provider.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 
 import '../../data/anime4k.dart';
+import '../../data/anime4k_metal_bridge.dart';
+import '../../data/anime4k_metal_ffi.dart';
+import '../../data/anime4k_performance.dart';
 import '../../data/anime4k_shader_library.dart';
+
+enum Anime4kPreviewBackend { mpv, appleMetal }
+
+class Anime4kPreviewCacheKey {
+  const Anime4kPreviewCacheKey({
+    required this.mode,
+    required this.quality,
+    required this.backend,
+    required this.pipelineHash,
+  });
+
+  final Anime4kMode mode;
+  final Anime4kQuality quality;
+  final Anime4kPreviewBackend backend;
+  final String pipelineHash;
+
+  @override
+  bool operator ==(Object other) {
+    return other is Anime4kPreviewCacheKey &&
+        other.mode == mode &&
+        other.quality == quality &&
+        other.backend == backend &&
+        other.pipelineHash == pipelineHash;
+  }
+
+  @override
+  int get hashCode => Object.hash(mode, quality, backend, pipelineHash);
+}
+
+class _Anime4kMetalPreviewCache {
+  final Map<Anime4kPreviewCacheKey, Uint8List> _images =
+      <Anime4kPreviewCacheKey, Uint8List>{};
+
+  Uint8List? lookup(Anime4kPreviewCacheKey key) => _images[key];
+
+  void store(Anime4kPreviewCacheKey key, Uint8List bytes) {
+    // The preview has a tiny configuration space, but keep the process-wide
+    // cache bounded in case a user cycles through many downloaded shader sets.
+    if (_images.length >= 16 && !_images.containsKey(key)) {
+      _images.remove(_images.keys.first);
+    }
+    _images[key] = bytes;
+  }
+}
+
+final _metalPreviewCache = _Anime4kMetalPreviewCache();
 
 /// A sample picture with the chosen mode running on it, beside the same
 /// picture untouched.
 ///
-/// The shaders only exist inside mpv, so this is a second mpv holding a still
-/// image rather than an episode: it opens the sample, is handed the same
-/// shader chain the real player gets, and draws the result. The plain file
-/// sits behind it as the other half of the split, so what moves when the
-/// divider moves is exactly what the mode does — on a picture that is the
-/// same every time, which is what makes two modes comparable at all.
-///
-/// It is a real decoder, so it is created when the panel opens and disposed
-/// when it closes.
+/// Apple uses the same native Metal backend as playback, but only long enough
+/// to render and capture one processed frame. The encoded result is cached by
+/// mode, quality, effective backend, and shader pipeline hash, so reopening the
+/// settings does not keep a second renderer alive. Other platforms, or an
+/// unavailable Apple Metal backend, keep the existing mpv preview as fallback.
 class Anime4kSamplePreview extends StatefulWidget {
   const Anime4kSamplePreview({
     super.key,
@@ -54,8 +102,13 @@ class Anime4kSamplePreview extends StatefulWidget {
 class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
   Player? _player;
   VideoController? _controller;
+  Uint8List? _processedPreviewBytes;
   String? _error;
   bool _ready = false;
+  bool _capturingMetal = false;
+  int _previewRequest = 0;
+
+  final GlobalKey _metalCaptureKey = GlobalKey();
 
   /// Where the divider sits, as a fraction of the width.
   double _split = 0.5;
@@ -72,72 +125,279 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     if (oldWidget.mode != widget.mode ||
         oldWidget.quality != widget.quality ||
         oldWidget.shaderDirectory != widget.shaderDirectory) {
-      unawaited(_applyShaders());
+      unawaited(_start());
     }
   }
 
   @override
   void dispose() {
-    // Ordered: the controller owns the texture the player renders into.
-    unawaited(_player?.dispose());
+    _previewRequest++;
+    final player = _player;
+    _player = null;
+    _controller = null;
+    unawaited(player?.dispose());
     super.dispose();
   }
 
-  Future<void> _start() async {
+  bool _isCurrentRequest(int request) => mounted && request == _previewRequest;
+
+  Future<void> _disposeSpecificPreviewPlayer(Player player) async {
+    if (identical(_player, player)) {
+      _player = null;
+      _controller = null;
+      _capturingMetal = false;
+    }
+    await player.dispose();
+  }
+
+  Future<void> _disposePreviewPlayer() async {
+    final player = _player;
+    _player = null;
+    _controller = null;
+    _capturingMetal = false;
+    if (player != null) await player.dispose();
+  }
+
+  Future<Anime4kProcessingDimensions> _sampleDimensions(File file) async {
+    final codec = await ui.instantiateImageCodec(await file.readAsBytes());
     try {
-      final file = await _writeSample();
-      final player = Player();
-      final controller = VideoController(player);
-      _player = player;
-      _controller = controller;
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      try {
+        return Anime4kProcessingDimensions(
+          width: image.width,
+          height: image.height,
+        );
+      } finally {
+        image.dispose();
+      }
+    } finally {
+      codec.dispose();
+    }
+  }
+
+  Future<Uint8List> _captureMetalPreview() async {
+    final boundary = _metalCaptureKey.currentContext?.findRenderObject();
+    if (boundary is! RenderRepaintBoundary) {
+      throw StateError('Anime4K preview capture surface is unavailable.');
+    }
+    final image = await boundary.toImage(pixelRatio: 1);
+    try {
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) {
+        throw StateError('Anime4K preview capture returned no pixels.');
+      }
+      return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    } finally {
+      image.dispose();
+    }
+  }
+
+  Future<bool> _startAppleMetalOneShot({
+    required int request,
+    required File file,
+    required Anime4kPipeline pipeline,
+  }) async {
+    final key = Anime4kPreviewCacheKey(
+      mode: widget.mode,
+      quality: widget.quality,
+      backend: Anime4kPreviewBackend.appleMetal,
+      pipelineHash: pipeline.pipelineHash,
+    );
+    final cached = _metalPreviewCache.lookup(key);
+    if (cached != null) {
+      if (_isCurrentRequest(request)) {
+        setState(() {
+          _processedPreviewBytes = cached;
+          _ready = true;
+          _error = null;
+        });
+      }
+      return true;
+    }
+
+    final bindings = Anime4kMetalFfiBindings.tryCreate();
+    if (bindings == null || pipeline.isEmpty || pipeline.pipelineHash.isEmpty) {
+      return false;
+    }
+
+    final dimensions = await _sampleDimensions(file);
+    if (!_isCurrentRequest(request)) return false;
+
+    final player = Player();
+    final controller = VideoController(
+      player,
+      configuration: VideoControllerConfiguration(
+        width: dimensions.width,
+        height: dimensions.height,
+      ),
+    );
+    _player = player;
+    _controller = controller;
+    setState(() {
+      _capturingMetal = true;
+      _ready = false;
+      _processedPreviewBytes = null;
+      _error = null;
+    });
+
+    Anime4kMetalBridge? metalBridge;
+    int? handle;
+    try {
+      // Mount the Video texture before opening the still image. This lets the
+      // patched media_kit render path own the very first produced frame.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!_isCurrentRequest(request)) {
+        await _disposeSpecificPreviewPlayer(player);
+        return false;
+      }
 
       final platform = player.platform;
-      if (platform is NativePlayer) {
-        // mpv gives a still image one second and then reports the end of the
-        // file. This one has to sit there for as long as the panel is open.
-        await platform.setProperty('image-display-duration', 'inf');
-        await platform.setProperty('loop-file', 'inf');
-        // Nothing here is watched, and a settings panel that made noise
-        // would be a surprise.
-        await platform.setProperty('mute', 'yes');
+      if (platform is! NativePlayer) {
+        await _disposeSpecificPreviewPlayer(player);
+        return false;
       }
 
+      handle = await platform.handle;
+      metalBridge = Anime4kMetalBridge(bindings: bindings);
+      final shaderPaths = pipeline.files
+          .map((name) => p.join(widget.shaderDirectory.trim(), name))
+          .toList(growable: false);
+      final metalState = metalBridge.configure(
+        handle: handle,
+        shaderPaths: shaderPaths,
+        pipelineHash: pipeline.pipelineHash,
+        source: dimensions,
+        output: dimensions,
+      );
+      if (metalState != Anime4kNativeMetalState.ready) {
+        metalBridge.disable(handle: handle);
+        await _disposeSpecificPreviewPlayer(player);
+        return false;
+      }
+
+      // Metal and mpv must never process the same preview frame.
+      await platform.setProperty('glsl-shaders', '');
+      await platform.setProperty('image-display-duration', 'inf');
+      await platform.setProperty('mute', 'yes');
       await player.open(Media(file.path), play: true);
-      await _applyShaders();
-      if (!mounted) return;
-      setState(() => _ready = true);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _error = '$error');
-    }
-  }
-
-  /// Copies the bundled sample somewhere mpv can open by path.
-  Future<File> _writeSample() async {
-    final bytes = await rootBundle.load(Anime4kSamplePreview.assetPath);
-    final directory = await getApplicationSupportDirectory();
-    final file = File(p.join(directory.path, 'anime4k_sample.jpg'));
-    await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
-    return file;
-  }
-
-  /// Hands this player the same chain the real one would run.
-  Future<void> _applyShaders() async {
-    final player = _player;
-    if (player == null) return;
-    final platform = player.platform;
-    if (platform is! NativePlayer) {
-      if (mounted) {
-        setState(() => _error = 'Anime4K requires the native mpv player.');
+      await controller.waitUntilFirstFrameRendered.timeout(
+        const Duration(seconds: 5),
+      );
+      await WidgetsBinding.instance.endOfFrame;
+      if (!_isCurrentRequest(request)) {
+        metalBridge.disable(handle: handle);
+        await _disposeSpecificPreviewPlayer(player);
+        return false;
       }
-      return;
+
+      final bytes = await _captureMetalPreview();
+      if (!_isCurrentRequest(request)) {
+        metalBridge.disable(handle: handle);
+        await _disposeSpecificPreviewPlayer(player);
+        return false;
+      }
+
+      _metalPreviewCache.store(key, bytes);
+      setState(() {
+        _processedPreviewBytes = bytes;
+        _ready = true;
+        _capturingMetal = false;
+        _error = null;
+      });
+      metalBridge.disable(handle: handle);
+      await _disposePreviewPlayer();
+      return true;
+    } catch (_) {
+      if (metalBridge != null && handle != null) {
+        metalBridge.disable(handle: handle);
+      }
+      await _disposeSpecificPreviewPlayer(player);
+      return false;
     }
+  }
+
+  Future<void> _start() async {
+    final request = ++_previewRequest;
+    await _disposePreviewPlayer();
+    if (!_isCurrentRequest(request)) return;
+    setState(() {
+      _ready = false;
+      _capturingMetal = false;
+      _processedPreviewBytes = null;
+      _error = null;
+    });
+
     try {
+      final file = await _writeSample();
       final pipeline = await const Anime4kShaderLibrary().pipeline(
         mode: widget.mode,
         quality: widget.quality,
         directory: widget.shaderDirectory,
       );
+      if (!_isCurrentRequest(request)) return;
+
+      if (pipeline.isEmpty) {
+        final bytes = await file.readAsBytes();
+        if (_isCurrentRequest(request)) {
+          setState(() {
+            _processedPreviewBytes = bytes;
+            _ready = true;
+          });
+        }
+        return;
+      }
+
+      if ((Platform.isIOS || Platform.isMacOS) &&
+          await _startAppleMetalOneShot(
+            request: request,
+            file: file,
+            pipeline: pipeline,
+          )) {
+        return;
+      }
+      if (!_isCurrentRequest(request)) return;
+      await _startMpvFallback(
+        request: request,
+        file: file,
+        pipeline: pipeline,
+      );
+    } catch (error) {
+      if (!_isCurrentRequest(request)) return;
+      setState(() => _error = '$error');
+    }
+  }
+
+  Future<void> _startMpvFallback({
+    required int request,
+    required File file,
+    required Anime4kPipeline pipeline,
+  }) async {
+    final player = Player();
+    final controller = VideoController(player);
+    if (!_isCurrentRequest(request)) {
+      await player.dispose();
+      return;
+    }
+    _player = player;
+    _controller = controller;
+    setState(() {
+      _capturingMetal = false;
+      _processedPreviewBytes = null;
+      _ready = false;
+    });
+
+    try {
+      final platform = player.platform;
+      if (platform is! NativePlayer) {
+        throw StateError('Anime4K requires the native mpv player.');
+      }
+
+      await platform.setProperty('image-display-duration', 'inf');
+      await platform.setProperty('loop-file', 'inf');
+      await platform.setProperty('mute', 'yes');
+      await player.open(Media(file.path), play: true);
+
       String currentVo = '';
       if (!pipeline.isEmpty) {
         currentVo = (await platform.getProperty('current-vo')).trim();
@@ -149,9 +409,6 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
         }
       }
 
-      // gpu-dumb-mode=auto is expected to be "yes" before a custom shader is
-      // loaded. Asking mpv for it before this line rejects a perfectly valid
-      // renderer. Load the chain first, then verify that mpv left dumb mode.
       await platform.setProperty('glsl-shaders', pipeline.value);
       final applied = (await platform.getProperty('glsl-shaders')).trim();
       if (pipeline.value.isNotEmpty && applied.isEmpty) {
@@ -169,15 +426,34 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
           );
         }
       }
-      if (mounted && _error != null) setState(() => _error = null);
-    } catch (error) {
-      if (mounted) setState(() => _error = '$error');
+
+      if (!_isCurrentRequest(request)) {
+        await _disposeSpecificPreviewPlayer(player);
+        return;
+      }
+      setState(() {
+        _ready = true;
+        _error = null;
+      });
+    } catch (_) {
+      await _disposeSpecificPreviewPlayer(player);
+      rethrow;
     }
+  }
+
+  /// Copies the bundled sample somewhere mpv can open by path.
+  Future<File> _writeSample() async {
+    final bytes = await rootBundle.load(Anime4kSamplePreview.assetPath);
+    final directory = await getApplicationSupportDirectory();
+    final file = File(p.join(directory.path, 'anime4k_sample.jpg'));
+    await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+    return file;
   }
 
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
+    final processedBytes = _processedPreviewBytes;
     final fill = widget.fillColor ?? Colors.white.withValues(alpha: 0.04);
 
     return Column(
@@ -229,16 +505,26 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
                                 Anime4kSamplePreview.assetPath,
                                 fit: BoxFit.cover,
                               ),
-                              if (controller != null && _ready)
+                              if (processedBytes != null && _ready)
                                 ClipRect(
                                   clipper: _LeftOf(_split),
-                                  child: Video(
-                                    controller: controller,
+                                  child: Image.memory(
+                                    processedBytes,
                                     fit: BoxFit.cover,
-                                    // media_kit exports NoVideoControls as
-                                    // an untyped null; passing it directly
-                                    // says the same thing and type-checks.
-                                    controls: null,
+                                    gaplessPlayback: true,
+                                  ),
+                                )
+                              else if (controller != null &&
+                                  (_ready || _capturingMetal))
+                                ClipRect(
+                                  clipper: _LeftOf(_split),
+                                  child: RepaintBoundary(
+                                    key: _metalCaptureKey,
+                                    child: Video(
+                                      controller: controller,
+                                      fit: BoxFit.cover,
+                                      controls: null,
+                                    ),
                                   ),
                                 ),
                               if (!_ready)

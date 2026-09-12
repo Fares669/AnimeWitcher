@@ -3,6 +3,14 @@ import Foundation
 @main
 struct Anime4KMetalShaderTests {
     static func main() throws {
+        try testSyntheticFixture()
+        try testMixedFP16PrecisionContract()
+        try testCRLFLineEndings()
+        try emitCorpusMetalSourcesIfRequested()
+        print("Anime4KMetalShaderTests: PASS")
+    }
+
+    private static func testSyntheticFixture() throws {
         let source = """
         //!DESC Anime4K-Test-Pass
         //!HOOK MAIN
@@ -34,13 +42,170 @@ struct Anime4KMetalShaderTests {
         precondition(metal.contains("texture2d<float, access::write> output"))
 
         do {
-            _ = try Anime4KMetalShader.parse("//!HOOK MAIN\nvec4 hook() { return vec4(0); }")
+            _ = try Anime4KMetalShader.parse(
+                "//!HOOK MAIN\nvec4 hook() { return vec4(0); }"
+            )
             preconditionFailure("malformed shader without DESC should fail")
         } catch {
             // Expected: the translator must fail closed instead of silently
             // producing a no-op Metal pipeline.
         }
+    }
 
-        print("Anime4KMetalShaderTests: PASS")
+    private static func testMixedFP16PrecisionContract() throws {
+        let source = """
+        //!DESC Anime4K-Precision-Pass
+        //!HOOK MAIN
+        //!BIND MAIN
+        vec4 hook() {
+            vec4 color = MAIN_tex(MAIN_pos);
+            return color;
+        }
+        """
+        let shader = try Anime4KMetalShader.parse(source)[0]
+
+        let fp32 = shader.metalSource(precision: .fp32)
+        precondition(fp32.contains("using vec4 = float4;"))
+        precondition(fp32.contains("using mat4 = float4x4;"))
+        precondition(fp32.contains("texture2d<float, access::sample> MAIN"))
+        precondition(fp32.contains("texture2d<float, access::write> output"))
+
+        let mixed = shader.metalSource(precision: .mixedFP16)
+        precondition(
+            mixed.contains("using vec2 = float2;"),
+            "texture coordinates and dimensions must stay FP32"
+        )
+        precondition(mixed.contains("using vec4 = half4;"))
+        precondition(mixed.contains("using mat4 = half4x4;"))
+        precondition(mixed.contains("texture2d<half, access::sample> MAIN"))
+        precondition(mixed.contains("texture2d<half, access::write> output"))
+        precondition(
+            mixed.contains("float2 mtlPos"),
+            "normalized texture coordinates must remain FP32"
+        )
+    }
+
+    /// GitHub's v4.0.1 release ZIP stores AutoDownscalePre with CRLF line
+    /// endings, while the Git tree uses LF. Swift treats CRLF as a single
+    /// grapheme cluster, so splitting the source on the `\n` Character alone
+    /// can leave the entire shader as one line and hide every `//!DESC`.
+    private static func testCRLFLineEndings() throws {
+        let lf = """
+        // release-style header
+        //!DESC Anime4K-CRLF-Pass
+        //!HOOK MAIN
+        //!BIND HOOKED
+        //!BIND NATIVE
+        //!WIDTH OUTPUT.w
+        //!HEIGHT OUTPUT.h
+        vec4 hook() {
+            return HOOKED_tex(HOOKED_pos);
+        }
+        """
+        let crlf = lf.replacingOccurrences(of: "\n", with: "\r\n")
+        let passes = try Anime4KMetalShader.parse(crlf)
+        precondition(
+            passes.count == 1 && passes[0].name == "Anime4K-CRLF-Pass",
+            "CRLF Anime4K shaders must parse exactly like LF shaders"
+        )
+    }
+
+    /// When called with `OUTPUT_DIR shader1.glsl ...`, translate every pass in
+    /// the real pinned corpus into individual FP32 and mixed-FP16 `.metal`
+    /// files. Apple CI compiles both policies, so mixed precision cannot become
+    /// a paper-only optimization that fails on a real Anime4K shader family.
+    private static func emitCorpusMetalSourcesIfRequested() throws {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        guard !arguments.isEmpty else { return }
+        guard arguments.count >= 2 else {
+            throw CorpusVerificationError.usage
+        }
+
+        let outputDirectory = URL(
+            fileURLWithPath: arguments[0],
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: outputDirectory,
+            withIntermediateDirectories: true
+        )
+
+        var generatedPasses = 0
+        for path in arguments.dropFirst() {
+            let url = URL(fileURLWithPath: path)
+            let data = try Data(contentsOf: url)
+            guard let source = String(data: data, encoding: .utf8) else {
+                throw CorpusVerificationError.notUTF8(path)
+            }
+
+            let passes: [Anime4KMetalShader]
+            do {
+                passes = try Anime4KMetalShader.parse(source)
+            } catch {
+                throw CorpusVerificationError.parseFailure(
+                    path,
+                    String(describing: error)
+                )
+            }
+            guard !passes.isEmpty else {
+                throw CorpusVerificationError.noPasses(path)
+            }
+
+            let shaderBase = url.deletingPathExtension().lastPathComponent
+                .replacingOccurrences(
+                    of: "[^A-Za-z0-9_-]",
+                    with: "_",
+                    options: .regularExpression
+                )
+            for (index, pass) in passes.enumerated() {
+                for precision in Anime4KMetalPrecisionPolicy.allCases {
+                    let filename = String(
+                        format: "%@-%03d-%@-%@.metal",
+                        shaderBase,
+                        index,
+                        precision.rawValue,
+                        pass.functionName
+                    )
+                    let output = outputDirectory.appendingPathComponent(filename)
+                    try pass.metalSource(precision: precision).write(
+                        to: output,
+                        atomically: true,
+                        encoding: .utf8
+                    )
+                    generatedPasses += 1
+                }
+            }
+        }
+
+        guard generatedPasses > 0 else {
+            throw CorpusVerificationError.noGeneratedPasses
+        }
+        print(
+            "Anime4K corpus translation: \(arguments.count - 1) files, " +
+            "\(generatedPasses) Metal precision/pass combinations"
+        )
+    }
+}
+
+enum CorpusVerificationError: Error, LocalizedError {
+    case usage
+    case notUTF8(String)
+    case parseFailure(String, String)
+    case noPasses(String)
+    case noGeneratedPasses
+
+    var errorDescription: String? {
+        switch self {
+        case .usage:
+            return "usage: Anime4KMetalShaderTests OUTPUT_DIR shader.glsl ..."
+        case .notUTF8(let path):
+            return "Anime4K corpus shader is not UTF-8: \(path)"
+        case .parseFailure(let path, let detail):
+            return "Anime4K corpus parse failed for \(path): \(detail)"
+        case .noPasses(let path):
+            return "Anime4K corpus shader parsed to zero passes: \(path)"
+        case .noGeneratedPasses:
+            return "Anime4K corpus produced no Metal passes"
+        }
     }
 }

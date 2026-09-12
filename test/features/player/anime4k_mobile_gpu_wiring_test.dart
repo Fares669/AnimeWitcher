@@ -23,7 +23,7 @@ void main() {
 
   test('player verifies a real mpv GPU renderer before applying shaders', () {
     final source = File(
-      'lib/features/player/presentation/player_controller.dart',
+      'lib/features/player/presentation/player_controller_base.dart',
     ).readAsStringSync();
 
     expect(source, contains("getProperty('current-vo')"));
@@ -34,12 +34,24 @@ void main() {
 
   test('player checks gpu-dumb-mode only after asking mpv to load shaders', () {
     final source = File(
-      'lib/features/player/presentation/player_controller.dart',
+      'lib/features/player/presentation/player_controller_base.dart',
     ).readAsStringSync();
 
-    final apply = source.indexOf("setProperty('glsl-shaders', pipeline.value)");
-    final dumbMode = source.indexOf("getProperty('gpu-dumb-mode')");
-    expect(apply, greaterThanOrEqualTo(0));
+    // Apple routing deliberately materializes a guarded GLSL value so Metal
+    // and mpv shaders can never process the same frame. Keep this wiring test
+    // focused on the behavioral invariant: when the mpv route is selected,
+    // the resolved pipeline is assigned, submitted to mpv, and only then is
+    // gpu-dumb-mode inspected to verify that mpv accepted real GPU shaders.
+    final resolve = source.indexOf(
+      "final glslValue = route.enableMpvShaders ? pipeline.value : '';",
+    );
+    final apply = source.indexOf(
+      "setProperty('glsl-shaders', glslValue)",
+      resolve,
+    );
+    final dumbMode = source.indexOf("getProperty('gpu-dumb-mode')", apply);
+    expect(resolve, greaterThanOrEqualTo(0));
+    expect(apply, greaterThan(resolve));
     expect(dumbMode, greaterThan(apply));
   });
 

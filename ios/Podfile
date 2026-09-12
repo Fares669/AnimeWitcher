@@ -24,6 +24,9 @@ def flutter_root
 end
 
 require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+require_relative '../scripts/anime4k_media_kit_patch'
+require_relative '../scripts/anime4k_mpv_pacing_patch'
+require_relative '../scripts/anime4k_metal_capi_install'
 
 flutter_ios_podfile_setup
 
@@ -34,6 +37,28 @@ target 'Runner' do
   target 'RunnerTests' do
     inherit! :search_paths
   end
+end
+
+pre_install do |_installer|
+  anime4k_plugin_root = anime4k_flutter_plugin_root(
+    project_dir: __dir__,
+    platform: :ios
+  )
+  anime4k_native_dir = File.expand_path('../native/anime4k_metal', __dir__)
+  patch_anime4k_media_kit_video(
+    plugin_root: anime4k_plugin_root,
+    native_dir: anime4k_native_dir,
+    platform: :ios
+  )
+  patch_anime4k_mpv_render_pacing(
+    plugin_root: anime4k_plugin_root,
+    platform: :ios
+  )
+  install_anime4k_metal_capi(
+    plugin_root: anime4k_plugin_root,
+    native_dir: anime4k_native_dir,
+    platform: :ios
+  )
 end
 
 
@@ -102,5 +127,6 @@ post_install do |installer|
   ))
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    retain_anime4k_metal_capi_symbols(target)
   end
 end

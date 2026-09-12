@@ -1,19 +1,49 @@
 name: Anime4K platform build verification
 
 on:
-  push:
-    branches:
-      - feat/anime4k-mobile-gpu
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  android:
-    name: Android compile
+  quality:
+    name: Flutter analyze & tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Test
+        run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+  android:
+    name: Android compile
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
       - name: Generate
         run: |
           flutter pub get
@@ -24,22 +54,95 @@ jobs:
 
   ios:
     name: iOS compile (unsigned)
+    needs: quality
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
+      # These focused integration contracts stay before the full corpus so TDD
+      # failures surface quickly instead of after all generated passes compile.
+      - name: Test Anime4K runtime telemetry integration
+        run: |
+          swiftc \
+            -framework CoreVideo \
+            -framework Metal \
+            -framework MetalFX \
+            native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
+            native/anime4k_metal/Anime4KMetalRuntime.swift \
+            native/anime4k_metal/Anime4KMetalRuntimeTelemetryIntegrationTests.swift \
+            -o /tmp/anime4k_metal_runtime_telemetry_tests
+          /tmp/anime4k_metal_runtime_telemetry_tests
+      - name: Test Anime4K telemetry CocoaPods install
+        run: ruby scripts/test_anime4k_telemetry_install.rb
+      - name: Test Dart-to-Metal C API contract
+        run: |
+          swiftc \
+            -framework CoreVideo \
+            -framework Metal \
+            -framework MetalFX \
+            native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
+            native/anime4k_metal/Anime4KMetalRuntime.swift \
+            native/anime4k_metal/Anime4KMediaKitBridge.swift \
+            native/anime4k_metal/Anime4KMetalCAPI.swift \
+            native/anime4k_metal/Anime4KMetalCAPITests.swift \
+            -o /tmp/anime4k_metal_capi_tests
+          /tmp/anime4k_metal_capi_tests
+      # These native gates do not need Flutter. Run them first so parser/runtime
+      # regressions fail in seconds instead of after downloading the SDK.
+      - name: Verify full Anime4K v4.0.1 Metal corpus
+        run: bash scripts/verify_anime4k_metal_corpus.sh
+      - name: Test native Anime4K Metal runtime contract
+        run: |
+          if grep -q 'waitUntilCompleted' native/anime4k_metal/Anime4KMetalRuntime.swift 2>/dev/null; then
+            echo 'steady-state Anime4K runtime must not use waitUntilCompleted()' >&2
+            exit 1
+          fi
+          swiftc \
+            -framework CoreVideo \
+            -framework Metal \
+            -framework MetalFX \
+            native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
+            native/anime4k_metal/Anime4KMetalRuntime.swift \
+            native/anime4k_metal/Anime4KMediaKitBridge.swift \
+            native/anime4k_metal/Anime4KMetalRuntimeTests.swift \
+            -o /tmp/anime4k_metal_runtime_tests
+          /tmp/anime4k_metal_runtime_tests
+      - name: Test Anime4K Metal telemetry accumulator
+        run: |
+          swiftc \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalTelemetryTests.swift \
+            -o /tmp/anime4k_metal_telemetry_tests
+          /tmp/anime4k_metal_telemetry_tests
+      - name: Test media_kit Anime4K bridge backpressure contract
+        run: |
+          swiftc \
+            -framework CoreVideo \
+            -framework Metal \
+            -framework MetalFX \
+            native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
+            native/anime4k_metal/Anime4KMetalRuntime.swift \
+            native/anime4k_metal/Anime4KMediaKitBridge.swift \
+            native/anime4k_metal/Anime4KMediaKitBridgeTests.swift \
+            -o /tmp/anime4k_media_kit_bridge_tests
+          /tmp/anime4k_media_kit_bridge_tests
+      - name: Test media_kit Anime4K render patch contract
+        run: ruby scripts/test_anime4k_media_kit_patch.rb
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - name: Test Anime4K Metal shader translator
-        run: |
-          swiftc \
-            native/anime4k_metal/Anime4KMetalShader.swift \
-            native/anime4k_metal/Anime4KMetalShaderTests.swift \
-            -o /tmp/anime4k_metal_shader_tests
-          /tmp/anime4k_metal_shader_tests
+          flutter-version: 3.47.1
+          cache: true
       - name: Generate
         run: |
           flutter pub get
@@ -54,9 +157,26 @@ jobs:
         run: bash scripts/configure_ios_google_sign_in.sh
       - name: Build iOS
         run: flutter build ios --release --no-codesign
+      - name: Verify Anime4K C ABI symbols in iOS framework
+        run: |
+          binary="build/ios/iphoneos/Runner.app/Frameworks/media_kit_video.framework/media_kit_video"
+          test -f "$binary"
+          nm -gU "$binary" > /tmp/anime4k-ios-symbols.txt
+          for symbol in \
+            animewitcher_anime4k_metal_configure \
+            animewitcher_anime4k_metal_status \
+            animewitcher_anime4k_metal_telemetry \
+            animewitcher_anime4k_metal_set_bypass \
+            animewitcher_anime4k_metal_disable; do
+            grep -Eq "[[:space:]]_${symbol}$" /tmp/anime4k-ios-symbols.txt || {
+              echo "missing retained Anime4K C ABI symbol: $symbol" >&2
+              exit 1
+            }
+          done
 
   macos:
     name: macOS compile
+    needs: quality
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -66,6 +186,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.1
+          cache: true
       - name: Generate
         run: |
           flutter config --enable-macos-desktop
@@ -74,3 +196,20 @@ jobs:
           dart run build_runner build --delete-conflicting-outputs
       - name: Build macOS
         run: flutter build macos --release
+      - name: Verify Anime4K C ABI symbols in macOS framework
+        run: |
+          binary="$(find build/macos -type f -name media_kit_video -path '*media_kit_video.framework/*' | head -n 1)"
+          test -n "$binary"
+          test -f "$binary"
+          nm -gU "$binary" > /tmp/anime4k-macos-symbols.txt
+          for symbol in \
+            animewitcher_anime4k_metal_configure \
+            animewitcher_anime4k_metal_status \
+            animewitcher_anime4k_metal_telemetry \
+            animewitcher_anime4k_metal_set_bypass \
+            animewitcher_anime4k_metal_disable; do
+            grep -Eq "[[:space:]]_${symbol}$" /tmp/anime4k-macos-symbols.txt || {
+              echo "missing retained Anime4K C ABI symbol: $symbol" >&2
+              exit 1
+            }
+          done
