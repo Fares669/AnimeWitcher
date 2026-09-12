@@ -23,7 +23,7 @@ void main() {
       expect(base, same);
       expect(base.hashCode, same.hashCode);
       expect(base, isNot(const Anime4kPreviewCacheKey(mode: Anime4kMode.b, quality: Anime4kQuality.m, backend: Anime4kPreviewBackend.appleMetal, pipelineHash: 'pipeline-a')));
-      expect(base, isNot(const Anime4kPreviewCacheKey(mode: Anime4kMode.a, quality: Anime4kQuality.h, backend: Anime4kPreviewBackend.appleMetal, pipelineHash: 'pipeline-a')));
+      expect(base, isNot(const Anime4kPreviewCacheKey(mode: Anime4kMode.a, quality: Anime4kQuality.l, backend: Anime4kPreviewBackend.appleMetal, pipelineHash: 'pipeline-a')));
       expect(base, isNot(const Anime4kPreviewCacheKey(mode: Anime4kMode.a, quality: Anime4kQuality.m, backend: Anime4kPreviewBackend.mpv, pipelineHash: 'pipeline-a')));
       expect(base, isNot(const Anime4kPreviewCacheKey(mode: Anime4kMode.a, quality: Anime4kQuality.m, backend: Anime4kPreviewBackend.appleMetal, pipelineHash: 'pipeline-b')));
     });
