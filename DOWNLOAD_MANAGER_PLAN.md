@@ -303,7 +303,7 @@
   - **Confirmed root cause:** the prior cancel path deleted its own JobStore `canceled` row immediately after ownership settlement, while `downloads_provider.dart` separately deleted plugin DB rows, Hive metadata and files. A crash/late callback could therefore outlive the only terminal fact, and presentation code raced the service for destructive cleanup.
   - **Verification passed:** RED→GREEN explicit completed→canceled deletion tombstone, late-reopen fence, repeated-delete idempotency, missing-row tombstone, age/ownership/projection GC policy, service-owned delete guards, cancel ownership/checkpoint/settlement regressions, DM-10 callback-generation regressions, logical-identity/JobState presentation regressions, analyzer and `git diff --check`.
 
-- [ ] **DM-31 — Make URL-refresh descriptor ownership transactional and generation-aware**
+- [x] **DM-31 — Make URL-refresh descriptor ownership transactional and generation-aware**
   - **Problem:** `DownloadLauncher` saves a descriptor before `startDownload()` and removes it on a failed result; concurrent/obsolete callers for the same episode can remove the descriptor of a successful/current job.
   - **Root cause:** a lifecycle-critical recovery capability is persisted by the presentation/launch caller outside the logical job transaction.
   - **Severity / priority:** **P1 / High.**
@@ -311,6 +311,8 @@
   - **Proposed fix:** pass descriptor data into the service and commit/remove it with the logical job generation. Old callers/generations cannot delete a current descriptor. Decide explicitly whether descriptor persistence is required or optional per source; surface failure through typed start outcome.
   - **Verification/testing:** two simultaneous starts same episode; first fails after second succeeds; old cancel vs new generation; descriptor store failure; crash between descriptor/job writes; source/quality change; relaunch with descriptor-only/job-only state.
   - **Dependencies:** DM-21, DM-24, DM-11.
+  - **Implementation notes (2026-09-12):** Refresh descriptors are owned by logical task generation inside DownloadService start/cancel boundaries. Obsolete callers cannot remove a newer generation descriptor, and descriptor persistence failure is surfaced through the typed start outcome instead of being silently detached from job creation.
+  - **Verification passed:** generation/owner descriptor guards, typed start outcome coverage, URL refresh behavior, DM-11 replica-transaction compatibility, full analyzer, and the dedicated `Verify DM-31 generation-owned refresh descriptors` workflow.
 
 - [ ] **DM-08 — Make source refresh complete and safe for every resumable representation**
   - **Problem:** native-resume-only single downloads cannot safely migrate opaque bytes when signed URLs expire; HTTP refresh handling differs across paths.
