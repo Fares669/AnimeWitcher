@@ -66,6 +66,7 @@ final class Anime4KMediaKitBridge {
     private let copyQueue: MTLCommandQueue?
     private var textureCache: CVMetalTextureCache?
     private var runtimes: [UInt: Anime4KMetalRuntime] = [:]
+    private var bypassedRuntimeKeys: Set<UInt> = []
     private var publicationLedger = Anime4KMetalPublicationLedger(capacity: 3)
 
     private init() {
@@ -107,13 +108,34 @@ final class Anime4KMediaKitBridge {
             lock.anime4kWithLock { runtimes[key] = runtime }
         } catch {
             runtime.disable()
-            lock.anime4kWithLock { _ = runtimes.removeValue(forKey: key) }
+            lock.anime4kWithLock {
+                _ = runtimes.removeValue(forKey: key)
+                bypassedRuntimeKeys.remove(key)
+            }
             throw error
         }
     }
 
     func disable(handle: OpaquePointer) {
         disable(key: handleKey(handle))
+    }
+
+    /// Temporarily bypasses Anime4K frame processing while preserving the
+    /// configured runtime and telemetry. Eco uses this for critical thermal
+    /// protection so ProcessInfo telemetry can observe recovery and resume the
+    /// same per-player runtime without a decode/render-path restart.
+    @discardableResult
+    func setBypass(handle: OpaquePointer, bypass: Bool) -> Bool {
+        let key = handleKey(handle)
+        return lock.anime4kWithLock {
+            guard runtimes[key] != nil else { return false }
+            if bypass {
+                bypassedRuntimeKeys.insert(key)
+            } else {
+                bypassedRuntimeKeys.remove(key)
+            }
+            return true
+        }
     }
 
     func telemetry(handle: OpaquePointer) -> Anime4KMetalRuntimeTelemetry? {
@@ -133,14 +155,17 @@ final class Anime4KMediaKitBridge {
         let key = handleKey(handle)
         guard let runtime = lock.anime4kWithLock({ () -> Anime4KMetalRuntime? in
             guard let runtime = runtimes[key] else { return nil }
+            // Intentional Eco bypass is not a late/dropped frame. It is a
+            // deliberate pass-through while thermal pressure recovers.
+            if bypassedRuntimeKeys.contains(key) { return nil }
             guard publicationLedger.reserve(for: key) else {
                 runtime.recordLateOrDroppedFrame()
                 return nil
             }
             return runtime
         }) else {
-            // Saturation is deliberately non-blocking: TextureHW publishes the
-            // untouched frame rather than waiting for a Metal/output slot.
+            // Saturation and intentional Eco bypass are both non-blocking:
+            // TextureHW immediately publishes the untouched mpv frame.
             return false
         }
 
@@ -293,7 +318,10 @@ final class Anime4KMediaKitBridge {
     }
 
     private func disable(key: UInt) {
-        let runtime = lock.anime4kWithLock { runtimes.removeValue(forKey: key) }
+        let runtime = lock.anime4kWithLock { () -> Anime4KMetalRuntime? in
+            bypassedRuntimeKeys.remove(key)
+            return runtimes.removeValue(forKey: key)
+        }
         runtime?.disable()
     }
 
