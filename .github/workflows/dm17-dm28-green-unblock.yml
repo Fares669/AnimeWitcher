@@ -77,6 +77,51 @@ jobs:
               if len(matches) != 1:
                   raise SystemExit(f'Expected exactly one production patch in {path}, found {len(matches)}')
               exec(compile(matches[0], path, 'exec'), {})
+
+          # A Dio CancelToken no longer owns the response stream after headers are
+          # returned. Make the detached range reader itself cancellation-aware so
+          # dispose() can actually join the writer instead of waiting for the
+          # 30-second stream idle timeout.
+          range_path = Path('lib/core/services/download_range_transfer.dart')
+          range_source = range_path.read_text()
+          class_anchor = 'class DownloadRangeTransfer {'
+          stream_helper = '''Stream<T> _cancelRangeStream<T>(
+            Stream<T> source,
+            CancelToken token,
+          ) async* {
+            final iterator = StreamIterator<T>(source);
+            try {
+              while (!token.isCancelled) {
+                final moved = await Future.any<Object?>([
+                  iterator.moveNext(),
+                  token.whenCancel.then<Object?>((_) => null),
+                ]);
+                if (token.isCancelled || moved != true) break;
+                yield iterator.current;
+              }
+            } finally {
+              await iterator.cancel();
+            }
+          }
+
+          '''
+          if '_cancelRangeStream<T>' not in range_source:
+              if class_anchor not in range_source:
+                  raise SystemExit('DM-17 cancellable stream class anchor drift')
+              range_source = range_source.replace(class_anchor, stream_helper + class_anchor, 1)
+
+          old_stream_loop = '''          await for (final bytes in current.stream.timeout(
+            kDownloadRangeStreamIdleTimeout,
+          )) {'''
+          new_stream_loop = '''          await for (final bytes in _cancelRangeStream(
+            current.stream.timeout(kDownloadRangeStreamIdleTimeout),
+            operation.token,
+          )) {'''
+          if old_stream_loop in range_source:
+              range_source = range_source.replace(old_stream_loop, new_stream_loop, 1)
+          elif '_cancelRangeStream(' not in range_source:
+              raise SystemExit('DM-17 cancellable stream loop anchor drift')
+          range_path.write_text(range_source)
           PY
 
           dart format \
