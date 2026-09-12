@@ -67,6 +67,20 @@ void main() {
       expect(bindings.disableHandle, 99);
     });
 
+    test('temporary Eco bypass uses the exact player handle and fails closed', () {
+      final bindings = _FakeBindings(bypassResult: 1);
+      final bridge = Anime4kMetalBridge(bindings: bindings);
+
+      expect(bridge.setBypass(handle: 41, bypass: true), isTrue);
+      expect(bindings.bypassHandle, 41);
+      expect(bindings.bypassValue, isTrue);
+
+      final failed = Anime4kMetalBridge(
+        bindings: _FakeBindings(bypassResult: 0),
+      );
+      expect(failed.setBypass(handle: 41, bypass: false), isFalse);
+    });
+
     test('invalid native status fails closed instead of enabling Metal', () {
       final bridge = Anime4kMetalBridge(
         bindings: _FakeBindings(configureResult: 999),
@@ -122,17 +136,21 @@ class _FakeBindings implements Anime4kMetalNativeBindings {
   _FakeBindings({
     this.configureResult = 1,
     this.statusResult = 1,
+    this.bypassResult = 1,
     this.telemetryJson,
   });
 
   final int configureResult;
   final int statusResult;
+  final int bypassResult;
   final String? telemetryJson;
   int? configureHandle;
   String? configureJson;
   int? statusHandle;
   int? disableHandle;
   int? telemetryHandle;
+  int? bypassHandle;
+  bool? bypassValue;
 
   @override
   int configure(int handle, String configurationJson) {
@@ -145,6 +163,13 @@ class _FakeBindings implements Anime4kMetalNativeBindings {
   int status(int handle) {
     statusHandle = handle;
     return statusResult;
+  }
+
+  @override
+  int setBypass(int handle, bool bypass) {
+    bypassHandle = handle;
+    bypassValue = bypass;
+    return bypassResult;
   }
 
   @override
