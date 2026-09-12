@@ -12,21 +12,24 @@ import 'package:path/path.dart' as p;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import 'anime4k.dart';
+import 'anime4k_shader_manifest.dart';
 
 part 'anime4k_shader_library.g.dart';
 
-/// A resolved pipeline, ready to hand to mpv.
+/// A resolved pipeline, ready to hand to mpv or identify in the Metal cache.
 class Anime4kPipeline {
   const Anime4kPipeline({
     required this.value,
     required this.files,
     required this.missing,
+    this.pipelineHash = '',
   });
 
   const Anime4kPipeline.none()
     : value = '',
       files = const <String>[],
-      missing = const <String>[];
+      missing = const <String>[],
+      pipelineHash = '';
 
   /// The `glsl-shaders` string, empty when nothing should run.
   final String value;
@@ -38,34 +41,33 @@ class Anime4kPipeline {
   /// Shaders the mode wanted that the folder does not have.
   final List<String> missing;
 
+  /// Stable identity of the ordered shader bytes used by this pipeline.
+  ///
+  /// Future Metal pipeline compilation uses this as its cache key. It is empty
+  /// whenever no pipeline is active.
+  final String pipelineHash;
+
   bool get isEmpty => value.isEmpty;
 }
 
 class Anime4kShaderLibrary {
-  const Anime4kShaderLibrary();
+  const Anime4kShaderLibrary({Anime4kShaderManifestCache? manifestCache})
+    : _manifestCacheOverride = manifestCache;
+
+  final Anime4kShaderManifestCache? _manifestCacheOverride;
+
+  Anime4kShaderManifestCache get _manifestCache =>
+      _manifestCacheOverride ?? Anime4kShaderManifestCache.shared;
 
   /// The `.glsl` filenames directly inside [directory].
   ///
-  /// An unreadable or missing folder is an empty list rather than an error:
-  /// a viewer who moved their shaders should get the picture back with no
-  /// shaders, not a player that refuses to start.
+  /// The manifest cache avoids rereading every shader for repeated preview or
+  /// apply operations. An unreadable or missing folder is an empty list rather
+  /// than an error: a viewer who moved their shaders should get the picture
+  /// back with no shaders, not a player that refuses to start.
   Future<List<String>> listShaders(String directory) async {
-    final path = directory.trim();
-    if (path.isEmpty) return const <String>[];
-    try {
-      final folder = Directory(path);
-      if (!await folder.exists()) return const <String>[];
-      final names = <String>[];
-      await for (final entry in folder.list(followLinks: false)) {
-        if (entry is! File) continue;
-        final name = p.basename(entry.path);
-        if (p.extension(name).toLowerCase() == '.glsl') names.add(name);
-      }
-      names.sort();
-      return names;
-    } catch (_) {
-      return const <String>[];
-    }
+    final manifest = await _manifestCache.load(directory);
+    return manifest.names;
   }
 
   /// What mpv should run for [mode] given the folder the viewer chose.
@@ -77,11 +79,15 @@ class Anime4kShaderLibrary {
     if (mode == Anime4kMode.off || directory.trim().isEmpty) {
       return const Anime4kPipeline.none();
     }
-    final available = await listShaders(directory);
+
+    // Load once. Calling [listShaders] here would perform a second cache check
+    // and leave the hash detached from the exact manifest used to resolve the
+    // chain if the folder changed between those two calls.
+    final manifest = await _manifestCache.load(directory);
     final chain = resolveAnime4kChain(
       mode: mode,
       quality: quality,
-      available: available,
+      available: manifest.names,
     );
     if (chain.files.isEmpty) {
       return Anime4kPipeline(
@@ -97,6 +103,7 @@ class Anime4kShaderLibrary {
       value: anime4kGlslShadersValue(paths, onWindows: Platform.isWindows),
       files: chain.files,
       missing: chain.missing,
+      pipelineHash: manifest.pipelineHash(chain.files),
     );
   }
 }
