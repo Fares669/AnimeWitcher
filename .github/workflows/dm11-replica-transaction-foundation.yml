@@ -24,286 +24,53 @@ jobs:
         with:
           ref: plan/download-manager-reliability
           fetch-depth: 0
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.47.1
           cache: true
+
       - name: Install dependencies
         run: flutter pub get
-      - name: Materialize verified DM-11 behavioral test
+
+      - name: Apply DM-11 foundation after established RED
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import textwrap
-          source = Path('.github/workflows/dm11-cycle-bootstrap.yml').read_text()
-          test_source = Path('.github/workflows/dm11-cycle-bootstrap-v4.yml').read_text()
-          # v4 already consumes the historical RED test from this workflow; after replacing
-          # this file, retain an equivalent focused test directly.
-          Path('test/core/services/download_replica_transaction_test.dart').write_text(r'''import 'package:animewitcher/core/services/download_job_state.dart';
-import 'package:animewitcher/core/services/download_job_store.dart';
-import 'package:flutter_test/flutter_test.dart';
-
-void main() {
-  late InMemoryDownloadJobStoreBackend backend;
-  late DownloadJobStore store;
-
-  setUp(() {
-    backend = InMemoryDownloadJobStoreBackend();
-    store = DownloadJobStore(backend: backend);
-  });
-
-  DownloadJobRecord record({int generation = 2}) => DownloadJobRecord(
-    taskId: 'episode-1',
-    seriesName: 'Series',
-    episodeNumber: '1',
-    fileName: 'episode.mp4',
-    filePath: '/tmp/episode.mp4',
-    jobState: DownloadJobState.running,
-    generation: generation,
-    createdAtMillis: 1,
-    updatedAtMillis: 1,
-  );
-
-  test('replica intent survives process death before executor acknowledgement', () async {
-    await store.put(record());
-    final token = await store.beginReplicaTransaction(
-      'episode-1',
-      operation: DownloadReplicaOperation.pause,
-      state: DownloadJobState.pausing,
-      updatedAtMillis: 10,
-    );
-    expect(token, isNotNull);
-    final relaunched = DownloadJobStore(backend: backend);
-    final persisted = await relaunched.get('episode-1');
-    expect(persisted!.replicaTransaction!.operation, DownloadReplicaOperation.pause);
-    expect(persisted.replicaTransaction!.phase, DownloadReplicaTransactionPhase.intent);
-    expect(persisted.generation, 3);
-  });
-
-  test('executor acknowledgement survives before projection', () async {
-    await store.put(record());
-    final token = (await store.beginReplicaTransaction(
-      'episode-1',
-      operation: DownloadReplicaOperation.resume,
-      state: DownloadJobState.resuming,
-    ))!;
-    expect(await store.advanceReplicaTransaction(token, DownloadReplicaTransactionPhase.executorAcknowledged), isTrue);
-    final persisted = await DownloadJobStore(backend: backend).get('episode-1');
-    expect(persisted!.replicaTransaction!.phase, DownloadReplicaTransactionPhase.executorAcknowledged);
-  });
-
-  test('projection phase is durable and commit clears only current journal', () async {
-    await store.put(record());
-    final token = (await store.beginReplicaTransaction(
-      'episode-1',
-      operation: DownloadReplicaOperation.cancel,
-      state: DownloadJobState.canceling,
-    ))!;
-    expect(await store.advanceReplicaTransaction(token, DownloadReplicaTransactionPhase.executorAcknowledged), isTrue);
-    expect(await store.advanceReplicaTransaction(token, DownloadReplicaTransactionPhase.projecting), isTrue);
-    expect(await store.commitReplicaTransaction(token), isTrue);
-    final persisted = await store.get('episode-1');
-    expect(persisted!.replicaTransaction, isNull);
-    expect(persisted.generation, token.generation);
-  });
-
-  test('stale process cannot advance a newer transaction', () async {
-    await store.put(record());
-    final stale = (await store.beginReplicaTransaction(
-      'episode-1',
-      operation: DownloadReplicaOperation.pause,
-      state: DownloadJobState.pausing,
-    ))!;
-    final newer = (await store.beginReplicaTransaction(
-      'episode-1',
-      operation: DownloadReplicaOperation.resume,
-      state: DownloadJobState.resuming,
-    ))!;
-    expect(newer.generation, greaterThan(stale.generation));
-    expect(await store.advanceReplicaTransaction(stale, DownloadReplicaTransactionPhase.executorAcknowledged), isFalse);
-    expect((await store.get('episode-1'))!.replicaTransaction!.generation, newer.generation);
-  });
-
-  test('legacy schema without transaction loads with no journal', () async {
-    final json = record().toJson()..remove('replicaTransaction');
-    final restored = DownloadJobRecord.fromJson(json);
-    expect(restored, isNotNull);
-    expect(restored!.replicaTransaction, isNull);
-  });
-}
-''')
-          PY
-          dart format test/core/services/download_replica_transaction_test.dart
-      - name: Prove RED or acknowledge prior RED
-        run: |
-          if grep -q 'beginReplicaTransaction' lib/core/services/download_job_store.dart; then
-            echo 'DM-11 transaction foundation already present; historical RED was established in earlier run.'
-          else
-            set +e
-            flutter test test/core/services/download_replica_transaction_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key > /tmp/dm11-red.log 2>&1
-            status=$?
-            set -e
-            cat /tmp/dm11-red.log
-            test "$status" -ne 0
-            grep -Eq 'beginReplicaTransaction|DownloadReplicaOperation|replicaTransaction' /tmp/dm11-red.log
-          fi
-      - name: Apply durable transaction foundation
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('lib/core/services/download_job_store.dart')
-          s = p.read_text()
-          if 'enum DownloadReplicaOperation' in s:
-              print('DM-11 transaction model already present')
-              raise SystemExit(0)
-          def rep(old, new, label):
-              global s
-              if old not in s:
-                  raise SystemExit(f'DM-11 {label} anchor drift')
-              s = s.replace(old, new, 1)
-          rep('const int kDownloadJobSchemaVersion = 6;', 'const int kDownloadJobSchemaVersion = 7;', 'schema')
-          enum_anchor = '''enum DownloadByteReconciliationReason {
-  exactDiskLoss,
-  noSurvivingBytes,
-  multipartManifestRollback,
-  nativeRecoverabilityLoss,
-}
-'''
-          enum_insert = enum_anchor + r'''
-
-enum DownloadReplicaOperation {
-  start,
-  pause,
-  resume,
-  cancel,
-  complete,
-  sourceRefresh,
-  nativeHandoff,
-}
-
-enum DownloadReplicaTransactionPhase { intent, executorAcknowledged, projecting }
-
-class DownloadReplicaTransaction {
-  const DownloadReplicaTransaction({required this.operation, required this.phase, required this.generation});
-  final DownloadReplicaOperation operation;
-  final DownloadReplicaTransactionPhase phase;
-  final int generation;
-  DownloadReplicaTransaction copyWith({DownloadReplicaTransactionPhase? phase}) => DownloadReplicaTransaction(operation: operation, phase: phase ?? this.phase, generation: generation);
-  Map<String, Object?> toJson() => <String, Object?>{'operation': operation.name, 'phase': phase.name, 'generation': generation};
-  static DownloadReplicaTransaction? fromJson(Object? raw) {
-    if (raw is! Map) return null;
-    final map = Map<String, dynamic>.from(raw);
-    final operationName = _nonEmptyString(map['operation']);
-    final phaseName = _nonEmptyString(map['phase']);
-    final generation = _intValue(map['generation'], fallback: -1);
-    if (operationName == null || phaseName == null || generation < 0) return null;
-    DownloadReplicaOperation? operation;
-    for (final value in DownloadReplicaOperation.values) { if (value.name == operationName) { operation = value; break; } }
-    DownloadReplicaTransactionPhase? phase;
-    for (final value in DownloadReplicaTransactionPhase.values) { if (value.name == phaseName) { phase = value; break; } }
-    if (operation == null || phase == null) return null;
-    return DownloadReplicaTransaction(operation: operation, phase: phase, generation: generation);
-  }
-}
-'''
-          rep(enum_anchor, enum_insert, 'enum')
-          rep('''    this.lastByteReconciliationAtMillis,
-  });''', '''    this.lastByteReconciliationAtMillis,
-    this.replicaTransaction,
-  });''', 'constructor')
-          rep('''  final int? lastByteReconciliationAtMillis;
-
-  DownloadAttemptToken get attemptToken =>''', '''  final int? lastByteReconciliationAtMillis;
-  final DownloadReplicaTransaction? replicaTransaction;
-
-  DownloadAttemptToken get attemptToken =>''', 'field')
-          rep('''    int? lastByteReconciliationAtMillis,
-  }) => DownloadJobRecord(''', '''    int? lastByteReconciliationAtMillis,
-    DownloadReplicaTransaction? replicaTransaction,
-    bool clearReplicaTransaction = false,
-  }) => DownloadJobRecord(''', 'copy signature')
-          copy_line = '    lastByteReconciliationAtMillis:\n        lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\n'
-          rep(copy_line, copy_line + '    replicaTransaction: clearReplicaTransaction\n        ? null\n        : (replicaTransaction ?? this.replicaTransaction),\n', 'copy body')
-          json_line = "    if (lastByteReconciliationAtMillis != null)\n      'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,\n"
-          rep(json_line, json_line + "    if (replicaTransaction != null)\n      'replicaTransaction': replicaTransaction!.toJson(),\n", 'json')
-          from_line = "      lastByteReconciliationAtMillis: _nullableIntValue(\n        map['lastByteReconciliationAtMillis'],\n      ),\n"
-          rep(from_line, from_line + "      replicaTransaction: DownloadReplicaTransaction.fromJson(\n        map['replicaTransaction'],\n      ),\n", 'from json')
-          all_anchor = '  Future<List<DownloadJobRecord>> all() async {\n'
-          methods = r'''
-  Future<DownloadAttemptToken?> beginReplicaTransaction(
-    String taskId, {
-    required DownloadReplicaOperation operation,
-    required DownloadJobState state,
-    int? updatedAtMillis,
-  }) => _serialize(() async {
-    final current = await get(taskId);
-    if (current == null || downloadJobIsTerminal(current.state)) return null;
-    final generation = current.generation + 1;
-    final next = current.copyWith(
-      state: state,
-      generation: generation,
-      updatedAtMillis: updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
-      replicaTransaction: DownloadReplicaTransaction(operation: operation, phase: DownloadReplicaTransactionPhase.intent, generation: generation),
-    );
-    if (!await _putUnlocked(next)) return null;
-    return next.attemptToken;
-  });
-
-  Future<bool> advanceReplicaTransaction(
-    DownloadAttemptToken token,
-    DownloadReplicaTransactionPhase phase, {
-    int? updatedAtMillis,
-  }) => _serialize(() async {
-    final current = await get(token.taskId);
-    final tx = current?.replicaTransaction;
-    if (current == null || current.generation != token.generation || tx == null || tx.generation != token.generation) return false;
-    if (phase.index < tx.phase.index) return false;
-    return _putUnlocked(current.copyWith(
-      updatedAtMillis: updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
-      replicaTransaction: tx.copyWith(phase: phase),
-    ));
-  });
-
-  Future<bool> commitReplicaTransaction(
-    DownloadAttemptToken token, {
-    int? updatedAtMillis,
-  }) => _serialize(() async {
-    final current = await get(token.taskId);
-    final tx = current?.replicaTransaction;
-    if (current == null || current.generation != token.generation || tx == null || tx.generation != token.generation || tx.phase != DownloadReplicaTransactionPhase.projecting) return false;
-    return _putUnlocked(current.copyWith(
-      updatedAtMillis: updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
-      clearReplicaTransaction: true,
-    ));
-  });
-
-'''
-          rep(all_anchor, methods + all_anchor, 'store insertion')
-          p.write_text(s)
-          PY
-          dart format lib/core/services/download_job_store.dart
+          python3 .github/scripts/dm11_foundation_patch.py
+          dart format lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
           git diff --check
-      - name: Verify foundation GREEN
+
+      - name: Verify DM-11 foundation GREEN
         run: |
-          flutter test test/core/services/download_replica_transaction_test.dart test/core/services/download_recovery_fault_injection_test.dart test/core/services/download_relaunch_chaos_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test \
+            test/core/services/download_replica_transaction_test.dart \
+            test/core/services/download_recovery_fault_injection_test.dart \
+            test/core/services/download_relaunch_chaos_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
           flutter analyze --no-fatal-warnings --no-fatal-infos
           git diff --check
-      - name: Commit verified foundation
+
+      - name: Commit verified production slice
         run: |
-          if git diff --quiet -- lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart; then
-            echo 'DM-11 foundation already verified; nothing to commit.'
+          if git diff --quiet -- lib/core/services/download_job_store.dart; then
+            echo 'DM-11 foundation already present; nothing to commit.'
             exit 0
           fi
           git config user.name 'openai-download-agent'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
+          git add lib/core/services/download_job_store.dart
           git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11 foundation)'
           git pull --rebase origin plan/download-manager-reliability
+
       - name: Re-verify after rebase
         run: |
-          flutter test test/core/services/download_replica_transaction_test.dart test/core/services/download_recovery_fault_injection_test.dart test/core/services/download_relaunch_chaos_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test \
+            test/core/services/download_replica_transaction_test.dart \
+            test/core/services/download_recovery_fault_injection_test.dart \
+            test/core/services/download_relaunch_chaos_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
           flutter analyze --no-fatal-warnings --no-fatal-infos
           git diff --check
-      - name: Push verified foundation
+
+      - name: Push verified production slice
         run: git push origin HEAD:plan/download-manager-reliability
