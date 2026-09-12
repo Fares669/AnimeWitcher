@@ -1,0 +1,120 @@
+name: Verify DM-08 final acceptance matrix
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm08-final-acceptance.yml
+      - lib/core/services/download_service.dart
+      - lib/core/utils/download_resume.dart
+      - test/core/services/download_source_refresh_checkpoint_guard_test.dart
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm08-final-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: Generate sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Verify DM-08 acceptance matrix
+        run: |
+          flutter test \
+            test/core/services/download_source_refresh_service_wiring_test.dart \
+            test/core/services/download_source_refresh_capability_test.dart \
+            test/core/services/download_source_refresh_checkpoint_guard_test.dart \
+            test/core/services/download_source_refresh_integrity_test.dart \
+            test/core/services/download_retry_policy_test.dart \
+            test/core/services/download_url_refresh_test.dart \
+            test/core/services/download_resource_identity_test.dart \
+            test/core/services/download_url_refresh_generation_test.dart \
+            test/core/utils/download_resume_test.dart \
+            test/core/services/download_command_outcome_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Mark DM-08 complete after verified acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('DOWNLOAD_MANAGER_PLAN.md')
+          text = path.read_text()
+          old = '- [ ] **DM-08 — Make source refresh complete and safe for every resumable representation**'
+          new = '- [x] **DM-08 — Make source refresh complete and safe for every resumable representation**'
+          if new in text:
+              raise SystemExit(0)
+          if old not in text:
+              raise SystemExit('DM-08 checklist marker not found')
+          text = text.replace(old, new, 1)
+          marker = '  - **Dependencies:** DM-03, DM-06, DM-20, DM-31.\n'
+          notes = (
+              marker
+              + '  - **Implementation notes (2026-09-13):** Resume now distinguishes same-source native adoption, visible-prefix migration, multipart-owned bytes, clean zero-evidence restart, and opaque native-only ownership. A validated source replacement cannot silently discard opaque native resume bytes; that path surfaces `restartRequired` instead.\n'
+              + '  - **Verification passed:** 401/403 and optional 404 refresh policy, unavailable refresh providers, validator/size/content identity guards, prefix-integrity checks, generation-owned descriptors, refresh checkpoint ordering, native/partial/multipart capability decisions, explicit restart-required wiring, resume fallback behavior, and full analyzer.\n'
+          )
+          if marker not in text:
+              raise SystemExit('DM-08 dependency marker not found')
+          text = text.replace(marker, notes, 1)
+          path.write_text(text)
+          PY
+          git diff --check
+      - name: Commit verified DM-08 completion
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- DOWNLOAD_MANAGER_PLAN.md; then
+            echo 'DM-08 already marked complete.'
+            echo 'needs_push=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'needs_push=true' >> "$GITHUB_OUTPUT"
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add DOWNLOAD_MANAGER_PLAN.md
+          git commit -m 'docs(downloads): complete DM-08 after acceptance verification'
+          git stash push --include-untracked -m 'dm08-final-generated-before-rebase' || true
+          git pull --rebase origin plan/download-manager-reliability
+      - name: Reverify and push completion
+        if: steps.commit.outputs.needs_push == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          flutter test \
+            test/core/services/download_source_refresh_service_wiring_test.dart \
+            test/core/services/download_source_refresh_capability_test.dart \
+            test/core/services/download_source_refresh_checkpoint_guard_test.dart \
+            test/core/services/download_source_refresh_integrity_test.dart \
+            test/core/services/download_retry_policy_test.dart \
+            test/core/services/download_url_refresh_test.dart \
+            test/core/services/download_resource_identity_test.dart \
+            test/core/services/download_url_refresh_generation_test.dart \
+            test/core/utils/download_resume_test.dart \
+            test/core/services/download_command_outcome_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+          git push origin HEAD:plan/download-manager-reliability

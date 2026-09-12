@@ -1,5 +1,7 @@
 import 'package:background_downloader/background_downloader.dart';
 
+import 'download_parallel.dart';
+
 /// Logical state of one episode download.
 ///
 /// This deliberately does not mirror [TaskStatus]. Native downloader status,
@@ -10,6 +12,7 @@ enum DownloadJobState {
   starting,
   running,
   retryWaiting,
+  waitingForNetwork,
   pausing,
   pausedByUser,
   interrupted,
@@ -18,6 +21,100 @@ enum DownloadJobState {
   completed,
   canceled,
   orphaned,
+}
+
+/// Queue scheduling is a projection of the durable logical state. Plugin
+/// TaskStatus and legacy metadata are executor/migration evidence only.
+bool downloadJobQueueWaiting(DownloadJobState state) =>
+    state == DownloadJobState.queued;
+
+/// `pausing` still owns its slot until executor ownership is proven released;
+/// only the settled logical pause is excluded as user-paused by the scheduler.
+bool downloadJobUserPaused(DownloadJobState state) =>
+    state == DownloadJobState.pausedByUser;
+
+/// Durable user-pause intent is encoded in logical state only.
+bool downloadJobHasUserPauseIntent(DownloadJobState state) =>
+    state == DownloadJobState.pausing || state == DownloadJobState.pausedByUser;
+
+bool downloadJobIsTerminal(DownloadJobState state) =>
+    state == DownloadJobState.completed ||
+    state == DownloadJobState.canceled ||
+    state == DownloadJobState.orphaned;
+
+/// One-time migration for pre-v6 side flags. Pause wins over queue.
+DownloadJobState migrateLegacyDownloadJobState({
+  required DownloadJobState state,
+  required bool userPaused,
+  required bool queueWaiting,
+}) {
+  if (downloadJobIsTerminal(state)) return state;
+  if (userPaused) {
+    return state == DownloadJobState.pausing
+        ? DownloadJobState.pausing
+        : DownloadJobState.pausedByUser;
+  }
+  if (queueWaiting) return DownloadJobState.queued;
+  return state;
+}
+
+bool downloadJobOccupiesSlot(DownloadJobState state) {
+  return switch (state) {
+    DownloadJobState.starting ||
+    DownloadJobState.running ||
+    DownloadJobState.retryWaiting ||
+    DownloadJobState.pausing ||
+    DownloadJobState.assembling ||
+    DownloadJobState.verifying => true,
+    DownloadJobState.queued ||
+    DownloadJobState.waitingForNetwork ||
+    DownloadJobState.pausedByUser ||
+    DownloadJobState.interrupted ||
+    DownloadJobState.completed ||
+    DownloadJobState.canceled ||
+    DownloadJobState.orphaned => false,
+  };
+}
+
+/// Compatibility projection for queue code that still consumes TaskStatus.
+/// This never reads TaskStatus to derive logical state; direction is strictly
+/// DownloadJobState -> plugin-shaped status.
+TaskStatus downloadJobTaskStatus(DownloadJobState state) {
+  return switch (state) {
+    DownloadJobState.queued => TaskStatus.paused,
+    DownloadJobState.starting => TaskStatus.enqueued,
+    DownloadJobState.running ||
+    DownloadJobState.pausing ||
+    DownloadJobState.assembling ||
+    DownloadJobState.verifying => TaskStatus.running,
+    DownloadJobState.retryWaiting ||
+    DownloadJobState.waitingForNetwork => TaskStatus.waitingToRetry,
+    DownloadJobState.pausedByUser ||
+    DownloadJobState.interrupted ||
+    DownloadJobState.orphaned => TaskStatus.paused,
+    DownloadJobState.completed => TaskStatus.complete,
+    DownloadJobState.canceled => TaskStatus.canceled,
+  };
+}
+
+/// User-visible projection of durable logical state. This intentionally differs
+/// from [downloadJobTaskStatus] for queued work: executor compatibility may
+/// persist it as paused, while the UI must show it as waiting/enqueued.
+TaskStatus downloadJobDisplayStatus(DownloadJobState state) {
+  return switch (state) {
+    DownloadJobState.queued || DownloadJobState.starting => TaskStatus.enqueued,
+    DownloadJobState.running ||
+    DownloadJobState.pausing ||
+    DownloadJobState.assembling ||
+    DownloadJobState.verifying => TaskStatus.running,
+    DownloadJobState.retryWaiting ||
+    DownloadJobState.waitingForNetwork => TaskStatus.waitingToRetry,
+    DownloadJobState.pausedByUser ||
+    DownloadJobState.interrupted ||
+    DownloadJobState.orphaned => TaskStatus.paused,
+    DownloadJobState.completed => TaskStatus.complete,
+    DownloadJobState.canceled => TaskStatus.canceled,
+  };
 }
 
 /// What startup reconciliation should do after deriving the logical state.
@@ -32,6 +129,10 @@ enum DownloadRecoveryAction {
   /// An explicit user pause is durable across process death.
   keepPaused,
 
+  /// Connectivity is unavailable and no executor currently owns the writer.
+  /// Keep durable bytes parked until a connectivity restoration reconciliation.
+  keepNetworkHeld,
+
   /// The row is terminal or there is not enough durable evidence to revive it.
   ignore,
 }
@@ -44,6 +145,131 @@ class DownloadRecoveryPlan {
 
   bool get shouldRequeue => action == DownloadRecoveryAction.requeue;
   bool get isNativeOwned => action == DownloadRecoveryAction.keepNative;
+}
+
+class DownloadRecoveryInventory {
+  const DownloadRecoveryInventory({
+    required this.records,
+    required this.nativeOnlyTaskIds,
+    required this.durableOnlyTaskIds,
+  });
+
+  final List<TaskRecord> records;
+  final Set<String> nativeOnlyTaskIds;
+  final Set<String> durableOnlyTaskIds;
+}
+
+enum DownloadDurableOnlyRecoveryDisposition { recover, orphan }
+
+/// A durable JobStore row is safe to revive only when both execution and
+/// presentation identities survived. A task snapshot alone can restart bytes,
+/// but without AnimeWitcher metadata the episode cannot be projected back into
+/// the user-visible downloads inventory.
+DownloadDurableOnlyRecoveryDisposition planDurableOnlyRecoveryDisposition({
+  required bool hasPresentationMetadata,
+  required bool hasRecoverableTaskDescriptor,
+}) {
+  return hasPresentationMetadata && hasRecoverableTaskDescriptor
+      ? DownloadDurableOnlyRecoveryDisposition.recover
+      : DownloadDurableOnlyRecoveryDisposition.orphan;
+}
+
+enum DownloadMissingPresentationRecoveryDisposition {
+  recover,
+  settleOwner,
+  orphan,
+  preserveTerminal,
+}
+
+/// Decide what startup may do when the executor/task identity survived but the
+/// AnimeWitcher presentation identity did not. Never restart a hidden transfer:
+/// a live writer is settled first, while terminal logical state is preserved.
+DownloadMissingPresentationRecoveryDisposition planMissingPresentationRecovery({
+  required bool hasPresentationMetadata,
+  required bool hasLiveOwnership,
+  DownloadJobState? authoritativeState,
+}) {
+  if (authoritativeState == DownloadJobState.completed ||
+      authoritativeState == DownloadJobState.canceled ||
+      authoritativeState == DownloadJobState.orphaned) {
+    return DownloadMissingPresentationRecoveryDisposition.preserveTerminal;
+  }
+  if (hasPresentationMetadata) {
+    return DownloadMissingPresentationRecoveryDisposition.recover;
+  }
+  return hasLiveOwnership
+      ? DownloadMissingPresentationRecoveryDisposition.settleOwner
+      : DownloadMissingPresentationRecoveryDisposition.orphan;
+}
+
+/// Build one deterministic startup inventory from every source that can carry
+/// a complete logical task descriptor. Source precedence is deliberate:
+/// persisted executor projection > live runtime ownership > durable snapshot.
+/// A lower-priority replica can fill a missing row but can never replace a
+/// stronger source for the same execution identity. Multipart children remain
+/// implementation details and never become logical episode rows.
+DownloadRecoveryInventory buildDownloadRecoveryInventory({
+  required Iterable<TaskRecord> persistedRecords,
+  required Iterable<Task> runtimeTasks,
+  Iterable<TaskRecord> durableRecords = const <TaskRecord>[],
+  Map<String, int> orderByTaskId = const <String, int>{},
+}) {
+  final records = <TaskRecord>[];
+  final knownIds = <String>{};
+
+  for (final record in persistedRecords) {
+    if (!isLogicalEpisodeDownloadTask(record.task)) continue;
+    if (!knownIds.add(record.task.taskId)) continue;
+    records.add(record);
+  }
+
+  final missingRuntimeTasks = <DownloadTask>[];
+  for (final task in runtimeTasks) {
+    if (!isLogicalEpisodeDownloadTask(task)) continue;
+    if (!knownIds.add(task.taskId)) continue;
+    missingRuntimeTasks.add(task as DownloadTask);
+  }
+  missingRuntimeTasks.sort((a, b) => a.taskId.compareTo(b.taskId));
+
+  final nativeOnlyTaskIds = <String>{};
+  for (final task in missingRuntimeTasks) {
+    nativeOnlyTaskIds.add(task.taskId);
+    records.add(TaskRecord(task, TaskStatus.running, 0, -1));
+  }
+
+  final durableOnlyTaskIds = <String>{};
+  final missingDurableRecords = <TaskRecord>[];
+  for (final record in durableRecords) {
+    if (!isLogicalEpisodeDownloadTask(record.task)) continue;
+    if (!knownIds.add(record.task.taskId)) continue;
+    durableOnlyTaskIds.add(record.task.taskId);
+    missingDurableRecords.add(record);
+  }
+  missingDurableRecords.sort((a, b) => a.task.taskId.compareTo(b.task.taskId));
+  records.addAll(missingDurableRecords);
+
+  // Preserve executor order when no durable FIFO evidence exists. Once at
+  // least one timestamp is available, order all logical rows deterministically
+  // and put unknown-age legacy rows after known FIFO entries.
+  if (orderByTaskId.isNotEmpty) {
+    records.sort((a, b) {
+      final aOrder = orderByTaskId[a.task.taskId];
+      final bOrder = orderByTaskId[b.task.taskId];
+      if (aOrder != null || bOrder != null) {
+        if (aOrder == null) return 1;
+        if (bOrder == null) return -1;
+        final byOrder = aOrder.compareTo(bOrder);
+        if (byOrder != 0) return byOrder;
+      }
+      return a.task.taskId.compareTo(b.task.taskId);
+    });
+  }
+
+  return DownloadRecoveryInventory(
+    records: List<TaskRecord>.unmodifiable(records),
+    nativeOnlyTaskIds: Set<String>.unmodifiable(nativeOnlyTaskIds),
+    durableOnlyTaskIds: Set<String>.unmodifiable(durableOnlyTaskIds),
+  );
 }
 
 /// Derive one deterministic startup decision from all durable/native evidence.
@@ -61,6 +287,7 @@ DownloadRecoveryPlan planDownloadRecovery({
   required bool userPaused,
   required bool stillInNativeQueue,
   required bool hasMetadata,
+  bool networkAvailable = true,
 }) {
   if (persisted == TaskStatus.complete) {
     return const DownloadRecoveryPlan(
@@ -74,6 +301,20 @@ DownloadRecoveryPlan planDownloadRecovery({
       state: DownloadJobState.pausedByUser,
       action: DownloadRecoveryAction.keepPaused,
     );
+  }
+
+  if (!networkAvailable && !queueWaiting) {
+    final recoverableOffline =
+        persisted != TaskStatus.complete &&
+        (persisted != TaskStatus.canceled || hasMetadata);
+    if (recoverableOffline) {
+      return DownloadRecoveryPlan(
+        state: DownloadJobState.waitingForNetwork,
+        action: stillInNativeQueue
+            ? DownloadRecoveryAction.keepNative
+            : DownloadRecoveryAction.keepNetworkHeld,
+      );
+    }
   }
 
   if (stillInNativeQueue) {
@@ -153,6 +394,7 @@ DownloadRecoveryPlan planDownloadRecoveryWithJobAuthority({
   DownloadJobState? authoritativeState,
   bool authoritativeUserPaused = false,
   bool authoritativeQueueWaiting = false,
+  bool networkAvailable = true,
 }) {
   if (authoritativeState == null) {
     return planDownloadRecovery(
@@ -161,6 +403,7 @@ DownloadRecoveryPlan planDownloadRecoveryWithJobAuthority({
       userPaused: userPaused,
       stillInNativeQueue: stillInNativeQueue,
       hasMetadata: hasMetadata,
+      networkAvailable: networkAvailable,
     );
   }
 
@@ -176,10 +419,10 @@ DownloadRecoveryPlan planDownloadRecoveryWithJobAuthority({
       break;
   }
 
-  // Keep legacy userPaused=true as migration evidence too. A pause is safer to
-  // preserve than to accidentally turn into network activity after relaunch.
+  // Legacy userPaused is migration evidence only when no JobStore authority
+  // exists (handled above). Once a durable logical state exists, replicas such
+  // as metadata/plugin status may not override it.
   if (authoritativeUserPaused ||
-      userPaused ||
       authoritativeState == DownloadJobState.pausedByUser ||
       authoritativeState == DownloadJobState.pausing) {
     return const DownloadRecoveryPlan(
@@ -188,11 +431,38 @@ DownloadRecoveryPlan planDownloadRecoveryWithJobAuthority({
     );
   }
 
+  if (authoritativeState == DownloadJobState.waitingForNetwork) {
+    if (!networkAvailable) {
+      return DownloadRecoveryPlan(
+        state: DownloadJobState.waitingForNetwork,
+        action: stillInNativeQueue
+            ? DownloadRecoveryAction.keepNative
+            : DownloadRecoveryAction.keepNetworkHeld,
+      );
+    }
+    if (!stillInNativeQueue) {
+      return const DownloadRecoveryPlan(
+        state: DownloadJobState.interrupted,
+        action: DownloadRecoveryAction.requeue,
+      );
+    }
+  }
+
+  if (!networkAvailable && authoritativeState != DownloadJobState.queued) {
+    return DownloadRecoveryPlan(
+      state: DownloadJobState.waitingForNetwork,
+      action: stillInNativeQueue
+          ? DownloadRecoveryAction.keepNative
+          : DownloadRecoveryAction.keepNetworkHeld,
+    );
+  }
+
   if (stillInNativeQueue) {
     final state = switch (authoritativeState) {
       DownloadJobState.queued => DownloadJobState.queued,
       DownloadJobState.starting => DownloadJobState.starting,
       DownloadJobState.retryWaiting => DownloadJobState.retryWaiting,
+      DownloadJobState.waitingForNetwork => DownloadJobState.waitingForNetwork,
       DownloadJobState.assembling => DownloadJobState.assembling,
       DownloadJobState.verifying => DownloadJobState.verifying,
       _ => DownloadJobState.running,

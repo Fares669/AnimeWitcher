@@ -175,7 +175,7 @@ void main() {
     expect(restartCalls, 1);
   });
 
-  test('does not restart from zero when saved progress exists', () async {
+  test('historical saved progress alone does not block zero restart', () async {
     var restartCalls = 0;
 
     final result = await resumeOrRestartDownload(
@@ -188,8 +188,8 @@ void main() {
       savedProgress: 0.42,
     );
 
-    expect(result, isFalse);
-    expect(restartCalls, 0);
+    expect(result, isTrue);
+    expect(restartCalls, 1);
   });
 
   test(
@@ -261,7 +261,7 @@ void main() {
         expectedBytes: 100,
         savedProgress: 0.4,
       ),
-      DownloadResumeStrategy.partialFile,
+      DownloadResumeStrategy.restartFromZero,
     );
     expect(
       shouldRestartDownloadFromZero(
@@ -276,7 +276,7 @@ void main() {
         expectedBytes: 100,
         savedProgress: 0.25,
       ),
-      isFalse,
+      isTrue,
     );
     expect(
       shouldRestartDownloadFromZero(
@@ -436,24 +436,27 @@ void main() {
     expect(await found.length(), 40);
   });
 
-  test('canonicalizes the largest temp prefix without keeping a duplicate', () async {
-    final root = await Directory.systemTemp.createTemp('aw-canonical-');
-    addTearDown(() => root.delete(recursive: true));
-    final dest = File(p.join(root.path, '0.part'));
-    await dest.writeAsBytes(List<int>.filled(10, 1));
-    final temp = File('${dest.path}.download');
-    await temp.writeAsBytes(List<int>.filled(40, 2));
+  test(
+    'canonicalizes the largest temp prefix without keeping a duplicate',
+    () async {
+      final root = await Directory.systemTemp.createTemp('aw-canonical-');
+      addTearDown(() => root.delete(recursive: true));
+      final dest = File(p.join(root.path, '0.part'));
+      await dest.writeAsBytes(List<int>.filled(10, 1));
+      final temp = File('${dest.path}.download');
+      await temp.writeAsBytes(List<int>.filled(40, 2));
 
-    final result = await canonicalizePartialDownloadFile(
-      destinationPath: dest.path,
-    );
-    expect(result, isNotNull);
-    expect(result!.file.path, dest.path);
-    expect(result.bytes, 40);
-    expect(await dest.length(), 40);
-    expect(await dest.readAsBytes(), List<int>.filled(40, 2));
-    expect(await temp.exists(), isFalse);
-  });
+      final result = await canonicalizePartialDownloadFile(
+        destinationPath: dest.path,
+      );
+      expect(result, isNotNull);
+      expect(result!.file.path, dest.path);
+      expect(result.bytes, 40);
+      expect(await dest.length(), 40);
+      expect(await dest.readAsBytes(), List<int>.filled(40, 2));
+      expect(await temp.exists(), isFalse);
+    },
+  );
 
   test('moves a suffix prefix into an absent canonical destination', () async {
     final root = await Directory.systemTemp.createTemp('aw-canonical-empty-');
@@ -473,25 +476,28 @@ void main() {
     expect(await temp.exists(), isFalse);
   });
 
-  test('keeps canonical destination when it already has the most bytes', () async {
-    final root = await Directory.systemTemp.createTemp('aw-canonical-best-');
-    addTearDown(() => root.delete(recursive: true));
-    final dest = File(p.join(root.path, 'episode.mp4'));
-    final temp = File('${dest.path}.download');
-    await dest.writeAsBytes(List<int>.filled(80, 3));
-    await temp.writeAsBytes(List<int>.filled(40, 4));
+  test(
+    'keeps canonical destination when it already has the most bytes',
+    () async {
+      final root = await Directory.systemTemp.createTemp('aw-canonical-best-');
+      addTearDown(() => root.delete(recursive: true));
+      final dest = File(p.join(root.path, 'episode.mp4'));
+      final temp = File('${dest.path}.download');
+      await dest.writeAsBytes(List<int>.filled(80, 3));
+      await temp.writeAsBytes(List<int>.filled(40, 4));
 
-    final result = await canonicalizePartialDownloadFile(
-      destinationPath: dest.path,
-    );
+      final result = await canonicalizePartialDownloadFile(
+        destinationPath: dest.path,
+      );
 
-    expect(result, isNotNull);
-    expect(result!.bytes, 80);
-    expect(await dest.length(), 80);
-    // Do not delete a sibling merely because it is smaller. A native worker
-    // may still own it; cleanup remains the explicit cancel/delete path.
-    expect(await temp.exists(), isTrue);
-  });
+      expect(result, isNotNull);
+      expect(result!.bytes, 80);
+      expect(await dest.length(), 80);
+      // Do not delete a sibling merely because it is smaller. A native worker
+      // may still own it; cleanup remains the explicit cancel/delete path.
+      expect(await temp.exists(), isTrue);
+    },
+  );
 
   test('append keeps the existing prefix and adds the rest', () async {
     final root = await Directory.systemTemp.createTemp('aw-append-');

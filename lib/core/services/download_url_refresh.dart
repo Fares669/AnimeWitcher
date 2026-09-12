@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
@@ -17,6 +18,9 @@ class DownloadUrlRefreshDescriptor {
     required this.providerId,
     required this.source,
     required this.updatedAtMillis,
+    this.generation = 0,
+    this.ownerTaskId,
+    this.logicalId,
     this.quality,
     this.refreshUrl,
   });
@@ -27,6 +31,9 @@ class DownloadUrlRefreshDescriptor {
   final String? quality;
   final String? refreshUrl;
   final int updatedAtMillis;
+  final int generation;
+  final String? ownerTaskId;
+  final String? logicalId;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'trackingUrl': trackingUrl,
@@ -35,6 +42,9 @@ class DownloadUrlRefreshDescriptor {
     if (quality?.trim().isNotEmpty ?? false) 'quality': quality,
     if (refreshUrl?.trim().isNotEmpty ?? false) 'refreshUrl': refreshUrl,
     'updatedAtMillis': updatedAtMillis,
+    'generation': generation,
+    if (ownerTaskId?.trim().isNotEmpty ?? false) 'ownerTaskId': ownerTaskId,
+    if (logicalId?.trim().isNotEmpty ?? false) 'logicalId': logicalId,
   };
 
   static DownloadUrlRefreshDescriptor? fromJson(Object? raw) {
@@ -52,6 +62,11 @@ class DownloadUrlRefreshDescriptor {
       quality: _string(map['quality']),
       refreshUrl: _string(map['refreshUrl']),
       updatedAtMillis: _int(map['updatedAtMillis']),
+      // Legacy descriptors predate generation fencing. Generation zero keeps
+      // them readable until the owning DownloadService rewrites the record.
+      generation: _int(map['generation']),
+      ownerTaskId: _string(map['ownerTaskId']),
+      logicalId: _string(map['logicalId']),
     );
   }
 }
@@ -96,14 +111,91 @@ class DownloadUrlRefreshStore {
   String keyFor(String trackingUrl) =>
       md5.convert(utf8.encode(trackingUrl.trim())).toString();
 
-  Future<void> save(DownloadUrlRefreshDescriptor descriptor) async {
-    if (descriptor.trackingUrl.trim().isEmpty ||
-        descriptor.providerId.trim().isEmpty ||
-        descriptor.source.trim().isEmpty) {
-      return;
-    }
-    await backend.write(keyFor(descriptor.trackingUrl), descriptor.toJson());
+  Future<void> _tail = Future<void>.value();
+
+  Future<T> _serialize<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    _tail = _tail.then<void>((_) async {
+      try {
+        completer.complete(await action());
+      } catch (error, stack) {
+        completer.completeError(error, stack);
+      }
+    });
+    return completer.future;
   }
+
+  Future<bool> claimOwnership(DownloadUrlRefreshDescriptor descriptor) =>
+      _serialize(() async {
+        final ownerTaskId = descriptor.ownerTaskId?.trim();
+        final logicalId = descriptor.logicalId?.trim();
+        if (descriptor.trackingUrl.trim().isEmpty ||
+            descriptor.providerId.trim().isEmpty ||
+            descriptor.source.trim().isEmpty ||
+            ownerTaskId == null ||
+            ownerTaskId.isEmpty ||
+            logicalId == null ||
+            logicalId.isEmpty) {
+          return false;
+        }
+        final key = keyFor(descriptor.trackingUrl);
+        final existing = DownloadUrlRefreshDescriptor.fromJson(
+          await backend.read(key),
+        );
+        final existingLogicalId = existing?.logicalId?.trim();
+        if (existingLogicalId != null &&
+            existingLogicalId.isNotEmpty &&
+            existingLogicalId != logicalId) {
+          return false;
+        }
+        if (existing?.ownerTaskId == ownerTaskId &&
+            existing!.generation > descriptor.generation) {
+          return false;
+        }
+        await backend.write(key, descriptor.toJson());
+        return true;
+      });
+
+  Future<bool> save(DownloadUrlRefreshDescriptor descriptor) =>
+      _serialize(() async {
+        if (descriptor.trackingUrl.trim().isEmpty ||
+            descriptor.providerId.trim().isEmpty ||
+            descriptor.source.trim().isEmpty) {
+          return false;
+        }
+        final key = keyFor(descriptor.trackingUrl);
+        final existing = DownloadUrlRefreshDescriptor.fromJson(
+          await backend.read(key),
+        );
+        final incomingOwner = descriptor.ownerTaskId?.trim();
+        final existingOwner = existing?.ownerTaskId?.trim();
+
+        // Owned descriptors can only be created/replaced through the explicit
+        // claim path. This prevents a delayed old task from resurrecting its
+        // descriptor after the current owner has deleted it.
+        if (existing == null) {
+          if (incomingOwner != null && incomingOwner.isNotEmpty) return false;
+        } else if (existingOwner != null && existingOwner.isNotEmpty) {
+          if (incomingOwner != existingOwner) return false;
+          final existingLogicalId = existing.logicalId?.trim();
+          final incomingLogicalId = descriptor.logicalId?.trim();
+          if (existingLogicalId != null &&
+              existingLogicalId.isNotEmpty &&
+              incomingLogicalId != existingLogicalId) {
+            return false;
+          }
+        } else if (incomingOwner != null && incomingOwner.isNotEmpty) {
+          // Migrating a legacy unowned descriptor to owned state is also a
+          // claim operation, never a plain save.
+          return false;
+        }
+
+        if (existing != null && existing.generation > descriptor.generation) {
+          return false;
+        }
+        await backend.write(key, descriptor.toJson());
+        return true;
+      });
 
   Future<DownloadUrlRefreshDescriptor?> get(String trackingUrl) async {
     final key = keyFor(trackingUrl);
@@ -118,6 +210,41 @@ class DownloadUrlRefreshStore {
     }
     return descriptor;
   }
+
+  Future<bool> removeForGeneration(
+    String trackingUrl,
+    int generation,
+  ) => _serialize(() async {
+    final key = keyFor(trackingUrl);
+    final descriptor = DownloadUrlRefreshDescriptor.fromJson(
+      await backend.read(key),
+    );
+    if (descriptor == null) return true;
+    // Generation-only cleanup is retained for legacy unowned rows only. Once
+    // an owner exists, callers must prove the task identity as well.
+    if (descriptor.ownerTaskId != null) return false;
+    if (descriptor.generation != generation) return false;
+    await backend.delete(key);
+    return true;
+  });
+
+  Future<bool> removeForOwnerGeneration(
+    String trackingUrl,
+    String ownerTaskId,
+    int generation,
+  ) => _serialize(() async {
+    final key = keyFor(trackingUrl);
+    final descriptor = DownloadUrlRefreshDescriptor.fromJson(
+      await backend.read(key),
+    );
+    if (descriptor == null) return true;
+    if (descriptor.ownerTaskId?.trim() != ownerTaskId.trim()) return false;
+    // A newer same-owner operation may clean an older descriptor after a
+    // crash, but a stale operation can never delete a newer generation.
+    if (descriptor.generation > generation) return false;
+    await backend.delete(key);
+    return true;
+  });
 
   Future<void> remove(String trackingUrl) =>
       backend.delete(keyFor(trackingUrl));

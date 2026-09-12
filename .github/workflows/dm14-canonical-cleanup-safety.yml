@@ -1,0 +1,264 @@
+name: DM-14 canonical cleanup safety
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm14-canonical-cleanup-safety.yml
+      - lib/core/utils/download_cleanup.dart
+      - test/core/utils/download_cleanup_canonical_safety_test.dart
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm14-cleanup-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canonical-cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Prove DM-14 RED before production change
+        run: |
+          if grep -q '_directoryContainsOnlyKnownDownloadArtifacts' lib/core/utils/download_cleanup.dart; then
+            echo 'DM-14 cleanup guard already implemented; skipping historical RED replay.'
+            exit 0
+          fi
+          set +e
+          flutter test test/core/utils/download_cleanup_canonical_safety_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key \
+            > /tmp/dm14-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/dm14-red.log
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected DM-14 canonical cleanup regression to be RED before implementation.' >&2
+            exit 1
+          fi
+          grep -q 'app download containment\|unknown user content\|symlink escape' /tmp/dm14-red.log
+
+      - name: Apply canonical containment and provenance-safe cleanup
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('lib/core/utils/download_cleanup.dart')
+          source = path.read_text()
+
+          old = r'''bool pathIsInsideAppDownloads(String path) {
+            final normalized = path.replaceAll('\\', '/');
+            return normalized.contains(kAppDownloadsRootMarker);
+          }
+
+          bool pathIsAppDownloadsRoot(String path) {
+            final normalized = path.replaceAll('\\', '/');
+            return normalized.endsWith(kAppDownloadsRootMarker) ||
+                normalized.endsWith('$kAppDownloadsRootMarker/');
+          }
+          '''
+          new = r'''bool _downloadPathSegmentEquals(String a, String b) =>
+              Platform.isWindows ? a.toLowerCase() == b.toLowerCase() : a == b;
+
+          String _normalizedAbsoluteDownloadPath(String value) =>
+              p.normalize(p.absolute(value));
+
+          String? _appDownloadsRootForPath(String value) {
+            final normalized = _normalizedAbsoluteDownloadPath(value);
+            final segments = p.split(normalized);
+            for (var i = 0; i + 1 < segments.length; i++) {
+              if (_downloadPathSegmentEquals(segments[i], 'AnimeWitcher') &&
+                  _downloadPathSegmentEquals(segments[i + 1], 'Downloads')) {
+                return p.normalize(p.joinAll(segments.take(i + 2)));
+              }
+            }
+            return null;
+          }
+
+          bool pathIsInsideAppDownloads(String path) {
+            final normalized = _normalizedAbsoluteDownloadPath(path);
+            final root = _appDownloadsRootForPath(normalized);
+            if (root == null) return false;
+            return normalized == root || p.isWithin(root, normalized);
+          }
+
+          bool pathIsAppDownloadsRoot(String path) {
+            final normalized = _normalizedAbsoluteDownloadPath(path);
+            final root = _appDownloadsRootForPath(normalized);
+            return root != null && normalized == root;
+          }
+
+          Future<bool> _resolvesInsideAppDownloads(Directory directory) async {
+            final rootPath = _appDownloadsRootForPath(directory.path);
+            if (rootPath == null) return false;
+            try {
+              final canonicalRoot = p.normalize(
+                await Directory(rootPath).resolveSymbolicLinks(),
+              );
+              final canonicalDirectory = p.normalize(
+                await directory.resolveSymbolicLinks(),
+              );
+              return canonicalDirectory == canonicalRoot ||
+                  p.isWithin(canonicalRoot, canonicalDirectory);
+            } catch (_) {
+              return false;
+            }
+          }
+          '''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif '_appDownloadsRootForPath' not in source:
+              raise SystemExit('DM-14 containment anchor drift')
+
+          old = r'''Future<void> _deleteEmptyAncestorsUpTo(
+            Directory start,
+            Directory stopAt,
+          ) async {
+            var dir = start;
+            final stop = stopAt.path.replaceAll('\\', '/');
+            while (true) {
+              final current = dir.path.replaceAll('\\', '/');
+              if (current == stop) return;
+              if (!current.startsWith(stop)) return;
+              if (!await dir.exists()) {
+                dir = dir.parent;
+                continue;
+              }
+              final children = await dir.list(followLinks: false).toList();
+              if (children.isNotEmpty) return;
+              await dir.delete();
+              if (dir.parent.path == dir.path) return;
+              dir = dir.parent;
+            }
+          }
+          '''
+          new = r'''Future<void> _deleteEmptyAncestorsUpTo(
+            Directory start,
+            Directory stopAt,
+          ) async {
+            var dir = start;
+            final stop = _normalizedAbsoluteDownloadPath(stopAt.path);
+            while (true) {
+              final current = _normalizedAbsoluteDownloadPath(dir.path);
+              if (current == stop) return;
+              if (!p.isWithin(stop, current)) return;
+              if (!await dir.exists()) {
+                dir = dir.parent;
+                continue;
+              }
+              final children = await dir.list(followLinks: false).toList();
+              if (children.isNotEmpty) return;
+              await dir.delete();
+              if (dir.parent.path == dir.path) return;
+              dir = dir.parent;
+            }
+          }
+
+          bool _isKnownOwnedDownloadArtifact(File file) {
+            final lower = p.basename(file.path).toLowerCase();
+            if (lower == 'manifest.json' || lower == 'manifest.json.tmp') {
+              return true;
+            }
+            if (lower.endsWith('.assembling')) return true;
+            return kDownloadTempSuffixes.any(lower.endsWith);
+          }
+
+          Future<bool> _directoryContainsOnlyKnownDownloadArtifacts(
+            Directory directory,
+          ) async {
+            if (!await directory.exists()) return true;
+            await for (final entity in directory.list(followLinks: false)) {
+              if (entity is Link) return false;
+              if (entity is File) {
+                if (!_isKnownOwnedDownloadArtifact(entity)) return false;
+                continue;
+              }
+              if (entity is Directory &&
+                  !await _directoryContainsOnlyKnownDownloadArtifacts(entity)) {
+                return false;
+              }
+            }
+            return true;
+          }
+          '''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif '_directoryContainsOnlyKnownDownloadArtifacts' not in source:
+              raise SystemExit('DM-14 ancestor anchor drift')
+
+          old = r'''  final seriesDir = seriesFolderForDownloadedFile(deletedFile);
+            if (seriesDir == null) return;
+            if (!await seriesDir.exists()) return;
+
+            if (await directoryContainsVideoFiles(seriesDir)) {
+              await _deleteEmptyAncestorsUpTo(deletedFile.parent, seriesDir);
+              return;
+            }
+
+            await seriesDir.delete(recursive: true);
+          }
+          '''
+          new = r'''  final seriesDir = seriesFolderForDownloadedFile(deletedFile);
+            if (seriesDir == null) return;
+            if (!await seriesDir.exists()) return;
+            if (!await _resolvesInsideAppDownloads(seriesDir)) return;
+
+            if (await directoryContainsVideoFiles(seriesDir)) {
+              await _deleteEmptyAncestorsUpTo(deletedFile.parent, seriesDir);
+              return;
+            }
+
+            if (!await _directoryContainsOnlyKnownDownloadArtifacts(seriesDir)) {
+              await _deleteEmptyAncestorsUpTo(deletedFile.parent, seriesDir);
+              return;
+            }
+            await seriesDir.delete(recursive: true);
+          }
+          '''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif '!await _resolvesInsideAppDownloads(seriesDir)' not in source:
+              raise SystemExit('DM-14 series cleanup anchor drift')
+
+          path.write_text(source)
+          PY
+          dart format lib/core/utils/download_cleanup.dart test/core/utils/download_cleanup_canonical_safety_test.dart
+
+      - name: Verify DM-14 GREEN slice
+        run: |
+          flutter test test/core/utils/download_cleanup_canonical_safety_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_delete_tombstone_guard_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Commit verified DM-14 cleanup slice
+        run: |
+          if git diff --quiet -- lib/core/utils/download_cleanup.dart; then
+            echo 'DM-14 cleanup source already verified; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/utils/download_cleanup.dart
+          git commit -m 'fix(downloads): harden canonical cleanup containment (DM-14)'
+          git pull --rebase origin plan/download-manager-reliability
+          git push origin HEAD:plan/download-manager-reliability

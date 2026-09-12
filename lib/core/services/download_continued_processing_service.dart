@@ -27,6 +27,28 @@ typedef SystemDownloadChunkUpdate = void Function({
   required bool completed,
 });
 
+@visibleForTesting
+class DownloadGlobalHandlerLease {
+  DownloadGlobalHandlerLease._(this.generation);
+
+  static int _nextGeneration = 0;
+  static int? _activeGeneration;
+
+  final int generation;
+
+  static DownloadGlobalHandlerLease acquire() {
+    final lease = DownloadGlobalHandlerLease._(++_nextGeneration);
+    _activeGeneration = lease.generation;
+    return lease;
+  }
+
+  bool releaseIfCurrent() {
+    if (_activeGeneration != generation) return false;
+    _activeGeneration = null;
+    return true;
+  }
+}
+
 /// Bridges AnimeWitcher downloads to iOS 26's system-managed continued
 /// processing task UI. On older iOS versions the native side returns false
 /// and background_downloader continues to work normally.
@@ -43,6 +65,8 @@ class DownloadContinuedProcessingService {
   final SystemDownloadTaskUpdate? onTaskUpdate;
   final SystemDownloadChunkUpdate? onChunkUpdate;
   bool _handlerInstalled = false;
+  bool _disposed = false;
+  DownloadGlobalHandlerLease? _handlerLease;
   static const Duration _updateSampleInterval = Duration(seconds: 1);
   Timer? _updateTimer;
   DateTime? _lastUpdateAt;
@@ -54,6 +78,7 @@ class DownloadContinuedProcessingService {
     this.onChunkUpdate,
   }) {
     if (_isAvailable) {
+      _handlerLease = DownloadGlobalHandlerLease.acquire();
       _channel.setMethodCallHandler(_handleNativeCall);
       _handlerInstalled = true;
     }
@@ -134,7 +159,7 @@ class DownloadContinuedProcessingService {
       _updateTimer = null;
       final pending = _pendingUpdate;
       _pendingUpdate = null;
-      if (pending == null || !_isAvailable) return;
+      if (pending == null || !_isAvailable || _disposed) return;
       _lastUpdateAt = DateTime.now();
       await _invoke('update', pending);
     });
@@ -212,6 +237,7 @@ class DownloadContinuedProcessingService {
   }
 
   Future<dynamic> _handleNativeCall(MethodCall call) async {
+    if (_disposed) return false;
     final arguments = call.arguments;
     if (arguments is! Map) return false;
 
@@ -276,7 +302,7 @@ class DownloadContinuedProcessingService {
   }
 
   Future<void> _invoke(String method, Map<String, Object> arguments) async {
-    if (!_isAvailable) return;
+    if (!_isAvailable || _disposed) return;
 
     try {
       await _channel.invokeMethod<void>(method, arguments);
@@ -297,10 +323,16 @@ class DownloadContinuedProcessingService {
   }
 
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     _cancelPendingUpdate();
     if (_handlerInstalled) {
-      _channel.setMethodCallHandler(null);
+      final ownsHandler = _handlerLease?.releaseIfCurrent() ?? false;
+      if (ownsHandler) {
+        _channel.setMethodCallHandler(null);
+      }
       _handlerInstalled = false;
+      _handlerLease = null;
     }
   }
 }

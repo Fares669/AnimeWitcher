@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -12,6 +13,7 @@ import 'package:collection/collection.dart';
 import 'package:permission_handler/permission_handler.dart'
     hide PermissionStatus;
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:disk_usage/disk_usage.dart';
 
 import '../domain/entity/multimedia_item.dart';
 import '../router/app_router.dart';
@@ -34,6 +36,9 @@ import 'download_retry_policy.dart';
 import 'download_host_profile.dart';
 import 'download_job_state.dart';
 import 'download_job_store.dart';
+import 'download_resource_identity.dart';
+import 'download_logical_identity.dart';
+import 'download_service_readiness.dart';
 import 'download_url_refresh.dart';
 import 'download_plugin_compat.dart';
 import 'download_transport.dart';
@@ -50,6 +55,91 @@ DownloadService downloadService(Ref ref) {
   // scope and the next DownloadService.init() throws "Stream already listened".
   ref.onDispose(service.dispose);
   return service;
+}
+
+enum DownloadCommandOutcome {
+  running,
+  attached,
+  queued,
+  paused,
+  settlingOwnership,
+  alreadyComplete,
+  restartRequired,
+  recoverableFailure,
+  serviceUnavailable,
+  missingState,
+  terminal,
+}
+
+class _DownloadRestartRequiredException implements Exception {
+  final String taskId;
+
+  const _DownloadRestartRequiredException(this.taskId);
+}
+
+DownloadCommandOutcome downloadCommandOutcomeForJobState(
+  DownloadJobState? state,
+) {
+  return switch (state) {
+    DownloadJobState.running ||
+    DownloadJobState.starting ||
+    DownloadJobState.assembling ||
+    DownloadJobState.verifying => DownloadCommandOutcome.running,
+    DownloadJobState.queued => DownloadCommandOutcome.queued,
+    DownloadJobState.retryWaiting ||
+    DownloadJobState.waitingForNetwork ||
+    DownloadJobState.interrupted => DownloadCommandOutcome.recoverableFailure,
+    DownloadJobState.pausing => DownloadCommandOutcome.settlingOwnership,
+    DownloadJobState.pausedByUser => DownloadCommandOutcome.paused,
+    DownloadJobState.completed => DownloadCommandOutcome.alreadyComplete,
+    DownloadJobState.canceled => DownloadCommandOutcome.terminal,
+    DownloadJobState.orphaned || null => DownloadCommandOutcome.missingState,
+  };
+}
+
+DownloadCommandOutcome resolvePauseCommandOutcome({
+  required DownloadJobState? state,
+  required DownloadRuntimeOwnership ownership,
+}) {
+  final durable = downloadCommandOutcomeForJobState(state);
+  if (durable == DownloadCommandOutcome.alreadyComplete ||
+      durable == DownloadCommandOutcome.terminal) {
+    return durable;
+  }
+  if (ownership != DownloadRuntimeOwnership.notOwned) {
+    return DownloadCommandOutcome.settlingOwnership;
+  }
+  return durable;
+}
+
+DownloadCommandOutcome resolveResumeCommandOutcome({
+  required DownloadJobState? state,
+  required DownloadRuntimeOwnership ownership,
+}) {
+  final durable = downloadCommandOutcomeForJobState(state);
+  if (durable == DownloadCommandOutcome.alreadyComplete ||
+      durable == DownloadCommandOutcome.terminal) {
+    return durable;
+  }
+  return switch (ownership) {
+    DownloadRuntimeOwnership.owned => DownloadCommandOutcome.attached,
+    DownloadRuntimeOwnership.settling || DownloadRuntimeOwnership.unknown =>
+      DownloadCommandOutcome.settlingOwnership,
+    DownloadRuntimeOwnership.notOwned => durable,
+  };
+}
+
+DownloadCommandOutcome resolveCancelCommandOutcome({
+  required DownloadJobState? state,
+  required DownloadRuntimeOwnership ownership,
+}) {
+  if (ownership != DownloadRuntimeOwnership.notOwned) {
+    return DownloadCommandOutcome.settlingOwnership;
+  }
+  if (state == null || state == DownloadJobState.canceled) {
+    return DownloadCommandOutcome.terminal;
+  }
+  return downloadCommandOutcomeForJobState(state);
 }
 
 class DownloadProgressData {
@@ -238,6 +328,37 @@ class ActiveDownloadsNotifier extends _$ActiveDownloadsNotifier {
   void remove(String url) => state = {...state}..remove(url);
 }
 
+enum DownloadLifecycleCheckpointCommit { committed, rejected, failed }
+
+@visibleForTesting
+Future<DownloadLifecycleCheckpointCommit> commitAuthoritativeDownloadCheckpoint(
+  Future<bool> Function() checkpoint,
+) async {
+  try {
+    return await checkpoint()
+        ? DownloadLifecycleCheckpointCommit.committed
+        : DownloadLifecycleCheckpointCommit.rejected;
+  } catch (_) {
+    return DownloadLifecycleCheckpointCommit.failed;
+  }
+}
+
+@visibleForTesting
+class DownloadServiceTeardownBarrier {
+  Future<void> _tail = Future<void>.value();
+
+  Future<void> wait() => _tail;
+
+  Future<void> run(Future<void> Function() teardown) {
+    final next = _tail.then<void>(
+      (_) => teardown(),
+      onError: (Object _, StackTrace __) => teardown(),
+    );
+    _tail = next.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return next;
+  }
+}
+
 class DownloadService {
   final diagnosticLog = DownloadDiagnosticLog(
     () async => Directory(
@@ -246,7 +367,7 @@ class DownloadService {
   );
 
   Future<void> setDiagnosticLogging(bool enabled) async {
-    await init();
+    await _awaitCommandReadiness('setDiagnosticLogging');
     final previous = diagnosticLog.enabled;
     try {
       await diagnosticLog.configure(enabled);
@@ -263,19 +384,29 @@ class DownloadService {
   // each DownloadService instance can listen via the broadcast proxy instead.
   static StreamSubscription<TaskUpdate>? _fdSubscription;
   static final _sharedEvents = StreamController<TaskUpdate>.broadcast();
+  static final DownloadServiceTeardownBarrier _teardownBarrier =
+      DownloadServiceTeardownBarrier();
 
   final Ref _ref;
   final Dio _dio;
-  final Set<String> _cancellingUrls = {};
   final Set<String> _userPausedIds = {};
   final Set<String> _dequeuingPausedIds = {};
-  final Set<String> _restackingWaiterIds = {};
   late final DownloadContinuedProcessingService _continuedProcessing;
   final _updatesController = StreamController<TaskUpdate>.broadcast();
+  final _parallelFailures =
+      StreamController<ParallelAssemblyFailure>.broadcast();
+
+  Stream<ParallelAssemblyFailure> get parallelFailures =>
+      _parallelFailures.stream;
   StreamSubscription<TaskUpdate>? _updatesSubscription;
+  final Connectivity _connectivity = Connectivity();
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  bool _networkAvailable = true;
   bool _isInitialized = false;
   bool _disposed = false;
-  Future<void>? _initializing;
+  Future<void>? _disposeFuture;
+  final DownloadServiceReadinessBarrier _readiness =
+      DownloadServiceReadinessBarrier();
   late final PersistentParallelDownload _parallel;
   late final DownloadRangeTransfer _rangeTransfers;
   late final NativeSingleDownloadTransport _nativeTransport;
@@ -315,8 +446,19 @@ class DownloadService {
           await _rangeTransfers.stop(id);
         }
         await FileDownloader().cancelTasksWithIds(ids);
+        final unsettled = <String>[];
         for (final id in ids) {
+          final ownership = await _waitForCancelOwnershipRelease(id);
+          if (ownership != DownloadRuntimeOwnership.notOwned) {
+            unsettled.add(id);
+            continue;
+          }
           await FileDownloader().database.deleteRecordWithId(id);
+        }
+        if (unsettled.isNotEmpty) {
+          throw StateError(
+            'Multipart cancel ownership did not settle: ${unsettled.join(',')}',
+          );
         }
       },
       saveRecord: (record) => FileDownloader().database.updateRecord(record),
@@ -338,6 +480,7 @@ class DownloadService {
           isInternalDownloaderChunk(task) &&
           !_rangeTransfers.isActive(task.taskId),
       onPausedDrainSettled: (parentTaskId) {
+        if (_disposed) return;
         diagnosticLog.record('parallel.pauseDrainQueueRelease', {
           'taskId': parentTaskId,
         });
@@ -346,6 +489,14 @@ class DownloadService {
       },
       onUpdate: (update) {
         if (!_disposed) _sharedEvents.add(update);
+      },
+      availableStorageBytes: (path) => DiskUsage.freeSpace(path),
+      onAssemblyFailure: (failure) {
+        diagnosticLog.record('parallel.failure', {
+          'taskId': failure.parentTaskId,
+          'reason': failure.reason.name,
+        });
+        if (!_disposed) _parallelFailures.add(failure);
       },
       onPartProgress: (parent, child, progress) {
         if (!_disposed) {
@@ -357,12 +508,14 @@ class DownloadService {
         }
       },
       onHostPressure: (url, ceiling) {
+        if (_disposed) return;
         diagnosticLog.record('parallel.hostPressure', {'count': ceiling});
         unawaited(
           _hostProfiles.recordPressure(url: url, fallbackCeiling: ceiling),
         );
       },
       onHostSample: (url, connections, bytesPerSecond) {
+        if (_disposed) return;
         unawaited(
           _hostProfiles.recordSuccess(
             url: url,
@@ -380,6 +533,14 @@ class DownloadService {
   }
 
   Stream<TaskUpdate> get updates => _updatesController.stream;
+
+  /// Read-only logical lifecycle projection for UI surfaces. Executor/plugin
+  /// status remains evidence and must not overwrite a durable JobStore state.
+  Future<DownloadJobState?> logicalJobStateForTask(String taskId) async {
+    final id = taskId.trim();
+    if (id.isEmpty) return null;
+    return (await _jobStore.get(id))?.state;
+  }
 
   void _handleNativeTaskUpdate({
     required String taskId,
@@ -400,9 +561,7 @@ class DownloadService {
         writtenBytes < 0) {
       return;
     }
-    if (_userPausedIds.contains(taskId) ||
-        _terminalJobIds.contains(taskId) ||
-        _cancellingUrls.contains(trackingUrl)) {
+    if (_userPausedIds.contains(taskId) || _terminalJobIds.contains(taskId)) {
       return;
     }
 
@@ -537,7 +696,7 @@ class DownloadService {
     double? speedBytesPerSecond,
     bool completed = false,
   }) {
-    if (_terminalJobIds.contains(parentTaskId)) return;
+    if (_disposed || _terminalJobIds.contains(parentTaskId)) return;
     final parentUserPaused = _userPausedIds.contains(parentTaskId);
     diagnosticLog.record('chunk.update', {
       'taskId': chunkTaskId,
@@ -580,27 +739,210 @@ class DownloadService {
   }
 
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
-    unawaited(_parallel.dispose());
-    _rangeTransfers.dispose();
+    _disposeFuture ??= _teardownBarrier.run(_disposeResources);
+  }
+
+  Future<void> _disposeResources() async {
+    await _updatesSubscription?.cancel();
+    _updatesSubscription = null;
+    await _connectivitySubscription?.cancel();
+    _connectivitySubscription = null;
+    await _rangeTransfers.dispose();
+    await _parallel.dispose();
+    await _nativeTransport.dispose();
+    await _continuedProcessing.dispose();
+    await _parallelFailures.close();
+    await _updatesController.close();
     _telemetry.clear();
     _expectedSizePersistedIds.clear();
     _terminalJobIds.clear();
-    unawaited(_nativeTransport.dispose());
-    _updatesSubscription?.cancel();
-    unawaited(_continuedProcessing.dispose());
-    _updatesController.close();
     // Do NOT cancel _fdSubscription — it matches FileDownloader()'s singleton
     // lifetime and cannot be re-subscribed after cancellation.
   }
 
-  Future<void> init() => _initializing ??= _initialize().catchError((
-    Object error,
-    StackTrace stack,
-  ) {
-    _initializing = null;
-    Error.throwWithStackTrace(error, stack);
-  });
+  bool _hasConnectivity(List<ConnectivityResult> results) =>
+      results.any((result) => result != ConnectivityResult.none);
+
+  Future<void> _initializeConnectivity() async {
+    try {
+      _networkAvailable = _hasConnectivity(
+        await _connectivity.checkConnectivity(),
+      );
+    } catch (_) {
+      // A platform connectivity probe failure is unknown, not proof of offline.
+      _networkAvailable = true;
+    }
+    await _connectivitySubscription?.cancel();
+    _connectivitySubscription = _connectivity.onConnectivityChanged.listen(
+      _handleConnectivityChanged,
+    );
+    diagnosticLog.record('network.state', {'available': _networkAvailable});
+  }
+
+  void _handleConnectivityChanged(List<ConnectivityResult> results) {
+    final available = _hasConnectivity(results);
+    final restored = !_networkAvailable && available;
+    _networkAvailable = available;
+    diagnosticLog.record('network.state', {
+      'available': available,
+      'restored': restored,
+    });
+    if (restored && _isInitialized && !_disposed) {
+      unawaited(_resumeNetworkHeldDownloads());
+    }
+  }
+
+  Future<void> _holdDownloadForNetwork(DownloadTask task) async {
+    if (_disposed ||
+        _terminalJobIds.contains(task.taskId) ||
+        _userPausedIds.contains(task.taskId)) {
+      return;
+    }
+    final saved = await _savedProgressFor(task);
+    final checkpointed = await _checkpointLogicalJob(
+      task,
+      state: DownloadJobState.waitingForNetwork,
+      durableBytes: saved.partialBytes,
+      durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
+      expectedBytes: saved.totalSize,
+      userPaused: false,
+      queueWaiting: false,
+    );
+    if (!checkpointed) return;
+    final hold = await _jobStore.beginOperation(
+      task.taskId,
+      state: DownloadJobState.waitingForNetwork,
+    );
+    if (hold == null) return;
+    _queueWaitingIds.remove(task.taskId);
+    _waitingPayloads.remove(task.taskId);
+    await FileDownloader().database.updateRecord(
+      TaskRecord(
+        task,
+        TaskStatus.waitingToRetry,
+        saved.progress,
+        saved.totalSize,
+      ),
+    );
+    _publishProgress(
+      trackingUrl: downloadTrackingUrl(task),
+      taskId: task.taskId,
+      progress: saved.progress,
+      totalSize: saved.totalSize,
+      status: TaskStatus.waitingToRetry,
+    );
+    _updatesController.add(TaskStatusUpdate(task, TaskStatus.waitingToRetry));
+    diagnosticLog.record('network.hold', {
+      'taskId': task.taskId,
+      'generation': hold.generation,
+    });
+  }
+
+  Future<void> _resumeNetworkHeldDownloads() async {
+    if (!_networkAvailable || _disposed) return;
+    await _serializeQueue(() async {
+      if (!_networkAvailable || _disposed) return;
+      final held = (await _jobStore.all())
+          .where((job) => job.state == DownloadJobState.waitingForNetwork)
+          .toList(growable: false);
+      for (final job in held) {
+        if (_terminalJobIds.contains(job.taskId) ||
+            _userPausedIds.contains(job.taskId)) {
+          continue;
+        }
+        final ownership = await _runtimeOwnershipFor(job.taskId);
+        if (ownership == DownloadRuntimeOwnership.owned) {
+          diagnosticLog.record('network.restoreOwned', {'taskId': job.taskId});
+          continue;
+        }
+        if (ownership != DownloadRuntimeOwnership.notOwned) {
+          diagnosticLog.record('network.restoreDeferred', {
+            'taskId': job.taskId,
+            'ownership': ownership.name,
+          });
+          continue;
+        }
+        final record = await FileDownloader().database.recordForId(job.taskId);
+        final task = record?.task is DownloadTask
+            ? record!.task as DownloadTask
+            : job.restoreTaskSnapshot();
+        if (task == null) continue;
+        final claim = await _jobStore.beginOperation(
+          job.taskId,
+          state: DownloadJobState.interrupted,
+        );
+        if (claim == null) continue;
+        await _enqueueExistingTaskAsWaiterUnlocked(task);
+        diagnosticLog.record('network.restoreQueued', {
+          'taskId': job.taskId,
+          'generation': claim.generation,
+        });
+      }
+      await _syncQueueToCapUnlocked();
+      await _syncSessionOverlay();
+    });
+  }
+
+  Future<void> _acknowledgeNativeNetworkResume(DownloadTask task) async {
+    final job = await _jobStore.get(task.taskId);
+    if (job?.state != DownloadJobState.waitingForNetwork) return;
+    final ownership = await _runtimeOwnershipFor(task.taskId);
+    if (ownership != DownloadRuntimeOwnership.owned) return;
+    final token = await _jobStore.beginOperation(
+      task.taskId,
+      state: DownloadJobState.running,
+    );
+    if (token != null) {
+      diagnosticLog.record('network.nativeResumeAck', {
+        'taskId': task.taskId,
+        'generation': token.generation,
+      });
+    }
+  }
+
+  Future<void> init() {
+    if (_disposed) {
+      return Future<void>.error(DownloadServiceUnavailableException.disposed());
+    }
+    return _readiness.ensureReady(() async {
+      await _teardownBarrier.wait();
+      if (_disposed) {
+        throw DownloadServiceUnavailableException.disposed();
+      }
+      await _initialize();
+    });
+  }
+
+  Future<void> _awaitCommandReadiness(String command) async {
+    try {
+      await init();
+    } on DownloadServiceUnavailableException catch (error) {
+      diagnosticLog.record('command.serviceUnavailable', {
+        'command': command,
+        'reason': error.reason.name,
+        'retryable': error.retryable,
+        if (error.cause != null)
+          'causeType': error.cause.runtimeType.toString(),
+      });
+      rethrow;
+    }
+  }
+
+  Future<bool> _awaitLifecycleReadiness(String event) async {
+    try {
+      await init();
+      return true;
+    } on DownloadServiceUnavailableException catch (error) {
+      diagnosticLog.record('lifecycle.serviceUnavailable', {
+        'event': event,
+        'reason': error.reason.name,
+        'retryable': error.retryable,
+      });
+      return false;
+    }
+  }
 
   Future<void> _initialize() async {
     if (_isInitialized) {
@@ -617,6 +959,7 @@ class DownloadService {
       diagnosticLog.lastError = 'Unable to initialize log directory';
     }
     diagnosticLog.record('service.initialize');
+    await _initializeConnectivity();
     // Restore durable user intent before native/plugin callbacks can race the
     // startup reconciliation pass.
     await _restoreAuthoritativeJobIntent();
@@ -659,6 +1002,10 @@ class DownloadService {
     // 4. Bridge FileDownloader updates into a shared broadcast stream (once),
     //    then let this instance listen to that broadcast proxy.
     _fdSubscription ??= FileDownloader().updates.listen(_sharedEvents.add);
+    // A previous initialization attempt may have failed after installing
+    // this instance listener. Cancel it before retrying so deliberate retry
+    // cannot duplicate callback consumers.
+    await _updatesSubscription?.cancel();
     _updatesSubscription = _sharedEvents.stream.listen((update) {
       diagnosticLog.record('task.update', {
         'taskId': update.task.taskId,
@@ -691,29 +1038,21 @@ class DownloadService {
         return;
       }
 
-      // Restacking later HQ waiters behind a resumed episode. Swallow only
-      // the cancel/fail from the old native task so re-enqueue events pass.
-      if (_restackingWaiterIds.contains(update.task.taskId)) {
-        if (update is TaskStatusUpdate &&
-            (update.status == TaskStatus.canceled ||
-                update.status == TaskStatus.failed ||
-                update.status == TaskStatus.notFound)) {
-          return;
-        }
-        if (update is TaskProgressUpdate &&
-            (update.progress < 0 || update.progress > 1)) {
-          return;
-        }
+      if (update is TaskStatusUpdate &&
+          update.task is DownloadTask &&
+          !_networkAvailable &&
+          (update.status == TaskStatus.waitingToRetry ||
+              update.status == TaskStatus.failed ||
+              update.status == TaskStatus.canceled ||
+              update.status == TaskStatus.notFound)) {
+        unawaited(_holdDownloadForNetwork(update.task as DownloadTask));
+        return;
       }
 
-      // User-initiated cancels are cleaned up in [cancelDownload]; ignore their
-      // follow-up events so they cannot race with pause-on-failure handling.
-      if (_cancellingUrls.contains(trackingUrl)) {
-        if (update is TaskStatusUpdate &&
-            update.status == TaskStatus.canceled) {
-          _updatesController.add(update);
-        }
-        return;
+      if (update is TaskStatusUpdate &&
+          update.task is DownloadTask &&
+          update.status == TaskStatus.running) {
+        unawaited(_acknowledgeNativeNetworkResume(update.task as DownloadTask));
       }
 
       // Ghost cancel/fail from HQ dequeue while URLSession still owns this
@@ -723,9 +1062,32 @@ class DownloadService {
       if (update is TaskStatusUpdate &&
           shouldParkSystemCanceledDownload(
             status: update.status,
-            userCancel: _cancellingUrls.contains(trackingUrl),
+            userCancel: _terminalJobIds.contains(update.task.taskId),
           )) {
         unawaited(_retainLiveNativeOrPause(update, trackingUrl));
+        return;
+      }
+
+      // Completion is the one terminal callback that may be safe even when it
+      // belongs to an older executor generation, but only after DM-06 proves
+      // the final artifact against independent resource evidence. Never publish
+      // `complete` to UI/listeners before that verification commits JobStore.
+      if (update is TaskStatusUpdate && update.status == TaskStatus.complete) {
+        unawaited(_handleVerifiedCompleteUpdate(update, trackingUrl));
+        return;
+      }
+
+      // A delayed pause acknowledgement from an earlier control generation
+      // cannot regress a writer that is already owned by the resumed/current
+      // execution. Runtime ownership is the acknowledgement, not elapsed time.
+      if (update is TaskStatusUpdate &&
+          update.status == TaskStatus.paused &&
+          (_rangeTransfers.isActive(update.task.taskId) ||
+              _parallel.isActive(update.task.taskId) ||
+              _nativeTransport.owns(update.task.taskId))) {
+        diagnosticLog.record('callback.stalePauseIgnored', {
+          'taskId': update.task.taskId,
+        });
         return;
       }
 
@@ -1013,6 +1375,9 @@ class DownloadService {
   /// holding queue. Every episode is OS-enqueued; extras wait as
   /// **في الانتظار**. Dart still promotes leftover waiters when a slot frees.
   Future<void> applyQueueSettings({required int maxConcurrent}) async {
+    if (configureHoldingQueueForTesting == null) {
+      await _awaitCommandReadiness('applyQueueSettings');
+    }
     await applyDownloadQueueSettings(
       maxConcurrent: maxConcurrent,
       persist: _ref.read(storageServiceProvider).setDownloadConcurrency,
@@ -1033,6 +1398,9 @@ class DownloadService {
   Future<void> applyNotificationSettings(
     DownloadNotificationPrefs prefs,
   ) async {
+    // Notification preferences are configuration, not download lifecycle
+    // ownership. Persist them even while startup recovery is still settling;
+    // _initialize() reads the same persisted value before recovery begins.
     await _ref.read(storageServiceProvider).setDownloadNotificationPrefs(prefs);
     _configureDownloadNotifications(prefs);
   }
@@ -1105,34 +1473,47 @@ class DownloadService {
     });
   }
 
+  DownloadTask? _downloadTaskFromMetadataSnapshot(
+    Map<String, dynamic>? metadata,
+  ) {
+    final raw = metadata?['taskSnapshot'];
+    if (raw is! Map) return null;
+    try {
+      final restored = Task.createFromJson(Map<String, dynamic>.from(raw));
+      return restored is DownloadTask && isLogicalEpisodeDownloadTask(restored)
+          ? restored
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _restoreAuthoritativeJobIntent() async {
     for (final job in await _jobStore.all()) {
-      final paused =
-          job.userPaused ||
-          job.state == DownloadJobState.pausing ||
-          job.state == DownloadJobState.pausedByUser;
-      final terminal =
-          job.state == DownloadJobState.completed ||
-          job.state == DownloadJobState.canceled ||
-          job.state == DownloadJobState.orphaned;
-      if (paused) _userPausedIds.add(job.taskId);
-      if (job.queueWaiting || job.state == DownloadJobState.queued) {
+      if (downloadJobHasUserPauseIntent(job.state)) {
+        _userPausedIds.add(job.taskId);
+      }
+      if (downloadJobQueueWaiting(job.state)) {
         _queueWaitingIds.add(job.taskId);
       }
-      if (terminal) _terminalJobIds.add(job.taskId);
+      if (downloadJobIsTerminal(job.state)) {
+        _terminalJobIds.add(job.taskId);
+      }
     }
   }
 
   /// Persist lifecycle boundaries for the logical episode without turning
   /// hot progress callbacks into Hive writes. DownloadJobStore owns monotonic
   /// byte/identity merging; this service only supplies orchestration evidence.
-  Future<void> _checkpointLogicalJob(
+  Future<bool> _checkpointLogicalJob(
     DownloadTask task, {
     required DownloadJobState state,
     int? durableBytes,
+    DownloadDurableByteProvenance? durableByteProvenance,
     int? expectedBytes,
     bool? userPaused,
     bool? queueWaiting,
+    DownloadResourceFingerprint? fingerprint,
   }) async {
     final terminal =
         state == DownloadJobState.completed ||
@@ -1144,57 +1525,311 @@ class DownloadService {
         'status': state.name,
         'reason': 'terminalTombstone',
       });
-      return;
+      return false;
     }
-    try {
-      final accepted = await _jobStore.checkpoint(
+    final commit = await commitAuthoritativeDownloadCheckpoint(
+      () => _jobStore.checkpoint(
         taskId: task.taskId,
         trackingUrl: downloadTrackingUrl(task),
         state: state,
         durableBytes: durableBytes,
+        durableByteProvenance: durableByteProvenance,
         expectedBytes: expectedBytes,
         userPaused: userPaused,
         queueWaiting: queueWaiting,
-        fingerprint: DownloadResourceFingerprint(
-          expectedBytes: expectedBytes ?? -1,
-          finalUrl: task.url,
-        ),
+        taskSnapshot: task.toJson(),
+        fingerprint:
+            fingerprint ??
+            fingerprintWithExpectedBytes(
+              remote: null,
+              expectedBytes: expectedBytes ?? -1,
+              fallbackFinalUrl: task.url,
+            ),
+      ),
+    );
+    if (commit != DownloadLifecycleCheckpointCommit.committed) {
+      diagnosticLog.record(
+        commit == DownloadLifecycleCheckpointCommit.rejected
+            ? 'job.checkpointRejected'
+            : 'job.checkpointError',
+        {'taskId': task.taskId, 'status': state.name, 'result': commit.name},
       );
-      if (!accepted) {
-        diagnosticLog.record('job.checkpointRejected', {
-          'taskId': task.taskId,
-          'status': state.name,
-        });
-        return;
-      }
-      if (terminal) _terminalJobIds.add(task.taskId);
-    } catch (error) {
-      diagnosticLog.record('job.checkpointError', {
-        'taskId': task.taskId,
-        'status': state.name,
-        'errorType': error.runtimeType.toString(),
-      });
+      return false;
     }
+    if (terminal) _terminalJobIds.add(task.taskId);
+    return true;
   }
 
   Future<void> _recoverPersistedDownloads() async {
-    final records = await FileDownloader().database.allRecords();
-    diagnosticLog.record('recovery.begin', {'count': records.length});
+    final storage = _ref.read(storageServiceProvider);
+    final persistedRecords = await FileDownloader().database.allRecords();
+    final runtimeTasks = await _liveTransferTasks();
+    final jobs = await _jobStore.all();
+    final metadataById = await storage.getAllDownloadMetadata();
+
+    // DM-04: manifests are durable executor evidence even when plugin DB,
+    // JobStore or metadata projections were lost. Scan only the app-owned
+    // Downloads subtree; never infer task identity from arbitrary files.
+    final discoveredManifests = await discoverParallelManifestRecoveryEvidence([
+      Directory(
+        p.join(await _getPublicDownloadsPath(), 'AnimeWitcher', 'Downloads'),
+      ),
+    ]);
+    final manifestEvidenceById = <String, ParallelManifestRecoveryEvidence>{};
+    final unresolvedManifestEvidence = <ParallelManifestRecoveryEvidence>[];
+    final manifestsByParent =
+        <String, List<ParallelManifestRecoveryEvidence>>{};
+    for (final manifestEvidence in discoveredManifests) {
+      manifestsByParent
+          .putIfAbsent(
+            manifestEvidence.parentTaskId,
+            () => <ParallelManifestRecoveryEvidence>[],
+          )
+          .add(manifestEvidence);
+    }
+    for (final entry in manifestsByParent.entries) {
+      final candidates = entry.value;
+      if (candidates.length != 1) {
+        unresolvedManifestEvidence.addAll(candidates);
+        diagnosticLog.record('recovery.unresolvedManifest', {
+          'taskId': entry.key,
+          'reason': 'duplicateParentEvidence',
+          'count': candidates.length,
+        });
+        continue;
+      }
+      final manifestEvidence = candidates.single;
+      if (manifestEvidence.parentTask == null) {
+        unresolvedManifestEvidence.add(manifestEvidence);
+        diagnosticLog.record('recovery.unresolvedManifest', {
+          'taskId': manifestEvidence.parentTaskId,
+          'reason': 'missingParentDescriptor',
+          'schemaVersion': manifestEvidence.schemaVersion,
+        });
+        continue;
+      }
+      manifestEvidenceById[manifestEvidence.parentTaskId] = manifestEvidence;
+      try {
+        // Rehydrate multipart child ownership before any orphan/user-pause
+        // decision so a surviving writer cannot become invisible at parent level.
+        await _parallel.restore(manifestEvidence.parentTask!);
+      } catch (_) {
+        diagnosticLog.record('recovery.unresolvedManifestOwnership', {
+          'taskId': manifestEvidence.parentTaskId,
+          'reason': 'restoreFailed',
+        });
+      }
+    }
+
+    // Legacy manifests are intentionally not enough to fabricate a parent.
+    // If a known child writer survived, settle that exact child identity before
+    // ignoring the unresolved parent evidence.
+    Set<String>? liveManifestPartIds;
+    try {
+      liveManifestPartIds = await _livePartIds();
+    } catch (_) {
+      liveManifestPartIds = null;
+    }
+    final settledLegacyChildIds = <String>{};
+    for (final manifestEvidence in unresolvedManifestEvidence) {
+      if (liveManifestPartIds == null) {
+        diagnosticLog.record('recovery.unresolvedManifestOwnership', {
+          'taskId': manifestEvidence.parentTaskId,
+          'reason': 'ownershipQueryFailed',
+        });
+        continue;
+      }
+      for (final childTask in manifestEvidence.childTasks) {
+        if (!liveManifestPartIds.contains(childTask.taskId) ||
+            !settledLegacyChildIds.add(childTask.taskId)) {
+          continue;
+        }
+        var settled = false;
+        try {
+          settled = await _pauseTransfer(childTask);
+        } catch (_) {
+          settled = false;
+        }
+        if (!settled) {
+          diagnosticLog.record('recovery.unresolvedManifestOwnership', {
+            'taskId': manifestEvidence.parentTaskId,
+            'childTaskId': childTask.taskId,
+            'reason': 'childOwnershipNotReleased',
+          });
+        }
+      }
+    }
+
+    final durableRecords = <TaskRecord>[];
+    final orderByTaskId = <String, int>{};
+    final knownExecutorIds = <String>{
+      for (final record in persistedRecords) record.task.taskId,
+      for (final task in runtimeTasks) task.taskId,
+    };
+
+    for (final entry in metadataById.entries) {
+      final timestamp = entry.value['timestamp'];
+      if (timestamp is num) orderByTaskId[entry.key] = timestamp.toInt();
+    }
+    final jobById = <String, DownloadJobRecord>{
+      for (final job in jobs) job.taskId: job,
+    };
+    for (final job in jobs) {
+      orderByTaskId.putIfAbsent(job.taskId, () => job.updatedAtMillis);
+      if (knownExecutorIds.contains(job.taskId) ||
+          job.state == DownloadJobState.completed ||
+          job.state == DownloadJobState.canceled ||
+          job.state == DownloadJobState.orphaned) {
+        continue;
+      }
+      final metadata = metadataById[job.taskId];
+      final task =
+          job.restoreTaskSnapshot() ??
+          _downloadTaskFromMetadataSnapshot(metadata) ??
+          manifestEvidenceById[job.taskId]?.parentTask;
+      final disposition = planDurableOnlyRecoveryDisposition(
+        hasPresentationMetadata: metadata?['item'] is Map,
+        hasRecoverableTaskDescriptor: task != null,
+      );
+      if (disposition == DownloadDurableOnlyRecoveryDisposition.orphan) {
+        await _jobStore.checkpoint(
+          taskId: job.taskId,
+          trackingUrl: job.trackingUrl,
+          state: DownloadJobState.orphaned,
+          durableBytes: job.durableBytes,
+          durableByteProvenance: job.durableByteProvenance,
+          expectedBytes: job.expectedBytes,
+          userPaused: job.userPaused,
+          queueWaiting: false,
+          fingerprint: job.fingerprint,
+        );
+        diagnosticLog.record(
+          metadata?['item'] is! Map
+              ? 'recovery.orphanedMissingPresentation'
+              : 'recovery.orphanedMissingDescriptor',
+          {'taskId': job.taskId, 'source': 'jobStore'},
+        );
+        continue;
+      }
+      final recoverableTask = task!;
+      final progress = job.expectedBytes > 0
+          ? (job.durableBytes / job.expectedBytes).clamp(0.0, 1.0).toDouble()
+          : downloadMetadataProgress(metadata);
+      durableRecords.add(
+        TaskRecord(
+          recoverableTask,
+          TaskStatus.paused,
+          progress,
+          job.expectedBytes,
+        ),
+      );
+    }
+
+    // Metadata can survive even if both executor DB and JobStore were lost.
+    // New-format rows carry a complete task snapshot and are recoverable; old
+    // rows become explicit orphans instead of guessing URL/headers/path.
+    for (final entry in metadataById.entries) {
+      final taskId = entry.key;
+      if (knownExecutorIds.contains(taskId) ||
+          jobById.containsKey(taskId) ||
+          durableRecords.any((record) => record.task.taskId == taskId)) {
+        continue;
+      }
+      final metadata = entry.value;
+      final manifestEvidence = manifestEvidenceById[taskId];
+      final metadataTask = _downloadTaskFromMetadataSnapshot(metadata);
+      final task =
+          _downloadTaskFromMetadataSnapshot(metadata) ??
+          manifestEvidenceById[taskId]?.parentTask;
+      final trackingUrl = (metadata['trackingUrl'] as String?)?.trim() ?? '';
+      if (task == null) {
+        if (trackingUrl.isNotEmpty) {
+          await _jobStore.checkpoint(
+            taskId: taskId,
+            trackingUrl: trackingUrl,
+            state: DownloadJobState.orphaned,
+            expectedBytes: downloadMetadataExpectedBytes(metadata),
+            userPaused: isUserPausedMetadata(metadata),
+            queueWaiting: false,
+          );
+          diagnosticLog.record('recovery.orphanedMissingDescriptor', {
+            'taskId': taskId,
+            'source': 'metadata',
+          });
+        }
+        continue;
+      }
+      final expected = knownDownloadSize(<int?>[
+        downloadMetadataExpectedBytes(metadata),
+        manifestEvidence?.expectedBytes,
+      ]);
+      final progress =
+          metadataTask == null &&
+              manifestEvidence != null &&
+              manifestEvidence.expectedBytes > 0
+          ? (manifestEvidence.durableBytes / manifestEvidence.expectedBytes)
+                .clamp(0.0, 1.0)
+                .toDouble()
+          : downloadMetadataProgress(metadata);
+      durableRecords.add(
+        TaskRecord(task, TaskStatus.paused, progress, expected),
+      );
+    }
+
+    // A v6 manifest can be the only surviving logical descriptor. Add it once
+    // as durable paused evidence; the normal missing-presentation policy below
+    // either reconstructs the projection from metadata or explicitly orphans it.
+    for (final manifestEvidence in manifestEvidenceById.values) {
+      if (knownExecutorIds.contains(manifestEvidence.parentTaskId) ||
+          jobById.containsKey(manifestEvidence.parentTaskId) ||
+          metadataById.containsKey(manifestEvidence.parentTaskId) ||
+          durableRecords.any(
+            (record) => record.task.taskId == manifestEvidence.parentTaskId,
+          )) {
+        continue;
+      }
+      final parentTask = manifestEvidence.parentTask!;
+      final progress = manifestEvidence.expectedBytes > 0
+          ? (manifestEvidence.durableBytes / manifestEvidence.expectedBytes)
+                .clamp(0.0, 1.0)
+                .toDouble()
+          : 0.0;
+      durableRecords.add(
+        TaskRecord(
+          parentTask,
+          TaskStatus.paused,
+          progress,
+          manifestEvidence.expectedBytes,
+        ),
+      );
+    }
+
+    final inventory = buildDownloadRecoveryInventory(
+      persistedRecords: persistedRecords,
+      runtimeTasks: runtimeTasks,
+      durableRecords: durableRecords,
+      orderByTaskId: orderByTaskId,
+    );
+    final records = inventory.records;
+    diagnosticLog.record('recovery.begin', {
+      'count': records.length,
+      'nativeOnly': inventory.nativeOnlyTaskIds.length,
+      'durableOnly': inventory.durableOnlyTaskIds.length,
+    });
     for (final record in records) {
       diagnosticLog.record('recovery.record', {
         'taskId': record.task.taskId,
         'status': record.status.name,
         'progress': record.progress,
+        'nativeOnly': inventory.nativeOnlyTaskIds.contains(record.task.taskId),
       });
     }
     final nativeIds = <String>{
-      for (final task in await _liveTransferTasks())
+      for (final task in runtimeTasks)
         if (isLogicalEpisodeDownloadTask(task)) task.taskId,
     };
-    final storage = _ref.read(storageServiceProvider);
 
     for (final record in records) {
-      if (!isLogicalEpisodeDownloadTask(record.task)) continue;
       final task = record.task as DownloadTask;
       final trackingUrl = downloadTrackingUrl(task);
       final metadata = await storage.getDownloadMetadata(task.taskId);
@@ -1214,7 +1849,7 @@ class DownloadService {
       final legacyQueueWaiting = isQueueWaitingMetadata(metadata);
       final queueWaiting = oldJob == null
           ? legacyQueueWaiting
-          : oldJob.queueWaiting || oldJob.state == DownloadJobState.queued;
+          : downloadJobQueueWaiting(oldJob.state);
       if (queueWaiting) {
         _queueWaitingIds.add(task.taskId);
         _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
@@ -1250,12 +1885,112 @@ class DownloadService {
           record.status == TaskStatus.waitingToRetry;
       final stillNative =
           nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);
-      final userPaused =
-          isUserPausedMetadata(metadata) ||
-          _userPausedIds.contains(task.taskId) ||
-          oldJob?.userPaused == true ||
-          oldJob?.state == DownloadJobState.pausedByUser ||
-          oldJob?.state == DownloadJobState.pausing;
+      final hasLiveOwnership =
+          stillNative || _parallel.hasLiveConnections(task.taskId);
+      final presentationDisposition = planMissingPresentationRecovery(
+        hasPresentationMetadata: metadata?['item'] is Map,
+        hasLiveOwnership: hasLiveOwnership,
+        authoritativeState: oldJob?.state,
+      );
+      if (presentationDisposition ==
+          DownloadMissingPresentationRecoveryDisposition.preserveTerminal) {
+        if (hasLiveOwnership) {
+          try {
+            await _pauseTransfer(task);
+          } catch (_) {
+            // The terminal durable state stays authoritative. A later
+            // reconciliation pass retries settlement without revival.
+          }
+        }
+        _queueWaitingIds.remove(task.taskId);
+        _waitingPayloads.remove(task.taskId);
+        _forgetSessionTask(task.taskId);
+        continue;
+      }
+      if (presentationDisposition !=
+          DownloadMissingPresentationRecoveryDisposition.recover) {
+        final orphanManifest = manifestEvidenceById[task.taskId];
+        final expectedForOrphan = knownDownloadSize(<int?>[
+          record.expectedFileSize,
+          downloadMetadataExpectedBytes(metadata),
+          oldJob?.expectedBytes,
+          orphanManifest?.expectedBytes,
+        ]);
+        final orphanBytes = selectDownloadRecoveryBytes(
+          exactDiskBytes: -1,
+          currentGenerationJobBytes: authoritativeDownloadJobBytes(oldJob),
+          multipartManifestBytes: orphanManifest?.durableBytes ?? -1,
+        );
+        final orphanProvenance = switch (orphanBytes.source) {
+          DownloadRecoveryByteSource.jobStore =>
+            oldJob?.durableByteProvenance ?? DownloadDurableByteProvenance.none,
+          DownloadRecoveryByteSource.multipartManifest =>
+            DownloadDurableByteProvenance.multipartManifest,
+          _ => DownloadDurableByteProvenance.none,
+        };
+        if (presentationDisposition ==
+            DownloadMissingPresentationRecoveryDisposition.settleOwner) {
+          final pausingCommitted = await _checkpointLogicalJob(
+            task,
+            state: DownloadJobState.pausing,
+            expectedBytes: expectedForOrphan,
+            userPaused: false,
+            queueWaiting: false,
+          );
+          if (!pausingCommitted) {
+            diagnosticLog.record('recovery.missingPresentationSettling', {
+              'taskId': task.taskId,
+              'reason': 'checkpointFailed',
+            });
+            continue;
+          }
+          var settled = false;
+          try {
+            settled = await _pauseTransfer(task);
+          } catch (_) {
+            settled = false;
+          }
+          if (!settled) {
+            diagnosticLog.record('recovery.missingPresentationSettling', {
+              'taskId': task.taskId,
+              'reason': 'ownershipNotReleased',
+            });
+            continue;
+          }
+        }
+
+        final orphanCommitted = await _checkpointLogicalJob(
+          task,
+          state: DownloadJobState.orphaned,
+          durableBytes: orphanBytes.bytes,
+          durableByteProvenance: orphanProvenance,
+          expectedBytes: expectedForOrphan,
+          userPaused: false,
+          queueWaiting: false,
+        );
+        if (!orphanCommitted) {
+          diagnosticLog.record('recovery.missingPresentationSettling', {
+            'taskId': task.taskId,
+            'reason': 'orphanCheckpointFailed',
+          });
+          continue;
+        }
+        _queueWaitingIds.remove(task.taskId);
+        _waitingPayloads.remove(task.taskId);
+        _forgetSessionTask(task.taskId);
+        await FileDownloader().database.updateRecord(
+          TaskRecord(task, TaskStatus.paused, progress, expectedForOrphan),
+        );
+        diagnosticLog.record('recovery.orphanedMissingPresentation', {
+          'taskId': task.taskId,
+          'source': stillNative ? 'runtime' : 'executor',
+        });
+        continue;
+      }
+      final userPaused = oldJob != null
+          ? downloadJobHasUserPauseIntent(oldJob.state)
+          : isUserPausedMetadata(metadata) ||
+                _userPausedIds.contains(task.taskId);
       final recoveryPlan = planDownloadRecoveryWithJobAuthority(
         persisted: record.status,
         queueWaiting: queueWaiting,
@@ -1265,6 +2000,7 @@ class DownloadService {
         authoritativeState: oldJob?.state,
         authoritativeUserPaused: oldJob?.userPaused ?? false,
         authoritativeQueueWaiting: oldJob?.queueWaiting ?? false,
+        networkAvailable: _networkAvailable,
       );
 
       // Migrate pre-DownloadJobStore installs on first reconciliation. Only
@@ -1277,15 +2013,26 @@ class DownloadService {
         downloadMetadataExpectedBytes(metadata),
         oldJob?.expectedBytes,
       ]);
-      final manifestBytes = task is ParallelDownloadTask && expectedBytes > 0
-          ? (progress * expectedBytes).floor()
+      final manifestBytes = task is ParallelDownloadTask
+          ? (_parallel.durableBytesFor(task.taskId) ?? -1)
           : -1;
       final recoveryBytes = selectDownloadRecoveryBytes(
         exactDiskBytes: saved.partialBytes > 0 ? saved.partialBytes : -1,
-        currentGenerationJobBytes: oldJob?.durableBytes ?? -1,
+        currentGenerationJobBytes: authoritativeDownloadJobBytes(oldJob),
         multipartManifestBytes: manifestBytes,
       );
       final durableBytes = recoveryBytes.bytes;
+      final durableByteProvenance = switch (recoveryBytes.source) {
+        DownloadRecoveryByteSource.verifiedFinalFile =>
+          DownloadDurableByteProvenance.verifiedFinalFile,
+        DownloadRecoveryByteSource.exactDisk =>
+          DownloadDurableByteProvenance.exactDisk,
+        DownloadRecoveryByteSource.jobStore =>
+          oldJob?.durableByteProvenance ?? DownloadDurableByteProvenance.none,
+        DownloadRecoveryByteSource.multipartManifest =>
+          DownloadDurableByteProvenance.multipartManifest,
+        DownloadRecoveryByteSource.none => DownloadDurableByteProvenance.none,
+      };
       _telemetry.seed(
         task.taskId,
         transferredBytes: durableBytes,
@@ -1297,10 +2044,12 @@ class DownloadService {
         state: recoveryPlan.state,
         generation: oldJob?.generation ?? 0,
         durableBytes: durableBytes,
+        durableByteProvenance: durableByteProvenance,
         expectedBytes: expectedBytes,
-        userPaused: userPaused,
-        queueWaiting: recoveryPlan.shouldRequeue,
+        userPaused: downloadJobHasUserPauseIntent(recoveryPlan.state),
+        queueWaiting: downloadJobQueueWaiting(recoveryPlan.state),
         updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+        taskSnapshot: oldJob?.taskSnapshot ?? task.toJson(),
         fingerprint:
             oldJob?.fingerprint ??
             DownloadResourceFingerprint(
@@ -1308,7 +2057,64 @@ class DownloadService {
               finalUrl: task.url,
             ),
       );
-      await _jobStore.put(migratedJob);
+      if (oldJob != null && durableBytes < oldJob.durableBytes) {
+        final reason = switch (recoveryBytes.source) {
+          DownloadRecoveryByteSource.multipartManifest =>
+            DownloadByteReconciliationReason.multipartManifestRollback,
+          DownloadRecoveryByteSource.exactDisk when durableBytes == 0 =>
+            DownloadByteReconciliationReason.noSurvivingBytes,
+          DownloadRecoveryByteSource.exactDisk =>
+            DownloadByteReconciliationReason.exactDiskLoss,
+          _ => DownloadByteReconciliationReason.nativeRecoverabilityLoss,
+        };
+        final reconciled = await _jobStore.reconcileDurableBytes(
+          oldJob.attemptToken,
+          durableBytes: durableBytes,
+          evidenceProvenance:
+              durableByteProvenance == DownloadDurableByteProvenance.none
+              ? DownloadDurableByteProvenance.exactDisk
+              : durableByteProvenance,
+          reason: reason,
+          fingerprint: migratedJob.fingerprint,
+        );
+        if (reconciled != null) {
+          final corrected = migratedJob.copyWith(
+            generation: reconciled.generation,
+          );
+          await _jobStore.put(corrected);
+        }
+      } else {
+        await _jobStore.put(migratedJob);
+      }
+
+      if (inventory.durableOnlyTaskIds.contains(task.taskId) &&
+          recoveryPlan.action != DownloadRecoveryAction.ignore) {
+        await FileDownloader().database.updateRecord(
+          TaskRecord(task, TaskStatus.paused, progress, expectedBytes),
+        );
+        diagnosticLog.record('recovery.repairedDurableProjection', {
+          'taskId': task.taskId,
+          'progress': progress,
+          'expectedBytes': expectedBytes,
+        });
+      }
+
+      if (inventory.nativeOnlyTaskIds.contains(task.taskId) &&
+          recoveryPlan.action != DownloadRecoveryAction.ignore) {
+        // The runtime already owns this task but the executor DB projection was
+        // lost. Repair the projection only after durable logical state exists;
+        // this is not a start/enqueue operation and therefore cannot create a
+        // second writer. A user-pause path below may immediately settle it to
+        // paused once ownership release is acknowledged.
+        await FileDownloader().database.updateRecord(
+          TaskRecord(task, TaskStatus.running, progress, expectedBytes),
+        );
+        diagnosticLog.record('recovery.repairedPluginProjection', {
+          'taskId': task.taskId,
+          'progress': progress,
+          'expectedBytes': expectedBytes,
+        });
+      }
 
       if (oldJob != null &&
           recoveryPlan.action == DownloadRecoveryAction.ignore) {
@@ -1318,28 +2124,64 @@ class DownloadService {
         continue;
       }
 
+      if (recoveryPlan.action == DownloadRecoveryAction.keepNetworkHeld) {
+        _queueWaitingIds.remove(task.taskId);
+        _waitingPayloads.remove(task.taskId);
+        _rememberSessionTask(task.taskId);
+        await FileDownloader().database.updateRecord(
+          TaskRecord(task, TaskStatus.waitingToRetry, progress, expectedBytes),
+        );
+        _publishProgress(
+          trackingUrl: trackingUrl,
+          taskId: task.taskId,
+          progress: progress,
+          totalSize: expectedBytes,
+          status: TaskStatus.waitingToRetry,
+        );
+        diagnosticLog.record('recovery.networkHeld', {'taskId': task.taskId});
+        continue;
+      }
+
+      var userPauseSettled = !userPaused;
       if (userPaused) {
         _userPausedIds.add(task.taskId);
         _queueWaitingIds.remove(task.taskId);
         _waitingPayloads.remove(task.taskId);
         _rememberSessionTask(task.taskId);
-        if (shouldNativePauseAfterUserPause(
+        final needsNativePause = shouldNativePauseAfterUserPause(
           userPaused: true,
           stillInNativeQueue:
               stillNative || _parallel.hasLiveConnections(task.taskId),
-        )) {
-          try {
-            await _pauseTransfer(task);
-          } catch (_) {}
-        }
-        await FileDownloader().database.updateRecord(
-          TaskRecord(
-            task,
-            TaskStatus.paused,
-            progress,
-            record.expectedFileSize,
-          ),
         );
+        userPauseSettled = !needsNativePause;
+        if (needsNativePause) {
+          try {
+            userPauseSettled = await _pauseTransfer(task);
+          } catch (_) {
+            userPauseSettled = false;
+          }
+        }
+        if (userPauseSettled) {
+          await FileDownloader().database.updateRecord(
+            TaskRecord(
+              task,
+              TaskStatus.paused,
+              progress,
+              record.expectedFileSize,
+            ),
+          );
+        } else {
+          await _checkpointLogicalJob(
+            task,
+            state: DownloadJobState.pausing,
+            expectedBytes: expectedBytes,
+            userPaused: true,
+            queueWaiting: false,
+          );
+          diagnosticLog.record('recovery.pauseSettling', {
+            'taskId': task.taskId,
+          });
+        }
         await storage.patchDownloadMetadata(
           task.taskId,
           queueWaiting: false,
@@ -1378,37 +2220,91 @@ class DownloadService {
         await _enqueueExistingTaskAsWaiterUnlocked(task);
       }
 
-      final showAsWaiting = _queueWaitingIds.contains(task.taskId);
-      final showAsRunning =
-          !userPaused &&
-          ((record.status == TaskStatus.running && stillNative) ||
-              (shouldContinue && !showAsWaiting));
+      final projectedJob = await _jobStore.get(task.taskId);
+      final projectedState = projectedJob?.state ?? recoveryPlan.state;
       _publishProgress(
         trackingUrl: trackingUrl,
         taskId: task.taskId,
         progress: progress,
         totalSize: expectedBytes,
-        status: showAsWaiting
-            ? TaskStatus.enqueued
-            : (userPaused
-                  ? TaskStatus.paused
-                  : (showAsRunning
-                        ? TaskStatus.running
-                        : (stillNative && wasRunning
-                              ? record.status
-                              : TaskStatus.paused))),
+        status: downloadJobDisplayStatus(projectedState),
       );
     }
 
     await _syncQueueToCapUnlocked();
     await _syncSessionOverlay();
+    await _garbageCollectCanceledTombstones();
   }
 
-  int _occupiedSlotCount(List<TaskRecord> records) {
+  Future<void> _garbageCollectCanceledTombstones() async {
+    final storage = _ref.read(storageServiceProvider);
+    final refreshStore = _ref.read(downloadUrlRefreshStoreProvider);
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
+    for (final job in await _jobStore.all()) {
+      if (job.state != DownloadJobState.canceled) continue;
+      final ownership = await _runtimeOwnershipFor(job.taskId);
+      if (ownership != DownloadRuntimeOwnership.notOwned) continue;
+
+      // Cleanup is idempotent and may be retried on every recovery. It never
+      // runs while a writer might still own the destination.
+      try {
+        await FileDownloader().database.deleteRecordWithId(job.taskId);
+      } catch (_) {}
+      try {
+        await storage.removeDownloadMetadata(job.taskId);
+      } catch (_) {}
+      try {
+        await refreshStore.removeForOwnerGeneration(
+          job.trackingUrl,
+          job.taskId,
+          job.generation,
+        );
+      } catch (_) {}
+      final restored = job.restoreTaskSnapshot();
+      if (restored != null) {
+        try {
+          final path = await restored.filePath();
+          if (path.isNotEmpty) {
+            final file = File(path);
+            if (await file.exists()) await deleteDownloadedFile(file);
+          }
+        } catch (_) {}
+      }
+
+      final pluginRecordAbsent =
+          await FileDownloader().database.recordForId(job.taskId) == null;
+      final metadataAbsent =
+          await storage.getDownloadMetadata(job.taskId) == null;
+      if (downloadCanceledTombstoneEligibleForGc(
+        job,
+        nowMillis: nowMillis,
+        ownershipReleased: true,
+        pluginRecordAbsent: pluginRecordAbsent,
+        metadataAbsent: metadataAbsent,
+      )) {
+        await _jobStore.remove(job.taskId);
+      }
+    }
+  }
+
+  Future<int> _occupiedSlotCount(List<TaskRecord> records) async {
     final occupying = <String>{};
     for (final record in records) {
       if (!isLogicalEpisodeDownloadTask(record.task)) continue;
       final taskId = record.task.taskId;
+      final job = await _jobStore.get(taskId);
+      if (job != null) {
+        if (downloadJobOccupiesSlot(job.state)) {
+          occupying.add(taskId);
+        } else if (job.state == DownloadJobState.waitingForNetwork) {
+          final ownership = await _runtimeOwnershipFor(taskId);
+          if (ownership.blocksNewWriter) occupying.add(taskId);
+        }
+        continue;
+      }
+
+      // Pre-JobStore migration fallback only. Once a durable job exists the
+      // replicas below are never allowed to decide lifecycle.
       if (_userPausedIds.contains(taskId)) {
         if (_parallel.hasLiveConnections(taskId)) occupying.add(taskId);
         continue;
@@ -1421,7 +2317,6 @@ class DownloadService {
       }
     }
     occupying.addAll(_startingTaskIds);
-    occupying.removeAll(_restackingWaiterIds);
     return occupying.length;
   }
 
@@ -1432,22 +2327,35 @@ class DownloadService {
     final entries = <DownloadQueueEntry>[];
     for (final record in records) {
       if (!isLogicalEpisodeDownloadTask(record.task)) continue;
-      if (record.status == TaskStatus.complete ||
-          record.status == TaskStatus.canceled) {
+      final taskId = record.task.taskId;
+      final job = await _jobStore.get(taskId);
+      if (job != null &&
+          (job.state == DownloadJobState.completed ||
+              job.state == DownloadJobState.canceled ||
+              job.state == DownloadJobState.orphaned)) {
         continue;
       }
-      final metadata = await storage.getDownloadMetadata(record.task.taskId);
-      final queueWaiting =
-          _queueWaitingIds.contains(record.task.taskId) ||
-          isQueueWaitingMetadata(metadata);
-      final userPaused =
-          _userPausedIds.contains(record.task.taskId) ||
-          isUserPausedMetadata(metadata);
+      if (job == null &&
+          (record.status == TaskStatus.complete ||
+              record.status == TaskStatus.canceled)) {
+        continue;
+      }
+      final metadata = await storage.getDownloadMetadata(taskId);
+      final queueWaiting = job != null
+          ? downloadJobQueueWaiting(job.state)
+          : _queueWaitingIds.contains(taskId) ||
+                isQueueWaitingMetadata(metadata);
+      final userPaused = job != null
+          ? downloadJobUserPaused(job.state)
+          : _userPausedIds.contains(taskId) || isUserPausedMetadata(metadata);
       entries.add(
         DownloadQueueEntry(
-          taskId: record.task.taskId,
-          status: record.status,
-          timestamp: (metadata?['timestamp'] as int?) ?? 0,
+          taskId: taskId,
+          status: job != null
+              ? downloadJobTaskStatus(job.state)
+              : record.status,
+          timestamp:
+              (metadata?['timestamp'] as int?) ?? job?.updatedAtMillis ?? 0,
           queueWaiting: queueWaiting,
           userPaused: userPaused,
         ),
@@ -1457,6 +2365,7 @@ class DownloadService {
   }
 
   Future<void> _syncQueueToCapUnlocked() async {
+    if (!_networkAvailable) return;
     final max = clampDownloadConcurrency(
       _ref.read(storageServiceProvider).getDownloadConcurrency(),
     );
@@ -1473,7 +2382,9 @@ class DownloadService {
     // Promote leftover parked waiters. Native HoldingQueue already owns
     // OS-enqueued waiters — do not enqueue a second copy.
     for (final taskId in plan.idsToPromote) {
-      if (_occupiedSlotCount(await FileDownloader().database.allRecords()) >=
+      if ((await _occupiedSlotCount(
+            await FileDownloader().database.allRecords(),
+          )) >=
           max) {
         break;
       }
@@ -1488,7 +2399,7 @@ class DownloadService {
   /// Promote leftover parked waiters only if native does not already own
   /// that episode. Never pause/re-enqueue/restart URLSession here.
   Future<void> onAppForegrounded() async {
-    if (!_isInitialized) return;
+    if (!await _awaitLifecycleReadiness('foreground')) return;
     await _serializeQueue(() async {
       await _reconcileTransferOwnership();
       await _attachUiToLiveNativeTasks();
@@ -1508,6 +2419,8 @@ class DownloadService {
     _sessionOrder.remove(taskId);
   }
 
+  // Pre-logical-identity migration fallback: mutable executor keys are
+  // consulted only when no canonical logical identity survives.
   String _overlayEpisodeKeyFromParts({
     required String taskId,
     required String trackingUrl,
@@ -1546,23 +2459,36 @@ class DownloadService {
     double? speedBytesPerSecond,
   }) async {
     final records = await FileDownloader().database.allRecords();
+    final storage = _ref.read(storageServiceProvider);
     final liveProgress = _ref.read(downloadProgressProvider);
     final entries = <DownloadOverlayEntry>[];
     for (final record in records) {
       if (!isLogicalEpisodeDownloadTask(record.task)) continue;
+      final job = await _jobStore.get(record.task.taskId);
+      final metadata = await storage.getDownloadMetadata(record.task.taskId);
+      final logicalId =
+          job?.logicalId ?? logicalDownloadIdFromMetadata(metadata);
       final trackingUrl = downloadTrackingUrl(record.task);
       final live = liveProgress[trackingUrl];
-      final leftoverWaiting = _queueWaitingIds.contains(record.task.taskId);
       final liveRunning = live?.status == TaskStatus.running;
-      final inSession =
-          _sessionOrder.contains(record.task.taskId) ||
-          occupiesDownloadSlot(
-            status: record.status,
-            queueWaiting: leftoverWaiting,
-          ) ||
-          leftoverWaiting ||
-          liveRunning ||
-          record.status == TaskStatus.enqueued;
+      final leftoverWaiting = job != null
+          ? downloadJobQueueWaiting(job.state)
+          : _queueWaitingIds.contains(record.task.taskId);
+      final inSession = job != null
+          ? _sessionOrder.contains(record.task.taskId) ||
+                downloadJobOccupiesSlot(job.state) ||
+                leftoverWaiting ||
+                liveRunning
+          : _sessionOrder.contains(record.task.taskId) ||
+                occupiesDownloadSlot(
+                  status: record.status,
+                  queueWaiting: leftoverWaiting,
+                ) ||
+                leftoverWaiting ||
+                liveRunning ||
+                record.status == TaskStatus.enqueued;
+      // Pre-JobStore migration fallback above is deliberately isolated to
+      // rows that do not yet have durable lifecycle authority.
       if (!inSession) continue;
       _rememberSessionTask(record.task.taskId);
       final isPreferred = preferTaskId == record.task.taskId;
@@ -1583,10 +2509,12 @@ class DownloadService {
       final storedTotal = isPreferred
           ? (totalBytes ?? live?.totalSize ?? record.expectedFileSize)
           : (live?.totalSize ?? record.expectedFileSize);
-      final displayStatus = displayDownloadStatus(
-        persisted: liveRunning ? TaskStatus.running : record.status,
-        queueWaiting: leftoverWaiting && !liveRunning,
-      );
+      final displayStatus = job != null
+          ? downloadJobDisplayStatus(job.state)
+          : displayDownloadStatus(
+              persisted: liveRunning ? TaskStatus.running : record.status,
+              queueWaiting: leftoverWaiting && !liveRunning,
+            );
       final incomingSpeed = isPreferred
           ? (speedBytesPerSecond ?? (live?.networkSpeed ?? 0) * 1000 * 1000)
           : (live?.networkSpeed ?? 0) * 1000 * 1000;
@@ -1604,27 +2532,34 @@ class DownloadService {
           progress: storedProgress,
           totalBytes: storedTotal,
           speedBytesPerSecond: speed,
-          episodeKey: _overlayEpisodeKeyForTask(record.task),
+          episodeKey: logicalId ?? _overlayEpisodeKeyForTask(record.task),
         ),
       );
     }
     final seen = {for (final entry in entries) entry.taskId};
     for (final payload in _waitingPayloads.entries) {
       if (seen.contains(payload.key)) continue;
+      final job = await _jobStore.get(payload.key);
+      if (job != null && !downloadJobQueueWaiting(job.state)) continue;
       _rememberSessionTask(payload.key);
+      final payloadLogicalId = (payload.value['logicalId'] as String?)?.trim();
       entries.add(
         DownloadOverlayEntry(
           taskId: payload.key,
-          status: TaskStatus.enqueued,
+          status: job != null
+              ? downloadJobDisplayStatus(job.state)
+              : TaskStatus.enqueued,
           displayName: payload.value['displayName'] as String? ?? '',
-          queueWaiting: true,
-          episodeKey: _overlayEpisodeKeyFromParts(
-            taskId: payload.key,
-            trackingUrl: payload.value['metaData'] as String? ?? '',
-            url: payload.value['url'] as String? ?? '',
-            directory: payload.value['directory'] as String? ?? '',
-            filename: payload.value['filename'] as String? ?? '',
-          ),
+          queueWaiting: job != null ? downloadJobQueueWaiting(job.state) : true,
+          episodeKey: payloadLogicalId != null && payloadLogicalId.isNotEmpty
+              ? payloadLogicalId
+              : _overlayEpisodeKeyFromParts(
+                  taskId: payload.key,
+                  trackingUrl: payload.value['metaData'] as String? ?? '',
+                  url: payload.value['url'] as String? ?? '',
+                  directory: payload.value['directory'] as String? ?? '',
+                  filename: payload.value['filename'] as String? ?? '',
+                ),
         ),
       );
     }
@@ -1749,25 +2684,46 @@ class DownloadService {
     final transferring = <String>[];
     final paused = <String>[];
     final waiterIds = <String>{};
+    final queueWaitingIds = <String>{};
     final completedIds = <String>{};
     for (final record in records) {
       if (!isLogicalEpisodeDownloadTask(record.task)) continue;
       final task = record.task as DownloadTask;
-      if (record.status == TaskStatus.complete) {
+      final job = await _jobStore.get(task.taskId);
+      if (job != null &&
+          (job.state == DownloadJobState.completed ||
+              job.state == DownloadJobState.canceled ||
+              job.state == DownloadJobState.orphaned)) {
         completedIds.add(task.taskId);
         _waitingPayloads.remove(task.taskId);
         continue;
       }
-      if (record.status == TaskStatus.canceled &&
-          !_userPausedIds.contains(task.taskId)) {
-        completedIds.add(task.taskId);
-        _waitingPayloads.remove(task.taskId);
-        continue;
+      if (job == null) {
+        // Pre-JobStore migration fallback: plugin status and in-memory intent
+        // may classify old executor rows only until durable authority exists.
+        if (record.status == TaskStatus.complete) {
+          completedIds.add(task.taskId);
+          _waitingPayloads.remove(task.taskId);
+          continue;
+        }
+        if (record.status == TaskStatus.canceled &&
+            !_userPausedIds.contains(task.taskId)) {
+          completedIds.add(task.taskId);
+          _waitingPayloads.remove(task.taskId);
+          continue;
+        }
       }
-      final leftoverWaiting = _queueWaitingIds.contains(task.taskId);
-      final userPaused =
-          _userPausedIds.contains(task.taskId) ||
-          (record.status == TaskStatus.paused && !leftoverWaiting);
+      final leftoverWaiting = job != null
+          ? downloadJobQueueWaiting(job.state)
+          : _queueWaitingIds.contains(task.taskId);
+      final userPaused = job != null
+          ? downloadJobUserPaused(job.state)
+          : _userPausedIds.contains(task.taskId) ||
+                (record.status == TaskStatus.paused && !leftoverWaiting);
+      final projectedStatus = job != null
+          ? downloadJobTaskStatus(job.state)
+          : record.status;
+      if (leftoverWaiting) queueWaitingIds.add(task.taskId);
       if (userPaused) {
         paused.add(task.taskId);
         continue;
@@ -1777,7 +2733,7 @@ class DownloadService {
       // requested four-part episode into one part. Dart/PersistentParallelDownload
       // owns multipart promotion and all child checkpoint/assembly semantics.
       if (isNativeWaitingSnapshotWaiter(
-            status: record.status,
+            status: projectedStatus,
             queueWaiting: leftoverWaiting,
             userPaused: false,
           ) &&
@@ -1786,15 +2742,21 @@ class DownloadService {
         waiterIds.add(task.taskId);
         continue;
       }
-      if (occupiesDownloadSlot(status: record.status, queueWaiting: false)) {
+      final occupiesSlot = job != null
+          ? downloadJobOccupiesSlot(job.state)
+          : occupiesDownloadSlot(status: record.status, queueWaiting: false);
+      if (occupiesSlot) {
         transferring.add(task.taskId);
         _waitingPayloads.remove(task.taskId);
       }
     }
     for (final id in _userPausedIds) {
+      final job = await _jobStore.get(id);
+      if (job != null && !downloadJobUserPaused(job.state)) continue;
       if (!paused.contains(id) && !completedIds.contains(id)) {
         paused.add(id);
         transferring.remove(id);
+        queueWaitingIds.remove(id);
       }
     }
     for (final entry in _waitingPayloads.entries) {
@@ -1804,12 +2766,22 @@ class DownloadService {
           completedIds.contains(entry.key)) {
         continue;
       }
+      final job = await _jobStore.get(entry.key);
+      if (job != null) {
+        if (downloadJobUserPaused(job.state)) {
+          paused.add(entry.key);
+          continue;
+        }
+        if (!downloadJobQueueWaiting(job.state)) continue;
+        queueWaitingIds.add(entry.key);
+      }
       final record = records.firstWhereOrNull(
         (record) => record.task.taskId == entry.key,
       );
       if (record?.task is ParallelDownloadTask ||
-          _rangeTransfers.isActive(entry.key))
+          _rangeTransfers.isActive(entry.key)) {
         continue;
+      }
       waiters.add(
         await _waitingPayloadPreservingBytes(
           record?.task as DownloadTask? ??
@@ -1851,7 +2823,7 @@ class DownloadService {
       waiters: waiters,
       transferringTaskIds: transferring,
       pausedTaskIds: paused,
-      queueWaitingTaskIds: _queueWaitingIds.toList(),
+      queueWaitingTaskIds: queueWaitingIds.toList(),
       sessionTaskIds: List<String>.from(_sessionOrder),
       sessionCompletedCount: overlay?.completedCount ?? _sessionCompletedCount,
       sessionBatchTotal: overlay?.batchTotal ?? _sessionBatchTotal,
@@ -1921,6 +2893,14 @@ class DownloadService {
     DownloadTask task,
   ) async {
     final payload = Map<String, Object>.from(_waitingPayloadFor(task));
+    final job = await _jobStore.get(task.taskId);
+    final metadata = await _ref
+        .read(storageServiceProvider)
+        .getDownloadMetadata(task.taskId);
+    final logicalId = job?.logicalId ?? logicalDownloadIdFromMetadata(metadata);
+    if (logicalId != null && logicalId.isNotEmpty) {
+      payload['logicalId'] = logicalId;
+    }
     if (task is! ParallelDownloadTask) {
       try {
         final resume = await BackgroundDownloaderCompat.resumeDataForTaskId(
@@ -1997,15 +2977,12 @@ class DownloadService {
         }
       }
     } catch (_) {}
-    final manifestBytes =
-        task is ParallelDownloadTask &&
-            parallelProgress != null &&
-            totalSize > 0
-        ? (parallelProgress * totalSize).floor()
+    final manifestBytes = task is ParallelDownloadTask
+        ? (_parallel.durableBytesFor(task.taskId) ?? -1)
         : -1;
     final recoveryBytes = selectDownloadRecoveryBytes(
       exactDiskBytes: exactDiskBytes,
-      currentGenerationJobBytes: job?.durableBytes ?? -1,
+      currentGenerationJobBytes: authoritativeDownloadJobBytes(job),
       multipartManifestBytes: manifestBytes,
     );
     _telemetry.seed(
@@ -2073,15 +3050,11 @@ class DownloadService {
         ? TaskStatus.running
         : (record?.status ?? TaskStatus.enqueued);
     if (!_userPausedIds.contains(attached.taskId)) {
-      final durableBytes = totalSize > 0 && progress > 0
-          ? (totalSize * progress).floor()
-          : 0;
       await _checkpointLogicalJob(
         attached,
         state: transferring
             ? DownloadJobState.running
             : DownloadJobState.starting,
-        durableBytes: durableBytes,
         expectedBytes: totalSize,
         userPaused: false,
         queueWaiting: false,
@@ -2144,6 +3117,20 @@ class DownloadService {
     TaskStatusUpdate update,
     String trackingUrl,
   ) async {
+    final authoritative = await _jobStore.get(update.task.taskId);
+    if (authoritative != null &&
+        (authoritative.state == DownloadJobState.queued ||
+            authoritative.state == DownloadJobState.pausing ||
+            authoritative.state == DownloadJobState.pausedByUser ||
+            downloadJobIsTerminal(authoritative.state))) {
+      diagnosticLog.record('callback.staleTerminalIgnored', {
+        'taskId': update.task.taskId,
+        'callback': update.status.name,
+        'state': authoritative.state.name,
+        'generation': authoritative.generation,
+      });
+      return;
+    }
     if (update.task is DownloadTask) {
       final live = await _liveNativeTaskFor(
         taskId: update.task.taskId,
@@ -2272,6 +3259,47 @@ class DownloadService {
     _ref.read(appRouterProvider).go('/library');
   }
 
+  Future<void> _handleVerifiedCompleteUpdate(
+    TaskStatusUpdate update,
+    String trackingUrl,
+  ) async {
+    final current = _ref.read(downloadProgressProvider)[trackingUrl];
+    if (!isCompleteDownloadCredible(
+      progress: current?.progress,
+      expectedBytes: current?.totalSize ?? -1,
+    )) {
+      diagnosticLog.record('callback.stubCompleteIgnored', {
+        'taskId': update.task.taskId,
+      });
+      await _attachUiToLiveNativeTasks();
+      return;
+    }
+
+    await _persistCompletedFilePath(update.task);
+    final job = await _jobStore.get(update.task.taskId);
+    if (job?.state != DownloadJobState.completed) {
+      diagnosticLog.record('callback.completeVerificationRejected', {
+        'taskId': update.task.taskId,
+        'generation': job?.generation,
+        'state': job?.state.name,
+      });
+      return;
+    }
+
+    _updatesController.add(update);
+    if (update.task is ParallelDownloadTask) {
+      BackgroundDownloaderCompat.updateSyntheticNotification(
+        update.task,
+        update.status,
+      );
+    }
+    _rememberSessionTask(update.task.taskId);
+    _queueWaitingIds.remove(update.task.taskId);
+    _waitingPayloads.remove(update.task.taskId);
+    await _syncSessionOverlay(completedSuccess: true);
+    _handleStatusUpdate(update, trackingUrl);
+  }
+
   void _handleStatusUpdate(TaskStatusUpdate update, String trackingUrl) {
     if (update.status == TaskStatus.complete) {
       _ref.read(activeDownloadsProvider.notifier).remove(trackingUrl);
@@ -2350,9 +3378,6 @@ class DownloadService {
     await _checkpointLogicalJob(
       task,
       state: DownloadJobState.interrupted,
-      durableBytes: totalSize > 0 && progress > 0
-          ? (totalSize * progress).floor()
-          : 0,
       expectedBytes: totalSize,
       userPaused: false,
       queueWaiting: false,
@@ -2406,7 +3431,9 @@ class DownloadService {
       queueOrder: _queueOrder(),
     );
     for (final taskId in ids) {
-      if (_occupiedSlotCount(await FileDownloader().database.allRecords()) >=
+      if ((await _occupiedSlotCount(
+            await FileDownloader().database.allRecords(),
+          )) >=
           max) {
         break;
       }
@@ -2467,11 +3494,65 @@ class DownloadService {
     String trackingUrl, {
     bool notifyContinuedProcessing = true,
   }) async {
+    await _awaitCommandReadiness('cancelDownload');
     diagnosticLog.record('command.cancel', {'taskId': taskId});
-    // Tombstone the logical download before waiting on native IO. This makes a
-    // user delete immediate in every UI and prevents late URLSession callbacks
-    // from resurrecting the row while the OS finishes canceling its worker.
-    _cancellingUrls.add(trackingUrl);
+
+    final storage = _ref.read(storageServiceProvider);
+    final existingJob = await _jobStore.get(taskId);
+    final parentRecord = await FileDownloader().database.recordForId(taskId);
+    DownloadTask? cancelTask = parentRecord?.task is DownloadTask
+        ? parentRecord!.task as DownloadTask
+        : await _liveNativeTaskFor(taskId: taskId, trackingUrl: trackingUrl);
+
+    // The durable delete fact is written before any executor stop/cancel. The
+    // tombstone itself advances the DM-10 generation fence and is idempotent on
+    // repeated delete commands.
+    DownloadJobRecord? deletionSeed = existingJob;
+    if (deletionSeed == null) {
+      var durableBytes = 0;
+      var expectedBytes = -1;
+      Map<String, dynamic>? taskSnapshot;
+      String? logicalId;
+      if (cancelTask != null) {
+        final saved = await _savedProgressFor(cancelTask);
+        durableBytes = saved.partialBytes > 0 ? saved.partialBytes : 0;
+        expectedBytes = saved.totalSize;
+        taskSnapshot = cancelTask.toJson();
+        logicalId = logicalDownloadIdFromMetadata(
+          await storage.getDownloadMetadata(taskId),
+        );
+      }
+      final stableTrackingUrl = trackingUrl.trim().isNotEmpty
+          ? trackingUrl.trim()
+          : (cancelTask == null ? '' : downloadTrackingUrl(cancelTask));
+      if (stableTrackingUrl.isNotEmpty) {
+        deletionSeed = DownloadJobRecord(
+          taskId: taskId,
+          logicalId: logicalId,
+          trackingUrl: stableTrackingUrl,
+          state: DownloadJobState.canceled,
+          generation: 0,
+          durableBytes: durableBytes,
+          durableByteProvenance: durableBytes > 0
+              ? DownloadDurableByteProvenance.exactDisk
+              : DownloadDurableByteProvenance.none,
+          expectedBytes: expectedBytes,
+          userPaused: false,
+          queueWaiting: false,
+          updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+          taskSnapshot: taskSnapshot,
+        );
+      }
+    }
+    if (deletionSeed != null) {
+      final tombstone = await _jobStore.tombstoneForDeletion(deletionSeed);
+      if (tombstone == null) {
+        throw StateError('Failed to persist delete tombstone for $taskId');
+      }
+    }
+
+    // UI/session projections may disappear after the terminal fact is durable,
+    // but destructive storage cleanup stays behind ownership settlement.
     _terminalJobIds.add(taskId);
     _queueWaitingIds.remove(taskId);
     _waitingPayloads.remove(taskId);
@@ -2485,69 +3566,177 @@ class DownloadService {
     _expectedSizePersistedIds.remove(taskId);
 
     await _rangeTransfers.stop(taskId);
-    try {
-      await _serializeQueue(() async {
-        _queueWaitingIds.remove(taskId);
-        _waitingPayloads.remove(taskId);
-        _forgetSessionTask(taskId);
-        final ids = <String>{taskId};
-        for (final task in await FileDownloader().allTasks(allGroups: true)) {
-          if (task.taskId == taskId ||
-              downloadTrackingUrl(task) == trackingUrl) {
-            ids.add(task.taskId);
-          }
+    await _serializeQueue(() async {
+      _queueWaitingIds.remove(taskId);
+      _waitingPayloads.remove(taskId);
+      _forgetSessionTask(taskId);
+      final ids = <String>{taskId};
+      for (final task in await FileDownloader().allTasks(allGroups: true)) {
+        if (task.taskId == taskId || downloadTrackingUrl(task) == trackingUrl) {
+          ids.add(task.taskId);
         }
-        final parentRecord = await FileDownloader().database.recordForId(
-          taskId,
+      }
+      if (parentRecord?.task is ParallelDownloadTask) {
+        await _parallel.cancel(parentRecord!.task as ParallelDownloadTask);
+      } else if (parentRecord?.task is DownloadTask &&
+          isNativeSingleDownloadTask(parentRecord!.task)) {
+        final settlement = await _nativeTransport.cancel(
+          parentRecord.task as DownloadTask,
         );
-        if (parentRecord?.task is ParallelDownloadTask) {
-          await _parallel.cancel(parentRecord!.task as ParallelDownloadTask);
-        } else if (parentRecord?.task is DownloadTask &&
-            isNativeSingleDownloadTask(parentRecord!.task)) {
-          await _nativeTransport.cancel(parentRecord.task as DownloadTask);
-          ids.remove(taskId);
-        }
-        if (ids.isNotEmpty) {
-          await FileDownloader().cancelTasksWithIds(ids.toList());
-        }
-        _nativeTransport.forget(taskId);
-        _userPausedIds.remove(taskId);
-        _dequeuingPausedIds.remove(taskId);
-        _ref.read(activeDownloadsProvider.notifier).remove(trackingUrl);
-        _ref.read(downloadProgressProvider.notifier).remove(trackingUrl);
-        // Proactive cleanup
-        await FileDownloader().database.deleteRecordWithId(taskId);
-        await _ref.read(storageServiceProvider).removeDownloadMetadata(taskId);
-        await _jobStore.remove(taskId);
-        await _ref.read(downloadUrlRefreshStoreProvider).remove(trackingUrl);
-        await _syncQueueToCapUnlocked();
+        diagnosticLog.record('cancel.commandSettlement', {
+          'taskId': taskId,
+          'settlement': settlement.name,
+        });
+        ids.remove(taskId);
+      }
+      if (ids.isNotEmpty) {
+        await FileDownloader().cancelTasksWithIds(ids.toList());
+      }
+
+      final cancelOwnership = await _waitForCancelOwnershipRelease(taskId);
+      if (cancelOwnership != DownloadRuntimeOwnership.notOwned) {
+        diagnosticLog.record('cancel.ownershipUnsettled', {
+          'taskId': taskId,
+          'ownership': cancelOwnership.name,
+        });
+        await _persistNativeWaitingSnapshot();
         if (notifyContinuedProcessing) {
           await _syncSessionOverlay(completedSuccess: false);
         }
-      });
-    } finally {
-      // Small delay to let final updates clear
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _cancellingUrls.remove(trackingUrl);
-      });
+        return;
+      }
+
+      _nativeTransport.forget(taskId);
+      _userPausedIds.remove(taskId);
+      _dequeuingPausedIds.remove(taskId);
+      _ref.read(activeDownloadsProvider.notifier).remove(trackingUrl);
+      _ref.read(downloadProgressProvider.notifier).remove(trackingUrl);
+      await FileDownloader().database.deleteRecordWithId(taskId);
+      await storage.removeDownloadMetadata(taskId);
+      final cancelJob = await _jobStore.get(taskId);
+      await _ref
+          .read(downloadUrlRefreshStoreProvider)
+          .removeForOwnerGeneration(
+            trackingUrl,
+            taskId,
+            cancelJob?.generation ?? 0,
+          );
+      // Keep the canceled JobStore row. It is the durable fence against late
+      // complete/running callbacks and is GC'd only by the age+ownership policy.
+      await _syncQueueToCapUnlocked();
+      if (notifyContinuedProcessing) {
+        await _syncSessionOverlay(completedSuccess: false);
+      }
+    });
+  }
+
+  Future<DownloadCommandOutcome> cancelDownloadOutcome(
+    String taskId,
+    String trackingUrl, {
+    bool notifyContinuedProcessing = true,
+  }) async {
+    try {
+      await cancelDownload(
+        taskId,
+        trackingUrl,
+        notifyContinuedProcessing: notifyContinuedProcessing,
+      );
+    } on DownloadServiceUnavailableException {
+      return DownloadCommandOutcome.serviceUnavailable;
+    } catch (_) {
+      return DownloadCommandOutcome.recoverableFailure;
     }
+
+    final ownership = await _runtimeOwnershipFor(taskId);
+    final job = await _jobStore.get(taskId);
+    return resolveCancelCommandOutcome(state: job?.state, ownership: ownership);
+  }
+
+  Future<DownloadCommandOutcome> deleteDownloadOutcome(
+    Task task,
+    MultimediaItem item, {
+    Episode? episode,
+    bool notifyContinuedProcessing = true,
+  }) async {
+    final filesToDelete = <String, File>{};
+    try {
+      final directPath = await task.filePath();
+      if (directPath.isNotEmpty) filesToDelete[directPath] = File(directPath);
+    } catch (_) {}
+    try {
+      final resolved = await resolveDownloadedFile(
+        task,
+        item,
+        episode: episode,
+      );
+      if (resolved != null) filesToDelete[resolved.path] = resolved;
+    } catch (_) {}
+
+    final outcome = await cancelDownloadOutcome(
+      task.taskId,
+      downloadTrackingUrl(task),
+      notifyContinuedProcessing: notifyContinuedProcessing,
+    );
+    final safeToDestroy = switch (outcome) {
+      DownloadCommandOutcome.terminal ||
+      DownloadCommandOutcome.alreadyComplete ||
+      DownloadCommandOutcome.missingState => true,
+      _ => false,
+    };
+    if (!safeToDestroy) return outcome;
+
+    final ownership = await _runtimeOwnershipFor(task.taskId);
+    if (ownership != DownloadRuntimeOwnership.notOwned) {
+      return DownloadCommandOutcome.settlingOwnership;
+    }
+
+    var cleanupFailed = false;
+    for (final file in filesToDelete.values) {
+      try {
+        if (await file.exists() && !await deleteDownloadedFile(file)) {
+          cleanupFailed = true;
+        }
+      } catch (_) {
+        cleanupFailed = true;
+      }
+    }
+    return cleanupFailed
+        ? DownloadCommandOutcome.recoverableFailure
+        : DownloadCommandOutcome.terminal;
+  }
+
+  Future<DownloadCommandOutcome> pauseDownloadOutcome(String taskId) async {
+    try {
+      await pauseDownload(taskId);
+    } on DownloadServiceUnavailableException {
+      return DownloadCommandOutcome.serviceUnavailable;
+    } catch (_) {
+      return DownloadCommandOutcome.recoverableFailure;
+    }
+    final job = await _jobStore.get(taskId);
+    final ownership = await _runtimeOwnershipFor(taskId);
+    return resolvePauseCommandOutcome(state: job?.state, ownership: ownership);
+  }
+
+  Future<DownloadCommandOutcome> resumeDownloadOutcome(String taskId) async {
+    try {
+      await resumeDownload(taskId);
+    } on _DownloadRestartRequiredException {
+      return DownloadCommandOutcome.restartRequired;
+    } on DownloadServiceUnavailableException {
+      return DownloadCommandOutcome.serviceUnavailable;
+    } catch (_) {
+      return DownloadCommandOutcome.recoverableFailure;
+    }
+    final job = await _jobStore.get(taskId);
+    final ownership = await _runtimeOwnershipFor(taskId);
+    return resolveResumeCommandOutcome(state: job?.state, ownership: ownership);
   }
 
   Future<void> pauseDownload(String taskId) async {
+    await _awaitCommandReadiness('pauseDownload');
     diagnosticLog.record('command.pauseDownload', {'taskId': taskId});
-    // Fence callbacks immediately on tap. Native pause/resume-data settlement
-    // can take a moment on iOS, but progress events must not visually undo the
-    // user's pause while that acknowledgement is in flight.
-    _userPausedIds.add(taskId);
-    final stoppedRange = await _rangeTransfers.stop(taskId);
     await _serializeQueue(() async {
-      _userPausedIds.add(taskId);
-      _queueWaitingIds.remove(taskId);
-      _waitingPayloads.remove(taskId);
-      await _ref
-          .read(storageServiceProvider)
-          .patchDownloadMetadata(taskId, queueWaiting: false, userPaused: true);
-
       final recordForId = await FileDownloader().database.recordForId(taskId);
       final tracking = recordForId != null
           ? downloadTrackingUrl(recordForId.task)
@@ -2561,12 +3750,36 @@ class DownloadService {
       }
 
       if (downloadTask != null) {
-        await _checkpointLogicalJob(
+        final checkpointed = await _checkpointLogicalJob(
           downloadTask,
           state: DownloadJobState.pausing,
           userPaused: true,
           queueWaiting: false,
         );
+        if (!checkpointed) {
+          throw StateError('Failed to persist pause intent for $taskId');
+        }
+        final pauseOperation = await _jobStore.beginReplicaTransaction(
+          taskId,
+          operation: DownloadReplicaOperation.pause,
+          state: DownloadJobState.pausing,
+        );
+        if (pauseOperation == null) {
+          throw StateError('Failed to journal pause intent for $taskId');
+        }
+        // Fence callbacks only after the durable pause intent exists. Ownership
+        // must never be stopped first and then fail to persist the user's intent.
+        _userPausedIds.add(taskId);
+        _queueWaitingIds.remove(taskId);
+        _waitingPayloads.remove(taskId);
+        await _ref
+            .read(storageServiceProvider)
+            .patchDownloadMetadata(
+              taskId,
+              queueWaiting: false,
+              userPaused: true,
+            );
+        final stoppedRange = await _rangeTransfers.stop(taskId);
         // Plugin pause produces URLSession resumeData and drops the
         // transferring task so it no longer occupies a slot. Never cancel —
         // cancel deletes the temp file and forces a restart from byte 0.
@@ -2605,40 +3818,37 @@ class DownloadService {
           downloadMetadataExpectedBytes(metadata),
         ]);
         if (!didPause) {
-          _userPausedIds.remove(taskId);
-          await _ref
-              .read(storageServiceProvider)
-              .patchDownloadMetadata(
-                taskId,
-                queueWaiting: false,
-                userPaused: false,
-                lastProgress: progress,
-                lastExpectedBytes: totalSize,
-              );
-          await _checkpointLogicalJob(
-            downloadTask,
-            state: DownloadJobState.running,
-            durableBytes: totalSize > 0 && progress > 0
-                ? (totalSize * progress).floor()
-                : 0,
-            expectedBytes: totalSize,
-            userPaused: false,
-            queueWaiting: false,
-          );
-          _publishProgress(
-            trackingUrl: trackingUrl,
-            taskId: taskId,
-            progress: progress,
-            totalSize: totalSize,
-            status: TaskStatus.running,
-            networkSpeed: current?.networkSpeed ?? 0,
-            timeRemaining: current?.timeRemaining ?? Duration.zero,
-          );
-          _updatesController.add(
-            TaskStatusUpdate(downloadTask, TaskStatus.running),
-          );
+          diagnosticLog.record('pause.settling', {
+            'taskId': taskId,
+            'ownership': (await _runtimeOwnershipFor(taskId)).name,
+          });
+          // Keep the already-persisted `pausing` + userPaused intent. The task
+          // must not become logically/UI paused until ownership release is
+          // proven, and must not be rolled back to running while the user has
+          // an outstanding pause request. A later reconcile/retry can settle it.
           await _syncSessionOverlay(completedSuccess: false);
           await _persistNativeWaitingSnapshot();
+          return;
+        }
+
+        final executorAcknowledged = await _jobStore.advanceReplicaTransaction(
+          pauseOperation,
+          DownloadReplicaTransactionPhase.executorAcknowledged,
+        );
+        if (!executorAcknowledged) {
+          diagnosticLog.record('pause.replicaAckSuperseded', {
+            'taskId': taskId,
+          });
+          return;
+        }
+        final projecting = await _jobStore.advanceReplicaTransaction(
+          pauseOperation,
+          DownloadReplicaTransactionPhase.projecting,
+        );
+        if (!projecting) {
+          diagnosticLog.record('pause.replicaProjectionSuperseded', {
+            'taskId': taskId,
+          });
           return;
         }
 
@@ -2654,16 +3864,26 @@ class DownloadService {
               lastProgress: progress,
               lastExpectedBytes: totalSize,
             );
-        await _checkpointLogicalJob(
-          downloadTask,
+        final pauseCommitted = await _jobStore.updateForAttempt(
+          pauseOperation,
           state: DownloadJobState.pausedByUser,
-          durableBytes: totalSize > 0 && progress > 0
-              ? (totalSize * progress).floor()
-              : 0,
           expectedBytes: totalSize,
           userPaused: true,
           queueWaiting: false,
         );
+        if (!pauseCommitted) {
+          diagnosticLog.record('pause.superseded', {'taskId': taskId});
+          return;
+        }
+        final replicaCommitted = await _jobStore.commitReplicaTransaction(
+          pauseOperation,
+        );
+        if (!replicaCommitted) {
+          diagnosticLog.record('pause.replicaCommitSuperseded', {
+            'taskId': taskId,
+          });
+          return;
+        }
         _publishProgress(
           trackingUrl: trackingUrl,
           taskId: taskId,
@@ -2682,6 +3902,7 @@ class DownloadService {
   }
 
   Future<void> resumeDownload(String taskId) async {
+    await _awaitCommandReadiness('resumeDownload');
     diagnosticLog.record('command.resumeDownload', {'taskId': taskId});
     await _serializeQueue(() async {
       await _resumeUserPausedUnlocked(taskId);
@@ -2690,8 +3911,6 @@ class DownloadService {
 
   Future<void> _resumeUserPausedUnlocked(String taskId) async {
     await _reconcileTransferOwnership();
-    _userPausedIds.remove(taskId);
-    _dequeuingPausedIds.remove(taskId);
     DownloadTask? downloadTask = await _liveNativeTaskFor(taskId: taskId);
     if (downloadTask == null) {
       final record = await FileDownloader().database.recordForId(taskId);
@@ -2701,15 +3920,27 @@ class DownloadService {
     }
     if (downloadTask == null) return;
     _rememberSessionTask(taskId);
-    await _ref
-        .read(storageServiceProvider)
-        .patchDownloadMetadata(taskId, queueWaiting: false, userPaused: false);
-    await _checkpointLogicalJob(
+    final checkpointed = await _checkpointLogicalJob(
       downloadTask,
       state: DownloadJobState.starting,
       userPaused: false,
       queueWaiting: false,
     );
+    if (!checkpointed) {
+      throw StateError('Failed to persist resume intent for $taskId');
+    }
+    final resumeOperation = await _jobStore.beginOperation(
+      taskId,
+      state: DownloadJobState.starting,
+    );
+    if (resumeOperation == null) {
+      throw StateError('Failed to fence resume operation for $taskId');
+    }
+    _userPausedIds.remove(taskId);
+    _dequeuingPausedIds.remove(taskId);
+    await _ref
+        .read(storageServiceProvider)
+        .patchDownloadMetadata(taskId, queueWaiting: false, userPaused: false);
 
     final max = clampDownloadConcurrency(
       _ref.read(storageServiceProvider).getDownloadConcurrency(),
@@ -2725,12 +3956,16 @@ class DownloadService {
       queueOrder: _queueOrder(),
     );
 
-    await _cancelNativeWaitersForRestackUnlocked(plan.waitersToRestack);
+    final waitersReadyForRestack = await _cancelNativeWaitersForRestackUnlocked(
+      plan.waitersToRestack,
+    );
 
     final reservedEarlier = <String>{};
     try {
       for (final earlierId in plan.earlierWaiterIds) {
-        if (_occupiedSlotCount(await FileDownloader().database.allRecords()) >=
+        if (await _occupiedSlotCount(
+              await FileDownloader().database.allRecords(),
+            ) >=
             max) {
           break;
         }
@@ -2744,7 +3979,7 @@ class DownloadService {
       }
 
       final latestRecords = await FileDownloader().database.allRecords();
-      final occupiedAfterEarlier = _occupiedSlotCount(latestRecords);
+      final occupiedAfterEarlier = await _occupiedSlotCount(latestRecords);
       final remainingWaiters = plan.waitingFifoIds
           .where(
             (id) =>
@@ -2775,9 +4010,8 @@ class DownloadService {
           await _checkpointLogicalJob(
             downloadTask,
             state: DownloadJobState.interrupted,
-            durableBytes: saved.totalSize > 0 && saved.progress > 0
-                ? (saved.totalSize * saved.progress).floor()
-                : saved.partialBytes,
+            durableBytes: saved.partialBytes,
+            durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
             expectedBytes: saved.totalSize,
             userPaused: false,
             queueWaiting: false,
@@ -2805,7 +4039,7 @@ class DownloadService {
         await _enqueueExistingTaskAsWaiterUnlocked(downloadTask);
       }
 
-      for (final waiterId in plan.waitersToRestack) {
+      for (final waiterId in waitersReadyForRestack) {
         final record = byId[waiterId];
         if (record == null || record.task is! DownloadTask) continue;
         await _enqueueExistingTaskAsWaiterUnlocked(record.task as DownloadTask);
@@ -2813,10 +4047,6 @@ class DownloadService {
     } finally {
       _startingTaskIds.removeAll(reservedEarlier);
     }
-
-    Future<void>.delayed(const Duration(milliseconds: 800), () {
-      _restackingWaiterIds.removeAll(plan.waitersToRestack);
-    });
 
     await _persistNativeWaitingSnapshot();
     await _syncSessionOverlay();
@@ -2840,11 +4070,28 @@ class DownloadService {
     return false;
   }
 
-  Future<void> _cancelNativeWaitersForRestackUnlocked(List<String> ids) async {
-    if (ids.isEmpty) return;
+  Future<List<String>> _cancelNativeWaitersForRestackUnlocked(
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return const <String>[];
+
+    final ready = <String>[];
+    for (final id in ids) {
+      final job = await _jobStore.get(id);
+      if (job == null) {
+        ready.add(id);
+        continue;
+      }
+      final token = await _jobStore.beginOperation(
+        id,
+        state: DownloadJobState.queued,
+      );
+      if (token != null) ready.add(id);
+    }
+
     final liveIds = <String>{};
     for (final task in await FileDownloader().allTasks(allGroups: true)) {
-      if (!ids.contains(task.taskId)) continue;
+      if (!ready.contains(task.taskId)) continue;
       final record = await FileDownloader().database.recordForId(task.taskId);
       if (record != null &&
           reservesDownloadSlot(
@@ -2855,11 +4102,27 @@ class DownloadService {
       }
       liveIds.add(task.taskId);
     }
-    if (liveIds.isEmpty) return;
-    _restackingWaiterIds.addAll(liveIds);
+    if (liveIds.isEmpty) return List<String>.unmodifiable(ready);
+
     try {
       await FileDownloader().cancelTasksWithIds(liveIds.toList());
-    } catch (_) {}
+    } catch (_) {
+      for (final id in liveIds) {
+        ready.remove(id);
+      }
+      return List<String>.unmodifiable(ready);
+    }
+
+    for (final id in liveIds) {
+      final ownership = await _waitForCancelOwnershipRelease(id);
+      if (ownership == DownloadRuntimeOwnership.notOwned) continue;
+      ready.remove(id);
+      diagnosticLog.record('restack.ownershipUnsettled', {
+        'taskId': id,
+        'ownership': ownership.name,
+      });
+    }
+    return List<String>.unmodifiable(ready);
   }
 
   Future<void> _enqueueExistingTaskAsWaiterUnlocked(DownloadTask task) async {
@@ -2883,19 +4146,22 @@ class DownloadService {
     final previous = await FileDownloader().database.recordForId(task.taskId);
     final progress = previous?.progress ?? 0.0;
     final totalSize = previous?.expectedFileSize ?? -1;
-    _queueWaitingIds.add(task.taskId);
-    _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
-    _rememberSessionTask(task.taskId);
-    await _ref
-        .read(storageServiceProvider)
-        .patchDownloadMetadata(task.taskId, queueWaiting: true);
-    await _checkpointLogicalJob(
+    final checkpointed = await _checkpointLogicalJob(
       task,
       state: DownloadJobState.queued,
       expectedBytes: totalSize,
       userPaused: false,
       queueWaiting: true,
     );
+    if (!checkpointed) {
+      throw StateError('Failed to persist queue intent for ${task.taskId}');
+    }
+    _queueWaitingIds.add(task.taskId);
+    _waitingPayloads[task.taskId] = _waitingPayloadFor(task);
+    _rememberSessionTask(task.taskId);
+    await _ref
+        .read(storageServiceProvider)
+        .patchDownloadMetadata(task.taskId, queueWaiting: true);
     await FileDownloader().database.updateRecord(
       TaskRecord(task, TaskStatus.paused, progress, totalSize),
     );
@@ -2953,7 +4219,21 @@ class DownloadService {
     return _enqueueTransfer(task, knownTotalBytes);
   }
 
+  Future<bool> _canNativeResume(DownloadTask task) async {
+    try {
+      return await FileDownloader()
+          .taskCanResume(task)
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> _resumeDownloadTask(DownloadTask task) async {
+    if (!_networkAvailable) {
+      await _holdDownloadForNetwork(task);
+      return true;
+    }
     if (_parallel.isActive(task.taskId) ||
         _rangeTransfers.isActive(task.taskId))
       return true;
@@ -2969,12 +4249,36 @@ class DownloadService {
       }
     }
 
+    final currentJob = await _jobStore.get(task.taskId);
+    if (currentJob != null) {
+      final execution = await _jobStore.beginOperation(
+        task.taskId,
+        state: DownloadJobState.starting,
+      );
+      if (execution == null) return false;
+    }
+
     final saved = await _savedProgressFor(task);
+    if (saved.totalSize > 0 &&
+        saved.partialBytes == saved.totalSize &&
+        await _resumeUsingPartialFile(task)) {
+      return true;
+    }
+    final canNativeResume =
+        task is! ParallelDownloadTask && await _canNativeResume(task);
     final refreshResult = await _refreshTaskBeforeResume(
       task,
       expectedBytes: saved.totalSize,
       partialBytes: saved.partialBytes,
+      hasOpaqueNativeResume: canNativeResume && saved.partialBytes <= 0,
     );
+    if (refreshResult.restartRequired) {
+      diagnosticLog.record('source.refreshRestartRequired', {
+        'taskId': task.taskId,
+        'opaqueNativeResume': canNativeResume,
+      });
+      throw _DownloadRestartRequiredException(task.taskId);
+    }
     task = refreshResult.task;
     final trackingUrl = downloadTrackingUrl(task);
     if (saved.progress > 0) {
@@ -2999,7 +4303,9 @@ class DownloadService {
         await _parallel.importLegacy(task, data.data);
         return _parallel.start(task, saved.totalSize);
       }
-      if (saved.progress > 0 || saved.partialBytes > 0) return false;
+      // A historical percentage can survive after all multipart manifests and
+      // bytes are gone. Only actual surviving bytes may block a zero restart.
+      if (saved.partialBytes > 0) return false;
       return _enqueueTransfer(task, saved.totalSize);
     }
 
@@ -3010,17 +4316,25 @@ class DownloadService {
       return _resumeUsingPartialFile(task);
     }
 
+    if (canNativeResume && !refreshResult.refreshed) {
+      var resumed = false;
+      try {
+        resumed = await _nativeTransport.resume(task);
+      } catch (_) {
+        resumed = false;
+      }
+      if (resumed) return true;
+      if (saved.partialBytes <= 0) {
+        // taskCanResume proves opaque native ownership existed, but the executor
+        // could not adopt it. Never convert that hidden byte ownership into an
+        // implicit zero-byte restart.
+        throw _DownloadRestartRequiredException(task.taskId);
+      }
+    }
+
     return resumeOrRestartDownload(
-      canResume: () async {
-        try {
-          return await FileDownloader()
-              .taskCanResume(task)
-              .timeout(const Duration(seconds: 3));
-        } catch (_) {
-          return false;
-        }
-      },
-      resume: () => _nativeTransport.resume(task),
+      canResume: () async => false,
+      resume: () async => false,
       resumeFromPartial: () => _resumeUsingPartialFile(task),
       restart: () =>
           _enqueueFreshAdaptiveTask(task, knownTotalBytes: saved.totalSize),
@@ -3031,7 +4345,25 @@ class DownloadService {
   }
 
   Future<bool> _resumeUsingPartialFile(DownloadTask task) async {
-    if (task is ParallelDownloadTask) return false;
+    final isParallel = task is ParallelDownloadTask;
+    if (isParallel) {
+      Set<String> livePartIds;
+      try {
+        livePartIds = await _livePartIds();
+      } catch (_) {
+        diagnosticLog.record('completion.localArtifactOwnershipUnknown', {
+          'taskId': task.taskId,
+        });
+        return false;
+      }
+      if (livePartIds.any((id) => id.startsWith('${task.taskId}.part.'))) {
+        diagnosticLog.record('completion.localArtifactOwnedParts', {
+          'taskId': task.taskId,
+        });
+        return false;
+      }
+    }
+
     String destinationPath;
     try {
       destinationPath = await task.filePath();
@@ -3040,20 +4372,83 @@ class DownloadService {
     }
     if (destinationPath.isEmpty) return false;
 
+    final expectedBytes = (await _savedProgressFor(task)).totalSize;
+    if (isParallel) {
+      final candidate = await findPartialDownloadFile(
+        destinationPath: destinationPath,
+      );
+      if (candidate == null || expectedBytes <= 0) return false;
+      int candidateBytes;
+      try {
+        candidateBytes = await candidate.length();
+      } catch (_) {
+        return false;
+      }
+      if (candidateBytes != expectedBytes) return false;
+    }
+
     final partial = await canonicalizePartialDownloadFile(
       destinationPath: destinationPath,
     );
     if (partial == null) return false;
     final existingBytes = partial.bytes;
-    final expectedBytes = (await _savedProgressFor(task)).totalSize;
     if (expectedBytes > 0 && existingBytes == expectedBytes) {
+      final persistedFingerprint = (await _jobStore.get(task.taskId))
+          ?.fingerprint;
+      final currentFingerprint = await _probeResourceFingerprint(
+        task.url,
+        headers: task.headers,
+      );
+      final prefixProof = await _rangeTransfers.verifyExistingPrefix(
+        id: '${task.taskId}.completion-proof',
+        url: task.url,
+        headers: task.headers,
+        file: partial.file,
+        written: existingBytes,
+      );
+      if (!downloadCompletionEvidenceMatches(
+        observedFileBytes: existingBytes,
+        expectedResourceBytes: expectedBytes,
+        prefixMatches: prefixProof.matches,
+        persistedFingerprint: persistedFingerprint,
+        currentFingerprint: currentFingerprint,
+      )) {
+        diagnosticLog.record('completion.identityRejected', {
+          'taskId': task.taskId,
+          'bytes': existingBytes,
+          'expected': expectedBytes,
+        });
+        return false;
+      }
+      final checkpointed = await _checkpointLogicalJob(
+        task,
+        state: DownloadJobState.completed,
+        durableBytes: expectedBytes,
+        durableByteProvenance: DownloadDurableByteProvenance.verifiedFinalFile,
+        expectedBytes: expectedBytes,
+        userPaused: false,
+        queueWaiting: false,
+        fingerprint: fingerprintWithExpectedBytes(
+          remote: currentFingerprint,
+          expectedBytes: expectedBytes,
+          fallbackFinalUrl: task.url,
+        ),
+      );
+      if (!checkpointed) return false;
+
       await FileDownloader().database.updateRecord(
         TaskRecord(task, TaskStatus.complete, 1, expectedBytes),
       );
+      diagnosticLog.record('completion.adoptedExactLocalArtifact', {
+        'taskId': task.taskId,
+        'bytes': expectedBytes,
+        'parallel': isParallel,
+      });
       _sharedEvents.add(TaskProgressUpdate(task, 1, expectedBytes));
       _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));
       return true;
     }
+    if (task is ParallelDownloadTask) return false;
     if (!shouldResumeFromPartialBytes(
       existingPartialBytes: existingBytes,
       expectedBytes: expectedBytes,
@@ -3095,7 +4490,7 @@ class DownloadService {
           if (record?.task is! ParallelDownloadTask) return;
           var parent = record!.task as ParallelDownloadTask;
           final trackingUrl = downloadTrackingUrl(parent);
-          if (_cancellingUrls.contains(trackingUrl)) return;
+          if (_terminalJobIds.contains(parentTaskId)) return;
 
           final descriptor = await _ref
               .read(downloadUrlRefreshStoreProvider)
@@ -3186,6 +4581,7 @@ class DownloadService {
                   ? DownloadJobState.completed
                   : DownloadJobState.running,
               durableBytes: written,
+              durableByteProvenance: DownloadDurableByteProvenance.rangeFlushed,
               expectedBytes: total,
               queueWaiting: false,
             )) {
@@ -3209,6 +4605,7 @@ class DownloadService {
                   ? DownloadJobState.pausedByUser
                   : DownloadJobState.interrupted,
               durableBytes: written,
+              durableByteProvenance: DownloadDurableByteProvenance.rangeFlushed,
               expectedBytes: total,
             )) {
           return;
@@ -3221,6 +4618,9 @@ class DownloadService {
       onFailure: (failure) async {
         if (!logical || token == null) {
           if (parallelParent != null &&
+              failure.action == DownloadFailureAction.waitForNetwork) {
+            await _holdDownloadForNetwork(parallelParent);
+          } else if (parallelParent != null &&
               failure.action == DownloadFailureAction.refreshUrl) {
             _scheduleParallelParentRefresh(parallelParent.taskId);
           }
@@ -3228,6 +4628,10 @@ class DownloadService {
         }
         final activeToken = token;
         if (!await _jobStore.accepts(activeToken)) return;
+        if (failure.action == DownloadFailureAction.waitForNetwork) {
+          await _holdDownloadForNetwork(task);
+          return;
+        }
         if (failure.action == DownloadFailureAction.refreshUrl) {
           // DownloadRangeTransfer removes its ownership immediately after this
           // callback returns. Queue the retry on the next event turn so the
@@ -3235,7 +4639,7 @@ class DownloadService {
           Future<void>.delayed(Duration.zero, () async {
             if (_disposed ||
                 _userPausedIds.contains(task.taskId) ||
-                _cancellingUrls.contains(downloadTrackingUrl(task))) {
+                _terminalJobIds.contains(task.taskId)) {
               return;
             }
             await _serializeQueue(() async {
@@ -3252,16 +4656,45 @@ class DownloadService {
             await dest.exists() &&
             await dest.length() == failure.resourceSize &&
             (expectedBytes <= 0 || expectedBytes == failure.resourceSize)) {
+          final currentFingerprint = await _probeResourceFingerprint(
+            task.url,
+            headers: task.headers,
+          );
+          final persistedFingerprint = (await _jobStore.get(task.taskId))
+              ?.fingerprint;
+          final completionExpected = knownDownloadSize(<int?>[
+            expectedBytes,
+            persistedFingerprint?.expectedBytes,
+            currentFingerprint?.expectedBytes,
+            failure.resourceSize,
+          ]);
+          if (!downloadCompletionEvidenceMatches(
+            observedFileBytes: failure.resourceSize,
+            expectedResourceBytes: completionExpected,
+            // DownloadRangeTransfer only reaches reconcileRange after its
+            // existing-prefix guard has succeeded.
+            prefixMatches: true,
+            persistedFingerprint: persistedFingerprint,
+            currentFingerprint: currentFingerprint,
+          )) {
+            return;
+          }
           await _jobStore.updateForAttempt(
             activeToken,
             state: DownloadJobState.completed,
             durableBytes: failure.resourceSize,
-            expectedBytes: failure.resourceSize,
+            durableByteProvenance: DownloadDurableByteProvenance.rangeFlushed,
+            expectedBytes: completionExpected,
+            fingerprint: fingerprintWithExpectedBytes(
+              remote: currentFingerprint,
+              expectedBytes: completionExpected,
+              fallbackFinalUrl: task.url,
+            ),
           );
           await FileDownloader().database.updateRecord(
-            TaskRecord(task, TaskStatus.complete, 1, failure.resourceSize),
+            TaskRecord(task, TaskStatus.complete, 1, completionExpected),
           );
-          _sharedEvents.add(TaskProgressUpdate(task, 1, failure.resourceSize));
+          _sharedEvents.add(TaskProgressUpdate(task, 1, completionExpected));
           _sharedEvents.add(TaskStatusUpdate(task, TaskStatus.complete));
         }
       },
@@ -3276,60 +4709,76 @@ class DownloadService {
     final trackingUrl = downloadTrackingUrl(task);
     var job = await _jobStore.get(task.taskId);
     if (job == null) {
+      final remoteFingerprint = await _probeResourceFingerprint(
+        task.url,
+        headers: task.headers,
+      );
       final seeded = DownloadJobRecord(
         taskId: task.taskId,
         trackingUrl: trackingUrl,
         state: DownloadJobState.interrupted,
         generation: 0,
         durableBytes: existingBytes,
+        durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
         expectedBytes: expectedBytes,
         userPaused: false,
         queueWaiting: false,
         updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
-        fingerprint: DownloadResourceFingerprint(
+        taskSnapshot: task.toJson(),
+        fingerprint: fingerprintWithExpectedBytes(
+          remote: remoteFingerprint,
           expectedBytes: expectedBytes,
-          finalUrl: task.url,
+          fallbackFinalUrl: task.url,
         ),
       );
       if (!await _jobStore.put(seeded)) return null;
       job = seeded;
     } else if (existingBytes > job.durableBytes) {
-      await _jobStore.put(
+      if (!await _jobStore.put(
         job.copyWith(
           durableBytes: existingBytes,
+          durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
           expectedBytes: expectedBytes > 0 ? expectedBytes : job.expectedBytes,
           updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
         ),
-      );
+      )) {
+        return null;
+      }
     }
     return _jobStore.beginAttempt(task.taskId, state: DownloadJobState.running);
   }
 
-  Future<({DownloadTask task, bool refreshed})> _refreshTaskBeforeResume(
+  Future<({DownloadTask task, bool refreshed, bool restartRequired})>
+  _refreshTaskBeforeResume(
     DownloadTask task, {
     required int expectedBytes,
     required int partialBytes,
+    bool hasOpaqueNativeResume = false,
   }) async {
     diagnosticLog.record('source.check', {
       'taskId': task.taskId,
       'bytes': partialBytes,
       'total': expectedBytes,
     });
-    // Native single-file resume data may be the only durable representation of
-    // its bytes. Do not replace that URL unless a visible partial prefix exists.
-    // Multipart manifests own their own durable child files, so they are safe.
-    if (task is! ParallelDownloadTask && partialBytes <= 0) {
-      return (task: task, refreshed: false);
-    }
-
     final trackingUrl = downloadTrackingUrl(task);
+    final authoritativeFingerprint = (await _jobStore.get(task.taskId))
+        ?.fingerprint;
     final store = _ref.read(downloadUrlRefreshStoreProvider);
     final descriptor = await store.get(trackingUrl);
-    if (descriptor == null) return (task: task, refreshed: false);
+    if (descriptor == null)
+      return (task: task, refreshed: false, restartRequired: false);
 
     // Keep a still-valid URL. This avoids provider extraction work on every
     // short pause/resume while still detecting expired signed links.
     final current = await getMetadata(task.url, headers: task.headers);
+    final currentFingerprint = await _probeResourceFingerprint(
+      task.url,
+      headers: task.headers,
+    );
+    final currentIdentityMatches =
+        authoritativeFingerprint == null ||
+        currentFingerprint == null ||
+        authoritativeFingerprint.compatibleWith(currentFingerprint);
     final currentSizeMatches =
         expectedBytes <= 0 ||
         current?.size == null ||
@@ -3340,8 +4789,9 @@ class DownloadService {
     if (current != null &&
         current.size != null &&
         currentSizeMatches &&
-        currentRangeOk) {
-      return (task: task, refreshed: false);
+        currentRangeOk &&
+        currentIdentityMatches) {
+      return (task: task, refreshed: false, restartRequired: false);
     }
 
     final refreshed = await _ref
@@ -3351,16 +4801,68 @@ class DownloadService {
       'taskId': task.taskId,
       'result': refreshed != null,
     });
-    if (refreshed == null) return (task: task, refreshed: false);
+    if (refreshed == null)
+      return (task: task, refreshed: false, restartRequired: false);
     final metadata = await getMetadata(
       refreshed.url,
       headers: refreshed.headers,
     );
+    final refreshedFingerprint = await _probeResourceFingerprint(
+      refreshed.url,
+      headers: refreshed.headers,
+    );
+    final refreshedIdentityMatches =
+        authoritativeFingerprint == null ||
+        refreshedFingerprint == null ||
+        authoritativeFingerprint.compatibleWith(refreshedFingerprint);
     if (metadata?.size == null ||
         (expectedBytes > 0 && metadata!.size != expectedBytes) ||
         ((task is ParallelDownloadTask || partialBytes > 0) &&
-            metadata?.supportsRanges != true)) {
-      return (task: task, refreshed: false);
+            metadata?.supportsRanges != true) ||
+        !refreshedIdentityMatches) {
+      return (task: task, refreshed: false, restartRequired: false);
+    }
+
+    if (task is! ParallelDownloadTask &&
+        hasOpaqueNativeResume &&
+        partialBytes <= 0) {
+      // We proved the old source needs replacement and also proved that the
+      // only resumable bytes are opaque native resume data tied to that old
+      // source. The replacement itself is valid, but those bytes cannot be
+      // migrated safely, so leave durable/source state untouched and require an
+      // explicit user-visible restart decision.
+      return (task: task, refreshed: false, restartRequired: true);
+    }
+
+    // Source replacement changes executor/manifest identity. Persist an
+    // interrupted write-ahead boundary first so a storage failure cannot let
+    // the old durable state race a newly installed URL. DM-11/DM-31 later
+    // make the source capability itself transactional and generation-aware.
+    final refreshCheckpointed = await _checkpointLogicalJob(
+      task,
+      state: DownloadJobState.interrupted,
+      expectedBytes: expectedBytes,
+      userPaused: false,
+      queueWaiting: false,
+      fingerprint: fingerprintWithExpectedBytes(
+        remote: refreshedFingerprint,
+        expectedBytes: expectedBytes,
+        fallbackFinalUrl: refreshed.url,
+      ),
+    );
+    if (!refreshCheckpointed) {
+      throw StateError(
+        'Failed to persist source refresh boundary for ${task.taskId}',
+      );
+    }
+    final refreshOperation = await _jobStore.beginOperation(
+      task.taskId,
+      state: DownloadJobState.interrupted,
+    );
+    if (refreshOperation == null) {
+      throw StateError(
+        'Failed to fence source refresh operation for ${task.taskId}',
+      );
     }
 
     if (task is ParallelDownloadTask) {
@@ -3370,8 +4872,8 @@ class DownloadService {
         headers: refreshed.headers,
       );
       return replaced == null
-          ? (task: task, refreshed: false)
-          : (task: replaced, refreshed: true);
+          ? (task: task, refreshed: false, restartRequired: false)
+          : (task: replaced, refreshed: true, restartRequired: false);
     }
 
     final updated = task.copyWith(
@@ -3390,20 +4892,49 @@ class DownloadService {
       );
     }
     _nativeTransport.forget(task.taskId);
-    return (task: updated, refreshed: true);
+    return (task: updated, refreshed: true, restartRequired: false);
   }
 
-  Future<List<Task>> _liveTransferTasks() async {
-    // allTasks/taskForId include persisted paused tasks. They are not proof
-    // that URLSession or a worker currently owns a transfer. Use the public
-    // tracked-task database to exclude durable paused records instead of the
-    // plugin's testing-only downloader API.
-    final paused = (await FileDownloader().database.allRecordsWithStatus(
-      TaskStatus.paused,
-    )).map((record) => record.taskId).toSet();
-    return (await FileDownloader().allTasks(allGroups: true))
-        .where((task) => !paused.contains(task.taskId))
-        .toList();
+  Future<List<Task>> _liveTransferTasks() =>
+      FileDownloader().allTasks(allGroups: true);
+
+  Future<DownloadRuntimeOwnership> _runtimeOwnershipFor(String taskId) async {
+    if (_rangeTransfers.isActive(taskId) ||
+        _parallel.isActive(taskId) ||
+        _parallel.hasLiveConnections(taskId)) {
+      return DownloadRuntimeOwnership.owned;
+    }
+    try {
+      final activeTasks = await _liveTransferTasks();
+      return resolveDownloadRuntimeOwnership(
+        runtimeQuerySucceeded: true,
+        runtimeTaskPresent: activeTasks.any((task) => task.taskId == taskId),
+        transferHandlePresent: _nativeTransport.handleFor(taskId) != null,
+      );
+    } catch (_) {
+      return resolveDownloadRuntimeOwnership(
+        runtimeQuerySucceeded: false,
+        runtimeTaskPresent: false,
+        transferHandlePresent: _nativeTransport.handleFor(taskId) != null,
+      );
+    }
+  }
+
+  Future<DownloadRuntimeOwnership> _waitForCancelOwnershipRelease(
+    String taskId, {
+    int attempts = 10,
+    Duration delay = const Duration(milliseconds: 100),
+  }) async {
+    var ownership = await _runtimeOwnershipFor(taskId);
+    for (
+      var attempt = 1;
+      attempt < attempts && ownership != DownloadRuntimeOwnership.notOwned;
+      attempt++
+    ) {
+      await Future<void>.delayed(delay);
+      ownership = await _runtimeOwnershipFor(taskId);
+    }
+    return ownership;
   }
 
   Future<void> _reconcileTransferOwnership() async {
@@ -3475,9 +5006,8 @@ class DownloadService {
         // pauseDownload already joined the Range writer before entering the
         // control queue. A missing native task is expected in that case.
         return rangeAlreadyStopped &&
-            !(await _liveTransferTasks()).any(
-              (live) => live.taskId == task.taskId,
-            );
+            await _runtimeOwnershipFor(task.taskId) ==
+                DownloadRuntimeOwnership.notOwned;
       }
 
       // pause() acknowledges the command before URLSession has necessarily
@@ -3487,21 +5017,21 @@ class DownloadService {
         onTimeout: () {},
       );
 
-      if (isInternalDownloaderChunk(task)) {
-        // Verify the child really left the live native set. If the first pause
-        // raced URLSession hand-off, retry the same identity once; never cancel.
-        var stillLive = (await _liveTransferTasks()).any(
-          (live) => live.taskId == task.taskId,
-        );
-        if (stillLive) {
-          if (!await FileDownloader().pause(task)) return false;
-          await Future<void>.delayed(const Duration(milliseconds: 200));
-          stillLive = (await _liveTransferTasks()).any(
-            (live) => live.taskId == task.taskId,
-          );
-        }
-        if (stillLive) return false;
+      // Command acceptance and even a paused callback are not sufficient proof
+      // that URLSession released the writer. DM-19 runtime ownership is the
+      // final authority for both ordinary single-file and multipart children.
+      var ownership = await _runtimeOwnershipFor(task.taskId);
+      if (ownership == DownloadRuntimeOwnership.owned) {
+        // A hand-off race can leave the same task alive briefly. Retry pause on
+        // the same identity once; never cancel because that can destroy resume data.
+        final retried = isInternalDownloaderChunk(task)
+            ? await FileDownloader().pause(task)
+            : await _nativeTransport.pause(task);
+        if (!retried) return false;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        ownership = await _runtimeOwnershipFor(task.taskId);
       }
+      if (ownership != DownloadRuntimeOwnership.notOwned) return false;
       return true;
     } finally {
       await listener.cancel();
@@ -3514,11 +5044,14 @@ class DownloadService {
       'progress': progress,
       'total': size,
     });
-    if (_rangeTransfers.isActive(task.taskId)) return true;
-    if ((await _liveTransferTasks()).any(
-      (live) => live.taskId == task.taskId,
-    )) {
-      return true;
+    final ownership = await _runtimeOwnershipFor(task.taskId);
+    if (ownership == DownloadRuntimeOwnership.owned) return true;
+    if (ownership.blocksNewWriter) {
+      diagnosticLog.record('part.startOwnershipBlocked', {
+        'taskId': task.taskId,
+        'ownership': ownership.name,
+      });
+      return false;
     }
 
     final forceSourceValidation = downloadInternalSourceValidationRequired(
@@ -3599,12 +5132,99 @@ class DownloadService {
   }
 
   Future<bool> _enqueueTransfer(DownloadTask task, int totalBytes) async {
+    if (!_networkAvailable) {
+      await _holdDownloadForNetwork(task);
+      return true;
+    }
     if (task is! ParallelDownloadTask) return _nativeTransport.start(task);
     if (totalBytes <= 0) {
       totalBytes =
           (await getMetadata(task.url, headers: task.headers))?.size ?? -1;
     }
     return _parallel.start(task, totalBytes);
+  }
+
+  Future<DownloadResourceFingerprint?> _probeResourceFingerprint(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
+    String? strongEtag;
+    String? lastModified;
+    var expectedBytes = -1;
+    String? finalUrl;
+
+    void absorb(Response<dynamic> response) {
+      strongEtag ??= strongDownloadEtag(response.headers.value('etag'));
+      final modified = response.headers.value('last-modified')?.trim();
+      if (lastModified == null && modified != null && modified.isNotEmpty) {
+        lastModified = modified;
+      }
+      final range = RegExp(r'^bytes\s+\d+-\d+/(\d+)$')
+          .firstMatch(response.headers.value('content-range') ?? '');
+      final rangeBytes = range == null ? null : int.tryParse(range[1]!);
+      final contentBytes = int.tryParse(
+        response.headers.value('content-length') ?? '',
+      );
+      if (rangeBytes != null && rangeBytes > 0) {
+        expectedBytes = rangeBytes;
+      } else if (response.statusCode != 206 &&
+          contentBytes != null &&
+          contentBytes > 0) {
+        expectedBytes = contentBytes;
+      }
+      final resolved = response.realUri.toString().trim();
+      if (resolved.isNotEmpty) finalUrl = resolved;
+    }
+
+    try {
+      final response = await _dio
+          .head<dynamic>(
+            url,
+            options: Options(
+              headers: {...?headers, 'Accept-Encoding': 'identity'},
+              followRedirects: true,
+            ),
+          )
+          .timeout(const Duration(seconds: 10));
+      absorb(response);
+    } catch (_) {}
+
+    if (expectedBytes <= 0 || (strongEtag == null && lastModified == null)) {
+      try {
+        final response = await _dio
+            .get<dynamic>(
+              url,
+              options: Options(
+                headers: {
+                  ...?headers,
+                  'Range': 'bytes=0-0',
+                  'Accept-Encoding': 'identity',
+                },
+                followRedirects: true,
+                responseType: ResponseType.stream,
+                validateStatus: (status) =>
+                    status != null && (status == 200 || status == 206),
+              ),
+            )
+            .timeout(const Duration(seconds: 10));
+        absorb(response);
+        final body = response.data;
+        if (body is ResponseBody) {
+          final subscription = body.stream.listen(null);
+          await subscription.cancel();
+        }
+      } catch (_) {}
+    }
+
+    if (strongEtag == null && lastModified == null && expectedBytes <= 0) {
+      return null;
+    }
+    return DownloadResourceFingerprint(
+      strongEtag: strongEtag,
+      lastModified: lastModified,
+      expectedBytes: expectedBytes,
+      finalUrl: finalUrl ?? url,
+    );
   }
 
   Future<DownloadMetadata?> getMetadata(
@@ -3756,6 +5376,29 @@ class DownloadService {
     }
   }
 
+  Future<bool> _commitRefreshDescriptorForGeneration(
+    DownloadUrlRefreshDescriptor descriptor, {
+    required String trackingUrl,
+    required String ownerTaskId,
+    required String logicalId,
+    required int generation,
+    bool claimOwnership = false,
+  }) {
+    final owned = DownloadUrlRefreshDescriptor(
+      trackingUrl: trackingUrl,
+      providerId: descriptor.providerId,
+      source: descriptor.source,
+      quality: descriptor.quality,
+      refreshUrl: descriptor.refreshUrl,
+      updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+      generation: generation,
+      ownerTaskId: ownerTaskId,
+      logicalId: logicalId,
+    );
+    final store = _ref.read(downloadUrlRefreshStoreProvider);
+    return claimOwnership ? store.claimOwnership(owned) : store.save(owned);
+  }
+
   Future<bool> startDownload({
     required String url,
     required String filename,
@@ -3765,8 +5408,52 @@ class DownloadService {
     String? trackingUrl,
     Map<String, String>? headers,
     int totalBytes = -1,
+    DownloadUrlRefreshDescriptor? refreshDescriptor,
   }) async {
-    diagnosticLog.record('command.start', {'total': totalBytes});
+    final outcome = await startDownloadOutcome(
+      url: url,
+      filename: filename,
+      directory: directory,
+      item: item,
+      episode: episode,
+      trackingUrl: trackingUrl,
+      headers: headers,
+      totalBytes: totalBytes,
+      refreshDescriptor: refreshDescriptor,
+    );
+    return switch (outcome) {
+      DownloadCommandOutcome.running ||
+      DownloadCommandOutcome.attached ||
+      DownloadCommandOutcome.queued ||
+      DownloadCommandOutcome.alreadyComplete => true,
+      _ => false,
+    };
+  }
+
+  Future<DownloadCommandOutcome> startDownloadOutcome({
+    required String url,
+    required String filename,
+    required String directory, // Relative for mobile/mac, absolute for others
+    required MultimediaItem item,
+    Episode? episode,
+    String? trackingUrl,
+    Map<String, String>? headers,
+    int totalBytes = -1,
+    DownloadUrlRefreshDescriptor? refreshDescriptor,
+  }) async {
+    try {
+      await _awaitCommandReadiness('startDownload');
+    } catch (_) {
+      return DownloadCommandOutcome.serviceUnavailable;
+    }
+    final logicalId = DownloadLogicalIdentity.fromMedia(
+      item: item,
+      episode: episode,
+    ).key;
+    diagnosticLog.record('command.start', {
+      'total': totalBytes,
+      'logicalId': logicalId,
+    });
     if (kDebugMode) {
       debugPrint('[DownloadService] startDownload called');
       debugPrint('[DownloadService] - URL: $url');
@@ -3803,20 +5490,141 @@ class DownloadService {
     final isIOS = Platform.isIOS;
 
     return _serializeQueue(() async {
-      // Prevention: Check if task is ALREADY running (using database for robustness)
+      // Canonical logical identity is the primary duplicate/adoption key. A
+      // signed URL, filename or execution taskId may rotate between attempts.
       final records = await FileDownloader().database.allRecords();
-      final existingRecord = records.firstWhereOrNull(
-        (r) =>
-            (isLogicalEpisodeDownloadTask(r.task)) &&
-            (r.status == TaskStatus.failed ||
-                r.status == TaskStatus.notFound ||
-                r.status == TaskStatus.enqueued ||
-                r.status == TaskStatus.running ||
-                r.status == TaskStatus.paused ||
-                r.status == TaskStatus.waitingToRetry) &&
-            (r.task.metaData.isNotEmpty ? r.task.metaData : r.task.url) ==
-                (trackingUrl ?? url),
-      );
+      final recordsById = <String, TaskRecord>{
+        for (final record in records) record.task.taskId: record,
+      };
+      final logicalJobs = await _jobStore.allForLogicalId(logicalId);
+      DownloadJobRecord? existingLogicalJob;
+      TaskRecord? existingRecord;
+      for (final job in logicalJobs.reversed) {
+        if (job.state == DownloadJobState.completed ||
+            job.state == DownloadJobState.canceled ||
+            job.state == DownloadJobState.orphaned) {
+          continue;
+        }
+        final projected = recordsById[job.taskId];
+        if (projected != null && isLogicalEpisodeDownloadTask(projected.task)) {
+          existingLogicalJob = job;
+          existingRecord = projected;
+          break;
+        }
+        final restored = job.restoreTaskSnapshot();
+        if (restored == null || !isLogicalEpisodeDownloadTask(restored))
+          continue;
+        final progress = job.expectedBytes > 0
+            ? (job.durableBytes / job.expectedBytes).clamp(0.0, 1.0)
+            : 0.0;
+        existingLogicalJob = job;
+        existingRecord = TaskRecord(
+          restored,
+          downloadJobTaskStatus(job.state),
+          progress,
+          job.expectedBytes,
+        );
+        // Repair a lost executor projection; this does not start a writer.
+        await FileDownloader().database.updateRecord(existingRecord);
+        break;
+      }
+
+      if (existingRecord == null) {
+        // Reconstruct canonical identity for pre-DM24 JobStore rows before any
+        // mutable URL/path fallback. This is adoption/repair only; it never
+        // creates a second execution writer.
+        final allJobs = await _jobStore.all();
+        final storage = _ref.read(storageServiceProvider);
+        for (final candidateJob in allJobs.reversed) {
+          if (candidateJob.state == DownloadJobState.completed ||
+              candidateJob.state == DownloadJobState.canceled ||
+              candidateJob.state == DownloadJobState.orphaned) {
+            continue;
+          }
+          final metadata = await storage.getDownloadMetadata(
+            candidateJob.taskId,
+          );
+          final candidateLogicalId =
+              candidateJob.logicalId ?? logicalDownloadIdFromMetadata(metadata);
+          if (candidateLogicalId != logicalId) continue;
+
+          var migratedJob = candidateJob;
+          if (candidateJob.logicalId == null) {
+            migratedJob = candidateJob.copyWith(
+              logicalId: logicalId,
+              updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+            );
+            if (!await _jobStore.put(migratedJob)) continue;
+          }
+
+          final projected = recordsById[candidateJob.taskId];
+          if (projected != null &&
+              isLogicalEpisodeDownloadTask(projected.task)) {
+            existingLogicalJob = migratedJob;
+            existingRecord = projected;
+            break;
+          }
+
+          final restored = migratedJob.restoreTaskSnapshot();
+          if (restored == null || !isLogicalEpisodeDownloadTask(restored)) {
+            continue;
+          }
+          final progress = migratedJob.expectedBytes > 0
+              ? (migratedJob.durableBytes / migratedJob.expectedBytes).clamp(
+                  0.0,
+                  1.0,
+                )
+              : 0.0;
+          existingLogicalJob = migratedJob;
+          existingRecord = TaskRecord(
+            restored,
+            downloadJobTaskStatus(migratedJob.state),
+            progress,
+            migratedJob.expectedBytes,
+          );
+          await FileDownloader().database.updateRecord(existingRecord);
+          break;
+        }
+      }
+
+      // Pre-logical-identity migration fallback: only evidence that genuinely
+      // lacks canonical identity may use a historical tracking URL. Once a row
+      // has a logical ID, a different episode can never collapse through URL.
+      if (existingRecord == null) {
+        final storage = _ref.read(storageServiceProvider);
+        for (final candidate in records) {
+          if (!isLogicalEpisodeDownloadTask(candidate.task) ||
+              !(candidate.status == TaskStatus.failed ||
+                  candidate.status == TaskStatus.notFound ||
+                  candidate.status == TaskStatus.enqueued ||
+                  candidate.status == TaskStatus.running ||
+                  candidate.status == TaskStatus.paused ||
+                  candidate.status == TaskStatus.waitingToRetry)) {
+            continue;
+          }
+          final candidateJob = await _jobStore.get(candidate.task.taskId);
+          final candidateMetadata = await storage.getDownloadMetadata(
+            candidate.task.taskId,
+          );
+          final candidateLogicalId =
+              candidateJob?.logicalId ??
+              logicalDownloadIdFromMetadata(candidateMetadata);
+          if (candidateLogicalId != null) {
+            if (candidateLogicalId != logicalId) continue;
+            existingLogicalJob = candidateJob;
+            existingRecord = candidate;
+            break;
+          }
+
+          final candidateTracking = candidate.task.metaData.isNotEmpty
+              ? candidate.task.metaData
+              : candidate.task.url;
+          if (candidateTracking == (trackingUrl ?? url)) {
+            existingRecord = candidate;
+            break;
+          }
+        }
+      }
 
       if (existingRecord != null) {
         if (kDebugMode) {
@@ -3825,21 +5633,28 @@ class DownloadService {
           );
         }
 
-        final occupying = occupiesDownloadSlot(
-          status: existingRecord.status,
-          queueWaiting: _queueWaitingIds.contains(existingRecord.task.taskId),
-        );
+        final authoritativeJob =
+            existingLogicalJob ??
+            await _jobStore.get(existingRecord.task.taskId);
+        final occupying = authoritativeJob != null
+            ? downloadJobOccupiesSlot(authoritativeJob.state)
+            : occupiesDownloadSlot(
+                status: existingRecord.status,
+                queueWaiting: _queueWaitingIds.contains(
+                  existingRecord.task.taskId,
+                ),
+              );
         if (occupying &&
             (_parallel.isActive(existingRecord.task.taskId) ||
                 _rangeTransfers.isActive(existingRecord.task.taskId) ||
                 await _liveNativeTaskFor(taskId: existingRecord.task.taskId) !=
                     null)) {
           _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);
-          return true;
+          return DownloadCommandOutcome.attached;
         }
 
         if (existingRecord.task is! DownloadTask) {
-          return false;
+          return DownloadCommandOutcome.recoverableFailure;
         }
         final existingTask = existingRecord.task as DownloadTask;
         final live = await _liveNativeTaskFor(
@@ -3850,15 +5665,18 @@ class DownloadService {
             (occupying || isLiveNativeDownloadStatus(existingRecord.status))) {
           await _attachToLiveNativeTask(existingTask, live: live);
           _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);
-          return true;
+          return DownloadCommandOutcome.attached;
         }
         await _resumeUserPausedUnlocked(existingTask.taskId);
-        return true;
+        return downloadCommandOutcomeForJobState(
+          (await _jobStore.get(existingTask.taskId))?.state,
+        );
       }
 
       final tracking = trackingUrl ?? url;
       final completeRecords = await _completeRecordsForEpisode(
         records,
+        logicalId: logicalId,
         trackingUrl: tracking,
         item: item,
         episode: episode,
@@ -3892,7 +5710,7 @@ class DownloadService {
               '[DownloadService] Complete record already has a file for $tracking',
             );
           }
-          return true;
+          return DownloadCommandOutcome.alreadyComplete;
         case CompleteDownloadAction.dropAndEnqueue:
           await _dropCompleteRecords(completeRecords);
           break;
@@ -3934,9 +5752,26 @@ class DownloadService {
         allowPause: true,
         group: kLogicalDownloadGroup,
         metaData: trackingUrl ?? url,
-        transferHints: animeDownloadTransferHints(expectedBytes: totalBytes),
+        transferHints: animeDownloadTransferHints(
+          expectedBytes: totalBytes,
+          useUserInitiated: shouldUseUserInitiatedDownloadHint(
+            isAndroid: Platform.isAndroid,
+            notificationsConfigured: !shouldClearDownloadNotificationConfigs(
+              _ref.read(storageServiceProvider).getDownloadNotificationPrefs(),
+            ),
+            notificationPermissionGranted:
+                !Platform.isAndroid ||
+                await FileDownloader().permissions.status(
+                      PermissionType.notifications,
+                    ) ==
+                    PermissionStatus.granted,
+          ),
+        ),
         stallTimeout: const Duration(seconds: 45),
       );
+
+      int? refreshDescriptorGeneration;
+      String? refreshDescriptorOwnerTaskId;
 
       if (kDebugMode) debugPrint('[DownloadService] Enqueuing task...');
 
@@ -3965,11 +5800,23 @@ class DownloadService {
         final maxConcurrent = clampDownloadConcurrency(
           storage.getDownloadConcurrency(),
         );
-        final occupied = _occupiedSlotCount(
+        final occupied = await _occupiedSlotCount(
           await FileDownloader().database.allRecords(),
         );
         final startNow = occupied < maxConcurrent;
-        final expectedBytes = totalBytes > 0 ? totalBytes : -1;
+        final remoteFingerprint = await _probeResourceFingerprint(
+          url,
+          headers: headers,
+        );
+        final expectedBytes = knownDownloadSize(<int?>[
+          totalBytes,
+          remoteFingerprint?.expectedBytes,
+        ]);
+        final resourceFingerprint = fingerprintWithExpectedBytes(
+          remote: remoteFingerprint,
+          expectedBytes: expectedBytes,
+          fallbackFinalUrl: url,
+        );
         // Freeze the chosen transfer shape before queueing. This preserves a
         // manual/Auto multipart choice for episode 2+ instead of converting
         // only the first episode and leaving later FIFO rows single-part.
@@ -3977,9 +5824,11 @@ class DownloadService {
           task,
           knownTotalBytes: expectedBytes,
         );
-        await _jobStore.put(
+        refreshDescriptorOwnerTaskId = transferTask.taskId;
+        final startIntent = await _jobStore.beginReplicaTransactionFromSeed(
           DownloadJobRecord(
             taskId: transferTask.taskId,
+            logicalId: logicalId,
             trackingUrl: trackingUrl ?? url,
             state: startNow
                 ? DownloadJobState.starting
@@ -3990,12 +5839,42 @@ class DownloadService {
             userPaused: false,
             queueWaiting: !startNow,
             updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
-            fingerprint: DownloadResourceFingerprint(
-              expectedBytes: expectedBytes,
-              finalUrl: url,
-            ),
+            taskSnapshot: transferTask.toJson(),
+            fingerprint: resourceFingerprint,
           ),
+          operation: DownloadReplicaOperation.start,
+          state: startNow ? DownloadJobState.starting : DownloadJobState.queued,
+          intentData: <String, Object?>{
+            if (refreshDescriptor != null)
+              'refreshDescriptor': <String, Object?>{
+                'trackingUrl': trackingUrl ?? url,
+                'providerId': refreshDescriptor.providerId,
+                'source': refreshDescriptor.source,
+                if (refreshDescriptor.quality != null)
+                  'quality': refreshDescriptor.quality,
+                if (refreshDescriptor.refreshUrl != null)
+                  'refreshUrl': refreshDescriptor.refreshUrl,
+              },
+          },
         );
+        if (startIntent == null) {
+          throw StateError('Failed to persist fresh download intent');
+        }
+
+        if (!startNow && refreshDescriptor != null) {
+          final committed = await _commitRefreshDescriptorForGeneration(
+            refreshDescriptor,
+            trackingUrl: trackingUrl ?? url,
+            ownerTaskId: transferTask.taskId,
+            logicalId: logicalId,
+            generation: startIntent.generation,
+            claimOwnership: true,
+          );
+          if (!committed) {
+            throw StateError('A newer refresh descriptor owns this download');
+          }
+          refreshDescriptorGeneration = 0;
+        }
 
         _waitingPayloads[transferTask.taskId] = _waitingPayloadFor(
           transferTask,
@@ -4007,6 +5886,8 @@ class DownloadService {
           episode: episode,
           trackingUrl: trackingUrl ?? url,
           filePath: path,
+          logicalId: logicalId,
+          taskSnapshot: transferTask.toJson(),
           queueWaiting: !startNow,
         );
         _ref.read(activeDownloadsProvider.notifier).add(trackingUrl ?? url);
@@ -4029,13 +5910,32 @@ class DownloadService {
           );
           await _persistNativeWaitingSnapshot();
           unawaited(_syncSessionOverlay());
-          return true;
+          return DownloadCommandOutcome.queued;
         }
 
         _startingTaskIds.add(transferTask.taskId);
         _updatesController.add(
           TaskStatusUpdate(transferTask, TaskStatus.enqueued),
         );
+        // The write-ahead start intent is also the execution generation fence.
+        // Do not increment generation again before the executor effect or the
+        // durable journal and refresh-descriptor owner would describe different
+        // attempts after a crash.
+        final startOperation = startIntent;
+        if (refreshDescriptor != null) {
+          final committed = await _commitRefreshDescriptorForGeneration(
+            refreshDescriptor,
+            trackingUrl: trackingUrl ?? url,
+            ownerTaskId: transferTask.taskId,
+            logicalId: logicalId,
+            generation: startOperation.generation,
+            claimOwnership: true,
+          );
+          if (!committed) {
+            throw StateError('A newer refresh descriptor owns this download');
+          }
+          refreshDescriptorGeneration = startOperation.generation;
+        }
         final success = await _enqueueTransfer(transferTask, expectedBytes);
         if (kDebugMode) {
           debugPrint(
@@ -4066,17 +5966,27 @@ class DownloadService {
           _updatesController.add(
             TaskStatusUpdate(transferTask, TaskStatus.paused),
           );
-          return false;
+          return DownloadCommandOutcome.recoverableFailure;
         }
 
         await _persistNativeWaitingSnapshot();
         unawaited(_syncSessionOverlay());
-        return true;
+        return DownloadCommandOutcome.running;
       } catch (error) {
         _waitingPayloads.remove(task.taskId);
         _forgetSessionTask(task.taskId);
         final storage = _ref.read(storageServiceProvider);
         await storage.removeDownloadMetadata(task.taskId);
+        if (refreshDescriptorGeneration != null &&
+            refreshDescriptorOwnerTaskId != null) {
+          await _ref
+              .read(downloadUrlRefreshStoreProvider)
+              .removeForOwnerGeneration(
+                trackingUrl ?? url,
+                refreshDescriptorOwnerTaskId,
+                refreshDescriptorGeneration,
+              );
+        }
         // A start that never established recoverable ownership must not leave
         // an authoritative JobStore row that resurrects itself on relaunch.
         await _jobStore.remove(task.taskId);
@@ -4086,7 +5996,7 @@ class DownloadService {
         if (kDebugMode) {
           debugPrint('[DownloadService] Failed to enqueue download: $error');
         }
-        return false;
+        return DownloadCommandOutcome.recoverableFailure;
       } finally {
         _startingTaskIds.remove(task.taskId);
       }
@@ -4095,6 +6005,7 @@ class DownloadService {
 
   Future<List<TaskRecord>> _completeRecordsForEpisode(
     List<TaskRecord> records, {
+    required String logicalId,
     required String trackingUrl,
     required MultimediaItem item,
     Episode? episode,
@@ -4105,6 +6016,15 @@ class DownloadService {
     final matches = <TaskRecord>[];
     for (final record in records) {
       if (record.status != TaskStatus.complete) continue;
+      final metadata = await storage.getDownloadMetadata(record.task.taskId);
+      final candidateLogicalId = logicalDownloadIdFromMetadata(metadata);
+      if (candidateLogicalId != null) {
+        if (candidateLogicalId == logicalId) matches.add(record);
+        continue;
+      }
+
+      // Pre-logical-identity migration fallback. Only rows that genuinely lack
+      // reconstructable presentation identity may use URL/path heuristics.
       final recordUrl = downloadTrackingUrl(record.task);
       var matched =
           recordUrl == trackingUrl ||
@@ -4115,25 +6035,22 @@ class DownloadService {
             filename: filename,
             directory: directory,
           );
-      if (!matched) {
-        final metadata = await storage.getDownloadMetadata(record.task.taskId);
-        if (metadata != null) {
-          final storedTracking = (metadata['trackingUrl'] as String?)?.trim();
-          matched =
-              (storedTracking != null && storedTracking == trackingUrl) ||
-              metadataMatchesDownload(
-                item: item,
-                episode: episode,
-                candidateItem: MultimediaItem.fromJson(
-                  Map<String, dynamic>.from(metadata['item'] as Map),
-                ),
-                candidateEpisode: metadata['episode'] != null
-                    ? Episode.fromJson(
-                        Map<String, dynamic>.from(metadata['episode'] as Map),
-                      )
-                    : null,
-              );
-        }
+      if (!matched && metadata != null && metadata['item'] is Map) {
+        final storedTracking = (metadata['trackingUrl'] as String?)?.trim();
+        matched =
+            (storedTracking != null && storedTracking == trackingUrl) ||
+            metadataMatchesDownload(
+              item: item,
+              episode: episode,
+              candidateItem: MultimediaItem.fromJson(
+                Map<String, dynamic>.from(metadata['item'] as Map),
+              ),
+              candidateEpisode: metadata['episode'] is Map
+                  ? Episode.fromJson(
+                      Map<String, dynamic>.from(metadata['episode'] as Map),
+                    )
+                  : null,
+            );
       }
       if (matched) matches.add(record);
     }
@@ -4154,35 +6071,102 @@ class DownloadService {
     try {
       final path = await task.filePath();
       var fileBytes = -1;
+      File? completedFile;
       if (path.isNotEmpty) {
         final file = File(path);
-        if (await file.exists()) fileBytes = await file.length();
+        if (await file.exists()) {
+          completedFile = file;
+          fileBytes = await file.length();
+        }
       }
+
       final record = await FileDownloader().database.recordForId(task.taskId);
+      final storage = _ref.read(storageServiceProvider);
+      final metadata = await storage.getDownloadMetadata(task.taskId);
+      final job = await _jobStore.get(task.taskId);
+      final currentFingerprint = task is DownloadTask
+          ? await _probeResourceFingerprint(task.url, headers: task.headers)
+          : null;
+
+      // Never promote the observed file into its own expectation. Every value
+      // here must pre-exist the final local length or come from remote evidence.
       final expectedBytes = knownDownloadSize(<int?>[
-        fileBytes,
+        job?.expectedBytes,
         record?.expectedFileSize,
+        downloadMetadataExpectedBytes(metadata),
         _telemetry.expectedBytesFor(task.taskId),
+        currentFingerprint?.expectedBytes,
       ]);
-      await _ref
-          .read(storageServiceProvider)
-          .patchDownloadMetadata(
-            task.taskId,
-            trackingUrl: downloadTrackingUrl(task),
-            filePath: path,
-            lastProgress: 1,
-            lastExpectedBytes: expectedBytes,
-          );
+
       if (task is DownloadTask) {
-        await _checkpointLogicalJob(
+        var prefixMatches = false;
+        if (completedFile != null && fileBytes > 0 && expectedBytes > 0) {
+          final proof = await _rangeTransfers.verifyExistingPrefix(
+            id: '${task.taskId}.final-proof',
+            url: task.url,
+            headers: task.headers,
+            file: completedFile,
+            written: fileBytes,
+          );
+          prefixMatches = proof.matches;
+        }
+
+        final verified = downloadCompletionEvidenceMatches(
+          observedFileBytes: fileBytes,
+          expectedResourceBytes: expectedBytes,
+          prefixMatches: prefixMatches,
+          persistedFingerprint: job?.fingerprint,
+          currentFingerprint: currentFingerprint,
+        );
+        if (!verified) {
+          diagnosticLog.record('completion.resourceIdentityRejected', {
+            'taskId': task.taskId,
+            'fileBytes': fileBytes,
+            'expectedBytes': expectedBytes,
+            'prefixMatches': prefixMatches,
+          });
+          await _checkpointLogicalJob(
+            task,
+            state: DownloadJobState.interrupted,
+            expectedBytes: expectedBytes,
+            userPaused: false,
+            queueWaiting: false,
+            fingerprint: currentFingerprint,
+          );
+          return;
+        }
+
+        final completedFingerprint = fingerprintWithExpectedBytes(
+          remote: currentFingerprint ?? job?.fingerprint,
+          expectedBytes: expectedBytes,
+          fallbackFinalUrl: task.url,
+        );
+        final completedPersisted = await _checkpointLogicalJob(
           task,
           state: DownloadJobState.completed,
-          durableBytes: expectedBytes > 0 ? expectedBytes : fileBytes,
+          durableBytes: fileBytes,
+          durableByteProvenance:
+              DownloadDurableByteProvenance.verifiedFinalFile,
           expectedBytes: expectedBytes,
           userPaused: false,
           queueWaiting: false,
+          fingerprint: completedFingerprint,
         );
+        if (!completedPersisted) {
+          diagnosticLog.record('completion.persistenceBlocked', {
+            'taskId': task.taskId,
+          });
+          return;
+        }
       }
+
+      await storage.patchDownloadMetadata(
+        task.taskId,
+        trackingUrl: downloadTrackingUrl(task),
+        filePath: path,
+        lastProgress: 1,
+        lastExpectedBytes: expectedBytes,
+      );
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[DownloadService] persist filePath failed: $e');

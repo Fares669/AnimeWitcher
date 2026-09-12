@@ -1,0 +1,80 @@
+name: DM04 Durable-only Startup Fix
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm04-durable-service-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  implement-startup-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Gate JobStore-only recovery on renderable presentation metadata
+        env:
+          OLD_B64: ICAgICAgZmluYWwgbWV0YWRhdGEgPSBtZXRhZGF0YUJ5SWRbam9iLnRhc2tJZF07CiAgICAgIGZpbmFsIHRhc2sgPQogICAgICAgICAgam9iLnJlc3RvcmVUYXNrU25hcHNob3QoKSA/PwogICAgICAgICAgX2Rvd25sb2FkVGFza0Zyb21NZXRhZGF0YVNuYXBzaG90KG1ldGFkYXRhKTsKICAgICAgaWYgKHRhc2sgPT0gbnVsbCkgewogICAgICAgIGF3YWl0IF9qb2JTdG9yZS5jaGVja3BvaW50KAogICAgICAgICAgdGFza0lkOiBqb2IudGFza0lkLAogICAgICAgICAgdHJhY2tpbmdVcmw6IGpvYi50cmFja2luZ1VybCwKICAgICAgICAgIHN0YXRlOiBEb3dubG9hZEpvYlN0YXRlLm9ycGhhbmVkLAogICAgICAgICAgZHVyYWJsZUJ5dGVzOiBqb2IuZHVyYWJsZUJ5dGVzLAogICAgICAgICAgZHVyYWJsZUJ5dGVQcm92ZW5hbmNlOiBqb2IuZHVyYWJsZUJ5dGVQcm92ZW5hbmNlLAogICAgICAgICAgZXhwZWN0ZWRCeXRlczogam9iLmV4cGVjdGVkQnl0ZXMsCiAgICAgICAgICB1c2VyUGF1c2VkOiBqb2IudXNlclBhdXNlZCwKICAgICAgICAgIHF1ZXVlV2FpdGluZzogZmFsc2UsCiAgICAgICAgICBmaW5nZXJwcmludDogam9iLmZpbmdlcnByaW50LAogICAgICAgICk7CiAgICAgICAgZGlhZ25vc3RpY0xvZy5yZWNvcmQoJ3JlY292ZXJ5Lm9ycGhhbmVkTWlzc2luZ0Rlc2NyaXB0b3InLCB7CiAgICAgICAgICAndGFza0lkJzogam9iLnRhc2tJZCwKICAgICAgICAgICdzb3VyY2UnOiAnam9iU3RvcmUnLAogICAgICAgIH0pOwogICAgICAgIGNvbnRpbnVlOwogICAgICB9CiAgICAgIGZpbmFsIHByb2dyZXNzID0gam9iLmV4cGVjdGVkQnl0ZXMgPiAwCiAgICAgICAgICA/IChqb2IuZHVyYWJsZUJ5dGVzIC8gam9iLmV4cGVjdGVkQnl0ZXMpLmNsYW1wKDAuMCwgMS4wKS50b0RvdWJsZSgpCiAgICAgICAgICA6IGRvd25sb2FkTWV0YWRhdGFQcm9ncmVzcyhtZXRhZGF0YSk7CiAgICAgIGR1cmFibGVSZWNvcmRzLmFkZCgKICAgICAgICBUYXNrUmVjb3JkKHRhc2ssIFRhc2tTdGF0dXMucGF1c2VkLCBwcm9ncmVzcywgam9iLmV4cGVjdGVkQnl0ZXMpLAogICAgICApOwo=
+          NEW_B64: ICAgICAgZmluYWwgbWV0YWRhdGEgPSBtZXRhZGF0YUJ5SWRbam9iLnRhc2tJZF07CiAgICAgIGZpbmFsIHRhc2sgPQogICAgICAgICAgam9iLnJlc3RvcmVUYXNrU25hcHNob3QoKSA/PwogICAgICAgICAgX2Rvd25sb2FkVGFza0Zyb21NZXRhZGF0YVNuYXBzaG90KG1ldGFkYXRhKTsKICAgICAgZmluYWwgZGlzcG9zaXRpb24gPSBwbGFuRHVyYWJsZU9ubHlSZWNvdmVyeURpc3Bvc2l0aW9uKAogICAgICAgIGhhc1ByZXNlbnRhdGlvbk1ldGFkYXRhOiBtZXRhZGF0YT9bJ2l0ZW0nXSBpcyBNYXAsCiAgICAgICAgaGFzUmVjb3ZlcmFibGVUYXNrRGVzY3JpcHRvcjogdGFzayAhPSBudWxsLAogICAgICApOwogICAgICBpZiAoZGlzcG9zaXRpb24gPT0gRG93bmxvYWREdXJhYmxlT25seVJlY292ZXJ5RGlzcG9zaXRpb24ub3JwaGFuKSB7CiAgICAgICAgYXdhaXQgX2pvYlN0b3JlLmNoZWNrcG9pbnQoCiAgICAgICAgICB0YXNrSWQ6IGpvYi50YXNrSWQsCiAgICAgICAgICB0cmFja2luZ1VybDogam9iLnRyYWNraW5nVXJsLAogICAgICAgICAgc3RhdGU6IERvd25sb2FkSm9iU3RhdGUub3JwaGFuZWQsCiAgICAgICAgICBkdXJhYmxlQnl0ZXM6IGpvYi5kdXJhYmxlQnl0ZXMsCiAgICAgICAgICBkdXJhYmxlQnl0ZVByb3ZlbmFuY2U6IGpvYi5kdXJhYmxlQnl0ZVByb3ZlbmFuY2UsCiAgICAgICAgICBleHBlY3RlZEJ5dGVzOiBqb2IuZXhwZWN0ZWRCeXRlcywKICAgICAgICAgIHVzZXJQYXVzZWQ6IGpvYi51c2VyUGF1c2VkLAogICAgICAgICAgcXVldWVXYWl0aW5nOiBmYWxzZSwKICAgICAgICAgIGZpbmdlcnByaW50OiBqb2IuZmluZ2VycHJpbnQsCiAgICAgICAgKTsKICAgICAgICBkaWFnbm9zdGljTG9nLnJlY29yZCgKICAgICAgICAgIG1ldGFkYXRhP1snaXRlbSddIGlzISBNYXAKICAgICAgICAgICAgICA/ICdyZWNvdmVyeS5vcnBoYW5lZE1pc3NpbmdQcmVzZW50YXRpb24nCiAgICAgICAgICAgICAgOiAncmVjb3Zlcnkub3JwaGFuZWRNaXNzaW5nRGVzY3JpcHRvcicsCiAgICAgICAgICB7CiAgICAgICAgICAgICd0YXNrSWQnOiBqb2IudGFza0lkLAogICAgICAgICAgICAnc291cmNlJzogJ2pvYlN0b3JlJywKICAgICAgICAgIH0sCiAgICAgICAgKTsKICAgICAgICBjb250aW51ZTsKICAgICAgfQogICAgICBmaW5hbCByZWNvdmVyYWJsZVRhc2sgPSB0YXNrITsKICAgICAgZmluYWwgcHJvZ3Jlc3MgPSBqb2IuZXhwZWN0ZWRCeXRlcyA+IDAKICAgICAgICAgID8gKGpvYi5kdXJhYmxlQnl0ZXMgLyBqb2IuZXhwZWN0ZWRCeXRlcykuY2xhbXAoMC4wLCAxLjApLnRvRG91YmxlKCkKICAgICAgICAgIDogZG93bmxvYWRNZXRhZGF0YVByb2dyZXNzKG1ldGFkYXRhKTsKICAgICAgZHVyYWJsZVJlY29yZHMuYWRkKAogICAgICAgIFRhc2tSZWNvcmQoCiAgICAgICAgICByZWNvdmVyYWJsZVRhc2ssCiAgICAgICAgICBUYXNrU3RhdHVzLnBhdXNlZCwKICAgICAgICAgIHByb2dyZXNzLAogICAgICAgICAgam9iLmV4cGVjdGVkQnl0ZXMsCiAgICAgICAgKSwKICAgICAgKTsK
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+          path = Path('lib/core/services/download_service.dart')
+          text = path.read_text()
+          old = base64.b64decode(os.environ['OLD_B64']).decode()
+          new = base64.b64decode(os.environ['NEW_B64']).decode()
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one durable-only startup block, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          dart format lib/core/services/download_service.dart
+      - name: Run DM-04 recovery regressions
+        run: |
+          tests=(
+            test/core/services/download_durable_only_recovery_test.dart
+            test/core/services/download_recovery_inventory_test.dart
+            test/core/services/download_recovery_snapshot_test.dart
+            test/core/services/download_startup_reconciliation_matrix_test.dart
+            test/core/services/download_recovery_fault_injection_test.dart
+          )
+          selected=()
+          for test_file in "${tests[@]}"; do
+            if [ -f "$test_file" ]; then
+              selected+=("$test_file")
+            fi
+          done
+          test "${#selected[@]}" -ge 4
+          flutter test "${selected[@]}" --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Verify scoped diff
+        run: |
+          git diff --check
+          test "$(git diff --name-only)" = "lib/core/services/download_service.dart"
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_service.dart
+          git commit -m "fix(downloads): orphan hidden durable-only jobs"
+          git push origin HEAD:plan/download-manager-reliability

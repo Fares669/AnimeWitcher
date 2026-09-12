@@ -1,0 +1,68 @@
+name: Verify DM-08 source refresh capability matrix
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm08-refresh-capability-verifier.yml
+      - .github/scripts/dm08_refresh_capability_patch.py
+      - test/core/services/download_source_refresh_capability_test.dart
+      - lib/core/utils/download_resume.dart
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm08-refresh-capability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: Apply DM-08 capability patch
+        run: |
+          python3 .github/scripts/dm08_refresh_capability_patch.py
+          dart format lib/core/utils/download_resume.dart test/core/services/download_source_refresh_capability_test.dart
+          git diff --check
+      - name: Verify DM-08 focused recovery policy
+        run: |
+          flutter test test/core/services/download_source_refresh_capability_test.dart test/core/utils/download_resume_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          git diff --check
+      - name: Commit verified DM-08 capability slice
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- lib/core/utils/download_resume.dart; then
+            echo 'DM-08 capability patch already present.'
+            echo 'needs_push=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'needs_push=true' >> "$GITHUB_OUTPUT"
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/utils/download_resume.dart
+          git commit -m 'feat(downloads): define DM-08 refresh recovery capability matrix'
+          git stash push --include-untracked -m 'dm08-generated-before-rebase' || true
+          git pull --rebase origin plan/download-manager-reliability
+      - name: Reverify and push
+        if: steps.commit.outputs.needs_push == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter test test/core/services/download_source_refresh_capability_test.dart test/core/utils/download_resume_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          git diff --check
+          git push origin HEAD:plan/download-manager-reliability

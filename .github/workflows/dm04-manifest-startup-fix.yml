@@ -1,0 +1,65 @@
+name: DM04 Manifest Startup Fix
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm04-manifest-startup-fix.yml
+      - .github/scripts/dm04_manifest_startup_patch.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile-manifest-startup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Reconcile manifest evidence into startup inventory
+        run: |
+          python3 .github/scripts/dm04_manifest_startup_patch.py
+          dart format lib/core/services/download_service.dart
+      - name: Run focused recovery suite
+        run: >-
+          flutter test
+          test/core/services/download_manifest_startup_inventory_test.dart
+          test/core/services/persistent_parallel_download_manifest_discovery_test.dart
+          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+          test/core/services/download_durable_only_recovery_test.dart
+          test/core/services/download_missing_presentation_recovery_test.dart
+          test/core/services/download_startup_reconciliation_matrix_test.dart
+          test/core/services/download_recovery_inventory_test.dart
+          test/core/services/download_recovery_fault_injection_test.dart
+          test/core/services/persistent_parallel_download_recovery_snapshot_test.dart
+          test/core/services/download_runtime_ownership_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Verify scoped diff
+        run: |
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "lib/core/services/download_service.dart"
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_service.dart
+          git commit -m "fix(downloads): reconcile manifest recovery evidence"
+          git push origin HEAD:plan/download-manager-reliability

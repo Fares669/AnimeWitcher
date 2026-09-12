@@ -129,6 +129,18 @@ void main() {
     await Future<void>.delayed(Duration.zero);
   }
 
+
+
+  test('missing multipart manifest is reported as not restorable', () async {
+    final manifest = File('${await parent.filePath()}.parts/manifest.json');
+    expect(await manifest.exists(), isFalse);
+    expect(await coordinator.restore(parent), isFalse);
+    expect(
+      starts,
+      isEmpty,
+      reason: 'restore must not create a writer when no manifest exists',
+    );
+  });
   test('five parts cover each byte once', () async {
     expect(await coordinator.start(parent, 23), isTrue);
     await expandFreshTo(5);
@@ -628,6 +640,38 @@ void main() {
       expect(await coordinator.start(parent, 3), isTrue);
       expect(starts, isEmpty);
       expect(await File(await parent.filePath()).readAsBytes(), [1, 2, 3]);
+    },
+  );
+
+  test(
+    'schema-v4 0.999 progress has zero durable authority after restore',
+    () async {
+      expect(await coordinator.start(parent, 25), isTrue);
+      await coordinator.pause(parent);
+      await coordinator.dispose();
+
+      final manifest = File('${await parent.filePath()}.parts/manifest.json');
+      final snapshot = Map<String, dynamic>.from(
+        jsonDecode(await manifest.readAsString()) as Map,
+      );
+      snapshot['schemaVersion'] = 4;
+      final parts = (snapshot['parts'] as List)
+          .map((raw) => Map<String, dynamic>.from(raw as Map))
+          .toList();
+      parts.first['complete'] = false;
+      parts.first['progress'] = 0.999;
+      parts.first['credibleProgress'] = 0.999;
+      for (final part in parts) {
+        part.remove('durableBytes');
+      }
+      snapshot['parts'] = parts;
+      await manifest.writeAsString(jsonEncode(snapshot), flush: true);
+
+      starts.clear();
+      coordinator = create();
+      expect(await coordinator.start(parent, 25), isTrue);
+      expect(coordinator.durableBytesFor(parent.taskId), 0);
+      expect(starts, isNotEmpty);
     },
   );
 

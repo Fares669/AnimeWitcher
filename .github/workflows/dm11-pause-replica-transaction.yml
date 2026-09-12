@@ -1,0 +1,57 @@
+name: Verify DM-11 pause replica transaction
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - .github/workflows/dm11-pause-replica-transaction.yml
+      - .github/scripts/dm11_pause_replica_patch.py
+      - test/core/services/download_replica_pause_ordering_test.dart
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Apply production patch
+        run: |
+          python3 .github/scripts/dm11_pause_replica_patch.py
+          dart format lib/core/services/download_service.dart test/core/services/download_replica_pause_ordering_test.dart
+          git diff --check
+      - name: Verify pause transaction
+        run: |
+          flutter test test/core/services/download_replica_pause_ordering_test.dart test/core/services/download_replica_transaction_test.dart test/core/services/download_recovery_fault_injection_test.dart test/core/services/download_relaunch_chaos_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Commit production slice
+        shell: bash
+        run: |
+          if git diff --quiet -- lib/core/services/download_service.dart; then exit 0; fi
+          git config user.name openai-download-agent
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add lib/core/services/download_service.dart
+          git commit -m 'fix(downloads): journal DM-11 pause transition'
+          git stash push --include-untracked -m dm11-pause-ci || true
+          git pull --rebase origin plan/download-manager-reliability
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          flutter test test/core/services/download_replica_pause_ordering_test.dart test/core/services/download_replica_transaction_test.dart test/core/services/download_recovery_fault_injection_test.dart test/core/services/download_relaunch_chaos_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+          git push origin HEAD:plan/download-manager-reliability

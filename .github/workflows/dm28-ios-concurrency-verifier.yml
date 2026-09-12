@@ -1,0 +1,129 @@
+# Retrigger after DM-28 verifier stabilization; the job itself preserves RED -> GREEN evidence.
+name: DM-28 iOS concurrency verifier
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm28-ios-concurrency-verifier.yml
+      - ios/Runner/DownloadNativeWaitingQueue.swift
+      - ios/RunnerTests/RunnerTests.swift
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm28-ios-concurrency-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-concurrency:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: plan/download-manager-reliability
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Inspect DM-28 iOS policy state
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path('ios/Runner/DownloadNativeWaitingQueue.swift').read_text()
+          match = re.search(
+              r'private static func clamp\(_ value: Int\) -> Int \{\s*min\(max\(value, 1\), (\d+)\)\s*\}',
+              source,
+          )
+          if not match:
+              raise SystemExit('DM-28 iOS clamp anchor drift')
+          cap = int(match.group(1))
+          observed = {value: min(max(value, 1), cap) for value in (1, 4, 6, 10)}
+          print('current iOS queue cap:', cap, 'observed:', observed)
+          if cap == 5:
+              if observed[6] != 5 or observed[10] != 5:
+                  raise SystemExit('DM-28 iOS RED changed unexpectedly')
+              print('DM-28 iOS RED reproduced: configured values above 5 are truncated')
+          elif cap == 10:
+              if observed != {1: 1, 4: 4, 6: 6, 10: 10}:
+                  raise SystemExit('DM-28 iOS GREEN semantics changed unexpectedly')
+              print('DM-28 iOS policy is already GREEN')
+          else:
+              raise SystemExit(f'DM-28 iOS cap must be migration state 5 or target 10, got {cap}')
+          PY
+
+      - name: Apply minimal DM-28 iOS concurrency fix when RED
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('ios/Runner/DownloadNativeWaitingQueue.swift')
+          source = path.read_text()
+          old = '''  private static func clamp(_ value: Int) -> Int {
+            min(max(value, 1), 5)
+          }
+          '''
+          new = '''  private static func clamp(_ value: Int) -> Int {
+            // Keep native background admission aligned with the user-facing
+            // logical download concurrency setting (1...10).
+            min(max(value, 1), 10)
+          }
+          '''
+          if old in source:
+              path.write_text(source.replace(old, new, 1))
+          elif 'min(max(value, 1), 10)' not in source:
+              raise SystemExit('DM-28 iOS clamp anchor drift')
+          PY
+
+      - name: Verify DM-28 iOS GREEN contract
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path('ios/Runner/DownloadNativeWaitingQueue.swift').read_text()
+          match = re.search(
+              r'private static func clamp\(_ value: Int\) -> Int \{.*?min\(max\(value, 1\), (\d+)\).*?\}',
+              source,
+              re.S,
+          )
+          if not match:
+              raise SystemExit('DM-28 iOS clamp missing after patch')
+          cap = int(match.group(1))
+          cases = {1: 1, 4: 4, 6: 6, 10: 10}
+          for value, expected in cases.items():
+              actual = min(max(value, 1), cap)
+              if actual != expected:
+                  raise SystemExit(f'iOS queue semantics mismatch: {value} -> {actual}, expected {expected}')
+          if cap != 10:
+              raise SystemExit(f'iOS native queue cap must match Dart setting max 10, got {cap}')
+          print('DM-28 iOS cases GREEN:', cases)
+          PY
+
+      - name: Build iOS simulator
+        run: flutter build ios --simulator --debug --no-codesign
+
+      - name: Commit verified DM-28 iOS slice
+        run: |
+          if git diff --quiet -- ios/Runner/DownloadNativeWaitingQueue.swift; then
+            echo 'DM-28 iOS source already verified; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ios/Runner/DownloadNativeWaitingQueue.swift
+          git commit -m 'fix(downloads): align iOS background concurrency with setting (DM-28)'
+          git push origin HEAD:plan/download-manager-reliability

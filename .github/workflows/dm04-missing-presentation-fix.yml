@@ -1,0 +1,239 @@
+name: DM04 Missing Presentation Fix
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm04-missing-presentation-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  implement-hidden-owner-policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Apply hidden-owner recovery policy
+        run: |
+          cat > /tmp/dm04_patch.py <<'PY'
+          from pathlib import Path
+
+          state_path = Path('lib/core/services/download_job_state.dart')
+          state = state_path.read_text()
+          state_anchor = (
+              'DownloadDurableOnlyRecoveryDisposition planDurableOnlyRecoveryDisposition({\n'
+              '  required bool hasPresentationMetadata,\n'
+              '  required bool hasRecoverableTaskDescriptor,\n'
+              '}) {\n'
+              '  return hasPresentationMetadata && hasRecoverableTaskDescriptor\n'
+              '      ? DownloadDurableOnlyRecoveryDisposition.recover\n'
+              '      : DownloadDurableOnlyRecoveryDisposition.orphan;\n'
+              '}\n\n'
+          )
+          helper = '''enum DownloadMissingPresentationRecoveryDisposition {
+            recover,
+            settleOwner,
+            orphan,
+            preserveTerminal,
+          }
+
+          /// Decide what startup may do when the executor/task identity survived but the
+          /// AnimeWitcher presentation identity did not. Never restart a hidden transfer:
+          /// a live writer is settled first, while terminal logical state is preserved.
+          DownloadMissingPresentationRecoveryDisposition planMissingPresentationRecovery({
+            required bool hasPresentationMetadata,
+            required bool hasLiveOwnership,
+            DownloadJobState? authoritativeState,
+          }) {
+            if (authoritativeState == DownloadJobState.completed ||
+                authoritativeState == DownloadJobState.canceled ||
+                authoritativeState == DownloadJobState.orphaned) {
+              return DownloadMissingPresentationRecoveryDisposition.preserveTerminal;
+            }
+            if (hasPresentationMetadata) {
+              return DownloadMissingPresentationRecoveryDisposition.recover;
+            }
+            return hasLiveOwnership
+                ? DownloadMissingPresentationRecoveryDisposition.settleOwner
+                : DownloadMissingPresentationRecoveryDisposition.orphan;
+          }
+
+          '''
+          # The workflow indentation is stripped by YAML before this here-doc reaches Python.
+          # Normalize the helper's deliberate script indentation before inserting it.
+          helper = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in helper.splitlines()
+          ) + '\n'
+          if 'enum DownloadMissingPresentationRecoveryDisposition' not in state:
+              count = state.count(state_anchor)
+              if count != 1:
+                  raise SystemExit(f'expected one state insertion anchor, found {count}')
+              state = state.replace(state_anchor, state_anchor + helper, 1)
+          state_path.write_text(state)
+
+          service_path = Path('lib/core/services/download_service.dart')
+          service = service_path.read_text()
+          anchor = (
+              '      final stillNative =\n'
+              '          nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);\n'
+              '      final userPaused =\n'
+          )
+          insert = '''      final stillNative =
+                    nativeIds.contains(task.taskId) || _parallel.isActive(task.taskId);
+                final hasLiveOwnership =
+                    stillNative || _parallel.hasLiveConnections(task.taskId);
+                final presentationDisposition = planMissingPresentationRecovery(
+                  hasPresentationMetadata: metadata?['item'] is Map,
+                  hasLiveOwnership: hasLiveOwnership,
+                  authoritativeState: oldJob?.state,
+                );
+                if (presentationDisposition ==
+                    DownloadMissingPresentationRecoveryDisposition.preserveTerminal) {
+                  if (hasLiveOwnership) {
+                    try {
+                      await _pauseTransfer(task);
+                    } catch (_) {
+                      // The terminal durable state stays authoritative. A later
+                      // reconciliation pass retries settlement without revival.
+                    }
+                  }
+                  _queueWaitingIds.remove(task.taskId);
+                  _waitingPayloads.remove(task.taskId);
+                  _forgetSessionTask(task.taskId);
+                  continue;
+                }
+                if (presentationDisposition !=
+                    DownloadMissingPresentationRecoveryDisposition.recover) {
+                  final expectedForOrphan = knownDownloadSize(<int?>[
+                    record.expectedFileSize,
+                    downloadMetadataExpectedBytes(metadata),
+                    oldJob?.expectedBytes,
+                  ]);
+                  if (presentationDisposition ==
+                      DownloadMissingPresentationRecoveryDisposition.settleOwner) {
+                    final pausingCommitted = await _checkpointLogicalJob(
+                      task,
+                      state: DownloadJobState.pausing,
+                      expectedBytes: expectedForOrphan,
+                      userPaused: false,
+                      queueWaiting: false,
+                    );
+                    if (!pausingCommitted) {
+                      diagnosticLog.record('recovery.missingPresentationSettling', {
+                        'taskId': task.taskId,
+                        'reason': 'checkpointFailed',
+                      });
+                      continue;
+                    }
+                    var settled = false;
+                    try {
+                      settled = await _pauseTransfer(task);
+                    } catch (_) {
+                      settled = false;
+                    }
+                    if (!settled) {
+                      diagnosticLog.record('recovery.missingPresentationSettling', {
+                        'taskId': task.taskId,
+                        'reason': 'ownershipNotReleased',
+                      });
+                      continue;
+                    }
+                  }
+
+                  final orphanCommitted = await _checkpointLogicalJob(
+                    task,
+                    state: DownloadJobState.orphaned,
+                    expectedBytes: expectedForOrphan,
+                    userPaused: false,
+                    queueWaiting: false,
+                  );
+                  if (!orphanCommitted) {
+                    diagnosticLog.record('recovery.missingPresentationSettling', {
+                      'taskId': task.taskId,
+                      'reason': 'orphanCheckpointFailed',
+                    });
+                    continue;
+                  }
+                  _queueWaitingIds.remove(task.taskId);
+                  _waitingPayloads.remove(task.taskId);
+                  _forgetSessionTask(task.taskId);
+                  await FileDownloader().database.updateRecord(
+                    TaskRecord(
+                      task,
+                      TaskStatus.paused,
+                      progress,
+                      expectedForOrphan,
+                    ),
+                  );
+                  diagnosticLog.record('recovery.orphanedMissingPresentation', {
+                    'taskId': task.taskId,
+                    'source': stillNative ? 'runtime' : 'executor',
+                  });
+                  continue;
+                }
+                final userPaused =
+          '''
+          insert = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in insert.splitlines()
+          ) + '\n'
+          if 'final presentationDisposition = planMissingPresentationRecovery(' not in service:
+              count = service.count(anchor)
+              if count != 1:
+                  raise SystemExit(f'expected one service insertion anchor, found {count}')
+              service = service.replace(anchor, insert, 1)
+          service_path.write_text(service)
+          PY
+          python3 /tmp/dm04_patch.py
+          dart format lib/core/services/download_job_state.dart lib/core/services/download_service.dart
+      - name: Run focused and adjacent recovery tests
+        run: |
+          tests=(
+            test/core/services/download_missing_presentation_recovery_test.dart
+            test/core/services/download_durable_only_recovery_test.dart
+            test/core/services/download_startup_reconciliation_matrix_test.dart
+            test/core/services/download_recovery_inventory_test.dart
+            test/core/services/download_recovery_fault_injection_test.dart
+            test/core/services/download_recovery_snapshot_test.dart
+            test/core/services/download_runtime_ownership_test.dart
+          )
+          selected=()
+          for test_file in "${tests[@]}"; do
+            if [ -f "$test_file" ]; then
+              selected+=("$test_file")
+            fi
+          done
+          test "${#selected[@]}" -ge 5
+          flutter test "${selected[@]}" --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Verify scoped diff
+        run: |
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' lib/core/services/download_job_state.dart lib/core/services/download_service.dart | sort)"
+          test "$changed" = "$expected"
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_job_state.dart lib/core/services/download_service.dart
+          git commit -m "fix(downloads): settle hidden recovery owners"
+          git push origin HEAD:plan/download-manager-reliability

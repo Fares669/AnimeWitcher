@@ -1,0 +1,76 @@
+name: DM-11 replica transaction foundation
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm11-replica-transaction-foundation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm11-replica-transaction-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  transaction-foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Apply DM-11 foundation after established RED
+        run: |
+          python3 .github/scripts/dm11_foundation_patch.py
+          dart format lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
+          git diff --check
+
+      - name: Verify DM-11 foundation GREEN
+        run: |
+          flutter test \
+            test/core/services/download_replica_transaction_test.dart \
+            test/core/services/download_recovery_fault_injection_test.dart \
+            test/core/services/download_relaunch_chaos_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Commit verified production slice
+        run: |
+          if git diff --quiet -- lib/core/services/download_job_store.dart; then
+            echo 'DM-11 foundation already present; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_job_store.dart
+          git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11 foundation)'
+          git pull --rebase origin plan/download-manager-reliability
+
+      - name: Re-verify after rebase
+        run: |
+          flutter test \
+            test/core/services/download_replica_transaction_test.dart \
+            test/core/services/download_recovery_fault_injection_test.dart \
+            test/core/services/download_relaunch_chaos_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Push verified production slice
+        run: git push origin HEAD:plan/download-manager-reliability

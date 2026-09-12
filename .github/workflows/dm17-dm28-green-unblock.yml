@@ -1,0 +1,191 @@
+name: DM-17 + DM-28 staged GREEN unblock
+# Manually retriggered by the download-manager plan executor after dependency validation.
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm17-dm28-green-unblock.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm17-dm28-green-unblock-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  green:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Apply the already-reviewed DM-17 and DM-28 production patches together
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          def python_blocks(path: str):
+              lines = Path(path).read_text().splitlines()
+              blocks = []
+              collecting = False
+              current = []
+              base_indent = 0
+              for line in lines:
+                  if not collecting and line.strip() == "python3 - <<'PY'":
+                      collecting = True
+                      current = []
+                      base_indent = len(line) - len(line.lstrip())
+                      continue
+                  if collecting and line.strip() == 'PY':
+                      blocks.append('\n'.join(current))
+                      collecting = False
+                      current = []
+                      continue
+                  if collecting:
+                      prefix = ' ' * base_indent
+                      current.append(line[len(prefix):] if line.startswith(prefix) else line)
+              return blocks
+
+          selections = [
+              (
+                  '.github/workflows/dm17-joined-teardown.yml',
+                  '# 1) Range transport: cancellation is not teardown completion.',
+              ),
+              (
+                  '.github/workflows/dm28-android-notification-policy-fix.yml',
+                  "transport_path = Path('lib/core/services/download_transport.dart')",
+              ),
+          ]
+
+          for path, needle in selections:
+              matches = [block for block in python_blocks(path) if needle in block]
+              if len(matches) != 1:
+                  raise SystemExit(f'Expected exactly one production patch in {path}, found {len(matches)}')
+              exec(compile(matches[0], path, 'exec'), {})
+
+          # A Dio CancelToken no longer owns the response stream after headers are
+          # returned. Make the detached range reader itself cancellation-aware so
+          # dispose() can actually join the writer instead of waiting for the
+          # 30-second stream idle timeout.
+          range_path = Path('lib/core/services/download_range_transfer.dart')
+          range_source = range_path.read_text()
+          class_anchor = 'class DownloadRangeTransfer {'
+          stream_helper = '''Stream<T> _cancelRangeStream<T>(
+            Stream<T> source,
+            CancelToken token,
+          ) async* {
+            final iterator = StreamIterator<T>(source);
+            try {
+              while (!token.isCancelled) {
+                final moved = await Future.any<Object?>([
+                  iterator.moveNext(),
+                  token.whenCancel.then<Object?>((_) => null),
+                ]);
+                if (token.isCancelled || moved != true) break;
+                yield iterator.current;
+              }
+            } finally {
+              await iterator.cancel();
+            }
+          }
+
+          '''
+          if '_cancelRangeStream<T>' not in range_source:
+              if class_anchor not in range_source:
+                  raise SystemExit('DM-17 cancellable stream class anchor drift')
+              range_source = range_source.replace(class_anchor, stream_helper + class_anchor, 1)
+
+          if 'await for (final bytes in _cancelRangeStream(' not in range_source:
+              stream_pattern = re.compile(
+                  r'current\.stream\.timeout\(\s*kDownloadRangeStreamIdleTimeout,?\s*\)'
+              )
+              replacement = '''_cancelRangeStream(
+            current.stream.timeout(kDownloadRangeStreamIdleTimeout),
+            operation.token,
+          )'''
+              range_source, substitutions = stream_pattern.subn(replacement, range_source, count=1)
+              if substitutions != 1:
+                  raise SystemExit(
+                      f'DM-17 cancellable stream loop anchor drift: substitutions={substitutions}'
+                  )
+          range_path.write_text(range_source)
+          PY
+
+          dart format \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/download_transport.dart
+
+      - name: Verify DM-17 teardown barrier
+        run: |
+          flutter test test/core/services/download_teardown_barrier_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify DM-17 range transfer teardown
+        run: |
+          flutter test test/core/services/download_range_transfer_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify DM-28 transport policy
+        run: |
+          flutter test test/core/services/download_transport_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify analyzer and diff
+        run: |
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Commit verified production fixes
+        run: |
+          if git diff --quiet -- \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/download_transport.dart; then
+            echo 'Both production fixes are already present.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/download_transport.dart
+          git commit -m 'fix(downloads): join teardown and align Android execution policy (DM-17 DM-28)'
+          # build_runner can touch tracked generated files outside the production
+          # patch. Drop only those remaining worktree edits after the production
+          # commit so rebase is clean; the committed DM-17/DM-28 changes remain.
+          git restore --worktree .
+          git pull --rebase origin plan/download-manager-reliability
+
+          flutter test test/core/services/download_teardown_barrier_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_transport_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+          git push origin HEAD:plan/download-manager-reliability

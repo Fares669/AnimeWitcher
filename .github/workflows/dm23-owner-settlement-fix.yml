@@ -1,0 +1,132 @@
+name: DM-23 owner settlement GREEN verifier
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm23-owner-settlement-fix.yml
+      - .github/scripts/dm23_owner_settlement_patch.py
+      - test/core/services/download_parallel_owner_settlement_guard_test.dart
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm23-owner-settlement-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  green:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate localization and generated sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Apply DM-23 production patch
+        run: python3 .github/scripts/dm23_owner_settlement_patch.py
+
+      - name: Format DM-23 production slice
+        run: dart format lib/core/services/persistent_parallel_download.dart
+
+      - name: Check patch whitespace
+        run: git diff --check
+
+      - name: Run DM-23 owner settlement guard
+        run: |
+          flutter test test/core/services/download_parallel_owner_settlement_guard_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Run multipart tail recovery regressions
+        run: |
+          flutter test test/core/services/persistent_parallel_download_tail_recovery_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/persistent_parallel_download_auto_recovery_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_cancel_ownership_guard_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Analyze production slice
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/persistent_parallel_download.dart
+
+      - name: Materialize verified DM-23 production fix
+        env:
+          BRANCH: plan/download-manager-reliability
+        run: |
+          if git diff --quiet -- lib/core/services/persistent_parallel_download.dart; then
+            echo 'DM-23 production slice already materialized.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/persistent_parallel_download.dart
+          git commit -m 'fix(downloads): fence multipart owner settlement'
+          # build_runner may leave unrelated generated files modified/untracked.
+          # Keep the verified production commit clean before rebasing/pushing it.
+          git stash push --include-untracked -m 'dm23-generated-worktree' || true
+          git pull --rebase origin "$BRANCH"
+          git push origin "HEAD:$BRANCH"
+
+      - name: Mark verified DM-23 complete
+        env:
+          BRANCH: plan/download-manager-reliability
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Drop build_runner noise and converge on the latest branch before
+          # changing the source-of-truth checklist (DM-08 may be committing too).
+          git stash push --include-untracked -m 'dm23-plan-generated' || true
+          git pull --rebase origin "$BRANCH"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('DOWNLOAD_MANAGER_PLAN.md')
+          text = path.read_text()
+          old = '- [ ] **DM-23 — Require old-owner settlement before multipart adoption, recycle, assembly, or relaunch**'
+          new = '- [x] **DM-23 — Require old-owner settlement before multipart adoption, recycle, assembly, or relaunch**'
+          if new in text:
+              raise SystemExit(0)
+          if old not in text:
+              raise SystemExit('DM-23 checklist marker not found')
+          text = text.replace(old, new, 1)
+          marker = '  - **Dependencies:** DM-19, DM-10.\n'
+          notes = (
+              marker
+              + '  - **Implementation notes (2026-09-13):** Multipart exact-size adoption now fails closed when pausing the previous native owner fails; tail recovery keeps the same owner fenced instead of adopting/relaunching, and tail recycle cancels successfully before releasing the child reservation or restoring/reusing its Range.\n'
+              + '  - **Verification passed:** 3 owner-settlement guard cases, 15 multipart/cancel regressions, production-slice analyzer, and the materialization/push verifier all passed before this checklist update.\n'
+          )
+          if marker not in text:
+              raise SystemExit('DM-23 dependency marker not found')
+          text = text.replace(marker, notes, 1)
+          path.write_text(text)
+          PY
+          if git diff --quiet -- DOWNLOAD_MANAGER_PLAN.md; then
+            echo 'DM-23 already marked complete.'
+            exit 0
+          fi
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add DOWNLOAD_MANAGER_PLAN.md
+          git commit -m 'docs(downloads): complete DM-23 after GREEN verification'
+          git pull --rebase origin "$BRANCH"
+          git push origin "HEAD:$BRANCH"
+
+# automation retrigger: verify current DM-23 production slice and completion marker

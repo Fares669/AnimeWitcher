@@ -7,11 +7,93 @@ bool isNativeSingleDownloadTask(Task task) =>
 
 const int kDownloadLargeFileHintThresholdBytes = 50 * 1024 * 1024;
 
-/// Anime episodes are explicit user downloads. User-initiated is always useful;
-/// largeFile is added when size is unknown or the episode is large enough to
-/// benefit from background_downloader's long-running transfer policy.
-Set<TransferHint> animeDownloadTransferHints({required int expectedBytes}) {
-  final hints = <TransferHint>{TransferHint.userInitiated};
+/// Runtime ownership is intentionally separate from persisted task status.
+/// Only [notOwned] permits a new writer for the same execution identity.
+enum DownloadRuntimeOwnership { owned, notOwned, settling, unknown }
+
+/// Result of issuing a cancellation command. None of these values, including
+/// [canceled], independently proves that the executor released file ownership;
+/// callers must still obtain a runtime [DownloadRuntimeOwnership.notOwned]
+/// acknowledgement before forgetting handles or deleting durable evidence.
+enum DownloadCancelSettlement { canceled, alreadyGone, stillOwned, unknown }
+
+/// Low-level result of issuing a non-terminal transport command. This is kept
+/// separate from DownloadService's logical/user-visible command outcome: an
+/// accepted executor command is not proof that the requested logical state has
+/// been durably reached.
+enum DownloadTransportCommandOutcome { accepted, rejected, unavailable }
+
+DownloadTransportCommandOutcome resolveDownloadTransportCommandOutcome({
+  required bool commandAccepted,
+  bool transportAvailable = true,
+}) {
+  if (!transportAvailable) return DownloadTransportCommandOutcome.unavailable;
+  return commandAccepted
+      ? DownloadTransportCommandOutcome.accepted
+      : DownloadTransportCommandOutcome.rejected;
+}
+
+DownloadCancelSettlement resolveDownloadCancelCommand({
+  required bool hadTrackedOwner,
+  required bool commandSucceeded,
+  required bool commandThrew,
+}) {
+  if (commandThrew) return DownloadCancelSettlement.unknown;
+  if (commandSucceeded) return DownloadCancelSettlement.canceled;
+  return hadTrackedOwner
+      ? DownloadCancelSettlement.stillOwned
+      : DownloadCancelSettlement.unknown;
+}
+
+extension DownloadRuntimeOwnershipSafety on DownloadRuntimeOwnership {
+  bool get blocksNewWriter => this != DownloadRuntimeOwnership.notOwned;
+}
+
+/// Resolve ownership from executor/runtime evidence only. A persisted database
+/// status is deliberately not an input: it may describe an older projection.
+DownloadRuntimeOwnership resolveDownloadRuntimeOwnership({
+  required bool runtimeQuerySucceeded,
+  required bool runtimeTaskPresent,
+  bool localRangeWriterActive = false,
+  bool operationSettling = false,
+  bool transferHandlePresent = false,
+}) {
+  if (localRangeWriterActive || runtimeTaskPresent) {
+    return DownloadRuntimeOwnership.owned;
+  }
+  if (operationSettling) return DownloadRuntimeOwnership.settling;
+  if (!runtimeQuerySucceeded) {
+    // A Transfer handle can be rehydrated from persistence, so presence alone
+    // cannot prove ownership; query failure therefore remains unknown.
+    return DownloadRuntimeOwnership.unknown;
+  }
+  // A successful executor query that does not contain the task is the
+  // independent negative acknowledgement needed before another writer starts.
+  return DownloadRuntimeOwnership.notOwned;
+}
+
+/// Android 14+ UIDT requires a user-visible notification. When notifications
+/// are disabled in-app or permission is denied, fall back to the normal
+/// resumable WorkManager path instead of requesting userInitiated priority.
+bool shouldUseUserInitiatedDownloadHint({
+  required bool isAndroid,
+  required bool notificationsConfigured,
+  required bool notificationPermissionGranted,
+}) {
+  if (!isAndroid) return true;
+  return notificationsConfigured && notificationPermissionGranted;
+}
+
+/// Anime episodes remain pause/resume capable for long-running WorkManager
+/// fallback even when Android UIDT cannot be used.
+Set<TransferHint> animeDownloadTransferHints({
+  required int expectedBytes,
+  bool useUserInitiated = true,
+}) {
+  final hints = <TransferHint>{};
+  if (useUserInitiated) {
+    hints.add(TransferHint.userInitiated);
+  }
   if (expectedBytes <= 0 ||
       expectedBytes >= kDownloadLargeFileHintThresholdBytes) {
     hints.add(TransferHint.largeFile);
@@ -21,10 +103,16 @@ Set<TransferHint> animeDownloadTransferHints({required int expectedBytes}) {
 
 abstract interface class DownloadTransport {
   bool owns(String taskId);
+
+  // Legacy bool commands stay temporarily available while DM-03 migrates all
+  // DownloadService/UI callers. New orchestration must consume the typed seam.
   Future<bool> start(DownloadTask task);
   Future<bool> pause(DownloadTask task);
   Future<bool> resume(DownloadTask task);
-  Future<bool> cancel(DownloadTask task);
+  Future<DownloadTransportCommandOutcome> startOutcome(DownloadTask task);
+  Future<DownloadTransportCommandOutcome> pauseOutcome(DownloadTask task);
+  Future<DownloadTransportCommandOutcome> resumeOutcome(DownloadTask task);
+  Future<DownloadCancelSettlement> cancel(DownloadTask task);
   Stream<TaskUpdate> updatesFor(String taskId);
   Future<void> dispose();
 }
@@ -59,7 +147,8 @@ class NativeSingleDownloadTransport implements DownloadTransport {
 
   @override
   bool owns(String taskId) =>
-      _handles.containsKey(taskId) || _downloader.transfers.forId(taskId) != null;
+      _handles.containsKey(taskId) ||
+      _downloader.transfers.forId(taskId) != null;
 
   Transfer? handleFor(String taskId) =>
       _handles[taskId] ?? _downloader.transfers.forId(taskId);
@@ -125,17 +214,67 @@ class NativeSingleDownloadTransport implements DownloadTransport {
   }
 
   @override
-  Future<bool> cancel(DownloadTask task) async {
-    if (!isNativeSingleDownloadTask(task)) return false;
+  Future<DownloadTransportCommandOutcome> startOutcome(
+    DownloadTask task,
+  ) async {
+    if (!isNativeSingleDownloadTask(task)) {
+      return DownloadTransportCommandOutcome.unavailable;
+    }
+    return resolveDownloadTransportCommandOutcome(
+      commandAccepted: await start(task),
+    );
+  }
+
+  @override
+  Future<DownloadTransportCommandOutcome> pauseOutcome(
+    DownloadTask task,
+  ) async {
+    if (!isNativeSingleDownloadTask(task)) {
+      return DownloadTransportCommandOutcome.unavailable;
+    }
+    return resolveDownloadTransportCommandOutcome(
+      commandAccepted: await pause(task),
+    );
+  }
+
+  @override
+  Future<DownloadTransportCommandOutcome> resumeOutcome(
+    DownloadTask task,
+  ) async {
+    if (!isNativeSingleDownloadTask(task)) {
+      return DownloadTransportCommandOutcome.unavailable;
+    }
+    return resolveDownloadTransportCommandOutcome(
+      commandAccepted: await resume(task),
+    );
+  }
+
+  @override
+  Future<DownloadCancelSettlement> cancel(DownloadTask task) async {
+    if (!isNativeSingleDownloadTask(task)) {
+      return DownloadCancelSettlement.unknown;
+    }
     final transfer = handleFor(task.taskId);
     try {
       final canceled = transfer != null
           ? await transfer.cancel()
           : await _downloader.cancelTaskWithId(task.taskId);
-      _detach(task.taskId);
-      return canceled;
+      // Never detach here. A true command result is an acknowledgement, not
+      // proof that URLSession stopped writing. DownloadService forgets this
+      // handle only after its independent runtime oracle returns notOwned.
+      return resolveDownloadCancelCommand(
+        hadTrackedOwner: transfer != null,
+        commandSucceeded: canceled,
+        commandThrew: false,
+      );
     } catch (_) {
-      return false;
+      // Preserve any handle/subscription on uncertainty. Forgetting it here can
+      // permit a second writer while the old executor is still alive.
+      return resolveDownloadCancelCommand(
+        hadTrackedOwner: transfer != null,
+        commandSucceeded: false,
+        commandThrew: true,
+      );
     }
   }
 

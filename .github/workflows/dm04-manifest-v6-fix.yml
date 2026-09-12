@@ -1,0 +1,101 @@
+name: DM04 Manifest V6 Fix
+
+on:
+  push:
+    branches: [plan/download-manager-reliability]
+    paths:
+      - .github/workflows/dm04-manifest-v6-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  implement-manifest-v6:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          git reset --hard HEAD
+      - name: Persist recoverable parent descriptor in multipart manifest
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('lib/core/services/persistent_parallel_download.dart')
+          source = path.read_text()
+
+          version_old = 'const int kParallelManifestSchemaVersion = 5;'
+          version_new = 'const int kParallelManifestSchemaVersion = 6;'
+          if source.count(version_old) != 1:
+              raise SystemExit(f'expected one schema anchor, found {source.count(version_old)}')
+          source = source.replace(version_old, version_new, 1)
+
+          comment_old = (
+              '/// Version 4 also persists whether a child must bypass old native resumeData\n'
+              '/// after its parent source URL was refreshed. Version 5 adds exact per-part\n'
+              '/// durable byte counters. Floating-point progress remains presentation/history\n'
+              '/// only and is never recovery byte authority.\n'
+          )
+          comment_new = (
+              '/// Version 4 also persists whether a child must bypass old native resumeData\n'
+              '/// after its parent source URL was refreshed. Version 5 adds exact per-part\n'
+              '/// durable byte counters. Version 6 also persists the complete logical parent\n'
+              '/// task descriptor so a manifest can participate in startup inventory even if\n'
+              '/// executor/JobStore projections were lost. Floating-point progress remains\n'
+              '/// presentation/history only and is never recovery byte authority.\n'
+          )
+          if source.count(comment_old) != 1:
+              raise SystemExit(f'expected one schema comment anchor, found {source.count(comment_old)}')
+          source = source.replace(comment_old, comment_new, 1)
+
+          payload_old = (
+              "      'parentTaskId': session.task.taskId,\n"
+              "      'generation': session.generation,\n"
+          )
+          payload_new = (
+              "      'parentTaskId': session.task.taskId,\n"
+              "      'parentTask': session.task.toJson(),\n"
+              "      'generation': session.generation,\n"
+          )
+          if source.count(payload_old) != 1:
+              raise SystemExit(f'expected one manifest payload anchor, found {source.count(payload_old)}')
+          source = source.replace(payload_old, payload_new, 1)
+
+          path.write_text(source)
+          PY
+          dart format lib/core/services/persistent_parallel_download.dart
+      - name: Run focused manifest recovery tests
+        run: >-
+          flutter test
+          test/core/services/persistent_parallel_download_parent_manifest_snapshot_test.dart
+          test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          test/core/services/persistent_parallel_download_recovery_snapshot_test.dart
+          test/core/services/persistent_parallel_download_test.dart
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Verify scoped diff
+        run: |
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "lib/core/services/persistent_parallel_download.dart"
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/persistent_parallel_download.dart
+          git commit -m "fix(downloads): persist multipart parent descriptor"
+          git push origin HEAD:plan/download-manager-reliability

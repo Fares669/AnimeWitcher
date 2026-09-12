@@ -1,0 +1,123 @@
+name: Bootstrap DM-11 transaction foundation v5
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm11-cycle-bootstrap-v5.yml
+      - .github/scripts/dm11_foundation_patch.py
+      - .github/scripts/dm11_verifier_patch.py
+      - lib/core/services/download_job_store.dart
+      - lib/core/services/download_url_refresh.dart
+      - lib/core/services/download_service.dart
+      - test/core/services/download_url_refresh_generation_test.dart
+      - test/core/services/download_replica_transaction_test.dart
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm11-cycle-bootstrap-v5-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Generate sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Apply DM-11 transaction foundation
+        run: |
+          test -f test/core/services/download_replica_transaction_test.dart
+          python3 .github/scripts/dm11_verifier_patch.py
+          dart format lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
+          git diff --check
+      - name: Verify DM-11 focused behavior
+        id: focused
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test test/core/services/download_replica_transaction_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key 2>&1 | tee dm11-focused.log
+      - name: Upload DM-11 focused log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm11-focused-log-${{ github.run_attempt }}
+          path: dm11-focused.log
+          if-no-files-found: error
+          retention-days: 1
+      - name: Verify DM-11 regressions
+        id: regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key 2>&1 | tee dm11-regressions.log
+      - name: Upload DM-11 regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm11-regressions-log-${{ github.run_attempt }}
+          path: dm11-regressions.log
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Verify DM-11 analyzer
+        id: analyzer
+        if: always() && steps.focused.outcome == 'success'
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter analyze --no-fatal-warnings --no-fatal-infos 2>&1 | tee dm11-analyzer.log
+          git diff --check
+      - name: Upload DM-11 analyzer log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm11-analyzer-log-${{ github.run_attempt }}
+          path: dm11-analyzer.log
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Commit verified foundation
+        if: steps.regressions.outcome == 'success' && steps.analyzer.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- lib/core/services/download_job_store.dart; then
+            echo 'DM-11 foundation already present; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_job_store.dart
+          git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11 foundation)'
+          echo 'Workspace changes left by source generation/analyzer before rebase:'
+          git status --short
+          git stash push --include-untracked -m 'dm11-ci-generated-before-rebase' || true
+          git pull --rebase origin plan/download-manager-reliability
+      - name: Re-verify rebased foundation
+        if: steps.regressions.outcome == 'success' && steps.analyzer.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          flutter test test/core/services/download_replica_transaction_test.dart test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Push verified foundation
+        if: steps.regressions.outcome == 'success' && steps.analyzer.outcome == 'success'
+        run: git push origin HEAD:plan/download-manager-reliability

@@ -19,6 +19,43 @@ enum DownloadResumeStrategy {
   restartFromZero,
 }
 
+/// Recovery action to use when a resumable task may need a refreshed source.
+///
+/// Native resume data can embed the old signed URL and is opaque to Dart. A
+/// source replacement must therefore never silently discard opaque bytes. Only
+/// a same-source native resume, a visible prefix, or multipart-owned child bytes
+/// can be migrated automatically. Otherwise the caller must surface an explicit
+/// restart-required outcome.
+enum DownloadSourceRefreshResumeAction {
+  nativeResume,
+  visiblePrefix,
+  multipartRefresh,
+  restartFromZero,
+  restartRequired,
+}
+
+DownloadSourceRefreshResumeAction planDownloadSourceRefreshResume({
+  required bool sourceRefreshRequired,
+  required bool canNativeResumeCurrentSource,
+  required bool hasOpaqueNativeResume,
+  required int visiblePartialBytes,
+  required bool isMultipart,
+}) {
+  if (!sourceRefreshRequired && canNativeResumeCurrentSource) {
+    return DownloadSourceRefreshResumeAction.nativeResume;
+  }
+  if (isMultipart) {
+    return DownloadSourceRefreshResumeAction.multipartRefresh;
+  }
+  if (visiblePartialBytes > 0) {
+    return DownloadSourceRefreshResumeAction.visiblePrefix;
+  }
+  if (hasOpaqueNativeResume) {
+    return DownloadSourceRefreshResumeAction.restartRequired;
+  }
+  return DownloadSourceRefreshResumeAction.restartFromZero;
+}
+
 /// Native status checkpoints can report -1/0 when the response size is not
 /// available. Those sentinels must not erase a previously known file length.
 int knownDownloadSize(Iterable<int?> candidates) {
@@ -40,8 +77,8 @@ bool shouldResumeFromPartialBytes({
   return true;
 }
 
-/// Prefer native resume data, then leftover bytes. Restart from 0 only when
-/// there is nothing to keep — never when pause/fail/kill left progress.
+/// Prefer native resume data, then durable leftover bytes. Historical UI
+/// progress never substitutes for recoverable bytes and cannot block restart.
 DownloadResumeStrategy chooseDownloadResumeStrategy({
   required bool canNativeResume,
   required int existingPartialBytes,
@@ -49,13 +86,22 @@ DownloadResumeStrategy chooseDownloadResumeStrategy({
   double savedProgress = 0,
 }) {
   if (canNativeResume) return DownloadResumeStrategy.nativeResume;
+  // An exact-size durable file is already a completion candidate. It must
+  // stay on the local recovery path instead of being classified as a
+  // zero-byte restart merely because no progress percentage survived.
+  if (existingPartialBytes > 0 &&
+      expectedBytes > 0 &&
+      existingPartialBytes == expectedBytes) {
+    return DownloadResumeStrategy.partialFile;
+  }
   if (shouldResumeFromPartialBytes(
     existingPartialBytes: existingPartialBytes,
     expectedBytes: expectedBytes,
   )) {
     return DownloadResumeStrategy.partialFile;
   }
-  if (savedProgress > 0) return DownloadResumeStrategy.partialFile;
+  // Historical UI progress is not recoverable-byte evidence. If native resume
+  // data and durable local bytes are both absent, a clean restart is safe.
   return DownloadResumeStrategy.restartFromZero;
 }
 
@@ -69,7 +115,8 @@ bool shouldRestartDownloadFromZero({
   // Exact-size files may be completed downloads whose last callback was lost.
   // Oversized files also contain saved data and must never be overwritten.
   if (existingPartialBytes > 0) return false;
-  if (savedProgress > 0) return false;
+  // savedProgress is presentation history only and deliberately does not fence
+  // a zero-byte restart. Durable bytes/native ownership are checked elsewhere.
   return true;
 }
 
@@ -262,8 +309,8 @@ Future<int> appendDownloadChunks({
   return written;
 }
 
-/// Resumes a paused/failed/killed download. Never starts over from byte 0
-/// when resume data, a partial file, or saved progress exists.
+/// Resumes a paused/failed/killed download. Native resume data and durable
+/// local bytes are recovery evidence; saved progress remains presentation only.
 Future<bool> resumeOrRestartDownload({
   required Future<bool> Function() canResume,
   required Future<bool> Function() resume,

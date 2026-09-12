@@ -164,7 +164,7 @@ void main() {
         final source = File(
           'lib/core/services/persistent_parallel_download.dart',
         ).readAsStringSync();
-        expect(source, contains('kParallelManifestSchemaVersion = 4'));
+        expect(source, contains('kParallelManifestSchemaVersion = 5'));
         expect(
           source,
           contains("'schemaVersion': kParallelManifestSchemaVersion"),
@@ -276,7 +276,7 @@ void main() {
       () {
         final source = File('lib/core/services/download_service.dart')
             .readAsStringSync();
-        expect(source, contains('Future<void> _checkpointLogicalJob('));
+        expect(source, contains('Future<bool> _checkpointLogicalJob('));
         expect(source, contains('state: DownloadJobState.pausing'));
         expect(source, contains('state: DownloadJobState.pausedByUser'));
         expect(source, contains('state: DownloadJobState.starting'));

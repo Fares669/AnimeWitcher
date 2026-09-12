@@ -1,0 +1,59 @@
+name: Verify DM-11 current transaction contract v6
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm11-cycle-bootstrap-v6.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm11-cycle-bootstrap-v6-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: Apply current DM-11 contract
+        run: |
+          python3 .github/scripts/dm11_v6_patch.py
+          dart format lib/core/services/download_job_store.dart
+          git diff --check
+      - name: Verify focused DM-11 behavior
+        run: |
+          flutter test test/core/services/download_replica_transaction_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Commit verified DM-11 foundation
+        run: |
+          if git diff --quiet -- lib/core/services/download_job_store.dart; then
+            echo 'DM-11 foundation already present.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_job_store.dart
+          git commit -m 'fix(downloads): journal replica transitions (DM-11 foundation)'
+          git pull --rebase origin plan/download-manager-reliability
+      - name: Reverify and push
+        run: |
+          flutter test test/core/services/download_replica_transaction_test.dart test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+          git push origin HEAD:plan/download-manager-reliability

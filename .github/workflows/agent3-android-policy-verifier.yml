@@ -1,0 +1,102 @@
+name: Agent 3 Android Policy Verifier
+
+on:
+  push:
+    branches:
+      - agent3/native-network-platform-reliability
+      - plan/download-manager-reliability
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent3-android-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dm28-android-policy-characterization:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Merge Android debug manifest
+        working-directory: android
+        run: gradle :app:processDebugMainManifest --stacktrace
+
+      - name: Verify Android 14 download execution declarations
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          ns = '{http://schemas.android.com/apk/res/android}'
+          roots = [
+              Path('build/app/intermediates'),
+              Path('android/app/build/intermediates'),
+          ]
+          candidates = []
+          for root_dir in roots:
+              if root_dir.exists():
+                  candidates.extend(root_dir.rglob('AndroidManifest.xml'))
+          candidates = [
+              p for p in candidates
+              if 'merged_manifests' in p.parts or 'packaged_manifests' in p.parts
+          ]
+          if not candidates:
+              searched = ', '.join(str(p) for p in roots)
+              raise SystemExit(f'no merged AndroidManifest.xml produced under: {searched}')
+
+          def rank(path: Path):
+              text = str(path).lower()
+              return (
+                  'debug' in text,
+                  'processdebugmainmanifest' in text,
+                  'merged_manifests' in path.parts,
+                  path.stat().st_size,
+              )
+
+          merged = max(candidates, key=rank)
+          root = ET.parse(merged).getroot()
+          permissions = {
+              e.attrib.get(ns + 'name', '')
+              for e in root.findall('uses-permission')
+          }
+          services = [
+              e.attrib.get(ns + 'name', '')
+              for e in root.findall('./application/service')
+          ]
+          print('merged manifest:', merged)
+          print('download/job services:')
+          for name in sorted(s for s in services if 'download' in s.lower() or 'job' in s.lower() or 'work' in s.lower()):
+              print(' -', name)
+          required = 'android.permission.RUN_USER_INITIATED_JOBS'
+          if required not in permissions:
+              raise SystemExit(f'missing {required}')
+          uidt = [s for s in services if 'userinitiated' in s.lower() or 'uidt' in s.lower()]
+          if not uidt:
+              raise SystemExit('RUN_USER_INITIATED_JOBS is declared but no merged UIDT/UserInitiated service was found')
+          print('UIDT services:', uidt)
+          PY
+
+      - name: Compile Android debug sources
+        working-directory: android
+        run: gradle :app:compileDebugKotlin --stacktrace

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
@@ -9,11 +10,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'package:window_manager/window_manager.dart';
+
 import 'core/theme/theme_provider.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/storage/storage_service.dart';
+
 import 'package:dynamic_color/dynamic_color.dart';
+
 import 'core/utils/app_utils.dart';
 import 'core/utils/artwork_host_fallback.dart';
 import 'core/utils/window_controls_visibility.dart';
@@ -25,8 +29,10 @@ import 'core/widgets/update_dialog.dart';
 import 'core/services/download_service.dart';
 import 'core/services/notification_service.dart';
 import 'core/widgets/m3_toast_overlay.dart';
+
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+
 import 'core/providers/locale_provider.dart';
 import 'core/providers/device_info_provider.dart';
 import 'shared/widgets/loading_indicator.dart';
@@ -51,8 +57,7 @@ void main() async {
       size: const Size(1280, 720),
       minimumSize: const Size(360, 640),
       center: true,
-      backgroundColor: Colors
-          .black, // Solid black prevents transparency during fullscreen transition
+      backgroundColor: Colors.black, // Solid black prevents transparency during fullscreen transition
       skipTaskbar: false,
       titleBarStyle: Platform.isMacOS
           ? TitleBarStyle.normal
@@ -281,7 +286,15 @@ class _MyAppState extends ConsumerState<MyApp>
       windowManager.addListener(this);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(downloadServiceProvider).init();
+      unawaited(
+        ref.read(downloadServiceProvider).init().catchError((Object error) {
+          if (kDebugMode) {
+            debugPrint(
+              '[DownloadService] Startup initialization deferred: $error',
+            );
+          }
+        }),
+      );
       _checkAppUpdates();
       _maybeShowWelcomeDialog();
     });
@@ -943,9 +956,7 @@ class _CustomTitleBarState extends State<CustomTitleBar> with WindowListener {
                                               decoration: BoxDecoration(
                                                 color: isDark
                                                     ? const Color(0xFF050505)
-                                                    : const Color(
-                                                        0xFFFAF8F5,
-                                                      ), // overlap box bg matches titlebar
+                                                    : const Color(0xFFFAF8F5), // overlap box bg matches titlebar
                                                 border: Border.all(
                                                   color: iconColor,
                                                   width: 1,

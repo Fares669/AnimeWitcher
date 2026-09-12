@@ -1,0 +1,120 @@
+name: DM-11 final crash-ordering acceptance
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm11-final-acceptance.yml
+      - lib/core/services/download_job_store.dart
+      - lib/core/services/download_service.dart
+      - test/core/services/download_replica_transaction_test.dart
+      - test/core/services/download_replica_start_journal_guard_test.dart
+      - test/core/services/download_replica_pause_ordering_test.dart
+      - test/core/services/download_recovery_fault_injection_test.dart
+      - test/core/services/download_relaunch_chaos_test.dart
+      - test/core/services/download_callback_generation_test.dart
+      - test/core/services/download_start_outcome_guard_test.dart
+      - test/core/services/download_refresh_descriptor_ownership_guard_test.dart
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm11-final-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-and-close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Verify DM-11 crash-safe ordering and convergence
+        run: |
+          set -euo pipefail
+          flutter test \
+            test/core/services/download_replica_transaction_test.dart \
+            test/core/services/download_replica_start_journal_guard_test.dart \
+            test/core/services/download_replica_pause_ordering_test.dart \
+            test/core/services/download_recovery_fault_injection_test.dart \
+            test/core/services/download_relaunch_chaos_test.dart \
+            test/core/services/download_callback_generation_test.dart \
+            test/core/services/download_start_outcome_guard_test.dart \
+            test/core/services/download_refresh_descriptor_ownership_guard_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Rebase onto latest branch and reverify if head moved
+        shell: bash
+        run: |
+          set -euo pipefail
+          verified_sha="$(git rev-parse HEAD)"
+          git reset --hard HEAD
+          git clean -fd
+          git fetch origin plan/download-manager-reliability
+          remote_sha="$(git rev-parse origin/plan/download-manager-reliability)"
+          if [ "$verified_sha" != "$remote_sha" ]; then
+            git rebase origin/plan/download-manager-reliability
+            flutter gen-l10n
+            dart run build_runner build --delete-conflicting-outputs
+            flutter test \
+              test/core/services/download_replica_transaction_test.dart \
+              test/core/services/download_replica_start_journal_guard_test.dart \
+              test/core/services/download_replica_pause_ordering_test.dart \
+              test/core/services/download_recovery_fault_injection_test.dart \
+              test/core/services/download_relaunch_chaos_test.dart \
+              test/core/services/download_callback_generation_test.dart \
+              test/core/services/download_start_outcome_guard_test.dart \
+              test/core/services/download_refresh_descriptor_ownership_guard_test.dart \
+              --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+            flutter analyze --no-fatal-warnings --no-fatal-infos
+            git diff --check
+          fi
+
+      - name: Mark DM-11 complete after verified GREEN
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --hard HEAD
+          git clean -fd
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('DOWNLOAD_MANAGER_PLAN.md')
+          source = path.read_text()
+          old = '- [ ] **DM-11 — Define crash-safe write ordering and convergence across all replicas**'
+          new = '- [x] **DM-11 — Define crash-safe write ordering and convergence across all replicas**'
+          if new in source:
+              raise SystemExit(0)
+          if old not in source:
+              raise SystemExit('DM-11 checklist anchor drift')
+          path.write_text(source.replace(old, new, 1))
+          PY
+          if git diff --quiet -- DOWNLOAD_MANAGER_PLAN.md; then
+            echo 'DM-11 already closed.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add DOWNLOAD_MANAGER_PLAN.md
+          git commit -m 'docs(downloads): mark DM-11 complete after acceptance'
+          git push origin HEAD:plan/download-manager-reliability

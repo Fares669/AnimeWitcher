@@ -1,0 +1,237 @@
+name: DM-17 joined teardown and reinitialization safety
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm17-joined-teardown.yml
+      - lib/core/services/download_service.dart
+      - lib/core/services/download_range_transfer.dart
+      - lib/core/services/download_continued_processing_service.dart
+      - test/core/services/download_teardown_barrier_test.dart
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm17-joined-teardown-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  joined-teardown:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Prove DM-17 RED before implementation
+        run: |
+          if grep -q 'class DownloadServiceTeardownBarrier' lib/core/services/download_service.dart; then
+            echo 'DM-17 teardown barrier already implemented; skipping historical RED replay.'
+            exit 0
+          fi
+          set +e
+          flutter test test/core/services/download_teardown_barrier_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key \
+            > /tmp/dm17-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/dm17-red.log
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected DM-17 teardown regression to be RED before implementation.' >&2
+            exit 1
+          fi
+          grep -Eq 'DownloadServiceTeardownBarrier|DownloadGlobalHandlerLease|void.*dispose|await.*dispose' /tmp/dm17-red.log
+
+      - name: Apply joined teardown barrier and handler lease
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 1) Range transport: cancellation is not teardown completion. Join every writer.
+          path = Path('lib/core/services/download_range_transfer.dart')
+          source = path.read_text()
+          old = '''  final _maxConnectTimesByOrigin = <String, Duration>{};\n\n  bool isActive(String id) => _operations.containsKey(id);'''
+          new = '''  final _maxConnectTimesByOrigin = <String, Duration>{};\n  bool _disposed = false;\n\n  bool isActive(String id) => _operations.containsKey(id);'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'bool _disposed = false;' not in source:
+              raise SystemExit('DM-17 range field anchor drift')
+
+          old = '''  void dispose() {\n    for (final operation in _operations.values) {\n      operation.token.cancel('Service disposed');\n    }\n  }'''
+          new = '''  Future<void> dispose() async {\n    _disposed = true;\n    final operations = _operations.values.toList(growable: false);\n    for (final operation in operations) {\n      operation.token.cancel('Service disposed');\n    }\n    await Future.wait<void>(operations.map((operation) => operation.done.future));\n  }'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'await Future.wait<void>(operations.map((operation) => operation.done.future))' not in source:
+              raise SystemExit('DM-17 range dispose anchor drift')
+
+          old = '''  }) async {\n    if (_operations.containsKey(id)) return true;\n    _lastFailures.remove(id);'''
+          new = '''  }) async {\n    if (_disposed) return false;\n    if (_operations.containsKey(id)) return true;\n    _lastFailures.remove(id);'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'if (_disposed) return false;' not in source:
+              raise SystemExit('DM-17 range start anchor drift')
+          path.write_text(source)
+
+          # 2) Global MethodChannel: lease ownership prevents ABA unregister.
+          path = Path('lib/core/services/download_continued_processing_service.dart')
+          source = path.read_text()
+          anchor = '''typedef SystemDownloadChunkUpdate = void Function({\n  required String parentTaskId,\n  required String chunkTaskId,\n  double? progress,\n  int? statusOrdinal,\n  int? writtenBytes,\n  int? expectedBytes,\n  int? attemptGeneration,\n  double? speedBytesPerSecond,\n  required bool completed,\n});\n'''
+          helper = anchor + '''\n@visibleForTesting\nclass DownloadGlobalHandlerLease {\n  DownloadGlobalHandlerLease._(this.generation);\n\n  static int _nextGeneration = 0;\n  static int? _activeGeneration;\n\n  final int generation;\n\n  static DownloadGlobalHandlerLease acquire() {\n    final lease = DownloadGlobalHandlerLease._(++_nextGeneration);\n    _activeGeneration = lease.generation;\n    return lease;\n  }\n\n  bool releaseIfCurrent() {\n    if (_activeGeneration != generation) return false;\n    _activeGeneration = null;\n    return true;\n  }\n}\n'''
+          if anchor in source and 'class DownloadGlobalHandlerLease' not in source:
+              source = source.replace(anchor, helper, 1)
+          elif 'class DownloadGlobalHandlerLease' not in source:
+              raise SystemExit('DM-17 handler helper anchor drift')
+
+          old = '''  bool _handlerInstalled = false;\n  static const Duration _updateSampleInterval = Duration(seconds: 1);'''
+          new = '''  bool _handlerInstalled = false;\n  bool _disposed = false;\n  DownloadGlobalHandlerLease? _handlerLease;\n  static const Duration _updateSampleInterval = Duration(seconds: 1);'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'DownloadGlobalHandlerLease? _handlerLease;' not in source:
+              raise SystemExit('DM-17 handler fields anchor drift')
+
+          old = '''    if (_isAvailable) {\n      _channel.setMethodCallHandler(_handleNativeCall);\n      _handlerInstalled = true;\n    }'''
+          new = '''    if (_isAvailable) {\n      _handlerLease = DownloadGlobalHandlerLease.acquire();\n      _channel.setMethodCallHandler(_handleNativeCall);\n      _handlerInstalled = true;\n    }'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif '_handlerLease = DownloadGlobalHandlerLease.acquire();' not in source:
+              raise SystemExit('DM-17 handler install anchor drift')
+
+          old = '''      if (pending == null || !_isAvailable) return;'''
+          new = '''      if (pending == null || !_isAvailable || _disposed) return;'''
+          if old in source:
+              source = source.replace(old, new, 1)
+
+          old = '''  Future<dynamic> _handleNativeCall(MethodCall call) async {\n    final arguments = call.arguments;'''
+          new = '''  Future<dynamic> _handleNativeCall(MethodCall call) async {\n    if (_disposed) return false;\n    final arguments = call.arguments;'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'if (_disposed) return false;' not in source:
+              raise SystemExit('DM-17 native callback anchor drift')
+
+          old = '''  Future<void> _invoke(String method, Map<String, Object> arguments) async {\n    if (!_isAvailable) return;'''
+          new = '''  Future<void> _invoke(String method, Map<String, Object> arguments) async {\n    if (!_isAvailable || _disposed) return;'''
+          if old in source:
+              source = source.replace(old, new, 1)
+
+          old = '''  Future<void> dispose() async {\n    _cancelPendingUpdate();\n    if (_handlerInstalled) {\n      _channel.setMethodCallHandler(null);\n      _handlerInstalled = false;\n    }\n  }'''
+          new = '''  Future<void> dispose() async {\n    if (_disposed) return;\n    _disposed = true;\n    _cancelPendingUpdate();\n    if (_handlerInstalled) {\n      final ownsHandler = _handlerLease?.releaseIfCurrent() ?? false;\n      if (ownsHandler) {\n        _channel.setMethodCallHandler(null);\n      }\n      _handlerInstalled = false;\n      _handlerLease = null;\n    }\n  }'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'final ownsHandler = _handlerLease?.releaseIfCurrent() ?? false;' not in source:
+              raise SystemExit('DM-17 handler dispose anchor drift')
+          path.write_text(source)
+
+          # 3) Service lifecycle: register teardown synchronously and make the next init await it.
+          path = Path('lib/core/services/download_service.dart')
+          source = path.read_text()
+          anchor = '''@visibleForTesting\nFuture<DownloadLifecycleCheckpointCommit> commitAuthoritativeDownloadCheckpoint(\n  Future<bool> Function() checkpoint,\n) async {\n  try {\n    return await checkpoint()\n        ? DownloadLifecycleCheckpointCommit.committed\n        : DownloadLifecycleCheckpointCommit.rejected;\n  } catch (_) {\n    return DownloadLifecycleCheckpointCommit.failed;\n  }\n}\n'''
+          helper = anchor + '''\n@visibleForTesting\nclass DownloadServiceTeardownBarrier {\n  Future<void> _tail = Future<void>.value();\n\n  Future<void> wait() => _tail;\n\n  Future<void> run(Future<void> Function() teardown) {\n    final next = _tail.then<void>(\n      (_) => teardown(),\n      onError: (Object _, StackTrace __) => teardown(),\n    );\n    _tail = next.then<void>(\n      (_) {},\n      onError: (Object _, StackTrace __) {},\n    );\n    return next;\n  }\n}\n'''
+          if anchor in source and 'class DownloadServiceTeardownBarrier' not in source:
+              source = source.replace(anchor, helper, 1)
+          elif 'class DownloadServiceTeardownBarrier' not in source:
+              raise SystemExit('DM-17 service barrier anchor drift')
+
+          old = '''  static StreamSubscription<TaskUpdate>? _fdSubscription;\n  static final _sharedEvents = StreamController<TaskUpdate>.broadcast();'''
+          new = '''  static StreamSubscription<TaskUpdate>? _fdSubscription;\n  static final _sharedEvents = StreamController<TaskUpdate>.broadcast();\n  static final DownloadServiceTeardownBarrier _teardownBarrier =\n      DownloadServiceTeardownBarrier();'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif '_teardownBarrier' not in source:
+              raise SystemExit('DM-17 static barrier anchor drift')
+
+          old = '''  bool _isInitialized = false;\n  bool _disposed = false;\n  final DownloadServiceReadinessBarrier _readiness ='''
+          new = '''  bool _isInitialized = false;\n  bool _disposed = false;\n  Future<void>? _disposeFuture;\n  final DownloadServiceReadinessBarrier _readiness ='''
+          if old in source:
+              source = source.replace(old, new, 1)
+
+          old = '''  Future<void> init() {\n    if (_disposed) {\n      return Future<void>.error(DownloadServiceUnavailableException.disposed());\n    }\n    return _readiness.ensureReady(_initialize);\n  }'''
+          new = '''  Future<void> init() {\n    if (_disposed) {\n      return Future<void>.error(DownloadServiceUnavailableException.disposed());\n    }\n    return _readiness.ensureReady(() async {\n      await _teardownBarrier.wait();\n      if (_disposed) {\n        throw DownloadServiceUnavailableException.disposed();\n      }\n      await _initialize();\n    });\n  }'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'await _teardownBarrier.wait();' not in source:
+              raise SystemExit('DM-17 init anchor drift')
+
+          old = '''  void _handleNativeChunkUpdate({\n    required String parentTaskId,'''
+          new = '''  void _handleNativeChunkUpdate({\n    required String parentTaskId,'''
+          # Add disposed guard at the first executable line of the method.
+          marker = '''    bool completed = false,\n  }) {\n    if (_terminalJobIds.contains(parentTaskId)) return;'''
+          replacement = '''    bool completed = false,\n  }) {\n    if (_disposed || _terminalJobIds.contains(parentTaskId)) return;'''
+          if marker in source:
+              source = source.replace(marker, replacement, 1)
+
+          old = '''  void dispose() {\n    _disposed = true;\n    unawaited(_parallelFailures.close());\n    unawaited(_parallel.dispose());\n    _rangeTransfers.dispose();\n    _telemetry.clear();\n    _expectedSizePersistedIds.clear();\n    _terminalJobIds.clear();\n    unawaited(_nativeTransport.dispose());\n    _updatesSubscription?.cancel();\n    _connectivitySubscription?.cancel();\n    unawaited(_continuedProcessing.dispose());\n    _updatesController.close();\n    // Do NOT cancel _fdSubscription — it matches FileDownloader()'s singleton\n    // lifetime and cannot be re-subscribed after cancellation.\n  }'''
+          new = '''  void dispose() {\n    if (_disposed) return;\n    _disposed = true;\n    _disposeFuture ??= _teardownBarrier.run(_disposeResources);\n  }\n\n  Future<void> _disposeResources() async {\n    await _updatesSubscription?.cancel();\n    _updatesSubscription = null;\n    await _connectivitySubscription?.cancel();\n    _connectivitySubscription = null;\n    await _rangeTransfers.dispose();\n    await _parallel.dispose();\n    await _nativeTransport.dispose();\n    await _continuedProcessing.dispose();\n    await _parallelFailures.close();\n    await _updatesController.close();\n    _telemetry.clear();\n    _expectedSizePersistedIds.clear();\n    _terminalJobIds.clear();\n    // Do NOT cancel _fdSubscription — it matches FileDownloader()'s singleton\n    // lifetime and cannot be re-subscribed after cancellation.\n  }'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'Future<void> _disposeResources() async' not in source:
+              raise SystemExit('DM-17 service dispose anchor drift')
+
+          # Prevent late multipart callbacks from scheduling work during the barrier.
+          source = source.replace(
+              '''      onPausedDrainSettled: (parentTaskId) {\n        diagnosticLog.record''',
+              '''      onPausedDrainSettled: (parentTaskId) {\n        if (_disposed) return;\n        diagnosticLog.record''',
+              1,
+          )
+          source = source.replace(
+              '''      onHostPressure: (url, ceiling) {\n        diagnosticLog.record''',
+              '''      onHostPressure: (url, ceiling) {\n        if (_disposed) return;\n        diagnosticLog.record''',
+              1,
+          )
+          source = source.replace(
+              '''      onHostSample: (url, connections, bytesPerSecond) {\n        unawaited(''',
+              '''      onHostSample: (url, connections, bytesPerSecond) {\n        if (_disposed) return;\n        unawaited(''',
+              1,
+          )
+          path.write_text(source)
+          PY
+          dart format \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_continued_processing_service.dart \
+            test/core/services/download_teardown_barrier_test.dart
+
+      - name: Verify DM-17 GREEN behavior
+        run: |
+          flutter test test/core/services/download_teardown_barrier_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_range_transfer_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_initialization_barrier_guard_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/ios_continued_processing_expiration_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Commit verified DM-17 teardown slice
+        run: |
+          if git diff --quiet -- \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_continued_processing_service.dart; then
+            echo 'DM-17 production sources already verified; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_continued_processing_service.dart
+          git commit -m 'fix(downloads): join service teardown before reinitialization (DM-17)'
+          git pull --rebase origin plan/download-manager-reliability
+          git push origin HEAD:plan/download-manager-reliability

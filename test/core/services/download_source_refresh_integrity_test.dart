@@ -110,7 +110,7 @@ void main() {
     () {
       final service = File('lib/core/services/download_service.dart')
           .readAsStringSync();
-      final start = service.indexOf('Future<void> _checkpointLogicalJob(');
+      final start = service.indexOf('Future<bool> _checkpointLogicalJob(');
       final end = service.indexOf(
         'Future<void> _recoverPersistedDownloads',
         start,

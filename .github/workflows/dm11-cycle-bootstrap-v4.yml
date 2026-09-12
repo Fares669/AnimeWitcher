@@ -1,0 +1,200 @@
+name: Bootstrap DM-11 transaction foundation v4
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm11-cycle-bootstrap-v4.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm11-cycle-bootstrap-v4-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Materialize verified DM-11 behavioral test
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+          source = Path('.github/workflows/dm11-replica-transaction-foundation.yml').read_text()
+          start = "          cat > test/core/services/download_replica_transaction_test.dart <<'DART'\n"
+          end = "\n          DART\n"
+          if start not in source:
+              raise SystemExit('DM-11 test source marker drift')
+          body = source.split(start, 1)[1].split(end, 1)[0]
+          Path('test/core/services/download_replica_transaction_test.dart').write_text(textwrap.dedent(body) + '\n')
+          PY
+          dart format test/core/services/download_replica_transaction_test.dart
+      - name: Apply durable transaction foundation with stable anchors
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+          workflow = Path('.github/workflows/dm11-cycle-bootstrap.yml').read_text()
+          step = workflow.split('      - name: Apply durable replica transaction foundation\n', 1)[1]
+          start = "          python3 - <<'PY'\n"
+          end = "\n          PY\n"
+          script = textwrap.dedent(step.split(start, 1)[1].split(end, 1)[0])
+          def replace_labeled_block(label, replacement):
+              global script
+              marker = f"'{label}',"
+              pos = script.find(marker)
+              if pos < 0:
+                  raise SystemExit(f'DM-11 helper label missing: {label}')
+              block_start = script.rfind('replace_once(', 0, pos)
+              block_end = script.find('\n\n', pos)
+              if block_start < 0 or block_end < 0:
+                  raise SystemExit(f'DM-11 helper block drift: {label}')
+              script = script[:block_start] + replacement.rstrip() + script[block_end:]
+          copy_replacement = '\n'.join([
+              'copy_line = (',
+              '    "    lastByteReconciliationAtMillis:\\n"',
+              '    "        lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\\n"',
+              ')',
+              'replace_once(',
+              '    copy_line,',
+              '    copy_line',
+              '    + "    replicaTransaction: clearReplicaTransaction\\n"',
+              '    + "        ? null\\n"',
+              '    + "        : (replicaTransaction ?? this.replicaTransaction),\\n",',
+              "    'copyWith body',",
+              ')',
+          ])
+          json_replacement = '\n'.join([
+              'json_line = (',
+              '    "    if (lastByteReconciliationAtMillis != null)\\n"',
+              '    "      \'lastByteReconciliationAtMillis\': lastByteReconciliationAtMillis,\\n"',
+              ')',
+              'replace_once(',
+              '    json_line,',
+              '    json_line',
+              '    + "    if (replicaTransaction != null)\\n"',
+              '    + "      \'replicaTransaction\': replicaTransaction!.toJson(),\\n",',
+              "    'toJson',",
+              ')',
+          ])
+          from_json_replacement = '\n'.join([
+              'from_json = (',
+              '    "      lastByteReconciliationAtMillis: _nullableIntValue(\\n"',
+              '    "        map[\'lastByteReconciliationAtMillis\'],\\n"',
+              '    "      ),\\n"',
+              ')',
+              'replace_once(',
+              '    from_json,',
+              '    from_json',
+              '    + "      replicaTransaction: DownloadReplicaTransaction.fromJson(\\n"',
+              '    + "        map[\'replicaTransaction\'],\\n"',
+              '    + "      ),\\n",',
+              "    'fromJson',",
+              ')',
+          ])
+          store_replacement = '\n'.join([
+              'all_anchor = "  Future<List<DownloadJobRecord>> all() async {\\n"',
+              'store_methods = store_insert[len(store_anchor):]',
+              'replace_once(',
+              '    all_anchor,',
+              '    store_methods + "\\n" + all_anchor,',
+              "    'store insertion',",
+              ')',
+          ])
+          replace_labeled_block('copyWith body', copy_replacement)
+          replace_labeled_block('toJson', json_replacement)
+          replace_labeled_block('fromJson', from_json_replacement)
+          store_marker = "replace_once(store_anchor, store_insert, 'store insertion')"
+          if store_marker not in script:
+              raise SystemExit('DM-11 store insertion helper marker drift')
+          script = script.replace(store_marker, store_replacement, 1)
+          exec(compile(script, '<dm11-foundation-v4>', 'exec'), {'__name__': '__main__'})
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/core/services/download_job_store.dart')
+          source = path.read_text()
+          if 'class InMemoryDownloadJobStoreBackend' not in source:
+              anchor = '''abstract interface class DownloadJobBackend {
+            Future<Map<String, dynamic>?> read(String taskId);
+            Future<List<Map<String, dynamic>>> readAll();
+            Future<void> write(String taskId, Map<String, Object?> value);
+            Future<void> delete(String taskId);
+          }
+          '''
+              implementation = r'''
+
+          /// Deterministic durable-backend double used by store transaction tests.
+          /// Reusing the same backend instance simulates an app relaunch while a
+          /// fresh [DownloadJobStore] reconstructs its in-memory serialization state.
+          class InMemoryDownloadJobStoreBackend implements DownloadJobBackend {
+            final Map<String, Map<String, Object?>> _rows =
+                <String, Map<String, Object?>>{};
+
+            @override
+            Future<Map<String, dynamic>?> read(String taskId) async {
+              final row = _rows[taskId];
+              return row == null ? null : Map<String, dynamic>.from(row);
+            }
+
+            @override
+            Future<List<Map<String, dynamic>>> readAll() async => _rows.values
+                .map((row) => Map<String, dynamic>.from(row))
+                .toList(growable: false);
+
+            @override
+            Future<void> write(String taskId, Map<String, Object?> value) async {
+              _rows[taskId] = Map<String, Object?>.from(value);
+            }
+
+            @override
+            Future<void> delete(String taskId) async {
+              _rows.remove(taskId);
+            }
+          }
+          '''
+              if anchor not in source:
+                  raise SystemExit('DM-11 in-memory backend anchor drift')
+              source = source.replace(anchor, anchor + implementation, 1)
+              path.write_text(source)
+          PY
+          dart format lib/core/services/download_job_store.dart
+          git diff --check
+      - name: Verify DM-11 foundation GREEN
+        run: |
+          flutter test test/core/services/download_replica_transaction_test.dart test/core/services/download_recovery_fault_injection_test.dart test/core/services/download_relaunch_chaos_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Commit and rebase verified foundation
+        run: |
+          if git diff --quiet -- lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart; then
+            echo 'DM-11 transaction foundation already verified; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
+          git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11 foundation)'
+          git pull --rebase origin plan/download-manager-reliability
+      - name: Re-verify rebased foundation
+        run: |
+          flutter test test/core/services/download_replica_transaction_test.dart test/core/services/download_recovery_fault_injection_test.dart test/core/services/download_relaunch_chaos_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Push verified foundation
+        run: git push origin HEAD:plan/download-manager-reliability

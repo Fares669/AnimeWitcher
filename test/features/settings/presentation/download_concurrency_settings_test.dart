@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive/hive.dart';
 
 import '../../../support/memory_storage_service.dart';
 import '../../../support/test_fonts.dart';
@@ -22,9 +23,24 @@ import '../../../support/debug_shots.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  late Directory hiveDirectory;
+
+  setUpAll(() async {
+    hiveDirectory = await Directory.systemTemp.createTemp(
+      'animewitcher-download-settings-',
+    );
+    Hive.init(hiveDirectory.path);
+  });
 
   tearDown(() {
     DownloadService.configureHoldingQueueForTesting = null;
+  });
+
+  tearDownAll(() async {
+    await Hive.close();
+    if (await hiveDirectory.exists()) {
+      await hiveDirectory.delete(recursive: true);
+    }
   });
 
   testWidgets('Settings downloads group uses sliders for episodes and connections', (

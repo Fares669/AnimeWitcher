@@ -8,6 +8,7 @@ import '../../../../core/services/download_service.dart';
 import '../../../../core/utils/download_time_remaining.dart';
 import '../../../../core/utils/file_size_formatter.dart';
 import '../../../library/presentation/widgets/segmented_download_progress.dart';
+
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
 class DownloadProgressDialog extends ConsumerStatefulWidget {
@@ -57,7 +58,15 @@ class _DownloadProgressDialogState
     final navigator = Navigator.of(context);
     final service = ref.read(downloadServiceProvider);
     try {
-      await service.cancelDownload(data.taskId, widget.trackingUrl);
+      final outcome = await service.cancelDownloadOutcome(
+        data.taskId,
+        widget.trackingUrl,
+      );
+      if (outcome != DownloadCommandOutcome.terminal &&
+          outcome != DownloadCommandOutcome.alreadyComplete) {
+        if (mounted) setState(() => _dismissRequested = false);
+        return;
+      }
       if (mounted && ModalRoute.of(context)?.isCurrent == true) {
         navigator.pop();
       }
@@ -246,9 +255,9 @@ class _DownloadProgressDialogState
                         onPressed: () async {
                           final service = ref.read(downloadServiceProvider);
                           if (data.status == TaskStatus.paused) {
-                            await service.resumeDownload(data.taskId);
+                            await service.resumeDownloadOutcome(data.taskId);
                           } else {
-                            await service.pauseDownload(data.taskId);
+                            await service.pauseDownloadOutcome(data.taskId);
                           }
                         },
                         child: Text(
@@ -303,9 +312,8 @@ class _DownloadProgressDialogState
         Text(
           value,
           textDirection: valueTextDirection ?? TextDirection.ltr,
-          style: Theme.of(
-            context,
-          ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+          style: Theme.of(context).textTheme.bodyLarge
+              ?.copyWith(fontWeight: FontWeight.w600),
         ),
       ],
     );
