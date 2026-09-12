@@ -32,6 +32,10 @@ jobs:
           cache: true
       - name: Install dependencies
         run: flutter pub get
+      - name: Generate sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
       - name: Apply DM-11 transaction foundation
         run: |
           test -f test/core/services/download_replica_transaction_test.dart
