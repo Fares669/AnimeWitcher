@@ -28,8 +28,6 @@ class PlayerController extends base.PlayerController {
   Anime4kEcoGovernor _anime4kEcoGovernor = Anime4kEcoGovernor();
   Anime4kMetalBridge? _anime4kEcoMetalBridge;
   int? _anime4kEcoHandle;
-  Anime4kProcessingDimensions? _anime4kEcoSource;
-  Anime4kProcessingDimensions? _anime4kEcoOutput;
   Anime4kQuality? _anime4kEcoEffectiveQuality;
   Anime4kPerformanceSnapshot? _anime4kPerformanceSnapshot;
   bool _anime4kEcoSampleInFlight = false;
@@ -168,10 +166,18 @@ class PlayerController extends base.PlayerController {
       final telemetry = metalBridge.telemetry(handle: handle);
       if (telemetry == null) return;
 
-      final dimensions = await _readAnime4kDimensions(platform);
-      if (dimensions == null) return;
-      _anime4kEcoSource = dimensions.source;
-      _anime4kEcoOutput = dimensions.output;
+      // The Apple render hook owns the authoritative processing surface. Use
+      // its live configuration rather than mpv dwidth/dheight estimates so Eco
+      // decisions and quality reconfiguration cannot resurrect oversized work
+      // after resize, rotation, or a media_kit surface change.
+      final source = Anime4kProcessingDimensions(
+        width: telemetry.inputWidth,
+        height: telemetry.inputHeight,
+      );
+      final output = Anime4kProcessingDimensions(
+        width: telemetry.processingWidth,
+        height: telemetry.processingHeight,
+      );
 
       double? fps;
       try {
@@ -188,8 +194,8 @@ class PlayerController extends base.PlayerController {
         requestedQuality: settings.anime4kQuality,
         telemetry: telemetry,
         frameBudgetMs: anime4kFrameBudgetMsFromFps(fps),
-        source: dimensions.source,
-        output: dimensions.output,
+        source: source,
+        output: output,
       );
       _anime4kPerformanceSnapshot = decision.snapshot;
 
@@ -200,8 +206,8 @@ class PlayerController extends base.PlayerController {
           platform: platform,
           metalBridge: metalBridge,
           handle: handle,
-          source: dimensions.source,
-          output: dimensions.output,
+          source: source,
+          output: output,
         );
         if (!configured) {
           _anime4kForceMpvFallback = true;
@@ -226,40 +232,6 @@ class PlayerController extends base.PlayerController {
     } finally {
       _anime4kEcoSampleInFlight = false;
     }
-  }
-
-  Future<({
-    Anime4kProcessingDimensions source,
-    Anime4kProcessingDimensions output,
-  })?> _readAnime4kDimensions(NativePlayer platform) async {
-    Future<int?> positive(String property) async {
-      try {
-        final raw = (await platform.getProperty(property)).trim();
-        final value = num.tryParse(raw)?.round();
-        return value != null && value > 0 ? value : null;
-      } catch (_) {
-        return null;
-      }
-    }
-
-    final sourceWidth = await positive('width');
-    final sourceHeight = await positive('height');
-    if (sourceWidth == null || sourceHeight == null) return null;
-    final drawableWidth = await positive('dwidth') ?? sourceWidth;
-    final drawableHeight = await positive('dheight') ?? sourceHeight;
-
-    final source = Anime4kProcessingDimensions(
-      width: sourceWidth,
-      height: sourceHeight,
-    );
-    final output = resolveAnime4kProcessingDimensions(
-      sourceWidth: sourceWidth,
-      sourceHeight: sourceHeight,
-      drawableWidth: drawableWidth,
-      drawableHeight: drawableHeight,
-      previous: _anime4kEcoOutput,
-    );
-    return (source: source, output: output);
   }
 
   Future<bool> _applyAnime4kEcoQuality({
@@ -350,8 +322,6 @@ class PlayerController extends base.PlayerController {
       metalBridge.disable(handle: handle);
     }
     _anime4kEcoHandle = null;
-    _anime4kEcoSource = null;
-    _anime4kEcoOutput = null;
     _anime4kEcoEffectiveQuality = null;
     _anime4kPerformanceSnapshot = null;
     _anime4kEcoSampleInFlight = false;
