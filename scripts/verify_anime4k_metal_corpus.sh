@@ -21,12 +21,15 @@ unzip -q "$ARCHIVE" -d "$EXTRACTED"
 # Treat the Dart production manifest as the single source of truth for which
 # shader bytes AnimeWitcher supports. Validate the official release against the
 # same byte sizes and Git blob ids that the runtime downloader enforces.
+#
+# Report every mismatch in one run. Besides being better diagnostics, this is
+# important because GitHub release assets are immutable download artifacts and
+# can legitimately differ byte-for-byte from the Git tree that shares a tag.
 python3 - \
   "$ROOT/lib/features/player/data/anime4k_download.dart" \
   "$EXTRACTED" \
   "$CORPUS" <<'PY'
 import hashlib
-import os
 import pathlib
 import re
 import shutil
@@ -56,21 +59,38 @@ for path in extracted.rglob("*"):
     if path.is_file() and path.suffix.lower() == ".glsl":
         by_basename.setdefault(path.name.lower(), []).append(path)
 
+errors = []
 for name, expected_size, expected_blob in entries:
     matches = by_basename.get(name.lower(), [])
     if len(matches) != 1:
-        raise SystemExit(f"{name}: expected one release file, found {len(matches)}")
+        errors.append(f"{name}: expected one release file, found {len(matches)}")
+        continue
+
     path = matches[0]
     data = path.read_bytes()
     actual_blob = hashlib.sha1(
         f"blob {len(data)}\0".encode("utf-8") + data
     ).hexdigest()
     if len(data) != expected_size or actual_blob != expected_blob:
-        raise SystemExit(
+        errors.append(
             f"{name}: pinned integrity mismatch "
-            f"size={len(data)}/{expected_size} blob={actual_blob}/{expected_blob}"
+            f"size={len(data)}/{expected_size} "
+            f"blob={actual_blob}/{expected_blob}\n"
+            f"  releaseAsset: Anime4kExpectedShader("
+            f"size: {len(data)}, gitBlobSha1: '{actual_blob}')"
         )
+        continue
+
     shutil.copy2(path, corpus / name)
+
+if errors:
+    print(
+        "Anime4K v4.0.1 release asset differs from the pinned manifest:",
+        file=sys.stderr,
+    )
+    for error in errors:
+        print(f"- {error}", file=sys.stderr)
+    raise SystemExit(1)
 
 print(f"Verified {len(entries)} pinned Anime4K v4.0.1 shader files")
 PY
