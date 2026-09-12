@@ -1,0 +1,248 @@
+name: DM-28 Android notification policy fix
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm28-android-notification-policy-fix.yml
+      - lib/core/services/download_transport.dart
+      - lib/core/services/download_service.dart
+      - test/core/services/download_transport_test.dart
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm28-android-notification-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Add DM-28 Android policy regression before production change
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('test/core/services/download_transport_test.dart')
+          source = path.read_text()
+          marker = "  test('anime transfers request user initiated and large file hints', () {\n"
+          if 'Android notification-off falls back without UIDT' in source:
+              print('DM-28 regression already present')
+              raise SystemExit(0)
+          if marker not in source:
+              raise SystemExit('download transport test anchor drift')
+          insert = r'''  test('Android notification-off falls back without UIDT', () {
+    final useUserInitiated = shouldUseUserInitiatedDownloadHint(
+      isAndroid: true,
+      notificationsConfigured: false,
+      notificationPermissionGranted: true,
+    );
+    final hints = animeDownloadTransferHints(
+      expectedBytes: 900 * 1024 * 1024,
+      useUserInitiated: useUserInitiated,
+    );
+
+    expect(useUserInitiated, isFalse);
+    expect(hints, isNot(contains(TransferHint.userInitiated)));
+    expect(hints, contains(TransferHint.largeFile));
+  });
+
+  test('Android denied notification permission falls back without UIDT', () {
+    final useUserInitiated = shouldUseUserInitiatedDownloadHint(
+      isAndroid: true,
+      notificationsConfigured: true,
+      notificationPermissionGranted: false,
+    );
+    final hints = animeDownloadTransferHints(
+      expectedBytes: 900 * 1024 * 1024,
+      useUserInitiated: useUserInitiated,
+    );
+
+    expect(useUserInitiated, isFalse);
+    expect(hints, isNot(contains(TransferHint.userInitiated)));
+    expect(hints, contains(TransferHint.largeFile));
+  });
+
+  test('Android notification-enabled keeps UIDT policy', () {
+    final useUserInitiated = shouldUseUserInitiatedDownloadHint(
+      isAndroid: true,
+      notificationsConfigured: true,
+      notificationPermissionGranted: true,
+    );
+    final hints = animeDownloadTransferHints(
+      expectedBytes: 900 * 1024 * 1024,
+      useUserInitiated: useUserInitiated,
+    );
+
+    expect(useUserInitiated, isTrue);
+    expect(hints, contains(TransferHint.userInitiated));
+    expect(hints, contains(TransferHint.largeFile));
+  });
+
+  test('non-Android keeps user-initiated priority without Android notification policy', () {
+    expect(
+      shouldUseUserInitiatedDownloadHint(
+        isAndroid: false,
+        notificationsConfigured: false,
+        notificationPermissionGranted: false,
+      ),
+      isTrue,
+    );
+  });
+
+'''
+          path.write_text(source.replace(marker, insert + marker, 1))
+          PY
+          dart format test/core/services/download_transport_test.dart
+
+      - name: Prove DM-28 Android RED when policy is absent
+        run: |
+          if grep -q 'bool shouldUseUserInitiatedDownloadHint' lib/core/services/download_transport.dart; then
+            echo 'DM-28 Android policy already implemented; skipping historical RED replay.'
+            exit 0
+          fi
+          set +e
+          flutter test test/core/services/download_transport_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key \
+            > /tmp/dm28-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/dm28-red.log
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected DM-28 Android regression to be RED before implementation.' >&2
+            exit 1
+          fi
+          if ! grep -q 'shouldUseUserInitiatedDownloadHint' /tmp/dm28-red.log; then
+            echo 'RED did not fail for the intended missing Android policy seam.' >&2
+            exit 1
+          fi
+          echo 'DM-28 Android RED reproduced at the policy seam.'
+
+      - name: Apply minimal DM-28 Android execution-policy fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          transport_path = Path('lib/core/services/download_transport.dart')
+          transport = transport_path.read_text()
+          old = r'''/// Anime episodes are explicit user downloads. User-initiated is always useful;
+/// largeFile is added when size is unknown or the episode is large enough to
+/// benefit from background_downloader's long-running transfer policy.
+Set<TransferHint> animeDownloadTransferHints({required int expectedBytes}) {
+  final hints = <TransferHint>{TransferHint.userInitiated};
+  if (expectedBytes <= 0 ||
+      expectedBytes >= kDownloadLargeFileHintThresholdBytes) {
+    hints.add(TransferHint.largeFile);
+  }
+  return hints;
+}
+'''
+          new = r'''/// Android 14+ UIDT requires a user-visible notification. When notifications
+/// are disabled in-app or permission is denied, fall back to the normal
+/// resumable WorkManager path instead of requesting userInitiated priority.
+bool shouldUseUserInitiatedDownloadHint({
+  required bool isAndroid,
+  required bool notificationsConfigured,
+  required bool notificationPermissionGranted,
+}) {
+  if (!isAndroid) return true;
+  return notificationsConfigured && notificationPermissionGranted;
+}
+
+/// Anime episodes remain pause/resume capable for long-running WorkManager
+/// fallback even when Android UIDT cannot be used.
+Set<TransferHint> animeDownloadTransferHints({
+  required int expectedBytes,
+  bool useUserInitiated = true,
+}) {
+  final hints = <TransferHint>{};
+  if (useUserInitiated) {
+    hints.add(TransferHint.userInitiated);
+  }
+  if (expectedBytes <= 0 ||
+      expectedBytes >= kDownloadLargeFileHintThresholdBytes) {
+    hints.add(TransferHint.largeFile);
+  }
+  return hints;
+}
+'''
+          if old in transport:
+              transport_path.write_text(transport.replace(old, new, 1))
+          elif 'bool shouldUseUserInitiatedDownloadHint' not in transport:
+              raise SystemExit('download_transport DM-28 anchor drift')
+
+          service_path = Path('lib/core/services/download_service.dart')
+          service = service_path.read_text()
+          old_call = '        transferHints: animeDownloadTransferHints(expectedBytes: totalBytes),\n'
+          new_call = r'''        transferHints: animeDownloadTransferHints(
+          expectedBytes: totalBytes,
+          useUserInitiated: shouldUseUserInitiatedDownloadHint(
+            isAndroid: Platform.isAndroid,
+            notificationsConfigured: !shouldClearDownloadNotificationConfigs(
+              _ref
+                  .read(storageServiceProvider)
+                  .getDownloadNotificationPrefs(),
+            ),
+            notificationPermissionGranted:
+                !Platform.isAndroid ||
+                await FileDownloader().permissions.status(
+                      PermissionType.notifications,
+                    ) ==
+                    PermissionStatus.granted,
+          ),
+        ),
+'''
+          if old_call in service:
+              service_path.write_text(service.replace(old_call, new_call, 1))
+          elif 'useUserInitiated: shouldUseUserInitiatedDownloadHint(' not in service:
+              raise SystemExit('download_service transfer hint anchor drift')
+          PY
+          dart format \
+            lib/core/services/download_transport.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_transport_test.dart
+
+      - name: Verify DM-28 Android policy GREEN
+        run: |
+          flutter test test/core/services/download_transport_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Commit verified DM-28 Android slice
+        run: |
+          if git diff --quiet -- \
+            lib/core/services/download_transport.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_transport_test.dart; then
+            echo 'DM-28 Android source already verified; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            lib/core/services/download_transport.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_transport_test.dart
+          git commit -m 'fix(downloads): align Android execution hints with notifications (DM-28)'
+          git pull --rebase origin plan/download-manager-reliability
+          git push origin HEAD:plan/download-manager-reliability
