@@ -213,13 +213,187 @@ Anime4kQuality _oneTierLower(Anime4kQuality quality) {
   return Anime4kQuality.values[index - 1];
 }
 
-/// Produces the work ceiling for Anime4K without mutating the viewer's saved
-/// mode or quality.
+Anime4kQuality _oneTierHigher(Anime4kQuality quality) {
+  final index = Anime4kQuality.values.indexOf(quality);
+  if (index < 0 || index >= Anime4kQuality.values.length - 1) {
+    return Anime4kQuality.ul;
+  }
+  return Anime4kQuality.values[index + 1];
+}
+
+/// Stateful Apple Eco/Auto governor.
+///
+/// Manual mode bypasses this state entirely. Eco requires sustained pressure
+/// before lowering quality, then enforces a cooldown so one bad burst cannot
+/// cascade through several tiers. Recovery is intentionally slower and moves
+/// one tier at a time, never above the viewer's requested quality ceiling.
+class Anime4kAdaptivePolicy {
+  Anime4kAdaptivePolicy({
+    this.downgradeSamples = 3,
+    this.recoverySamples = 8,
+    this.cooldownSamples = 4,
+  }) {
+    if (downgradeSamples <= 0 || recoverySamples <= 0 || cooldownSamples < 0) {
+      throw ArgumentError('Anime4K adaptive sample windows must be positive');
+    }
+  }
+
+  final int downgradeSamples;
+  final int recoverySamples;
+  final int cooldownSamples;
+
+  Anime4kQuality _effectiveQuality = Anime4kQuality.s;
+  bool _initialized = false;
+  bool _bypass = false;
+  int _unhealthyStreak = 0;
+  int _healthyStreak = 0;
+  int _cooldownRemaining = 0;
+
+  Anime4kQuality get effectiveQuality => _effectiveQuality;
+  bool get bypass => _bypass;
+
+  Anime4kEffectivePlan update({
+    required bool ecoEnabled,
+    required Anime4kMode mode,
+    required Anime4kQuality requestedQuality,
+    required Anime4kThermalLevel thermalLevel,
+    required bool lowPowerMode,
+    required double rollingFrameTimeMs,
+    required double frameBudgetMs,
+    required int lateOrDroppedFrames,
+  }) {
+    if (!_initialized) {
+      _effectiveQuality = requestedQuality;
+      _initialized = true;
+    }
+
+    // A viewer lowering the manual ceiling takes effect immediately. Raising
+    // it while Eco is active still recovers gradually through the normal path.
+    if (Anime4kQuality.values.indexOf(_effectiveQuality) >
+        Anime4kQuality.values.indexOf(requestedQuality)) {
+      _effectiveQuality = requestedQuality;
+    }
+
+    if (!ecoEnabled) {
+      _effectiveQuality = requestedQuality;
+      _bypass = false;
+      _unhealthyStreak = 0;
+      _healthyStreak = 0;
+      _cooldownRemaining = 0;
+      return Anime4kEffectivePlan(
+        mode: mode,
+        effectiveQuality: requestedQuality,
+        bypass: false,
+        reduceLateStages: false,
+      );
+    }
+
+    if (thermalLevel == Anime4kThermalLevel.critical) {
+      _effectiveQuality = Anime4kQuality.s;
+      _bypass = true;
+      _unhealthyStreak = 0;
+      _healthyStreak = 0;
+      _cooldownRemaining = 0;
+      return Anime4kEffectivePlan(
+        mode: mode,
+        effectiveQuality: _effectiveQuality,
+        bypass: true,
+        reduceLateStages: true,
+      );
+    }
+
+    final forcedLowWork =
+        lowPowerMode || thermalLevel == Anime4kThermalLevel.serious;
+    if (forcedLowWork) {
+      _effectiveQuality = Anime4kQuality.s;
+      _unhealthyStreak = 0;
+      _healthyStreak = 0;
+      _cooldownRemaining = 0;
+      return Anime4kEffectivePlan(
+        mode: mode,
+        effectiveQuality: _effectiveQuality,
+        // If critical thermal already forced a bypass, serious/low-power is
+        // not yet healthy enough to declare recovery. Fresh serious/LP entry
+        // runs S rather than bypassing.
+        bypass: _bypass,
+        reduceLateStages: true,
+      );
+    }
+
+    final framePressure =
+        frameBudgetMs > 0 && rollingFrameTimeMs >= frameBudgetMs * 0.8;
+    final underPressure =
+        thermalLevel == Anime4kThermalLevel.fair ||
+        framePressure ||
+        lateOrDroppedFrames > 0;
+
+    if (_bypass) {
+      if (underPressure) {
+        _healthyStreak = 0;
+      } else {
+        _healthyStreak += 1;
+        if (_healthyStreak >= recoverySamples) {
+          _bypass = false;
+          _healthyStreak = 0;
+          _cooldownRemaining = 0;
+        }
+      }
+      return Anime4kEffectivePlan(
+        mode: mode,
+        effectiveQuality: _effectiveQuality,
+        bypass: _bypass,
+        reduceLateStages: true,
+      );
+    }
+
+    if (_cooldownRemaining > 0) {
+      _cooldownRemaining -= 1;
+      _unhealthyStreak = 0;
+      _healthyStreak = 0;
+    } else if (underPressure) {
+      _healthyStreak = 0;
+      _unhealthyStreak += 1;
+      if (_unhealthyStreak >= downgradeSamples) {
+        _effectiveQuality = _oneTierLower(_effectiveQuality);
+        _unhealthyStreak = 0;
+        _cooldownRemaining = cooldownSamples;
+      }
+    } else {
+      _unhealthyStreak = 0;
+      if (_effectiveQuality != requestedQuality) {
+        _healthyStreak += 1;
+        if (_healthyStreak >= recoverySamples) {
+          final recovered = _oneTierHigher(_effectiveQuality);
+          final recoveredIndex = Anime4kQuality.values.indexOf(recovered);
+          final requestedIndex = Anime4kQuality.values.indexOf(requestedQuality);
+          _effectiveQuality = recoveredIndex > requestedIndex
+              ? requestedQuality
+              : recovered;
+          _healthyStreak = 0;
+          _cooldownRemaining = cooldownSamples;
+        }
+      } else {
+        _healthyStreak = 0;
+      }
+    }
+
+    final reduceLateStages =
+        _effectiveQuality == Anime4kQuality.s && underPressure;
+    return Anime4kEffectivePlan(
+      mode: mode,
+      effectiveQuality: _effectiveQuality,
+      bypass: false,
+      reduceLateStages: reduceLateStages,
+    );
+  }
+}
+
+/// Produces the immediate work ceiling for Anime4K without mutating the
+/// viewer's saved mode or quality.
 ///
 /// Manual mode is deliberately boring: it returns exactly what the viewer
-/// selected even under thermal pressure. Adaptive behavior exists only behind
-/// Apple Eco/Auto. The caller supplies already-smoothed frame timing; later
-/// runtime work will own hysteresis/cooldown and feed the stable value here.
+/// selected even under thermal pressure. [Anime4kAdaptivePolicy] owns the
+/// stateful hysteresis/cooldown used by Apple Eco/Auto across samples.
 Anime4kEffectivePlan planAnime4kPerformance({
   required bool ecoEnabled,
   required Anime4kMode mode,
