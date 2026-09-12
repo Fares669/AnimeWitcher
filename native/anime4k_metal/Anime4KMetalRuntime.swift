@@ -23,6 +23,7 @@ struct Anime4KMetalRuntimeConfiguration: Equatable {
     let sourceHeight: Int
     let outputWidth: Int
     let outputHeight: Int
+    let precision: Anime4KMetalPrecisionPolicy = .fp32
 }
 
 enum Anime4KMetalRuntimeStatus: Equatable {
@@ -285,7 +286,10 @@ final class Anime4KMetalRuntime {
                 for shader in shaders {
                     let library: MTLLibrary
                     do {
-                        library = try device.makeLibrary(source: shader.metalSource, options: nil)
+                        library = try device.makeLibrary(
+                            source: shader.metalSource(precision: configuration.precision),
+                            options: nil
+                        )
                     } catch {
                         throw Anime4KMetalRuntimeError.shaderCompile(
                             "\(url.lastPathComponent)/\(shader.name): \(error)"
