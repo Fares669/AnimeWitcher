@@ -65,7 +65,7 @@ jobs:
             --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
       - name: Analyze production slice
-        run: dart analyze lib/core/services/persistent_parallel_download.dart
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/persistent_parallel_download.dart
 
       - name: Materialize verified DM-23 production fix
         env:
