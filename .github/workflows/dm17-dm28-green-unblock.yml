@@ -38,25 +38,27 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import textwrap
 
           def python_blocks(path: str):
               lines = Path(path).read_text().splitlines()
               blocks = []
               collecting = False
               current = []
+              base_indent = 0
               for line in lines:
                   if not collecting and line.strip() == "python3 - <<'PY'":
                       collecting = True
                       current = []
+                      base_indent = len(line) - len(line.lstrip())
                       continue
                   if collecting and line.strip() == 'PY':
-                      blocks.append(textwrap.dedent('\n'.join(current)))
+                      blocks.append('\n'.join(current))
                       collecting = False
                       current = []
                       continue
                   if collecting:
-                      current.append(line)
+                      prefix = ' ' * base_indent
+                      current.append(line[len(prefix):] if line.startswith(prefix) else line)
               return blocks
 
           selections = [
