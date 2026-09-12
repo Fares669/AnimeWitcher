@@ -4,6 +4,7 @@ import Foundation
 struct Anime4KMetalShaderTests {
     static func main() throws {
         try testSyntheticFixture()
+        try testCRLFLineEndings()
         try emitCorpusMetalSourcesIfRequested()
         print("Anime4KMetalShaderTests: PASS")
     }
@@ -48,6 +49,31 @@ struct Anime4KMetalShaderTests {
             // Expected: the translator must fail closed instead of silently
             // producing a no-op Metal pipeline.
         }
+    }
+
+    /// GitHub's v4.0.1 release ZIP stores AutoDownscalePre with CRLF line
+    /// endings, while the Git tree uses LF. Swift treats CRLF as a single
+    /// grapheme cluster, so splitting the source on the `\n` Character alone
+    /// can leave the entire shader as one line and hide every `//!DESC`.
+    private static func testCRLFLineEndings() throws {
+        let lf = """
+        // release-style header
+        //!DESC Anime4K-CRLF-Pass
+        //!HOOK MAIN
+        //!BIND HOOKED
+        //!BIND NATIVE
+        //!WIDTH OUTPUT.w
+        //!HEIGHT OUTPUT.h
+        vec4 hook() {
+            return HOOKED_tex(HOOKED_pos);
+        }
+        """
+        let crlf = lf.replacingOccurrences(of: "\n", with: "\r\n")
+        let passes = try Anime4KMetalShader.parse(crlf)
+        precondition(
+            passes.count == 1 && passes[0].name == "Anime4K-CRLF-Pass",
+            "CRLF Anime4K shaders must parse exactly like LF shaders"
+        )
     }
 
     /// When called with `OUTPUT_DIR shader1.glsl ...`, translate every pass in
