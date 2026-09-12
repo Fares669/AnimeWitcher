@@ -1,0 +1,82 @@
+name: Verify DM-11 fresh-start journal wiring
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - lib/core/services/download_job_store.dart
+      - lib/core/services/download_service.dart
+      - test/core/services/download_replica_start_journal_guard_test.dart
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm11-start-journal-wiring-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: Generate sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Apply DM-11 fresh-start journal wiring
+        run: |
+          python3 .github/scripts/dm11_start_journal_patch.py
+          dart format lib/core/services/download_service.dart test/core/services/download_replica_start_journal_guard_test.dart
+          git diff --check
+      - name: Verify fresh-start journal behavior
+        run: |
+          flutter test \
+            test/core/services/download_replica_transaction_test.dart \
+            test/core/services/download_replica_start_journal_guard_test.dart \
+            test/core/services/download_start_outcome_guard_test.dart \
+            test/core/services/download_refresh_descriptor_ownership_guard_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          git diff --check
+      - name: Verify analyzer
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Commit verified service wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- lib/core/services/download_service.dart; then
+            echo 'DM-11 fresh-start service wiring already present.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_service.dart
+          git commit -m 'fix(downloads): journal fresh-start replica intent (DM-11)'
+          git stash push --include-untracked -m 'dm11-start-generated-before-rebase' || true
+          git pull --rebase origin plan/download-manager-reliability
+      - name: Reverify and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          flutter test \
+            test/core/services/download_replica_transaction_test.dart \
+            test/core/services/download_replica_start_journal_guard_test.dart \
+            test/core/services/download_start_outcome_guard_test.dart \
+            test/core/services/download_refresh_descriptor_ownership_guard_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+          git push origin HEAD:plan/download-manager-reliability
