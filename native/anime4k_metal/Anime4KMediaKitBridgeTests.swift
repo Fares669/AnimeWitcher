@@ -6,6 +6,7 @@ import Metal
 struct Anime4KMediaKitBridgeTests {
     static func main() throws {
         testPublicationLedgerBoundsEndToEndOwnershipPerPlayer()
+        testFrameGenerationDeduplicatesPerPlayer()
         try testActualPixelBufferRetargetsProcessingDimensions()
         print("Anime4KMediaKitBridgeTests: PASS")
     }
@@ -43,6 +44,29 @@ struct Anime4KMediaKitBridgeTests {
 
         ledger.release(for: secondPlayer)
         precondition(ledger.inflightCount(for: secondPlayer) == 0)
+    }
+
+    private static func testFrameGenerationDeduplicatesPerPlayer() {
+        var ledger = Anime4KFrameGenerationLedger()
+        let firstPlayer: UInt = 101
+        let secondPlayer: UInt = 202
+
+        precondition(ledger.claim(frameGeneration: 1, for: firstPlayer))
+        precondition(
+            !ledger.claim(frameGeneration: 1, for: firstPlayer),
+            "the same produced frame must not run Anime4K twice"
+        )
+        precondition(ledger.claim(frameGeneration: 2, for: firstPlayer))
+
+        // Frame generations are local to a media_kit texture/player.
+        precondition(ledger.claim(frameGeneration: 1, for: secondPlayer))
+        precondition(!ledger.claim(frameGeneration: 1, for: secondPlayer))
+
+        ledger.reset(for: firstPlayer)
+        precondition(
+            ledger.claim(frameGeneration: 1, for: firstPlayer),
+            "disable/reconfigure must reset stale generation state"
+        )
     }
 
     private static func testActualPixelBufferRetargetsProcessingDimensions() throws {
