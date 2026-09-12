@@ -110,6 +110,17 @@ struct Anime4KMetalShader {
 
         """
 
+        if precision == .mixedFP16 {
+            // Preserve explicitly-FP32 scalar math while allowing FP16 texture
+            // samples to participate without ambiguous Metal overloads.
+            header += """
+            inline float min(float lhs, half rhs) {
+                return metal::min(lhs, float(rhs));
+            }
+
+            """
+        }
+
         for bind in binds {
             header += """
             #define \(bind)_pos mtlPos
