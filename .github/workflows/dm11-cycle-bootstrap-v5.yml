@@ -8,6 +8,7 @@ on:
       - .github/workflows/dm11-cycle-bootstrap-v5.yml
       - .github/scripts/dm11_foundation_patch.py
       - .github/scripts/dm11_verifier_patch.py
+      - lib/core/services/download_job_store.dart
       - lib/core/services/download_url_refresh.dart
       - lib/core/services/download_service.dart
       - test/core/services/download_url_refresh_generation_test.dart
