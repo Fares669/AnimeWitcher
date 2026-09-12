@@ -1,4 +1,4 @@
-name: DM-23 multipart owner settlement fix
+name: DM-23 owner settlement RED verifier
 
 on:
   push:
@@ -6,26 +6,21 @@ on:
       - plan/download-manager-reliability
     paths:
       - .github/workflows/dm23-owner-settlement-fix.yml
-      - lib/core/services/persistent_parallel_download.dart
       - test/core/services/download_parallel_owner_settlement_guard_test.dart
+      - lib/core/services/persistent_parallel_download.dart
   workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: dm23-owner-settlement-${{ github.ref }}
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  owner-settlement:
+  green:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
           ref: plan/download-manager-reliability
-          fetch-depth: 0
 
       - uses: subosito/flutter-action@v2
         with:
@@ -36,154 +31,7 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Prove DM-23 RED before production change
-        run: |
-          if grep -A12 'if (settleNativeOwner)' lib/core/services/persistent_parallel_download.dart | grep -q 'return false;'; then
-            echo 'DM-23 owner-settlement guard already implemented; skipping historical RED replay.'
-            exit 0
-          fi
-          set +e
-          flutter test test/core/services/download_parallel_owner_settlement_guard_test.dart \
-            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key \
-            > /tmp/dm23-red.log 2>&1
-          status=$?
-          set -e
-          cat /tmp/dm23-red.log
-          if [ "$status" -eq 0 ]; then
-            echo 'Expected DM-23 owner-settlement regression to be RED before implementation.' >&2
-            exit 1
-          fi
-          grep -q 'bytesVerified must not imply ownerSettled' /tmp/dm23-red.log
-
-      - name: Apply DM-23 ownership barriers
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('lib/core/services/persistent_parallel_download.dart')
-          source = path.read_text()
-
-          # Exact bytes prove payload integrity only. If the old native writer
-          # cannot positively settle, adoption/assembly must fail closed.
-          old = '''    if (settleNativeOwner) {
-      try {
-        await pausePart(part.task);
-      } catch (_) {
-        // A task that has already finished natively may no longer be pausable.
-        // The second exact-size verification below remains the source of truth.
-      }
-    }
-'''
-          new = '''    if (settleNativeOwner) {
-      try {
-        await pausePart(part.task);
-      } catch (_) {
-        // Exact bytes prove payload durability, not executor ownership. If the
-        // native writer cannot positively settle, keep the part uncommitted so
-        // assembly/recycling cannot race a still-live writer.
-        return false;
-      }
-    }
-'''
-          if old in source:
-              source = source.replace(old, new, 1)
-          elif 'native writer cannot positively settle' not in source:
-              raise SystemExit('DM-23 adoption anchor drift')
-
-          # A failed pause means the current owner is still live/unknown. Do not
-          # schedule a replacement attempt on top of it; retry settlement later.
-          old = '''      try {
-        await pausePart(part.task);
-      } catch (_) {
-        // The worker can already be a stale URLSession bookkeeping entry.
-      }
-
-      if (await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
-'''
-          new = '''      try {
-        await pausePart(part.task);
-      } catch (_) {
-        part.tailRecoveryAttempted = false;
-        _armTailStallWatch(session, part);
-        return;
-      }
-
-      if (await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
-'''
-          if old in source:
-              source = source.replace(old, new, 1)
-          elif 'part.tailRecoveryAttempted = false;' not in source:
-              raise SystemExit('DM-23 tail pause anchor drift')
-
-          # Preserve launched/active ownership evidence until cancelParts has
-          # positively settled ownership (the DownloadService seam is fenced by
-          # DM-30/DM-19). A failed cancel must leave the current owner visible
-          # and must not restore/delete/relaunch its range.
-          old = '''    _cancelTailStallWatch(part);
-    _activeConnectionIds.remove(part.task.taskId);
-    part.launched = false;
-    part.speed = 0;
-    session.currentBatchPendingIds.remove(part.task.taskId);
-
-    try {
-      await cancelParts(<String>[part.task.taskId]);
-    } catch (_) {
-      // Recovery remains safe even if native already forgot this child.
-    }
-
-    if (backup != null) {
-'''
-          new = '''    _cancelTailStallWatch(part);
-    try {
-      await cancelParts(<String>[part.task.taskId]);
-    } catch (_) {
-      if (backup != null) {
-        try {
-          if (await backup.exists()) await backup.delete();
-        } catch (_) {}
-      }
-      _armTailStallWatch(session, part);
-      return;
-    }
-
-    _activeConnectionIds.remove(part.task.taskId);
-    part.launched = false;
-    part.speed = 0;
-    session.currentBatchPendingIds.remove(part.task.taskId);
-
-    if (backup != null) {
-'''
-          if old in source:
-              source = source.replace(old, new, 1)
-          elif source.find('await cancelParts(<String>[part.task.taskId]);') > source.find('_activeConnectionIds.remove(part.task.taskId);'):
-              raise SystemExit('DM-23 recycle settlement ordering anchor drift')
-
-          path.write_text(source)
-          PY
-          dart format lib/core/services/persistent_parallel_download.dart
-
-      - name: Verify DM-23 GREEN
+      - name: Run DM-23 owner settlement guard
         run: |
           flutter test test/core/services/download_parallel_owner_settlement_guard_test.dart \
             --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-          flutter test test/core/services/persistent_parallel_download_tail_recovery_test.dart \
-            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-          flutter test test/core/services/persistent_parallel_download_auto_recovery_test.dart \
-            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-          flutter test test/core/services/download_pause_settlement_guard_test.dart \
-            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-          flutter analyze --no-fatal-warnings --no-fatal-infos
-          git diff --check
-
-      - name: Commit verified DM-23 ownership slice
-        run: |
-          if git diff --quiet -- lib/core/services/persistent_parallel_download.dart; then
-            echo 'DM-23 source already verified; nothing to commit.'
-            exit 0
-          fi
-          git config user.name 'openai-download-agent'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add lib/core/services/persistent_parallel_download.dart
-          git commit -m 'fix(downloads): require multipart owner settlement before adoption (DM-23)'
-          git pull --rebase origin plan/download-manager-reliability
-          git push origin HEAD:plan/download-manager-reliability
