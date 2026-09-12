@@ -55,13 +55,16 @@ jobs:
           fi
           grep -q 'bytesVerified must not imply ownerSettled' /tmp/dm23-red.log
 
-      - name: Apply minimal DM-23 ownership barrier
+      - name: Apply DM-23 ownership barriers
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           path = Path('lib/core/services/persistent_parallel_download.dart')
           source = path.read_text()
+
+          # Exact bytes prove payload integrity only. If the old native writer
+          # cannot positively settle, adoption/assembly must fail closed.
           old = '''    if (settleNativeOwner) {
       try {
         await pausePart(part.task);
@@ -83,9 +86,79 @@ jobs:
     }
 '''
           if old in source:
-              path.write_text(source.replace(old, new, 1))
+              source = source.replace(old, new, 1)
           elif 'native writer cannot positively settle' not in source:
               raise SystemExit('DM-23 adoption anchor drift')
+
+          # A failed pause means the current owner is still live/unknown. Do not
+          # schedule a replacement attempt on top of it; retry settlement later.
+          old = '''      try {
+        await pausePart(part.task);
+      } catch (_) {
+        // The worker can already be a stale URLSession bookkeeping entry.
+      }
+
+      if (await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
+'''
+          new = '''      try {
+        await pausePart(part.task);
+      } catch (_) {
+        part.tailRecoveryAttempted = false;
+        _armTailStallWatch(session, part);
+        return;
+      }
+
+      if (await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
+'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif 'part.tailRecoveryAttempted = false;' not in source:
+              raise SystemExit('DM-23 tail pause anchor drift')
+
+          # Preserve launched/active ownership evidence until cancelParts has
+          # positively settled ownership (the DownloadService seam is fenced by
+          # DM-30/DM-19). A failed cancel must leave the current owner visible
+          # and must not restore/delete/relaunch its range.
+          old = '''    _cancelTailStallWatch(part);
+    _activeConnectionIds.remove(part.task.taskId);
+    part.launched = false;
+    part.speed = 0;
+    session.currentBatchPendingIds.remove(part.task.taskId);
+
+    try {
+      await cancelParts(<String>[part.task.taskId]);
+    } catch (_) {
+      // Recovery remains safe even if native already forgot this child.
+    }
+
+    if (backup != null) {
+'''
+          new = '''    _cancelTailStallWatch(part);
+    try {
+      await cancelParts(<String>[part.task.taskId]);
+    } catch (_) {
+      if (backup != null) {
+        try {
+          if (await backup.exists()) await backup.delete();
+        } catch (_) {}
+      }
+      _armTailStallWatch(session, part);
+      return;
+    }
+
+    _activeConnectionIds.remove(part.task.taskId);
+    part.launched = false;
+    part.speed = 0;
+    session.currentBatchPendingIds.remove(part.task.taskId);
+
+    if (backup != null) {
+'''
+          if old in source:
+              source = source.replace(old, new, 1)
+          elif source.find('await cancelParts(<String>[part.task.taskId]);') > source.find('_activeConnectionIds.remove(part.task.taskId);'):
+              raise SystemExit('DM-23 recycle settlement ordering anchor drift')
+
+          path.write_text(source)
           PY
           dart format lib/core/services/persistent_parallel_download.dart
 
