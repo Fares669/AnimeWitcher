@@ -19,11 +19,12 @@ def flutter_root
     matches = line.match(/FLUTTER_ROOT\=(.*)/)
     return matches[1].strip if matches
   end
-  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Flutter-Generated.xcconfig, then run \"flutter pub get\""
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run \"flutter pub get\""
 end
 
 require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
 require_relative '../scripts/anime4k_media_kit_patch'
+require_relative '../scripts/anime4k_mpv_pacing_patch'
 require_relative '../scripts/anime4k_metal_capi_install'
 
 flutter_macos_podfile_setup
@@ -46,6 +47,10 @@ pre_install do |_installer|
   patch_anime4k_media_kit_video(
     plugin_root: anime4k_plugin_root,
     native_dir: anime4k_native_dir,
+    platform: :macos
+  )
+  patch_anime4k_mpv_render_pacing(
+    plugin_root: anime4k_plugin_root,
     platform: :macos
   )
   install_anime4k_metal_capi(
