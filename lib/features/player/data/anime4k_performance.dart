@@ -3,6 +3,57 @@ import 'anime4k.dart';
 /// Renderer/backend currently responsible for Anime4K processing.
 enum Anime4kBackend { mpvGlsl, metal, metalEco }
 
+/// Native Apple Metal availability/result used to decide whether mpv must own
+/// the Anime4K pipeline instead. HDR is kept explicit so AKP-15 can fail closed
+/// without ever allowing both backends to process the same frame.
+enum Anime4kNativeMetalState { unavailable, ready, failed, unsupportedHdr }
+
+class Anime4kBackendRoute {
+  const Anime4kBackendRoute({
+    required this.backend,
+    required this.enableMetal,
+    required this.enableMpvShaders,
+  });
+
+  final Anime4kBackend backend;
+  final bool enableMetal;
+  final bool enableMpvShaders;
+}
+
+/// Selects exactly one Anime4K backend for a resolved pipeline.
+///
+/// Apple may use native Metal only while that backend is explicitly ready.
+/// Any unavailable/failed/unsupported-HDR state falls back to the already
+/// resolved mpv GLSL pipeline. Other platforms retain the existing mpv path.
+Anime4kBackendRoute resolveAnime4kBackendRoute({
+  required bool isApplePlatform,
+  required bool anime4kEnabled,
+  required bool hasResolvedPipeline,
+  required Anime4kNativeMetalState metalState,
+}) {
+  if (!anime4kEnabled || !hasResolvedPipeline) {
+    return const Anime4kBackendRoute(
+      backend: Anime4kBackend.mpvGlsl,
+      enableMetal: false,
+      enableMpvShaders: false,
+    );
+  }
+
+  if (isApplePlatform && metalState == Anime4kNativeMetalState.ready) {
+    return const Anime4kBackendRoute(
+      backend: Anime4kBackend.metal,
+      enableMetal: true,
+      enableMpvShaders: false,
+    );
+  }
+
+  return const Anime4kBackendRoute(
+    backend: Anime4kBackend.mpvGlsl,
+    enableMetal: false,
+    enableMpvShaders: true,
+  );
+}
+
 /// Platform-neutral thermal pressure used by the adaptive Apple policy.
 ///
 /// The native Apple layer will map ProcessInfo.ThermalState into this enum;
