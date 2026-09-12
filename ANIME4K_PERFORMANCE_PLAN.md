@@ -167,7 +167,7 @@
   - Android/Windows/Linux behavior remains unchanged.
   - Verification: exact-HEAD Flutter Checks `34695838534` passed routing/wiring regressions in the full suite, and platform run `34695837180` passed Android/macOS/iOS builds plus native Metal/C API contracts on commit `2e511e93`.
 
-- [ ] **AKP-13 — Apple Eco/Auto user setting and adaptive policy**
+- [x] **AKP-13 — Apple Eco/Auto user setting and adaptive policy**
   - Files:
     - Modify `player_settings_provider.dart`
     - Modify Anime4K dialog/settings UI
@@ -179,6 +179,7 @@
   - Add hysteresis/cooldown so effective quality does not flap.
   - Critical thermal temporarily bypasses Anime4K; recovery restores progressively.
   - UI shows requested quality and effective quality/backend in diagnostics without misleading the user.
+  - Verification: exact-HEAD Flutter Checks run `34699427393` passed Analyze, native logger typecheck, and 1191 tests (1 skipped); platform run `34699424965` passed Android, macOS release, iOS unsigned release, and all Anime4K native/C API/corpus/render-patch contracts on commit `bd252c80`.
 
 - [ ] **AKP-14 — Frame deduplication**
   - Files:
