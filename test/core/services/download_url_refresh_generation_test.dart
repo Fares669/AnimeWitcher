@@ -2,6 +2,9 @@ import 'package:animewitcher/core/services/download_url_refresh.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _MemoryBackend implements DownloadUrlRefreshBackend {
+  _MemoryBackend({this.throwOnWrite = false});
+
+  final bool throwOnWrite;
   final Map<String, Map<String, Object?>> rows = {};
 
   @override
@@ -12,6 +15,9 @@ class _MemoryBackend implements DownloadUrlRefreshBackend {
 
   @override
   Future<void> write(String key, Map<String, Object?> value) async {
+    if (throwOnWrite) {
+      throw StateError('injected descriptor-store write failure');
+    }
     rows[key] = Map<String, Object?>.from(value);
   }
 
@@ -114,5 +120,16 @@ void main() {
     expect(legacyRestored!.generation, 0);
     expect(legacyRestored.ownerTaskId, isNull);
     expect(legacyRestored.logicalId, isNull);
+  });
+
+  test('descriptor-store write failure is surfaced to the start owner', () async {
+    final backend = _MemoryBackend(throwOnWrite: true);
+    final store = DownloadUrlRefreshStore(backend);
+
+    await expectLater(
+      store.claimOwnership(descriptor(0)),
+      throwsA(isA<StateError>()),
+    );
+    expect(await store.get('episode-1'), isNull);
   });
 }
