@@ -38,9 +38,9 @@ end
 
 pre_install do |_installer|
   patch_anime4k_media_kit_video(
-    plugin_dir: File.expand_path(
-      '.symlinks/plugins/media_kit_video/macos/media_kit_video/Sources/media_kit_video/plugin',
-      __dir__
+    plugin_root: anime4k_flutter_plugin_root(
+      project_dir: __dir__,
+      platform: :macos
     ),
     native_dir: File.expand_path('../native/anime4k_metal', __dir__),
     platform: :macos
