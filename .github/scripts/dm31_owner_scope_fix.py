@@ -3,56 +3,45 @@ from pathlib import Path
 path = Path('lib/core/services/download_service.dart')
 source = path.read_text()
 
-outer_old = '''      int? refreshDescriptorGeneration;
-
-      if (kDebugMode) debugPrint('[DownloadService] Enqueuing task...');
-'''
-outer_new = '''      int? refreshDescriptorGeneration;
-      String? refreshDescriptorOwnerTaskId;
-
-      if (kDebugMode) debugPrint('[DownloadService] Enqueuing task...');
-'''
+# Keep the owner identity alive across the whole start transaction so the
+# rollback catch never reaches back into the transferTask local scope.
 if 'String? refreshDescriptorOwnerTaskId;' not in source:
-    if outer_old not in source:
+    declaration_anchor = '      int? refreshDescriptorGeneration;\n'
+    if source.count(declaration_anchor) != 1:
         raise SystemExit('DM-31 owner rollback scope anchor drift')
-    source = source.replace(outer_old, outer_new, 1)
+    source = source.replace(
+        declaration_anchor,
+        declaration_anchor + '      String? refreshDescriptorOwnerTaskId;\n',
+        1,
+    )
 
-transfer_anchor = '''        final transferTask = await _adaptiveTaskForFreshStart(
+if 'refreshDescriptorOwnerTaskId = transferTask.taskId;' not in source:
+    transfer_anchor = '''        final transferTask = await _adaptiveTaskForFreshStart(
           task,
           knownTotalBytes: expectedBytes,
         );
 '''
-transfer_new = transfer_anchor + '''        refreshDescriptorOwnerTaskId = transferTask.taskId;
-'''
-if 'refreshDescriptorOwnerTaskId = transferTask.taskId;' not in source:
     if transfer_anchor not in source:
         raise SystemExit('DM-31 transfer owner anchor drift')
-    source = source.replace(transfer_anchor, transfer_new, 1)
+    source = source.replace(
+        transfer_anchor,
+        transfer_anchor + '        refreshDescriptorOwnerTaskId = transferTask.taskId;\n',
+        1,
+    )
 
-rollback_old = '''        if (refreshDescriptorGeneration != null) {
-          await _ref
-              .read(downloadUrlRefreshStoreProvider)
-              .removeForOwnerGeneration(
-                trackingUrl ?? url,
-                transferTask.taskId,
+# dm31_patch_v2 already converts rollback to removeForOwnerGeneration. Only the
+# owner argument needs widening out of transferTask's local scope. Matching the
+# argument pair is intentionally narrower and less formatting-sensitive than
+# replacing the whole rollback block.
+rollback_argument = '''                transferTask.taskId,
                 refreshDescriptorGeneration,
-              );
-        }
 '''
-rollback_new = '''        if (refreshDescriptorGeneration != null &&
-            refreshDescriptorOwnerTaskId != null) {
-          await _ref
-              .read(downloadUrlRefreshStoreProvider)
-              .removeForOwnerGeneration(
-                trackingUrl ?? url,
-                refreshDescriptorOwnerTaskId,
+rollback_owner_argument = '''                refreshDescriptorOwnerTaskId,
                 refreshDescriptorGeneration,
-              );
-        }
 '''
-if rollback_old in source:
-    source = source.replace(rollback_old, rollback_new, 1)
-elif 'refreshDescriptorOwnerTaskId,' not in source:
-    raise SystemExit('DM-31 owner rollback block drift')
+if rollback_argument in source:
+    source = source.replace(rollback_argument, rollback_owner_argument, 1)
+elif rollback_owner_argument not in source:
+    raise SystemExit('DM-31 owner rollback argument drift')
 
 path.write_text(source)
