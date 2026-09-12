@@ -125,6 +125,54 @@ jobs:
           script = script.replace(store_marker, store_replacement, 1)
           exec(compile(script, '<dm11-foundation-v4>', 'exec'), {'__name__': '__main__'})
           PY
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/core/services/download_job_store.dart')
+          source = path.read_text()
+          if 'class InMemoryDownloadJobStoreBackend' not in source:
+              anchor = '''abstract interface class DownloadJobBackend {
+            Future<Map<String, dynamic>?> read(String taskId);
+            Future<List<Map<String, dynamic>>> readAll();
+            Future<void> write(String taskId, Map<String, Object?> value);
+            Future<void> delete(String taskId);
+          }
+          '''
+              implementation = r'''
+
+          /// Deterministic durable-backend double used by store transaction tests.
+          /// Reusing the same backend instance simulates an app relaunch while a
+          /// fresh [DownloadJobStore] reconstructs its in-memory serialization state.
+          class InMemoryDownloadJobStoreBackend implements DownloadJobBackend {
+            final Map<String, Map<String, Object?>> _rows =
+                <String, Map<String, Object?>>{};
+
+            @override
+            Future<Map<String, dynamic>?> read(String taskId) async {
+              final row = _rows[taskId];
+              return row == null ? null : Map<String, dynamic>.from(row);
+            }
+
+            @override
+            Future<List<Map<String, dynamic>>> readAll() async => _rows.values
+                .map((row) => Map<String, dynamic>.from(row))
+                .toList(growable: false);
+
+            @override
+            Future<void> write(String taskId, Map<String, Object?> value) async {
+              _rows[taskId] = Map<String, Object?>.from(value);
+            }
+
+            @override
+            Future<void> delete(String taskId) async {
+              _rows.remove(taskId);
+            }
+          }
+          '''
+              if anchor not in source:
+                  raise SystemExit('DM-11 in-memory backend anchor drift')
+              source = source.replace(anchor, anchor + implementation, 1)
+              path.write_text(source)
+          PY
           dart format lib/core/services/download_job_store.dart
           git diff --check
       - name: Verify DM-11 foundation GREEN
