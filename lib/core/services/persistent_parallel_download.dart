@@ -25,6 +25,22 @@ const Duration kParallelProgressCoalesceDelay = Duration(seconds: 1);
 /// parent progress stream.
 const Duration kParallelProgressPersistInterval = Duration(seconds: 1);
 
+/// Keep a small reserve beyond the remaining staging allocation so assembly
+/// does not consume the filesystem down to its last metadata blocks.
+const int kParallelAssemblyStorageReserveBytes = 8 * 1024 * 1024;
+
+enum ParallelAssemblyFailureReason { insufficientStorage }
+
+class ParallelAssemblyFailure {
+  const ParallelAssemblyFailure({
+    required this.parentTaskId,
+    required this.reason,
+  });
+
+  final String parentTaskId;
+  final ParallelAssemblyFailureReason reason;
+}
+
 /// Durable multipart manifest schema. Version 1 was the legacy payload that
 /// contained only `parts`. Version 2 added logical generation/expected byte
 /// identity. Version 3 also pins the first strong ETag (or Last-Modified)
@@ -375,6 +391,9 @@ class PersistentParallelDownload {
     this.maxActiveConnections = kDownloadGlobalConnectionBudget,
     this.onHostPressure,
     this.onHostSample,
+    this.availableStorageBytes,
+    this.onAssemblyFailure,
+    this.assemblyStorageReserveBytes = kParallelAssemblyStorageReserveBytes,
   });
 
   final DownloadDiagnosticLog? diagnosticLog;
@@ -412,6 +431,12 @@ class PersistentParallelDownload {
   final void Function(String url, int fallbackCeiling)? onHostPressure;
   final void Function(String url, int activeConnections, double bytesPerSecond)?
   onHostSample;
+
+  /// Returns free bytes on the volume containing [path]. Null means the host
+  /// could not answer, in which case allocation errors remain the safety net.
+  final Future<int?> Function(String path)? availableStorageBytes;
+  final void Function(ParallelAssemblyFailure failure)? onAssemblyFailure;
+  final int assemblyStorageReserveBytes;
 
   final Map<String, _ParallelSession> _sessions = {};
   final Map<String, _ParallelSession> _children = {};
@@ -2443,7 +2468,18 @@ class PersistentParallelDownload {
               TaskRecord(part.task, TaskStatus.complete, 1, part.size),
             );
             onPartProgress(session.task.taskId, part.task.taskId, 1);
-            await _persist(session);
+            try {
+              await _persist(session);
+            } on FileSystemException catch (error) {
+              if (!_isInsufficientStorageError(error)) rethrow;
+              final target = File(await session.task.filePath());
+              await _handleAssemblyStorageFailure(
+                session,
+                File('${target.path}.assembling'),
+                error: error,
+              );
+              return;
+            }
             _notifyPausedDrainSettled(session);
             if (session.active &&
                 session.parts.every((child) => child.complete)) {
@@ -3122,6 +3158,84 @@ class PersistentParallelDownload {
     _schedulePumpAll();
   }
 
+  bool _isInsufficientStorageError(FileSystemException error) {
+    final code = error.osError?.errorCode;
+    if (code == 28 || code == 69 || code == 112 || code == 122) return true;
+    final message = '${error.message} ${error.osError?.message ?? ''}'
+        .toLowerCase();
+    return message.contains('no space left') ||
+        message.contains('disk full') ||
+        message.contains('not enough space') ||
+        message.contains('quota exceeded');
+  }
+
+  Future<bool> _hasAssemblyHeadroom(
+    _ParallelSession session,
+    File target, {
+    required int remainingBytes,
+  }) async {
+    final probe = availableStorageBytes;
+    if (probe == null) return true;
+    try {
+      final free = await probe(target.parent.path);
+      if (free == null || free < 0) return true;
+      final reserve = assemblyStorageReserveBytes < 0
+          ? 0
+          : assemblyStorageReserveBytes;
+      return free >= remainingBytes + reserve;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<void> _parkForStorageFailure(_ParallelSession session) async {
+    session.active = false;
+    session.generation++;
+    session.pauseRequested = false;
+    _speedTelemetry.resetSpeed(session.task.taskId);
+    session.cancelAggregateProgress();
+    session.cancelProgressPersist();
+    session.cancelDiskProgressPoll();
+    session.cancelCoordinatorRecovery();
+    session.resetRamp();
+    for (final part in session.parts) {
+      _cancelPendingStartLease(part);
+      _cancelTailStallWatch(part);
+      part.recoveryTimer?.cancel();
+      part.recoveryTimer = null;
+      part.launched = false;
+      part.speed = 0;
+      _activeConnectionIds.remove(part.task.taskId);
+    }
+    try {
+      await _status(session, TaskStatus.paused);
+    } catch (_) {}
+    _schedulePumpAll();
+  }
+
+  Future<void> _handleAssemblyStorageFailure(
+    _ParallelSession session,
+    File staging, {
+    FileSystemException? error,
+  }) async {
+    diagnosticLog?.record('assembly.insufficientStorage', {
+      'taskId': session.task.taskId,
+      'total': session.size,
+      if (error?.osError?.errorCode != null)
+        'osError': error!.osError!.errorCode,
+    });
+    try {
+      if (await staging.exists()) await staging.delete();
+    } catch (_) {}
+    onAssemblyFailure?.call(
+      ParallelAssemblyFailure(
+        parentTaskId: session.task.taskId,
+        reason: ParallelAssemblyFailureReason.insufficientStorage,
+      ),
+    );
+    await _parkForStorageFailure(session);
+  }
+
   Future<void> _assemble(_ParallelSession session) async {
     diagnosticLog?.record('assembly.begin', {
       'taskId': session.task.taskId,
@@ -3134,18 +3248,23 @@ class PersistentParallelDownload {
         await _finishCompleteSession(session);
         return;
       }
-      // Never overwrite an unexpected user-visible file during automatic
-      // recovery. The user can remove/rename it explicitly and resume later.
       await _pause(session);
       return;
     }
 
     final staging = File('${target.path}.assembling');
-    final output = await staging.open(mode: FileMode.write);
+    if (!await _hasAssemblyHeadroom(
+      session,
+      target,
+      remainingBytes: session.size,
+    )) {
+      await _handleAssemblyStorageFailure(session, staging);
+      return;
+    }
+
+    RandomAccessFile? output;
     try {
-      // Establish the final logical length up front. Besides reducing repeated
-      // growth metadata work, this surfaces many disk-full failures before all
-      // parts are copied into a staging file.
+      output = await staging.open(mode: FileMode.write);
       await output.truncate(session.size);
       await output.setPosition(0);
       var assembledBytes = 0;
@@ -3155,13 +3274,19 @@ class PersistentParallelDownload {
           await _pause(session);
           return;
         }
+        if (!await _hasAssemblyHeadroom(session, target, remainingBytes: 0)) {
+          await output!.close();
+          output = null;
+          await _handleAssemblyStorageFailure(session, staging);
+          return;
+        }
         await for (final bytes in file.openRead()) {
           if (session.deleted) return;
           if (assembledBytes + bytes.length > session.size) {
             await _pause(session);
             return;
           }
-          await output.writeFrom(bytes);
+          await output!.writeFrom(bytes);
           assembledBytes += bytes.length;
         }
       }
@@ -3169,18 +3294,32 @@ class PersistentParallelDownload {
         await _pause(session);
         return;
       }
-      await output.flush();
+      await output!.flush();
+    } on FileSystemException catch (error) {
+      if (!_isInsufficientStorageError(error)) rethrow;
+      try {
+        await output?.close();
+      } catch (_) {}
+      output = null;
+      await _handleAssemblyStorageFailure(session, staging, error: error);
+      return;
     } finally {
-      await output.close();
+      try {
+        await output?.close();
+      } catch (_) {}
     }
     if (session.deleted) return;
     if (!await staging.exists() || await staging.length() != session.size) {
       await _pause(session);
       return;
     }
-    // The target was proven absent above. Rename staging atomically so a crash
-    // leaves either the recoverable .assembling file or the full final file.
-    await staging.rename(target.path);
+    try {
+      await staging.rename(target.path);
+    } on FileSystemException catch (error) {
+      if (!_isInsufficientStorageError(error)) rethrow;
+      await _handleAssemblyStorageFailure(session, staging, error: error);
+      return;
+    }
     await _finishCompleteSession(session);
   }
 }

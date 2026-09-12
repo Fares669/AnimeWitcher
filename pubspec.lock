@@ -361,6 +361,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.1"
+  disk_usage:
+    dependency: "direct main"
+    description:
+      name: disk_usage
+      sha256: "438401304354b7d25a8784ae435f4d730ae99c68d3bbeb02369db5c8af891ea6"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.0"
   dpad:
     dependency: "direct main"
     description:

@@ -403,7 +403,7 @@
 
 ## Phase 4 — Filesystem, background-native integration, platform behavior, and lifetime hardening
 
-- [ ] **DM-27 — Add storage-headroom policy for multipart download and assembly**
+- [x] **DM-27 — Add storage-headroom policy for multipart download and assembly**
   - **Problem:** all parts can download successfully but `.assembling` may require another near-full-file allocation and fail at the final stage.
   - **Root cause:** range-size validation is not paired with destination free-space/headroom planning for crash-safe staging.
   - **Severity / priority:** **P1 / High for large files/low-storage devices.**
@@ -411,6 +411,8 @@
   - **Proposed fix:** preflight and re-evaluate conservative headroom. Preserve crash-safe staging unless a lower-amplification algorithm is proven safe. Surface `insufficientStorage` and retain proven parts.
   - **Verification/testing:** enough for parts but not staging; disk fills mid-transfer/mid-assembly; cleanup frees space; resume after space available; no proven parts discarded solely because staging is short on space.
   - **Dependencies:** DM-03, DM-06.
+  - **Implementation notes (2026-09-12):** Multipart assembly preflights destination-volume capacity for the full staging allocation, re-evaluates the reserved safety margin while writing, and safely handles ENOSPC/EDQUOT races. Storage exhaustion emits typed `ParallelAssemblyFailureReason.insufficientStorage`, removes only incomplete staging, pauses the logical parent, and retains every verified Range for zero-redownload assembly retry. DownloadService exposes the typed failure stream for UI projection.
+  - **Verification passed:** Bounded-filesystem behavior was confirmed RED before the fix, then GREEN with verified parts preserved, typed `insufficientStorage`, no premature completion, and successful assembly after space is freed without another Range. Focused multipart regressions and analyzer also passed.
 
 - [ ] **DM-14 — Inventory/recover/clean orphan artifacts with canonical path safety**
   - **Problem:** `.parts`, `.assembling`, temp/final files can outlive logical records; current path checks use textual containment/suffix logic and recursive series cleanup can remove unknown non-video content.

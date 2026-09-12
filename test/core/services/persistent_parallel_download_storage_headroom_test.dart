@@ -20,6 +20,7 @@ void main() {
       final records = <String, TaskRecord>{};
       final starts = <DownloadTask>[];
       final statuses = <TaskStatus>[];
+      final assemblyFailures = <ParallelAssemblyFailure>[];
       const totalBytes = 8192;
       final parent = ParallelDownloadTask(
         taskId: 'dm27-parent',
@@ -48,6 +49,15 @@ void main() {
         },
         onPartProgress: (_, _, _) {},
         livePartIds: () async => <String>{},
+        availableStorageBytes: (path) async {
+          final result = await Process.run('df', <String>['-Pk', path]);
+          if (result.exitCode != 0) return null;
+          final lines = (result.stdout as String).trim().split('\n');
+          final columns = lines.last.trim().split(RegExp(r'\s+'));
+          return int.parse(columns[3]) * 1024;
+        },
+        assemblyStorageReserveBytes: 4 * 1024,
+        onAssemblyFailure: assemblyFailures.add,
         recoveryDelay: const Duration(milliseconds: 25),
         diskProgressPollInterval: const Duration(seconds: 30),
       );
@@ -57,10 +67,7 @@ void main() {
         if (await directory.exists()) await directory.delete(recursive: true);
       });
 
-      Future<void> waitUntil(
-        String stage,
-        bool Function() predicate,
-      ) async {
+      Future<void> waitUntil(String stage, bool Function() predicate) async {
         for (var i = 0; i < 400; i++) {
           if (predicate()) return;
           await Future<void>.delayed(const Duration(milliseconds: 5));
@@ -189,9 +196,7 @@ void main() {
         reason: 'assembly must not happen before the final completion signal',
       );
 
-      coordinator.handleUpdate(
-        TaskStatusUpdate(lastTask, TaskStatus.complete),
-      );
+      coordinator.handleUpdate(TaskStatusUpdate(lastTask, TaskStatus.complete));
       await Future<void>.delayed(const Duration(milliseconds: 150));
 
       expect(
@@ -207,6 +212,16 @@ void main() {
         );
       }
       expect(statuses, isNot(contains(TaskStatus.complete)));
+      await waitUntil(
+        'typed storage failure projection',
+        () => assemblyFailures.isNotEmpty || target.existsSync(),
+      );
+      expect(await target.exists(), isFalse);
+      expect(assemblyFailures, hasLength(1));
+      expect(
+        assemblyFailures.single.reason,
+        ParallelAssemblyFailureReason.insufficientStorage,
+      );
 
       await filler.delete();
 

@@ -13,6 +13,7 @@ import 'package:collection/collection.dart';
 import 'package:permission_handler/permission_handler.dart'
     hide PermissionStatus;
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:disk_usage/disk_usage.dart';
 
 import '../domain/entity/multimedia_item.dart';
 import '../router/app_router.dart';
@@ -368,6 +369,11 @@ class DownloadService {
   final Set<String> _dequeuingPausedIds = {};
   late final DownloadContinuedProcessingService _continuedProcessing;
   final _updatesController = StreamController<TaskUpdate>.broadcast();
+  final _parallelFailures =
+      StreamController<ParallelAssemblyFailure>.broadcast();
+
+  Stream<ParallelAssemblyFailure> get parallelFailures =>
+      _parallelFailures.stream;
   StreamSubscription<TaskUpdate>? _updatesSubscription;
   final Connectivity _connectivity = Connectivity();
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
@@ -457,6 +463,14 @@ class DownloadService {
       },
       onUpdate: (update) {
         if (!_disposed) _sharedEvents.add(update);
+      },
+      availableStorageBytes: (path) => DiskUsage.freeSpace(path),
+      onAssemblyFailure: (failure) {
+        diagnosticLog.record('parallel.failure', {
+          'taskId': failure.parentTaskId,
+          'reason': failure.reason.name,
+        });
+        if (!_disposed) _parallelFailures.add(failure);
       },
       onPartProgress: (parent, child, progress) {
         if (!_disposed) {
@@ -698,6 +712,7 @@ class DownloadService {
 
   void dispose() {
     _disposed = true;
+    unawaited(_parallelFailures.close());
     unawaited(_parallel.dispose());
     _rangeTransfers.dispose();
     _telemetry.clear();
