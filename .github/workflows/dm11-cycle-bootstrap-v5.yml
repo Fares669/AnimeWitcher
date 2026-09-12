@@ -7,6 +7,9 @@ on:
     paths:
       - .github/workflows/dm11-cycle-bootstrap-v5.yml
       - .github/scripts/dm11_foundation_patch.py
+      - .github/scripts/dm11_verifier_patch.py
+      - lib/core/services/download_url_refresh.dart
+      - lib/core/services/download_service.dart
       - test/core/services/download_replica_transaction_test.dart
 
 permissions:
@@ -39,53 +42,7 @@ jobs:
       - name: Apply DM-11 transaction foundation
         run: |
           test -f test/core/services/download_replica_transaction_test.dart
-          python3 .github/scripts/dm11_foundation_patch.py
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('lib/core/services/download_job_store.dart')
-          source = path.read_text()
-          if 'class InMemoryDownloadJobStoreBackend' not in source:
-              anchor = '''abstract interface class DownloadJobBackend {
-            Future<Map<String, dynamic>?> read(String taskId);
-            Future<List<Map<String, dynamic>>> readAll();
-            Future<void> write(String taskId, Map<String, Object?> value);
-            Future<void> delete(String taskId);
-          }
-          '''
-              implementation = r'''
-
-          /// Deterministic durable-backend double used by transaction tests.
-          /// Reusing one backend simulates relaunch with a new store instance.
-          class InMemoryDownloadJobStoreBackend implements DownloadJobBackend {
-            final Map<String, Map<String, Object?>> _rows =
-                <String, Map<String, Object?>>{};
-
-            @override
-            Future<Map<String, dynamic>?> read(String taskId) async {
-              final row = _rows[taskId];
-              return row == null ? null : Map<String, dynamic>.from(row);
-            }
-
-            @override
-            Future<List<Map<String, dynamic>>> readAll() async => _rows.values
-                .map((row) => Map<String, dynamic>.from(row))
-                .toList(growable: false);
-
-            @override
-            Future<void> write(String taskId, Map<String, Object?> value) async {
-              _rows[taskId] = Map<String, Object?>.from(value);
-            }
-
-            @override
-            Future<void> delete(String taskId) async {
-              _rows.remove(taskId);
-            }
-          }
-          '''
-              if anchor not in source:
-                  raise SystemExit('DM-11 in-memory backend anchor drift')
-              path.write_text(source.replace(anchor, anchor + implementation, 1))
-          PY
+          python3 .github/scripts/dm11_verifier_patch.py
           dart format lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
           git diff --check
       - name: Verify DM-11 focused behavior
