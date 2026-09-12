@@ -8,6 +8,9 @@ on:
       - .github/workflows/dm31-generation-owned-refresh.yml
       - .github/scripts/dm31_patch.py
       - .github/scripts/dm31_patch_v2.py
+      - test/core/services/download_refresh_descriptor_ownership_guard_test.dart
+      - test/core/services/download_url_refresh_generation_test.dart
+      - test/core/services/download_url_refresh_test.dart
 
 permissions:
   contents: write
