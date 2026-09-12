@@ -10,6 +10,90 @@ enum Anime4kBackend { mpvGlsl, metal, metalEco }
 /// CI platform.
 enum Anime4kThermalLevel { nominal, fair, serious, critical }
 
+/// Pixel dimensions used by the Anime4K processing graph.
+class Anime4kProcessingDimensions {
+  const Anime4kProcessingDimensions({
+    required this.width,
+    required this.height,
+  });
+
+  final int width;
+  final int height;
+
+  double get aspectRatio => width / height;
+}
+
+/// Resolves the smallest stable Anime4K target that covers the visible video.
+///
+/// The target aspect ratio always follows the source rather than the widget,
+/// because letterboxing/pillarboxing must not stretch Anime4K's intermediate
+/// textures. Dimensions are rounded down to even pixels so common video/GPU
+/// surfaces remain friendly to subsequent encoders and texture copies.
+///
+/// A small drawable-size wobble is treated as layout jitter: when the newly
+/// resolved target is within 2% of the previous target and both represent the
+/// same source aspect, the previous allocation is reused. Material changes
+/// (for example fullscreen 4K -> a 720p window) rebuild immediately. A
+/// transient zero-size layout similarly preserves the previous target instead
+/// of tearing down/rebuilding the Metal working set.
+Anime4kProcessingDimensions resolveAnime4kProcessingDimensions({
+  required int sourceWidth,
+  required int sourceHeight,
+  required int drawableWidth,
+  required int drawableHeight,
+  Anime4kProcessingDimensions? previous,
+}) {
+  if (sourceWidth <= 0 || sourceHeight <= 0) {
+    throw ArgumentError('Anime4K source dimensions must be positive');
+  }
+
+  if (drawableWidth <= 0 || drawableHeight <= 0) {
+    return previous ??
+        Anime4kProcessingDimensions(
+          width: _floorEven(sourceWidth),
+          height: _floorEven(sourceHeight),
+        );
+  }
+
+  final sourceAspect = sourceWidth / sourceHeight;
+  final drawableAspect = drawableWidth / drawableHeight;
+  final maxWidth = _floorEven(drawableWidth);
+  final maxHeight = _floorEven(drawableHeight);
+
+  final Anime4kProcessingDimensions candidate;
+  if (sourceAspect >= drawableAspect) {
+    final width = maxWidth;
+    final height = _floorEven((width / sourceAspect).floor());
+    candidate = Anime4kProcessingDimensions(width: width, height: height);
+  } else {
+    final height = maxHeight;
+    final width = _floorEven((height * sourceAspect).floor());
+    candidate = Anime4kProcessingDimensions(width: width, height: height);
+  }
+
+  if (previous != null &&
+      _sameSourceAspect(previous.aspectRatio, sourceAspect) &&
+      _withinLayoutJitter(previous.width, candidate.width) &&
+      _withinLayoutJitter(previous.height, candidate.height)) {
+    return previous;
+  }
+
+  return candidate;
+}
+
+int _floorEven(int value) {
+  final positive = value < 2 ? 2 : value;
+  return positive.isEven ? positive : positive - 1;
+}
+
+bool _sameSourceAspect(double previous, double source) {
+  return (previous - source).abs() / source <= 0.01;
+}
+
+bool _withinLayoutJitter(int previous, int candidate) {
+  return (previous - candidate).abs() / previous <= 0.02;
+}
+
 /// The effective work Anime4K should perform for the current conditions.
 class Anime4kEffectivePlan {
   const Anime4kEffectivePlan({
