@@ -50,5 +50,17 @@ void main() {
         ),
       );
     });
+
+    test('adapter is shipped by CocoaPods patch and native CI contracts', () {
+      final patch = File(
+        'scripts/anime4k_media_kit_patch.rb',
+      ).readAsStringSync();
+      final workflow = File(
+        '.github/workflows/anime4k-platform-build.yml',
+      ).readAsStringSync();
+
+      expect(patch, contains('Anime4KMetalFXScaler.swift'));
+      expect(workflow, contains('native/anime4k_metal/Anime4KMetalFXScaler.swift'));
+    });
   });
 }
