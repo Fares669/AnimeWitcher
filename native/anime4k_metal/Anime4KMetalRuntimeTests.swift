@@ -121,6 +121,10 @@ struct Anime4KMetalRuntimeTests {
             device: device,
             root: root
         )
+        try testRapidReconfigurationAndPoolReuse(
+            device: device,
+            shaderPath: shaderURL.path
+        )
         try testRuntimeLifetimeUntilGPUCompletion(
             device: device,
             shaderPath: shaderURL.path
@@ -224,6 +228,57 @@ struct Anime4KMetalRuntimeTests {
             maxDelta <= 2,
             "mixed FP16 drift exceeded the 2/255 BGRA acceptance bound: \(maxDelta)"
         )
+    }
+
+    private static func testRapidReconfigurationAndPoolReuse(
+        device: MTLDevice,
+        shaderPath: String
+    ) throws {
+        let runtime = try Anime4KMetalRuntime(device: device, maxInflightFrames: 2)
+        let dimensions = [
+            (8, 8),
+            (16, 12),
+            (32, 18),
+            (24, 24),
+            (12, 20),
+            (8, 8),
+        ]
+        var expectedGeneration = 0
+
+        for cycle in 0..<18 {
+            let dimension = dimensions[cycle % dimensions.count]
+            let width = dimension.0
+            let height = dimension.1
+            let configuration = Anime4KMetalRuntimeConfiguration(
+                shaderPaths: [shaderPath],
+                pipelineHash: "stress-\(cycle)",
+                sourceWidth: width,
+                sourceHeight: height,
+                outputWidth: width,
+                outputHeight: height
+            )
+
+            try runtime.configure(configuration)
+            expectedGeneration += 1
+            precondition(
+                runtime.compileGeneration == expectedGeneration,
+                "rapid resize must install exactly one new configuration generation"
+            )
+
+            // Reapplying the exact same configuration must reuse the compiled
+            // pipeline/output pool instead of rebuilding it again.
+            try runtime.configure(configuration)
+            precondition(
+                runtime.compileGeneration == expectedGeneration,
+                "identical resize/configuration must reuse compiled resources"
+            )
+
+            let input = try makePixelBuffer(width: width, height: height)
+            let output = try processAndWait(runtime: runtime, input: input)
+            precondition(CVPixelBufferGetWidth(output) == width)
+            precondition(CVPixelBufferGetHeight(output) == height)
+            precondition(runtime.status == .ready)
+        }
     }
 
     private static func testRuntimeLifetimeUntilGPUCompletion(
