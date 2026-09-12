@@ -2612,9 +2612,10 @@ class PlayerController extends Notifier<PlayerState> {
   /// mpv's `glsl-shaders` are mutually exclusive: a ready Metal runtime clears
   /// the mpv property, while any unavailable/failed Metal setup falls back to
   /// the exact same resolved GLSL pipeline. Non-Apple behavior is unchanged.
-  Future<Anime4kProcessingDimensions?> _resolveAnime4kMetalDimensions(
-    NativePlayer platform,
-  ) async {
+  Future<({
+    Anime4kProcessingDimensions source,
+    Anime4kProcessingDimensions output,
+  })?> _resolveAnime4kMetalDimensions(NativePlayer platform) async {
     Future<int?> positiveProperty(String name) async {
       try {
         final value = num.tryParse((await platform.getProperty(name)).trim());
@@ -2643,6 +2644,10 @@ class PlayerController extends Notifier<PlayerState> {
     }
     if (sourceWidth == null || sourceHeight == null) return null;
 
+    final sourceDimensions = Anime4kProcessingDimensions(
+      width: sourceWidth,
+      height: sourceHeight,
+    );
     final resolved = resolveAnime4kProcessingDimensions(
       sourceWidth: sourceWidth,
       sourceHeight: sourceHeight,
@@ -2651,7 +2656,7 @@ class PlayerController extends Notifier<PlayerState> {
       previous: _anime4kProcessingDimensions,
     );
     _anime4kProcessingDimensions = resolved;
-    return resolved;
+    return (source: sourceDimensions, output: resolved);
   }
 
   Anime4kMetalBridge? _appleAnime4kMetalBridge() {
@@ -2720,11 +2725,8 @@ class PlayerController extends Notifier<PlayerState> {
               handle: metalHandle,
               shaderPaths: shaderPaths,
               pipelineHash: pipeline.pipelineHash,
-              source: Anime4kProcessingDimensions(
-                width: dimensions.width,
-                height: dimensions.height,
-              ),
-              output: dimensions,
+              source: dimensions.source,
+              output: dimensions.output,
             );
           }
         }
@@ -2753,14 +2755,21 @@ class PlayerController extends Notifier<PlayerState> {
       }
 
       // Metal is optional. A failed/unavailable setup must relinquish the
-      // player before the exact same resolved pipeline is handed to mpv.
-      if (metalBridge != null && metalHandle != null) {
+      // player before the exact same resolved pipeline is handed to mpv. This
+      // also disables a runtime that was already active when the user turns
+      // Anime4K off; simply forgetting its Dart handle would leave native work
+      // running for every frame.
+      final previouslyActiveMetalHandle = _anime4kMetalHandle;
+      if (previouslyActiveMetalHandle != null) {
+        _disableAnime4kMetal();
+      }
+      if (metalBridge != null &&
+          metalHandle != null &&
+          metalHandle != previouslyActiveMetalHandle) {
         metalBridge.disable(handle: metalHandle);
       }
       _anime4kMetalHandle = null;
-      if (!anime4kEnabled || pipeline.isEmpty) {
-        _anime4kProcessingDimensions = null;
-      }
+      _anime4kProcessingDimensions = null;
 
       String currentVo = '';
       if (route.enableMpvShaders && !pipeline.isEmpty) {
