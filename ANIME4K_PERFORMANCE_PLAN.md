@@ -25,7 +25,7 @@
   - Identified missing official `Anime4K_AutoDownscalePre_x2.glsl` / `Anime4K_AutoDownscalePre_x4.glsl` stages, need for stage-aware CNN sizing, render-path Metal integration, asynchronous GPU buffering, FP16, color/HDR validation, frame deduplication, preview optimization, manifest integrity, and CI cleanup.
   - Design committed at `docs/superpowers/specs/2026-09-12-anime4k-ios-performance-design.md`.
 
-- [ ] **AKP-01 — Performance policy and telemetry contract**
+- [x] **AKP-01 — Performance policy and telemetry contract**
   - Files:
     - Create `lib/features/player/data/anime4k_performance.dart`
     - Create `test/features/player/anime4k_performance_test.dart`
@@ -39,6 +39,7 @@
   - Eco policy uses hysteresis-friendly inputs and never raises above requested quality.
   - RED: tests fail before the new policy exists.
   - GREEN: focused performance-policy tests pass.
+  - Verification: Flutter Checks run `34678445629` passed Analyze, full Test, and native logger typecheck on commit `2337a6a`.
 
 - [ ] **AKP-02 — Official AutoDownscale stages in the resolver**
   - Files:
