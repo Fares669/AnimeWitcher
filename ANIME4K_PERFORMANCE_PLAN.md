@@ -112,7 +112,7 @@
   - Preserve shader-file boundaries so each mpv shader file feeds its final output as `MAIN` to the next file rather than flattening A+A/B+B semantics.
   - Verification: native runtime contract step passed on platform run `34682216965` after the 265-pass corpus gate.
 
-- [ ] **AKP-08 — media_kit Apple render-path integration**
+- [x] **AKP-08 — media_kit Apple render-path integration**
   - Files:
     - Create marker-checked CocoaPods patch integration for iOS/macOS
     - Modify `ios/Podfile`
@@ -121,8 +121,9 @@
   - Keep upstream three-buffer ownership semantics.
   - Patch is idempotent and version/marker checked; source drift fails CocoaPods setup loudly.
   - Android build must remain isolated from Apple patch sources.
+  - Verification: exact-HEAD platform run `34691927403` passed Android, macOS release, iOS unsigned release, and `media_kit Anime4K render patch contract`.
 
-- [ ] **AKP-09 — GL ES/OpenGL ↔ Metal synchronization and buffer lifetime**
+- [x] **AKP-09 — GL ES/OpenGL ↔ Metal synchronization and buffer lifetime**
   - Files:
     - Modify `Anime4KMetalRuntime.swift`
     - Modify Apple integration patch
@@ -132,8 +133,9 @@
   - Do not add unconditional per-frame `glFinish()`.
   - When all output slots are busy, use an explicit non-blocking fallback policy instead of stalling indefinitely.
   - Native stress tests exercise rapid resize/configuration changes and pool reuse.
+  - Verification: exact-HEAD platform run `34691927403` passed the native runtime contract and media_kit bridge backpressure contract.
 
-- [ ] **AKP-10 — Mixed FP16 Metal path**
+- [x] **AKP-10 — Mixed FP16 Metal path**
   - Files:
     - Modify `native/anime4k_metal/Anime4KMetalShader.swift`
     - Extend Swift tests
@@ -141,6 +143,7 @@
   - Keep a debug FP32 reference path.
   - Compare FP16 output against FP32 with defined numerical tolerance before enabling FP16 by default.
   - Compile both policies across the actual supported shader corpus.
+  - Verification: exact-HEAD platform run `34691927403` passed the full shader corpus/precision gate for both precision policies.
 
 - [ ] **AKP-11 — Resolution-aware processing and texture reuse**
   - Files:
