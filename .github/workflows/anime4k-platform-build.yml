@@ -6,6 +6,10 @@ on:
       - feat/anime4k-mobile-gpu
       - feat/anime4k-ios-performance
 
+concurrency:
+  group: anime4k-platform-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   android:
     name: Android compile
