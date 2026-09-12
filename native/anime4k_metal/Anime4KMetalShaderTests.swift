@@ -78,7 +78,16 @@ struct Anime4KMetalShaderTests {
             guard let source = String(data: data, encoding: .utf8) else {
                 throw CorpusVerificationError.notUTF8(path)
             }
-            let passes = try Anime4KMetalShader.parse(source)
+
+            let passes: [Anime4KMetalShader]
+            do {
+                passes = try Anime4KMetalShader.parse(source)
+            } catch {
+                throw CorpusVerificationError.parseFailure(
+                    path,
+                    String(describing: error)
+                )
+            }
             guard !passes.isEmpty else {
                 throw CorpusVerificationError.noPasses(path)
             }
@@ -119,6 +128,7 @@ struct Anime4KMetalShaderTests {
 enum CorpusVerificationError: Error, LocalizedError {
     case usage
     case notUTF8(String)
+    case parseFailure(String, String)
     case noPasses(String)
     case noGeneratedPasses
 
@@ -128,6 +138,8 @@ enum CorpusVerificationError: Error, LocalizedError {
             return "usage: Anime4KMetalShaderTests OUTPUT_DIR shader.glsl ..."
         case .notUTF8(let path):
             return "Anime4K corpus shader is not UTF-8: \(path)"
+        case .parseFailure(let path, let detail):
+            return "Anime4K corpus parse failed for \(path): \(detail)"
         case .noPasses(let path):
             return "Anime4K corpus shader parsed to zero passes: \(path)"
         case .noGeneratedPasses:
