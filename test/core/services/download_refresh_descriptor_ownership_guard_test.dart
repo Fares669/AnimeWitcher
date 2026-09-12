@@ -25,7 +25,7 @@ void main() {
     );
     expect(service, contains('_commitRefreshDescriptorForGeneration('));
 
-    expect(store, contains('required this.generation'));
+    expect(store, contains('this.generation = 0'));
     expect(store, contains('Future<bool> removeForGeneration('));
     expect(store, contains('descriptor.generation != generation'));
   });
