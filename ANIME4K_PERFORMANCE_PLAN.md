@@ -41,7 +41,7 @@
   - GREEN: focused performance-policy tests pass.
   - Verification: Flutter Checks run `34678445629` passed Analyze, full Test, and native logger typecheck on commit `2337a6a`.
 
-- [ ] **AKP-02 — Official AutoDownscale stages in the resolver**
+- [x] **AKP-02 — Official AutoDownscale stages in the resolver**
   - Files:
     - Modify `lib/features/player/data/anime4k.dart`
     - Modify `test/features/player/anime4k_test.dart`
@@ -50,8 +50,9 @@
   - AutoDownscale stages are optional degradation-safe steps: if absent, the resolver reports them distinctly but does not destroy an otherwise usable pipeline.
   - RED: tests assert official fast pipeline ordering and fail first.
   - GREEN: all existing resolver tests plus new ordering tests pass.
+  - Verification: Flutter Checks run `34679101325` passed Analyze, full Test, and native logger typecheck on commit `af0557f7`.
 
-- [ ] **AKP-03 — Stage-aware CNN quality selection**
+- [x] **AKP-03 — Stage-aware CNN quality selection**
   - Files:
     - Modify `lib/features/player/data/anime4k.dart`
     - Modify `test/features/player/anime4k_test.dart`
@@ -61,6 +62,8 @@
   - Manual quality remains the ceiling; no stage may use a quality above the requested one merely because that file exists.
   - Preserve the one-use-per-shader rule.
   - RED/GREEN tests cover S/M/L/VL/UL for A, A+A, B+B, C+A.
+  - RED evidence: Flutter Checks run `34679670753` passed Analyze/native typecheck and failed 17 focused stage-quality assertions before implementation.
+  - GREEN verification: Flutter Checks run `34680067875` passed Analyze, full Test, and native logger typecheck on commit `83c5c1a`.
 
 - [ ] **AKP-04 — Shader manifest and deterministic cache key**
   - Files:
@@ -78,7 +81,7 @@
     - Modify `lib/features/player/data/anime4k_download.dart`
     - Modify/create downloader tests under `test/features/player/`
   - Download/extract into a temporary sibling directory.
-  - Reject path traversal and duplicate normalized filenames as today.
+  - Preserve safe basename flattening/path rejection and change duplicate normalized filenames from silent first-wins behavior to a hard integrity failure.
   - Validate the expected v4.0.1 shader manifest before activation.
   - Atomically replace the active shader folder only after validation succeeds.
   - A failed/cancelled update leaves the previous shader set untouched.
