@@ -1,0 +1,73 @@
+name: Repair DM-11 verifier anchor drift
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm11-repair-anchor-drift.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm11-anchor-repair-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - name: Repair verifier anchors for current dartfmt output
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('.github/workflows/dm11-replica-transaction-foundation.yml')
+          s = p.read_text()
+
+          replacements = [
+              (
+                  """          old = '''    lastByteReconciliationAtMillis:\n                  lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\n              );'''""",
+                  """          old = '''    lastByteReconciliationAtMillis:\n        lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\n  );'''""",
+                  'copyWith body anchor',
+              ),
+              (
+                  """          old = '''    if (lastByteReconciliationAtMillis != null)\n                'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,\n            };'''""",
+                  """          old = '''    if (lastByteReconciliationAtMillis != null)\n      'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,\n  };'''""",
+                  'toJson anchor',
+              ),
+              (
+                  """          old = '''      lastByteReconciliationAtMillis: _nullableIntValue(\n                  map['lastByteReconciliationAtMillis'],\n                ),\n              );'''""",
+                  """          old = '''      lastByteReconciliationAtMillis: _nullableIntValue(\n        map['lastByteReconciliationAtMillis'],\n      ),\n    );'''""",
+                  'fromJson anchor',
+              ),
+          ]
+
+          for old, new, label in replacements:
+              if old not in s:
+                  raise SystemExit(f'{label} repair target drifted again')
+              s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+
+          git diff --check
+          grep -n "copyWith body anchor drift\|toJson anchor drift\|fromJson anchor drift" .github/workflows/dm11-replica-transaction-foundation.yml
+
+      - name: Commit repair and remove one-shot helper
+        run: |
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/dm11-replica-transaction-foundation.yml
+          git rm .github/workflows/dm11-repair-anchor-drift.yml
+          git commit -m 'ci(downloads): align DM-11 verifier with current store formatting'
+          git pull --rebase origin plan/download-manager-reliability
+          git push origin HEAD:plan/download-manager-reliability
