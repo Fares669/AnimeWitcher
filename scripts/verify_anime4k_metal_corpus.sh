@@ -23,8 +23,8 @@ unzip -q "$ARCHIVE" -d "$EXTRACTED"
 # same byte sizes and Git blob ids that the runtime downloader enforces.
 #
 # Report every mismatch in one run. Besides being better diagnostics, this is
-# important because GitHub release assets are immutable download artifacts and
-# can legitimately differ byte-for-byte from the Git tree that shares a tag.
+# important because GitHub release assets can legitimately differ byte-for-byte
+# from the Git tree that shares a tag.
 python3 - \
   "$ROOT/lib/features/player/data/anime4k_download.dart" \
   "$EXTRACTED" \
@@ -101,14 +101,24 @@ swiftc \
   "$ROOT/native/anime4k_metal/Anime4KMetalShaderTests.swift" \
   -o "$SWIFT_TEST"
 
-mapfile -t SHADERS < <(find "$CORPUS" -type f -name '*.glsl' -print | sort)
+# macOS still ships Bash 3.2, which has no `mapfile`. Populate arrays with a
+# portable read loop so the exact same verifier works on Apple CI and locally.
+SHADERS=()
+while IFS= read -r file; do
+  SHADERS+=("$file")
+done < <(find "$CORPUS" -type f -name '*.glsl' -print | sort)
+
 if [[ "${#SHADERS[@]}" -ne 23 ]]; then
   echo "Expected 23 corpus shaders, found ${#SHADERS[@]}" >&2
   exit 1
 fi
 "$SWIFT_TEST" "$GENERATED" "${SHADERS[@]}"
 
-mapfile -t METAL_SOURCES < <(find "$GENERATED" -type f -name '*.metal' -print | sort)
+METAL_SOURCES=()
+while IFS= read -r file; do
+  METAL_SOURCES+=("$file")
+done < <(find "$GENERATED" -type f -name '*.metal' -print | sort)
+
 if [[ "${#METAL_SOURCES[@]}" -eq 0 ]]; then
   echo "Translator emitted no Metal sources" >&2
   exit 1
