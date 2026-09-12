@@ -145,7 +145,7 @@
   - Compile both policies across the actual supported shader corpus.
   - Verification: exact-HEAD platform run `34691927403` passed the full shader corpus/precision gate for both precision policies.
 
-- [ ] **AKP-11 — Resolution-aware processing and texture reuse**
+- [x] **AKP-11 — Resolution-aware processing and texture reuse**
   - Files:
     - Modify Metal runtime and Dart configuration/wiring
   - Determine target processing dimensions from source aspect ratio and actual player output/drawable size.
@@ -153,8 +153,10 @@
   - Rebuild reusable textures only when dimensions/pipeline change.
   - Preserve aspect ratio and avoid repeated resize oscillation caused by transient layout values.
   - Tests cover 480p/720p/1080p source to common iPhone/iPad output sizes.
+  - Regression: media_kit now retargets the active Metal runtime to the live `CVPixelBuffer` dimensions rather than trusting stale mpv drawable dimensions, and native telemetry carries those live dimensions back to Eco/Dart.
+  - Verification: exact-HEAD Flutter Checks `34695838534` passed Analyze/full Test/native logger typecheck, and platform run `34695837180` passed C API, 530-pass corpus, runtime/bridge contracts, and Android/macOS/iOS builds on commit `2e511e93`.
 
-- [ ] **AKP-12 — Dart Apple backend routing and no-double-processing fallback**
+- [x] **AKP-12 — Dart Apple backend routing and no-double-processing fallback**
   - Files:
     - Modify `lib/features/player/presentation/player_controller.dart`
     - Modify player wiring tests
@@ -163,6 +165,7 @@
   - If Metal reports failed/unavailable/unsupported-HDR, disable Metal and restore the exact resolved GLSL pipeline.
   - Turning Anime4K off clears both paths.
   - Android/Windows/Linux behavior remains unchanged.
+  - Verification: exact-HEAD Flutter Checks `34695838534` passed routing/wiring regressions in the full suite, and platform run `34695837180` passed Android/macOS/iOS builds plus native Metal/C API contracts on commit `2e511e93`.
 
 - [ ] **AKP-13 — Apple Eco/Auto user setting and adaptive policy**
   - Files:
