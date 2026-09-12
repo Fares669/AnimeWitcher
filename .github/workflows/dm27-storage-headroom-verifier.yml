@@ -101,6 +101,11 @@ jobs:
           dart format lib/core/services/persistent_parallel_download.dart lib/core/services/download_service.dart test/core/services/persistent_parallel_download_storage_headroom_test.dart
           flutter pub get
 
+      - name: Generate sources for analyzer
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
       - name: Verify DM-27 behavior and regressions
         env:
           DM27_TEST_ROOT: /mnt/dm27
