@@ -82,6 +82,39 @@ void main() {
 
       expect(state, Anime4kNativeMetalState.failed);
     });
+
+    test('decodes per-player native telemetry for the Eco governor', () {
+      final bindings = _FakeBindings(
+        telemetryJson: jsonEncode(<String, Object>{
+          'averageFrameTimeMs': 8.25,
+          'p95FrameTimeMs': 12.5,
+          'processedFrames': 120,
+          'lateOrDroppedFrames': 3,
+          'thermalLevel': 'fair',
+          'lowPowerMode': true,
+        }),
+      );
+      final bridge = Anime4kMetalBridge(bindings: bindings);
+
+      final telemetry = bridge.telemetry(handle: 77);
+
+      expect(bindings.telemetryHandle, 77);
+      expect(telemetry, isNotNull);
+      expect(telemetry!.averageFrameTimeMs, 8.25);
+      expect(telemetry.p95FrameTimeMs, 12.5);
+      expect(telemetry.processedFrames, 120);
+      expect(telemetry.lateOrDroppedFrames, 3);
+      expect(telemetry.thermalLevel, Anime4kThermalLevel.fair);
+      expect(telemetry.lowPowerMode, isTrue);
+    });
+
+    test('malformed native telemetry fails closed', () {
+      final bridge = Anime4kMetalBridge(
+        bindings: _FakeBindings(telemetryJson: '{not-json'),
+      );
+
+      expect(bridge.telemetry(handle: 5), isNull);
+    });
   });
 }
 
@@ -89,14 +122,17 @@ class _FakeBindings implements Anime4kMetalNativeBindings {
   _FakeBindings({
     this.configureResult = 1,
     this.statusResult = 1,
+    this.telemetryJson,
   });
 
   final int configureResult;
   final int statusResult;
+  final String? telemetryJson;
   int? configureHandle;
   String? configureJson;
   int? statusHandle;
   int? disableHandle;
+  int? telemetryHandle;
 
   @override
   int configure(int handle, String configurationJson) {
@@ -109,6 +145,12 @@ class _FakeBindings implements Anime4kMetalNativeBindings {
   int status(int handle) {
     statusHandle = handle;
     return statusResult;
+  }
+
+  @override
+  String? telemetry(int handle) {
+    telemetryHandle = handle;
+    return telemetryJson;
   }
 
   @override
