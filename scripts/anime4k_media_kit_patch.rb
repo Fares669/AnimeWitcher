@@ -42,26 +42,35 @@ def anime4k_media_kit_plugin_dir(plugin_root:, platform:)
           "unsupported Apple media_kit platform: #{platform}"
   end
 
-  canonical = File.join(
-    plugin_root,
-    platform.to_s,
-    'media_kit_video',
-    'Sources',
-    'media_kit_video',
-    'plugin'
-  )
-  return canonical if anime4k_complete_plugin_dir?(canonical)
+  platform_name = platform.to_s
 
-  # The published pub.dev archive is the source CocoaPods actually sees. Keep
-  # the canonical layout fast, but diagnose/accept a packaging-only directory
-  # shift when exactly one complete platform-specific plugin directory exists.
-  # Requiring all four upstream files prevents accidentally patching an
-  # unrelated TextureHW.swift.
-  platform_segment = platform.to_s
-  candidates = Dir.glob(File.join(plugin_root, '**', 'TextureHW.swift')).filter_map do |texture|
+  # pub.dev's media_kit_video 2.0.1 archive is what Flutter/CocoaPods actually
+  # installs. Its native sources live under <platform>/Classes/plugin. Keep the
+  # repository checkout layout as a second exact candidate so local/path/git
+  # dependency builds remain supported without loosening source-drift checks.
+  exact_candidates = [
+    File.join(plugin_root, platform_name, 'Classes', 'plugin'),
+    File.join(
+      plugin_root,
+      platform_name,
+      'media_kit_video',
+      'Sources',
+      'media_kit_video',
+      'plugin'
+    )
+  ]
+  exact_candidates.each do |candidate|
+    return candidate if anime4k_complete_plugin_dir?(candidate)
+  end
+
+  # Packaging layouts can move while keeping the same upstream files. Fallback
+  # discovery is deliberately scoped BELOW the requested platform directory.
+  # Do not inspect the absolute path segments: the iOS Flutter project itself
+  # is named `ios`, which previously caused macOS/Classes/plugin to be accepted
+  # as an iOS candidate too.
+  platform_root = File.join(File.expand_path(plugin_root), platform_name)
+  candidates = Dir.glob(File.join(platform_root, '**', 'TextureHW.swift')).filter_map do |texture|
     directory = File.dirname(texture)
-    segments = File.expand_path(directory).split(File::SEPARATOR)
-    next unless segments.include?(platform_segment)
     next unless anime4k_complete_plugin_dir?(directory)
 
     directory
@@ -70,10 +79,11 @@ def anime4k_media_kit_plugin_dir(plugin_root:, platform:)
   return candidates.first if candidates.length == 1
 
   discovered = candidates.empty? ? 'none' : candidates.join(', ')
+  expected = exact_candidates.join(' or ')
   raise Anime4KMediaKitPatchError,
         "media_kit #{platform} plugin source directory unresolved under " \
         "#{plugin_root}; complete candidates: #{discovered}; " \
-        "expected canonical path: #{canonical}"
+        "expected: #{expected}"
 end
 
 def anime4k_sync_support_files(plugin_dir:, native_dir:)
