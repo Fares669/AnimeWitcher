@@ -120,7 +120,9 @@ if 'generation: startOperation.generation,' not in source:
 
 catch_anchor = '''        await storage.removeDownloadMetadata(task.taskId);\n        // A start that never established recoverable ownership must not leave\n'''
 catch_new = '''        await storage.removeDownloadMetadata(task.taskId);\n        if (refreshDescriptorGeneration != null) {\n          await _ref.read(downloadUrlRefreshStoreProvider).removeForGeneration(\n            trackingUrl ?? url,\n            refreshDescriptorGeneration,\n          );\n        }\n        // A start that never established recoverable ownership must not leave\n'''
-if 'removeForGeneration(\n            trackingUrl ?? url,' not in source:
+legacy_rollback = 'removeForGeneration(\n            trackingUrl ?? url,'
+owner_rollback = '.removeForOwnerGeneration(\n                trackingUrl ?? url,'
+if legacy_rollback not in source and owner_rollback not in source:
     if catch_anchor not in source:
         raise SystemExit('DM-31 rollback anchor drift')
     source = source.replace(catch_anchor, catch_new, 1)
