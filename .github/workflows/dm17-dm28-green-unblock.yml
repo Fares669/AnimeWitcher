@@ -1,0 +1,124 @@
+name: DM-17 + DM-28 staged GREEN unblock
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm17-dm28-green-unblock.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm17-dm28-green-unblock-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  green:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Apply the already-reviewed DM-17 and DM-28 production patches together
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          def python_blocks(path: str):
+              lines = Path(path).read_text().splitlines()
+              blocks = []
+              collecting = False
+              current = []
+              for line in lines:
+                  if not collecting and line.strip() == "python3 - <<'PY'":
+                      collecting = True
+                      current = []
+                      continue
+                  if collecting and line.strip() == 'PY':
+                      blocks.append(textwrap.dedent('\n'.join(current)))
+                      collecting = False
+                      current = []
+                      continue
+                  if collecting:
+                      current.append(line)
+              return blocks
+
+          selections = [
+              (
+                  '.github/workflows/dm17-joined-teardown.yml',
+                  '# 1) Range transport: cancellation is not teardown completion.',
+              ),
+              (
+                  '.github/workflows/dm28-android-notification-policy-fix.yml',
+                  "transport_path = Path('lib/core/services/download_transport.dart')",
+              ),
+          ]
+
+          for path, needle in selections:
+              matches = [block for block in python_blocks(path) if needle in block]
+              if len(matches) != 1:
+                  raise SystemExit(f'Expected exactly one production patch in {path}, found {len(matches)}')
+              exec(compile(matches[0], path, 'exec'), {})
+          PY
+
+          dart format \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/download_transport.dart
+
+      - name: Verify both staged GREEN contracts
+        run: |
+          flutter test test/core/services/download_teardown_barrier_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_range_transfer_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_transport_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Commit verified production fixes
+        run: |
+          if git diff --quiet -- \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/download_transport.dart; then
+            echo 'Both production fixes are already present.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/download_transport.dart
+          git commit -m 'fix(downloads): join teardown and align Android execution policy (DM-17 DM-28)'
+          git pull --rebase origin plan/download-manager-reliability
+
+          flutter test test/core/services/download_teardown_barrier_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_transport_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+          git push origin HEAD:plan/download-manager-reliability
