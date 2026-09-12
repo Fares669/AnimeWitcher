@@ -6,14 +6,16 @@ void main() {
   test('source replacement is gated by an authoritative checkpoint', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
-    final signature = source.indexOf('_refreshTaskBeforeResume(');
-    final begin = source.lastIndexOf('Future<', signature);
+    const declaration =
+        'Future<({DownloadTask task, bool refreshed, bool restartRequired})>';
+    final begin = source.indexOf(declaration);
+    final signature = source.indexOf('_refreshTaskBeforeResume(', begin);
     final end = source.indexOf(
       'Future<List<Task>> _liveTransferTasks()',
       signature,
     );
-    expect(signature, greaterThanOrEqualTo(0));
     expect(begin, greaterThanOrEqualTo(0));
+    expect(signature, greaterThan(begin));
     expect(end, greaterThan(signature));
     final refresh = source.substring(begin, end);
 
@@ -30,16 +32,14 @@ void main() {
     final checkpoint = refresh.indexOf(
       'final refreshCheckpointed = await _checkpointLogicalJob(',
     );
+    final parallelReplacement = refresh.indexOf(
+      'await _parallel.replaceSource(',
+    );
+    final nativeProjection = refresh.indexOf(
+      'await FileDownloader().database.updateRecord(',
+    );
     expect(checkpoint, greaterThanOrEqualTo(0));
-    expect(
-      checkpoint,
-      lessThan(refresh.indexOf('await _parallel.replaceSource(')),
-    );
-    expect(
-      checkpoint,
-      lessThan(
-        refresh.indexOf('await FileDownloader().database.updateRecord('),
-      ),
-    );
+    expect(parallelReplacement, greaterThan(checkpoint));
+    expect(nativeProjection, greaterThan(checkpoint));
   });
 }
