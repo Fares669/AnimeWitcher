@@ -21,12 +21,12 @@ jobs:
           ref: feat/anime4k-ios-performance
           fetch-depth: 0
       - name: Apply exact AKP-17 patch
-        run: python3 tool/_temporary_akp17_metalfx_patch.py
+        run: python3 tool/_temporary_akp17_metalfx_patch_v2.py
       - name: Commit AKP-17 GREEN and remove helpers
         shell: bash
         run: |
           git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git config user.email 41898282+Fares669@users.noreply.github.com
           git add -A
           git diff --cached --check
           git commit -m "feat: add isolated MetalFX Anime4K experiment"
