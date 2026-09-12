@@ -139,7 +139,7 @@ void main() {
       for (var i = 0; i < 3; i++) {
         sample(state, frameTimeMs: 16);
       }
-      expect(state.effectiveQuality, Anime4kQuality.l);
+      expect(state.effectiveQuality, Anime4kQuality.vl);
 
       final manual = sample(
         state,
@@ -161,7 +161,7 @@ void main() {
 
       expect(sample(state, frameTimeMs: 16).effectiveQuality, Anime4kQuality.ul);
       expect(sample(state, frameTimeMs: 16).effectiveQuality, Anime4kQuality.ul);
-      expect(sample(state, frameTimeMs: 16).effectiveQuality, Anime4kQuality.l);
+      expect(sample(state, frameTimeMs: 16).effectiveQuality, Anime4kQuality.vl);
     });
 
     test('one healthy sample breaks an unhealthy streak', () {
@@ -181,7 +181,7 @@ void main() {
       sample(state, lateOrDroppedFrames: 2);
       final pressured = sample(state, lateOrDroppedFrames: 1);
 
-      expect(pressured.effectiveQuality, Anime4kQuality.l);
+      expect(pressured.effectiveQuality, Anime4kQuality.vl);
     });
 
     test('cooldown prevents consecutive samples from cascading quality', () {
@@ -189,11 +189,11 @@ void main() {
       for (var i = 0; i < 3; i++) {
         sample(state, frameTimeMs: 16);
       }
-      expect(state.effectiveQuality, Anime4kQuality.l);
+      expect(state.effectiveQuality, Anime4kQuality.vl);
 
       sample(state, frameTimeMs: 16);
       sample(state, frameTimeMs: 16);
-      expect(state.effectiveQuality, Anime4kQuality.l);
+      expect(state.effectiveQuality, Anime4kQuality.vl);
     });
 
     test('critical thermal bypasses immediately and recovery is progressive', () {
