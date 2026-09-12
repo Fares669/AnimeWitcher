@@ -36,6 +36,20 @@ jobs:
           channel: stable
       - name: Verify full Anime4K v4.0.1 Metal corpus
         run: bash scripts/verify_anime4k_metal_corpus.sh
+      - name: Test native Anime4K Metal runtime contract
+        run: |
+          if grep -q 'waitUntilCompleted' native/anime4k_metal/Anime4KMetalRuntime.swift 2>/dev/null; then
+            echo 'steady-state Anime4K runtime must not use waitUntilCompleted()' >&2
+            exit 1
+          fi
+          swiftc \
+            -framework CoreVideo \
+            -framework Metal \
+            native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalRuntime.swift \
+            native/anime4k_metal/Anime4KMetalRuntimeTests.swift \
+            -o /tmp/anime4k_metal_runtime_tests
+          /tmp/anime4k_metal_runtime_tests
       - name: Generate
         run: |
           flutter pub get
