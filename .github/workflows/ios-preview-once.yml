@@ -1,5 +1,5 @@
 name: iOS Preview One Shot
-# Retrigger after async render mailbox pacing fix 559bddd
+# Retrigger after mpv target-time pacing fix
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: feat/anime4k-ios-performance
+          ref: ${{ github.sha }}
       - name: Select Latest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
