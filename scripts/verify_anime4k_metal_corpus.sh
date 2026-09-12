@@ -103,6 +103,7 @@ swiftc \
 
 PRECISION_TEST="$TMP/anime4k_metal_precision_tests"
 swiftc \
+  -parse-as-library \
   "$ROOT/native/anime4k_metal/Anime4KMetalPrecisionTests.swift" \
   -o "$PRECISION_TEST"
 "$PRECISION_TEST"
