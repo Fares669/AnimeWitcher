@@ -124,3 +124,5 @@ jobs:
           git diff --check
 
           git push origin HEAD:plan/download-manager-reliability
+
+# retrigger: apply staged DM-17/DM-28 production patches after RED CI confirmation
