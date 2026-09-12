@@ -337,6 +337,41 @@ class _Anime4kDialogState extends ConsumerState<_Anime4kDialog> {
                 },
               ),
 
+              if (settings.anime4kEnabled &&
+                  (Platform.isIOS || Platform.isMacOS)) ...[
+                SwitchListTile(
+                  value: settings.anime4kEcoEnabled,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    appText(
+                      context,
+                      english: 'Eco / Auto',
+                      arabic: 'اقتصادي / تلقائي',
+                    ),
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  subtitle: Text(
+                    appText(
+                      context,
+                      english:
+                          'Keeps your selected quality as the ceiling and may '
+                          'reduce GPU work when the device is hot, in Low Power '
+                          'Mode, or missing the frame budget.',
+                      arabic:
+                          'يحافظ على الجودة التي اخترتها كسقف أعلى، وقد يقلل '
+                          'حمل الـGPU عند ارتفاع الحرارة أو تشغيل وضع الطاقة '
+                          'المنخفضة أو ضغط زمن الإطار.',
+                    ),
+                  ),
+                  onChanged: (on) async {
+                    await ref
+                        .read(playerSettingsProvider.notifier)
+                        .setAnime4kEcoEnabled(on);
+                    await _reapply();
+                  },
+                ),
+              ],
+
               if (settings.anime4kEnabled) ...[
                 const SizedBox(height: 8),
                 Text(
