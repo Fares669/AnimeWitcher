@@ -5,6 +5,8 @@ import Metal
 @main
 struct Anime4KMetalRuntimeTests {
     static func main() throws {
+        try testSlotLedgerAcrossReconfiguration()
+
         guard let device = MTLCreateSystemDefaultDevice() else {
             preconditionFailure("Apple CI must expose a Metal device")
         }
@@ -111,7 +113,79 @@ struct Anime4KMetalRuntimeTests {
             } == .bypassed
         )
 
+        try testRuntimeLifetimeUntilGPUCompletion(
+            device: device,
+            shaderPath: shaderURL.path
+        )
+
         print("Anime4KMetalRuntimeTests: PASS")
+    }
+
+    private static func testSlotLedgerAcrossReconfiguration() throws {
+        var ledger = Anime4KMetalSlotLedger(capacity: 2)
+        let first = ledger.reserve()
+        let second = ledger.reserve()
+        precondition(first != nil && second != nil)
+        precondition(ledger.reserve() == nil, "in-flight capacity must be bounded")
+        precondition(ledger.inflightCount == 2)
+        precondition(ledger.availableCount == 0)
+
+        // A new configuration must not make old GPU-owned slots available.
+        ledger.advanceEpoch()
+        precondition(ledger.reserve() == nil)
+        precondition(ledger.inflightCount == 2)
+
+        ledger.release(first!)
+        precondition(ledger.inflightCount == 1)
+        precondition(ledger.availableCount == 1)
+        let newEpochLease = ledger.reserve()
+        precondition(newEpochLease != nil)
+        precondition(newEpochLease!.epoch == ledger.epoch)
+
+        // A duplicate/stale completion cannot duplicate the same slot.
+        ledger.release(first!)
+        precondition(ledger.inflightCount == 2)
+        precondition(ledger.availableCount == 0)
+
+        ledger.release(second!)
+        ledger.release(newEpochLease!)
+        precondition(ledger.inflightCount == 0)
+        precondition(ledger.availableCount == 2)
+    }
+
+    private static func testRuntimeLifetimeUntilGPUCompletion(
+        device: MTLDevice,
+        shaderPath: String
+    ) throws {
+        var runtime: Anime4KMetalRuntime? = try Anime4KMetalRuntime(
+            device: device,
+            maxInflightFrames: 1
+        )
+        let configuration = Anime4KMetalRuntimeConfiguration(
+            shaderPaths: [shaderPath],
+            pipelineHash: "lifetime",
+            sourceWidth: 2048,
+            sourceHeight: 2048,
+            outputWidth: 2048,
+            outputHeight: 2048
+        )
+        try runtime!.configure(configuration)
+        let input = try makePixelBuffer(width: 2048, height: 2048)
+        let completed = DispatchSemaphore(value: 0)
+        let submission = runtime!.process(pixelBuffer: input) { result in
+            precondition(CVPixelBufferGetWidth(result) == 2048)
+            completed.signal()
+        }
+        precondition(submission == .submitted)
+
+        // The bridge may drop its last strong reference on disable/reconfigure.
+        // The command-buffer completion must still keep the runtime and input /
+        // output IOSurfaces alive long enough to deliver publication callback.
+        runtime = nil
+        precondition(
+            completed.wait(timeout: .now() + 10) == .success,
+            "in-flight Metal work must deliver completion after owner release"
+        )
     }
 
     private static func makePixelBuffer(
