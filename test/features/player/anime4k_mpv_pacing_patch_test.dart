@@ -32,4 +32,20 @@ void main() {
       );
     }
   });
+
+  test('pacing patch composes with the generated media_kit render source', () {
+    if (Platform.isWindows) return;
+
+    final result = Process.runSync(
+      'ruby',
+      const <String>['scripts/test_anime4k_mpv_pacing_patch.rb'],
+    );
+
+    expect(
+      result.exitCode,
+      0,
+      reason: 'Ruby pacing integration contract failed:\n'
+          '${result.stdout}\n${result.stderr}',
+    );
+  });
 }
