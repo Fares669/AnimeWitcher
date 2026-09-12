@@ -49,6 +49,8 @@ jobs:
             native/anime4k_metal/Anime4KMetalRuntimeTests.swift \
             -o /tmp/anime4k_metal_runtime_tests
           /tmp/anime4k_metal_runtime_tests
+      - name: Test media_kit Anime4K render patch contract
+        run: ruby scripts/test_anime4k_media_kit_patch.rb
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
