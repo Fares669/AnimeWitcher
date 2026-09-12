@@ -86,6 +86,21 @@ void main() {
       expect(capi, contains('Anime4KAppleUpscaleStrategy'));
     });
 
+    test('iOS benchmark preview enables the hidden experiment flag', () {
+      final previewWorkflow = File(
+        '.github/workflows/ios-preview-once.yml',
+      ).readAsStringSync();
+
+      expect(
+        previewWorkflow,
+        contains('"ANIME4K_METALFX_EXPERIMENT": "true"'),
+      );
+      expect(
+        previewWorkflow,
+        contains('--dart-define-from-file=dart-defines.json'),
+      );
+    });
+
     test('experiment removes Anime4K upscale stages before MetalFX', () {
       final runtime = File(
         'native/anime4k_metal/Anime4KMetalRuntime.swift',
