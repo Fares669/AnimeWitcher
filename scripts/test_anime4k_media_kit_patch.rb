@@ -72,6 +72,7 @@ SWIFT
 NATIVE_FILES = %w[
   Anime4KMetalShader.swift
   Anime4KMetalTelemetry.swift
+  Anime4KMetalFXScaler.swift
   Anime4KMetalRuntime.swift
   Anime4KMediaKitBridge.swift
 ].freeze
