@@ -9,8 +9,15 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
         raise SystemExit(f'DM-31 {label} anchor drift in {path}')
     path.write_text(source.replace(old, new, 1))
 
+
 refresh = Path('lib/core/services/download_url_refresh.dart')
 source = refresh.read_text()
+if "import 'dart:async';" not in source:
+    source = source.replace(
+        "import 'dart:convert';\n",
+        "import 'dart:async';\nimport 'dart:convert';\n",
+        1,
+    )
 if 'required this.generation' not in source:
     source = source.replace(
         '''    required this.updatedAtMillis,\n    this.quality,\n''',
