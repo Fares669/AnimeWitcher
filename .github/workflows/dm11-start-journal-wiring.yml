@@ -5,6 +5,8 @@ on:
     branches:
       - plan/download-manager-reliability
     paths:
+      - .github/workflows/dm11-start-journal-wiring.yml
+      - .github/scripts/dm11_start_journal_patch.py
       - lib/core/services/download_job_store.dart
       - lib/core/services/download_service.dart
       - test/core/services/download_replica_start_journal_guard_test.dart
