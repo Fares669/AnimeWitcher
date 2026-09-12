@@ -16,6 +16,44 @@ import CoreVideo
 import Foundation
 import Metal
 
+/// Bounds complete Anime4K publications, not merely the compute command buffer.
+///
+/// `Anime4KMetalRuntime` can release a compute slot as soon as its processed
+/// output is ready, while the bridge may still be blitting that output into
+/// media_kit's destination IOSurface. Keeping a second per-player ledger here
+/// prevents those final publishes from allowing the runtime output pool to grow
+/// without bound when the copy/presentation side is slower than compute.
+struct Anime4KMetalPublicationLedger {
+    private let capacity: Int
+    private var inflightByRuntime: [UInt: Int] = [:]
+
+    init(capacity: Int) {
+        precondition(capacity > 0)
+        self.capacity = capacity
+    }
+
+    mutating func reserve(for runtimeKey: UInt) -> Bool {
+        let current = inflightByRuntime[runtimeKey, default: 0]
+        guard current < capacity else { return false }
+        inflightByRuntime[runtimeKey] = current + 1
+        return true
+    }
+
+    mutating func release(for runtimeKey: UInt) {
+        let current = inflightByRuntime[runtimeKey, default: 0]
+        guard current > 0 else { return }
+        if current == 1 {
+            inflightByRuntime.removeValue(forKey: runtimeKey)
+        } else {
+            inflightByRuntime[runtimeKey] = current - 1
+        }
+    }
+
+    func inflightCount(for runtimeKey: UInt) -> Int {
+        inflightByRuntime[runtimeKey, default: 0]
+    }
+}
+
 /// Connects media_kit's Apple TextureHW render path to the per-player Anime4K
 /// Metal runtime. AKP-12 adds the Dart-facing configuration transport; until a
 /// handle is configured this bridge deliberately returns `false` and media_kit
@@ -28,6 +66,7 @@ final class Anime4KMediaKitBridge {
     private let copyQueue: MTLCommandQueue?
     private var textureCache: CVMetalTextureCache?
     private var runtimes: [UInt: Anime4KMetalRuntime] = [:]
+    private var publicationLedger = Anime4KMetalPublicationLedger(capacity: 3)
 
     private init() {
         let device = MTLCreateSystemDefaultDevice()
@@ -86,8 +125,22 @@ final class Anime4KMediaKitBridge {
         completion: @escaping () -> Void
     ) -> Bool {
         let key = handleKey(handle)
-        guard let runtime = lock.anime4kWithLock({ runtimes[key] }) else {
+        guard let runtime = lock.anime4kWithLock({ () -> Anime4KMetalRuntime? in
+            guard let runtime = runtimes[key] else { return nil }
+            guard publicationLedger.reserve(for: key) else { return nil }
+            return runtime
+        }) else {
+            // Saturation is deliberately non-blocking: TextureHW publishes the
+            // untouched frame rather than waiting for a Metal/output slot.
             return false
+        }
+
+        // The reservation spans runtime compute plus the final bridge blit into
+        // media_kit's owned destination. media_kit's existing three-buffer
+        // manager then owns that destination until Flutter consumes it.
+        let publicationCompletion: () -> Void = { [self] in
+            releasePublication(for: key)
+            completion()
         }
 
         // Anime4KMetalRuntime may call completion synchronously if setup fails
@@ -99,7 +152,7 @@ final class Anime4KMediaKitBridge {
         var accepted = false
         var earlyResult: CVPixelBuffer?
 
-        let submission = runtime.process(pixelBuffer: pixelBuffer) { [weak self] processed in
+        let submission = runtime.process(pixelBuffer: pixelBuffer) { [self] processed in
             var deliver: CVPixelBuffer?
             decisionLock.lock()
             if decisionKnown {
@@ -110,11 +163,11 @@ final class Anime4KMediaKitBridge {
             decisionLock.unlock()
 
             if let deliver = deliver {
-                self?.copyProcessedFrame(
+                copyProcessedFrame(
                     deliver,
                     into: pixelBuffer,
                     runtimeKey: key,
-                    completion: completion
+                    completion: publicationCompletion
                 )
             }
         }
@@ -125,15 +178,20 @@ final class Anime4KMediaKitBridge {
         let pending = accepted ? earlyResult : nil
         decisionLock.unlock()
 
+        guard accepted else {
+            releasePublication(for: key)
+            return false
+        }
+
         if let pending = pending {
             copyProcessedFrame(
                 pending,
                 into: pixelBuffer,
                 runtimeKey: key,
-                completion: completion
+                completion: publicationCompletion
             )
         }
-        return accepted
+        return true
     }
 
     private func copyProcessedFrame(
@@ -219,6 +277,10 @@ final class Anime4KMediaKitBridge {
             completion()
         }
         commandBuffer.commit()
+    }
+
+    private func releasePublication(for key: UInt) {
+        lock.anime4kWithLock { publicationLedger.release(for: key) }
     }
 
     private func disable(key: UInt) {
