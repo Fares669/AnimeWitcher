@@ -1,5 +1,4 @@
 name: iOS Preview One Shot
-# Retrigger after mpv target-time pacing fix
 
 on:
   workflow_dispatch:
@@ -10,6 +9,8 @@ on:
       - .github/workflows/ios-preview-once.yml
       - native/anime4k_metal/**
       - scripts/anime4k_*
+      - lib/features/player/presentation/player_controller.dart
+      - lib/features/player/presentation/player_controller_base.dart
       - ios/Podfile
 
 permissions:
