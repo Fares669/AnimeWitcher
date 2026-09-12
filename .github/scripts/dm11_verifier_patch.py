@@ -1,7 +1,14 @@
 from pathlib import Path
 import runpy
 
-runpy.run_path('.github/scripts/dm11_foundation_patch.py', run_name='__main__')
+try:
+    runpy.run_path('.github/scripts/dm11_foundation_patch.py', run_name='__main__')
+except SystemExit as error:
+    # The foundation helper intentionally exits 0 when its base transaction
+    # model is already present. That is success, not a reason to skip the
+    # follow-up verifier migrations added as DM-11 evolves.
+    if error.code not in (0, None):
+        raise
 
 path = Path('lib/core/services/download_job_store.dart')
 source = path.read_text()
