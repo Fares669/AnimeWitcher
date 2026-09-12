@@ -71,6 +71,12 @@ enum DownloadCommandOutcome {
   terminal,
 }
 
+class _DownloadRestartRequiredException implements Exception {
+  final String taskId;
+
+  const _DownloadRestartRequiredException(this.taskId);
+}
+
 DownloadCommandOutcome downloadCommandOutcomeForJobState(
   DownloadJobState? state,
 ) {
@@ -3715,6 +3721,8 @@ class DownloadService {
   Future<DownloadCommandOutcome> resumeDownloadOutcome(String taskId) async {
     try {
       await resumeDownload(taskId);
+    } on _DownloadRestartRequiredException {
+      return DownloadCommandOutcome.restartRequired;
     } on DownloadServiceUnavailableException {
       return DownloadCommandOutcome.serviceUnavailable;
     } catch (_) {
@@ -4180,6 +4188,16 @@ class DownloadService {
     return _enqueueTransfer(task, knownTotalBytes);
   }
 
+  Future<bool> _canNativeResume(DownloadTask task) async {
+    try {
+      return await FileDownloader()
+          .taskCanResume(task)
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> _resumeDownloadTask(DownloadTask task) async {
     if (!_networkAvailable) {
       await _holdDownloadForNetwork(task);
@@ -4215,11 +4233,21 @@ class DownloadService {
         await _resumeUsingPartialFile(task)) {
       return true;
     }
+    final canNativeResume =
+        task is! ParallelDownloadTask && await _canNativeResume(task);
     final refreshResult = await _refreshTaskBeforeResume(
       task,
       expectedBytes: saved.totalSize,
       partialBytes: saved.partialBytes,
+      hasOpaqueNativeResume: canNativeResume && saved.partialBytes <= 0,
     );
+    if (refreshResult.restartRequired) {
+      diagnosticLog.record('source.refreshRestartRequired', {
+        'taskId': task.taskId,
+        'opaqueNativeResume': canNativeResume,
+      });
+      throw _DownloadRestartRequiredException(task.taskId);
+    }
     task = refreshResult.task;
     final trackingUrl = downloadTrackingUrl(task);
     if (saved.progress > 0) {
@@ -4257,17 +4285,25 @@ class DownloadService {
       return _resumeUsingPartialFile(task);
     }
 
+    if (canNativeResume && !refreshResult.refreshed) {
+      var resumed = false;
+      try {
+        resumed = await _nativeTransport.resume(task);
+      } catch (_) {
+        resumed = false;
+      }
+      if (resumed) return true;
+      if (saved.partialBytes <= 0) {
+        // taskCanResume proves opaque native ownership existed, but the executor
+        // could not adopt it. Never convert that hidden byte ownership into an
+        // implicit zero-byte restart.
+        throw _DownloadRestartRequiredException(task.taskId);
+      }
+    }
+
     return resumeOrRestartDownload(
-      canResume: () async {
-        try {
-          return await FileDownloader()
-              .taskCanResume(task)
-              .timeout(const Duration(seconds: 3));
-        } catch (_) {
-          return false;
-        }
-      },
-      resume: () => _nativeTransport.resume(task),
+      canResume: () async => false,
+      resume: () async => false,
       resumeFromPartial: () => _resumeUsingPartialFile(task),
       restart: () =>
           _enqueueFreshAdaptiveTask(task, knownTotalBytes: saved.totalSize),
@@ -4681,29 +4717,25 @@ class DownloadService {
     return _jobStore.beginAttempt(task.taskId, state: DownloadJobState.running);
   }
 
-  Future<({DownloadTask task, bool refreshed})> _refreshTaskBeforeResume(
+  Future<({DownloadTask task, bool refreshed, bool restartRequired})>
+  _refreshTaskBeforeResume(
     DownloadTask task, {
     required int expectedBytes,
     required int partialBytes,
+    bool hasOpaqueNativeResume = false,
   }) async {
     diagnosticLog.record('source.check', {
       'taskId': task.taskId,
       'bytes': partialBytes,
       'total': expectedBytes,
     });
-    // Native single-file resume data may be the only durable representation of
-    // its bytes. Do not replace that URL unless a visible partial prefix exists.
-    // Multipart manifests own their own durable child files, so they are safe.
-    if (task is! ParallelDownloadTask && partialBytes <= 0) {
-      return (task: task, refreshed: false);
-    }
-
     final trackingUrl = downloadTrackingUrl(task);
     final authoritativeFingerprint = (await _jobStore.get(task.taskId))
         ?.fingerprint;
     final store = _ref.read(downloadUrlRefreshStoreProvider);
     final descriptor = await store.get(trackingUrl);
-    if (descriptor == null) return (task: task, refreshed: false);
+    if (descriptor == null)
+      return (task: task, refreshed: false, restartRequired: false);
 
     // Keep a still-valid URL. This avoids provider extraction work on every
     // short pause/resume while still detecting expired signed links.
@@ -4728,7 +4760,7 @@ class DownloadService {
         currentSizeMatches &&
         currentRangeOk &&
         currentIdentityMatches) {
-      return (task: task, refreshed: false);
+      return (task: task, refreshed: false, restartRequired: false);
     }
 
     final refreshed = await _ref
@@ -4738,7 +4770,8 @@ class DownloadService {
       'taskId': task.taskId,
       'result': refreshed != null,
     });
-    if (refreshed == null) return (task: task, refreshed: false);
+    if (refreshed == null)
+      return (task: task, refreshed: false, restartRequired: false);
     final metadata = await getMetadata(
       refreshed.url,
       headers: refreshed.headers,
@@ -4756,7 +4789,18 @@ class DownloadService {
         ((task is ParallelDownloadTask || partialBytes > 0) &&
             metadata?.supportsRanges != true) ||
         !refreshedIdentityMatches) {
-      return (task: task, refreshed: false);
+      return (task: task, refreshed: false, restartRequired: false);
+    }
+
+    if (task is! ParallelDownloadTask &&
+        hasOpaqueNativeResume &&
+        partialBytes <= 0) {
+      // We proved the old source needs replacement and also proved that the
+      // only resumable bytes are opaque native resume data tied to that old
+      // source. The replacement itself is valid, but those bytes cannot be
+      // migrated safely, so leave durable/source state untouched and require an
+      // explicit user-visible restart decision.
+      return (task: task, refreshed: false, restartRequired: true);
     }
 
     // Source replacement changes executor/manifest identity. Persist an
@@ -4797,8 +4841,8 @@ class DownloadService {
         headers: refreshed.headers,
       );
       return replaced == null
-          ? (task: task, refreshed: false)
-          : (task: replaced, refreshed: true);
+          ? (task: task, refreshed: false, restartRequired: false)
+          : (task: replaced, refreshed: true, restartRequired: false);
     }
 
     final updated = task.copyWith(
@@ -4817,7 +4861,7 @@ class DownloadService {
       );
     }
     _nativeTransport.forget(task.taskId);
-    return (task: updated, refreshed: true);
+    return (task: updated, refreshed: true, restartRequired: false);
   }
 
   Future<List<Task>> _liveTransferTasks() =>
