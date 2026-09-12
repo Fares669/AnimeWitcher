@@ -6,13 +6,15 @@ void main() {
   test('source replacement is gated by an authoritative checkpoint', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
-    final begin = source.indexOf(
-      'Future<({DownloadTask task, bool refreshed})> _refreshTaskBeforeResume(',
-    );
+    final signature = source.indexOf('_refreshTaskBeforeResume(');
+    final begin = source.lastIndexOf('Future<', signature);
     final end = source.indexOf(
       'Future<List<Task>> _liveTransferTasks()',
-      begin,
+      signature,
     );
+    expect(signature, greaterThanOrEqualTo(0));
+    expect(begin, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(signature));
     final refresh = source.substring(begin, end);
 
     expect(
