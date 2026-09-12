@@ -112,10 +112,12 @@ enum Anime4KMetalDartAPI {
         buffer: UnsafeMutablePointer<UInt8>?,
         capacity: Int32
     ) -> Int32 {
+        let bridge = Anime4KMediaKitBridge.shared
         guard handleAddress != 0,
               let handle = OpaquePointer(bitPattern: UInt(handleAddress)),
               status(handleAddress: handleAddress) == Anime4KMetalDartStatus.ready.rawValue,
-              let runtime = Anime4KMediaKitBridge.shared.telemetry(handle: handle) else {
+              let runtime = bridge.telemetry(handle: handle),
+              let configuration = bridge.activeConfiguration(handle: handle) else {
             return 0
         }
 
@@ -125,6 +127,10 @@ enum Anime4KMetalDartAPI {
             "p95FrameTimeMs": runtime.p95FrameTimeMs,
             "processedFrames": runtime.processedFrames,
             "lateOrDroppedFrames": runtime.lateOrDroppedFrames,
+            "inputWidth": configuration.sourceWidth,
+            "inputHeight": configuration.sourceHeight,
+            "processingWidth": configuration.outputWidth,
+            "processingHeight": configuration.outputHeight,
             "thermalLevel": thermalLevel(processInfo.thermalState),
             "lowPowerMode": processInfo.isLowPowerModeEnabled,
         ]
