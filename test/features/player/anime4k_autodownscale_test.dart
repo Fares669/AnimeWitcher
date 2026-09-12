@@ -57,7 +57,7 @@ void main() {
       ]);
     });
 
-    test('missing AutoDownscale shaders do not destroy a usable pipeline', () {
+    test('missing AutoDownscale is reported as an optional optimization', () {
       final chain = resolveAnime4kChain(
         mode: Anime4kMode.a,
         quality: Anime4kQuality.m,
@@ -73,8 +73,10 @@ void main() {
         'Anime4K_Upscale_CNN_x2_S.glsl',
       ]);
       expect(chain.isEmpty, isFalse);
+      expect(chain.isComplete, isTrue);
+      expect(chain.missing, isEmpty);
       expect(
-        chain.missing,
+        chain.optionalMissing,
         containsAll(<String>[
           'Anime4K_AutoDownscalePre_x2.glsl',
           'Anime4K_AutoDownscalePre_x4.glsl',
