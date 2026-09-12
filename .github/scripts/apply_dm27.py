@@ -62,6 +62,34 @@ if 'final Future<int?> Function(String path)? availableStorageBytes;' not in s:
         raise SystemExit('parallel field anchor drift')
     s = s.replace(field_anchor, field_repl, 1)
 
+completion_anchor = """            await _persist(session);
+            _notifyPausedDrainSettled(session);
+            if (session.active &&
+                session.parts.every((child) => child.complete)) {
+              await _assemble(session);
+"""
+completion_repl = """            try {
+              await _persist(session);
+            } on FileSystemException catch (error) {
+              if (!_isInsufficientStorageError(error)) rethrow;
+              final target = File(await session.task.filePath());
+              await _handleAssemblyStorageFailure(
+                session,
+                File('${target.path}.assembling'),
+                error: error,
+              );
+              return;
+            }
+            _notifyPausedDrainSettled(session);
+            if (session.active &&
+                session.parts.every((child) => child.complete)) {
+              await _assemble(session);
+"""
+if 'final target = File(await session.task.filePath());\n              await _handleAssemblyStorageFailure(' not in s:
+    if completion_anchor not in s:
+        raise SystemExit('parallel completion checkpoint anchor drift')
+    s = s.replace(completion_anchor, completion_repl, 1)
+
 start = s.find('  Future<void> _assemble(_ParallelSession session) async {')
 end = s.find('\n}\n\nclass _ParallelSession {', start)
 if start < 0 or end < 0:
@@ -92,10 +120,33 @@ method = r"""  bool _isInsufficientStorageError(FileSystemException error) {
           assemblyStorageReserveBytes < 0 ? 0 : assemblyStorageReserveBytes;
       return free >= remainingBytes + reserve;
     } catch (_) {
-      // Storage telemetry is advisory. The write path below still catches
-      // ENOSPC/EDQUOT and preserves every verified part.
       return true;
     }
+  }
+
+  Future<void> _parkForStorageFailure(_ParallelSession session) async {
+    session.active = false;
+    session.generation++;
+    session.pauseRequested = false;
+    _speedTelemetry.resetSpeed(session.task.taskId);
+    session.cancelAggregateProgress();
+    session.cancelProgressPersist();
+    session.cancelDiskProgressPoll();
+    session.cancelCoordinatorRecovery();
+    session.resetRamp();
+    for (final part in session.parts) {
+      _cancelPendingStartLease(part);
+      _cancelTailStallWatch(part);
+      part.recoveryTimer?.cancel();
+      part.recoveryTimer = null;
+      part.launched = false;
+      part.speed = 0;
+      _activeConnectionIds.remove(part.task.taskId);
+    }
+    try {
+      await _status(session, TaskStatus.paused);
+    } catch (_) {}
+    _schedulePumpAll();
   }
 
   Future<void> _handleAssemblyStorageFailure(
@@ -118,7 +169,7 @@ method = r"""  bool _isInsufficientStorageError(FileSystemException error) {
         reason: ParallelAssemblyFailureReason.insufficientStorage,
       ),
     );
-    await _pause(session);
+    await _parkForStorageFailure(session);
   }
 
   Future<void> _assemble(_ParallelSession session) async {
