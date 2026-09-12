@@ -11,6 +11,10 @@ abstract class Anime4kMetalNativeBindings {
 
   int status(int handle);
 
+  /// Enables/disables temporary Eco pass-through without destroying the
+  /// configured runtime. Returns 1 on success and 0 when unsupported/invalid.
+  int setBypass(int handle, bool bypass);
+
   /// Returns a small UTF-8 JSON snapshot for one player, or null when the
   /// optional telemetry symbol is unavailable. Telemetry must never decide
   /// whether the renderer itself can run.
@@ -86,6 +90,17 @@ class Anime4kMetalBridge {
       return _stateFromNative(_bindings.status(handle));
     } catch (_) {
       return Anime4kNativeMetalState.failed;
+    }
+  }
+
+  bool setBypass({required int handle, required bool bypass}) {
+    if (handle <= 0) return false;
+    try {
+      return _bindings.setBypass(handle, bypass) == 1;
+    } catch (_) {
+      // Temporary Eco bypass is an optimization/safety control, not a reason
+      // to crash playback. Callers can fail closed to their existing route.
+      return false;
     }
   }
 
