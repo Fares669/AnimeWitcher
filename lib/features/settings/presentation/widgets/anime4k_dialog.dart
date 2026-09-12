@@ -147,6 +147,7 @@ class _Anime4kDialogState extends ConsumerState<_Anime4kDialog> {
         (value) => value.asData?.value ?? const PlayerSettings(),
       ),
     );
+    final diagnostics = ref.watch(anime4kDiagnosticsProvider);
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final folder = settings.anime4kShaderDirectory.trim();
@@ -370,6 +371,40 @@ class _Anime4kDialogState extends ConsumerState<_Anime4kDialog> {
                     await _reapply();
                   },
                 ),
+                if (settings.anime4kEcoEnabled && diagnostics != null) ...[
+                  const SizedBox(height: 4),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colors.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${appText(context, english: 'Requested quality', arabic: 'الجودة المطلوبة')}: '
+                            '${diagnostics.requestedQuality.suffix}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${appText(context, english: 'Effective quality', arabic: 'الجودة الفعلية')}: '
+                            '${diagnostics.effectiveQuality.suffix}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${appText(context, english: 'Backend', arabic: 'المعالج')}: '
+                            '${diagnostics.backend.name}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ],
 
               if (settings.anime4kEnabled) ...[
