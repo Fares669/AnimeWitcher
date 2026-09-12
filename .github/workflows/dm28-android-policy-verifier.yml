@@ -1,0 +1,127 @@
+name: DM-28 Android policy verifier
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm28-android-policy-verifier.yml
+      - lib/core/services/download_transport.dart
+      - lib/core/services/download_service.dart
+      - android/app/src/main/AndroidManifest.xml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dm28-android-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Inject DM-28 transfer-hint policy tests
+        run: |
+          cat > test/core/services/dm28_android_policy_test.dart <<'DART'
+          import 'package:anime_witcher/core/services/download_transport.dart';
+          import 'package:background_downloader/background_downloader.dart';
+          import 'package:flutter_test/flutter_test.dart';
+
+          void main() {
+            test('Android UIDT requires visible running notification and permission', () {
+              final allowed = animeDownloadTransferHints(
+                expectedBytes: 900 * 1024 * 1024,
+                isAndroid: true,
+                runningNotificationEnabled: true,
+                notificationPermissionGranted: true,
+              );
+              expect(allowed, contains(TransferHint.userInitiated));
+              expect(allowed, contains(TransferHint.largeFile));
+
+              final disabled = animeDownloadTransferHints(
+                expectedBytes: 900 * 1024 * 1024,
+                isAndroid: true,
+                runningNotificationEnabled: false,
+                notificationPermissionGranted: true,
+              );
+              expect(disabled, isNot(contains(TransferHint.userInitiated)));
+              expect(disabled, contains(TransferHint.largeFile));
+
+              final denied = animeDownloadTransferHints(
+                expectedBytes: 900 * 1024 * 1024,
+                isAndroid: true,
+                runningNotificationEnabled: true,
+                notificationPermissionGranted: false,
+              );
+              expect(denied, isNot(contains(TransferHint.userInitiated)));
+              expect(denied, contains(TransferHint.largeFile));
+            });
+
+            test('non-Android keeps userInitiated independent of notification permission', () {
+              final hints = animeDownloadTransferHints(
+                expectedBytes: 1024,
+                isAndroid: false,
+                runningNotificationEnabled: false,
+                notificationPermissionGranted: false,
+              );
+              expect(hints, contains(TransferHint.userInitiated));
+            });
+          }
+          DART
+          flutter test test/core/services/dm28_android_policy_test.dart
+
+      - name: Merge Android debug manifest
+        working-directory: android
+        run: ./gradlew :app:processDebugMainManifest --stacktrace
+
+      - name: Verify Android 14 download execution declarations
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          ns = '{http://schemas.android.com/apk/res/android}'
+          candidates = list(Path('android/app/build/intermediates').rglob('AndroidManifest.xml'))
+          if not candidates:
+              raise SystemExit('no merged AndroidManifest.xml produced')
+          merged = max(candidates, key=lambda p: p.stat().st_size)
+          root = ET.parse(merged).getroot()
+          permissions = {
+              e.attrib.get(ns + 'name', '')
+              for e in root.findall('uses-permission')
+          }
+          services = [
+              e.attrib.get(ns + 'name', '')
+              for e in root.findall('./application/service')
+          ]
+          required = 'android.permission.RUN_USER_INITIATED_JOBS'
+          if required not in permissions:
+              raise SystemExit(f'missing {required}')
+          uidt = [s for s in services if 'userinitiated' in s.lower() or 'uidt' in s.lower()]
+          if not uidt:
+              raise SystemExit('RUN_USER_INITIATED_JOBS is declared but no merged UIDT/UserInitiated service was found')
+          print('merged manifest:', merged)
+          print('UIDT services:', uidt)
+          PY
+
+      - name: Compile Android debug sources
+        working-directory: android
+        run: ./gradlew :app:compileDebugKotlin --stacktrace
