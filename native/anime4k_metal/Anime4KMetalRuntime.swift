@@ -23,7 +23,25 @@ struct Anime4KMetalRuntimeConfiguration: Equatable {
     let sourceHeight: Int
     let outputWidth: Int
     let outputHeight: Int
-    let precision: Anime4KMetalPrecisionPolicy = .fp32
+    let precision: Anime4KMetalPrecisionPolicy
+
+    init(
+        shaderPaths: [String],
+        pipelineHash: String,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        outputWidth: Int,
+        outputHeight: Int,
+        precision: Anime4KMetalPrecisionPolicy = .fp32
+    ) {
+        self.shaderPaths = shaderPaths
+        self.pipelineHash = pipelineHash
+        self.sourceWidth = sourceWidth
+        self.sourceHeight = sourceHeight
+        self.outputWidth = outputWidth
+        self.outputHeight = outputHeight
+        self.precision = precision
+    }
 }
 
 enum Anime4KMetalRuntimeStatus: Equatable {
