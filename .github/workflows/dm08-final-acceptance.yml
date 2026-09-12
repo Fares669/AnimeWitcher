@@ -8,6 +8,7 @@ on:
       - .github/workflows/dm08-final-acceptance.yml
       - lib/core/services/download_service.dart
       - lib/core/utils/download_resume.dart
+      - test/core/services/download_source_refresh_checkpoint_guard_test.dart
 
 permissions:
   contents: write
