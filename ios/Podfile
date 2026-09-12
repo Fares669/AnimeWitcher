@@ -25,6 +25,7 @@ end
 
 require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
 require_relative '../scripts/anime4k_media_kit_patch'
+require_relative '../scripts/anime4k_mpv_pacing_patch'
 require_relative '../scripts/anime4k_metal_capi_install'
 
 flutter_ios_podfile_setup
@@ -47,6 +48,10 @@ pre_install do |_installer|
   patch_anime4k_media_kit_video(
     plugin_root: anime4k_plugin_root,
     native_dir: anime4k_native_dir,
+    platform: :ios
+  )
+  patch_anime4k_mpv_render_pacing(
+    plugin_root: anime4k_plugin_root,
     platform: :ios
   )
   install_anime4k_metal_capi(
