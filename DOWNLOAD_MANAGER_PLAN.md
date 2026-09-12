@@ -314,7 +314,7 @@
   - **Implementation notes (2026-09-12):** Refresh descriptors are owned by logical task generation inside DownloadService start/cancel boundaries. Obsolete callers cannot remove a newer generation descriptor, and descriptor persistence failure is surfaced through the typed start outcome instead of being silently detached from job creation.
   - **Verification passed:** generation/owner descriptor guards, typed start outcome coverage, URL refresh behavior, DM-11 replica-transaction compatibility, full analyzer, and the dedicated `Verify DM-31 generation-owned refresh descriptors` workflow.
 
-- [ ] **DM-08 — Make source refresh complete and safe for every resumable representation**
+- [x] **DM-08 — Make source refresh complete and safe for every resumable representation**
   - **Problem:** native-resume-only single downloads cannot safely migrate opaque bytes when signed URLs expire; HTTP refresh handling differs across paths.
   - **Root cause:** no unified capability matrix exists for visible prefix, opaque native resume data, multipart ranges and provider refresh identity.
   - **Severity / priority:** **P1 / High.**
@@ -322,6 +322,8 @@
   - **Proposed fix:** same-source native resume first when valid; otherwise migrate/adopt only proven bytes, validate stable resource identity, then Range-resume/restart. Normalize 401/403/404 policy using source/provider evidence. If opaque bytes cannot migrate, return explicit `restartRequired` rather than loop/deadlock.
   - **Verification/testing:** 401/403/404; native resume only; visible partial; changed size/validator/content; descriptor expired; provider unavailable; refresh during crash/relaunch.
   - **Dependencies:** DM-03, DM-06, DM-20, DM-31.
+  - **Implementation notes (2026-09-13):** Resume now distinguishes same-source native adoption, visible-prefix migration, multipart-owned bytes, clean zero-evidence restart, and opaque native-only ownership. A validated source replacement cannot silently discard opaque native resume bytes; that path surfaces `restartRequired` instead.
+  - **Verification passed:** 401/403 and optional 404 refresh policy, unavailable refresh providers, validator/size/content identity guards, prefix-integrity checks, generation-owned descriptors, refresh checkpoint ordering, native/partial/multipart capability decisions, explicit restart-required wiring, resume fallback behavior, and full analyzer.
 
 - [x] **DM-16 — Separate historical presentation progress from recoverable-byte evidence**
   - **Problem:** `savedProgress > 0` currently prevents zero restart even if no bytes or native resume data survive.
