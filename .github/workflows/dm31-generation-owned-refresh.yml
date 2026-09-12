@@ -8,9 +8,13 @@ on:
       - .github/workflows/dm31-generation-owned-refresh.yml
       - .github/scripts/dm31_patch.py
       - .github/scripts/dm31_patch_v2.py
+      - .github/scripts/dm31_owner_scope_fix.py
+      - .github/scripts/dm11_foundation_patch.py
+      - .github/scripts/dm11_verifier_patch.py
       - test/core/services/download_refresh_descriptor_ownership_guard_test.dart
       - test/core/services/download_url_refresh_generation_test.dart
       - test/core/services/download_url_refresh_test.dart
+      - test/core/services/download_replica_transaction_test.dart
 
 permissions:
   contents: write
@@ -41,11 +45,26 @@ jobs:
       - name: Apply DM-31 production patch
         run: |
           python3 .github/scripts/dm31_patch_v2.py
+          python3 .github/scripts/dm31_owner_scope_fix.py
           dart format lib/core/services/download_url_refresh.dart lib/features/details/presentation/download_launcher.dart lib/core/services/download_service.dart
           git diff --check
       - name: Verify DM-31 focused behavior
         run: |
           flutter test test/core/services/download_refresh_descriptor_ownership_guard_test.dart test/core/services/download_url_refresh_generation_test.dart test/core/services/download_url_refresh_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          git diff --check
+      - name: Verify full analyzer across DM-11 cycle foundation
+        shell: bash
+        run: |
+          set -euo pipefail
+          backup="$(mktemp)"
+          cp lib/core/services/download_job_store.dart "$backup"
+          restore_job_store() {
+            cp "$backup" lib/core/services/download_job_store.dart
+            rm -f "$backup"
+          }
+          trap restore_job_store EXIT
+          python3 .github/scripts/dm11_verifier_patch.py
+          dart format lib/core/services/download_job_store.dart
           flutter analyze --no-fatal-warnings --no-fatal-infos
           git diff --check
       - name: Commit verified DM-31 production changes
@@ -57,11 +76,25 @@ jobs:
           git config user.name 'openai-download-agent'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add lib/core/services/download_url_refresh.dart lib/features/details/presentation/download_launcher.dart lib/core/services/download_service.dart
-          git commit -m 'fix(downloads): generation-fence refresh descriptors (DM-31)'
+          git commit -m 'fix(downloads): owner-fence refresh descriptors (DM-31)'
           git pull --rebase origin plan/download-manager-reliability
       - name: Reverify and push
+        shell: bash
         run: |
+          set -euo pipefail
           flutter test test/core/services/download_refresh_descriptor_ownership_guard_test.dart test/core/services/download_url_refresh_generation_test.dart test/core/services/download_url_refresh_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          backup="$(mktemp)"
+          cp lib/core/services/download_job_store.dart "$backup"
+          restore_job_store() {
+            cp "$backup" lib/core/services/download_job_store.dart
+            rm -f "$backup"
+          }
+          trap restore_job_store EXIT
+          python3 .github/scripts/dm11_verifier_patch.py
+          dart format lib/core/services/download_job_store.dart
           flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+          restore_job_store
+          trap - EXIT
           git diff --check
           git push origin HEAD:plan/download-manager-reliability
