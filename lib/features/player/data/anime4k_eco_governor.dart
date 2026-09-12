@@ -76,10 +76,7 @@ class Anime4kEcoGovernor {
       averageFrameTimeMs: telemetry.averageFrameTimeMs,
       p95FrameTimeMs: telemetry.p95FrameTimeMs,
       processedFrames: telemetry.processedFrames,
-      // AKP-14 will populate native duplicate-frame accounting. Until then,
-      // exposing zero is explicit and avoids conflating intentional Eco bypass
-      // or backpressure with duplicate display refreshes.
-      skippedDuplicateFrames: 0,
+      skippedDuplicateFrames: telemetry.skippedDuplicateFrames,
       droppedOrLateFrames: telemetry.lateOrDroppedFrames,
       thermalLevel: telemetry.thermalLevel,
       lowPowerMode: telemetry.lowPowerMode,

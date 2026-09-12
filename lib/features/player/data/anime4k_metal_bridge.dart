@@ -28,6 +28,7 @@ class Anime4kMetalTelemetry {
     required this.averageFrameTimeMs,
     required this.p95FrameTimeMs,
     required this.processedFrames,
+    this.skippedDuplicateFrames = 0,
     required this.lateOrDroppedFrames,
     required this.inputWidth,
     required this.inputHeight,
@@ -40,6 +41,7 @@ class Anime4kMetalTelemetry {
   final double averageFrameTimeMs;
   final double p95FrameTimeMs;
   final int processedFrames;
+  final int skippedDuplicateFrames;
   final int lateOrDroppedFrames;
   final int inputWidth;
   final int inputHeight;
@@ -123,6 +125,7 @@ class Anime4kMetalBridge {
       final average = decoded['averageFrameTimeMs'];
       final p95 = decoded['p95FrameTimeMs'];
       final processed = decoded['processedFrames'];
+      final skippedDuplicate = decoded['skippedDuplicateFrames'] ?? 0;
       final lateOrDropped = decoded['lateOrDroppedFrames'];
       final inputWidth = decoded['inputWidth'];
       final inputHeight = decoded['inputHeight'];
@@ -133,6 +136,7 @@ class Anime4kMetalBridge {
       if (average is! num ||
           p95 is! num ||
           processed is! num ||
+          skippedDuplicate is! num ||
           lateOrDropped is! num ||
           inputWidth is! num ||
           inputHeight is! num ||
@@ -154,6 +158,7 @@ class Anime4kMetalBridge {
           average.isNegative ||
           p95.isNegative ||
           processed.isNegative ||
+          skippedDuplicate.isNegative ||
           lateOrDropped.isNegative ||
           inputWidth <= 0 ||
           inputHeight <= 0 ||
@@ -166,6 +171,7 @@ class Anime4kMetalBridge {
         averageFrameTimeMs: average.toDouble(),
         p95FrameTimeMs: p95.toDouble(),
         processedFrames: processed.toInt(),
+        skippedDuplicateFrames: skippedDuplicate.toInt(),
         lateOrDroppedFrames: lateOrDropped.toInt(),
         inputWidth: inputWidth.toInt(),
         inputHeight: inputHeight.toInt(),

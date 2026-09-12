@@ -170,9 +170,14 @@ def patch_anime4k_media_kit_video(plugin_root:, native_dir:, platform:)
           'media_kit VideoOutput publication marker changed'
   end
 
+  context_enter = platform == :ios ? 'EAGLContext.setCurrent(context)' : 'CGLSetCurrentContext(context)'
+  context_exit = platform == :ios ? 'EAGLContext.setCurrent(nil)' : 'CGLSetCurrentContext(nil)'
+
   texture = sources[:texture].sub(
     texture_signature,
-    <<~'SWIFT'.lines.map { |line| "  #{line}" }.join
+    <<~SWIFT.lines.map { |line| "  #{line}" }.join
+      private var anime4kFrameGeneration: UInt64 = 0
+
       public func render(_ size: CGSize) {
         render(size, completion: {})
       }
@@ -181,6 +186,74 @@ def patch_anime4k_media_kit_video(plugin_root:, native_dir:, platform:)
         _ size: CGSize,
         completion: @escaping () -> Void
       ) {
+        if Anime4KMediaKitBridge.shared.runtimeStatus(handle: handle) == .ready {
+          #{context_enter}
+          let anime4kUpdateFlags = mpv_render_context_update(renderContext)
+          guard anime4kUpdateFlags & UInt64(MPV_RENDER_UPDATE_FRAME.rawValue) != 0 else {
+            #{context_exit}
+            completion()
+            return
+          }
+
+          var anime4kFrameInfo = mpv_render_frame_info()
+          let anime4kFrameInfoResult = withUnsafeMutablePointer(to: &anime4kFrameInfo) { pointer in
+            let parameter = mpv_render_param(
+              type: MPV_RENDER_PARAM_NEXT_FRAME_INFO,
+              data: UnsafeMutableRawPointer(pointer)
+            )
+            return mpv_render_context_get_info(renderContext, parameter)
+          }
+          let anime4kHasFrame = anime4kFrameInfo.flags &
+            UInt64(MPV_RENDER_FRAME_INFO_PRESENT.rawValue) != 0
+          let anime4kIsRepeat = anime4kFrameInfo.flags &
+            UInt64(MPV_RENDER_FRAME_INFO_REPEAT.rawValue) != 0
+          let anime4kIsRedraw = anime4kFrameInfo.flags &
+            UInt64(MPV_RENDER_FRAME_INFO_REDRAW.rawValue) != 0
+          let anime4kRuntimeKey = UInt(bitPattern: Int(bitPattern: handle))
+
+          if anime4kFrameInfoResult >= 0 && anime4kHasFrame &&
+              anime4kIsRepeat && !anime4kIsRedraw {
+            var anime4kSkipRendering: CInt = 1
+            withUnsafeMutablePointer(to: &anime4kSkipRendering) { pointer in
+              var parameters = [
+                mpv_render_param(
+                  type: MPV_RENDER_PARAM_SKIP_RENDERING,
+                  data: UnsafeMutableRawPointer(pointer)
+                ),
+                mpv_render_param(),
+              ]
+              mpv_render_context_render(renderContext, &parameters)
+            }
+            Anime4KFrameDedupRegistry.shared.recordSkippedDuplicate(
+              for: anime4kRuntimeKey
+            )
+            #{context_exit}
+            completion()
+            return
+          }
+
+          anime4kFrameGeneration &+= 1
+          if !Anime4KFrameDedupRegistry.shared.claim(
+            frameGeneration: anime4kFrameGeneration,
+            for: anime4kRuntimeKey
+          ) {
+            var anime4kSkipRendering: CInt = 1
+            withUnsafeMutablePointer(to: &anime4kSkipRendering) { pointer in
+              var parameters = [
+                mpv_render_param(
+                  type: MPV_RENDER_PARAM_SKIP_RENDERING,
+                  data: UnsafeMutableRawPointer(pointer)
+                ),
+                mpv_render_param(),
+              ]
+              mpv_render_context_render(renderContext, &parameters)
+            }
+            #{context_exit}
+            completion()
+            return
+          }
+          #{context_exit}
+        }
     SWIFT
   )
   texture = texture.sub(

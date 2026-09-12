@@ -126,6 +126,10 @@ enum Anime4KMetalDartAPI {
             "averageFrameTimeMs": runtime.averageFrameTimeMs,
             "p95FrameTimeMs": runtime.p95FrameTimeMs,
             "processedFrames": runtime.processedFrames,
+            "skippedDuplicateFrames": runtime.skippedDuplicateFrames +
+                Anime4KFrameDedupRegistry.shared.skippedDuplicateFrames(
+                    for: UInt(handleAddress)
+                ),
             "lateOrDroppedFrames": runtime.lateOrDroppedFrames,
             "inputWidth": configuration.sourceWidth,
             "inputHeight": configuration.sourceHeight,
@@ -177,6 +181,7 @@ enum Anime4KMetalDartAPI {
         if let handle = OpaquePointer(bitPattern: UInt(handleAddress)) {
             Anime4KMediaKitBridge.shared.disable(handle: handle)
         }
+        Anime4KFrameDedupRegistry.shared.reset(for: UInt(handleAddress))
         _ = record(.disabled, for: handleAddress)
     }
 
