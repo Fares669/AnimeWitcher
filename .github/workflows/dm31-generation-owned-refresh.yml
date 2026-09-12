@@ -6,6 +6,7 @@ on:
       - plan/download-manager-reliability
     paths:
       - .github/workflows/dm31-generation-owned-refresh.yml
+      - .github/scripts/dm31_apply_patch.py
       - .github/scripts/dm31_patch.py
       - .github/scripts/dm31_patch_v2.py
       - .github/scripts/dm31_owner_scope_fix.py
@@ -44,7 +45,7 @@ jobs:
           dart run build_runner build --delete-conflicting-outputs
       - name: Apply DM-31 production patch
         run: |
-          python3 .github/scripts/dm31_patch_v2.py
+          python3 .github/scripts/dm31_apply_patch.py
           python3 .github/scripts/dm31_owner_scope_fix.py
           dart format lib/core/services/download_url_refresh.dart lib/features/details/presentation/download_launcher.dart lib/core/services/download_service.dart
           git diff --check
