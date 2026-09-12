@@ -41,9 +41,9 @@ const String anime4kProjectUrl = 'https://github.com/bloc97/Anime4K';
 
 /// Integrity metadata for one shader in the pinned release.
 ///
-/// [gitBlobSha1] is the object id Git assigns to the exact file bytes. Using
-/// the upstream blob id lets this app pin content directly to the v4.0.1 tag
-/// without maintaining a second independently-generated checksum source.
+/// [gitBlobSha1] is Git's content-addressed object id for the exact file bytes.
+/// We use the same construction for the release-asset bytes so verification is
+/// deterministic even where the release ZIP differs from the tagged Git tree.
 class Anime4kExpectedShader {
   const Anime4kExpectedShader({
     required this.size,
@@ -54,17 +54,19 @@ class Anime4kExpectedShader {
   final String gitBlobSha1;
 }
 
-/// The exact v4.0.1 shader subset used by AnimeWitcher's A/B/C pipelines.
+/// The exact v4.0.1 release-asset shader subset used by AnimeWitcher's A/B/C
+/// pipelines.
 ///
-/// These sizes and Git blob ids come from Anime4K tag `v4.0.1`, commit
-/// `4029bf701ecaa15f163cdc49cffe5501c1acf410`. The downloader activates only
-/// these verified files; unrelated experimental shaders in the release archive
-/// are deliberately ignored.
+/// Most files are byte-identical to tag `v4.0.1`; the official ZIP's
+/// Clamp_Highlights and AutoDownscalePre x2/x4 files are not. These values pin
+/// the bytes from `Anime4K_v4.0.zip`, because that is the artifact this app
+/// actually downloads. Apple CI re-downloads the official asset and verifies
+/// every entry against this manifest before translating the corpus to Metal.
 const Map<String, Anime4kExpectedShader> anime4kV401ExpectedManifest =
     <String, Anime4kExpectedShader>{
       'Anime4K_Clamp_Highlights.glsl': Anime4kExpectedShader(
-        size: 2795,
-        gitBlobSha1: '71dcf7344a7757c82867949164c650095a7b9735',
+        size: 2884,
+        gitBlobSha1: '755130a8293c42835a2e28cf4ec14fed651a8b23',
       ),
       'Anime4K_Restore_CNN_S.glsl': Anime4kExpectedShader(
         size: 17136,
@@ -147,12 +149,12 @@ const Map<String, Anime4kExpectedShader> anime4kV401ExpectedManifest =
         gitBlobSha1: '18c8453b0262c32347fd94c81791efb271a0a8b5',
       ),
       'Anime4K_AutoDownscalePre_x2.glsl': Anime4kExpectedShader(
-        size: 1560,
-        gitBlobSha1: '3e381373dc531160a0c876bc1a5675738fdb0cce',
+        size: 1596,
+        gitBlobSha1: 'd321b7d79a0922b4e219b30a65840646c6f5ff8d',
       ),
       'Anime4K_AutoDownscalePre_x4.glsl': Anime4kExpectedShader(
-        size: 1568,
-        gitBlobSha1: '1c4d421b2e4c42902b23ea62c18f8bdaaee280c7',
+        size: 1604,
+        gitBlobSha1: '7ffa64d0baf86ac27c769cb49f436fba68f717d7',
       ),
     };
 
