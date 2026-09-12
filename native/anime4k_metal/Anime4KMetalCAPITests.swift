@@ -109,6 +109,10 @@ struct Anime4KMetalCAPITests {
         precondition(telemetry["p95FrameTimeMs"] is NSNumber)
         precondition((telemetry["processedFrames"] as? NSNumber)?.intValue == 0)
         precondition(telemetry["lateOrDroppedFrames"] is NSNumber)
+        precondition((telemetry["inputWidth"] as? NSNumber)?.intValue == 8)
+        precondition((telemetry["inputHeight"] as? NSNumber)?.intValue == 8)
+        precondition((telemetry["processingWidth"] as? NSNumber)?.intValue == 8)
+        precondition((telemetry["processingHeight"] as? NSNumber)?.intValue == 8)
         precondition(telemetry["lowPowerMode"] is Bool)
         let thermal = telemetry["thermalLevel"] as? String
         precondition(
