@@ -64,6 +64,7 @@ jobs:
             -framework CoreVideo \
             -framework Metal \
             native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMediaKitBridge.swift \
             native/anime4k_metal/Anime4KMetalRuntimeTests.swift \
@@ -82,6 +83,7 @@ jobs:
             -framework CoreVideo \
             -framework Metal \
             native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMediaKitBridge.swift \
             native/anime4k_metal/Anime4KMediaKitBridgeTests.swift \
@@ -93,6 +95,7 @@ jobs:
             -framework CoreVideo \
             -framework Metal \
             native/anime4k_metal/Anime4KMetalShader.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMediaKitBridge.swift \
             native/anime4k_metal/Anime4KMetalCAPI.swift \
