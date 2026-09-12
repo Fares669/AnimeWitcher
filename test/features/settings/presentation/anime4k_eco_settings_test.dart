@@ -37,5 +37,19 @@ void main() {
       expect(source, contains('settings.anime4kEcoEnabled'));
       expect(source, contains('setAnime4kEcoEnabled'));
     });
+
+    test('Eco diagnostics show requested/effective quality and live backend', () {
+      final source = File(
+        'lib/features/settings/presentation/widgets/anime4k_dialog.dart',
+      ).readAsStringSync();
+
+      expect(source, contains('anime4kPerformanceSnapshot'));
+      expect(source, contains("english: 'Requested quality'"));
+      expect(source, contains("english: 'Effective quality'"));
+      expect(source, contains("english: 'Backend'"));
+      expect(source, contains('_anime4kDiagnosticsTimer'));
+      expect(source, contains('Timer.periodic(const Duration(seconds: 1)'));
+      expect(source, contains('_anime4kDiagnosticsTimer?.cancel()'));
+    });
   });
 }
