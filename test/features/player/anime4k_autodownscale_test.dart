@@ -22,7 +22,7 @@ Anime4kChain _resolve(Anime4kMode mode) => resolveAnime4kChain(
 
 void main() {
   group('official optimized AutoDownscale ordering', () {
-    test('Mode A matches Anime4K Apple fast ordering', () {
+    test('Mode A inserts AutoDownscale before the final upscale', () {
       expect(_resolve(Anime4kMode.a).files, <String>[
         'Anime4K_Clamp_Highlights.glsl',
         'Anime4K_Restore_CNN_M.glsl',
@@ -33,13 +33,15 @@ void main() {
       ]);
     });
 
-    test('Mode C downscales between its two upscale stages', () {
+    test('Mode C inserts AutoDownscale before its final upscale', () {
       expect(_resolve(Anime4kMode.c).files, <String>[
         'Anime4K_Clamp_Highlights.glsl',
         'Anime4K_Upscale_Denoise_CNN_x2_M.glsl',
         'Anime4K_AutoDownscalePre_x2.glsl',
         'Anime4K_AutoDownscalePre_x4.glsl',
-        'Anime4K_Upscale_CNN_x2_S.glsl',
+        // AKP-02 defines the AutoDownscale placement only. Stage-aware
+        // post-upscale quality reduction (M -> S here) belongs to AKP-03.
+        'Anime4K_Upscale_CNN_x2_M.glsl',
       ]);
     });
 
