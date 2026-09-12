@@ -85,14 +85,23 @@ jobs:
             lib/core/services/download_continued_processing_service.dart \
             lib/core/services/download_transport.dart
 
-      - name: Verify both staged GREEN contracts
+      - name: Verify DM-17 teardown barrier
         run: |
           flutter test test/core/services/download_teardown_barrier_test.dart \
             --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify DM-17 range transfer teardown
+        run: |
           flutter test test/core/services/download_range_transfer_test.dart \
             --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify DM-28 transport policy
+        run: |
           flutter test test/core/services/download_transport_test.dart \
             --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify analyzer and diff
+        run: |
           flutter analyze --no-fatal-warnings --no-fatal-infos
           git diff --check
 
@@ -124,5 +133,3 @@ jobs:
           git diff --check
 
           git push origin HEAD:plan/download-manager-reliability
-
-# retrigger: apply staged DM-17/DM-28 production patches after RED CI confirmation
