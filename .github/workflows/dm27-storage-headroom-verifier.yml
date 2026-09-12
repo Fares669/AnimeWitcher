@@ -105,12 +105,44 @@ jobs:
         env:
           DM27_TEST_ROOT: /mnt/dm27
         run: |
-          rm -rf /mnt/dm27/* || true
-          flutter test test/core/services/persistent_parallel_download_storage_headroom_test.dart
-          flutter test test/core/services/persistent_parallel_download_test.dart
-          flutter test test/core/services/persistent_parallel_download_auto_recovery_test.dart
-          flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
-          flutter analyze --no-fatal-warnings --no-fatal-infos
+          set +e
+          mkdir -p /tmp/dm27-logs
+          failures=0
+
+          run_check() {
+            name="$1"
+            shift
+            echo "=== $name ==="
+            rm -rf /mnt/dm27/* || true
+            "$@" 2>&1 | tee "/tmp/dm27-logs/${name}.log"
+            rc=${PIPESTATUS[0]}
+            echo "$rc" > "/tmp/dm27-logs/${name}.exit"
+            if [ "$rc" -ne 0 ]; then
+              failures=$((failures + 1))
+              echo "::error::DM-27 check failed: $name (exit $rc)"
+            fi
+          }
+
+          run_check storage-headroom flutter test test/core/services/persistent_parallel_download_storage_headroom_test.dart
+          run_check multipart flutter test test/core/services/persistent_parallel_download_test.dart
+          run_check auto-recovery flutter test test/core/services/persistent_parallel_download_auto_recovery_test.dart
+          run_check durable-manifest flutter test test/core/services/persistent_parallel_download_durable_manifest_guard_test.dart
+          run_check analyzer flutter analyze --no-fatal-warnings --no-fatal-infos
+
+          echo "$failures" > /tmp/dm27-logs/failures.count
+          if [ "$failures" -ne 0 ]; then
+            echo "DM-27 verifier collected $failures failing checks"
+            exit 1
+          fi
+
+      - name: Upload DM-27 verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm27-verification-${{ github.run_id }}
+          path: /tmp/dm27-logs
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Mark DM-27 verified and commit
         run: |
