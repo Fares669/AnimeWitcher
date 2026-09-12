@@ -13,6 +13,7 @@ import '../data/anime4k_eco_governor.dart';
 import '../data/anime4k_metal_bridge.dart';
 import '../data/anime4k_metal_ffi.dart';
 import '../data/anime4k_performance.dart';
+import '../data/anime4k_performance_log.dart';
 import '../data/anime4k_shader_library.dart';
 import 'player_controller_base.dart' as base;
 
@@ -50,6 +51,7 @@ class PlayerController extends base.PlayerController {
   Anime4kQuality? _anime4kEcoEffectiveQuality;
   Anime4kPerformanceSnapshot? _anime4kPerformanceSnapshot;
   late Anime4kDiagnosticsController _anime4kDiagnostics;
+  late Anime4kPerformanceLog _anime4kPerformanceLog;
   bool _anime4kEcoSampleInFlight = false;
   bool _anime4kForceMpvFallback = false;
 
@@ -62,6 +64,7 @@ class PlayerController extends base.PlayerController {
   base.PlayerState build() {
     final initial = super.build();
     _anime4kDiagnostics = ref.read(anime4kDiagnosticsProvider.notifier);
+    _anime4kPerformanceLog = ref.read(anime4kPerformanceLogProvider);
 
     ref.listen(playerSettingsProvider, (previous, next) {
       final before = previous?.asData?.value;
@@ -144,6 +147,19 @@ class PlayerController extends base.PlayerController {
   Future<void> applyAnime4kShaders() async {
     try {
       if (_anime4kForceMpvFallback && _isApplePlatform) {
+        final fallbackSettings = ref.read(playerSettingsProvider).asData?.value;
+        if (fallbackSettings != null) {
+          unawaited(
+            _anime4kPerformanceLog.recordRoute(
+              backend: Anime4kBackend.mpvGlsl,
+              mode: fallbackSettings.anime4kMode,
+              requestedQuality: fallbackSettings.anime4kQuality,
+              ecoEnabled: fallbackSettings.anime4kEcoEnabled,
+              metalFxExperiment: _anime4kMetalFxExperimentEnabled,
+              reason: 'runtime-fallback',
+            ),
+          );
+        }
         await _applyResolvedMpvFallback();
         return;
       }
@@ -166,6 +182,19 @@ class PlayerController extends base.PlayerController {
               ? Anime4kNativeMetalState.ready
               : Anime4kNativeMetalState.unsupportedHdr;
           if (colorState == Anime4kNativeMetalState.unsupportedHdr) {
+            unawaited(
+              _anime4kPerformanceLog.recordRoute(
+                backend: Anime4kBackend.mpvGlsl,
+                mode: settings.anime4kMode,
+                requestedQuality: settings.anime4kQuality,
+                ecoEnabled: settings.anime4kEcoEnabled,
+                metalFxExperiment: _anime4kMetalFxExperimentEnabled,
+                colorSignal: colorSignal.name,
+                reason: colorSignal == Anime4kColorSignal.hdr
+                    ? 'hdr-fallback'
+                    : 'unknown-color-fallback',
+              ),
+            );
             await _applyResolvedMpvFallback(platform: platform);
             return;
           }
@@ -176,6 +205,9 @@ class PlayerController extends base.PlayerController {
       if (isDisposed) return;
 
       final settings = ref.read(playerSettingsProvider).asData?.value;
+      if (settings != null) {
+        await _recordAnime4kPostApplyRoute(settings);
+      }
       if (!_isApplePlatform ||
           settings == null ||
           !settings.anime4kEnabled ||
@@ -215,6 +247,47 @@ class PlayerController extends base.PlayerController {
         debugPrint('Anime4K Eco setup skipped: $error');
       }
     }
+  }
+
+  bool get _anime4kMetalFxExperimentEnabled {
+    final settings = ref.read(playerSettingsProvider).asData?.value;
+    return bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&
+        (settings?.anime4kEcoEnabled ?? false);
+  }
+
+  Future<void> _recordAnime4kPostApplyRoute(PlayerSettings settings) async {
+    if (!settings.anime4kEnabled || settings.anime4kMode == Anime4kMode.off) {
+      return;
+    }
+
+    var backend = Anime4kBackend.mpvGlsl;
+    final platform = player.platform;
+    if (_isApplePlatform && platform is NativePlayer) {
+      try {
+        final bridge = _ecoMetalBridge();
+        final handle = await platform.handle;
+        if (bridge != null &&
+            handle > 0 &&
+            bridge.status(handle: handle) == Anime4kNativeMetalState.ready) {
+          backend = settings.anime4kEcoEnabled
+              ? Anime4kBackend.metalEco
+              : Anime4kBackend.metal;
+        }
+      } catch (_) {
+        backend = Anime4kBackend.mpvGlsl;
+      }
+    }
+
+    unawaited(
+      _anime4kPerformanceLog.recordRoute(
+        backend: backend,
+        mode: settings.anime4kMode,
+        requestedQuality: settings.anime4kQuality,
+        ecoEnabled: settings.anime4kEcoEnabled,
+        metalFxExperiment: _anime4kMetalFxExperimentEnabled,
+        reason: 'post-apply',
+      ),
+    );
   }
 
   Future<void> _sampleAnime4kEco() async {
@@ -320,6 +393,14 @@ class PlayerController extends base.PlayerController {
   ) {
     _anime4kPerformanceSnapshot = snapshot;
     _anime4kDiagnostics.publish(snapshot);
+    if (snapshot != null) {
+      unawaited(
+        _anime4kPerformanceLog.recordSnapshot(
+          snapshot,
+          metalFxExperiment: _anime4kMetalFxExperimentEnabled,
+        ),
+      );
+    }
   }
 
   Future<bool> _applyAnime4kEcoQuality({
