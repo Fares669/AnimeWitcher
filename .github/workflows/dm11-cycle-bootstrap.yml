@@ -1,0 +1,130 @@
+name: Bootstrap DM-11 transaction foundation
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm11-cycle-bootstrap.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm11-cycle-bootstrap-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Materialize DM-11 behavioral RED
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/dm11-replica-transaction-foundation.yml').read_text()
+          start = "          cat > test/core/services/download_replica_transaction_test.dart <<'DART'\n"
+          end = "\n          DART\n"
+          if start not in source:
+              raise SystemExit('DM-11 test source marker drift')
+          body = source.split(start, 1)[1].split(end, 1)[0]
+          Path('test/core/services/download_replica_transaction_test.dart').write_text(
+              textwrap.dedent(body) + '\n'
+          )
+          PY
+          dart format test/core/services/download_replica_transaction_test.dart
+
+      - name: Prove DM-11 RED
+        run: |
+          if grep -q 'beginReplicaTransaction' lib/core/services/download_job_store.dart; then
+            echo 'Transaction foundation already exists; historical RED already established.'
+            exit 0
+          fi
+          set +e
+          flutter test test/core/services/download_replica_transaction_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key \
+            > /tmp/dm11-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/dm11-red.log
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected DM-11 behavioral test to fail before journal implementation.' >&2
+            exit 1
+          fi
+          grep -Eq 'beginReplicaTransaction|DownloadReplicaOperation|replicaTransaction' /tmp/dm11-red.log
+
+      - name: Apply durable replica transaction foundation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/dm11-replica-transaction-foundation.yml').read_text()
+          step = source.split('      - name: Apply durable replica transaction journal\n', 1)[1]
+          start = "          python3 - <<'PY'\n"
+          end = "\n          PY\n"
+          script = textwrap.dedent(step.split(start, 1)[1].split(end, 1)[0])
+
+          replacements = [
+              (
+                  "    lastByteReconciliationAtMillis:\n                  lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\n              );",
+                  "    lastByteReconciliationAtMillis:\n        lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,\n  );",
+              ),
+              (
+                  "    if (lastByteReconciliationAtMillis != null)\n                'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,\n            };",
+                  "    if (lastByteReconciliationAtMillis != null)\n      'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,\n  };",
+              ),
+              (
+                  "      lastByteReconciliationAtMillis: _nullableIntValue(\n                  map['lastByteReconciliationAtMillis'],\n                ),\n              );",
+                  "      lastByteReconciliationAtMillis: _nullableIntValue(\n        map['lastByteReconciliationAtMillis'],\n      ),\n    );",
+              ),
+          ]
+          for old, new in replacements:
+              if old not in script:
+                  raise SystemExit('DM-11 extracted patch anchor drift')
+              script = script.replace(old, new, 1)
+
+          exec(compile(script, '<dm11-foundation>', 'exec'), {'__name__': '__main__'})
+          PY
+          dart format lib/core/services/download_job_store.dart
+          git diff --check
+
+      - name: Verify DM-11 foundation GREEN
+        run: |
+          flutter test \
+            test/core/services/download_replica_transaction_test.dart \
+            test/core/services/download_recovery_fault_injection_test.dart \
+            test/core/services/download_relaunch_chaos_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+
+      - name: Commit verified foundation
+        run: |
+          if git diff --quiet -- lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart; then
+            echo 'DM-11 transaction foundation already verified; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
+          git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11 foundation)'
+          git pull --rebase origin plan/download-manager-reliability
+          git push origin HEAD:plan/download-manager-reliability
