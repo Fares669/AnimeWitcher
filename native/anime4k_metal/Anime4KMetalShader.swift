@@ -182,8 +182,12 @@ struct Anime4KMetalShader {
     }
 
     static func parse(_ glsl: String) throws -> [Anime4KMetalShader] {
+        // `String.split(separator: "\n")` does not split CRLF text in Swift
+        // because CRLF is treated as one extended grapheme cluster. Anime4K's
+        // v4.0.1 release ZIP contains CRLF shaders even though the Git tree is
+        // LF, so split using Foundation's newline character set instead.
         let lines = glsl
-            .split(separator: "\n", omittingEmptySubsequences: false)
+            .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
 
         var shaders: [Anime4KMetalShader] = []
