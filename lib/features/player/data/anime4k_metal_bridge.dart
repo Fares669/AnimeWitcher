@@ -67,6 +67,7 @@ class Anime4kMetalBridge {
     required Anime4kProcessingDimensions source,
     required Anime4kProcessingDimensions output,
     String precision = 'mixedFP16',
+    String upscaleStrategy = 'fullAnime4K',
   }) {
     if (handle <= 0 ||
         shaderPaths.isEmpty ||
@@ -87,6 +88,7 @@ class Anime4kMetalBridge {
         'outputWidth': output.width,
         'outputHeight': output.height,
         'precision': precision,
+        'upscaleStrategy': upscaleStrategy,
       });
       return _stateFromNative(_bindings.configure(handle, payload));
     } catch (_) {

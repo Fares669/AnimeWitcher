@@ -2694,6 +2694,12 @@ class PlayerController extends Notifier<PlayerState> {
 
     try {
       final settings = ref.read(playerSettingsProvider).asData?.value;
+      final useMetalFxExperiment =
+          bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&
+          (settings?.anime4kEcoEnabled ?? false);
+      final upscaleStrategy = useMetalFxExperiment
+          ? 'restoreDenoiseMetalFXSpatial'
+          : 'fullAnime4K';
       final anime4kEnabled = settings?.anime4kEnabled ?? false;
       final shaderDirectory = settings?.anime4kShaderDirectory.trim() ?? '';
       final pipeline = await ref
@@ -2727,6 +2733,7 @@ class PlayerController extends Notifier<PlayerState> {
               pipelineHash: pipeline.pipelineHash,
               source: dimensions.source,
               output: dimensions.output,
+              upscaleStrategy: upscaleStrategy,
             );
           }
         }

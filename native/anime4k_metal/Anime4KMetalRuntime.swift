@@ -16,6 +16,11 @@ import CoreVideo
 import Foundation
 import Metal
 
+enum Anime4KAppleUpscaleStrategy: String, Equatable {
+    case fullAnime4K
+    case restoreDenoiseMetalFXSpatial
+}
+
 struct Anime4KMetalRuntimeConfiguration: Equatable {
     let shaderPaths: [String]
     let pipelineHash: String
@@ -24,6 +29,7 @@ struct Anime4KMetalRuntimeConfiguration: Equatable {
     let outputWidth: Int
     let outputHeight: Int
     let precision: Anime4KMetalPrecisionPolicy
+    let upscaleStrategy: Anime4KAppleUpscaleStrategy
 
     init(
         shaderPaths: [String],
@@ -32,7 +38,8 @@ struct Anime4KMetalRuntimeConfiguration: Equatable {
         sourceHeight: Int,
         outputWidth: Int,
         outputHeight: Int,
-        precision: Anime4KMetalPrecisionPolicy = .mixedFP16
+        precision: Anime4KMetalPrecisionPolicy = .mixedFP16,
+        upscaleStrategy: Anime4KAppleUpscaleStrategy = .fullAnime4K
     ) {
         self.shaderPaths = shaderPaths
         self.pipelineHash = pipelineHash
@@ -41,6 +48,7 @@ struct Anime4KMetalRuntimeConfiguration: Equatable {
         self.outputWidth = outputWidth
         self.outputHeight = outputHeight
         self.precision = precision
+        self.upscaleStrategy = upscaleStrategy
     }
 }
 
@@ -118,6 +126,8 @@ enum Anime4KMetalRuntimeError: Error, LocalizedError {
     case commandBufferUnavailable
     case encoderUnavailable(String)
     case invalidWhen(String)
+    case metalFXUnavailable
+    case metalFXPipeline(String)
 
     var errorDescription: String? {
         switch self {
@@ -149,6 +159,10 @@ enum Anime4KMetalRuntimeError: Error, LocalizedError {
             return "Anime4K Metal encoder is unavailable for: \(name)"
         case .invalidWhen(let expression):
             return "Anime4K Metal WHEN expression is invalid: \(expression)"
+        case .metalFXUnavailable:
+            return "Anime4K MetalFX spatial scaler is unavailable"
+        case .metalFXPipeline(let detail):
+            return "Anime4K MetalFX spatial scaler failed: \(detail)"
         }
     }
 }
@@ -178,6 +192,7 @@ final class Anime4KMetalRuntime {
     private let nearestSampler: MTLSamplerState
     private let linearSampler: MTLSamplerState
     private let finalCopyPipeline: MTLComputePipelineState
+    private let metalFXScaler: Anime4KMetalFXScaler
     private let maxInflightFrames: Int
     private let stateLock = NSLock()
 
@@ -282,6 +297,7 @@ final class Anime4KMetalRuntime {
         self.nearestSampler = nearest
         self.linearSampler = linear
         self.finalCopyPipeline = copyPipeline
+        self.metalFXScaler = Anime4KMetalFXScaler(device: device)
         self.maxInflightFrames = maxInflightFrames
         self.slotLedger = Anime4KMetalSlotLedger(capacity: maxInflightFrames)
         self.slotTextures = Array(repeating: [:], count: maxInflightFrames)
@@ -301,10 +317,26 @@ final class Anime4KMetalRuntime {
         }
 
         do {
-            var nextGroups: [CompiledGroup] = []
-            nextGroups.reserveCapacity(configuration.shaderPaths.count)
+            let shaderPaths: [String]
+            switch configuration.upscaleStrategy {
+            case .fullAnime4K:
+                shaderPaths = configuration.shaderPaths
+            case .restoreDenoiseMetalFXSpatial:
+                guard metalFXScaler.isAvailable else {
+                    throw Anime4KMetalRuntimeError.metalFXUnavailable
+                }
+                shaderPaths = experimentalShaderPaths(configuration.shaderPaths)
+                guard !shaderPaths.isEmpty else {
+                    throw Anime4KMetalRuntimeError.metalFXPipeline(
+                        "no restore/denoise stages remain after filtering"
+                    )
+                }
+            }
 
-            for path in configuration.shaderPaths {
+            var nextGroups: [CompiledGroup] = []
+            nextGroups.reserveCapacity(shaderPaths.count)
+
+            for path in shaderPaths {
                 let url = URL(fileURLWithPath: path)
                 guard let source = try? String(contentsOf: url, encoding: .utf8) else {
                     throw Anime4KMetalRuntimeError.shaderRead(path)
@@ -443,6 +475,23 @@ final class Anime4KMetalRuntime {
                     commandBuffer: commandBuffer
                 )
             }
+            if snapshot.configuration.upscaleStrategy == .restoreDenoiseMetalFXSpatial &&
+                (currentMain.width < snapshot.configuration.outputWidth ||
+                 currentMain.height < snapshot.configuration.outputHeight) {
+                do {
+                    currentMain = try metalFXScaler.encode(
+                        input: currentMain,
+                        outputWidth: snapshot.configuration.outputWidth,
+                        outputHeight: snapshot.configuration.outputHeight,
+                        slot: snapshot.lease.slot,
+                        commandBuffer: commandBuffer
+                    )
+                } catch {
+                    throw Anime4KMetalRuntimeError.metalFXPipeline(
+                        String(describing: error)
+                    )
+                }
+            }
             try encodeFinalCopy(
                 input: currentMain,
                 output: destinationTexture,
@@ -510,6 +559,29 @@ final class Anime4KMetalRuntime {
             }
             completion(inputBuffer)
             return .bypassed
+        }
+    }
+
+    private func experimentalShaderPaths(_ shaderPaths: [String]) -> [String] {
+        // The benchmark route keeps Anime4K restore/denoise work but removes
+        // Anime4K's own resize stages so MetalFX is the only spatial upscaler.
+        // Keep the concrete v4 names here as a source-level regression guard.
+        let knownUpscaleStages = [
+            "Anime4K_Upscale_CNN_x2_",
+            "Anime4K_Upscale_Denoise_CNN_x2_",
+            "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl",
+        ]
+        let restoreStagePrefix = "Anime4K_Restore_CNN_"
+
+        return shaderPaths.filter { path in
+            let name = URL(fileURLWithPath: path).lastPathComponent
+            if name.contains(restoreStagePrefix) { return true }
+            if knownUpscaleStages.contains(where: { name.contains($0) }) {
+                return false
+            }
+            return !name.contains("Anime4K_Upscale_") &&
+                !name.contains("Anime4K_AutoDownscalePre_")
         }
     }
 

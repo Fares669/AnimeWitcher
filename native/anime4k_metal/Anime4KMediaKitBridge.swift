@@ -204,7 +204,8 @@ final class Anime4KMediaKitBridge {
                 sourceHeight: prepared.configuration.sourceHeight,
                 outputWidth: frameWidth,
                 outputHeight: frameHeight,
-                precision: prepared.configuration.precision
+                precision: prepared.configuration.precision,
+                upscaleStrategy: prepared.configuration.upscaleStrategy
             )
             do {
                 // Resize/reconfigure only when the real media_kit surface

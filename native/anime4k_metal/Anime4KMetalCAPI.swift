@@ -17,6 +17,7 @@ private struct Anime4KMetalDartConfiguration: Decodable {
     let outputWidth: Int
     let outputHeight: Int
     let precision: String
+    let upscaleStrategy: String?
 }
 
 /// Dart-facing per-player configuration API. All malformed/unknown input fails
@@ -46,7 +47,10 @@ enum Anime4KMetalDartAPI {
                   payload.sourceHeight > 0,
                   payload.outputWidth > 0,
                   payload.outputHeight > 0,
-                  let precision = Anime4KMetalPrecisionPolicy(rawValue: payload.precision) else {
+                  let precision = Anime4KMetalPrecisionPolicy(rawValue: payload.precision),
+                  let upscaleStrategy = Anime4KAppleUpscaleStrategy(
+                      rawValue: payload.upscaleStrategy ?? "fullAnime4K"
+                  ) else {
                 return record(.failed, for: handleAddress)
             }
 
@@ -57,7 +61,8 @@ enum Anime4KMetalDartAPI {
                 sourceHeight: payload.sourceHeight,
                 outputWidth: payload.outputWidth,
                 outputHeight: payload.outputHeight,
-                precision: precision
+                precision: precision,
+                upscaleStrategy: upscaleStrategy
             )
             do {
                 try Anime4KMediaKitBridge.shared.configure(
