@@ -70,13 +70,16 @@ jobs:
           flutter analyze --no-fatal-warnings --no-fatal-infos
           git diff --check
       - name: Commit verified DM-31 production changes
+        id: commit
         shell: bash
         run: |
           set -euo pipefail
           if git diff --quiet -- lib/core/services/download_url_refresh.dart lib/features/details/presentation/download_launcher.dart lib/core/services/download_service.dart; then
             echo 'DM-31 production patch already present.'
+            echo 'needs_push=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo 'needs_push=true' >> "$GITHUB_OUTPUT"
           git config user.name 'openai-download-agent'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add lib/core/services/download_url_refresh.dart lib/features/details/presentation/download_launcher.dart lib/core/services/download_service.dart
@@ -86,6 +89,7 @@ jobs:
           git stash push --include-untracked -m 'dm31-ci-generated-before-rebase' || true
           git pull --rebase origin plan/download-manager-reliability
       - name: Reverify and push
+        if: steps.commit.outputs.needs_push == 'true'
         shell: bash
         run: |
           set -euo pipefail
