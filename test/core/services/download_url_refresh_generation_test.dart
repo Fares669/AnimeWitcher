@@ -21,12 +21,14 @@ class _MemoryBackend implements DownloadUrlRefreshBackend {
   }
 }
 
+final _baseUpdatedAtMillis = DateTime.now().millisecondsSinceEpoch;
+
 DownloadUrlRefreshDescriptor descriptor(int generation) =>
     DownloadUrlRefreshDescriptor(
       trackingUrl: 'episode-1',
       providerId: 'provider',
       source: 'server-a',
-      updatedAtMillis: 100 + generation,
+      updatedAtMillis: _baseUpdatedAtMillis + generation,
       generation: generation,
     );
 
