@@ -117,10 +117,20 @@ jobs:
               "    'fromJson',",
               ')',
           ])
+          store_replacement = '\n'.join([
+              'all_anchor = "  Future<List<DownloadJobRecord>> all() async {\\n"',
+              'store_methods = store_insert[len(store_anchor):]',
+              'replace_once(',
+              '    all_anchor,',
+              '    store_methods + "\\n" + all_anchor,',
+              "    'store insertion',",
+              ')',
+          ])
 
           replace_labeled_block('copyWith body', copy_replacement)
           replace_labeled_block('toJson', json_replacement)
           replace_labeled_block('fromJson', from_json_replacement)
+          replace_labeled_block('store insertion', store_replacement)
           exec(compile(script, '<dm11-foundation-v3>', 'exec'), {'__name__': '__main__'})
           PY
           dart format lib/core/services/download_job_store.dart
