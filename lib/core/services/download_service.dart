@@ -5825,7 +5825,7 @@ class DownloadService {
           knownTotalBytes: expectedBytes,
         );
         refreshDescriptorOwnerTaskId = transferTask.taskId;
-        final jobPersisted = await _jobStore.put(
+        final startIntent = await _jobStore.beginReplicaTransactionFromSeed(
           DownloadJobRecord(
             taskId: transferTask.taskId,
             logicalId: logicalId,
@@ -5842,8 +5842,22 @@ class DownloadService {
             taskSnapshot: transferTask.toJson(),
             fingerprint: resourceFingerprint,
           ),
+          operation: DownloadReplicaOperation.start,
+          state: startNow ? DownloadJobState.starting : DownloadJobState.queued,
+          intentData: <String, Object?>{
+            if (refreshDescriptor != null)
+              'refreshDescriptor': <String, Object?>{
+                'trackingUrl': trackingUrl ?? url,
+                'providerId': refreshDescriptor.providerId,
+                'source': refreshDescriptor.source,
+                if (refreshDescriptor.quality != null)
+                  'quality': refreshDescriptor.quality,
+                if (refreshDescriptor.refreshUrl != null)
+                  'refreshUrl': refreshDescriptor.refreshUrl,
+              },
+          },
         );
-        if (!jobPersisted) {
+        if (startIntent == null) {
           throw StateError('Failed to persist fresh download intent');
         }
 
@@ -5853,7 +5867,7 @@ class DownloadService {
             trackingUrl: trackingUrl ?? url,
             ownerTaskId: transferTask.taskId,
             logicalId: logicalId,
-            generation: 0,
+            generation: startIntent.generation,
             claimOwnership: true,
           );
           if (!committed) {
@@ -5903,15 +5917,11 @@ class DownloadService {
         _updatesController.add(
           TaskStatusUpdate(transferTask, TaskStatus.enqueued),
         );
-        final startOperation = await _jobStore.beginOperation(
-          transferTask.taskId,
-          state: DownloadJobState.starting,
-        );
-        if (startOperation == null) {
-          throw StateError(
-            'Failed to fence start operation for ${transferTask.taskId}',
-          );
-        }
+        // The write-ahead start intent is also the execution generation fence.
+        // Do not increment generation again before the executor effect or the
+        // durable journal and refresh-descriptor owner would describe different
+        // attempts after a crash.
+        final startOperation = startIntent;
         if (refreshDescriptor != null) {
           final committed = await _commitRefreshDescriptorForGeneration(
             refreshDescriptor,
