@@ -406,6 +406,7 @@ final class Anime4KMetalRuntime {
     @discardableResult
     func process(
         pixelBuffer inputBuffer: CVPixelBuffer,
+        destinationPixelBuffer: CVPixelBuffer? = nil,
         completion: @escaping (CVPixelBuffer) -> Void
     ) -> Anime4KMetalRuntimeSubmission {
         var busy = false
@@ -433,15 +434,25 @@ final class Anime4KMetalRuntime {
         }
 
         do {
-            var outputBuffer: CVPixelBuffer?
-            let outputResult = CVPixelBufferPoolCreatePixelBuffer(
-                kCFAllocatorDefault,
-                snapshot.pool,
-                &outputBuffer
-            )
-            guard outputResult == kCVReturnSuccess, let outputBuffer else {
-                throw Anime4KMetalRuntimeError.outputBufferCreation(outputResult)
-            }
+    let outputBuffer: CVPixelBuffer
+    if let destinationPixelBuffer {
+        guard CVPixelBufferGetWidth(destinationPixelBuffer) == snapshot.configuration.outputWidth,
+              CVPixelBufferGetHeight(destinationPixelBuffer) == snapshot.configuration.outputHeight else {
+            throw Anime4KMetalRuntimeError.invalidDimensions
+        }
+        outputBuffer = destinationPixelBuffer
+    } else {
+        var pooledOutputBuffer: CVPixelBuffer?
+        let outputResult = CVPixelBufferPoolCreatePixelBuffer(
+            kCFAllocatorDefault,
+            snapshot.pool,
+            &pooledOutputBuffer
+        )
+        guard outputResult == kCVReturnSuccess, let pooledOutputBuffer else {
+            throw Anime4KMetalRuntimeError.outputBufferCreation(outputResult)
+        }
+        outputBuffer = pooledOutputBuffer
+    }
 
             let inputTextureRef = try makeCVTexture(
                 pixelBuffer: inputBuffer,
