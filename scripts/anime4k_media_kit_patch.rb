@@ -10,6 +10,72 @@ ANIME4K_MEDIA_KIT_SUPPORT_FILES = %w[
   Anime4KMediaKitBridge.swift
 ].freeze
 
+ANIME4K_MEDIA_KIT_REQUIRED_FILES = [
+  'TextureHW.swift',
+  File.join('common', 'ResizableTextureProtocol.swift'),
+  File.join('common', 'SafeResizableTexture.swift'),
+  File.join('common', 'VideoOutput.swift')
+].freeze
+
+def anime4k_flutter_plugin_root(project_dir:, platform:)
+  relative = case platform
+             when :ios
+               File.join('.symlinks', 'plugins', 'media_kit_video')
+             when :macos
+               File.join('Flutter', 'ephemeral', '.symlinks', 'plugins', 'media_kit_video')
+             else
+               raise Anime4KMediaKitPatchError,
+                     "unsupported Apple media_kit platform: #{platform}"
+             end
+  File.expand_path(relative, project_dir)
+end
+
+def anime4k_complete_plugin_dir?(directory)
+  ANIME4K_MEDIA_KIT_REQUIRED_FILES.all? do |relative|
+    File.file?(File.join(directory, relative))
+  end
+end
+
+def anime4k_media_kit_plugin_dir(plugin_root:, platform:)
+  unless %i[ios macos].include?(platform)
+    raise Anime4KMediaKitPatchError,
+          "unsupported Apple media_kit platform: #{platform}"
+  end
+
+  canonical = File.join(
+    plugin_root,
+    platform.to_s,
+    'media_kit_video',
+    'Sources',
+    'media_kit_video',
+    'plugin'
+  )
+  return canonical if anime4k_complete_plugin_dir?(canonical)
+
+  # The published pub.dev archive is the source CocoaPods actually sees. Keep
+  # the canonical layout fast, but diagnose/accept a packaging-only directory
+  # shift when exactly one complete platform-specific plugin directory exists.
+  # Requiring all four upstream files prevents accidentally patching an
+  # unrelated TextureHW.swift.
+  platform_segment = platform.to_s
+  candidates = Dir.glob(File.join(plugin_root, '**', 'TextureHW.swift')).filter_map do |texture|
+    directory = File.dirname(texture)
+    segments = File.expand_path(directory).split(File::SEPARATOR)
+    next unless segments.include?(platform_segment)
+    next unless anime4k_complete_plugin_dir?(directory)
+
+    directory
+  end.uniq
+
+  return candidates.first if candidates.length == 1
+
+  discovered = candidates.empty? ? 'none' : candidates.join(', ')
+  raise Anime4KMediaKitPatchError,
+        "media_kit #{platform} plugin source directory unresolved under " \
+        "#{plugin_root}; complete candidates: #{discovered}; " \
+        "expected canonical path: #{canonical}"
+end
+
 def anime4k_sync_support_files(plugin_dir:, native_dir:)
   destination = File.join(plugin_dir, 'anime4k')
   FileUtils.mkdir_p(destination)
@@ -17,16 +83,18 @@ def anime4k_sync_support_files(plugin_dir:, native_dir:)
   ANIME4K_MEDIA_KIT_SUPPORT_FILES.each do |name|
     source = File.join(native_dir, name)
     unless File.file?(source)
-      raise Anime4KMediaKitPatchError, "Anime4K native support file missing: #{source}"
+      raise Anime4KMediaKitPatchError,
+            "Anime4K native support file missing: #{source}"
     end
     FileUtils.cp(source, File.join(destination, name))
   end
 end
 
-def patch_anime4k_media_kit_video(plugin_dir:, native_dir:, platform:)
-  unless %i[ios macos].include?(platform)
-    raise Anime4KMediaKitPatchError, "unsupported Apple media_kit platform: #{platform}"
-  end
+def patch_anime4k_media_kit_video(plugin_root:, native_dir:, platform:)
+  plugin_dir = anime4k_media_kit_plugin_dir(
+    plugin_root: plugin_root,
+    platform: platform
+  )
 
   files = {
     texture: File.join(plugin_dir, 'TextureHW.swift'),
@@ -34,11 +102,8 @@ def patch_anime4k_media_kit_video(plugin_dir:, native_dir:, platform:)
     safe: File.join(plugin_dir, 'common', 'SafeResizableTexture.swift'),
     video: File.join(plugin_dir, 'common', 'VideoOutput.swift')
   }
-  files.each_value do |path|
-    raise Anime4KMediaKitPatchError, "media_kit source missing: #{path}" unless File.file?(path)
-  end
-
   sources = files.transform_values { |path| File.read(path) }
+
   markers = {
     texture: 'AnimeWitcherAnime4KMetalRenderHook',
     protocol: 'AnimeWitcherAnime4KCompletionProtocol',
@@ -49,7 +114,8 @@ def patch_anime4k_media_kit_video(plugin_dir:, native_dir:, platform:)
   markers.each { |key, marker| marker_state[key] = sources[key].include?(marker) }
   marked = marker_state.values.count(true)
   if marked.positive? && marked != markers.length
-    raise Anime4KMediaKitPatchError, 'media_kit Anime4K patch is partially applied; clean Pods and retry'
+    raise Anime4KMediaKitPatchError,
+          'media_kit Anime4K patch is partially applied; clean Pods and retry'
   end
   if marked == markers.length
     anime4k_sync_support_files(plugin_dir: plugin_dir, native_dir: native_dir)
@@ -58,21 +124,26 @@ def patch_anime4k_media_kit_video(plugin_dir:, native_dir:, platform:)
 
   texture_signature = "  public func render(_ size: CGSize) {\n"
   unless sources[:texture].scan(texture_signature).length == 1
-    raise Anime4KMediaKitPatchError, 'media_kit TextureHW render marker changed'
+    raise Anime4KMediaKitPatchError,
+          'media_kit TextureHW render marker changed'
   end
   texture_tail = "    glFlush()\n\n    textureContexts.pushAsReady(textureContext!)\n"
   unless sources[:texture].scan(texture_tail).length == 1
-    raise Anime4KMediaKitPatchError, 'media_kit TextureHW publish marker changed'
+    raise Anime4KMediaKitPatchError,
+          'media_kit TextureHW publish marker changed'
   end
 
   protocol_needle = "  func render(_ size: CGSize)\n}"
   unless sources[:protocol].scan(protocol_needle).length == 1
-    raise Anime4KMediaKitPatchError, 'media_kit ResizableTextureProtocol marker changed'
+    raise Anime4KMediaKitPatchError,
+          'media_kit ResizableTextureProtocol marker changed'
   end
 
   safe_match = sources[:safe].match(/  public func render\(_ size: CGSize\) \{\n.*?^  \}\n/m)
-  unless safe_match && safe_match[0].include?('child.render(size)') && safe_match[0].include?('locked')
-    raise Anime4KMediaKitPatchError, 'media_kit SafeResizableTexture render marker changed'
+  unless safe_match && safe_match[0].include?('child.render(size)') &&
+         safe_match[0].include?('locked')
+    raise Anime4KMediaKitPatchError,
+          'media_kit SafeResizableTexture render marker changed'
   end
 
   video_needle = <<~'SWIFT'.lines.map { |line| "    #{line}" }.join
@@ -84,7 +155,8 @@ def patch_anime4k_media_kit_video(plugin_dir:, native_dir:, platform:)
     }
   SWIFT
   unless sources[:video].scan(video_needle).length == 1
-    raise Anime4KMediaKitPatchError, 'media_kit VideoOutput publication marker changed'
+    raise Anime4KMediaKitPatchError,
+          'media_kit VideoOutput publication marker changed'
   end
 
   texture = sources[:texture].sub(
