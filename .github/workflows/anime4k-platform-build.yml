@@ -57,10 +57,7 @@ jobs:
       - name: Test Anime4K Metal telemetry accumulator
         run: |
           swiftc \
-            -framework CoreVideo \
-            -framework Metal \
-            native/anime4k_metal/Anime4KMetalShader.swift \
-            native/anime4k_metal/Anime4KMetalRuntime.swift \
+            native/anime4k_metal/Anime4KMetalTelemetry.swift \
             native/anime4k_metal/Anime4KMetalTelemetryTests.swift \
             -o /tmp/anime4k_metal_telemetry_tests
           /tmp/anime4k_metal_telemetry_tests
