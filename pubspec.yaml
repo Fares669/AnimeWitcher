@@ -1,7 +1,8 @@
 name: animewitcher
 description: "A new Flutter project."
-# The following line defines a private application package.
-publish_to: 'none'
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to use `flutter pub publish`.
 
 version: 1.5.0+1
 
