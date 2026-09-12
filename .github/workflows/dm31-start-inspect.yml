@@ -1,0 +1,47 @@
+name: Inspect DM-31 start transaction seam
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm31-start-inspect.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+      - name: Print start transaction seam
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('lib/core/services/download_service.dart').read_text()
+          start = source.index('  Future<DownloadCommandOutcome> startDownloadOutcome({')
+          markers = [
+              '\n  Future<',
+              '\n  void ',
+          ]
+          candidates = []
+          for marker in markers:
+              pos = source.find(marker, start + 20)
+              if pos >= 0:
+                  candidates.append(pos)
+          end = min(candidates) if candidates else min(len(source), start + 24000)
+          print('--- START OUTCOME ---')
+          print(source[start:end])
+          print('--- WRAPPER OCCURRENCES ---')
+          needle = 'startDownloadOutcome('
+          pos = 0
+          while True:
+              pos = source.find(needle, pos)
+              if pos < 0:
+                  break
+              print(source[max(0, pos - 700):min(len(source), pos + 900)])
+              pos += len(needle)
+          PY
