@@ -19,6 +19,31 @@
 
 import Foundation
 
+enum Anime4KMetalPrecisionPolicy: String, CaseIterable {
+    case fp32
+    case mixedFP16
+
+    fileprivate var colorScalar: String {
+        self == .mixedFP16 ? "half" : "float"
+    }
+
+    fileprivate var vec3: String {
+        self == .mixedFP16 ? "half3" : "float3"
+    }
+
+    fileprivate var vec4: String {
+        self == .mixedFP16 ? "half4" : "float4"
+    }
+
+    fileprivate var mat3: String {
+        self == .mixedFP16 ? "half3x3" : "float3x3"
+    }
+
+    fileprivate var mat4: String {
+        self == .mixedFP16 ? "half4x4" : "float4x4"
+    }
+}
+
 struct Anime4KMetalShader {
     var name: String
     var hook: String?
@@ -60,20 +85,28 @@ struct Anime4KMetalShader {
         return "output"
     }
 
+    /// Keep the historical property as the FP32 reference path. Mixed FP16 is
+    /// explicitly selected so it cannot become the playback default before the
+    /// real corpus and numerical tolerance gates are green.
     var metalSource: String {
+        metalSource(precision: .fp32)
+    }
+
+    func metalSource(precision: Anime4KMetalPrecisionPolicy) -> String {
+        let colorScalar = precision.colorScalar
         var header = """
         #include <metal_stdlib>
         using namespace metal;
 
         using vec2 = float2;
-        using vec3 = float3;
-        using vec4 = float4;
+        using vec3 = \(precision.vec3);
+        using vec4 = \(precision.vec4);
         using ivec2 = int2;
         using ivec3 = int3;
         using ivec4 = int4;
         using mat2 = float2x2;
-        using mat3 = float3x3;
-        using mat4 = float4x4;
+        using mat3 = \(precision.mat3);
+        using mat4 = \(precision.mat4);
 
         """
 
@@ -104,20 +137,20 @@ struct Anime4KMetalShader {
         var entryArgs = ""
 
         for (index, bind) in binds.enumerated() {
-            extraArgs += "texture2d<float, access::sample> \(bind), "
+            extraArgs += "texture2d<\(colorScalar), access::sample> \(bind), "
             extraCallArgs += "\(bind), "
-            entryArgs += "texture2d<float, access::sample> \(bind) [[texture(\(index))]], "
+            entryArgs += "texture2d<\(colorScalar), access::sample> \(bind) [[texture(\(index))]], "
         }
 
         var textureIndex = binds.count
         if hook == "MAIN" && !binds.contains("MAIN") {
-            extraArgs += "texture2d<float, access::sample> MAIN, "
+            extraArgs += "texture2d<\(colorScalar), access::sample> MAIN, "
             extraCallArgs += "MAIN, "
-            entryArgs += "texture2d<float, access::sample> MAIN [[texture(\(textureIndex))]], "
+            entryArgs += "texture2d<\(colorScalar), access::sample> MAIN [[texture(\(textureIndex))]], "
             textureIndex += 1
         }
 
-        entryArgs += "texture2d<float, access::write> output [[texture(\(textureIndex))]], "
+        entryArgs += "texture2d<\(colorScalar), access::write> output [[texture(\(textureIndex))]], "
         entryArgs += "uint2 gid [[thread_position_in_grid]], "
         entryArgs += "sampler textureSampler [[sampler(0)]]"
 
