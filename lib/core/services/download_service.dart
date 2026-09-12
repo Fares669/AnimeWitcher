@@ -3759,12 +3759,13 @@ class DownloadService {
         if (!checkpointed) {
           throw StateError('Failed to persist pause intent for $taskId');
         }
-        final pauseOperation = await _jobStore.beginOperation(
+        final pauseOperation = await _jobStore.beginReplicaTransaction(
           taskId,
+          operation: DownloadReplicaOperation.pause,
           state: DownloadJobState.pausing,
         );
         if (pauseOperation == null) {
-          throw StateError('Failed to fence pause operation for $taskId');
+          throw StateError('Failed to journal pause intent for $taskId');
         }
         // Fence callbacks only after the durable pause intent exists. Ownership
         // must never be stopped first and then fail to persist the user's intent.
@@ -3830,6 +3831,27 @@ class DownloadService {
           return;
         }
 
+        final executorAcknowledged = await _jobStore.advanceReplicaTransaction(
+          pauseOperation,
+          DownloadReplicaTransactionPhase.executorAcknowledged,
+        );
+        if (!executorAcknowledged) {
+          diagnosticLog.record('pause.replicaAckSuperseded', {
+            'taskId': taskId,
+          });
+          return;
+        }
+        final projecting = await _jobStore.advanceReplicaTransaction(
+          pauseOperation,
+          DownloadReplicaTransactionPhase.projecting,
+        );
+        if (!projecting) {
+          diagnosticLog.record('pause.replicaProjectionSuperseded', {
+            'taskId': taskId,
+          });
+          return;
+        }
+
         await FileDownloader().database.updateRecord(
           TaskRecord(downloadTask, TaskStatus.paused, progress, totalSize),
         );
@@ -3851,6 +3873,15 @@ class DownloadService {
         );
         if (!pauseCommitted) {
           diagnosticLog.record('pause.superseded', {'taskId': taskId});
+          return;
+        }
+        final replicaCommitted = await _jobStore.commitReplicaTransaction(
+          pauseOperation,
+        );
+        if (!replicaCommitted) {
+          diagnosticLog.record('pause.replicaCommitSuperseded', {
+            'taskId': taskId,
+          });
           return;
         }
         _publishProgress(
