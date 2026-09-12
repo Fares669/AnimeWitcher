@@ -60,8 +60,8 @@ jobs:
           from pathlib import Path
           path = Path('DOWNLOAD_MANAGER_PLAN.md')
           text = path.read_text()
-          old = '- [ ] **DM-08 — Couple URL refresh, retry, and resume to actual transport capability**'
-          new = '- [x] **DM-08 — Couple URL refresh, retry, and resume to actual transport capability**'
+          old = '- [ ] **DM-08 — Make source refresh complete and safe for every resumable representation**'
+          new = '- [x] **DM-08 — Make source refresh complete and safe for every resumable representation**'
           if new in text:
               raise SystemExit(0)
           if old not in text:
