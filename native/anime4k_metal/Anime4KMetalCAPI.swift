@@ -76,9 +76,32 @@ enum Anime4KMetalDartAPI {
     }
 
     static func status(handleAddress: UInt64) -> Int32 {
-        lock.lock()
-        defer { lock.unlock() }
-        return (statuses[handleAddress] ?? .unavailable).rawValue
+        let cached: Anime4KMetalDartStatus = {
+            lock.lock()
+            defer { lock.unlock() }
+            return statuses[handleAddress] ?? .unavailable
+        }()
+
+        // Explicit disable/unavailable/failure states remain authoritative.
+        // Only a cached `ready` result needs reconciliation with the live
+        // runtime because GPU/final-blit failures can occur asynchronously.
+        guard cached == .ready else { return cached.rawValue }
+        guard handleAddress != 0,
+              let handle = OpaquePointer(bitPattern: UInt(handleAddress)) else {
+            return record(.failed, for: handleAddress)
+        }
+
+        switch Anime4KMediaKitBridge.shared.runtimeStatus(handle: handle) {
+        case .ready:
+            return Anime4KMetalDartStatus.ready.rawValue
+        case .failed:
+            return record(.failed, for: handleAddress)
+        case .disabled, .none:
+            // A runtime disappearing while Dart still believes Metal owns the
+            // player is an asynchronous backend failure, not an intentional
+            // Dart disable. Fail closed so the controller restores mpv GLSL.
+            return record(.failed, for: handleAddress)
+        }
     }
 
     /// Two-phase C ABI: call with nil/zero to query the required NUL-terminated
