@@ -79,7 +79,7 @@ def assert(condition, message)
   raise "ASSERTION FAILED: #{message}" unless condition
 end
 
-def plugin_dir(package_root, platform)
+def source_plugin_dir(package_root, platform)
   File.join(
     package_root,
     platform.to_s,
@@ -88,6 +88,10 @@ def plugin_dir(package_root, platform)
     'media_kit_video',
     'plugin'
   )
+end
+
+def published_plugin_dir(package_root, platform)
+  File.join(package_root, platform.to_s, 'Classes', 'plugin')
 end
 
 def write_plugin_fixture(directory)
@@ -102,8 +106,8 @@ end
 def build_package_fixture(root)
   package_root = File.join(root, 'media_kit_video')
   native = File.join(root, 'native')
-  write_plugin_fixture(plugin_dir(package_root, :ios))
-  write_plugin_fixture(plugin_dir(package_root, :macos))
+  write_plugin_fixture(source_plugin_dir(package_root, :ios))
+  write_plugin_fixture(source_plugin_dir(package_root, :macos))
   FileUtils.mkdir_p(native)
   NATIVE_FILES.each { |name| File.write(File.join(native, name), "// #{name}\n") }
   [package_root, native]
@@ -126,8 +130,8 @@ end
 
 Dir.mktmpdir('anime4k-media-kit-patch') do |root|
   package_root, native = build_package_fixture(root)
-  ios_plugin = plugin_dir(package_root, :ios)
-  macos_plugin = plugin_dir(package_root, :macos)
+  ios_plugin = source_plugin_dir(package_root, :ios)
+  macos_plugin = source_plugin_dir(package_root, :macos)
 
   assert(
     anime4k_media_kit_plugin_dir(plugin_root: package_root, platform: :ios) == ios_plugin,
@@ -191,9 +195,54 @@ Dir.mktmpdir('anime4k-media-kit-patch') do |root|
   )
 end
 
+# pub.dev's media_kit_video 2.0.1 archive uses <platform>/Classes/plugin,
+# unlike the repository source layout. Put the package below an `ios` project
+# directory on purpose: the resolver must scope discovery relative to the
+# package root, not mistake the parent project directory for the iOS platform
+# and accept the macOS plugin too.
+Dir.mktmpdir('anime4k-media-kit-pub-layout') do |root|
+  ios_project = File.join(root, 'ios')
+  package_root = File.join(
+    ios_project,
+    '.symlinks',
+    'plugins',
+    'media_kit_video'
+  )
+  native = File.join(root, 'native')
+  ios_plugin = published_plugin_dir(package_root, :ios)
+  macos_plugin = published_plugin_dir(package_root, :macos)
+  write_plugin_fixture(ios_plugin)
+  write_plugin_fixture(macos_plugin)
+  FileUtils.mkdir_p(native)
+  NATIVE_FILES.each { |name| File.write(File.join(native, name), "// #{name}\n") }
+
+  assert(
+    anime4k_media_kit_plugin_dir(plugin_root: package_root, platform: :ios) == ios_plugin,
+    'published iOS Classes/plugin must win even when macOS exists below an ios project path'
+  )
+  assert(
+    anime4k_media_kit_plugin_dir(plugin_root: package_root, platform: :macos) == macos_plugin,
+    'published macOS Classes/plugin must resolve independently'
+  )
+
+  patch_anime4k_media_kit_video(
+    plugin_root: package_root,
+    native_dir: native,
+    platform: :ios
+  )
+  assert(
+    File.read(File.join(ios_plugin, 'TextureHW.swift')).include?('AnimeWitcherAnime4KMetalRenderHook'),
+    'published iOS Classes/plugin tree must be patchable'
+  )
+  assert(
+    !File.read(File.join(macos_plugin, 'TextureHW.swift')).include?('AnimeWitcherAnime4KMetalRenderHook'),
+    'patching iOS must never modify the macOS published tree'
+  )
+end
+
 Dir.mktmpdir('anime4k-media-kit-packaging-layout') do |root|
   package_root, native = build_package_fixture(root)
-  canonical = plugin_dir(package_root, :ios)
+  canonical = source_plugin_dir(package_root, :ios)
   shifted = File.join(package_root, 'ios', 'published', 'native', 'plugin')
   FileUtils.mkdir_p(File.dirname(shifted))
   FileUtils.mv(canonical, shifted)
@@ -216,7 +265,7 @@ end
 
 Dir.mktmpdir('anime4k-media-kit-drift') do |root|
   package_root, native = build_package_fixture(root)
-  texture = File.join(plugin_dir(package_root, :ios), 'TextureHW.swift')
+  texture = File.join(source_plugin_dir(package_root, :ios), 'TextureHW.swift')
   File.write(texture, TEXTURE_FIXTURE.sub("glFlush()\n\n", "glFlush()\n    // upstream changed\n"))
 
   begin
