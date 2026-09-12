@@ -78,13 +78,19 @@ void main() {
       );
     });
 
-    test('media_kit patch skips Anime4K when mpv reports no new frame', () {
+    test('media_kit patch derives a produced-frame identity before Anime4K', () {
       final patch = File(
         'scripts/anime4k_media_kit_patch.rb',
       ).readAsStringSync();
 
       expect(patch, contains('mpv_render_context_update(renderContext)'));
       expect(patch, contains('MPV_RENDER_UPDATE_FRAME'));
+      expect(patch, contains('MPV_RENDER_PARAM_NEXT_FRAME_INFO'));
+      expect(patch, contains('mpv_render_context_get_info'));
+      expect(patch, contains('MPV_RENDER_FRAME_INFO_REPEAT'));
+      expect(patch, contains('MPV_RENDER_FRAME_INFO_REDRAW'));
+      expect(patch, contains('anime4kFrameGeneration'));
+      expect(patch, contains('frameGeneration: anime4kFrameGeneration'));
       expect(patch, contains('recordSkippedDuplicate'));
     });
   });
