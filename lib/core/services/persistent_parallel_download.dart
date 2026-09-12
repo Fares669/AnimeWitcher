@@ -1602,7 +1602,11 @@ class PersistentParallelDownload {
       try {
         await pausePart(part.task);
       } catch (_) {
-        // The worker can already be a stale URLSession bookkeeping entry.
+        // Do not free/reuse the Range while the previous native writer may
+        // still own it. Keep the same child live and retry settlement later.
+        part.tailRecoveryAttempted = false;
+        _armTailStallWatch(session, part);
+        return;
       }
 
       if (await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
@@ -1647,17 +1651,25 @@ class PersistentParallelDownload {
       savedBytes = 0;
     }
 
+    try {
+      await cancelParts(<String>[part.task.taskId]);
+    } catch (_) {
+      // Unknown cancellation outcome means ownership is still unsettled.
+      // Preserve the active lease and never expose this Range to a new writer.
+      if (backup != null) {
+        try {
+          if (await backup.exists()) await backup.delete();
+        } catch (_) {}
+      }
+      _armTailStallWatch(session, part);
+      return;
+    }
+
     _cancelTailStallWatch(part);
     _activeConnectionIds.remove(part.task.taskId);
     part.launched = false;
     part.speed = 0;
     session.currentBatchPendingIds.remove(part.task.taskId);
-
-    try {
-      await cancelParts(<String>[part.task.taskId]);
-    } catch (_) {
-      // Recovery remains safe even if native already forgot this child.
-    }
 
     if (backup != null) {
       try {
@@ -1728,8 +1740,9 @@ class PersistentParallelDownload {
       try {
         await pausePart(part.task);
       } catch (_) {
-        // A task that has already finished natively may no longer be pausable.
-        // The second exact-size verification below remains the source of truth.
+        // Exact bytes prove content, not that the prior writer relinquished
+        // ownership. Fail closed until native ownership is acknowledged settled.
+        return false;
       }
     }
 
