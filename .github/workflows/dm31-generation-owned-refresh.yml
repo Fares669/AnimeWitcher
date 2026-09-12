@@ -13,6 +13,7 @@ on:
       - .github/scripts/dm11_foundation_patch.py
       - .github/scripts/dm11_verifier_patch.py
       - test/core/services/download_refresh_descriptor_ownership_guard_test.dart
+      - test/core/services/download_start_outcome_guard_test.dart
       - test/core/services/download_url_refresh_generation_test.dart
       - test/core/services/download_url_refresh_test.dart
       - test/core/services/download_replica_transaction_test.dart
@@ -51,7 +52,7 @@ jobs:
           git diff --check
       - name: Verify DM-31 focused behavior
         run: |
-          flutter test test/core/services/download_refresh_descriptor_ownership_guard_test.dart test/core/services/download_url_refresh_generation_test.dart test/core/services/download_url_refresh_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_refresh_descriptor_ownership_guard_test.dart test/core/services/download_start_outcome_guard_test.dart test/core/services/download_url_refresh_generation_test.dart test/core/services/download_url_refresh_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
           git diff --check
       - name: Verify full analyzer across DM-11 cycle foundation
         shell: bash
@@ -90,7 +91,7 @@ jobs:
           set -euo pipefail
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-          flutter test test/core/services/download_refresh_descriptor_ownership_guard_test.dart test/core/services/download_url_refresh_generation_test.dart test/core/services/download_url_refresh_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_refresh_descriptor_ownership_guard_test.dart test/core/services/download_start_outcome_guard_test.dart test/core/services/download_url_refresh_generation_test.dart test/core/services/download_url_refresh_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
           backup="$(mktemp)"
           cp lib/core/services/download_job_store.dart "$backup"
           restore_job_store() {
