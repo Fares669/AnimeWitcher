@@ -5,7 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'download_job_state.dart';
 
-const int kDownloadJobSchemaVersion = 6;
+const int kDownloadJobSchemaVersion = 7;
 
 /// User-delete tombstones stay durable long enough to fence late native
 /// callbacks across relaunches. Cleanup may happen immediately after
@@ -50,6 +50,80 @@ enum DownloadByteReconciliationReason {
   noSurvivingBytes,
   multipartManifestRollback,
   nativeRecoverabilityLoss,
+}
+
+enum DownloadReplicaOperation {
+  start,
+  pause,
+  resume,
+  cancel,
+  complete,
+  sourceRefresh,
+  nativeHandoff,
+}
+
+enum DownloadReplicaTransactionPhase {
+  intent,
+  executorAcknowledged,
+  projecting,
+}
+
+class DownloadReplicaTransaction {
+  const DownloadReplicaTransaction({
+    required this.operation,
+    required this.phase,
+    required this.generation,
+  });
+
+  final DownloadReplicaOperation operation;
+  final DownloadReplicaTransactionPhase phase;
+  final int generation;
+
+  DownloadReplicaTransaction copyWith({
+    DownloadReplicaTransactionPhase? phase,
+  }) => DownloadReplicaTransaction(
+    operation: operation,
+    phase: phase ?? this.phase,
+    generation: generation,
+  );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'operation': operation.name,
+    'phase': phase.name,
+    'generation': generation,
+  };
+
+  static DownloadReplicaTransaction? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final map = Map<String, dynamic>.from(raw);
+    final operationName = _nonEmptyString(map['operation']);
+    final phaseName = _nonEmptyString(map['phase']);
+    final generation = _intValue(map['generation'], fallback: -1);
+    if (operationName == null || phaseName == null || generation < 0) {
+      return null;
+    }
+
+    DownloadReplicaOperation? operation;
+    for (final value in DownloadReplicaOperation.values) {
+      if (value.name == operationName) {
+        operation = value;
+        break;
+      }
+    }
+    DownloadReplicaTransactionPhase? phase;
+    for (final value in DownloadReplicaTransactionPhase.values) {
+      if (value.name == phaseName) {
+        phase = value;
+        break;
+      }
+    }
+    if (operation == null || phase == null) return null;
+    return DownloadReplicaTransaction(
+      operation: operation,
+      phase: phase,
+      generation: generation,
+    );
+  }
 }
 
 extension DownloadDurableByteProvenanceRules on DownloadDurableByteProvenance {
@@ -156,6 +230,7 @@ class DownloadJobRecord {
     this.lastByteReconciliationReason,
     this.lastByteReconciliationProvenance,
     this.lastByteReconciliationAtMillis,
+    this.replicaTransaction,
   });
 
   final String taskId;
@@ -179,6 +254,7 @@ class DownloadJobRecord {
   final DownloadByteReconciliationReason? lastByteReconciliationReason;
   final DownloadDurableByteProvenance? lastByteReconciliationProvenance;
   final int? lastByteReconciliationAtMillis;
+  final DownloadReplicaTransaction? replicaTransaction;
 
   DownloadAttemptToken get attemptToken =>
       DownloadAttemptToken(taskId: taskId, generation: generation);
@@ -212,6 +288,8 @@ class DownloadJobRecord {
     DownloadByteReconciliationReason? lastByteReconciliationReason,
     DownloadDurableByteProvenance? lastByteReconciliationProvenance,
     int? lastByteReconciliationAtMillis,
+    DownloadReplicaTransaction? replicaTransaction,
+    bool clearReplicaTransaction = false,
   }) => DownloadJobRecord(
     taskId: taskId,
     logicalId: logicalId ?? this.logicalId,
@@ -235,6 +313,9 @@ class DownloadJobRecord {
         this.lastByteReconciliationProvenance,
     lastByteReconciliationAtMillis:
         lastByteReconciliationAtMillis ?? this.lastByteReconciliationAtMillis,
+    replicaTransaction: clearReplicaTransaction
+        ? null
+        : (replicaTransaction ?? this.replicaTransaction),
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -263,6 +344,8 @@ class DownloadJobRecord {
           lastByteReconciliationProvenance!.name,
     if (lastByteReconciliationAtMillis != null)
       'lastByteReconciliationAtMillis': lastByteReconciliationAtMillis,
+    if (replicaTransaction != null)
+      'replicaTransaction': replicaTransaction!.toJson(),
   };
 
   static DownloadJobRecord? fromJson(Object? raw) {
@@ -315,6 +398,9 @@ class DownloadJobRecord {
       lastByteReconciliationAtMillis: _nullableIntValue(
         map['lastByteReconciliationAtMillis'],
       ),
+      replicaTransaction: DownloadReplicaTransaction.fromJson(
+        map['replicaTransaction'],
+      ),
     );
   }
 }
@@ -324,6 +410,34 @@ abstract interface class DownloadJobBackend {
   Future<List<Map<String, dynamic>>> readAll();
   Future<void> write(String taskId, Map<String, Object?> value);
   Future<void> delete(String taskId);
+}
+
+/// Deterministic durable-backend double used by transaction tests.
+/// Reusing one backend simulates relaunch with a new store instance.
+class InMemoryDownloadJobStoreBackend implements DownloadJobBackend {
+  final Map<String, Map<String, Object?>> _rows =
+      <String, Map<String, Object?>>{};
+
+  @override
+  Future<Map<String, dynamic>?> read(String taskId) async {
+    final row = _rows[taskId];
+    return row == null ? null : Map<String, dynamic>.from(row);
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> readAll() async => _rows.values
+      .map((row) => Map<String, dynamic>.from(row))
+      .toList(growable: false);
+
+  @override
+  Future<void> write(String taskId, Map<String, Object?> value) async {
+    _rows[taskId] = Map<String, Object?>.from(value);
+  }
+
+  @override
+  Future<void> delete(String taskId) async {
+    _rows.remove(taskId);
+  }
 }
 
 /// Hive backend kept separate from [DownloadJobStore] so state-machine tests do
@@ -388,6 +502,74 @@ class DownloadJobStore {
     if (id.isEmpty) return null;
     return DownloadJobRecord.fromJson(await backend.read(id));
   }
+
+  Future<DownloadAttemptToken?> beginReplicaTransaction(
+    String taskId, {
+    required DownloadReplicaOperation operation,
+    required DownloadJobState state,
+    int? updatedAtMillis,
+  }) => _serialize(() async {
+    final current = await get(taskId);
+    if (current == null || downloadJobIsTerminal(current.state)) return null;
+    final generation = current.generation + 1;
+    final next = current.copyWith(
+      state: state,
+      generation: generation,
+      updatedAtMillis: updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
+      replicaTransaction: DownloadReplicaTransaction(
+        operation: operation,
+        phase: DownloadReplicaTransactionPhase.intent,
+        generation: generation,
+      ),
+    );
+    if (!await _putUnlocked(next)) return null;
+    return next.attemptToken;
+  });
+
+  Future<bool> advanceReplicaTransaction(
+    DownloadAttemptToken token,
+    DownloadReplicaTransactionPhase phase, {
+    int? updatedAtMillis,
+  }) => _serialize(() async {
+    final current = await get(token.taskId);
+    final transaction = current?.replicaTransaction;
+    if (current == null ||
+        current.generation != token.generation ||
+        transaction == null ||
+        transaction.generation != token.generation) {
+      return false;
+    }
+    if (phase.index < transaction.phase.index) return false;
+    return _putUnlocked(
+      current.copyWith(
+        updatedAtMillis:
+            updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
+        replicaTransaction: transaction.copyWith(phase: phase),
+      ),
+    );
+  });
+
+  Future<bool> commitReplicaTransaction(
+    DownloadAttemptToken token, {
+    int? updatedAtMillis,
+  }) => _serialize(() async {
+    final current = await get(token.taskId);
+    final transaction = current?.replicaTransaction;
+    if (current == null ||
+        current.generation != token.generation ||
+        transaction == null ||
+        transaction.generation != token.generation ||
+        transaction.phase != DownloadReplicaTransactionPhase.projecting) {
+      return false;
+    }
+    return _putUnlocked(
+      current.copyWith(
+        updatedAtMillis:
+            updatedAtMillis ?? DateTime.now().millisecondsSinceEpoch,
+        clearReplicaTransaction: true,
+      ),
+    );
+  });
 
   Future<List<DownloadJobRecord>> all() async {
     final jobs = <DownloadJobRecord>[];
