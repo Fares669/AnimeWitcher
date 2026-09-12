@@ -1,0 +1,108 @@
+name: Bootstrap DM-11 transaction foundation v5
+
+on:
+  push:
+    branches:
+      - plan/download-manager-reliability
+    paths:
+      - .github/workflows/dm11-cycle-bootstrap-v5.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm11-cycle-bootstrap-v5-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: plan/download-manager-reliability
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Apply DM-11 transaction foundation
+        run: |
+          test -f test/core/services/download_replica_transaction_test.dart
+          python3 .github/scripts/dm11_foundation_patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/core/services/download_job_store.dart')
+          source = path.read_text()
+          if 'class InMemoryDownloadJobStoreBackend' not in source:
+              anchor = '''abstract interface class DownloadJobBackend {
+            Future<Map<String, dynamic>?> read(String taskId);
+            Future<List<Map<String, dynamic>>> readAll();
+            Future<void> write(String taskId, Map<String, Object?> value);
+            Future<void> delete(String taskId);
+          }
+          '''
+              implementation = r'''
+
+          /// Deterministic durable-backend double used by transaction tests.
+          /// Reusing one backend simulates relaunch with a new store instance.
+          class InMemoryDownloadJobStoreBackend implements DownloadJobBackend {
+            final Map<String, Map<String, Object?>> _rows =
+                <String, Map<String, Object?>>{};
+
+            @override
+            Future<Map<String, dynamic>?> read(String taskId) async {
+              final row = _rows[taskId];
+              return row == null ? null : Map<String, dynamic>.from(row);
+            }
+
+            @override
+            Future<List<Map<String, dynamic>>> readAll() async => _rows.values
+                .map((row) => Map<String, dynamic>.from(row))
+                .toList(growable: false);
+
+            @override
+            Future<void> write(String taskId, Map<String, Object?> value) async {
+              _rows[taskId] = Map<String, Object?>.from(value);
+            }
+
+            @override
+            Future<void> delete(String taskId) async {
+              _rows.remove(taskId);
+            }
+          }
+          '''
+              if anchor not in source:
+                  raise SystemExit('DM-11 in-memory backend anchor drift')
+              path.write_text(source.replace(anchor, anchor + implementation, 1))
+          PY
+          dart format lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
+          git diff --check
+      - name: Verify DM-11 foundation GREEN
+        run: |
+          flutter test test/core/services/download_replica_transaction_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Commit verified foundation
+        run: |
+          if git diff --quiet -- lib/core/services/download_job_store.dart; then
+            echo 'DM-11 foundation already present; nothing to commit.'
+            exit 0
+          fi
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_job_store.dart
+          git commit -m 'fix(downloads): journal crash-safe replica transitions (DM-11 foundation)'
+          git pull --rebase origin plan/download-manager-reliability
+      - name: Re-verify rebased foundation
+        run: |
+          flutter test test/core/services/download_replica_transaction_test.dart test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+          git diff --check
+      - name: Push verified foundation
+        run: git push origin HEAD:plan/download-manager-reliability
