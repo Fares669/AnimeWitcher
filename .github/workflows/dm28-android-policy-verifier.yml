@@ -8,11 +8,12 @@ on:
       - .github/workflows/dm28-android-policy-verifier.yml
       - lib/core/services/download_transport.dart
       - lib/core/services/download_service.dart
+      - test/core/services/download_transport_test.dart
       - android/app/src/main/AndroidManifest.xml
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: dm28-android-policy-${{ github.ref }}
@@ -21,8 +22,12 @@ concurrency:
 jobs:
   android-policy:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: plan/download-manager-reliability
 
       - uses: subosito/flutter-action@v2
         with:
@@ -86,7 +91,156 @@ jobs:
             });
           }
           DART
-          flutter test test/core/services/dm28_android_policy_test.dart
+
+      - name: Prove DM-28 Android RED before implementation
+        run: |
+          set +e
+          flutter test test/core/services/dm28_android_policy_test.dart 2>&1 | tee /tmp/dm28-android-red.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo 'DM-28 Android policy unexpectedly passed before the fix'
+            exit 1
+          fi
+          grep -q "No named parameter with the name 'isAndroid'" /tmp/dm28-android-red.log
+
+      - name: Apply DM-28 Android execution-policy fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          transport = Path('lib/core/services/download_transport.dart')
+          s = transport.read_text()
+          old = '''/// Anime episodes are explicit user downloads. User-initiated is always useful;
+          /// largeFile is added when size is unknown or the episode is large enough to
+          /// benefit from background_downloader's long-running transfer policy.
+          Set<TransferHint> animeDownloadTransferHints({required int expectedBytes}) {
+            final hints = <TransferHint>{TransferHint.userInitiated};
+            if (expectedBytes <= 0 ||
+                expectedBytes >= kDownloadLargeFileHintThresholdBytes) {
+              hints.add(TransferHint.largeFile);
+            }
+            return hints;
+          }
+          '''
+          new = '''/// Anime episodes are explicit user downloads. Android 14+ UIDT requires a
+          /// visible running notification, so only request [TransferHint.userInitiated]
+          /// there when both the app setting and OS notification permission can support
+          /// it. [TransferHint.largeFile] remains the long-running WorkManager fallback
+          /// for large/unknown transfers when UIDT is unavailable.
+          Set<TransferHint> animeDownloadTransferHints({
+            required int expectedBytes,
+            bool isAndroid = false,
+            bool runningNotificationEnabled = true,
+            bool notificationPermissionGranted = true,
+          }) {
+            final hints = <TransferHint>{};
+            if (!isAndroid ||
+                (runningNotificationEnabled && notificationPermissionGranted)) {
+              hints.add(TransferHint.userInitiated);
+            }
+            if (expectedBytes <= 0 ||
+                expectedBytes >= kDownloadLargeFileHintThresholdBytes) {
+              hints.add(TransferHint.largeFile);
+            }
+            return hints;
+          }
+          '''
+          if old not in s:
+              raise SystemExit('DM-28 transfer hint anchor drift')
+          transport.write_text(s.replace(old, new, 1))
+
+          service = Path('lib/core/services/download_service.dart')
+          d = service.read_text()
+          old = '''    final isAndroid = Platform.isAndroid;
+              final isIOS = Platform.isIOS;
+
+              return _serializeQueue(() async {
+          '''
+          new = '''    final isAndroid = Platform.isAndroid;
+              final isIOS = Platform.isIOS;
+              final notificationPrefs = _ref
+                  .read(storageServiceProvider)
+                  .getDownloadNotificationPrefs();
+              var notificationPermissionGranted = true;
+              if (isAndroid) {
+                try {
+                  notificationPermissionGranted =
+                      await FileDownloader().permissions.status(
+                            PermissionType.notifications,
+                          ) ==
+                          PermissionStatus.granted;
+                } catch (_) {
+                  // UIDT cannot safely assume its mandatory visible notification
+                  // when permission state cannot be proven. Fall back to the
+                  // ordinary/large-file WorkManager policy instead.
+                  notificationPermissionGranted = false;
+                }
+              }
+
+              return _serializeQueue(() async {
+          '''
+          if old not in d:
+              raise SystemExit('DM-28 start policy anchor drift')
+          d = d.replace(old, new, 1)
+          old = '''        transferHints: animeDownloadTransferHints(expectedBytes: totalBytes),
+          '''
+          new = '''        transferHints: animeDownloadTransferHints(
+                  expectedBytes: totalBytes,
+                  isAndroid: isAndroid,
+                  runningNotificationEnabled: notificationPrefs.running,
+                  notificationPermissionGranted: notificationPermissionGranted,
+                ),
+          '''
+          if old not in d:
+              raise SystemExit('DM-28 task hint anchor drift')
+          service.write_text(d.replace(old, new, 1))
+
+          test = Path('test/core/services/download_transport_test.dart')
+          t = test.read_text()
+          addition = r'''
+
+            test('Android omits UIDT when its running notification is unavailable', () {
+              final disabled = animeDownloadTransferHints(
+                expectedBytes: 900 * 1024 * 1024,
+                isAndroid: true,
+                runningNotificationEnabled: false,
+                notificationPermissionGranted: true,
+              );
+              expect(disabled, isNot(contains(TransferHint.userInitiated)));
+              expect(disabled, contains(TransferHint.largeFile));
+
+              final denied = animeDownloadTransferHints(
+                expectedBytes: 900 * 1024 * 1024,
+                isAndroid: true,
+                runningNotificationEnabled: true,
+                notificationPermissionGranted: false,
+              );
+              expect(denied, isNot(contains(TransferHint.userInitiated)));
+              expect(denied, contains(TransferHint.largeFile));
+            });
+
+            test('non-Android user initiated policy does not depend on notifications', () {
+              final hints = animeDownloadTransferHints(
+                expectedBytes: 1024,
+                isAndroid: false,
+                runningNotificationEnabled: false,
+                notificationPermissionGranted: false,
+              );
+              expect(hints, contains(TransferHint.userInitiated));
+            });
+          '''
+          if "Android omits UIDT when its running notification is unavailable" not in t:
+              head, sep, tail = t.rpartition('\n}')
+              if not sep:
+                  raise SystemExit('DM-28 transport test closing brace drift')
+              test.write_text(head + addition + '\n}\n')
+          PY
+          dart format lib/core/services/download_transport.dart lib/core/services/download_service.dart test/core/services/download_transport_test.dart
+
+      - name: Verify DM-28 Android GREEN
+        run: |
+          flutter test test/core/services/dm28_android_policy_test.dart test/core/services/download_transport_test.dart
 
       - name: Merge Android debug manifest
         working-directory: android
@@ -125,3 +279,17 @@ jobs:
       - name: Compile Android debug sources
         working-directory: android
         run: ./gradlew :app:compileDebugKotlin --stacktrace
+
+      - name: Generate Dart sources and analyze
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_transport.dart lib/core/services/download_service.dart test/core/services/download_transport_test.dart
+
+      - name: Commit verified DM-28 Android slice
+        run: |
+          git config user.name 'openai-download-agent'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_transport.dart lib/core/services/download_service.dart test/core/services/download_transport_test.dart
+          git commit -m 'fix(downloads): align Android UIDT notification fallback (DM-28)'
+          git push origin HEAD:plan/download-manager-reliability
