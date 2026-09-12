@@ -29,6 +29,10 @@ class Anime4kMetalTelemetry {
     required this.p95FrameTimeMs,
     required this.processedFrames,
     required this.lateOrDroppedFrames,
+    required this.inputWidth,
+    required this.inputHeight,
+    required this.processingWidth,
+    required this.processingHeight,
     required this.thermalLevel,
     required this.lowPowerMode,
   });
@@ -37,6 +41,10 @@ class Anime4kMetalTelemetry {
   final double p95FrameTimeMs;
   final int processedFrames;
   final int lateOrDroppedFrames;
+  final int inputWidth;
+  final int inputHeight;
+  final int processingWidth;
+  final int processingHeight;
   final Anime4kThermalLevel thermalLevel;
   final bool lowPowerMode;
 }
@@ -116,12 +124,20 @@ class Anime4kMetalBridge {
       final p95 = decoded['p95FrameTimeMs'];
       final processed = decoded['processedFrames'];
       final lateOrDropped = decoded['lateOrDroppedFrames'];
+      final inputWidth = decoded['inputWidth'];
+      final inputHeight = decoded['inputHeight'];
+      final processingWidth = decoded['processingWidth'];
+      final processingHeight = decoded['processingHeight'];
       final thermal = decoded['thermalLevel'];
       final lowPower = decoded['lowPowerMode'];
       if (average is! num ||
           p95 is! num ||
           processed is! num ||
           lateOrDropped is! num ||
+          inputWidth is! num ||
+          inputHeight is! num ||
+          processingWidth is! num ||
+          processingHeight is! num ||
           thermal is! String ||
           lowPower is! bool) {
         return null;
@@ -138,7 +154,11 @@ class Anime4kMetalBridge {
           average.isNegative ||
           p95.isNegative ||
           processed.isNegative ||
-          lateOrDropped.isNegative) {
+          lateOrDropped.isNegative ||
+          inputWidth <= 0 ||
+          inputHeight <= 0 ||
+          processingWidth <= 0 ||
+          processingHeight <= 0) {
         return null;
       }
 
@@ -147,6 +167,10 @@ class Anime4kMetalBridge {
         p95FrameTimeMs: p95.toDouble(),
         processedFrames: processed.toInt(),
         lateOrDroppedFrames: lateOrDropped.toInt(),
+        inputWidth: inputWidth.toInt(),
+        inputHeight: inputHeight.toInt(),
+        processingWidth: processingWidth.toInt(),
+        processingHeight: processingHeight.toInt(),
         thermalLevel: thermalLevel,
         lowPowerMode: lowPower,
       );
