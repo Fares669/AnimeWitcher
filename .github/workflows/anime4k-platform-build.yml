@@ -42,8 +42,10 @@ jobs:
           swiftc \
             -framework CoreVideo \
             -framework Metal \
+            -framework MetalFX \
             native/anime4k_metal/Anime4KMetalShader.swift \
             native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMetalRuntimeTelemetryIntegrationTests.swift \
             -o /tmp/anime4k_metal_runtime_telemetry_tests
@@ -55,8 +57,10 @@ jobs:
           swiftc \
             -framework CoreVideo \
             -framework Metal \
+            -framework MetalFX \
             native/anime4k_metal/Anime4KMetalShader.swift \
             native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMediaKitBridge.swift \
             native/anime4k_metal/Anime4KMetalCAPI.swift \
@@ -76,8 +80,10 @@ jobs:
           swiftc \
             -framework CoreVideo \
             -framework Metal \
+            -framework MetalFX \
             native/anime4k_metal/Anime4KMetalShader.swift \
             native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMediaKitBridge.swift \
             native/anime4k_metal/Anime4KMetalRuntimeTests.swift \
@@ -95,8 +101,10 @@ jobs:
           swiftc \
             -framework CoreVideo \
             -framework Metal \
+            -framework MetalFX \
             native/anime4k_metal/Anime4KMetalShader.swift \
             native/anime4k_metal/Anime4KMetalTelemetry.swift \
+            native/anime4k_metal/Anime4KMetalFXScaler.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMediaKitBridge.swift \
             native/anime4k_metal/Anime4KMediaKitBridgeTests.swift \
