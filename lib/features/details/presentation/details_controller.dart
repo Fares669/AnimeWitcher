@@ -11,11 +11,11 @@ import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
-import 'package:animewitcher/core/storage/storage_service.dart';
 import '../../library/presentation/history_provider.dart';
 import 'playback_launcher.dart';
 import '../../../core/services/download_service.dart';
 import '../../../core/providers/anime_data_source_settings_provider.dart';
+import '../../../core/providers/episode_sort_provider.dart';
 import '../../../core/services/anizip_service.dart';
 import 'downloaded_file_provider.dart';
 import 'details_item_merge.dart';
@@ -204,14 +204,7 @@ class DetailsController extends _$DetailsController {
       }
     });
 
-    final savedAscending =
-        ref
-            .read(storageServiceProvider)
-            .getPlayerSetting<bool>(
-              'episode_sort_ascending',
-              defaultValue: true,
-            ) ??
-        true;
+    final savedAscending = ref.read(episodeSortAscendingProvider);
 
     return DetailsState(isAscending: savedAscending);
   }
@@ -226,11 +219,9 @@ class DetailsController extends _$DetailsController {
     final nextAscending = !state.isAscending;
     state = state.copyWith(isAscending: nextAscending);
 
-    unawaited(
-      ref
-          .read(storageServiceProvider)
-          .setPlayerSetting('episode_sort_ascending', nextAscending),
-    );
+    ref
+        .read(episodeSortAscendingProvider.notifier)
+        .setAscending(nextAscending);
   }
 
   void toggleEpisodeSelection(Episode episode) {

@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/core/utils/image_fallbacks.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
+import 'package:animewitcher/core/utils/episode_order.dart';
+import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/services/download_service.dart';
 import '../../../../core/services/download_concurrency.dart';
@@ -253,6 +255,12 @@ class _GroupedDownloadTile extends ConsumerWidget {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
     final firstItem = items.first;
+    final episodeSortAscending = ref.watch(episodeSortAscendingProvider);
+    final orderedItems = episodeItemsInDisplayOrder(
+      items,
+      episodeOf: (item) => item.episode,
+      ascending: episodeSortAscending,
+    );
 
     return Card(
       margin: EdgeInsets.zero,
@@ -344,9 +352,9 @@ class _GroupedDownloadTile extends ConsumerWidget {
             ),
           ],
         ),
-        children: items.asMap().entries.map((entry) {
+        children: orderedItems.asMap().entries.map((entry) {
           final download = entry.value;
-          final isLast = entry.key == items.length - 1;
+          final isLast = entry.key == orderedItems.length - 1;
 
           return Column(
             children: [

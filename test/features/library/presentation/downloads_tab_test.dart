@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_service.dart';
 import 'package:animewitcher/core/utils/download_cleanup.dart';
@@ -80,9 +81,19 @@ class _StubDownloadsNotifier extends DownloadsNotifier {
   Future<List<DownloadItem>> build() async => _items;
 }
 
+class _StubEpisodeSortAscendingNotifier extends EpisodeSortAscendingNotifier {
+  _StubEpisodeSortAscendingNotifier(this._value);
+
+  final bool _value;
+
+  @override
+  bool build() => _value;
+}
+
 Widget _downloadsApp(
   List<DownloadItem> items, {
   TextDirection? shellDirection,
+  bool episodeSortAscending = true,
 }) {
   Widget home = const Scaffold(
     body: RepaintBoundary(
@@ -96,6 +107,9 @@ Widget _downloadsApp(
   return ProviderScope(
     overrides: [
       downloadsProvider.overrideWith(() => _StubDownloadsNotifier(items)),
+      episodeSortAscendingProvider.overrideWith(
+        () => _StubEpisodeSortAscendingNotifier(episodeSortAscending),
+      ),
     ],
     child: MaterialApp(
       locale: const Locale('ar'),
@@ -663,6 +677,55 @@ void main() {
         ).writeAsBytesSync(bytes!.buffer.asUint8List());
       });
     }
+  });
+
+  testWidgets('completed episodes follow the details-page sort direction', (
+    tester,
+  ) async {
+    final show = MultimediaItem(
+      title: 'Scrambled',
+      url: 'https://animewitcher.test/scrambled',
+      posterUrl: '',
+      contentType: MultimediaContentType.anime,
+      tmdbId: 99,
+    );
+
+    DownloadItem episode(int number, int timestamp) => DownloadItem(
+      task: _task(
+        taskId: 'scrambled-$number',
+        filename: 'الحلقة $number.mp4',
+        metaData: 'https://animewitcher.test/scrambled/$number',
+      ),
+      status: TaskStatus.complete,
+      progress: 1,
+      item: show,
+      episode: Episode(
+        name: 'الحلقة $number',
+        url: 'https://animewitcher.test/scrambled/$number',
+        season: 1,
+        episode: number,
+        serverName: 'الحلقة $number',
+      ),
+      timestamp: timestamp,
+    );
+
+    await tester.pumpWidget(
+      _downloadsApp(
+        [episode(10, 300), episode(12, 200), episode(11, 100)],
+        episodeSortAscending: false,
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('المكتملة'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Scrambled'));
+    await tester.pumpAndSettle();
+
+    final episode12Y = tester.getTopLeft(find.text('الحلقة 12')).dy;
+    final episode11Y = tester.getTopLeft(find.text('الحلقة 11')).dy;
+    final episode10Y = tester.getTopLeft(find.text('الحلقة 10')).dy;
+    expect(episode12Y, lessThan(episode11Y));
+    expect(episode11Y, lessThan(episode10Y));
   });
 
   testWidgets('tab swipe follows RTL and lands on the completed anime group', (
