@@ -75,4 +75,54 @@ void main() {
     expect(store, contains('Future<bool> removeForGeneration('));
     expect(store, contains('if (descriptor.ownerTaskId != null) return false;'));
   });
+
+  test('DM-31 requires descriptor persistence before accepting a start', () {
+    final service = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+
+    final queuedDescriptorGate = service.indexOf(
+      'if (!startNow && refreshDescriptor != null) {',
+    );
+    final queuedCommit = service.indexOf(
+      '_commitRefreshDescriptorForGeneration(',
+      queuedDescriptorGate,
+    );
+    final queuedAccepted = service.indexOf(
+      'return DownloadCommandOutcome.queued;',
+      queuedDescriptorGate,
+    );
+
+    expect(queuedDescriptorGate, greaterThanOrEqualTo(0));
+    expect(queuedCommit, greaterThan(queuedDescriptorGate));
+    expect(queuedAccepted, greaterThan(queuedCommit));
+
+    final immediateCommit = service.lastIndexOf(
+      '_commitRefreshDescriptorForGeneration(',
+    );
+    final nativeEnqueue = service.indexOf(
+      'final success = await _enqueueTransfer(transferTask, expectedBytes);',
+      immediateCommit,
+    );
+    expect(immediateCommit, greaterThanOrEqualTo(0));
+    expect(nativeEnqueue, greaterThan(immediateCommit));
+
+    // Store failures and ownership rejection must escape the commit helper into
+    // the start transaction catch, which rolls back and reports a recoverable
+    // command failure rather than returning queued/running without recovery
+    // capability.
+    expect(
+      service,
+      contains("throw StateError('A newer refresh descriptor owns this download')"),
+    );
+    final startFailureLog = service.indexOf(
+      "debugPrint('[DownloadService] Failed to enqueue download: ",
+      nativeEnqueue,
+    );
+    final recoverable = service.indexOf(
+      'return DownloadCommandOutcome.recoverableFailure;',
+      startFailureLog,
+    );
+    expect(startFailureLog, greaterThan(nativeEnqueue));
+    expect(recoverable, greaterThan(startFailureLog));
+  });
 }
