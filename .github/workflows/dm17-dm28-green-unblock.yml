@@ -37,6 +37,7 @@ jobs:
       - name: Apply the already-reviewed DM-17 and DM-28 production patches together
         run: |
           python3 - <<'PY'
+          import re
           from pathlib import Path
 
           def python_blocks(path: str):
@@ -110,21 +111,19 @@ jobs:
                   raise SystemExit('DM-17 cancellable stream class anchor drift')
               range_source = range_source.replace(class_anchor, stream_helper + class_anchor, 1)
 
-          old_stream_source = '''current.stream.timeout(
-            kDownloadRangeStreamIdleTimeout,
-          )'''
-          if old_stream_source not in range_source:
-              old_stream_source = '''current.stream.timeout(
-              kDownloadRangeStreamIdleTimeout,
-            )'''
-          new_stream_source = '''_cancelRangeStream(
+          if 'await for (final bytes in _cancelRangeStream(' not in range_source:
+              stream_pattern = re.compile(
+                  r'current\.stream\.timeout\(\s*kDownloadRangeStreamIdleTimeout,?\s*\)'
+              )
+              replacement = '''_cancelRangeStream(
             current.stream.timeout(kDownloadRangeStreamIdleTimeout),
             operation.token,
           )'''
-          if old_stream_source in range_source:
-              range_source = range_source.replace(old_stream_source, new_stream_source, 1)
-          elif 'await for (final bytes in _cancelRangeStream(' not in range_source:
-              raise SystemExit('DM-17 cancellable stream loop anchor drift')
+              range_source, substitutions = stream_pattern.subn(replacement, range_source, count=1)
+              if substitutions != 1:
+                  raise SystemExit(
+                      f'DM-17 cancellable stream loop anchor drift: substitutions={substitutions}'
+                  )
           range_path.write_text(range_source)
           PY
 
