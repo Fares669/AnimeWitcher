@@ -51,6 +51,51 @@ struct Anime4KMetalCAPITests {
                 == Anime4KMetalDartStatus.ready.rawValue
         )
 
+        let requiredBytes = Anime4KMetalDartAPI.telemetry(
+            handleAddress: handleAddress,
+            buffer: nil,
+            capacity: 0
+        )
+        precondition(requiredBytes > 1, "ready runtime must expose telemetry JSON")
+
+        var telemetryBytes = [UInt8](
+            repeating: 0,
+            count: Int(requiredBytes)
+        )
+        let writtenBytes = telemetryBytes.withUnsafeMutableBufferPointer { buffer in
+            Anime4KMetalDartAPI.telemetry(
+                handleAddress: handleAddress,
+                buffer: buffer.baseAddress,
+                capacity: Int32(buffer.count)
+            )
+        }
+        precondition(writtenBytes == requiredBytes)
+        precondition(telemetryBytes.last == 0, "C ABI telemetry must be NUL terminated")
+
+        let telemetryData = Data(telemetryBytes.dropLast())
+        let telemetryObject = try JSONSerialization.jsonObject(with: telemetryData)
+        guard let telemetry = telemetryObject as? [String: Any] else {
+            preconditionFailure("telemetry must decode to a JSON object")
+        }
+        precondition(telemetry["averageFrameTimeMs"] is NSNumber)
+        precondition(telemetry["p95FrameTimeMs"] is NSNumber)
+        precondition((telemetry["processedFrames"] as? NSNumber)?.intValue == 0)
+        precondition(telemetry["lateOrDroppedFrames"] is NSNumber)
+        precondition(telemetry["lowPowerMode"] is Bool)
+        let thermal = telemetry["thermalLevel"] as? String
+        precondition(
+            ["nominal", "fair", "serious", "critical"].contains(thermal ?? ""),
+            "native thermal state must use the Dart policy vocabulary"
+        )
+        precondition(
+            Anime4KMetalDartAPI.telemetry(
+                handleAddress: 0,
+                buffer: nil,
+                capacity: 0
+            ) == 0,
+            "invalid handles must fail closed"
+        )
+
         Anime4KMetalDartAPI.disable(handleAddress: handleAddress)
         precondition(
             Anime4KMetalDartAPI.status(handleAddress: handleAddress)
