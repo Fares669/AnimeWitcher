@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent3/native-network-platform-reliability
+      - plan/download-manager-reliability
   workflow_dispatch:
 
 permissions:
