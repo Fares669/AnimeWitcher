@@ -113,6 +113,10 @@ struct Anime4KMetalRuntimeTests {
             } == .bypassed
         )
 
+        try testPrecisionIsPartOfConfigurationAndNumericallyBounded(
+            device: device,
+            root: root
+        )
         try testRuntimeLifetimeUntilGPUCompletion(
             device: device,
             shaderPath: shaderURL.path
@@ -153,6 +157,71 @@ struct Anime4KMetalRuntimeTests {
         precondition(ledger.availableCount == 2)
     }
 
+    private static func testPrecisionIsPartOfConfigurationAndNumericallyBounded(
+        device: MTLDevice,
+        root: URL
+    ) throws {
+        let shaderURL = root.appendingPathComponent("precision.glsl")
+        try """
+        //!DESC Anime4K-Runtime-Precision
+        //!HOOK MAIN
+        //!BIND MAIN
+        vec4 hook() {
+            vec4 color = MAIN_tex(MAIN_pos);
+            return color * vec4(0.731, 0.617, 0.853, 1.0)
+                + vec4(0.017, 0.029, 0.011, 0.0);
+        }
+        """.write(to: shaderURL, atomically: true, encoding: .utf8)
+
+        let runtime = try Anime4KMetalRuntime(device: device, maxInflightFrames: 1)
+        let input = try makePixelBuffer(width: 16, height: 16)
+        fillGradient(input)
+
+        let fp32 = Anime4KMetalRuntimeConfiguration(
+            shaderPaths: [shaderURL.path],
+            pipelineHash: "precision",
+            sourceWidth: 16,
+            sourceHeight: 16,
+            outputWidth: 16,
+            outputHeight: 16,
+            precision: .fp32
+        )
+        try runtime.configure(fp32)
+        let fp32Output = try processAndWait(runtime: runtime, input: input)
+        let fp32Bytes = pixelBytes(fp32Output)
+        precondition(runtime.compileGeneration == 1)
+
+        let mixed = Anime4KMetalRuntimeConfiguration(
+            shaderPaths: [shaderURL.path],
+            pipelineHash: "precision",
+            sourceWidth: 16,
+            sourceHeight: 16,
+            outputWidth: 16,
+            outputHeight: 16,
+            precision: .mixedFP16
+        )
+        try runtime.configure(mixed)
+        let mixedOutput = try processAndWait(runtime: runtime, input: input)
+        let mixedBytes = pixelBytes(mixedOutput)
+        precondition(
+            runtime.compileGeneration == 2,
+            "precision must participate in the compiled pipeline cache key"
+        )
+        precondition(fp32Bytes.count == mixedBytes.count)
+
+        var maxDelta = 0
+        for index in fp32Bytes.indices {
+            maxDelta = max(
+                maxDelta,
+                abs(Int(fp32Bytes[index]) - Int(mixedBytes[index]))
+            )
+        }
+        precondition(
+            maxDelta <= 2,
+            "mixed FP16 drift exceeded the 2/255 BGRA acceptance bound: \(maxDelta)"
+        )
+    }
+
     private static func testRuntimeLifetimeUntilGPUCompletion(
         device: MTLDevice,
         shaderPath: String
@@ -188,6 +257,55 @@ struct Anime4KMetalRuntimeTests {
         )
     }
 
+    private static func processAndWait(
+        runtime: Anime4KMetalRuntime,
+        input: CVPixelBuffer
+    ) throws -> CVPixelBuffer {
+        let completed = DispatchSemaphore(value: 0)
+        var output: CVPixelBuffer?
+        let submission = runtime.process(pixelBuffer: input) { result in
+            output = result
+            completed.signal()
+        }
+        precondition(submission == .submitted)
+        precondition(completed.wait(timeout: .now() + 5) == .success)
+        guard let output else { throw RuntimeTestError.missingOutput }
+        return output
+    }
+
+    private static func fillGradient(_ pixelBuffer: CVPixelBuffer) {
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let stride = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        for y in 0..<height {
+            let row = base.advanced(by: y * stride).assumingMemoryBound(to: UInt8.self)
+            for x in 0..<width {
+                let offset = x * 4
+                row[offset] = UInt8((x * 13 + y * 7) % 256)
+                row[offset + 1] = UInt8((x * 5 + y * 17) % 256)
+                row[offset + 2] = UInt8((x * 19 + y * 3) % 256)
+                row[offset + 3] = 255
+            }
+        }
+    }
+
+    private static func pixelBytes(_ pixelBuffer: CVPixelBuffer) -> [UInt8] {
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return [] }
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let stride = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        return Array(
+            UnsafeBufferPointer(
+                start: base.assumingMemoryBound(to: UInt8.self),
+                count: height * stride
+            )
+        )
+    }
+
     private static func makePixelBuffer(
         width: Int,
         height: Int
@@ -214,4 +332,5 @@ struct Anime4KMetalRuntimeTests {
 
 enum RuntimeTestError: Error {
     case pixelBufferCreation(CVReturn)
+    case missingOutput
 }
