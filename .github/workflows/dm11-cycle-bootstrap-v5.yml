@@ -6,6 +6,8 @@ on:
       - plan/download-manager-reliability
     paths:
       - .github/workflows/dm11-cycle-bootstrap-v5.yml
+      - .github/scripts/dm11_foundation_patch.py
+      - test/core/services/download_replica_transaction_test.dart
 
 permissions:
   contents: write
@@ -82,9 +84,22 @@ jobs:
           PY
           dart format lib/core/services/download_job_store.dart test/core/services/download_replica_transaction_test.dart
           git diff --check
-      - name: Verify DM-11 foundation GREEN
+      - name: Verify DM-11 focused behavior
+        id: focused
+        shell: bash
         run: |
-          flutter test test/core/services/download_replica_transaction_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          set -o pipefail
+          flutter test test/core/services/download_replica_transaction_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key 2>&1 | tee dm11-focused.log
+      - name: Upload DM-11 focused log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm11-focused-log-${{ github.run_attempt }}
+          path: dm11-focused.log
+          if-no-files-found: error
+          retention-days: 1
+      - name: Verify DM-11 regressions and analyzer
+        run: |
           flutter test test/core/services/download_job_store_test.dart test/core/services/download_callback_generation_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
           flutter analyze --no-fatal-warnings --no-fatal-infos
           git diff --check
