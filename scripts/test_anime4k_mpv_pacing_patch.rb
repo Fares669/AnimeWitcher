@@ -45,7 +45,7 @@ Dir.mktmpdir('anime4k-mpv-pacing') do |root|
     'publication must wait only for remaining target-time headroom'
   )
   assert(
-    patched.include?('else {\n      mpv_render_context_render(renderContext, &params)\n    }'),
+    patched.match?(/else \{\n\s+mpv_render_context_render\(renderContext, &params\)\n\s+\}/),
     'non-Metal rendering must preserve media_kit mpv timing behavior'
   )
 
