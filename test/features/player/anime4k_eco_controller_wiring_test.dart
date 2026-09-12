@@ -30,6 +30,29 @@ void main() {
       expect(telemetry, greaterThan(status));
     });
 
+    test('Eco consumes authoritative native processing dimensions', () {
+      final sample = source.indexOf('Future<void> _sampleAnime4kEco()');
+      expect(sample, greaterThanOrEqualTo(0));
+      expect(
+        source.indexOf('width: telemetry.inputWidth', sample),
+        greaterThan(sample),
+      );
+      expect(
+        source.indexOf('height: telemetry.inputHeight', sample),
+        greaterThan(sample),
+      );
+      expect(
+        source.indexOf('width: telemetry.processingWidth', sample),
+        greaterThan(sample),
+      );
+      expect(
+        source.indexOf('height: telemetry.processingHeight', sample),
+        greaterThan(sample),
+      );
+      expect(source, isNot(contains("getProperty('dwidth')")));
+      expect(source, isNot(contains("getProperty('dheight')")));
+    });
+
     test('runtime failure restores the resolved mpv fallback instead of faking ready', () {
       final sample = source.indexOf('Future<void> _sampleAnime4kEco()');
       expect(sample, greaterThanOrEqualTo(0));
