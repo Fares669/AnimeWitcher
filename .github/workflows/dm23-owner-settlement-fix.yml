@@ -81,3 +81,5 @@ jobs:
           git commit -m 'fix(downloads): fence multipart owner settlement'
           git pull --rebase origin "$BRANCH"
           git push origin "HEAD:$BRANCH"
+
+# automation retrigger: verify current DM-23 production slice
