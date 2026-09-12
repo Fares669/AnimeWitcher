@@ -186,6 +186,7 @@ final class Anime4KMetalRuntime {
     private var outputPool: CVPixelBufferPool?
     private var slotLedger: Anime4KMetalSlotLedger
     private var slotTextures: [[TextureKey: MTLTexture]]
+    private var telemetryAccumulator = Anime4KMetalTelemetryAccumulator()
     private var _status: Anime4KMetalRuntimeStatus = .disabled
     private var _compileGeneration = 0
 
@@ -195,6 +196,16 @@ final class Anime4KMetalRuntime {
 
     var compileGeneration: Int {
         stateLock.withLock { _compileGeneration }
+    }
+
+    var telemetry: Anime4KMetalRuntimeTelemetry {
+        stateLock.withLock { telemetryAccumulator.snapshot }
+    }
+
+    func recordLateOrDroppedFrame() {
+        stateLock.withLock {
+            telemetryAccumulator.recordLateOrDroppedFrame()
+        }
     }
 
     init(device: MTLDevice, maxInflightFrames: Int = 3) throws {
@@ -365,6 +376,7 @@ final class Anime4KMetalRuntime {
         pixelBuffer inputBuffer: CVPixelBuffer,
         completion: @escaping (CVPixelBuffer) -> Void
     ) -> Anime4KMetalRuntimeSubmission {
+        var busy = false
         let snapshot: (
             lease: Anime4KMetalSlotLease,
             groups: [CompiledGroup],
@@ -377,13 +389,15 @@ final class Anime4KMetalRuntime {
                 return nil
             }
             guard let lease = slotLedger.reserve() else {
+                telemetryAccumulator.recordLateOrDroppedFrame()
+                busy = true
                 return nil
             }
             return (lease, compiledGroups, configuration, pool)
         }
 
         guard let snapshot else {
-            return status == .ready ? .busy : .bypassed
+            return busy ? .busy : .bypassed
         }
 
         do {
@@ -435,6 +449,8 @@ final class Anime4KMetalRuntime {
                 commandBuffer: commandBuffer
             )
 
+            let submittedAt = ProcessInfo.processInfo.systemUptime
+
             // The completion intentionally retains `self`, the source/output
             // CVPixelBuffers and their CVMetalTexture wrappers until GPU work
             // has completed. The runtime may be removed from the bridge while
@@ -443,10 +459,34 @@ final class Anime4KMetalRuntime {
                 _ = inputBuffer
                 _ = inputTextureRef
                 _ = outputTextureRef
+
+                let fallbackMilliseconds = max(
+                    0,
+                    (ProcessInfo.processInfo.systemUptime - submittedAt) * 1000
+                )
+                let gpuMilliseconds: Double? = {
+                    let start = buffer.gpuStartTime
+                    let end = buffer.gpuEndTime
+                    guard start.isFinite,
+                          end.isFinite,
+                          end >= start,
+                          end > 0 else {
+                        return nil
+                    }
+                    return (end - start) * 1000
+                }()
+
                 self.stateLock.withLock {
                     let belongsToCurrentEpoch =
                         snapshot.lease.epoch == self.slotLedger.epoch
                     self.slotLedger.release(snapshot.lease)
+                    if buffer.status == .completed {
+                        self.telemetryAccumulator.recordCompletedFrame(
+                            milliseconds: gpuMilliseconds ?? fallbackMilliseconds
+                        )
+                    } else {
+                        self.telemetryAccumulator.recordLateOrDroppedFrame()
+                    }
                     if belongsToCurrentEpoch && buffer.status == .error {
                         self._status = .failed(
                             buffer.error.map(String.init(describing:)) ??
@@ -463,6 +503,7 @@ final class Anime4KMetalRuntime {
                 let belongsToCurrentEpoch =
                     snapshot.lease.epoch == slotLedger.epoch
                 slotLedger.release(snapshot.lease)
+                telemetryAccumulator.recordLateOrDroppedFrame()
                 if belongsToCurrentEpoch {
                     _status = .failed(String(describing: error))
                 }
