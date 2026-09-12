@@ -46,6 +46,10 @@ struct Anime4KMetalRuntimeTests {
             outputWidth: 8,
             outputHeight: 8
         )
+        precondition(
+            first.precision == .mixedFP16,
+            "mixed FP16 must be the production default after the numerical gate"
+        )
         try runtime.configure(first)
         precondition(runtime.status == .ready)
         precondition(runtime.compileGeneration == 1)

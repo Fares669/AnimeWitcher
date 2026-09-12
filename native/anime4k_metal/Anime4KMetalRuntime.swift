@@ -32,7 +32,7 @@ struct Anime4KMetalRuntimeConfiguration: Equatable {
         sourceHeight: Int,
         outputWidth: Int,
         outputHeight: Int,
-        precision: Anime4KMetalPrecisionPolicy = .fp32
+        precision: Anime4KMetalPrecisionPolicy = .mixedFP16
     ) {
         self.shaderPaths = shaderPaths
         self.pipelineHash = pipelineHash
