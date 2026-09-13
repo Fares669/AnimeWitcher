@@ -61,34 +61,31 @@ class PlayerController extends base.PlayerController {
 
   Future<Anime4kColorSignal> _readAnime4kColorSignal(
     NativePlayer platform,
-  ) async {
-    String? gamma;
-    String? colorSystem;
+  ) {
+    return waitForAnime4kColorSignal(
+      isCancelled: () => isDisposed,
+      read: () async {
+        String? gamma;
+        String? colorSystem;
 
-    for (var attempt = 0; attempt < 5; attempt++) {
-      try {
-        gamma = (await platform.getProperty('video-params/gamma')).trim();
-      } catch (_) {
-        gamma = null;
-      }
-      try {
-        colorSystem = (await platform.getProperty('video-params/colormatrix'))
-  .trim();
-      } catch (_) {
-        colorSystem = null;
-      }
+        try {
+          gamma = (await platform.getProperty('video-params/gamma')).trim();
+        } catch (_) {
+          gamma = null;
+        }
+        try {
+          colorSystem =
+              (await platform.getProperty('video-params/colormatrix')).trim();
+        } catch (_) {
+          colorSystem = null;
+        }
 
-      final signal = classifyAnime4kColorSignal(
-        transfer: gamma,
-        colorSystem: colorSystem,
-      );
-      if (signal != Anime4kColorSignal.unknown) return signal;
-      if (attempt < 4) {
-        await Future<void>.delayed(const Duration(milliseconds: 60));
-        if (isDisposed) return Anime4kColorSignal.unknown;
-      }
-    }
-    return Anime4kColorSignal.unknown;
+        return classifyAnime4kColorSignal(
+          transfer: gamma,
+          colorSystem: colorSystem,
+        );
+      },
+    );
   }
 
   @override
@@ -98,15 +95,15 @@ class PlayerController extends base.PlayerController {
         final settings = ref.read(playerSettingsProvider).asData?.value;
         final platform = player.platform;
         if (settings != null &&
-  settings.anime4kEnabled &&
-  settings.anime4kMode != Anime4kMode.off &&
-  platform is NativePlayer) {
-final colorSignal = await _readAnime4kColorSignal(platform);
-if (isDisposed) return;
-if (colorSignal != Anime4kColorSignal.sdr) {
-  await _applyResolvedMpvFallback(platform: platform);
-  return;
-}
+            settings.anime4kEnabled &&
+            settings.anime4kMode != Anime4kMode.off &&
+            platform is NativePlayer) {
+          final colorSignal = await _readAnime4kColorSignal(platform);
+          if (isDisposed) return;
+          if (colorSignal != Anime4kColorSignal.sdr) {
+            await _applyResolvedMpvFallback(platform: platform);
+            return;
+          }
         }
       }
 
@@ -124,7 +121,9 @@ if (colorSignal != Anime4kColorSignal.sdr) {
   Future<void> _applyResolvedMpvFallback({NativePlayer? platform}) async {
     final nativePlatform =
         platform ??
-        (player.platform is NativePlayer ? player.platform as NativePlayer : null);
+        (player.platform is NativePlayer
+            ? player.platform as NativePlayer
+            : null);
     if (nativePlatform == null) return;
     final settings =
         ref.read(playerSettingsProvider).asData?.value ??
@@ -132,11 +131,11 @@ if (colorSignal != Anime4kColorSignal.sdr) {
     final pipeline = await ref
         .read(anime4kShaderLibraryProvider)
         .pipeline(
-mode: settings.anime4kEnabled
-    ? settings.anime4kMode
-    : Anime4kMode.off,
-quality: settings.anime4kQuality,
-directory: settings.anime4kShaderDirectory,
+          mode: settings.anime4kEnabled
+              ? settings.anime4kMode
+              : Anime4kMode.off,
+          quality: settings.anime4kQuality,
+          directory: settings.anime4kShaderDirectory,
         );
 
     final metalBridge = _metalBridge();
