@@ -100,4 +100,71 @@ void main() {
       expect(controller, contains('metalBridge.disable(handle: handle)'));
     });
   });
+
+  group('Anime4K color metadata readiness', () {
+    test('waits through transient unknown metadata until SDR is ready', () async {
+      var reads = 0;
+      final result = await waitForAnime4kColorSignal(
+        maxAttempts: 5,
+        retryDelay: Duration.zero,
+        read: () async {
+          reads++;
+          return reads < 3
+              ? Anime4kColorSignal.unknown
+              : Anime4kColorSignal.sdr;
+        },
+      );
+
+      expect(result, Anime4kColorSignal.sdr);
+      expect(reads, 3);
+    });
+
+    test('returns HDR as soon as metadata becomes known', () async {
+      var reads = 0;
+      final result = await waitForAnime4kColorSignal(
+        maxAttempts: 5,
+        retryDelay: Duration.zero,
+        read: () async {
+          reads++;
+          return reads == 1
+              ? Anime4kColorSignal.unknown
+              : Anime4kColorSignal.hdr;
+        },
+      );
+
+      expect(result, Anime4kColorSignal.hdr);
+      expect(reads, 2);
+    });
+
+    test('fails closed after bounded retries when metadata stays unknown', () async {
+      var reads = 0;
+      final result = await waitForAnime4kColorSignal(
+        maxAttempts: 3,
+        retryDelay: Duration.zero,
+        read: () async {
+          reads++;
+          return Anime4kColorSignal.unknown;
+        },
+      );
+
+      expect(result, Anime4kColorSignal.unknown);
+      expect(reads, 3);
+    });
+
+    test('cancellation fails closed without another metadata read', () async {
+      var reads = 0;
+      final result = await waitForAnime4kColorSignal(
+        maxAttempts: 5,
+        retryDelay: Duration.zero,
+        isCancelled: () => reads >= 1,
+        read: () async {
+          reads++;
+          return Anime4kColorSignal.unknown;
+        },
+      );
+
+      expect(result, Anime4kColorSignal.unknown);
+      expect(reads, 1);
+    });
+  });
 }
