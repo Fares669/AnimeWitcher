@@ -22,8 +22,11 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
       - name: Verify RED regression
         shell: bash
         run: |
