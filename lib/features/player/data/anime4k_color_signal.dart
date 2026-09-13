@@ -1,3 +1,5 @@
+import 'dart:async';
+
 /// Conservative color-transfer classification used by the Apple Anime4K gate.
 ///
 /// Native Metal is currently validated for SDR only. Any HDR/extended-range or
