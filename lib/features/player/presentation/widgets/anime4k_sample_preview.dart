@@ -270,11 +270,7 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
       if (await captureFile.exists()) {
         await captureFile.delete();
       }
-      await platform.command([
-        'screenshot-to-file',
-        captureFile.path,
-        'window',
-      ]);
+      await platform.command(['screenshot-to-file', captureFile.path, 'video']);
 
       var captured = false;
       for (var attempt = 0; attempt < 40; attempt++) {
