@@ -24,6 +24,7 @@ export 'player_controller_base.dart'
 /// can process a frame.
 class PlayerController extends base.PlayerController {
   Anime4kMetalBridge? _anime4kMetalBridge;
+  int _anime4kApplySerial = 0;
 
   bool get _isApplePlatform => Platform.isIOS || Platform.isMacOS;
 
@@ -59,11 +60,87 @@ class PlayerController extends base.PlayerController {
     return bridge;
   }
 
+  Future<PlayerSettings?> _readAnime4kSettingsReady() async {
+    final current = ref.read(playerSettingsProvider).asData?.value;
+    if (current != null) return current;
+    try {
+      return await ref.read(playerSettingsProvider.future);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool _isCurrentAnime4kApply({
+    required int applySerial,
+    required int sourceSessionId,
+  }) {
+    return !isDisposed &&
+        applySerial == _anime4kApplySerial &&
+        currentState.sourceSessionId == sourceSessionId;
+  }
+
+  /// Opening a media item returns before mpv is guaranteed to have selected a
+  /// GPU VO and decoded the first video's dimensions. Applying a saved Anime4K
+  /// setting during that window used to clear the shader chain and never retry,
+  /// which is why toggling the setting later inside the player appeared to fix
+  /// it. Wait for the same concrete prerequisites the real apply path needs.
+  Future<bool> _waitForAnime4kPlaybackReadiness(
+    NativePlayer platform, {
+    required int applySerial,
+    required int sourceSessionId,
+    int maxAttempts = 150,
+    Duration retryDelay = const Duration(milliseconds: 100),
+  }) async {
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      if (!_isCurrentAnime4kApply(
+        applySerial: applySerial,
+        sourceSessionId: sourceSessionId,
+      )) {
+        return false;
+      }
+
+      String currentVo = '';
+      num width = 0;
+      num height = 0;
+      try {
+        currentVo = (await platform.getProperty('current-vo')).trim();
+      } catch (_) {
+        currentVo = '';
+      }
+      try {
+        width = num.tryParse((await platform.getProperty('width')).trim()) ?? 0;
+      } catch (_) {
+        width = 0;
+      }
+      try {
+        height = num.tryParse((await platform.getProperty('height')).trim()) ?? 0;
+      } catch (_) {
+        height = 0;
+      }
+
+      if (anime4kGpuRendererSupportsShaders(currentVo) &&
+          width > 0 &&
+          height > 0) {
+        return true;
+      }
+
+      if (attempt + 1 < maxAttempts) {
+        await Future<void>.delayed(retryDelay);
+      }
+    }
+    return false;
+  }
+
   Future<Anime4kColorSignal> _readAnime4kColorSignal(
-    NativePlayer platform,
-  ) {
+    NativePlayer platform, {
+    required int applySerial,
+    required int sourceSessionId,
+  }) {
     return waitForAnime4kColorSignal(
-      isCancelled: () => isDisposed,
+      isCancelled: () => !_isCurrentAnime4kApply(
+        applySerial: applySerial,
+        sourceSessionId: sourceSessionId,
+      ),
       read: () async {
         String? gamma;
         String? colorSystem;
@@ -90,23 +167,70 @@ class PlayerController extends base.PlayerController {
 
   @override
   Future<void> applyAnime4kShaders() async {
+    final applySerial = ++_anime4kApplySerial;
+    final sourceSessionId = currentState.sourceSessionId;
+
     try {
       if (_isApplePlatform && !currentState.useExoPlayer) {
-        final settings = ref.read(playerSettingsProvider).asData?.value;
+        final settings = await _readAnime4kSettingsReady();
+        if (!_isCurrentAnime4kApply(
+          applySerial: applySerial,
+          sourceSessionId: sourceSessionId,
+        )) {
+          return;
+        }
+
         final platform = player.platform;
         if (settings != null &&
             settings.anime4kEnabled &&
             settings.anime4kMode != Anime4kMode.off &&
             platform is NativePlayer) {
-          final colorSignal = await _readAnime4kColorSignal(platform);
-          if (isDisposed) return;
+          final playbackReady = await _waitForAnime4kPlaybackReadiness(
+            platform,
+            applySerial: applySerial,
+            sourceSessionId: sourceSessionId,
+          );
+          if (!_isCurrentAnime4kApply(
+            applySerial: applySerial,
+            sourceSessionId: sourceSessionId,
+          )) {
+            return;
+          }
+          if (!playbackReady) {
+            await _applyResolvedMpvFallback(
+              platform: platform,
+              settings: settings,
+            );
+            return;
+          }
+
+          final colorSignal = await _readAnime4kColorSignal(
+            platform,
+            applySerial: applySerial,
+            sourceSessionId: sourceSessionId,
+          );
+          if (!_isCurrentAnime4kApply(
+            applySerial: applySerial,
+            sourceSessionId: sourceSessionId,
+          )) {
+            return;
+          }
           if (colorSignal != Anime4kColorSignal.sdr) {
-            await _applyResolvedMpvFallback(platform: platform);
+            await _applyResolvedMpvFallback(
+              platform: platform,
+              settings: settings,
+            );
             return;
           }
         }
       }
 
+      if (!_isCurrentAnime4kApply(
+        applySerial: applySerial,
+        sourceSessionId: sourceSessionId,
+      )) {
+        return;
+      }
       await super.applyAnime4kShaders();
     } catch (error) {
       // Anime4K is optional and settings can become available before
@@ -118,24 +242,28 @@ class PlayerController extends base.PlayerController {
     }
   }
 
-  Future<void> _applyResolvedMpvFallback({NativePlayer? platform}) async {
+  Future<void> _applyResolvedMpvFallback({
+    NativePlayer? platform,
+    PlayerSettings? settings,
+  }) async {
     final nativePlatform =
         platform ??
         (player.platform is NativePlayer
             ? player.platform as NativePlayer
             : null);
     if (nativePlatform == null) return;
-    final settings =
+    final resolvedSettings =
+        settings ??
         ref.read(playerSettingsProvider).asData?.value ??
         const PlayerSettings();
     final pipeline = await ref
         .read(anime4kShaderLibraryProvider)
         .pipeline(
-          mode: settings.anime4kEnabled
-              ? settings.anime4kMode
+          mode: resolvedSettings.anime4kEnabled
+              ? resolvedSettings.anime4kMode
               : Anime4kMode.off,
-          quality: settings.anime4kQuality,
-          directory: settings.anime4kShaderDirectory,
+          quality: resolvedSettings.anime4kQuality,
+          directory: resolvedSettings.anime4kShaderDirectory,
         );
 
     final metalBridge = _metalBridge();
