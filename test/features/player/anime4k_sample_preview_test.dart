@@ -92,10 +92,11 @@ void main() {
         fallbackPath,
         contains("setProperty('glsl-shaders', pipeline.value)"),
       );
-      expect(
-        fallbackPath,
-        contains("'screenshot-to-file', captureFile.path, 'window'"),
-      );
+      // dart format may place the command list across several lines; assert
+      // its semantic arguments independently instead of formatting whitespace.
+      expect(fallbackPath, contains("'screenshot-to-file'"));
+      expect(fallbackPath, contains('captureFile.path'));
+      expect(fallbackPath, contains("'window'"));
       expect(fallbackPath, contains('_metalPreviewCache.store(key, bytes)'));
       expect(fallbackPath, contains('await _disposeSpecificPreviewPlayer(player)'));
       expect(fallbackPath, isNot(contains("setProperty('loop-file', 'inf')")));
