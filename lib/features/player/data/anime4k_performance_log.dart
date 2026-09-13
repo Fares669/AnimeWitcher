@@ -17,9 +17,10 @@ typedef Anime4kClock = DateTime Function();
 
 /// Device-local JSONL benchmark log for the Apple Anime4K performance work.
 ///
-/// Nothing is uploaded. A new `anime4k-*` file is created under Documents/log
-/// for each service lifetime so a physical-device preview run can be inspected
-/// from the settings UI and attached to benchmark evidence later.
+/// Nothing is uploaded. One `anime4k-*` file is created under Documents/log
+/// for each service lifetime. User-visible configuration changes are recorded
+/// as ordered segments in that same file so physical-device comparisons have
+/// explicit boundaries instead of inferring them from nearby route events.
 class Anime4kPerformanceLog {
   Anime4kPerformanceLog({
     Anime4kDocumentsDirectoryResolver? documentsDirectory,
@@ -36,6 +37,68 @@ class Anime4kPerformanceLog {
 
   Future<File>? _sessionFile;
   Future<void> _writeTail = Future<void>.value();
+  _Anime4kLogConfiguration? _activeConfiguration;
+  int? _activeSegmentId;
+  int _nextSegmentId = 1;
+  DateTime? _activeSegmentStartedAt;
+  Map<String, Object?>? _latestSnapshotSummary;
+
+  Future<void> recordConfiguration({
+    required bool enabled,
+    required Anime4kMode mode,
+    required Anime4kQuality requestedQuality,
+    required bool ecoEnabled,
+    required bool metalFxExperiment,
+  }) {
+    final nextConfiguration = _Anime4kLogConfiguration(
+      enabled: enabled,
+      mode: mode,
+      requestedQuality: requestedQuality,
+      ecoEnabled: ecoEnabled,
+      metalFxExperiment: metalFxExperiment,
+    );
+
+    return _enqueue((file) async {
+      if (_activeConfiguration == nextConfiguration) return;
+
+      final now = _now();
+      final previous = _activeConfiguration;
+      final previousId = _activeSegmentId;
+      final previousStartedAt = _activeSegmentStartedAt;
+      if (previous != null &&
+          previousId != null &&
+          previousStartedAt != null) {
+        final elapsed = now.difference(previousStartedAt);
+        final latestSnapshot = _latestSnapshotSummary;
+        await _writeEvent(
+          file,
+          <String, Object?>{
+            'type': 'segmentEnd',
+            'segmentId': previousId,
+            ...previous.toJson(),
+            'durationMs': elapsed.isNegative ? 0 : elapsed.inMilliseconds,
+            if (latestSnapshot != null) ...latestSnapshot,
+          },
+          timestamp: now,
+        );
+      }
+
+      final nextId = _nextSegmentId++;
+      _activeConfiguration = nextConfiguration;
+      _activeSegmentId = nextId;
+      _activeSegmentStartedAt = now;
+      _latestSnapshotSummary = null;
+      await _writeEvent(
+        file,
+        <String, Object?>{
+          'type': 'segmentStart',
+          'segmentId': nextId,
+          ...nextConfiguration.toJson(),
+        },
+        timestamp: now,
+      );
+    });
+  }
 
   Future<void> recordRoute({
     required Anime4kBackend backend,
@@ -50,19 +113,22 @@ class Anime4kPerformanceLog {
     String? playerBackend,
     String? reason,
   }) {
-    return _append(<String, Object?>{
-      'type': 'route',
-      'backend': backend.name,
-      'mode': mode.name,
-      'requestedQuality': requestedQuality.name,
-      'ecoEnabled': ecoEnabled,
-      'colorSignal': colorSignal,
-      'colorTransfer': colorTransfer,
-      'colorSystem': colorSystem,
-      'metalState': metalState,
-      'playerBackend': playerBackend,
-      'reason': reason,
-      'metalFxExperiment': metalFxExperiment,
+    return _enqueue((file) {
+      return _writeEvent(file, <String, Object?>{
+        'type': 'route',
+        'segmentId': _activeSegmentId,
+        'backend': backend.name,
+        'mode': mode.name,
+        'requestedQuality': requestedQuality.name,
+        'ecoEnabled': ecoEnabled,
+        'colorSignal': colorSignal,
+        'colorTransfer': colorTransfer,
+        'colorSystem': colorSystem,
+        'metalState': metalState,
+        'playerBackend': playerBackend,
+        'reason': reason,
+        'metalFxExperiment': metalFxExperiment,
+      });
     });
   }
 
@@ -70,24 +136,17 @@ class Anime4kPerformanceLog {
     Anime4kPerformanceSnapshot snapshot, {
     required bool metalFxExperiment,
   }) {
-    return _append(<String, Object?>{
-      'type': 'snapshot',
-      'backend': snapshot.backend.name,
-      'requestedMode': snapshot.requestedMode.name,
-      'requestedQuality': snapshot.requestedQuality.name,
-      'effectiveQuality': snapshot.effectiveQuality.name,
-      'inputWidth': snapshot.inputWidth,
-      'inputHeight': snapshot.inputHeight,
-      'processingWidth': snapshot.processingWidth,
-      'processingHeight': snapshot.processingHeight,
-      'averageFrameTimeMs': snapshot.averageFrameTimeMs,
-      'p95FrameTimeMs': snapshot.p95FrameTimeMs,
-      'processedFrames': snapshot.processedFrames,
-      'skippedDuplicateFrames': snapshot.skippedDuplicateFrames,
-      'droppedOrLateFrames': snapshot.droppedOrLateFrames,
-      'thermalLevel': snapshot.thermalLevel.name,
-      'lowPowerMode': snapshot.lowPowerMode,
-      'metalFxExperiment': metalFxExperiment,
+    return _enqueue((file) async {
+      final summary = _snapshotSummary(
+        snapshot,
+        metalFxExperiment: metalFxExperiment,
+      );
+      _latestSnapshotSummary = summary;
+      await _writeEvent(file, <String, Object?>{
+        'type': 'snapshot',
+        'segmentId': _activeSegmentId,
+        ...summary,
+      });
     });
   }
 
@@ -128,15 +187,15 @@ class Anime4kPerformanceLog {
     return start == 0 ? text : '[... earlier Anime4K log omitted ...]\n$text';
   }
 
-  Future<void> _append(Map<String, Object?> event) {
-    final next = _appendAfter(_writeTail, event);
+  Future<void> _enqueue(Future<void> Function(File file) operation) {
+    final next = _runAfter(_writeTail, operation);
     _writeTail = next;
     return next;
   }
 
-  Future<void> _appendAfter(
+  Future<void> _runAfter(
     Future<void> previous,
-    Map<String, Object?> event,
+    Future<void> Function(File file) operation,
   ) async {
     try {
       await previous;
@@ -146,20 +205,28 @@ class Anime4kPerformanceLog {
 
     try {
       final file = await _ensureSessionFile();
-      final entry = <String, Object?>{
-        'timestamp': _now().toUtc().toIso8601String(),
-        ...event,
-      };
-      await file.writeAsString(
-        '${jsonEncode(entry)}\n',
-        mode: FileMode.append,
-        flush: true,
-      );
+      await operation(file);
     } catch (error) {
       if (kDebugMode) {
         debugPrint('Anime4K performance log write skipped: $error');
       }
     }
+  }
+
+  Future<void> _writeEvent(
+    File file,
+    Map<String, Object?> event, {
+    DateTime? timestamp,
+  }) {
+    final entry = <String, Object?>{
+      'timestamp': (timestamp ?? _now()).toUtc().toIso8601String(),
+      ...event,
+    };
+    return file.writeAsString(
+      '${jsonEncode(entry)}\n',
+      mode: FileMode.append,
+      flush: true,
+    );
   }
 
   Future<File> _ensureSessionFile() {
@@ -187,6 +254,30 @@ class Anime4kPerformanceLog {
       flush: true,
     );
     return file;
+  }
+
+  static Map<String, Object?> _snapshotSummary(
+    Anime4kPerformanceSnapshot snapshot, {
+    required bool metalFxExperiment,
+  }) {
+    return <String, Object?>{
+      'backend': snapshot.backend.name,
+      'requestedMode': snapshot.requestedMode.name,
+      'requestedQuality': snapshot.requestedQuality.name,
+      'effectiveQuality': snapshot.effectiveQuality.name,
+      'inputWidth': snapshot.inputWidth,
+      'inputHeight': snapshot.inputHeight,
+      'processingWidth': snapshot.processingWidth,
+      'processingHeight': snapshot.processingHeight,
+      'averageFrameTimeMs': snapshot.averageFrameTimeMs,
+      'p95FrameTimeMs': snapshot.p95FrameTimeMs,
+      'processedFrames': snapshot.processedFrames,
+      'skippedDuplicateFrames': snapshot.skippedDuplicateFrames,
+      'droppedOrLateFrames': snapshot.droppedOrLateFrames,
+      'thermalLevel': snapshot.thermalLevel.name,
+      'lowPowerMode': snapshot.lowPowerMode,
+      'metalFxExperiment': metalFxExperiment,
+    };
   }
 
   static Future<Map<String, Object?>> _readDeviceInfo() async {
@@ -223,6 +314,49 @@ class Anime4kPerformanceLog {
     }
     return null;
   }
+}
+
+class _Anime4kLogConfiguration {
+  const _Anime4kLogConfiguration({
+    required this.enabled,
+    required this.mode,
+    required this.requestedQuality,
+    required this.ecoEnabled,
+    required this.metalFxExperiment,
+  });
+
+  final bool enabled;
+  final Anime4kMode mode;
+  final Anime4kQuality requestedQuality;
+  final bool ecoEnabled;
+  final bool metalFxExperiment;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'enabled': enabled,
+    'mode': mode.name,
+    'requestedQuality': requestedQuality.name,
+    'ecoEnabled': ecoEnabled,
+    'metalFxExperiment': metalFxExperiment,
+  };
+
+  @override
+  bool operator ==(Object other) {
+    return other is _Anime4kLogConfiguration &&
+        other.enabled == enabled &&
+        other.mode == mode &&
+        other.requestedQuality == requestedQuality &&
+        other.ecoEnabled == ecoEnabled &&
+        other.metalFxExperiment == metalFxExperiment;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    enabled,
+    mode,
+    requestedQuality,
+    ecoEnabled,
+    metalFxExperiment,
+  );
 }
 
 final anime4kPerformanceLogProvider = Provider<Anime4kPerformanceLog>((ref) {
