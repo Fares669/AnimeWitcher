@@ -47,6 +47,13 @@ jobs:
               raise SystemExit('expected duplicate bypass cleanup was not found')
           script = script.replace(bad_count, fixed_count)
 
+          bad_strategy = r'''replace(capi, '                precision: precision,\n                upscaleStrategy: upscaleStrategy\n', '                precision: precision\n', expected=2)'''
+          fixed_strategy = r'''replace(capi, '                precision: precision,\n                upscaleStrategy: upscaleStrategy\n', '                precision: precision\n', expected=1)
+          replace(capi, '                    precision: precision,\n                    upscaleStrategy: upscaleStrategy\n', '                    precision: precision\n', expected=1)'''
+          if bad_strategy not in script:
+              raise SystemExit('expected combined playback/preview strategy cleanup was not found')
+          script = script.replace(bad_strategy, fixed_strategy)
+
           namespace = {'__name__': '__main__'}
           exec(compile(script, '<anime4k-cleanup>', 'exec'), namespace)
 
