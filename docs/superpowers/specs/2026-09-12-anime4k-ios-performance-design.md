@@ -1,123 +1,118 @@
 # Anime4K iOS Performance Design
 
+## Status
+
+This document describes the final architecture of `feat/anime4k-ios-performance` after implementation and physical-device experimentation. Development-only Eco/Auto, MetalFX, and user-facing benchmark-log experiments are intentionally not part of the shipping design.
+
 ## Goal
 
-Reduce Anime4K GPU load, heat, battery use, and dropped frames on iOS while preserving image quality, keeping manual S/M/L/VL/UL choices deterministic, and adding a separate Apple Eco/Auto mode that may adapt work to runtime conditions.
+Reduce Anime4K GPU overhead and duplicated work on Apple platforms while preserving deterministic manual quality, image correctness, safe fallback behavior, and compatibility with the existing non-Apple mpv GLSL path.
 
-## Current State
+## Final product behavior
 
-AnimeWitcher currently resolves Anime4K v4.0.1 GLSL pipelines in Dart and applies them through mpv `glsl-shaders`. iOS uses media_kit's libmpv OpenGL ES renderer, which renders into Metal-compatible BGRA `CVPixelBuffer`s. The repository already contains an Anime4K GLSL-to-MSL translator derived from Anime4KMetal, but it does not yet execute a native Metal runtime in the playback path.
-
-## Non-Negotiable Behavior
-
-- Manual quality S/M/L/VL/UL remains fixed. Eco/Auto never silently changes a manual non-Eco selection.
-- Apple Eco/Auto is a separate setting available on iOS/macOS only.
-- Eco/Auto may reduce work but never change the semantic mode A/B/C/A+A/B+B/C+A; it adapts quality tier, expensive late passes, and processing resolution only.
-- Android/Windows/Linux remain on the existing mpv GLSL path unless a later dedicated plan changes them.
-- If native Metal setup, shader compilation, synchronization, color correctness, or runtime processing fails, playback must continue using mpv GLSL or unmodified video rather than crash or claim Anime4K is active when it is not.
-- Metal and mpv Anime4K must never process the same frame simultaneously.
+- Manual S/M/L/VL/UL quality is deterministic and never silently adapted.
+- Existing semantic modes A/B/C/A+A/B+B/C+A remain unchanged.
+- iOS/macOS may use the native Metal Anime4K backend for supported SDR playback.
+- HDR or unknown transfer metadata fails closed to the exact resolved mpv GLSL pipeline until a separately validated native HDR path exists.
+- Android/Windows/Linux continue to use mpv GLSL.
+- Metal and mpv Anime4K never process the same frame at the same time.
+- Native setup, shader compilation, synchronization, or runtime failure never crashes playback and never reports fake success; the controller restores the safe fallback path.
+- A saved Anime4K selection applies automatically when an episode opens. On Apple, the controller waits for bounded color-metadata readiness before deciding native Metal vs fallback.
 - iOS minimum remains 15.0 and macOS minimum remains 12.0.
 
-## Performance Strategy
+## Architecture
 
-### 1. Correct the shader pipeline before optimizing the backend
+### 1. Resolver and shader integrity
 
-Anime4K's own optimized configurations insert `Anime4K_AutoDownscalePre_x2.glsl` and `Anime4K_AutoDownscalePre_x4.glsl` between upscale stages so work is not wasted at a resolution larger than the actual output needs. AnimeWitcher's current resolver omits those passes. The resolver will add them where the official v4.0.1 optimized pipelines use them.
+Anime4K remains pinned to v4.0.1. The resolver includes the official `Anime4K_AutoDownscalePre_x2.glsl` and `Anime4K_AutoDownscalePre_x4.glsl` stages where appropriate and uses stage-aware CNN quality selection so later high-resolution passes do not accidentally inherit unnecessary cost.
 
-Repeated CNN stages will become stage-aware: later passes after an x2 upscale use a lower network size intentionally instead of only choosing another unused filename. The manual selected quality remains the first-stage ceiling.
+Shader installation is staged into a temporary directory, validates the expected filename/size/SHA-256 manifest, rejects unsafe paths and duplicate normalized names, and atomically replaces the active directory only after validation succeeds. A deterministic ordered pipeline hash feeds the native pipeline cache.
 
-### 2. Baseline and observability first
+### 2. Native Metal render-path integration
 
-Before changing native rendering, add deterministic performance telemetry interfaces for:
+On Apple platforms, the native runtime is integrated into media_kit's produced-frame render path after libmpv creates a new frame and before that frame is published to Flutter. It does not run from a Flutter buffer-copy callback, so display refreshes cannot cause repeated Anime4K processing of the same video frame.
 
-- backend (`mpv-glsl`, `metal`, `metal-eco`)
-- requested mode and quality
-- effective quality
-- input and processing dimensions
-- average and p95 Anime4K frame time
-- processed frame count and skipped duplicate frame count
-- dropped/late frame count when available
-- thermal state
-- Low Power Mode state
+The CocoaPods integration is marker/version checked and fails loudly if upstream `media_kit_video` source structure drifts beyond the supported patch contract.
 
-Telemetry is debug/diagnostic state, not analytics upload.
+### 3. GPU synchronization and lifetime
 
-### 3. Execute native Metal in the render path
+The runtime owns its Metal device/queue, `CVMetalTextureCache`, compiled pipeline cache, reusable intermediate textures, output resources, and bounded in-flight slots.
 
-The native Metal runtime will be called as part of media_kit's Apple render path after libmpv has rendered a new frame and before that frame is published as ready to Flutter. It will not run from `copyPixelBuffer()` because Flutter may request the same current buffer multiple times. This guarantees at most one Anime4K execution per produced video frame.
+Input `CVPixelBuffer`/IOSurface resources remain alive until Metal completes its reads. Publication ownership remains bounded until the processed destination is safe to expose/reuse. Steady-state playback does not call `waitUntilCompleted()`, and the integration avoids a blanket per-frame `glFinish()`.
 
-The integration remains marker/version checked. If the upstream `media_kit_video` source structure changes, CocoaPods setup fails loudly rather than silently producing an unprocessed image.
+When bounded resources are exhausted, the path follows an explicit non-blocking fallback/publication policy rather than indefinitely blocking the player or UI thread.
 
-### 4. Asynchronous GPU pipeline, no per-frame blocking wait
+### 4. One execution per produced video frame
 
-Do not use `waitUntilCompleted()` in the steady-state render loop. Maintain a bounded ring of output buffers and command buffers. Each frame may be in flight until its completion handler marks its resources reusable. If no output slot is available, skip Anime4K for that frame or keep the most recent completed processed frame according to the render contract; never block the UI/main thread indefinitely.
+A produced-frame identity/generation registry prevents Anime4K from running again when Flutter or the display redraws the same source frame. A 24/30 fps source therefore does not multiply processing simply because the display refreshes at 60/120 Hz.
 
-### 5. GL ES to Metal synchronization and lifetime safety
+Native telemetry retains processed/skipped/late counters so this behavior remains testable and measurable without exposing a user-facing logging feature.
 
-Input `CVPixelBuffer`s are Metal-compatible IOSurfaces. The runtime creates Metal textures with `CVMetalTextureCache`, preserves the source buffer until Metal has finished reading it, and preserves output buffers until Flutter is done with the published frame. Synchronization must be proven without adding a blanket `glFinish()` to every frame. Buffer ownership is explicit so media_kit cannot recycle a surface still in use by Metal.
+### 5. Mixed FP16 compute
 
-### 6. Mixed FP16 compute
+Safe sampled colors, CNN/intermediate values, and suitable arithmetic use FP16. Coordinates, dimensions, and numerically sensitive operations remain FP32. Apple CI compiles the pinned shader corpus under the supported precision policies and regression tests preserve the translator contract.
 
-The existing translator emits float32 vectors and sampled textures. Add a precision policy that uses `half`/`half2`/`half3`/`half4` for CNN weights, sampled colors, and safe intermediate math while retaining float32 for coordinates, size calculations, and numerically sensitive accumulations. The exact output must be compared against float32 within a defined tolerance before enabling FP16 by default.
+### 6. Resolution-aware processing and cache reuse
 
-### 7. Reuse textures and compiled pipelines
+Processing dimensions follow source aspect ratio and real output/live buffer dimensions rather than allocating unnecessarily large intermediate surfaces. Compiled pipelines and textures are rebuilt only when relevant shader/dimension/precision inputs change.
 
-Intermediate textures are allocated per pipeline/dimension configuration, not per frame. Recompile only when shader list or relevant dimensions change. Cache `MTLComputePipelineState` objects and use a stable cache key derived from shader content hashes plus precision mode. Explore `MTLBinaryArchive` only after the primary runtime is correct; it is an optimization, not a dependency.
+The active native runtime can retarget to live `CVPixelBuffer` dimensions when player/drawable metadata is stale or changes during playback.
 
-### 8. Resolution-aware processing
+### 7. No-double-processing backend routing
 
-Never run Anime4K at a resolution materially above the player output when the extra pixels will immediately be downscaled. Processing dimensions derive from source aspect ratio and actual drawable/video output size. Manual mode keeps its selected quality but avoids pointless oversized intermediate work. Eco/Auto may be more aggressive about capping processing dimensions.
+Dart resolves the exact Anime4K GLSL pipeline first. On iOS/macOS, native Metal is configured only when Apple routing is eligible and SDR color metadata is known.
 
-### 9. Apple Eco/Auto policy
+- Native Metal ready: clear mpv `glsl-shaders`, then native Metal owns Anime4K.
+- Native unavailable/failed: disable native processing and restore the exact resolved mpv GLSL pipeline.
+- HDR/unknown metadata: keep native Metal disabled and use the exact mpv fallback.
+- Anime4K disabled: clear/disable both processing paths.
 
-Eco/Auto uses the manual selected mode and selected quality as intent. It may step down the effective quality and late-stage work using hysteresis based on:
+The route never intentionally processes a frame through both Anime4K implementations.
 
-- rolling Anime4K GPU/frame time relative to the video frame budget
-- `ProcessInfo.thermalState`
-- Low Power Mode
-- sustained dropped/late frames
+### 8. Color metadata readiness and startup behavior
 
-Suggested initial policy:
+A new media item can expose `video-params/gamma`/color metadata slightly after `Player.open()` returns. The Apple wrapper therefore performs bounded retries for metadata readiness before making the native/fallback decision.
 
-- nominal thermal, sufficient headroom: requested quality
-- pressure or fair thermal: one tier lower
-- serious thermal or repeated misses: S and reduced late-stage work
-- critical thermal: temporarily bypass Anime4K until recovery
-- Low Power Mode: cap at S in Eco/Auto
+Known SDR can enter native Metal. Known HDR returns immediately to fallback. Metadata that remains unknown after the bounded window also fails closed. This makes the saved Anime4K mode take effect on episode open without weakening HDR safety.
 
-Transitions require sustained evidence and cooldown windows to prevent oscillation.
+### 9. Settings preview
 
-### 10. Frame deduplication
+The Apple settings preview processes the bundled sample as a one-shot native Metal image and caches the result by mode, quality, effective backend, and shader hash. It does not keep a second playback renderer running continuously.
 
-Anime4K runs only for a newly produced video frame. Display refreshes at 60/120 Hz must not re-run Anime4K for a 24/30 fps source. Use render production identity/timestamp or buffer generation identity, not wall-clock guessing.
+If native preview processing is unavailable, the existing mpv fallback applies the selected GLSL pipeline and captures the processed `video` frame rather than the external window/Flutter texture. Temporary players are disposed after capture.
 
-### 11. Color and HDR correctness
+### 10. Internal telemetry
 
-The Metal backend must preserve SDR color and must not silently damage HDR. Add representative image tests where possible and device-level validation for SDR/HDR. If HDR correctness cannot be guaranteed on the native path, fall back to mpv GLSL for HDR content until a correct path is implemented.
+Native telemetry is retained as an engineering/runtime contract: average/p95 Anime4K time, processed/skipped/late frames, active dimensions, thermal state, and Low Power Mode can be sampled for tests and controlled physical benchmarks.
 
-### 12. Preview optimization
+It is not an analytics upload and there is no shipping user-facing performance-log UI.
 
-The settings preview currently creates a second media_kit player and keeps a still image active. Replace that on Apple with a one-shot processed image cache where practical so opening settings does not continuously consume decode/render resources. The preview must use the same effective pipeline logic as playback.
+## Retired experiments
 
-### 13. Shader library integrity
+### Eco/Auto
 
-Keep Anime4K pinned to v4.0.1. Download into a temporary directory, verify the expected manifest/content hashes, then atomically replace the active shader directory. Cache a manifest of filenames and hashes so pipeline resolution and Metal cache keys do not repeatedly scan the filesystem.
+An adaptive quality/thermal prototype was implemented and tested during development. It was later removed from the shipping scope. Final manual quality does not change automatically based on thermal state, frame time, or Low Power Mode.
 
-### 14. MetalFX experiment
+### MetalFX
 
-After the native Metal Anime4K path is stable, benchmark an optional Eco variant that uses Anime4K restore/denoise followed by MetalFX spatial scaling instead of all Anime4K upscale passes. Keep it experimental until objective quality and frame-time measurements show a benefit.
+An optional MetalFX spatial-upscale path was implemented and compared on physical hardware. It did not demonstrate a sufficient advantage for the tested workload to justify product/runtime complexity, so the MetalFX toggle, scaler adapter, and strategy routing were removed before merge.
 
-### 15. Verification
+### User-facing Performance log
 
-Every implementation item follows TDD where testable. Required automated gates before completion:
+The temporary JSONL benchmark/logging surface used during device investigation was removed. Internal native telemetry remains because it is useful for runtime validation and controlled benchmark capture.
 
-- focused Anime4K Dart tests
-- full Flutter test suite
-- `flutter analyze`
-- native Swift translator/runtime tests
-- full v4.0.1 shader corpus translation/Metal compilation checks on Apple CI
-- Android build unchanged and green
-- iOS unsigned release build green
-- macOS release build green
+## Verification and acceptance
 
-Physical-device acceptance on at least one iPhone/iPad is required for claiming performance improvement. Report baseline vs optimized average/p95 processing time, dropped frames, thermal behavior, and effective processing resolution. CI build success alone is not performance proof.
+Automated merge gates require:
+
+- `flutter analyze` and the full Flutter test suite.
+- Dart↔Metal C API tests.
+- native runtime/telemetry/backpressure/publication tests.
+- full pinned Anime4K v4.0.1 GLSL→MSL corpus compilation on Apple CI.
+- media_kit patch-contract tests.
+- Android build.
+- unsigned iOS release build plus Anime4K C ABI symbol verification.
+- macOS release build plus Anime4K symbol verification.
+- no temporary branch-only validation workflows left in the merge candidate.
+
+Physical-device evidence is separate from compilation correctness. Before claiming final performance/color acceptance without a waiver, record representative SDR visual comparison, real HDR fallback behavior, and a controlled baseline-vs-optimized average/p95 benchmark on the exact tested commit. The evidence templates live in `docs/anime4k_apple_color_acceptance.md` and `docs/anime4k_performance_benchmark.md`.
