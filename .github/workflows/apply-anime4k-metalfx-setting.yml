@@ -1,4 +1,4 @@
-name: Apply Anime4K segmented log controller wiring
+name: Apply Anime4K preview video capture
 
 on:
   push:
@@ -23,48 +23,45 @@ jobs:
           flutter-version: '3.47.1'
           channel: stable
           cache: true
-      - name: Patch controller configuration boundary
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Confirm focused RED
+        shell: bash
+        run: |
+          set +e
+          flutter test test/features/player/anime4k_sample_preview_test.dart > /tmp/anime4k-preview-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/anime4k-preview-red.log
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected preview regression test to fail before implementation.' >&2
+            exit 1
+          fi
+          grep -Eq "video|window|Expected" /tmp/anime4k-preview-red.log
+      - name: Capture processed video instead of external window
         shell: bash
         run: |
           python3 <<'PY'
           from pathlib import Path
-          import re
 
-          path = Path('lib/features/player/presentation/player_controller.dart')
+          path = Path('lib/features/player/presentation/widgets/anime4k_sample_preview.dart')
           text = path.read_text()
-          if '.recordConfiguration(' not in text:
-              pattern = re.compile(
-                  r'(Future<void> applyAnime4kShaders\(\) async \{\s*try \{\s*)'
-              )
-              insertion = """final configurationSettings =
-              ref.read(playerSettingsProvider).asData?.value;
-            if (configurationSettings != null) {
-              await _anime4kPerformanceLog.recordConfiguration(
-                enabled: configurationSettings.anime4kEnabled,
-                mode: configurationSettings.anime4kMode,
-                requestedQuality: configurationSettings.anime4kQuality,
-                ecoEnabled: configurationSettings.anime4kEcoEnabled,
-                metalFxExperiment: configurationSettings.anime4kMetalFxEnabled,
-              );
-            }
-
-            """
-              text, count = pattern.subn(lambda match: match.group(1) + insertion, text, count=1)
-              if count != 1:
-                  raise SystemExit(f'applyAnime4kShaders semantic match count={count}')
-          path.write_text(text)
+          old = "        'window',\n"
+          new = "        'video',\n"
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one window screenshot target, found {count}')
+          path.write_text(text.replace(old, new, 1))
           PY
-          dart format lib/features/player/presentation/player_controller.dart
-      - name: Run focused GREEN test
-        run: |
-          flutter pub get
-          flutter test test/features/player/anime4k_performance_log_contract_test.dart
-      - name: Commit controller wiring
+          dart format lib/features/player/presentation/widgets/anime4k_sample_preview.dart
+      - name: Run focused GREEN
+        run: flutter test test/features/player/anime4k_sample_preview_test.dart
+      - name: Commit preview fix
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add lib/features/player/presentation/player_controller.dart
+          git add lib/features/player/presentation/widgets/anime4k_sample_preview.dart
           git diff --cached --check
-          git commit -m "fix: attribute Anime4K logs to setting segments"
+          git commit -m "fix: capture Anime4K preview from processed video"
           git push origin HEAD:feat/anime4k-ios-performance
