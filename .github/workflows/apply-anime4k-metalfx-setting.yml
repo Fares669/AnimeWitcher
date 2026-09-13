@@ -105,6 +105,7 @@ jobs:
       - name: Run focused GREEN tests
         run: |
           flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
           flutter test \
             test/features/settings/presentation/anime4k_eco_settings_test.dart \
             test/features/player/anime4k_metalfx_experiment_contract_test.dart
