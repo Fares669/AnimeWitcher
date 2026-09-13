@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/anime4k-preview-black-fix-once.yml
       - scripts/anime4k_preview_black_fix_once.py
+      - test/features/player/anime4k_sample_preview_test.dart
 
 permissions:
   contents: write
