@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -233,19 +232,20 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
       final outputPath = outputFile.path;
       final pipelineHash = pipeline.pipelineHash;
 
-      // Native Metal compilation/processing can take noticeable time on the
-      // first preview. Keep it off the UI isolate so the dialog and spinner
-      // remain responsive while the one-shot command buffer completes.
-      final succeeded = await Isolate.run(() {
-        final bindings = Anime4kMetalFfiBindings.tryCreate();
-        return bindings?.processPreview(
-              inputPath: inputPath,
-              outputPath: outputPath,
-              shaderPaths: shaderPaths,
-              pipelineHash: pipelineHash,
-            ) ??
-            false;
-      });
+      // Resolve and invoke the C ABI from the same Dart isolate used by the
+      // real player. Playback already proves this symbol lookup context on
+      // physical Apple devices; a secondary isolate added a second, divergent
+      // FFI path that could fail and unnecessarily force the fragile mpv
+      // screenshot fallback. The result is cached, so this synchronous native
+      // one-shot is paid only for a new preview configuration.
+      final bindings = Anime4kMetalFfiBindings.tryCreate();
+      final succeeded = bindings?.processPreview(
+            inputPath: inputPath,
+            outputPath: outputPath,
+            shaderPaths: shaderPaths,
+            pipelineHash: pipelineHash,
+          ) ??
+          false;
       if (!succeeded || !_isCurrentRequest(request)) return false;
       if (!await outputFile.exists() || await outputFile.length() <= 0) {
         return false;
