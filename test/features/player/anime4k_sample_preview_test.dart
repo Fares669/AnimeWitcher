@@ -22,43 +22,92 @@ void main() {
 
       expect(base, same);
       expect(base.hashCode, same.hashCode);
-      expect(base, isNot(const Anime4kPreviewCacheKey(mode: Anime4kMode.b, quality: Anime4kQuality.m, backend: Anime4kPreviewBackend.appleMetal, pipelineHash: 'pipeline-a')));
-      expect(base, isNot(const Anime4kPreviewCacheKey(mode: Anime4kMode.a, quality: Anime4kQuality.l, backend: Anime4kPreviewBackend.appleMetal, pipelineHash: 'pipeline-a')));
-      expect(base, isNot(const Anime4kPreviewCacheKey(mode: Anime4kMode.a, quality: Anime4kQuality.m, backend: Anime4kPreviewBackend.mpv, pipelineHash: 'pipeline-a')));
-      expect(base, isNot(const Anime4kPreviewCacheKey(mode: Anime4kMode.a, quality: Anime4kQuality.m, backend: Anime4kPreviewBackend.appleMetal, pipelineHash: 'pipeline-b')));
+      expect(
+        base,
+        isNot(
+          const Anime4kPreviewCacheKey(
+            mode: Anime4kMode.b,
+            quality: Anime4kQuality.m,
+            backend: Anime4kPreviewBackend.appleMetal,
+            pipelineHash: 'pipeline-a',
+          ),
+        ),
+      );
+      expect(
+        base,
+        isNot(
+          const Anime4kPreviewCacheKey(
+            mode: Anime4kMode.a,
+            quality: Anime4kQuality.l,
+            backend: Anime4kPreviewBackend.appleMetal,
+            pipelineHash: 'pipeline-a',
+          ),
+        ),
+      );
+      expect(
+        base,
+        isNot(
+          const Anime4kPreviewCacheKey(
+            mode: Anime4kMode.a,
+            quality: Anime4kQuality.m,
+            backend: Anime4kPreviewBackend.mpv,
+            pipelineHash: 'pipeline-a',
+          ),
+        ),
+      );
+      expect(
+        base,
+        isNot(
+          const Anime4kPreviewCacheKey(
+            mode: Anime4kMode.a,
+            quality: Anime4kQuality.m,
+            backend: Anime4kPreviewBackend.appleMetal,
+            pipelineHash: 'pipeline-b',
+          ),
+        ),
+      );
     });
 
-    test('Apple Metal path checks cache before creating a preview player', () {
-      final source = File('lib/features/player/presentation/widgets/anime4k_sample_preview.dart').readAsStringSync();
-      final methodStart = source.indexOf('_startAppleMetalOneShot');
-      final fallbackStart = source.indexOf('_startMpvFallback');
-      expect(methodStart, greaterThanOrEqualTo(0));
-      expect(fallbackStart, greaterThan(methodStart));
-      final applePath = source.substring(methodStart, fallbackStart);
-      final cacheLookup = applePath.indexOf('_metalPreviewCache.lookup(');
-      final playerCreation = applePath.indexOf('Player()');
-      expect(cacheLookup, greaterThanOrEqualTo(0));
-      expect(playerCreation, greaterThan(cacheLookup));
-      expect(applePath, isNot(contains("setProperty('loop-file', 'inf')")));
-      expect(applePath, contains('Anime4kMetalBridge'));
+    test('preview never rasterizes an external video texture through Flutter', () {
+      final source = File(
+        'lib/features/player/presentation/widgets/anime4k_sample_preview.dart',
+      ).readAsStringSync();
+
+      // Flutter RepaintBoundary cannot reliably capture an external iOS/macOS
+      // texture; on device this produced an all-black processed half.
+      expect(source, isNot(contains('RenderRepaintBoundary')));
+      expect(source, isNot(contains('toImage(')));
+      expect(source, isNot(contains('_metalCaptureKey')));
     });
 
-    test('Apple one-shot captures final rendered frame then disposes player', () {
-      final source = File('lib/features/player/presentation/widgets/anime4k_sample_preview.dart').readAsStringSync();
-      expect(source, contains('RepaintBoundary'));
-      expect(source, contains('toImage('));
-      expect(source, contains('toByteData('));
-      expect(source, contains('_metalPreviewCache.store('));
-      expect(source, contains('await _disposePreviewPlayer()'));
-    });
-
-    test('mpv preview remains the explicit fallback path', () {
-      final source = File('lib/features/player/presentation/widgets/anime4k_sample_preview.dart').readAsStringSync();
+    test('mpv fallback captures the processed window once and disposes player', () {
+      final source = File(
+        'lib/features/player/presentation/widgets/anime4k_sample_preview.dart',
+      ).readAsStringSync();
       final fallbackStart = source.indexOf('_startMpvFallback');
       expect(fallbackStart, greaterThanOrEqualTo(0));
       final fallbackPath = source.substring(fallbackStart);
-      expect(fallbackPath, contains("setProperty('loop-file', 'inf')"));
-      expect(fallbackPath, contains("setProperty('glsl-shaders', pipeline.value)"));
+
+      expect(
+        fallbackPath,
+        contains("setProperty('glsl-shaders', pipeline.value)"),
+      );
+      expect(
+        fallbackPath,
+        contains("'screenshot-to-file', captureFile.path, 'window'"),
+      );
+      expect(fallbackPath, contains('_metalPreviewCache.store(key, bytes)'));
+      expect(fallbackPath, contains('await _disposeSpecificPreviewPlayer(player)'));
+      expect(fallbackPath, isNot(contains("setProperty('loop-file', 'inf')")));
+    });
+
+    test('Apple preview explicitly falls back until native buffer capture exists', () {
+      final source = File(
+        'lib/features/player/presentation/widgets/anime4k_sample_preview.dart',
+      ).readAsStringSync();
+      final startCall = source.indexOf('_startMpvFallback(');
+      expect(startCall, greaterThanOrEqualTo(0));
+      expect(source, isNot(contains('_startAppleMetalOneShot(')));
     });
   });
 }
