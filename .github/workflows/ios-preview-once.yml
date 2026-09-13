@@ -11,6 +11,7 @@ on:
       - scripts/anime4k_*
       - lib/features/player/presentation/player_controller.dart
       - lib/features/player/presentation/player_controller_base.dart
+      - lib/features/player/presentation/widgets/anime4k_sample_preview.dart
       - ios/Podfile
 
 permissions:
