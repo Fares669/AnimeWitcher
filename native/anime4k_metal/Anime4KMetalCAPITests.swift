@@ -57,6 +57,16 @@ struct Anime4KMetalCAPITests {
 
         configureReady()
 
+        let requiredBytes = Anime4KMetalDartAPI.telemetry(
+            handleAddress: handleAddress,
+            buffer: nil,
+            capacity: 0
+        )
+        precondition(
+            requiredBytes > 1,
+            "configured runtime must expose NUL-terminated telemetry"
+        )
+
         var telemetryBytes = [UInt8](
             repeating: 0,
             count: Int(requiredBytes)
