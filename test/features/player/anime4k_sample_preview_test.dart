@@ -83,7 +83,7 @@ void main() {
       expect(source, isNot(contains('_metalCaptureKey')));
     });
 
-    test('mpv fallback captures the processed window once and disposes player', () {
+    test('mpv fallback captures the processed video once and disposes player', () {
       final source = File(
         'lib/features/player/presentation/widgets/anime4k_sample_preview.dart',
       ).readAsStringSync();
@@ -95,11 +95,12 @@ void main() {
         fallbackPath,
         contains("setProperty('glsl-shaders', pipeline.value)"),
       );
-      // dart format may place the command list across several lines; assert
-      // its semantic arguments independently instead of formatting whitespace.
+      // The external window/texture path is unreliable on iOS/macOS. Ask mpv
+      // for its processed video frame before it is published to the texture.
       expect(fallbackPath, contains("'screenshot-to-file'"));
       expect(fallbackPath, contains('captureFile.path'));
-      expect(fallbackPath, contains("'window'"));
+      expect(fallbackPath, contains("'video'"));
+      expect(fallbackPath, isNot(contains("'window'")));
       expect(fallbackPath, contains('_metalPreviewCache.store(key, bytes)'));
       expect(
         fallbackPath,
