@@ -261,14 +261,9 @@ class PlayerController extends base.PlayerController {
 
       _anime4kEcoHandle = handle;
       _anime4kEcoEffectiveQuality ??= settings.anime4kQuality;
-      if (settings.anime4kEcoEnabled) {
-        _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
-          unawaited(_sampleAnime4kEco());
-        });
-      } else {
-        _anime4kEcoTimer?.cancel();
-        _anime4kEcoTimer = null;
-      }
+      _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+        unawaited(_sampleAnime4kEco());
+      });
       // One immediate sample is useful in both Manual Metal and Eco. Only Eco
       // keeps the periodic feedback loop alive after this diagnostic sample.
       unawaited(_sampleAnime4kEco());
@@ -419,6 +414,10 @@ class PlayerController extends base.PlayerController {
         output: output,
       );
       _publishAnime4kPerformanceSnapshot(decision.snapshot);
+
+      // Manual Metal and MetalFX benchmark runs still need fresh telemetry,
+      // but only Eco may adapt quality or native bypass state.
+      if (!settings.anime4kEcoEnabled) return;
 
       if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {
         final configured = await _applyAnime4kEcoQuality(

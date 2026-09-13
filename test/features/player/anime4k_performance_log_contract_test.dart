@@ -316,7 +316,19 @@ void main() {
       );
       expect(sampleEnd, greaterThan(sampleStart));
       final sampleBody = controller.substring(sampleStart, sampleEnd);
-      expect(sampleBody, isNot(contains('!settings.anime4kEcoEnabled')));
+      final publish = sampleBody.indexOf(
+        '_publishAnime4kPerformanceSnapshot(decision.snapshot);',
+      );
+      final ecoOnlyPolicyGuard = sampleBody.indexOf(
+        'if (!settings.anime4kEcoEnabled) return;',
+      );
+      expect(publish, greaterThanOrEqualTo(0));
+      expect(
+        ecoOnlyPolicyGuard,
+        greaterThan(publish),
+        reason:
+            'Manual Metal must publish telemetry before Eco-only policy exits.',
+      );
     });
   });
 }
