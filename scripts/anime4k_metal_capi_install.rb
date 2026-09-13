@@ -20,6 +20,7 @@ end
 
 ANIME4K_METAL_CAPI_SYMBOLS = %w[
   animewitcher_anime4k_metal_configure
+  animewitcher_anime4k_metal_process_preview
   animewitcher_anime4k_metal_status
   animewitcher_anime4k_metal_telemetry
   animewitcher_anime4k_metal_set_bypass
