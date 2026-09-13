@@ -20,8 +20,6 @@ typedef _ProcessPreviewDart = int Function(
 );
 typedef _StatusNative = Int32 Function(Uint64);
 typedef _StatusDart = int Function(int);
-typedef _SetBypassNative = Int32 Function(Uint64, Int32);
-typedef _SetBypassDart = int Function(int, int);
 typedef _TelemetryNative = Int32 Function(
   Uint64,
   Pointer<Uint8>,
@@ -43,7 +41,6 @@ class Anime4kMetalFfiBindings implements Anime4kMetalNativeBindings {
       _status = library.lookupFunction<_StatusNative, _StatusDart>(
         'animewitcher_anime4k_metal_status',
       ),
-      _setBypass = _tryLookupSetBypass(library),
       _telemetry = _tryLookupTelemetry(library),
       _disable = library.lookupFunction<_DisableNative, _DisableDart>(
         'animewitcher_anime4k_metal_disable',
@@ -52,7 +49,6 @@ class Anime4kMetalFfiBindings implements Anime4kMetalNativeBindings {
   final _ConfigureDart _configure;
   final _ProcessPreviewDart? _processPreview;
   final _StatusDart _status;
-  final _SetBypassDart? _setBypass;
   final _TelemetryDart? _telemetry;
   final _DisableDart _disable;
 
@@ -64,18 +60,6 @@ class Anime4kMetalFfiBindings implements Anime4kMetalNativeBindings {
     } catch (_) {
       // The one-shot settings preview was added after the playback C ABI.
       // Older Apple builds remain usable and simply take the mpv fallback.
-      return null;
-    }
-  }
-
-  static _SetBypassDart? _tryLookupSetBypass(DynamicLibrary library) {
-    try {
-      return library.lookupFunction<_SetBypassNative, _SetBypassDart>(
-        'animewitcher_anime4k_metal_set_bypass',
-      );
-    } catch (_) {
-      // The Eco bypass symbol is optional for compatibility with older Apple
-      // builds. Returning 0 makes callers fail closed without disabling Metal.
       return null;
     }
   }
@@ -120,7 +104,6 @@ class Anime4kMetalFfiBindings implements Anime4kMetalNativeBindings {
     required List<String> shaderPaths,
     required String pipelineHash,
     String precision = 'mixedFP16',
-    String upscaleStrategy = 'fullAnime4K',
   }) {
     final processPreview = _processPreview;
     if (processPreview == null ||
@@ -135,7 +118,6 @@ class Anime4kMetalFfiBindings implements Anime4kMetalNativeBindings {
       'shaderPaths': shaderPaths,
       'pipelineHash': pipelineHash,
       'precision': precision,
-      'upscaleStrategy': upscaleStrategy,
     });
     final nativeInputPath = inputPath.toNativeUtf8();
     final nativeOutputPath = outputPath.toNativeUtf8();
@@ -153,17 +135,6 @@ class Anime4kMetalFfiBindings implements Anime4kMetalNativeBindings {
 
   @override
   int status(int handle) => _status(handle);
-
-  @override
-  int setBypass(int handle, bool bypass) {
-    final setBypass = _setBypass;
-    if (setBypass == null) return 0;
-    try {
-      return setBypass(handle, bypass ? 1 : 0);
-    } catch (_) {
-      return 0;
-    }
-  }
 
   @override
   String? telemetry(int handle) {

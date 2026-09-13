@@ -23,7 +23,6 @@ ANIME4K_METAL_CAPI_SYMBOLS = %w[
   animewitcher_anime4k_metal_process_preview
   animewitcher_anime4k_metal_status
   animewitcher_anime4k_metal_telemetry
-  animewitcher_anime4k_metal_set_bypass
   animewitcher_anime4k_metal_disable
 ].freeze
 

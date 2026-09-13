@@ -57,37 +57,6 @@ struct Anime4KMetalCAPITests {
 
         configureReady()
 
-        precondition(
-            Anime4KMetalDartAPI.setBypass(
-                handleAddress: handleAddress,
-                bypass: true
-            ) == 1,
-            "Eco critical thermal must be able to bypass processing without disabling the runtime"
-        )
-        precondition(
-            Anime4KMetalDartAPI.status(handleAddress: handleAddress)
-                == Anime4KMetalDartStatus.ready.rawValue,
-            "temporary Eco bypass must keep runtime status ready for recovery telemetry"
-        )
-
-        let requiredBytes = Anime4KMetalDartAPI.telemetry(
-            handleAddress: handleAddress,
-            buffer: nil,
-            capacity: 0
-        )
-        precondition(
-            requiredBytes > 1,
-            "temporarily bypassed runtime must keep exposing telemetry for recovery"
-        )
-
-        precondition(
-            Anime4KMetalDartAPI.setBypass(
-                handleAddress: handleAddress,
-                bypass: false
-            ) == 1,
-            "Eco recovery must resume processing on the existing runtime"
-        )
-
         var telemetryBytes = [UInt8](
             repeating: 0,
             count: Int(requiredBytes)
@@ -129,13 +98,6 @@ struct Anime4KMetalCAPITests {
             ) == 0,
             "invalid handles must fail closed"
         )
-        precondition(
-            Anime4KMetalDartAPI.setBypass(
-                handleAddress: 0,
-                bypass: true
-            ) == 0,
-            "invalid bypass handles must fail closed"
-        )
 
         // The settings preview must exercise the same native Metal runtime as
         // playback without creating a Flutter external texture or second video
@@ -161,7 +123,6 @@ struct Anime4KMetalCAPITests {
             "shaderPaths": [shaderURL.path],
             "pipelineHash": "preview-capi-test",
             "precision": "mixedFP16",
-            "upscaleStrategy": "fullAnime4K",
         ]
         let previewData = try JSONSerialization.data(
             withJSONObject: previewConfiguration

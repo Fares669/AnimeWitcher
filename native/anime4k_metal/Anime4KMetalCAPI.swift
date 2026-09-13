@@ -21,14 +21,12 @@ private struct Anime4KMetalDartConfiguration: Decodable {
     let outputWidth: Int
     let outputHeight: Int
     let precision: String
-    let upscaleStrategy: String?
 }
 
 private struct Anime4KMetalPreviewConfiguration: Decodable {
     let shaderPaths: [String]
     let pipelineHash: String
     let precision: String
-    let upscaleStrategy: String?
 }
 
 /// A tiny synchronized hand-off for the one-shot preview command-buffer
@@ -79,10 +77,7 @@ enum Anime4KMetalDartAPI {
                   payload.sourceHeight > 0,
                   payload.outputWidth > 0,
                   payload.outputHeight > 0,
-                  let precision = Anime4KMetalPrecisionPolicy(rawValue: payload.precision),
-                  let upscaleStrategy = Anime4KAppleUpscaleStrategy(
-                      rawValue: payload.upscaleStrategy ?? "fullAnime4K"
-                  ) else {
+                  let precision = Anime4KMetalPrecisionPolicy(rawValue: payload.precision) else {
                 return record(.failed, for: handleAddress)
             }
 
@@ -93,8 +88,7 @@ enum Anime4KMetalDartAPI {
                 sourceHeight: payload.sourceHeight,
                 outputWidth: payload.outputWidth,
                 outputHeight: payload.outputHeight,
-                precision: precision,
-                upscaleStrategy: upscaleStrategy
+                precision: precision
             )
             do {
                 try Anime4KMediaKitBridge.shared.configure(
@@ -135,9 +129,6 @@ enum Anime4KMetalDartAPI {
             guard !payload.shaderPaths.isEmpty,
                   !payload.pipelineHash.isEmpty,
                   let precision = Anime4KMetalPrecisionPolicy(rawValue: payload.precision),
-                  let upscaleStrategy = Anime4KAppleUpscaleStrategy(
-                      rawValue: payload.upscaleStrategy ?? "fullAnime4K"
-                  ),
                   let device = MTLCreateSystemDefaultDevice() else {
                 return 0
             }
@@ -205,8 +196,7 @@ enum Anime4KMetalDartAPI {
                     sourceHeight: height,
                     outputWidth: width,
                     outputHeight: height,
-                    precision: precision,
-                    upscaleStrategy: upscaleStrategy
+                    precision: precision
                 )
             )
 
@@ -325,22 +315,6 @@ enum Anime4KMetalDartAPI {
         return requiredBytes
     }
 
-    /// Enables/disables a temporary per-player pass-through state without
-    /// destroying the configured runtime. This is intentionally separate from
-    /// `disable`: Eco needs telemetry to remain alive while critical thermal
-    /// pressure cools down so it can observe recovery and resume progressively.
-    static func setBypass(handleAddress: UInt64, bypass: Bool) -> Int32 {
-        guard handleAddress != 0,
-              status(handleAddress: handleAddress) == Anime4KMetalDartStatus.ready.rawValue,
-              let handle = OpaquePointer(bitPattern: UInt(handleAddress)) else {
-            return 0
-        }
-        return Anime4KMediaKitBridge.shared.setBypass(
-            handle: handle,
-            bypass: bypass
-        ) ? 1 : 0
-    }
-
     static func disable(handleAddress: UInt64) {
         if let handle = OpaquePointer(bitPattern: UInt(handleAddress)) {
             Anime4KMediaKitBridge.shared.disable(handle: handle)
@@ -372,7 +346,7 @@ enum Anime4KMetalDartAPI {
             return "critical"
         @unknown default:
             // Unknown future thermal pressure fails conservatively toward the
-            // strongest Eco reaction rather than overstressing the device.
+            // strongest known pressure level.
             return "critical"
         }
     }
@@ -417,17 +391,6 @@ public func animewitcherAnime4KMetalTelemetry(
         handleAddress: handleAddress,
         buffer: buffer,
         capacity: capacity
-    )
-}
-
-@_cdecl("animewitcher_anime4k_metal_set_bypass")
-public func animewitcherAnime4KMetalSetBypass(
-    _ handleAddress: UInt64,
-    _ bypass: Int32
-) -> Int32 {
-    Anime4KMetalDartAPI.setBypass(
-        handleAddress: handleAddress,
-        bypass: bypass != 0
     )
 }
 

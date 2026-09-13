@@ -404,7 +404,10 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     final bytes = await rootBundle.load(Anime4kSamplePreview.assetPath);
     final directory = await getApplicationSupportDirectory();
     final file = File(p.join(directory.path, 'anime4k_sample.jpg'));
-    await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+    await file.writeAsBytes(
+      bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+      flush: true,
+    );
     return file;
   }
 
