@@ -49,6 +49,38 @@ Anime4kColorSignal classifyAnime4kColorSignal({
   return Anime4kColorSignal.unknown;
 }
 
+/// Waits briefly for mpv to publish usable color metadata after a new file is
+/// opened.
+///
+/// `player.open` can complete before `video-params/gamma` exists. Treating that
+/// transient state as a final `unknown` decision makes the Apple wrapper fall
+/// back before the saved Anime4K mode can configure native Metal. The caller
+/// can keep polling without blocking playback, while HDR and a permanently
+/// unknown signal still fail closed.
+Future<Anime4kColorSignal> waitForAnime4kColorSignal({
+  required Future<Anime4kColorSignal> Function() read,
+  bool Function()? isCancelled,
+  int maxAttempts = 60,
+  Duration retryDelay = const Duration(milliseconds: 50),
+}) async {
+  if (maxAttempts <= 0) return Anime4kColorSignal.unknown;
+
+  for (var attempt = 0; attempt < maxAttempts; attempt++) {
+    if (isCancelled?.call() ?? false) {
+      return Anime4kColorSignal.unknown;
+    }
+
+    final signal = await read();
+    if (signal != Anime4kColorSignal.unknown) return signal;
+
+    if (attempt + 1 < maxAttempts) {
+      await Future<void>.delayed(retryDelay);
+    }
+  }
+
+  return Anime4kColorSignal.unknown;
+}
+
 String _normalizeAnime4kColorValue(String? value) {
   return value?.trim().toLowerCase().replaceAll('_', '-') ?? '';
 }
