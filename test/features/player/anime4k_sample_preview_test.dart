@@ -95,8 +95,6 @@ void main() {
         fallbackPath,
         contains("setProperty('glsl-shaders', pipeline.value)"),
       );
-      // The external window/texture path is unreliable on iOS/macOS. Ask mpv
-      // for its processed video frame before it is published to the texture.
       expect(fallbackPath, contains("'screenshot-to-file'"));
       expect(fallbackPath, contains('captureFile.path'));
       expect(fallbackPath, contains("'video'"));
@@ -109,13 +107,40 @@ void main() {
       expect(fallbackPath, isNot(contains("setProperty('loop-file', 'inf')")));
     });
 
-    test('Apple preview explicitly falls back until native buffer capture exists', () {
-      final source = File(
+    test('Apple preview uses native Metal one-shot before mpv fallback', () {
+      final preview = File(
         'lib/features/player/presentation/widgets/anime4k_sample_preview.dart',
       ).readAsStringSync();
-      final startCall = source.indexOf('_startMpvFallback(');
-      expect(startCall, greaterThanOrEqualTo(0));
-      expect(source, isNot(contains('_startAppleMetalOneShot(')));
+      final ffi = File(
+        'lib/features/player/data/anime4k_metal_ffi.dart',
+      ).readAsStringSync();
+      final capi = File(
+        'native/anime4k_metal/Anime4KMetalCAPI.swift',
+      ).readAsStringSync();
+      final installer = File(
+        'scripts/anime4k_metal_capi_install.rb',
+      ).readAsStringSync();
+
+      final nativeCall = preview.indexOf('_startAppleMetalOneShot(');
+      final fallbackCall = preview.indexOf(
+        '_startMpvFallback(',
+        nativeCall < 0 ? 0 : nativeCall + 1,
+      );
+      expect(
+        nativeCall,
+        greaterThanOrEqualTo(0),
+        reason: 'Apple settings preview must have a native one-shot path.',
+      );
+      expect(
+        fallbackCall,
+        greaterThan(nativeCall),
+        reason: 'mpv must remain a fallback after the Apple one-shot attempt.',
+      );
+      expect(preview, contains('Anime4kPreviewBackend.appleMetal'));
+      expect(preview, contains('Anime4kMetalFfiBindings.tryCreate()'));
+      expect(ffi, contains('animewitcher_anime4k_metal_process_preview'));
+      expect(capi, contains('@_cdecl("animewitcher_anime4k_metal_process_preview")'));
+      expect(installer, contains('animewitcher_anime4k_metal_process_preview'));
     });
   });
 }
