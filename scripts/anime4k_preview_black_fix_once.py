@@ -38,6 +38,7 @@ if '\n  final GlobalKey _metalCaptureKey = GlobalKey();\n' not in text:
     raise SystemExit('capture key marker changed')
 text = text.replace('\n  final GlobalKey _metalCaptureKey = GlobalKey();\n', '\n', 1)
 text = text.replace('      _capturingMetal = false;\n', '')
+text = text.replace('    _capturingMetal = false;\n', '')
 
 method_start = text.index('  Future<Anime4kProcessingDimensions> _sampleDimensions')
 start_method = text.index('  Future<void> _start() async {', method_start)
@@ -221,6 +222,7 @@ for forbidden in [
     'RenderRepaintBoundary',
     'toImage(',
     '_metalCaptureKey',
+    '_capturingMetal',
     '_startAppleMetalOneShot(',
 ]:
     if forbidden in text:
