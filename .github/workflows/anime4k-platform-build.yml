@@ -81,6 +81,8 @@ jobs:
       - name: Test Dart-to-Metal C API contract
         run: |
           swiftc \
+            -framework CoreGraphics \
+            -framework CoreImage \
             -framework CoreVideo \
             -framework Metal \
             -framework MetalFX \
@@ -164,6 +166,7 @@ jobs:
           nm -gU "$binary" > /tmp/anime4k-ios-symbols.txt
           for symbol in \
             animewitcher_anime4k_metal_configure \
+            animewitcher_anime4k_metal_process_preview \
             animewitcher_anime4k_metal_status \
             animewitcher_anime4k_metal_telemetry \
             animewitcher_anime4k_metal_set_bypass \
@@ -204,6 +207,7 @@ jobs:
           nm -gU "$binary" > /tmp/anime4k-macos-symbols.txt
           for symbol in \
             animewitcher_anime4k_metal_configure \
+            animewitcher_anime4k_metal_process_preview \
             animewitcher_anime4k_metal_status \
             animewitcher_anime4k_metal_telemetry \
             animewitcher_anime4k_metal_set_bypass \
