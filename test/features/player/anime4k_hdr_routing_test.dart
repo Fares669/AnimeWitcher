@@ -52,6 +52,7 @@ void main() {
         'lib/features/player/presentation/player_controller.dart',
       ).readAsStringSync();
 
+      final readinessWait = controller.indexOf('waitForAnime4kColorSignal');
       final gammaRead = controller.indexOf(
         "getProperty('video-params/gamma')",
       );
@@ -64,23 +65,28 @@ void main() {
       );
       final baseApply = controller.indexOf('await super.applyAnime4kShaders()');
 
+      expect(readinessWait, greaterThanOrEqualTo(0));
       expect(gammaRead, greaterThanOrEqualTo(0));
       expect(colorSystemRead, greaterThanOrEqualTo(0));
       expect(classification, greaterThanOrEqualTo(0));
       expect(nonSdrGuard, greaterThanOrEqualTo(0));
       expect(baseApply, greaterThanOrEqualTo(0));
+      expect(readinessWait, lessThan(baseApply));
       expect(gammaRead, lessThan(baseApply));
       expect(colorSystemRead, lessThan(baseApply));
       expect(classification, lessThan(baseApply));
       expect(nonSdrGuard, lessThan(baseApply));
     });
 
-    test('HDR and unknown metadata fail closed through exact mpv fallback', () {
+    test('HDR and unresolved metadata fail closed through exact mpv fallback', () {
       final controller = File(
         'lib/features/player/presentation/player_controller.dart',
       ).readAsStringSync();
+      final colorPolicy = File(
+        'lib/features/player/data/anime4k_color_signal.dart',
+      ).readAsStringSync();
 
-      expect(controller, contains('Anime4kColorSignal.unknown'));
+      expect(controller, contains('waitForAnime4kColorSignal'));
       expect(controller, contains('colorSignal != Anime4kColorSignal.sdr'));
       expect(
         controller,
@@ -89,6 +95,7 @@ void main() {
       expect(controller, contains("setProperty('glsl-shaders', pipeline.value)"));
       expect(controller, contains("getProperty('current-vo')"));
       expect(controller, contains("getProperty('gpu-dumb-mode')"));
+      expect(colorPolicy, contains('return Anime4kColorSignal.unknown'));
     });
 
     test('HDR fallback disables native Metal using the real player handle', () {
