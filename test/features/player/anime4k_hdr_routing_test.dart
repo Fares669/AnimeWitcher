@@ -126,10 +126,9 @@ void main() {
 
       expect(controller, contains('waitForAnime4kColorSignal'));
       expect(controller, contains('colorSignal != Anime4kColorSignal.sdr'));
-      expect(
-        controller,
-        contains('_applyResolvedMpvFallback(platform: platform)'),
-      );
+      expect(controller, contains('_applyResolvedMpvFallback('));
+      expect(controller, contains('platform: platform,'));
+      expect(controller, contains('settings: settings,'));
       expect(controller, contains("setProperty('glsl-shaders', pipeline.value)"));
       expect(controller, contains("getProperty('current-vo')"));
       expect(controller, contains("getProperty('gpu-dumb-mode')"));
