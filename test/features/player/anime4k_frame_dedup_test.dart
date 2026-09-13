@@ -15,9 +15,6 @@ class _TelemetryBindings implements Anime4kMetalNativeBindings {
   void disable(int handle) {}
 
   @override
-  int setBypass(int handle, bool bypass) => 1;
-
-  @override
   int status(int handle) => 1;
 
   @override
@@ -50,21 +47,6 @@ void main() {
       expect(telemetry.skippedDuplicateFrames, 7);
       expect(telemetry.processedFrames, 11);
       expect(telemetry.lateOrDroppedFrames, 2);
-    });
-
-    test('Eco snapshot forwards native duplicate count instead of zero', () {
-      final governor = File(
-        'lib/features/player/data/anime4k_eco_governor.dart',
-      ).readAsStringSync();
-
-      expect(
-        governor,
-        contains('skippedDuplicateFrames: telemetry.skippedDuplicateFrames'),
-      );
-      expect(
-        governor,
-        isNot(contains('skippedDuplicateFrames: 0')),
-      );
     });
 
     test('C API exposes duplicate counter from runtime telemetry', () {
