@@ -6,6 +6,7 @@ on:
       - feat/anime4k-ios-performance
     paths:
       - .github/workflows/anime4k-preview-black-fix-once.yml
+      - scripts/anime4k_preview_black_fix_once.py
 
 permissions:
   contents: write
