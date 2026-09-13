@@ -459,6 +459,35 @@ class _Anime4kDialogState extends ConsumerState<_Anime4kDialog> {
                     await _reapply();
                   },
                 ),
+                SwitchListTile(
+                  value: settings.anime4kMetalFxEnabled,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    appText(
+                      context,
+                      english: 'MetalFX (experimental)',
+                      arabic: 'MetalFX (تجريبي)',
+                    ),
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  subtitle: Text(
+                    appText(
+                      context,
+                      english:
+                          'Uses Anime4K restore/denoise with Apple MetalFX '
+                          'for the final upscale. This is independent from Eco.',
+                      arabic:
+                          'يستخدم استعادة/تنقية Anime4K مع Apple MetalFX '
+                          'للتكبير النهائي. هذا الخيار مستقل عن الوضع الاقتصادي.',
+                    ),
+                  ),
+                  onChanged: (on) async {
+                    await ref
+                        .read(playerSettingsProvider.notifier)
+                        .setAnime4kMetalFxEnabled(on);
+                    await _reapply();
+                  },
+                ),
                 if (settings.anime4kEcoEnabled && diagnostics != null) ...[
                   const SizedBox(height: 4),
                   DecoratedBox(
@@ -590,11 +619,7 @@ class _Anime4kDialogState extends ConsumerState<_Anime4kDialog> {
           onPressed: () => showAnime4kPerformanceLogDialog(context, ref),
           icon: const Icon(Icons.article_outlined),
           label: Text(
-            appText(
-              context,
-              english: 'Performance log',
-              arabic: 'سجل الأداء',
-            ),
+            appText(context, english: 'Performance log', arabic: 'سجل الأداء'),
           ),
         ),
         TextButton(

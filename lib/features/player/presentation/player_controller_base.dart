@@ -2612,10 +2612,10 @@ class PlayerController extends Notifier<PlayerState> {
   /// mpv's `glsl-shaders` are mutually exclusive: a ready Metal runtime clears
   /// the mpv property, while any unavailable/failed Metal setup falls back to
   /// the exact same resolved GLSL pipeline. Non-Apple behavior is unchanged.
-  Future<({
-    Anime4kProcessingDimensions source,
-    Anime4kProcessingDimensions output,
-  })?> _resolveAnime4kMetalDimensions(NativePlayer platform) async {
+  Future<
+    ({Anime4kProcessingDimensions source, Anime4kProcessingDimensions output})?
+  >
+  _resolveAnime4kMetalDimensions(NativePlayer platform) async {
     Future<int?> positiveProperty(String name) async {
       try {
         final value = num.tryParse((await platform.getProperty(name)).trim());
@@ -2694,9 +2694,7 @@ class PlayerController extends Notifier<PlayerState> {
 
     try {
       final settings = ref.read(playerSettingsProvider).asData?.value;
-      final useMetalFxExperiment =
-          const bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&
-          (settings?.anime4kEcoEnabled ?? false);
+      final useMetalFxExperiment = settings?.anime4kMetalFxEnabled ?? false;
       final upscaleStrategy = useMetalFxExperiment
           ? 'restoreDenoiseMetalFXSpatial'
           : 'fullAnime4K';

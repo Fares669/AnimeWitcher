@@ -87,14 +87,12 @@ class PlayerController extends base.PlayerController {
     return initial;
   }
 
-  bool _anime4kSettingsChanged(
-    PlayerSettings? previous,
-    PlayerSettings? next,
-  ) {
+  bool _anime4kSettingsChanged(PlayerSettings? previous, PlayerSettings? next) {
     if (identical(previous, next)) return false;
     if (previous == null || next == null) return previous != next;
     return previous.anime4kEnabled != next.anime4kEnabled ||
         previous.anime4kEcoEnabled != next.anime4kEcoEnabled ||
+        previous.anime4kMetalFxEnabled != next.anime4kMetalFxEnabled ||
         previous.anime4kMode != next.anime4kMode ||
         previous.anime4kQuality != next.anime4kQuality ||
         previous.anime4kShaderDirectory != next.anime4kShaderDirectory;
@@ -272,8 +270,7 @@ class PlayerController extends base.PlayerController {
 
   bool get _anime4kMetalFxExperimentEnabled {
     final settings = ref.read(playerSettingsProvider).asData?.value;
-    return const bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&
-        (settings?.anime4kEcoEnabled ?? false);
+    return settings?.anime4kMetalFxEnabled ?? false;
   }
 
   Future<void> _recordAnime4kPostApplyRoute(PlayerSettings settings) async {
@@ -496,8 +493,11 @@ class PlayerController extends base.PlayerController {
   }
 
   Future<void> _applyResolvedMpvFallback({NativePlayer? platform}) async {
-    final nativePlatform = platform ??
-        (player.platform is NativePlayer ? player.platform as NativePlayer : null);
+    final nativePlatform =
+        platform ??
+        (player.platform is NativePlayer
+            ? player.platform as NativePlayer
+            : null);
     if (nativePlatform == null) return;
     final settings =
         ref.read(playerSettingsProvider).asData?.value ??
