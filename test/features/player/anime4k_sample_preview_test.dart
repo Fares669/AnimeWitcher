@@ -142,5 +142,31 @@ void main() {
       expect(capi, contains('@_cdecl("animewitcher_anime4k_metal_process_preview")'));
       expect(installer, contains('animewitcher_anime4k_metal_process_preview'));
     });
+
+    test('Apple native preview resolves FFI on the player isolate', () {
+      final preview = File(
+        'lib/features/player/presentation/widgets/anime4k_sample_preview.dart',
+      ).readAsStringSync();
+
+      expect(
+        preview,
+        isNot(contains("import 'dart:isolate';")),
+        reason:
+            'Playback resolves the Apple C ABI from the main player isolate. '
+            'The preview must use the same process-symbol lookup context.',
+      );
+      expect(
+        preview,
+        isNot(contains('Isolate.run')),
+        reason:
+            'The native one-shot already owns its Metal command-buffer wait; '
+            'moving FFI symbol resolution to a secondary Dart isolate adds a '
+            'different failure path that playback does not use.',
+      );
+      final binding = preview.indexOf('Anime4kMetalFfiBindings.tryCreate()');
+      final processing = preview.indexOf('.processPreview(', binding);
+      expect(binding, greaterThanOrEqualTo(0));
+      expect(processing, greaterThan(binding));
+    });
   });
 }
