@@ -91,11 +91,6 @@ jobs:
           replace(controller,
           """  bool get _anime4kMetalFxExperimentEnabled {\n    final settings = ref.read(playerSettingsProvider).asData?.value;\n    return const bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&\n        (settings?.anime4kEcoEnabled ?? false);\n  }\n""",
           """  bool get _anime4kMetalFxExperimentEnabled {\n    final settings = ref.read(playerSettingsProvider).asData?.value;\n    return settings?.anime4kMetalFxEnabled ?? false;\n  }\n""")
-
-          preview = '.github/workflows/ios-preview-once.yml'
-          replace(preview,
-          '            "ANIME4K_METALFX_EXPERIMENT": "true",\n',
-          '')
           PY
           dart format \
             lib/features/settings/presentation/player_settings_provider.dart \
@@ -118,8 +113,7 @@ jobs:
             lib/features/settings/presentation/player_settings_provider.dart \
             lib/features/settings/presentation/widgets/anime4k_dialog.dart \
             lib/features/player/presentation/player_controller_base.dart \
-            lib/features/player/presentation/player_controller.dart \
-            .github/workflows/ios-preview-once.yml
+            lib/features/player/presentation/player_controller.dart
           git diff --cached --check
           git commit -m "feat: expose independent Anime4K MetalFX toggle"
           git push origin HEAD:feat/anime4k-ios-performance
