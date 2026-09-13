@@ -159,6 +159,20 @@ class PlayerController extends base.PlayerController {
   @override
   Future<void> applyAnime4kShaders() async {
     try {
+      final configurationSettings = ref
+          .read(playerSettingsProvider)
+          .asData
+          ?.value;
+      if (configurationSettings != null) {
+        await _anime4kPerformanceLog.recordConfiguration(
+          enabled: configurationSettings.anime4kEnabled,
+          mode: configurationSettings.anime4kMode,
+          requestedQuality: configurationSettings.anime4kQuality,
+          ecoEnabled: configurationSettings.anime4kEcoEnabled,
+          metalFxExperiment: configurationSettings.anime4kMetalFxEnabled,
+        );
+      }
+
       if (_anime4kForceMpvFallback && _isApplePlatform) {
         final fallbackSettings = ref.read(playerSettingsProvider).asData?.value;
         if (fallbackSettings != null) {
