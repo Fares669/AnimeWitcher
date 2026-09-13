@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  group('Anime4K MetalFX Eco experiment isolation', () {
+  group('Anime4K MetalFX experiment isolation', () {
     test('MetalFX adapter is isolated and conditionally imported', () {
       final adapter = File(
         'native/anime4k_metal/Anime4KMetalFXScaler.swift',
@@ -63,9 +63,12 @@ void main() {
       expect(workflow, contains('native/anime4k_metal/Anime4KMetalFXScaler.swift'));
     });
 
-    test('benchmark toggle is hidden, debug-only, and restricted to Eco', () {
-      final controller = File(
+    test('runtime request comes from persisted MetalFX setting, not Eco or AOT define', () {
+      final baseController = File(
         'lib/features/player/presentation/player_controller_base.dart',
+      ).readAsStringSync();
+      final controller = File(
+        'lib/features/player/presentation/player_controller.dart',
       ).readAsStringSync();
       final bridge = File(
         'lib/features/player/data/anime4k_metal_bridge.dart',
@@ -74,45 +77,16 @@ void main() {
         'native/anime4k_metal/Anime4KMetalCAPI.swift',
       ).readAsStringSync();
 
-      expect(
-        controller,
-        contains("bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT')"),
-      );
-      expect(controller, contains('settings?.anime4kEcoEnabled ?? false'));
-      expect(controller, contains("'restoreDenoiseMetalFXSpatial'"));
-      expect(controller, contains("'fullAnime4K'"));
+      expect(baseController, contains('settings?.anime4kMetalFxEnabled ?? false'));
+      expect(baseController, isNot(contains('ANIME4K_METALFX_EXPERIMENT')));
+      expect(controller, contains('settings?.anime4kMetalFxEnabled ?? false'));
+      expect(controller, isNot(contains('ANIME4K_METALFX_EXPERIMENT')));
+      expect(controller, isNot(contains('anime4kEcoEnabled ?? false')));
+      expect(baseController, contains("'restoreDenoiseMetalFXSpatial'"));
+      expect(baseController, contains("'fullAnime4K'"));
       expect(bridge, contains("'upscaleStrategy': upscaleStrategy"));
       expect(capi, contains('upscaleStrategy'));
       expect(capi, contains('Anime4KAppleUpscaleStrategy'));
-    });
-
-    test('benchmark toggle uses const environment lookup for AOT Apple builds', () {
-      const lookup =
-          "const bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT')";
-      final baseController = File(
-        'lib/features/player/presentation/player_controller_base.dart',
-      ).readAsStringSync();
-      final ecoController = File(
-        'lib/features/player/presentation/player_controller.dart',
-      ).readAsStringSync();
-
-      expect(baseController, contains(lookup));
-      expect(ecoController, contains(lookup));
-    });
-
-    test('iOS benchmark preview enables the hidden experiment flag', () {
-      final previewWorkflow = File(
-        '.github/workflows/ios-preview-once.yml',
-      ).readAsStringSync();
-
-      expect(
-        previewWorkflow,
-        contains('"ANIME4K_METALFX_EXPERIMENT": "true"'),
-      );
-      expect(
-        previewWorkflow,
-        contains('--dart-define-from-file=dart-defines.json'),
-      );
     });
 
     test('experiment removes Anime4K upscale stages before MetalFX', () {
