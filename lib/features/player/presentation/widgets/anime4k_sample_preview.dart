@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 
 import '../../data/anime4k.dart';
+import '../../data/anime4k_metal_ffi.dart';
 import '../../data/anime4k_shader_library.dart';
 
 enum Anime4kPreviewBackend { mpv, appleMetal }
@@ -63,10 +65,11 @@ final _metalPreviewCache = _Anime4kMetalPreviewCache();
 /// A sample picture with the chosen mode running on it, beside the same
 /// picture untouched.
 ///
-/// The preview renders one still through mpv's final video-output window,
-/// captures that processed result once, caches it by mode/quality/backend/hash,
-/// and disposes the renderer. This intentionally avoids rasterizing Flutter's
-/// external Texture, which can produce an all-black image on Apple devices.
+/// Apple first sends the still image through the same native Metal runtime as
+/// playback, writes one PNG, caches it, then tears the one-shot work down. mpv
+/// remains a fail-safe fallback for unsupported/older builds. This avoids both
+/// a continuously active second renderer and Flutter external-texture capture,
+/// which can produce an all-black image on Apple devices.
 class Anime4kSamplePreview extends StatefulWidget {
   const Anime4kSamplePreview({
     super.key,
@@ -95,7 +98,6 @@ class Anime4kSamplePreview extends StatefulWidget {
 
 class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
   Player? _player;
-  VideoController? _controller;
   Uint8List? _processedPreviewBytes;
   String? _error;
   bool _ready = false;
@@ -125,7 +127,6 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     _previewRequest++;
     final player = _player;
     _player = null;
-    _controller = null;
     unawaited(player?.dispose());
     super.dispose();
   }
@@ -135,7 +136,6 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
   Future<void> _disposeSpecificPreviewPlayer(Player player) async {
     if (identical(_player, player)) {
       _player = null;
-      _controller = null;
     }
     await player.dispose();
   }
@@ -143,7 +143,6 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
   Future<void> _disposePreviewPlayer() async {
     final player = _player;
     _player = null;
-    _controller = null;
     if (player != null) await player.dispose();
   }
 
@@ -177,11 +176,100 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
         return;
       }
 
+      if ((Platform.isIOS || Platform.isMacOS) &&
+          await _startAppleMetalOneShot(
+            request: request,
+            file: file,
+            pipeline: pipeline,
+          )) {
+        return;
+      }
       if (!_isCurrentRequest(request)) return;
+
       await _startMpvFallback(request: request, file: file, pipeline: pipeline);
     } catch (error) {
       if (!_isCurrentRequest(request)) return;
       setState(() => _error = '$error');
+    }
+  }
+
+  Future<bool> _startAppleMetalOneShot({
+    required int request,
+    required File file,
+    required Anime4kPipeline pipeline,
+  }) async {
+    final key = Anime4kPreviewCacheKey(
+      mode: widget.mode,
+      quality: widget.quality,
+      backend: Anime4kPreviewBackend.appleMetal,
+      pipelineHash: pipeline.pipelineHash,
+    );
+    final cached = _metalPreviewCache.lookup(key);
+    if (cached != null) {
+      if (_isCurrentRequest(request)) {
+        setState(() {
+          _processedPreviewBytes = cached;
+          _ready = true;
+          _error = null;
+        });
+        return true;
+      }
+      return false;
+    }
+
+    final shaderDirectory = widget.shaderDirectory.trim();
+    final shaderPaths = pipeline.files
+        .map((name) => p.join(shaderDirectory, name))
+        .toList(growable: false);
+    if (shaderPaths.isEmpty || pipeline.pipelineHash.isEmpty) return false;
+
+    final directory = await getApplicationSupportDirectory();
+    final outputFile = File(
+      p.join(directory.path, 'anime4k_preview_metal_$request.png'),
+    );
+    try {
+      if (await outputFile.exists()) await outputFile.delete();
+      final inputPath = file.path;
+      final outputPath = outputFile.path;
+      final pipelineHash = pipeline.pipelineHash;
+
+      // Native Metal compilation/processing can take noticeable time on the
+      // first preview. Keep it off the UI isolate so the dialog and spinner
+      // remain responsive while the one-shot command buffer completes.
+      final succeeded = await Isolate.run(() {
+        final bindings = Anime4kMetalFfiBindings.tryCreate();
+        return bindings?.processPreview(
+              inputPath: inputPath,
+              outputPath: outputPath,
+              shaderPaths: shaderPaths,
+              pipelineHash: pipelineHash,
+            ) ??
+            false;
+      });
+      if (!succeeded || !_isCurrentRequest(request)) return false;
+      if (!await outputFile.exists() || await outputFile.length() <= 0) {
+        return false;
+      }
+
+      final bytes = await outputFile.readAsBytes();
+      if (!_isCurrentRequest(request)) return false;
+      _metalPreviewCache.store(key, bytes);
+      setState(() {
+        _processedPreviewBytes = bytes;
+        _ready = true;
+        _error = null;
+      });
+      return true;
+    } catch (_) {
+      // Fail closed to the existing mpv one-shot path. A preview failure must
+      // never disable or mutate the real player backend.
+      return false;
+    } finally {
+      try {
+        if (await outputFile.exists()) await outputFile.delete();
+      } catch (_) {
+        // A stale preview file is harmless and uses a per-request filename.
+      }
     }
   }
 
@@ -215,7 +303,6 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
       return;
     }
     _player = player;
-    _controller = controller;
     setState(() {
       _processedPreviewBytes = null;
       _ready = false;
@@ -312,7 +399,7 @@ class _Anime4kSamplePreviewState extends State<Anime4kSamplePreview> {
     }
   }
 
-  /// Copies the bundled sample somewhere mpv can open by path.
+  /// Copies the bundled sample somewhere native Metal/mpv can open by path.
   Future<File> _writeSample() async {
     final bytes = await rootBundle.load(Anime4kSamplePreview.assetPath);
     final directory = await getApplicationSupportDirectory();
