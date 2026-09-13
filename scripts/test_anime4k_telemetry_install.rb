@@ -27,7 +27,6 @@ Dir.mktmpdir('anime4k-telemetry-install') do |root|
     Anime4KMetalRuntime.swift
     Anime4KMediaKitBridge.swift
     Anime4KMetalTelemetry.swift
-    Anime4KMetalFXScaler.swift
     Anime4KMetalCAPI.swift
   ].each do |name|
     File.write(File.join(native_dir, name), "// #{name}\n")
@@ -40,7 +39,7 @@ Dir.mktmpdir('anime4k-telemetry-install') do |root|
     platform: :ios
   )
 
-  %w[Anime4KMetalTelemetry.swift Anime4KMetalFXScaler.swift Anime4KMetalCAPI.swift].each do |name|
+  %w[Anime4KMetalTelemetry.swift Anime4KMetalCAPI.swift].each do |name|
     installed = File.join(plugin_dir, 'anime4k', name)
     raise "#{name} was not installed into media_kit" unless File.file?(installed)
   end
