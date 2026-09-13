@@ -28,6 +28,7 @@ jobs:
         run: |
           python3 <<'PY'
           from pathlib import Path
+          import re
 
           def replace(path, old, new, count=1):
               p = Path(path)
@@ -65,11 +66,23 @@ jobs:
           """                  onChanged: (on) async {\n                    await ref\n                        .read(playerSettingsProvider.notifier)\n                        .setAnime4kEcoEnabled(on);\n                    await _reapply();\n                  },\n                ),\n                if (settings.anime4kEcoEnabled && diagnostics != null) ...[\n""",
           """                  onChanged: (on) async {\n                    await ref\n                        .read(playerSettingsProvider.notifier)\n                        .setAnime4kEcoEnabled(on);\n                    await _reapply();\n                  },\n                ),\n                SwitchListTile(\n                  value: settings.anime4kMetalFxEnabled,\n                  contentPadding: EdgeInsets.zero,\n                  title: Text(\n                    appText(\n                      context,\n                      english: 'MetalFX (experimental)',\n                      arabic: 'MetalFX (تجريبي)',\n                    ),\n                    style: theme.textTheme.titleSmall,\n                  ),\n                  subtitle: Text(\n                    appText(\n                      context,\n                      english:\n                          'Uses Anime4K restore/denoise with Apple MetalFX '\n                          'for the final upscale. This is independent from Eco.',\n                      arabic:\n                          'يستخدم استعادة/تنقية Anime4K مع Apple MetalFX '\n                          'للتكبير النهائي. هذا الخيار مستقل عن الوضع الاقتصادي.',\n                    ),\n                  ),\n                  onChanged: (on) async {\n                    await ref\n                        .read(playerSettingsProvider.notifier)\n                        .setAnime4kMetalFxEnabled(on);\n                    await _reapply();\n                  },\n                ),\n                if (settings.anime4kEcoEnabled && diagnostics != null) ...[\n""")
 
-          base = 'lib/features/player/presentation/player_controller_base.dart'
-          replace(base,
-          """      final useMetalFxExperiment =\n          const bool.fromEnvironment('ANIME4K_METALFX_EXPERIMENT') &&\n          (settings?.anime4kEcoEnabled ?? false);\n""",
-          """      final useMetalFxExperiment =\n          settings?.anime4kMetalFxEnabled ?? false;\n""",
-          count=2)
+          base = Path('lib/features/player/presentation/player_controller_base.dart')
+          base_text = base.read_text()
+          pattern = re.compile(
+              r"final useMetalFxExperiment\s*=\s*"
+              r"const bool\.fromEnvironment\('ANIME4K_METALFX_EXPERIMENT'\)\s*&&\s*"
+              r"\(settings\?\.anime4kEcoEnabled\s*\?\?\s*false\);"
+          )
+          base_text, count = pattern.subn(
+              "final useMetalFxExperiment =\n          settings?.anime4kMetalFxEnabled ?? false;",
+              base_text,
+          )
+          if count < 1 or 'ANIME4K_METALFX_EXPERIMENT' in base_text:
+              raise SystemExit(
+                  f'{base}: semantic MetalFX replacement count={count}, residual define='
+                  f"{'ANIME4K_METALFX_EXPERIMENT' in base_text}"
+              )
+          base.write_text(base_text)
 
           controller = 'lib/features/player/presentation/player_controller.dart'
           replace(controller,
