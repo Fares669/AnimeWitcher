@@ -56,16 +56,15 @@ jobs:
 
           namespace = {'__name__': '__main__'}
           exec(compile(script, '<anime4k-cleanup>', 'exec'), namespace)
-
-          retry = Path('.github/workflows/anime4k-cleanup-retry.yml')
-          if retry.exists():
-              retry.unlink()
           PY
-      - name: Commit cleanup
+      - name: Commit code cleanup
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # The Actions token may not mutate workflows. Restore every workflow
+          # here; those references are updated separately through GitHub.
+          git checkout HEAD -- .github/workflows
           git add -A
           git diff --cached --check
           git commit -m 'fix: simplify Anime4K Apple runtime'
