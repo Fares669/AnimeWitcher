@@ -1,6 +1,6 @@
 # Anime4K Apple Performance Benchmark Evidence
 
-> **PENDING — the final controlled physical-hardware matrix is not complete yet.** Supplementary iPhone measurements already exist, but do not claim performance completion until every required comparison below is measured on a physical Apple device and tied to the exact commit that was tested.
+> **PENDING — the final controlled physical-hardware matrix is not complete yet.** Supplementary iPhone measurements already exist. Do not claim performance completion until every required comparison below is measured on a physical Apple device and tied to the exact commit that was tested.
 
 This document is the reproducible evidence record for AKP-15, AKP-17, and AKP-18. CI can prove compilation, shader-corpus validity, routing contracts, and telemetry plumbing, but it cannot substitute for visual and performance acceptance on real Apple hardware.
 
