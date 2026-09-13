@@ -39,14 +39,15 @@ jobs:
             exit 1
           }
       - name: Apply minimal production fix
-        shell: python
+        shell: bash
         run: |
+          python3 - <<'PY'
           from pathlib import Path
 
           path = Path('lib/features/player/presentation/player_controller.dart')
           source = path.read_text()
 
-          old_timer = '''      if (settings.anime4kEcoEnabled) {
+          old_timer = """      if (settings.anime4kEcoEnabled) {
             _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
               unawaited(_sampleAnime4kEco());
             });
@@ -54,31 +55,32 @@ jobs:
             _anime4kEcoTimer?.cancel();
             _anime4kEcoTimer = null;
           }
-'''
-          new_timer = '''      _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+"""
+          new_timer = """      _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
         unawaited(_sampleAnime4kEco());
       });
-'''
+"""
           if source.count(old_timer) != 1:
-            raise SystemExit(f'expected one timer gate, found {source.count(old_timer)}')
+              raise SystemExit(f'expected one timer gate, found {source.count(old_timer)}')
           source = source.replace(old_timer, new_timer)
 
-          old_policy = '''      _publishAnime4kPerformanceSnapshot(decision.snapshot);
+          old_policy = """      _publishAnime4kPerformanceSnapshot(decision.snapshot);
 
       if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {
-'''
-          new_policy = '''      _publishAnime4kPerformanceSnapshot(decision.snapshot);
+"""
+          new_policy = """      _publishAnime4kPerformanceSnapshot(decision.snapshot);
 
       // Manual Metal and MetalFX benchmark runs still need fresh telemetry,
       // but only Eco may adapt quality or native bypass state.
       if (!settings.anime4kEcoEnabled) return;
 
       if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {
-'''
+"""
           if source.count(old_policy) != 1:
-            raise SystemExit(f'expected one policy boundary, found {source.count(old_policy)}')
+              raise SystemExit(f'expected one policy boundary, found {source.count(old_policy)}')
           source = source.replace(old_policy, new_policy)
           path.write_text(source)
+          PY
       - name: Run focused GREEN
         run: flutter test test/features/player/anime4k_manual_telemetry_sampling_test.dart test/features/player/anime4k_performance_log_contract_test.dart test/features/player/anime4k_eco_controller_wiring_test.dart
       - name: Commit production fix
