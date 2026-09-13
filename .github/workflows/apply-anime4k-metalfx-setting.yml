@@ -28,35 +28,30 @@ jobs:
         run: |
           python3 <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('lib/features/player/presentation/player_controller.dart')
           text = path.read_text()
-          old = """  @override
-          Future<void> applyAnime4kShaders() async {
-            try {
-              if (_anime4kForceMpvFallback && _isApplePlatform) {
-          """
-          new = """  @override
-          Future<void> applyAnime4kShaders() async {
-            try {
-              final configurationSettings =
-                  ref.read(playerSettingsProvider).asData?.value;
-              if (configurationSettings != null) {
-                await _anime4kPerformanceLog.recordConfiguration(
-                  enabled: configurationSettings.anime4kEnabled,
-                  mode: configurationSettings.anime4kMode,
-                  requestedQuality: configurationSettings.anime4kQuality,
-                  ecoEnabled: configurationSettings.anime4kEcoEnabled,
-                  metalFxExperiment: configurationSettings.anime4kMetalFxEnabled,
-                );
-              }
-
-              if (_anime4kForceMpvFallback && _isApplePlatform) {
-          """
           if '.recordConfiguration(' not in text:
-              if old not in text:
-                  raise SystemExit('applyAnime4kShaders insertion marker missing')
-              text = text.replace(old, new, 1)
+              pattern = re.compile(
+                  r'(Future<void> applyAnime4kShaders\(\) async \{\s*try \{\s*)'
+              )
+              insertion = """final configurationSettings =
+              ref.read(playerSettingsProvider).asData?.value;
+            if (configurationSettings != null) {
+              await _anime4kPerformanceLog.recordConfiguration(
+                enabled: configurationSettings.anime4kEnabled,
+                mode: configurationSettings.anime4kMode,
+                requestedQuality: configurationSettings.anime4kQuality,
+                ecoEnabled: configurationSettings.anime4kEcoEnabled,
+                metalFxExperiment: configurationSettings.anime4kMetalFxEnabled,
+              );
+            }
+
+            """
+              text, count = pattern.subn(lambda match: match.group(1) + insertion, text, count=1)
+              if count != 1:
+                  raise SystemExit(f'applyAnime4kShaders semantic match count={count}')
           path.write_text(text)
           PY
           dart format lib/features/player/presentation/player_controller.dart
