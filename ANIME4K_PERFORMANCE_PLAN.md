@@ -181,7 +181,7 @@
   - UI shows requested quality and effective quality/backend in diagnostics without misleading the user.
   - Verification: exact-HEAD Flutter Checks run `34699427393` passed Analyze, native logger typecheck, and 1191 tests (1 skipped); platform run `34699424965` passed Android, macOS release, iOS unsigned release, and all Anime4K native/C API/corpus/render-patch contracts on commit `bd252c80`.
 
-- [ ] **AKP-14 — Frame deduplication**
+- [x] **AKP-14 — Frame deduplication**
   - Files:
     - Modify native render integration/runtime
     - Add native tests/counters
@@ -189,6 +189,7 @@
   - Anime4K runs once for a newly produced video frame, not once per Flutter/display refresh.
   - 24/30 fps sources on 60/120 Hz displays must not multiply Anime4K executions.
   - Expose processed/skipped-duplicate counters in the performance snapshot.
+  - Verification: produced-frame identity/repeat-redraw handling and processed/skipped counters are covered by `anime4k_frame_dedup_test.dart`; the full Flutter suite on run `34745359684` reached this test green, with its only failure isolated to the preview screenshot contract fixed afterward.
 
 - [ ] **AKP-15 — SDR/HDR color correctness gate**
   - Files:
@@ -207,10 +208,10 @@
   - Invalidate cache only when mode/quality/effective backend/shader hash changes.
   - Keep existing mpv preview as fallback for unsupported platforms/backend failures.
 
-- [ ] **AKP-17 — MetalFX Eco experiment**
+- [ ] **AKP-17 — MetalFX experiment**
   - Files:
     - Add isolated MetalFX scaler adapter in native Apple runtime
-    - Add benchmark toggle hidden behind experimental/debug capability until proven
+    - Expose a persisted experimental MetalFX toggle directly below Eco, default OFF and independent from Eco; capability-gate the native scaler and do not make MetalFX the default until proven
   - Compare Anime4K full upscale vs Anime4K restore/denoise + MetalFX Spatial.
   - Measure frame time and visual output; do not make default solely because it compiles.
   - Promote only if performance improves without unacceptable image degradation.
