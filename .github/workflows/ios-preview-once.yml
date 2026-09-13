@@ -1,6 +1,7 @@
 name: iOS Preview One Shot
 
 # Kept during AKP-15/17/18 physical validation; remove only during AKP-19 cleanup.
+# Rebuild after benchmark-contract sync so the IPA and CI share the same exact head.
 on:
   workflow_dispatch:
   push:
