@@ -1,3 +1,5 @@
+import CoreGraphics
+import CoreImage
 import Foundation
 
 @main
@@ -133,6 +135,77 @@ struct Anime4KMetalCAPITests {
                 bypass: true
             ) == 0,
             "invalid bypass handles must fail closed"
+        )
+
+        // The settings preview must exercise the same native Metal runtime as
+        // playback without creating a Flutter external texture or second video
+        // renderer. Use an actual PNG so this covers decode -> CVPixelBuffer ->
+        // Metal -> CVPixelBuffer -> PNG end to end on Apple CI.
+        let previewInputURL = root.appendingPathComponent("preview-input.png")
+        let previewOutputURL = root.appendingPathComponent("preview-output.png")
+        let previewContext = CIContext(options: nil)
+        let previewBounds = CGRect(x: 0, y: 0, width: 16, height: 12)
+        let previewSource = CIImage(
+            color: CIColor(red: 0.25, green: 0.5, blue: 0.75, alpha: 1)
+        ).cropped(to: previewBounds)
+        let previewColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ??
+            CGColorSpaceCreateDeviceRGB()
+        try previewContext.writePNGRepresentation(
+            of: previewSource,
+            to: previewInputURL,
+            format: .RGBA8,
+            colorSpace: previewColorSpace,
+            options: [:]
+        )
+        let previewConfiguration: [String: Any] = [
+            "shaderPaths": [shaderURL.path],
+            "pipelineHash": "preview-capi-test",
+            "precision": "mixedFP16",
+            "upscaleStrategy": "fullAnime4K",
+        ]
+        let previewData = try JSONSerialization.data(
+            withJSONObject: previewConfiguration
+        )
+        let previewJSON = String(decoding: previewData, as: UTF8.self)
+        let previewResult = previewInputURL.path.withCString { inputPointer in
+            previewOutputURL.path.withCString { outputPointer in
+                previewJSON.withCString { jsonPointer in
+                    animewitcherAnime4KMetalProcessPreview(
+                        inputPointer,
+                        outputPointer,
+                        jsonPointer
+                    )
+                }
+            }
+        }
+        precondition(previewResult == 1, "native one-shot preview must succeed")
+        let previewAttributes = try FileManager.default.attributesOfItem(
+            atPath: previewOutputURL.path
+        )
+        precondition(
+            (previewAttributes[.size] as? NSNumber)?.intValue ?? 0 > 0,
+            "native one-shot preview must write a non-empty PNG"
+        )
+        guard let previewOutput = CIImage(contentsOf: previewOutputURL) else {
+            preconditionFailure("native one-shot preview PNG must be decodable")
+        }
+        precondition(Int(previewOutput.extent.width) == 16)
+        precondition(Int(previewOutput.extent.height) == 12)
+        let missingInputResult = root.appendingPathComponent("missing.png").path
+            .withCString { inputPointer in
+                previewOutputURL.path.withCString { outputPointer in
+                    previewJSON.withCString { jsonPointer in
+                        animewitcherAnime4KMetalProcessPreview(
+                            inputPointer,
+                            outputPointer,
+                            jsonPointer
+                        )
+                    }
+                }
+            }
+        precondition(
+            missingInputResult == 0,
+            "one-shot preview must fail closed for an unreadable source"
         )
 
         // Simulate a post-configure native failure/removal. The C API must not
