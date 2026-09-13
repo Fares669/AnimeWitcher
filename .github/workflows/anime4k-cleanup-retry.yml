@@ -30,17 +30,22 @@ jobs:
           if start_marker not in workflow or end_marker not in workflow:
               raise SystemExit('could not locate cleanup migration source')
           script = workflow.split(start_marker, 1)[1].split(end_marker, 1)[0]
-          # YAML contributes ten spaces of indentation to every here-doc line.
           script = '\n'.join(
               line[10:] if line.startswith('          ') else line
               for line in script.splitlines()
           ) + '\n'
 
-          bad = r'''sub(runtime, r"\n        case \.metalFXUnavailable:.*?\n            return \"Anime4K MetalFX spatial scaler failed: \\(detail\)\"", '', expected=1, flags=re.S)'''
-          good = r'''replace(runtime, '        case .metalFXUnavailable:\n            return "Anime4K MetalFX spatial scaler is unavailable"\n        case .metalFXPipeline(let detail):\n            return "Anime4K MetalFX spatial scaler failed: \\(detail)"\n', '', expected=1)'''
-          if bad not in script:
+          bad_regex = r'''sub(runtime, r"\n        case \.metalFXUnavailable:.*?\n            return \"Anime4K MetalFX spatial scaler failed: \\(detail\)\"", '', expected=1, flags=re.S)'''
+          fixed_regex = r'''replace(runtime, '        case .metalFXUnavailable:\n            return "Anime4K MetalFX spatial scaler is unavailable"\n        case .metalFXPipeline(let detail):\n            return "Anime4K MetalFX spatial scaler failed: \\(detail)"\n', '', expected=1)'''
+          if bad_regex not in script:
               raise SystemExit('expected broken MetalFX error regex was not found')
-          script = script.replace(bad, good)
+          script = script.replace(bad_regex, fixed_regex)
+
+          bad_count = r'''replace(media, '                bypassedRuntimeKeys.remove(key)\n', '', expected=1)'''
+          fixed_count = r'''replace(media, '                bypassedRuntimeKeys.remove(key)\n', '', expected=2)'''
+          if bad_count not in script:
+              raise SystemExit('expected duplicate bypass cleanup was not found')
+          script = script.replace(bad_count, fixed_count)
 
           namespace = {'__name__': '__main__'}
           exec(compile(script, '<anime4k-cleanup>', 'exec'), namespace)
