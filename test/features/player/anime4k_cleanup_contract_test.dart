@@ -1,3 +1,4 @@
+// Triggers the one-shot cleanup migration after its RED contract was staged.
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
