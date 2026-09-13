@@ -39,8 +39,13 @@ jobs:
           grep -q "preview never rasterizes an external video texture through Flutter" /tmp/anime4k-preview-red.log
       - name: Apply one-shot native-window capture fix
         shell: bash
+        env:
+          FALLBACK_METHOD_B64: "ICBGdXR1cmU8dm9pZD4gX3N0YXJ0TXB2RmFsbGJhY2soewogICAgcmVxdWlyZWQgaW50IHJlcXVlc3QsCiAgICByZXF1aXJlZCBGaWxlIGZpbGUsCiAgICByZXF1aXJlZCBBbmltZTRrUGlwZWxpbmUgcGlwZWxpbmUsCiAgfSkgYXN5bmMgewogICAgZmluYWwga2V5ID0gQW5pbWU0a1ByZXZpZXdDYWNoZUtleSgKICAgICAgbW9kZTogd2lkZ2V0Lm1vZGUsCiAgICAgIHF1YWxpdHk6IHdpZGdldC5xdWFsaXR5LAogICAgICBiYWNrZW5kOiBBbmltZTRrUHJldmlld0JhY2tlbmQubXB2LAogICAgICBwaXBlbGluZUhhc2g6IHBpcGVsaW5lLnBpcGVsaW5lSGFzaCwKICAgICk7CiAgICBmaW5hbCBjYWNoZWQgPSBfbWV0YWxQcmV2aWV3Q2FjaGUubG9va3VwKGtleSk7CiAgICBpZiAoY2FjaGVkICE9IG51bGwpIHsKICAgICAgaWYgKF9pc0N1cnJlbnRSZXF1ZXN0KHJlcXVlc3QpKSB7CiAgICAgICAgc2V0U3RhdGUoKCkgewogICAgICAgICAgX3Byb2Nlc3NlZFByZXZpZXdCeXRlcyA9IGNhY2hlZDsKICAgICAgICAgIF9yZWFkeSA9IHRydWU7CiAgICAgICAgICBfZXJyb3IgPSBudWxsOwogICAgICAgIH0pOwogICAgICB9CiAgICAgIHJldHVybjsKICAgIH0KCiAgICBmaW5hbCBwbGF5ZXIgPSBQbGF5ZXIoKTsKICAgIGZpbmFsIGNvbnRyb2xsZXIgPSBWaWRlb0NvbnRyb2xsZXIocGxheWVyKTsKICAgIGlmICghX2lzQ3VycmVudFJlcXVlc3QocmVxdWVzdCkpIHsKICAgICAgYXdhaXQgcGxheWVyLmRpc3Bvc2UoKTsKICAgICAgcmV0dXJuOwogICAgfQogICAgX3BsYXllciA9IHBsYXllcjsKICAgIF9jb250cm9sbGVyID0gY29udHJvbGxlcjsKICAgIHNldFN0YXRlKCgpIHsKICAgICAgX3Byb2Nlc3NlZFByZXZpZXdCeXRlcyA9IG51bGw7CiAgICAgIF9yZWFkeSA9IGZhbHNlOwogICAgfSk7CgogICAgRmlsZT8gY2FwdHVyZUZpbGU7CiAgICB0cnkgewogICAgICBmaW5hbCBwbGF0Zm9ybSA9IHBsYXllci5wbGF0Zm9ybTsKICAgICAgaWYgKHBsYXRmb3JtIGlzISBOYXRpdmVQbGF5ZXIpIHsKICAgICAgICB0aHJvdyBTdGF0ZUVycm9yKCdBbmltZTRLIHJlcXVpcmVzIHRoZSBuYXRpdmUgbXB2IHBsYXllci4nKTsKICAgICAgfQoKICAgICAgYXdhaXQgcGxhdGZvcm0uc2V0UHJvcGVydHkoJ2ltYWdlLWRpc3BsYXktZHVyYXRpb24nLCAnaW5mJyk7CiAgICAgIGF3YWl0IHBsYXRmb3JtLnNldFByb3BlcnR5KCctbXV0ZScucmVwbGFjZSgnLScsICcnKSwgJ3llcycpOwogICAgICBhd2FpdCBwbGF0Zm9ybS5zZXRQcm9wZXJ0eSgnZ2xzbC1zaGFkZXJzJywgcGlwZWxpbmUudmFsdWUpOwogICAgICBhd2FpdCBwbGF5ZXIub3BlbihNZWRpYShmaWxlLnBhdGgpLCBwbGF5OiB0cnVlKTsKICAgICAgYXdhaXQgY29udHJvbGxlci53YWl0VW50aWxGaXJzdEZyYW1lUmVuZGVyZWQudGltZW91dCgKICAgICAgICBjb25zdCBEdXJhdGlvbihzZWNvbmRzOiA1KSwKICAgICAgKTsKCiAgICAgIGlmICghX2lzQ3VycmVudFJlcXVlc3QocmVxdWVzdCkpIHsKICAgICAgICBhd2FpdCBfZGlzcG9zZVNwZWNpZmljUHJldmlld1BsYXllcihwbGF5ZXIpOwogICAgICAgIHJldHVybjsKICAgICAgfQoKICAgICAgZmluYWwgY3VycmVudFZvID0gKGF3YWl0IHBsYXRmb3JtLmdldFByb3BlcnR5KCdjdXJyZW50LXZvJykpLnRyaW0oKTsKICAgICAgaWYgKCFhbmltZTRrR3B1UmVuZGVyZXJTdXBwb3J0c1NoYWRlcnMoY3VycmVudFZvKSkgewogICAgICAgIHRocm93IFN0YXRlRXJyb3IoCiAgICAgICAgICAnQW5pbWU0SyBHUFUgc2hhZGVycyBhcmUgdW5hdmFpbGFibGUgb24gdGhpcyByZW5kZXJlciAnCiAgICAgICAgICAnKHZvPSRjdXJyZW50Vm8pLicsCiAgICAgICAgKTsKICAgICAgfQogICAgICBmaW5hbCBhcHBsaWVkID0gKGF3YWl0IHBsYXRmb3JtLmdldFByb3BlcnR5KCdnbHNsLXNoYWRlcnMnKSkudHJpbSgpOwogICAgICBpZiAocGlwZWxpbmUudmFsdWUuaXNOb3RFbXB0eSAmJiBhcHBsaWVkLmlzRW1wdHkpIHsKICAgICAgICB0aHJvdyBTdGF0ZUVycm9yKCdtcHYgZGlkIG5vdCBhY2NlcHQgdGhlIEFuaW1lNEsgc2hhZGVyIGNoYWluLicpOwogICAgICB9CiAgICAgIGZpbmFsIGdwdUR1bWJNb2RlID0gKGF3YWl0IHBsYXRmb3JtLmdldFByb3BlcnR5KCdncHUtZHVtYi1tb2RlJykpCiAgICAgICAgICAudHJpbSgpCiAgICAgICAgICAudG9Mb3dlckNhc2UoKTsKICAgICAgaWYgKGdwdUR1bWJNb2RlID09ICd5ZXMnKSB7CiAgICAgICAgYXdhaXQgcGxhdGZvcm0uc2V0UHJvcGVydHkoJ2dsc2wtc2hhZGVycycsICcnKTsKICAgICAgICB0aHJvdyBTdGF0ZUVycm9yKAogICAgICAgICAgJ0FuaW1lNEsgR1BVIHNoYWRlcnMgYXJlIHVuYXZhaWxhYmxlIG9uIHRoaXMgcmVuZGVyZXIgJwogICAgICAgICAgJyh2bz0kY3VycmVudFZvLCBncHUtZHVtYi1tb2RlPSRncHVE dW1iTW9kZSkuJywKICAgICAgICApOwogICAgICB9CgogICAgICBmaW5hbCBkaXJlY3RvcnkgPSBhd2FpdCBnZXRBcHBsaWNhdGlvblN1cHBvcnREaXJlY3RvcnkoKTsKICAgICAgY2FwdHVyZUZpbGUgPSBGaWxlKAogICAgICAgIHAuam9pbihkaXJlY3RvcnkucGF0aCwgJ2FuaW1lNGtfcHJldmlld19jYXB0dXJlXyRyZXF1ZXN0LnBuZycpLAogICAgICApOwogICAgICBpZiAoYXdhaXQgY2FwdHVyZUZpbGUuZXhpc3RzKCkpIHsKICAgICAgICBhd2FpdCBjYXB0dXJlRmlsZS5kZWxldGUoKTsKICAgICAgfQogICAgICBhd2FpdCBwbGF0Zm9ybS5jb21tYW5kKFsnc2NyZWVuc2hvdC10by1maWxlJywgY2FwdHVyZUZpbGUucGF0aCwgJ3dpbmRvdyddKTsKCiAgICAgIHZhciBjYXB0dXJlZCA9IGZhbHNlOwogICAgICBmb3IgKHZhciBhdHRlbXB0ID0gMDsgYXR0ZW1wdCA8IDQwOyBhdHRlbXB0KyspIHsKICAgICAgICBpZiAoYXdhaXQgY2FwdHVyZUZpbGUuZXhpc3RzKCkgJiYgYXdhaXQgY2FwdHVyZUZpbGUubGVuZ3RoKCkgPiAwKSB7CiAgICAgICAgICBjYXB0dXJlZCA9IHRydWU7CiAgICAgICAgICBicmVhazsKICAgICAgICB9CiAgICAgICAgYXdhaXQgRnV0dXJlPHZvaWQ+LmRlbGF5ZWQoY29uc3QgRHVyYXRpb24obWlsbGlzZWNvbmRzOiAyNSkpOwogICAgICB9CiAgICAgIGlmICghY2FwdHVyZWQpIHsKICAgICAgICB0aHJvdyBTdGF0ZUVycm9yKCdBbmltZTRL IHByZXZpZXcgc2NyZWVuc2hvdCB3YXMgbm90IHByb2R1Y2VkLicpOwogICAgICB9CgogICAgICBmaW5hbCBieXRlcyA9IGF3YWl0IGNhcHR1cmVGaWxlLnJlYWRBc0J5dGVzKCk7CiAgICAgIGlmICghX2lzQ3VycmVudFJlcXVlc3QocmVxdWVzdCkpIHsKICAgICAgICBhd2FpdCBfZGlzcG9zZVNwZWNpZmljUHJldmlld1BsYXllcihwbGF5ZXIpOwogICAgICAgIHJldHVybjsKICAgICAgfQoKICAgICAgX21ldGFsUHJldmlld0NhY2hlLnN0b3JlKGtleSwgYnl0ZXMpOwogICAgICBzZXRTdGF0ZSgoKSB7CiAgICAgICAgX3Byb2Nlc3NlZFByZXZpZXdCeXRlcyA9IGJ5dGVzOwogICAgICAgIF9yZWFkeSA9IHRydWU7CiAgICAgICAgX2Vycm9yID0gbnVsbDsKICAgICAgfSk7CiAgICAgIGF3YWl0IF9kaXNwb3NlU3BlY2lmaWNQcmV2aWV3UGxheWVyKHBsYXllcik7CiAgICB9IGNhdGNoIChfKSB7CiAgICAgIGF3YWl0IF9kaXNwb3NlU3BlY2lmaWNQcmV2aWV3UGxheWVyKHBsYXllcik7CiAgICAgIHJldGhyb3c7CiAgICB9IGZpbmFsbHkgewogICAgICBmaW5hbCBmaWxlVG9EZWxldGUgPSBjYXB0dXJlRmlsZTsKICAgICAgaWYgKGZpbGVUb0RlbGV0ZSAhPSBudWxsKSB7CiAgICAgICAgdHJ5IHsKICAgICAgICAgIGlmIChhd2FpdCBmaWxlVG9EZWxldGUuZXhpc3RzKCkpIGF3YWl0IGZpbGVUb0RlbGV0ZS5kZWxldGUoKTsKICAgICAgICB9IGNhdGNoIChfKSB7CiAgICAgICAgICAvLyBBIHN0YWxlIHByZXZpZXcgZmlsZSBpcyBoYXJtbGVzcyBhbmQgd2lsbCBiZSBvdmVyd3JpdHRlbiBuZXh0IHJ1bi4KICAgICAgICB9CiAgICAgIH0KICAgIH0KICB9Cg o="
         run: |
           python3 - <<'PY'
+          import base64
+          import os
+          import re
           from pathlib import Path
 
           path = Path('lib/features/player/presentation/widgets/anime4k_sample_preview.dart')
@@ -57,19 +62,12 @@ jobs:
                   raise SystemExit(f'missing expected import: {needle!r}')
               text = text.replace(needle, '', 1)
 
-          text = text.replace(
-              "/// Apple uses the same native Metal backend as playback, but only long enough\n"
-              "/// to render and capture one processed frame. The encoded result is cached by\n"
-              "/// mode, quality, effective backend, and shader pipeline hash, so reopening the\n"
-              "/// settings does not keep a second renderer alive. Other platforms, or an\n"
-              "/// unavailable Apple Metal backend, keep the existing mpv preview as fallback.\n",
-              "/// The preview renders one still through mpv's final video-output window,\n"
-              "/// captures that processed result once, caches it by mode/quality/backend/hash,\n"
-              "/// and disposes the renderer. This intentionally avoids rasterizing Flutter's\n"
-              "/// external Texture, which can produce an all-black image on Apple devices.\n",
-              1,
+          text = re.sub(
+              r"/// Apple uses the same native Metal backend as playback, but only long enough\n/// to render and capture one processed frame\. The encoded result is cached by\n/// mode, quality, effective backend, and shader pipeline hash, so reopening the\n/// settings does not keep a second renderer alive\. Other platforms, or an\n/// unavailable Apple Metal backend, keep the existing mpv preview as fallback\.\n",
+              "/// The preview renders one still through mpv's final video-output window,\n/// captures that processed result once, caches it by mode/quality/backend/hash,\n/// and disposes the renderer. This intentionally avoids rasterizing Flutter's\n/// external Texture, which can produce an all-black image on Apple devices.\n",
+              text,
+              count=1,
           )
-
           text = text.replace('  bool _capturingMetal = false;\n', '', 1)
           text = text.replace('\n  final GlobalKey _metalCaptureKey = GlobalKey();\n', '\n', 1)
           text = text.replace('      _capturingMetal = false;\n', '')
@@ -78,150 +76,14 @@ jobs:
           start_method = text.index('  Future<void> _start() async {', method_start)
           text = text[:method_start] + text[start_method:]
 
-          apple_block = """      if ((Platform.isIOS || Platform.isMacOS) &&
-          await _startAppleMetalOneShot(
-            request: request,
-            file: file,
-            pipeline: pipeline,
-          )) {
-        return;
-      }
-      if (!_isCurrentRequest(request)) return;
-"""
-          if apple_block not in text:
+          pattern = re.compile(r"      if \(\(Platform\.isIOS \|\| Platform\.isMacOS\) &&\n          await _startAppleMetalOneShot\(\n            request: request,\n            file: file,\n            pipeline: pipeline,\n          \)\) \{\n        return;\n      \}\n      if \(!_isCurrentRequest\(request\)\) return;\n")
+          text, count = pattern.subn('      if (!_isCurrentRequest(request)) return;\n', text, count=1)
+          if count != 1:
               raise SystemExit('Apple Metal preview call block changed')
-          text = text.replace(apple_block, '      if (!_isCurrentRequest(request)) return;\n', 1)
 
           fallback_start = text.index('  Future<void> _startMpvFallback({')
           fallback_end = text.index('  /// Copies the bundled sample somewhere mpv can open by path.', fallback_start)
-          fallback = r'''  Future<void> _startMpvFallback({
-    required int request,
-    required File file,
-    required Anime4kPipeline pipeline,
-  }) async {
-    final key = Anime4kPreviewCacheKey(
-      mode: widget.mode,
-      quality: widget.quality,
-      backend: Anime4kPreviewBackend.mpv,
-      pipelineHash: pipeline.pipelineHash,
-    );
-    final cached = _metalPreviewCache.lookup(key);
-    if (cached != null) {
-      if (_isCurrentRequest(request)) {
-        setState(() {
-          _processedPreviewBytes = cached;
-          _ready = true;
-          _error = null;
-        });
-      }
-      return;
-    }
-
-    final player = Player();
-    final controller = VideoController(player);
-    if (!_isCurrentRequest(request)) {
-      await player.dispose();
-      return;
-    }
-    _player = player;
-    _controller = controller;
-    setState(() {
-      _processedPreviewBytes = null;
-      _ready = false;
-    });
-
-    File? captureFile;
-    try {
-      final platform = player.platform;
-      if (platform is! NativePlayer) {
-        throw StateError('Anime4K requires the native mpv player.');
-      }
-
-      await platform.setProperty('image-display-duration', 'inf');
-      await platform.setProperty('mute', 'yes');
-      await platform.setProperty('glsl-shaders', pipeline.value);
-      await player.open(Media(file.path), play: true);
-      await controller.waitUntilFirstFrameRendered.timeout(
-        const Duration(seconds: 5),
-      );
-
-      if (!_isCurrentRequest(request)) {
-        await _disposeSpecificPreviewPlayer(player);
-        return;
-      }
-
-      final currentVo = (await platform.getProperty('current-vo')).trim();
-      if (!anime4kGpuRendererSupportsShaders(currentVo)) {
-        throw StateError(
-          'Anime4K GPU shaders are unavailable on this renderer '
-          '(vo=$currentVo).',
-        );
-      }
-      final applied = (await platform.getProperty('glsl-shaders')).trim();
-      if (pipeline.value.isNotEmpty && applied.isEmpty) {
-        throw StateError('mpv did not accept the Anime4K shader chain.');
-      }
-      final gpuDumbMode = (await platform.getProperty('gpu-dumb-mode'))
-          .trim()
-          .toLowerCase();
-      if (gpuDumbMode == 'yes') {
-        await platform.setProperty('glsl-shaders', '');
-        throw StateError(
-          'Anime4K GPU shaders are unavailable on this renderer '
-          '(vo=$currentVo, gpu-dumb-mode=$gpuDumbMode).',
-        );
-      }
-
-      final directory = await getApplicationSupportDirectory();
-      captureFile = File(
-        p.join(directory.path, 'anime4k_preview_capture_$request.png'),
-      );
-      if (await captureFile.exists()) {
-        await captureFile.delete();
-      }
-      await platform.command(['screenshot-to-file', captureFile.path, 'window']);
-
-      var captured = false;
-      for (var attempt = 0; attempt < 40; attempt++) {
-        if (await captureFile.exists() && await captureFile.length() > 0) {
-          captured = true;
-          break;
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 25));
-      }
-      if (!captured) {
-        throw StateError('Anime4K preview screenshot was not produced.');
-      }
-
-      final bytes = await captureFile.readAsBytes();
-      if (!_isCurrentRequest(request)) {
-        await _disposeSpecificPreviewPlayer(player);
-        return;
-      }
-
-      _metalPreviewCache.store(key, bytes);
-      setState(() {
-        _processedPreviewBytes = bytes;
-        _ready = true;
-        _error = null;
-      });
-      await _disposeSpecificPreviewPlayer(player);
-    } catch (_) {
-      await _disposeSpecificPreviewPlayer(player);
-      rethrow;
-    } finally {
-      final fileToDelete = captureFile;
-      if (fileToDelete != null) {
-        try {
-          if (await fileToDelete.exists()) await fileToDelete.delete();
-        } catch (_) {
-          // A stale preview file is harmless and will be overwritten next run.
-        }
-      }
-    }
-  }
-
-'''
+          fallback = base64.b64decode(os.environ['FALLBACK_METHOD_B64']).decode()
           text = text[:fallback_start] + fallback + text[fallback_end:]
 
           text = text.replace('    final controller = _controller;\n', '', 1)
@@ -237,7 +99,6 @@ jobs:
               raise SystemExit('external Texture raster capture still present')
           if '_startAppleMetalOneShot(' in text:
               raise SystemExit('unsafe Apple texture capture path still present')
-
           path.write_text(text)
           PY
           dart format lib/features/player/presentation/widgets/anime4k_sample_preview.dart \
@@ -248,7 +109,7 @@ jobs:
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+Fares669@users.noreply.github.com"
           git add lib/features/player/presentation/widgets/anime4k_sample_preview.dart \
                   test/features/player/anime4k_sample_preview_test.dart
           git diff --cached --check
