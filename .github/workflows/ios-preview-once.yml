@@ -11,6 +11,7 @@ on:
       - .github/workflows/ios-preview-once.yml
       - native/anime4k_metal/**
       - scripts/anime4k_*
+      - lib/features/player/data/anime4k_metal_ffi.dart
       - lib/features/player/presentation/player_controller.dart
       - lib/features/player/presentation/player_controller_base.dart
       - lib/features/player/presentation/widgets/anime4k_sample_preview.dart
@@ -69,6 +70,7 @@ jobs:
           nm -gU "$binary" > /tmp/anime4k-preview-symbols.txt
           for symbol in \
             animewitcher_anime4k_metal_configure \
+            animewitcher_anime4k_metal_process_preview \
             animewitcher_anime4k_metal_status \
             animewitcher_anime4k_metal_telemetry \
             animewitcher_anime4k_metal_set_bypass \
