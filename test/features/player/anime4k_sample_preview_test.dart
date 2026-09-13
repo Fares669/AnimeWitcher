@@ -6,67 +6,70 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('Anime4K settings preview one-shot cache', () {
-    test('cache identity changes only with mode quality backend or shader hash', () {
-      const base = Anime4kPreviewCacheKey(
-        mode: Anime4kMode.a,
-        quality: Anime4kQuality.m,
-        backend: Anime4kPreviewBackend.appleMetal,
-        pipelineHash: 'pipeline-a',
-      );
-      const same = Anime4kPreviewCacheKey(
-        mode: Anime4kMode.a,
-        quality: Anime4kQuality.m,
-        backend: Anime4kPreviewBackend.appleMetal,
-        pipelineHash: 'pipeline-a',
-      );
+    test(
+      'cache identity changes only with mode quality backend or shader hash',
+      () {
+        const base = Anime4kPreviewCacheKey(
+          mode: Anime4kMode.a,
+          quality: Anime4kQuality.m,
+          backend: Anime4kPreviewBackend.appleMetal,
+          pipelineHash: 'pipeline-a',
+        );
+        const same = Anime4kPreviewCacheKey(
+          mode: Anime4kMode.a,
+          quality: Anime4kQuality.m,
+          backend: Anime4kPreviewBackend.appleMetal,
+          pipelineHash: 'pipeline-a',
+        );
 
-      expect(base, same);
-      expect(base.hashCode, same.hashCode);
-      expect(
-        base,
-        isNot(
-          const Anime4kPreviewCacheKey(
-            mode: Anime4kMode.b,
-            quality: Anime4kQuality.m,
-            backend: Anime4kPreviewBackend.appleMetal,
-            pipelineHash: 'pipeline-a',
+        expect(base, same);
+        expect(base.hashCode, same.hashCode);
+        expect(
+          base,
+          isNot(
+            const Anime4kPreviewCacheKey(
+              mode: Anime4kMode.b,
+              quality: Anime4kQuality.m,
+              backend: Anime4kPreviewBackend.appleMetal,
+              pipelineHash: 'pipeline-a',
+            ),
           ),
-        ),
-      );
-      expect(
-        base,
-        isNot(
-          const Anime4kPreviewCacheKey(
-            mode: Anime4kMode.a,
-            quality: Anime4kQuality.l,
-            backend: Anime4kPreviewBackend.appleMetal,
-            pipelineHash: 'pipeline-a',
+        );
+        expect(
+          base,
+          isNot(
+            const Anime4kPreviewCacheKey(
+              mode: Anime4kMode.a,
+              quality: Anime4kQuality.l,
+              backend: Anime4kPreviewBackend.appleMetal,
+              pipelineHash: 'pipeline-a',
+            ),
           ),
-        ),
-      );
-      expect(
-        base,
-        isNot(
-          const Anime4kPreviewCacheKey(
-            mode: Anime4kMode.a,
-            quality: Anime4kQuality.m,
-            backend: Anime4kPreviewBackend.mpv,
-            pipelineHash: 'pipeline-a',
+        );
+        expect(
+          base,
+          isNot(
+            const Anime4kPreviewCacheKey(
+              mode: Anime4kMode.a,
+              quality: Anime4kQuality.m,
+              backend: Anime4kPreviewBackend.mpv,
+              pipelineHash: 'pipeline-a',
+            ),
           ),
-        ),
-      );
-      expect(
-        base,
-        isNot(
-          const Anime4kPreviewCacheKey(
-            mode: Anime4kMode.a,
-            quality: Anime4kQuality.m,
-            backend: Anime4kPreviewBackend.appleMetal,
-            pipelineHash: 'pipeline-b',
+        );
+        expect(
+          base,
+          isNot(
+            const Anime4kPreviewCacheKey(
+              mode: Anime4kMode.a,
+              quality: Anime4kQuality.m,
+              backend: Anime4kPreviewBackend.appleMetal,
+              pipelineHash: 'pipeline-b',
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
 
     test('preview never rasterizes an external video texture through Flutter', () {
       final source = File(
@@ -98,7 +101,10 @@ void main() {
       expect(fallbackPath, contains('captureFile.path'));
       expect(fallbackPath, contains("'window'"));
       expect(fallbackPath, contains('_metalPreviewCache.store(key, bytes)'));
-      expect(fallbackPath, contains('await _disposeSpecificPreviewPlayer(player)'));
+      expect(
+        fallbackPath,
+        contains('await _disposeSpecificPreviewPlayer(player)'),
+      );
       expect(fallbackPath, isNot(contains("setProperty('loop-file', 'inf')")));
     });
 
