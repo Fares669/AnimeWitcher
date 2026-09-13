@@ -78,6 +78,44 @@ void main() {
       expect(nonSdrGuard, lessThan(baseApply));
     });
 
+    test('saved Anime4K waits for settings and native playback readiness', () {
+      final controller = File(
+        'lib/features/player/presentation/player_controller.dart',
+      ).readAsStringSync();
+
+      final settingsWait = controller.indexOf('playerSettingsProvider.future');
+      final playbackWait = controller.indexOf(
+        '_waitForAnime4kPlaybackReadiness',
+      );
+      final rendererRead = controller.indexOf("getProperty('current-vo')");
+      final widthRead = controller.indexOf("getProperty('width')");
+      final heightRead = controller.indexOf("getProperty('height')");
+      final sessionGuard = controller.indexOf('sourceSessionId');
+      final baseApply = controller.indexOf('await super.applyAnime4kShaders()');
+
+      expect(
+        settingsWait,
+        greaterThanOrEqualTo(0),
+        reason:
+            'Initial episode open must await the persisted settings instead of '
+            'treating AsyncLoading as Anime4K disabled.',
+      );
+      expect(
+        playbackWait,
+        greaterThanOrEqualTo(0),
+        reason:
+            'Initial episode open must wait for mpv renderer/video readiness '
+            'instead of permanently giving up on the first startup race.',
+      );
+      expect(rendererRead, greaterThanOrEqualTo(0));
+      expect(widthRead, greaterThanOrEqualTo(0));
+      expect(heightRead, greaterThanOrEqualTo(0));
+      expect(sessionGuard, greaterThanOrEqualTo(0));
+      expect(baseApply, greaterThanOrEqualTo(0));
+      expect(settingsWait, lessThan(baseApply));
+      expect(playbackWait, lessThan(baseApply));
+    });
+
     test('HDR and unresolved metadata fail closed through exact mpv fallback', () {
       final controller = File(
         'lib/features/player/presentation/player_controller.dart',
