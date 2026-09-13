@@ -1,5 +1,6 @@
 name: iOS Preview One Shot
 
+# Kept during AKP-15/17/18 physical validation; remove only during AKP-19 cleanup.
 on:
   workflow_dispatch:
   push:
