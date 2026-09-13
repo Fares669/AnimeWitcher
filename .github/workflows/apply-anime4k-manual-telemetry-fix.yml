@@ -1,0 +1,91 @@
+name: Apply Anime4K manual telemetry fix
+
+on:
+  push:
+    branches:
+      - feat/anime4k-ios-performance
+    paths:
+      - .github/workflows/apply-anime4k-manual-telemetry-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/anime4k-ios-performance
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Confirm focused RED
+        shell: bash
+        run: |
+          set +e
+          flutter test test/features/player/anime4k_manual_telemetry_sampling_test.dart > /tmp/red.log 2>&1
+          status=$?
+          cat /tmp/red.log
+          if [ "$status" -eq 0 ]; then
+            echo "Focused regression unexpectedly passed before production fix" >&2
+            exit 1
+          fi
+          grep -q "Manual Metal/MetalFX benchmark segments need fresh telemetry too" /tmp/red.log || {
+            echo "RED failed for an unexpected reason" >&2
+            exit 1
+          }
+      - name: Apply minimal production fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('lib/features/player/presentation/player_controller.dart')
+          source = path.read_text()
+
+          old_timer = '''      if (settings.anime4kEcoEnabled) {
+            _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+              unawaited(_sampleAnime4kEco());
+            });
+          } else {
+            _anime4kEcoTimer?.cancel();
+            _anime4kEcoTimer = null;
+          }
+'''
+          new_timer = '''      _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+        unawaited(_sampleAnime4kEco());
+      });
+'''
+          if source.count(old_timer) != 1:
+            raise SystemExit(f'expected one timer gate, found {source.count(old_timer)}')
+          source = source.replace(old_timer, new_timer)
+
+          old_policy = '''      _publishAnime4kPerformanceSnapshot(decision.snapshot);
+
+      if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {
+'''
+          new_policy = '''      _publishAnime4kPerformanceSnapshot(decision.snapshot);
+
+      // Manual Metal and MetalFX benchmark runs still need fresh telemetry,
+      // but only Eco may adapt quality or native bypass state.
+      if (!settings.anime4kEcoEnabled) return;
+
+      if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {
+'''
+          if source.count(old_policy) != 1:
+            raise SystemExit(f'expected one policy boundary, found {source.count(old_policy)}')
+          source = source.replace(old_policy, new_policy)
+          path.write_text(source)
+      - name: Run focused GREEN
+        run: flutter test test/features/player/anime4k_manual_telemetry_sampling_test.dart test/features/player/anime4k_performance_log_contract_test.dart test/features/player/anime4k_eco_controller_wiring_test.dart
+      - name: Commit production fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/features/player/presentation/player_controller.dart
+          git commit -m "fix: sample manual Anime4K telemetry periodically"
+          git push origin HEAD:feat/anime4k-ios-performance
