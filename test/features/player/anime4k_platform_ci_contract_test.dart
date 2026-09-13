@@ -25,7 +25,7 @@ void main() {
       expect(
         evidenceFile.existsSync(),
         isTrue,
-        reason: 'AKP-18 requires a checked-in physical-device evidence template.',
+        reason: 'Final review requires a checked-in physical-device evidence template.',
       );
 
       final evidence = evidenceFile.readAsStringSync();
@@ -42,7 +42,6 @@ void main() {
         'Low Power Mode',
         'SDR',
         'HDR',
-        'MetalFX',
         'PENDING',
       ]) {
         expect(
@@ -52,10 +51,33 @@ void main() {
         );
       }
 
+      expect(evidence, contains('Retired experiments'));
+      expect(evidence, contains('Eco/Auto'));
+      expect(evidence, contains('MetalFX'));
+      expect(evidence, isNot(contains('segmentStart')));
+      expect(evidence, isNot(contains('segmentEnd')));
       expect(
         evidence,
         contains('Do not claim performance completion'),
         reason: 'The template must fail closed until real device evidence exists.',
+      );
+    });
+
+    test('source-of-truth plan matches the simplified shipping scope', () {
+      final plan = File('ANIME4K_PERFORMANCE_PLAN.md').readAsStringSync();
+
+      expect(plan, contains('Retired from shipping scope'));
+      expect(plan, contains('Eco/Auto'));
+      expect(plan, contains('MetalFX'));
+      expect(plan, contains('Performance log'));
+      expect(plan, isNot(contains('Expose a persisted experimental MetalFX toggle')));
+      expect(plan, isNot(contains('Apple Eco/Auto is a separate Apple-only mode')));
+    });
+
+    test('temporary one-shot preview workflow is removed before main merge', () {
+      expect(
+        File('.github/workflows/ios-preview-once.yml').existsSync(),
+        isFalse,
       );
     });
   });
