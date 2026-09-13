@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 path = Path('lib/features/player/presentation/widgets/anime4k_sample_preview.dart')
 text = path.read_text()
@@ -203,6 +202,20 @@ live_end = text.find('                              if (!_ready)', live_start)
 if live_end < 0:
     raise SystemExit('preview loading marker changed')
 text = text[:live_start] + text[live_end:]
+
+# The processed-image collection item previously flowed directly into `else if`.
+# Once that external-Texture branch is removed it needs its own trailing comma.
+standalone_image_marker = (
+    '                                )\n'
+    '                              if (!_ready)'
+)
+if standalone_image_marker not in text:
+    raise SystemExit('processed preview collection marker changed')
+text = text.replace(
+    standalone_image_marker,
+    '                                ),\n                              if (!_ready)',
+    1,
+)
 
 for forbidden in [
     'RenderRepaintBoundary',
