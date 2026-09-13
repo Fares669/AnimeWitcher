@@ -46,36 +46,36 @@ jobs:
 
           path = Path('lib/features/player/presentation/player_controller.dart')
           source = path.read_text()
-
-          old_timer = """      if (settings.anime4kEcoEnabled) {
-            _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
-              unawaited(_sampleAnime4kEco());
-            });
-          } else {
-            _anime4kEcoTimer?.cancel();
-            _anime4kEcoTimer = null;
-          }
-"""
-          new_timer = """      _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
-        unawaited(_sampleAnime4kEco());
-      });
-"""
+          old_timer = (
+              "      if (settings.anime4kEcoEnabled) {\n"
+              "        _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {\n"
+              "          unawaited(_sampleAnime4kEco());\n"
+              "        });\n"
+              "      } else {\n"
+              "        _anime4kEcoTimer?.cancel();\n"
+              "        _anime4kEcoTimer = null;\n"
+              "      }\n"
+          )
+          new_timer = (
+              "      _anime4kEcoTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {\n"
+              "        unawaited(_sampleAnime4kEco());\n"
+              "      });\n"
+          )
           if source.count(old_timer) != 1:
               raise SystemExit(f'expected one timer gate, found {source.count(old_timer)}')
           source = source.replace(old_timer, new_timer)
 
-          old_policy = """      _publishAnime4kPerformanceSnapshot(decision.snapshot);
-
-      if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {
-"""
-          new_policy = """      _publishAnime4kPerformanceSnapshot(decision.snapshot);
-
-      // Manual Metal and MetalFX benchmark runs still need fresh telemetry,
-      // but only Eco may adapt quality or native bypass state.
-      if (!settings.anime4kEcoEnabled) return;
-
-      if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {
-"""
+          old_policy = (
+              "      _publishAnime4kPerformanceSnapshot(decision.snapshot);\n\n"
+              "      if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {\n"
+          )
+          new_policy = (
+              "      _publishAnime4kPerformanceSnapshot(decision.snapshot);\n\n"
+              "      // Manual Metal and MetalFX benchmark runs still need fresh telemetry,\n"
+              "      // but only Eco may adapt quality or native bypass state.\n"
+              "      if (!settings.anime4kEcoEnabled) return;\n\n"
+              "      if (decision.plan.effectiveQuality != _anime4kEcoEffectiveQuality) {\n"
+          )
           if source.count(old_policy) != 1:
               raise SystemExit(f'expected one policy boundary, found {source.count(old_policy)}')
           source = source.replace(old_policy, new_policy)
