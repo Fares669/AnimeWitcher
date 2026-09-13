@@ -68,10 +68,8 @@ jobs:
           swiftc \
             -framework CoreVideo \
             -framework Metal \
-            -framework MetalFX \
             native/anime4k_metal/Anime4KMetalShader.swift \
             native/anime4k_metal/Anime4KMetalTelemetry.swift \
-            native/anime4k_metal/Anime4KMetalFXScaler.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMetalRuntimeTelemetryIntegrationTests.swift \
             -o /tmp/anime4k_metal_runtime_telemetry_tests
@@ -85,10 +83,8 @@ jobs:
             -framework CoreImage \
             -framework CoreVideo \
             -framework Metal \
-            -framework MetalFX \
             native/anime4k_metal/Anime4KMetalShader.swift \
             native/anime4k_metal/Anime4KMetalTelemetry.swift \
-            native/anime4k_metal/Anime4KMetalFXScaler.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMediaKitBridge.swift \
             native/anime4k_metal/Anime4KMetalCAPI.swift \
@@ -108,10 +104,8 @@ jobs:
           swiftc \
             -framework CoreVideo \
             -framework Metal \
-            -framework MetalFX \
             native/anime4k_metal/Anime4KMetalShader.swift \
             native/anime4k_metal/Anime4KMetalTelemetry.swift \
-            native/anime4k_metal/Anime4KMetalFXScaler.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMediaKitBridge.swift \
             native/anime4k_metal/Anime4KMetalRuntimeTests.swift \
@@ -129,10 +123,8 @@ jobs:
           swiftc \
             -framework CoreVideo \
             -framework Metal \
-            -framework MetalFX \
             native/anime4k_metal/Anime4KMetalShader.swift \
             native/anime4k_metal/Anime4KMetalTelemetry.swift \
-            native/anime4k_metal/Anime4KMetalFXScaler.swift \
             native/anime4k_metal/Anime4KMetalRuntime.swift \
             native/anime4k_metal/Anime4KMediaKitBridge.swift \
             native/anime4k_metal/Anime4KMediaKitBridgeTests.swift \
@@ -169,7 +161,6 @@ jobs:
             animewitcher_anime4k_metal_process_preview \
             animewitcher_anime4k_metal_status \
             animewitcher_anime4k_metal_telemetry \
-            animewitcher_anime4k_metal_set_bypass \
             animewitcher_anime4k_metal_disable; do
             grep -Eq "[[:space:]]_${symbol}$" /tmp/anime4k-ios-symbols.txt || {
               echo "missing retained Anime4K C ABI symbol: $symbol" >&2
@@ -210,7 +201,6 @@ jobs:
             animewitcher_anime4k_metal_process_preview \
             animewitcher_anime4k_metal_status \
             animewitcher_anime4k_metal_telemetry \
-            animewitcher_anime4k_metal_set_bypass \
             animewitcher_anime4k_metal_disable; do
             grep -Eq "[[:space:]]_${symbol}$" /tmp/anime4k-macos-symbols.txt || {
               echo "missing retained Anime4K C ABI symbol: $symbol" >&2
