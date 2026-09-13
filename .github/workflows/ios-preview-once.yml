@@ -1,7 +1,6 @@
 name: iOS Preview One Shot
 
-# Kept during AKP-15/17/18 physical validation; remove only during AKP-19 cleanup.
-# Rebuild after manual-Metal telemetry fix so physical benchmarks capture live samples.
+# One-shot unsigned iOS build used to validate the current Apple Anime4K path.
 on:
   workflow_dispatch:
   push:
@@ -73,7 +72,6 @@ jobs:
             animewitcher_anime4k_metal_process_preview \
             animewitcher_anime4k_metal_status \
             animewitcher_anime4k_metal_telemetry \
-            animewitcher_anime4k_metal_set_bypass \
             animewitcher_anime4k_metal_disable; do
             grep -Eq "[[:space:]]_${symbol}$" /tmp/anime4k-preview-symbols.txt || {
               echo "missing retained Anime4K C ABI symbol: $symbol" >&2
