@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "target": {
+    "mpv_tag": "v0.41.0",
+    "mpv_commit": "41f6a645068483470267271e1d09966ca3b9f413"
+  },
+  "builder": {
+    "repository": "mpv-android/mpv-android",
+    "ref": "2025-12-27",
+    "commit": "6deb01cee00e347c8e72fc57dd61fbb43916a528",
+    "license": "MIT",
+    "ndk": "r29"
+  },
+  "source_pins": {
+    "dav1d": "bf82cfa74e5f609220a0692ecb9e7ace33d353f1",
+    "ffmpeg": "d60c1d72c1299e683c1d2f86cb4332b4d88348a5",
+    "libass": "cbb743215bad0fe202477e569fe8005545258ccd",
+    "libplacebo": "bc90ef94944a3dcaab324b86d3e3769ad1d8698b"
+  },
+  "build_policy": {
+    "ffmpeg_linkage": "static",
+    "ffmpeg_gpl": false,
+    "mpv_gpl": false,
+    "libplacebo_required": true,
+    "vulkan": false,
+    "media_kit_java_vm_bridge": "mpv_lavc_set_java_vm"
+  },
+  "media_kit_base": {
+    "repository": "media-kit/libmpv-android-video-build",
+    "release": "v1.1.7",
+    "purpose": "Preserve the media_kit Android helper and JAR layout while replacing libmpv.so",
+    "jars": {
+      "arm64-v8a": {
+        "name": "default-arm64-v8a.jar",
+        "sha256": "4363dfa5d3d415b91c1f16f6fb90c3fe59a77dfd3f9b824d2b24b492d6b09df9"
+      },
+      "armeabi-v7a": {
+        "name": "default-armeabi-v7a.jar",
+        "sha256": "8ead114fc5a43348d89dc0eb8f41823e549b15115c29f73ee26973f973620995"
+      },
+      "x86": {
+        "name": "default-x86.jar",
+        "sha256": "94c13cb6188b774710e5e487afff6e500c4af504df74b2494d7b12cf9be8a66a"
+      },
+      "x86_64": {
+        "name": "default-x86_64.jar",
+        "sha256": "90268cd15f0766e07fb8e427388c621161177c9eb343c544f327bd63232bb236"
+      }
+    }
+  }
+}
