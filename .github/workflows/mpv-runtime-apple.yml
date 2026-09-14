@@ -6,7 +6,10 @@ on:
     paths:
       - '.github/workflows/mpv-runtime-apple.yml'
       - 'scripts/mpv_runtime/**'
+      - 'scripts/prepare_media_kit_ios_headers.sh'
       - 'third_party/mpv/**'
+      - 'ios/Podfile'
+      - 'macos/Podfile'
       - 'MPV_UPGRADE_PLAN.md'
   workflow_dispatch:
 
@@ -146,6 +149,60 @@ jobs:
           path: ${{ runner.temp }}/mpv-apple-${{ matrix.platform }}
           if-no-files-found: error
           retention-days: 7
+
+  verify-app-integration:
+    name: Verify app with mpv 0.41 ${{ matrix.platform }}
+    needs: build-runtime
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, macos]
+    steps:
+      - name: Checkout AnimeWitcher
+        uses: actions/checkout@v6
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: |
+          if [[ '${{ matrix.platform }}' == macos ]]; then
+            flutter config --enable-macos-desktop
+          fi
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Prepare pinned runtime and matching headers
+        run: |
+          bash scripts/mpv_runtime/prepare_apple_runtime.sh '${{ matrix.platform }}'
+          bash scripts/prepare_media_kit_ios_headers.sh '${{ matrix.platform }}'
+          bash scripts/mpv_runtime/verify_apple_runtime.sh '${{ matrix.platform }}'
+
+      - name: Build unsigned iOS application
+        if: matrix.platform == 'ios'
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Build unsigned macOS application
+        if: matrix.platform == 'macos'
+        run: |
+          flutter build macos --release \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify extracted runtime after CocoaPods
+        run: bash scripts/mpv_runtime/verify_apple_runtime.sh '${{ matrix.platform }}' --require-extracted
+
+      - name: Re-run Anime4K patch regressions
+        run: |
+          ruby scripts/test_anime4k_media_kit_patch.rb
+          ruby scripts/test_anime4k_mpv_pacing_patch.rb
 
   publish-runtime:
     name: Publish verified Apple runtime candidates
