@@ -226,7 +226,9 @@ jobs:
           set -euxo pipefail
           tag="mpv-v0.41.0-windows-animewitcher-${HEAD_SHA:0:12}"
           dll="$(find candidate -type f -name 'libmpv-2.dll' -print -quit)"
+          checksum="$(find candidate -type f -name 'libmpv-2.dll.sha256' -print -quit)"
           test -n "$dll"
+          test -n "$checksum"
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" \
               --repo "$GITHUB_REPOSITORY" \
@@ -235,5 +237,8 @@ jobs:
               --title "mpv v0.41.0 Windows runtime ${HEAD_SHA:0:12}" \
               --notes "Verified AnimeWitcher Windows x64 libmpv v0.41.0 runtime. Exact source pins are recorded by the mpv Windows workflow."
           fi
-          gh release upload "$tag" "$dll#libmpv-2.dll" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$tag" \
+            "$dll#libmpv-2.dll" \
+            "$checksum#libmpv-2.dll.sha256" \
+            --repo "$GITHUB_REPOSITORY" --clobber
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,url
