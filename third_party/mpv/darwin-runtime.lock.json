@@ -21,7 +21,7 @@
     "gpu_next_deferred_to_task_7": true
   },
   "targets": {
-    "ios": "mk-out-xcframeworks-ios-universal-video-default",
-    "macos": "mk-out-xcframeworks-macos-universal-video-default"
+    "ios": "mk-out-archive-xcframeworks-ios-universal-video-default",
+    "macos": "mk-out-archive-xcframeworks-macos-universal-video-default"
   }
 }

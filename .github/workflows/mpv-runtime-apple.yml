@@ -91,7 +91,7 @@ jobs:
         working-directory: _build/darwin-builder
         env:
           XCODE_PATH: ${{ steps.xcode.outputs.path }}
-          TARGET: mk-out-xcframeworks-${{ matrix.platform }}-universal-video-default
+          TARGET: mk-out-archive-xcframeworks-${{ matrix.platform }}-universal-video-default
         run: |
           set -euxo pipefail
           nix develop -c make \
@@ -103,11 +103,15 @@ jobs:
         working-directory: _build/darwin-builder
         run: |
           set -euxo pipefail
+          runtime_archive="$(find result -maxdepth 1 -type f -name 'libmpv-xcframeworks_*.tar.gz' -print -quit)"
           mpv_zip="$(find result -maxdepth 1 -type f -name '*_Mpv.zip' -print -quit)"
+          test -n "$runtime_archive"
           test -n "$mpv_zip"
           mkdir -p "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}"
+          cp "$runtime_archive" "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/"
           cp "$mpv_zip" "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/"
           cp "$GITHUB_WORKSPACE/third_party/mpv/v0.41.0/client.h" "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/client.h"
+          shasum -a 256 "$runtime_archive" | tee "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/runtime.tar.gz.sha256"
           shasum -a 256 "$mpv_zip" | tee "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/Mpv.zip.sha256"
           printf '%s\n' \
             "mpv=v0.41.0" \
