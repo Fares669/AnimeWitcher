@@ -1,0 +1,127 @@
+name: mpv Apple Runtime
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/mpv-runtime-apple.yml'
+      - 'scripts/mpv_runtime/**'
+      - 'third_party/mpv/**'
+      - 'MPV_UPGRADE_PLAN.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mpv-apple-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MPV_COMMIT: 41f6a645068483470267271e1d09966ca3b9f413
+  FFMPEG_COMMIT: d60c1d72c1299e683c1d2f86cb4332b4d88348a5
+  BUILDER_COMMIT: b4e3ce98826cd4a28f6121b29f56ea203346e6e3
+
+jobs:
+  build-runtime:
+    name: Build mpv 0.41 ${{ matrix.platform }} runtime
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, macos]
+
+    steps:
+      - name: Checkout AnimeWitcher
+        uses: actions/checkout@v6
+
+      - name: Checkout pinned media_kit Darwin builder
+        uses: actions/checkout@v6
+        with:
+          repository: media-kit/libmpv-darwin-build
+          ref: ${{ env.BUILDER_COMMIT }}
+          path: _build/darwin-builder
+          fetch-depth: 1
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          extra-conf: |
+            sandbox = true
+            sandbox-fallback = false
+
+      - name: Enable Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+        with:
+          use-flakehub: false
+
+      - name: Hash exact upstream source archives
+        id: sources
+        run: |
+          set -euxo pipefail
+          curl --fail --location --retry 4 \
+            "https://github.com/mpv-player/mpv/archive/${MPV_COMMIT}.tar.gz" \
+            --output "$RUNNER_TEMP/mpv.tar.gz"
+          curl --fail --location --retry 4 \
+            "https://github.com/FFmpeg/FFmpeg/archive/${FFMPEG_COMMIT}.tar.gz" \
+            --output "$RUNNER_TEMP/ffmpeg.tar.gz"
+          echo "mpv_sha256=$(shasum -a 256 "$RUNNER_TEMP/mpv.tar.gz" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "ffmpeg_sha256=$(shasum -a 256 "$RUNNER_TEMP/ffmpeg.tar.gz" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare pinned Darwin builder
+        run: |
+          set -euxo pipefail
+          python3 scripts/mpv_runtime/prepare_darwin_builder.py \
+            --builder _build/darwin-builder \
+            --lock third_party/mpv/darwin-runtime.lock.json \
+            --mpv-sha256 '${{ steps.sources.outputs.mpv_sha256 }}' \
+            --ffmpeg-sha256 '${{ steps.sources.outputs.ffmpeg_sha256 }}'
+          grep -F "$MPV_COMMIT" _build/darwin-builder/packages.lock.nix
+          grep -F "$FFMPEG_COMMIT" _build/darwin-builder/packages.lock.nix
+
+      - name: Select Xcode
+        id: xcode
+        run: |
+          set -euxo pipefail
+          XCODE_PATH="$(realpath /Applications/Xcode_16.1.0.app)"
+          "$XCODE_PATH/Contents/Developer/usr/bin/xcodebuild" -version
+          echo "path=$XCODE_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Build exact mpv 0.41 XCFramework set
+        working-directory: _build/darwin-builder
+        env:
+          XCODE_PATH: ${{ steps.xcode.outputs.path }}
+          TARGET: mk-out-xcframeworks-${{ matrix.platform }}-universal-video-default
+        run: |
+          set -euxo pipefail
+          nix develop -c make \
+            XCODE_PATH="$XCODE_PATH" \
+            VERSION=v0.41.0-animewitcher \
+            TARGET="$TARGET"
+
+      - name: Verify mpv artifact exists
+        working-directory: _build/darwin-builder
+        run: |
+          set -euxo pipefail
+          mpv_zip="$(find result -maxdepth 1 -type f -name '*_Mpv.zip' -print -quit)"
+          test -n "$mpv_zip"
+          mkdir -p "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}"
+          cp "$mpv_zip" "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/"
+          cp "$GITHUB_WORKSPACE/third_party/mpv/v0.41.0/client.h" "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/client.h"
+          shasum -a 256 "$mpv_zip" | tee "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/Mpv.zip.sha256"
+          printf '%s\n' \
+            "mpv=v0.41.0" \
+            "mpv_commit=$MPV_COMMIT" \
+            "ffmpeg_commit=$FFMPEG_COMMIT" \
+            "builder_commit=$BUILDER_COMMIT" \
+            "platform=${{ matrix.platform }}" \
+            "gpl=false" > "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/provenance.txt"
+
+      - name: Upload verified candidate
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mpv-v0.41.0-apple-${{ matrix.platform }}
+          path: ${{ runner.temp }}/mpv-apple-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 7
