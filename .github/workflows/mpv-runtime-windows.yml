@@ -63,6 +63,24 @@ jobs:
           python3 -m pip install --break-system-packages "meson==${MESON_VERSION}"
           test "$(meson --version)" = "$MESON_VERSION"
 
+      - name: Pin cppwinrt Windows metadata source
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('toolchain/cppwinrt.cmake')
+          text = path.read_text()
+          old = 'https://github.com/microsoft/windows-rs/raw/master/crates/libs/bindgen/default/Windows.winmd'
+          new = 'https://raw.githubusercontent.com/microsoft/windows-rs/af7b0b6a165fde6166f00a5892f1910d4ccd6433/crates/libs/default/Windows.winmd'
+          if text.count(old) != 1:
+              raise SystemExit('cppwinrt metadata URL layout changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          grep -F 'af7b0b6a165fde6166f00a5892f1910d4ccd6433/crates/libs/default/Windows.winmd' toolchain/cppwinrt.cmake
+          ! grep -F 'raw/master' toolchain/cppwinrt.cmake
+
       - name: Pin mpv source to exact 0.41.0 commit
         working-directory: _build/win-builder
         run: |

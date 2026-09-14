@@ -27,7 +27,7 @@
   - Machine-readable `third_party/mpv/integration.json` records target/header/media_kit/platform provenance.
   - Deterministic verifier and CI tests reject version/renderer/status drift.
   - Contract declares `renderer.primary = gpu-next` and `renderer.fallback = gpu`.
-  - Audited baselines: Darwin `v0.7.2 -> mpv v0.36.0`; Android `v1.1.7 -> mpv 78d43740...`; Windows `20241021 -> mpv 0f785845...`.
+  - Audited baselines: Darwin `v0.6.0 -> mpv v0.36.0`; Android `v1.1.7 -> mpv 78d43740...`; Windows `20241021 -> mpv 0f785845...`.
 
 - [x] **MPV-02 — Exact mpv v0.41.0 target headers**
   - Vendored the exact four upstream libmpv v0.41.0 headers and verify immutable Git blob SHAs in CI.

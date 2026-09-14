@@ -31,18 +31,18 @@
     "macos": "mk-out-archive-xcframeworks-macos-universal-video-default"
   },
   "release": {
-    "tag": "mpv-v0.41.0-animewitcher-55e07927c869",
-    "source_head": "55e07927c869ac957c6f6ee297af9a66e41eb33c"
+    "tag": "mpv-v0.41.0-animewitcher-60833ea2a7db",
+    "source_head": "60833ea2a7db7a76fe841bcf26e34716a183b2d0"
   },
   "artifacts": {
     "ios": {
-      "overlay_version": "v0.41.0-animewitcher.55e07927c869",
-      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-animewitcher-55e07927c869/libmpv-xcframeworks_v0.41.0-animewitcher_ios-universal-video-default.tar.gz",
-      "sha256": "940178710f6cb1f0414db679d2793eeb4d7fd5d3a597412663edad18368c64fd"
+      "overlay_version": "v0.41.0-animewitcher.60833ea2a7db",
+      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-animewitcher-60833ea2a7db/libmpv-xcframeworks_v0.41.0-animewitcher_ios-universal-video-default.tar.gz",
+      "sha256": "88fc14516fdb87bfa27b14916043388630cfd6a8d9855d8e42e31c78003c0fd5"
     },
     "macos": {
-      "overlay_version": "v0.41.0-animewitcher.55e07927c869",
-      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-animewitcher-55e07927c869/libmpv-xcframeworks_v0.41.0-animewitcher_macos-universal-video-default.tar.gz",
+      "overlay_version": "v0.41.0-animewitcher.60833ea2a7db",
+      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-animewitcher-60833ea2a7db/libmpv-xcframeworks_v0.41.0-animewitcher_macos-universal-video-default.tar.gz",
       "sha256": "613284194da74cb44600270fa238f87a52c1a37d5bad7def6b7912b10fc5b18f"
     }
   }

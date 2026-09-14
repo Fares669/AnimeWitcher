@@ -5,9 +5,9 @@ AnimeWitcher targets mpv `v0.41.0` with explicit `gpu-next` as the normal render
 ## ios
 
 - Current package boundary: `media_kit_libs_ios_video`.
-- Current runtime source: `media-kit/libmpv-darwin-build` release `v0.7.2`.
+- Current runtime source: `media-kit/libmpv-darwin-build` release `v0.6.0`.
 - Current underlying mpv: `v0.36.0`.
-- Evidence: media_kit's iOS video Makefile downloads `libmpv-xcframeworks_v0.7.2_ios-universal-video-default.tar.gz` and verifies its SHA-256; the current `libmpv-darwin-build` dependency lock still pins mpv `0.36.0`.
+- Evidence: media_kit's iOS video Makefile downloads `libmpv-xcframeworks_v0.6.0_ios-universal-video-default.tar.gz` and verifies its SHA-256; the current `libmpv-darwin-build` dependency lock still pins mpv `0.36.0`.
 - Replacement strategy: `runtime-overlay` at the resolved `media_kit_libs_ios_video/ios/Makefile` archive URL/checksum boundary.
 - Target: an immutable iOS XCFramework archive built from mpv `v0.41.0`, verified before CocoaPods consumes it, followed atomically by activation of the vendored v0.41.0 libmpv headers.
 - Reason for not forking media_kit: its Dart/native API can stay unchanged; only the native binary source needs replacement.
@@ -15,9 +15,9 @@ AnimeWitcher targets mpv `v0.41.0` with explicit `gpu-next` as the normal render
 ## macos
 
 - Current package boundary: `media_kit_libs_macos_video`.
-- Current runtime source: `media-kit/libmpv-darwin-build` release `v0.7.2`.
+- Current runtime source: `media-kit/libmpv-darwin-build` release `v0.6.0`.
 - Current underlying mpv: `v0.36.0`.
-- Evidence: media_kit's macOS video Makefile downloads the v0.7.2 universal video XCFramework and verifies its SHA-256; the Darwin build lock pins mpv `0.36.0`.
+- Evidence: media_kit's macOS video Makefile downloads the v0.6.0 universal video XCFramework and verifies its SHA-256; the Darwin build lock pins mpv `0.36.0`.
 - Replacement strategy: `runtime-overlay` at the resolved `media_kit_libs_macos_video/macos/Makefile` archive URL/checksum boundary.
 - Target: an immutable macOS XCFramework archive built from mpv `v0.41.0`, with matching v0.41.0 headers and the existing Anime4K/media_kit patch contract preserved.
 

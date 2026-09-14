@@ -95,7 +95,12 @@ jobs:
         run: |
           set -euxo pipefail
           tag="mpv-v0.41.0-android-animewitcher-${HEAD_SHA:0:12}"
-          mapfile -t assets < <(find candidates -type f -name 'com.alexmercerind.media_kit_libs_android_video-default-*.jar' | sort)
+          assets=()
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            mapfile -t matches < <(find candidates -type f -name "default-${abi}.jar" | sort)
+            test "${#matches[@]}" -eq 1
+            assets+=( "${matches[0]}" )
+          done
           test "${#assets[@]}" -eq 4
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" \

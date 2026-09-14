@@ -12,7 +12,7 @@ under `include/mpv/`.
 
 These are **target headers only** until the Apple runtime is upgraded.
 The current Apple media-kit runtime still comes from
-`libmpv-darwin-build v0.7.2` / mpv `v0.36.0`, so the build must keep
+`libmpv-darwin-build v0.6.0` / mpv `v0.36.0`, so the build must keep
 using the existing v0.36 headers until runtime/header alignment is
 switched atomically in MPV-04.
 

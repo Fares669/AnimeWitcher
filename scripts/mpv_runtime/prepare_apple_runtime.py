@@ -17,14 +17,14 @@ PLATFORM_SPECS = {
     "ios": {
         "package": "media_kit_libs_ios_video",
         "package_version": "1.1.4",
-        "upstream_runtime": "v0.7.2",
-        "upstream_sha256": "a0dbcddc0eaefa5534eb2bdc797e5386b1e0cd4057ed8f73aa2dd6105503dffb",
+        "upstream_runtime": "v0.6.0",
+        "upstream_sha256": "a95bc18508af26136b8a408341c05b5585d644ec013f00ac07db09d2e28d36ae",
     },
     "macos": {
         "package": "media_kit_libs_macos_video",
         "package_version": "1.1.4",
-        "upstream_runtime": "v0.7.2",
-        "upstream_sha256": "dd9928fff9c97329e17f69fe8ef0d621cf458f9f70847955f84b4eb1e9047b09",
+        "upstream_runtime": "v0.6.0",
+        "upstream_sha256": "84d2ad98e046e82c6dc34d8547d76c2afeaee89c0f53032773be8985c95536d6",
     },
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

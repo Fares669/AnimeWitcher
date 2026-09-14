@@ -43,13 +43,13 @@ def valid_manifest():
         "platforms": {
             "ios": {
                 "runtime_source": "libmpv-darwin-build",
-                "runtime_ref": "v0.7.2",
+                "runtime_ref": "v0.6.0",
                 "actual_mpv": "v0.36.0",
                 "status": "pending",
             },
             "macos": {
                 "runtime_source": "libmpv-darwin-build",
-                "runtime_ref": "v0.7.2",
+                "runtime_ref": "v0.6.0",
                 "actual_mpv": "v0.36.0",
                 "status": "pending",
             },

@@ -20,23 +20,23 @@
   "platforms": {
     "ios": {
       "runtime_source": "libmpv-darwin-build",
-      "runtime_ref": "v0.7.2",
+      "runtime_ref": "v0.6.0",
       "actual_mpv": "v0.36.0",
       "target_mpv": "v0.41.0",
       "status": "pending",
       "replacement_strategy": "runtime-overlay",
       "replacement_boundary": "media_kit_libs_ios_video/ios/Makefile XCFramework archive URL + SHA256",
-      "provenance_url": "https://github.com/media-kit/media-kit/blob/c533e446755f51cf53c7e57aea873f2aa5355f81/libs/ios/media_kit_libs_ios_video/ios/Makefile"
+      "provenance_url": "https://github.com/media-kit/media-kit/blob/a7f622e9f41026c02fae138450e411144614b60d/libs/ios/media_kit_libs_ios_video/ios/Makefile"
     },
     "macos": {
       "runtime_source": "libmpv-darwin-build",
-      "runtime_ref": "v0.7.2",
+      "runtime_ref": "v0.6.0",
       "actual_mpv": "v0.36.0",
       "target_mpv": "v0.41.0",
       "status": "pending",
       "replacement_strategy": "runtime-overlay",
       "replacement_boundary": "media_kit_libs_macos_video/macos/Makefile XCFramework archive URL + SHA256",
-      "provenance_url": "https://github.com/media-kit/media-kit/blob/c533e446755f51cf53c7e57aea873f2aa5355f81/libs/macos/media_kit_libs_macos_video/macos/Makefile"
+      "provenance_url": "https://github.com/media-kit/media-kit/blob/a7f622e9f41026c02fae138450e411144614b60d/libs/macos/media_kit_libs_macos_video/macos/Makefile"
     },
     "android": {
       "runtime_source": "libmpv-android-video-build",

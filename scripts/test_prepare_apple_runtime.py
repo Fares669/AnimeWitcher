@@ -34,18 +34,18 @@ class AppleRuntimeOverlayTests(unittest.TestCase):
         spec = {
             "ios": (
                 "media_kit_libs_ios_video-1.1.4",
-                "a0dbcddc0eaefa5534eb2bdc797e5386b1e0cd4057ed8f73aa2dd6105503dffb",
+                "a95bc18508af26136b8a408341c05b5585d644ec013f00ac07db09d2e28d36ae",
             ),
             "macos": (
                 "media_kit_libs_macos_video-1.1.4",
-                "dd9928fff9c97329e17f69fe8ef0d621cf458f9f70847955f84b4eb1e9047b09",
+                "84d2ad98e046e82c6dc34d8547d76c2afeaee89c0f53032773be8985c95536d6",
             ),
         }[platform]
         package = self.pub_cache / "hosted/pub.dev" / spec[0] / platform
         package.mkdir(parents=True)
         (package / "Makefile").write_text(
             "all: Frameworks/*.xcframework\n\n"
-            "MPV_XCFRAMEWORKS_VERSION=v0.7.2\n"
+            "MPV_XCFRAMEWORKS_VERSION=v0.6.0\n"
             f"MPV_XCFRAMEWORKS_SHA256SUM={spec[1]}\n\n"
             f".cache/xcframeworks/libmpv-xcframeworks-${{MPV_XCFRAMEWORKS_VERSION}}-{platform}-universal.tar.gz:\n"
             "\tmkdir -p .cache/xcframeworks\n",
@@ -156,7 +156,7 @@ class AppleRuntimeOverlayTests(unittest.TestCase):
     def test_rejects_upstream_makefile_drift(self):
         package = self.make_package("macos")
         makefile = package / "Makefile"
-        makefile.write_text(makefile.read_text().replace("v0.7.2", "v0.8.0"), encoding="utf-8")
+        makefile.write_text(makefile.read_text().replace("v0.6.0", "v0.8.0"), encoding="utf-8")
         archive, digest = self.make_archive()
         with self.assertRaisesRegex(RuntimeError, "Makefile drift"):
             prepare_runtime(
