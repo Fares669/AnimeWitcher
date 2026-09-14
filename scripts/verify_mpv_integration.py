@@ -13,10 +13,10 @@ EXPECTED_MEDIA_KIT = {
     "media_kit_libs_video": "1.0.7",
 }
 EXPECTED_HEADERS = {
-    "client.h": "9a902859c6176f89a6b6ac5f7b33fa73d371853a",
-    "render.h": "0803ce97af8c4a23708c6b37f80c653ab3659022",
-    "render_gl.h": "5c376bd8c359801b490ca04a2f19a13812acefed",
-    "stream_cb.h": "2d055363113652caeeef61b71fed1fea4ba09b3f",
+    "client.h": "85cff63bd5d20797ca622834fd904d506d0d4fd8",
+    "render.h": "99aadeb5d837dd47a8a170ae55672cf46ec5f4c4",
+    "render_gl.h": "aa2719d5c4ebfa1ecaee469b563d138e10b1df4e",
+    "stream_cb.h": "9ae6f31a16847d9a695886a78bc1b7a2c9942a27",
 }
 EXPECTED_PLATFORMS = {"ios", "macos", "android", "windows"}
 ALLOWED_PLATFORM_STATUS = {"pending", "upgraded", "blocked"}
