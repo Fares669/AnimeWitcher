@@ -117,8 +117,8 @@ jobs:
         working-directory: _build/darwin-builder
         run: |
           set -euxo pipefail
-          runtime_archive="$(find result -maxdepth 1 -type f -name 'libmpv-xcframeworks_*.tar.gz' -print -quit)"
-          mpv_zip="$(find result -maxdepth 1 -type f -name '*_Mpv.zip' -print -quit)"
+          runtime_archive="$(find -L result -maxdepth 1 -type f -name 'libmpv-xcframeworks_*.tar.gz' -print -quit)"
+          mpv_zip="$(find -L result -maxdepth 1 -type f -name '*_Mpv.zip' -print -quit)"
           test -n "$runtime_archive"
           test -n "$mpv_zip"
           mkdir -p "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}"
