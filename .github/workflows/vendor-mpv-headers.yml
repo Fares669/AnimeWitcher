@@ -1,0 +1,89 @@
+name: Vendor mpv 0.41 headers
+
+on:
+  push:
+    branches: [feat/mpv-0.41-upgrade]
+    paths:
+      - .github/workflows/vendor-mpv-headers.yml
+
+permissions:
+  contents: write
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/mpv-0.41-upgrade
+
+      - name: Fetch and verify upstream mpv headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination='third_party/mpv/v0.41.0'
+          mkdir -p "$destination"
+          base='https://raw.githubusercontent.com/mpv-player/mpv/v0.41.0/include/mpv'
+
+          curl -fsSL "$base/client.h" -o "$destination/client.h"
+          curl -fsSL "$base/render.h" -o "$destination/render.h"
+          curl -fsSL "$base/render_gl.h" -o "$destination/render_gl.h"
+          curl -fsSL "$base/stream_cb.h" -o "$destination/stream_cb.h"
+
+          verify_blob() {
+            local file="$1"
+            local expected="$2"
+            local actual
+            actual="$(git hash-object -- "$destination/$file")"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "Unexpected mpv v0.41.0 blob for $file: $actual (expected $expected)" >&2
+              exit 1
+            fi
+          }
+
+          verify_blob client.h 85cff63bd5d20797ca622834fd904d506d0d4fd8
+          verify_blob render.h 99aadeb5d837dd47a8a170ae55672cf46ec5f4c4
+          verify_blob render_gl.h aa2719d5c4ebfa1ecaee469b563d138e10b1df4e
+          verify_blob stream_cb.h 9ae6f31a16847d9a695886a78bc1b7a2c9942a27
+
+          cat > "$destination/README.md" <<'EOF'
+          # Pinned libmpv v0.41.0 target headers
+
+          These files are exact copies from `mpv-player/mpv` tag `v0.41.0`
+          under `include/mpv/`.
+
+          | File | Upstream Git blob SHA |
+          | --- | --- |
+          | `client.h` | `85cff63bd5d20797ca622834fd904d506d0d4fd8` |
+          | `render.h` | `99aadeb5d837dd47a8a170ae55672cf46ec5f4c4` |
+          | `render_gl.h` | `aa2719d5c4ebfa1ecaee469b563d138e10b1df4e` |
+          | `stream_cb.h` | `9ae6f31a16847d9a695886a78bc1b7a2c9942a27` |
+
+          These are **target headers only** until the Apple runtime is upgraded.
+          The current Apple media-kit runtime still comes from
+          `libmpv-darwin-build v0.7.2` / mpv `v0.36.0`, so the build must keep
+          using the existing v0.36 headers until runtime/header alignment is
+          switched atomically in MPV-04.
+
+          Verify integrity with:
+
+          ```sh
+          python3 scripts/verify_mpv_integration.py --require-target-headers
+          ```
+          EOF
+
+          python3 scripts/verify_mpv_integration.py --require-target-headers
+
+      - name: Commit vendored headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add third_party/mpv/v0.41.0
+          if git diff --cached --quiet; then
+            echo 'Target headers already match upstream.'
+            exit 0
+          fi
+          git commit -m 'chore: vendor verified mpv 0.41 headers [vendor-mpv]'
+          git push origin HEAD:feat/mpv-0.41-upgrade
