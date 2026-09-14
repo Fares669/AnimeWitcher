@@ -111,19 +111,17 @@ jobs:
             -B "build_${BIT}" \
             -S "$PWD"
 
-          # The builder's force-update target assumes ExternalProject sources
-          # have already been materialized. Without this first download pass,
-          # fresh CI jobs leave detached/placeholder source dirs and `update`
-          # fails before compilation with "HEAD does not point to a branch".
-          ninja -C "build_${BIT}" download || true
-
       - name: Build exact mpv 0.41 libmpv
         working-directory: _build/win-builder
         env:
           BIT: ${{ matrix.bit }}
         run: |
           set -euxo pipefail
-          ninja -C "build_${BIT}" update
+          # This is a clean, pinned ExternalProject build. Do not run the
+          # builder-wide `download`/`update` helper targets: they include
+          # unrelated packages and force-update partially materialized git
+          # trees. Building mpv-release directly lets Ninja fetch only its
+          # declared dependency graph and keeps all source revisions immutable.
           ninja -C "build_${BIT}" mpv-release
 
       - name: Verify and stage libmpv runtime
