@@ -11,6 +11,7 @@ from mpv_runtime.prepare_darwin_builder import (
     OBSOLETE_MPV_OPTION_TOKENS,
     NEW_FFMPEG_VP9_PROGRESS_BLOCK,
     OLD_FFMPEG_VP9_PROGRESS_BLOCK,
+    prepare_libplacebo_dependency,
     prepare_patch_compatibility,
 )
 
@@ -130,12 +131,62 @@ class PrepareDarwinBuilderPatchTests(unittest.TestCase):
         temp, builder, repo, _, mpv_recipe, _, _, _ = self.make_fixture()
         self.addCleanup(temp.cleanup)
         text = mpv_recipe.read_text(encoding="utf-8")
-        mpv_recipe.write_text(
-            text.replace(OBSOLETE_MPV_OPTION_TOKENS[-1], "-Dreplacement-option=disabled"),
-            encoding="utf-8",
-        )
+        mpv_recipe.write_text(text.replace(OBSOLETE_MPV_OPTION_TOKENS[-1], "-Dreplacement-option=disabled"), encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "obsolete mpv option"):
             prepare_patch_compatibility(builder, repo)
+
+    def test_injects_pinned_minimal_libplacebo_dependency(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        builder = Path(temp.name) / "builder"
+        mpv_recipe = builder / "nix/packages/mk-pkg-mpv/default.nix"
+        mpv_recipe.parent.mkdir(parents=True)
+        mpv_recipe.write_text(
+            "  libass = callPackage ../mk-pkg-libass/default.nix { };\n"
+            "  buildInputs =\n"
+            "    [ ffmpeg ]\n",
+            encoding="utf-8",
+        )
+        lock = {
+            "source_pins": {
+                "libplacebo": {
+                    "repository": "https://github.com/haasn/libplacebo.git",
+                    "version": "6.338.2",
+                    "commit": "64c1954570f1cd57f8570a57e51fb0249b57bb90",
+                }
+            }
+        }
+        prepare_libplacebo_dependency(builder, lock)
+        package = (
+            builder / "nix/packages/mk-pkg-libplacebo/default.nix"
+        ).read_text(encoding="utf-8")
+        self.assertIn("64c1954570f1cd57f8570a57e51fb0249b57bb90", package)
+        self.assertIn("submodules = true", package)
+        self.assertIn("-Dvulkan=disabled", package)
+        self.assertIn("-Dopengl=disabled", package)
+        self.assertIn("-Ddefault_library=static", package)
+        recipe = mpv_recipe.read_text(encoding="utf-8")
+        self.assertIn("libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };", recipe)
+        self.assertIn("[ ffmpeg libplacebo ]", recipe)
+
+    def test_fails_closed_when_libplacebo_injection_boundary_drifted(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        builder = Path(temp.name) / "builder"
+        mpv_recipe = builder / "nix/packages/mk-pkg-mpv/default.nix"
+        mpv_recipe.parent.mkdir(parents=True)
+        mpv_recipe.write_text("unexpected recipe\n", encoding="utf-8")
+        lock = {
+            "source_pins": {
+                "libplacebo": {
+                    "repository": "https://github.com/haasn/libplacebo.git",
+                    "version": "6.338.2",
+                    "commit": "64c1954570f1cd57f8570a57e51fb0249b57bb90",
+                }
+            }
+        }
+        with self.assertRaisesRegex(RuntimeError, "libplacebo injection"):
+            prepare_libplacebo_dependency(builder, lock)
 
     def test_fails_closed_when_audiounit_patch_drifted(self):
         temp, builder, repo, _, _, _, old_patch, _ = self.make_fixture()

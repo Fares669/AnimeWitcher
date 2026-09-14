@@ -57,6 +57,104 @@ OBSOLETE_MPV_OPTION_TOKENS = (
     "-Dwin32-internal-pthreads=disabled",
 )
 OLD_AUDIOUNIT_PATCH_MARKER = "-    [instance setCategory:AVAudioSessionCategoryPlayback error:nil];"
+LIBPLACEBO_CALLPACKAGE_ANCHOR = "  libass = callPackage ../mk-pkg-libass/default.nix { };\n"
+LIBPLACEBO_BUILDINPUT_ANCHOR = "  buildInputs =\n    [ ffmpeg ]\n"
+
+
+def render_libplacebo_package(repository: str, commit: str, version: str) -> str:
+    return f"""{{
+  pkgs ? import ../../utils/default/pkgs.nix,
+  os ? import ../../utils/default/os.nix,
+  arch ? pkgs.callPackage ../../utils/default/arch.nix {{ }},
+}}:
+
+let
+  callPackage = pkgs.lib.callPackageWith {{ inherit pkgs os arch; }};
+  nativeFile = callPackage ../../utils/native-file/default.nix {{ }};
+  crossFile = callPackage ../../utils/cross-file/default.nix {{ }};
+  src = builtins.fetchGit {{
+    url = \"{repository}\";
+    rev = \"{commit}\";
+    submodules = true;
+  }};
+in
+
+pkgs.stdenvNoCC.mkDerivation {{
+  name = \"libplacebo-${{os}}-${{arch}}-{version}\";
+  inherit src;
+  dontUnpack = true;
+  enableParallelBuilding = true;
+  nativeBuildInputs = [
+    pkgs.meson
+    pkgs.ninja
+    pkgs.pkg-config
+    pkgs.python3
+  ];
+  configurePhase = ''
+    meson setup build $src \\
+      --native-file ${{nativeFile}} \\
+      --cross-file ${{crossFile}} \\
+      --prefix=$out \\
+      -Ddefault_library=static \\
+      -Dvulkan=disabled \\
+      -Dopengl=disabled \\
+      -Dd3d11=disabled \\
+      -Dglslang=disabled \\
+      -Dshaderc=disabled \\
+      -Dlcms=disabled \\
+      -Ddovi=disabled \\
+      -Dlibdovi=disabled \\
+      -Ddemos=false \\
+      -Dtests=false \\
+      -Dbench=false \\
+      -Dfuzz=false \\
+      -Dunwind=disabled \\
+      -Dxxhash=disabled
+  '';
+  buildPhase = ''
+    meson compile -vC build
+  '';
+  installPhase = ''
+    meson install -C build
+  '';
+}}
+"""
+
+
+def prepare_libplacebo_dependency(builder: Path, lock: dict) -> None:
+    pin = lock["source_pins"]["libplacebo"]
+    package = builder / "nix/packages/mk-pkg-libplacebo/default.nix"
+    package.parent.mkdir(parents=True, exist_ok=True)
+    package.write_text(
+        render_libplacebo_package(
+            pin["repository"],
+            pin["commit"],
+            pin["version"],
+        ),
+        encoding="utf-8",
+    )
+
+    mpv_recipe = builder / "nix/packages/mk-pkg-mpv/default.nix"
+    text = mpv_recipe.read_text(encoding="utf-8")
+    call_count = text.count(LIBPLACEBO_CALLPACKAGE_ANCHOR)
+    input_count = text.count(LIBPLACEBO_BUILDINPUT_ANCHOR)
+    if call_count != 1 or input_count != 1:
+        raise RuntimeError(
+            "Darwin mpv recipe drifted before libplacebo injection: "
+            f"call={call_count}, buildInputs={input_count}"
+        )
+    text = text.replace(
+        LIBPLACEBO_CALLPACKAGE_ANCHOR,
+        LIBPLACEBO_CALLPACKAGE_ANCHOR
+        + "  libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };\n",
+        1,
+    )
+    text = text.replace(
+        LIBPLACEBO_BUILDINPUT_ANCHOR,
+        "  buildInputs =\n    [ ffmpeg libplacebo ]\n",
+        1,
+    )
+    mpv_recipe.write_text(text, encoding="utf-8")
 
 
 def remove_obsolete_mpv_options(text: str) -> str:
@@ -166,6 +264,7 @@ def main() -> int:
 
     repo_root = Path(__file__).resolve().parents[2]
     prepare_patch_compatibility(args.builder, repo_root)
+    prepare_libplacebo_dependency(args.builder, lock)
 
     mpv_recipe = (args.builder / "nix/packages/mk-pkg-mpv/default.nix").read_text(
         encoding="utf-8"
@@ -184,6 +283,11 @@ def main() -> int:
             "Darwin builder still passes removed mpv 0.41 options: "
             + ", ".join(remaining_obsolete)
         )
+
+    if "libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };" not in mpv_recipe:
+        raise SystemExit("Darwin builder is missing the pinned libplacebo dependency")
+    if "[ ffmpeg libplacebo ]" not in mpv_recipe:
+        raise SystemExit("Darwin builder does not link the pinned libplacebo dependency")
 
     # mpv 0.41 requires libplacebo as a build dependency; it is no longer a
     # feature option. Task 4 still preserves the existing libmpv Render API.

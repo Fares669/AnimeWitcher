@@ -10,14 +10,20 @@
   },
   "source_pins": {
     "ffmpeg": "d60c1d72c1299e683c1d2f86cb4332b4d88348a5",
-    "ffmpeg_release_marker": "8.0.git"
+    "ffmpeg_release_marker": "8.0.git",
+    "libplacebo": {
+      "repository": "https://github.com/haasn/libplacebo.git",
+      "version": "6.338.2",
+      "tag": "v6.338.2",
+      "commit": "64c1954570f1cd57f8570a57e51fb0249b57bb90"
+    }
   },
   "build_policy": {
     "variant": "video",
     "flavor": "default",
     "mpv_gpl": false,
     "preserve_render_api": true,
-    "libplacebo_required_for_core_runtime": false,
+    "libplacebo_required_for_core_runtime": true,
     "gpu_next_deferred_to_task_7": true
   },
   "targets": {
