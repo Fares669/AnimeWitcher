@@ -27,6 +27,7 @@ jobs:
           python3 scripts/test_mpv_runtime_provenance.py
           python3 scripts/test_prepare_darwin_builder.py
           python3 scripts/test_prepare_apple_runtime.py
+          python3 scripts/test_android_ndk_tools.py
           python3 scripts/test_verify_android_runtime.py
           python3 scripts/test_verify_windows_runtime.py
 

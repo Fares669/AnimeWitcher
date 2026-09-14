@@ -139,8 +139,9 @@ fi
   exit 1
 }
 
-STRIP="$(find "$ANDROID_HOME/ndk" -type f -path '*/29.*/toolchains/llvm/prebuilt/*/bin/llvm-strip' -print -quit 2>/dev/null || true)"
-[[ -x "$STRIP" ]] || { echo "llvm-strip not found" >&2; exit 1; }
+# NDK r29 may expose LLVM tools as symlinks. Do not restrict lookup to -type f.
+source "$ROOT/scripts/mpv_runtime/android_ndk_tools.sh"
+STRIP="$(find_android_ndk_llvm_tool "$ANDROID_HOME" llvm-strip)"
 "$STRIP" --strip-all "$LIBMPV"
 
 mkdir -p "$OUTPUT_DIR"
