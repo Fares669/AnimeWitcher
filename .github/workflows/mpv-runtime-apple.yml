@@ -94,10 +94,24 @@ jobs:
           TARGET: mk-out-archive-xcframeworks-${{ matrix.platform }}-universal-video-default
         run: |
           set -euxo pipefail
+          BUILD_LOG="$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}-build.log"
+          set +e
           nix develop -c make \
             XCODE_PATH="$XCODE_PATH" \
             VERSION=v0.41.0-animewitcher \
-            TARGET="$TARGET"
+            TARGET="$TARGET" 2>&1 | tee "$BUILD_LOG"
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
+
+      - name: Upload Apple build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mpv-v0.41.0-apple-${{ matrix.platform }}-build-log
+          path: ${{ runner.temp }}/mpv-apple-${{ matrix.platform }}-build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Verify mpv artifact exists
         working-directory: _build/darwin-builder
