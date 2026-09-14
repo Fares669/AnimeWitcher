@@ -74,12 +74,35 @@ jobs:
           text = path.read_text()
           old = 'https://github.com/microsoft/windows-rs/raw/master/crates/libs/bindgen/default/Windows.winmd'
           new = 'https://raw.githubusercontent.com/microsoft/windows-rs/af7b0b6a165fde6166f00a5892f1910d4ccd6433/crates/libs/default/Windows.winmd'
-          if text.count(old) != 1:
-              raise SystemExit('cppwinrt metadata URL layout changed')
-          path.write_text(text.replace(old, new, 1))
+          clone_flags = '    GIT_CLONE_FLAGS "--filter=tree:0"'
+          git_tag = '    GIT_TAG 856eaff70a48d6b053c2ad3dffec15b81ca34b10'
+          if text.count(old) != 1 or text.count(clone_flags) != 1:
+              raise SystemExit('cppwinrt toolchain layout changed')
+          text = text.replace(old, new, 1)
+          text = text.replace(clone_flags, clone_flags + '\n' + git_tag, 1)
+          path.write_text(text)
           PY
           grep -F 'af7b0b6a165fde6166f00a5892f1910d4ccd6433/crates/libs/default/Windows.winmd' toolchain/cppwinrt.cmake
+          grep -F 'GIT_TAG 856eaff70a48d6b053c2ad3dffec15b81ca34b10' toolchain/cppwinrt.cmake
           ! grep -F 'raw/master' toolchain/cppwinrt.cmake
+
+      - name: Pin LLVM release source
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('toolchain/llvm/llvm.cmake')
+          text = path.read_text()
+          old = '    GIT_TAG release/20.x'
+          new = '    GIT_TAG 87f0227cb60147a26a1eeb4fb06e3b505e9c7261'
+          if text.count(old) != 1:
+              raise SystemExit('LLVM source tag layout changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          grep -F 'GIT_TAG 87f0227cb60147a26a1eeb4fb06e3b505e9c7261' toolchain/llvm/llvm.cmake
+          ! grep -F 'GIT_TAG release/20.x' toolchain/llvm/llvm.cmake
 
       - name: Pin mpv source to exact 0.41.0 commit
         working-directory: _build/win-builder
@@ -128,18 +151,42 @@ jobs:
             -B "build_${BIT}" \
             -S "$PWD"
 
-      - name: Bootstrap pinned LLVM MinGW toolchain
+      - name: Bootstrap pinned LLVM host compiler
         working-directory: _build/win-builder
         env:
           BIT: ${{ matrix.bit }}
         run: |
           set -euxo pipefail
           ninja -C "build_${BIT}" llvm
+
+      - name: Patch LLVM MinGW libc++ compatibility
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src_packages/llvm/libunwind/src/Unwind-seh.cpp')
+          text = path.read_text()
+          old = 'return 4 /* ExceptionExecuteHandler in mingw */;'
+          new = 'return static_cast<EXCEPTION_DISPOSITION>(4);'
+          if text.count(old) != 2:
+              raise SystemExit('unexpected LLVM Unwind-seh.cpp compatibility layout')
+          path.write_text(text.replace(old, new))
+          PY
+          grep -F 'return static_cast<EXCEPTION_DISPOSITION>(4);' src_packages/llvm/libunwind/src/Unwind-seh.cpp
+          test "$(grep -Fc 'return static_cast<EXCEPTION_DISPOSITION>(4);' src_packages/llvm/libunwind/src/Unwind-seh.cpp)" = 2
+
+      - name: Bootstrap pinned LLVM MinGW runtime libraries
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set -euxo pipefail
           ninja -C "build_${BIT}" rustup
           ninja -C "build_${BIT}" llvm-clang
           test -x "$PWD/clang_root/bin/clang"
           test -x "$PWD/clang_root/bin/${{ matrix.target }}-w64-mingw32-gcc"
-
       - name: Build exact mpv 0.41 libmpv
         working-directory: _build/win-builder
         env:
@@ -216,6 +263,84 @@ jobs:
           path: ${{ runner.temp }}/mpv-windows-${{ matrix.arch }}-logs
           if-no-files-found: warn
           retention-days: 3
+
+
+  verify-app-integration:
+    name: Verify app with mpv 0.41 Windows
+    needs: [build-libmpv, publish-runtime]
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/mpv-0.41-upgrade' &&
+      github.actor == github.repository_owner
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout AnimeWitcher
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Download built x64 runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: mpv-v0.41.0-windows-x64
+          path: runtime
+
+      - name: Stage and verify built x64 runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          dll="$(find runtime -type f -name 'libmpv-2.dll' -print -quit)"
+          test -n "$dll"
+          grep -F 'mpv=v0.41.0' "$(dirname "$dll")/provenance.txt"
+          mkdir -p third_party/mpv/shinchiro
+          cp "$dll" third_party/mpv/shinchiro/libmpv-2.dll
+          printf '%s\n' "ANIMEWITCHER_WINDOWS_MPV_DLL=$PWD/third_party/mpv/shinchiro/libmpv-2.dll" >> "$GITHUB_ENV"
+          python3 - "$PWD/third_party/mpv/shinchiro/libmpv-2.dll" <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path.cwd()))
+          from scripts.mpv_runtime.verify_windows_runtime import verify_dll
+
+          errors = verify_dll('x64', Path(sys.argv[1]))
+          if errors:
+              raise SystemExit('\\n'.join(errors))
+          print(f'verified built Windows libmpv: {sys.argv[1]}')
+          PY
+      - name: Build Windows application with pinned runtime
+        run: |
+          flutter build windows --release \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify packaged Windows runtime
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import sys
+
+          sys.path.insert(0, str(Path.cwd()))
+          from scripts.mpv_runtime.verify_windows_runtime import verify_dll
+
+          dll = Path('build/windows/x64/runner/Release/libmpv-2.dll')
+          errors = verify_dll('x64', dll)
+          if errors:
+              raise SystemExit('\\n'.join(errors))
+          print(f'verified packaged Windows libmpv: {dll}')
+          PY
 
   publish-runtime:
     name: Publish verified Windows x64 runtime candidate

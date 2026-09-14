@@ -31,7 +31,9 @@ fail() {
 [[ -f "$integration" ]] || fail "mpv integration contract is missing"
 [[ -f "$lock" ]] || fail "Darwin runtime lock is missing"
 
-mapfile -t contract < <(python3 - "$integration" "$lock" "$PLATFORM" <<'PY'
+contract_file="$(mktemp)"
+trap 'rm -f "$contract_file"' EXIT
+python3 - "$integration" "$lock" "$PLATFORM" > "$contract_file" <<'PY'
 import json
 import sys
 
@@ -49,7 +51,10 @@ print(artifact["overlay_version"])
 print(artifact["sha256"])
 print(artifact["url"])
 PY
-)
+contract=()
+while IFS= read -r line; do
+  contract+=( "$line" )
+done < "$contract_file"
 [[ ${#contract[@]} -eq 8 ]] || fail "unable to read target/header/runtime contract"
 readonly MPV_VERSION="${contract[0]}"
 readonly MPV_OVERLAY_VERSION="${contract[5]}"

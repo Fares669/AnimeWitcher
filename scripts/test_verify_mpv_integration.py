@@ -61,8 +61,8 @@ def valid_manifest():
             },
             "windows": {
                 "runtime_source": "media_kit_libs_windows_video",
-                "runtime_ref": "20241021",
-                "actual_mpv": "0f7858451817c5fd5ebdb74a807a7c997662c390",
+                "runtime_ref": "2023-09-24",
+                "actual_mpv": "652a1dd90711839acdccc08004056d25514ef2d8",
                 "status": "pending",
             },
         },

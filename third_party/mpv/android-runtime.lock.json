@@ -47,5 +47,27 @@
         "sha256": "90268cd15f0766e07fb8e427388c621161177c9eb343c544f327bd63232bb236"
       }
     }
+  },
+  "artifacts": {
+    "arm64-v8a": {
+      "name": "default-arm64-v8a.jar",
+      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-android-animewitcher-c5d972e194d1/default-arm64-v8a.jar",
+      "sha256": "73c3721dbf148fdbdf0e7ca1a97df2a0eee2f0c5fb5d244afdb80e01f6936633"
+    },
+    "armeabi-v7a": {
+      "name": "default-armeabi-v7a.jar",
+      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-android-animewitcher-c5d972e194d1/default-armeabi-v7a.jar",
+      "sha256": "8b59c8db0ee4caca669197b4e0da92c9287028a6208c368e825a5842b4515d36"
+    },
+    "x86": {
+      "name": "default-x86.jar",
+      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-android-animewitcher-c5d972e194d1/default-x86.jar",
+      "sha256": "2aec8769088cd9e1d696defbcaaf1803bd47b89b91e17369a7878b422019a04a"
+    },
+    "x86_64": {
+      "name": "default-x86_64.jar",
+      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-android-animewitcher-c5d972e194d1/default-x86_64.jar",
+      "sha256": "9c90bc48311a9c3338fe6528469ac263d3d9dd8874922aa455a5895b92c2f7cf"
+    }
   }
 }

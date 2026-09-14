@@ -33,8 +33,8 @@ AnimeWitcher targets mpv `v0.41.0` with explicit `gpu-next` as the normal render
 ## windows
 
 - Current package boundary: `media_kit_libs_windows_video/windows/CMakeLists.txt`.
-- Current runtime source: media_kit's `libmpv-win32-video-cmake` snapshot `20241021`.
-- Current underlying mpv: commit `0f7858451817c5fd5ebdb74a807a7c997662c390` (archive names abbreviate it as `0f78584`).
+- Current runtime source: media_kit's `media_kit_libs_windows_video` 1.0.11 boundary at snapshot `2023-09-24`.
+- Current underlying mpv: commit `652a1dd90711839acdccc08004056d25514ef2d8` (archive names abbreviate it as `652a1dd`).
 - Evidence: the package CMake file selects x64/arm64 archives, validates their MD5, extracts them into `libmpv`, and bundles `libmpv-2.dll` from that directory.
 - Replacement strategy: `runtime-overlay` at the `LIBMPV` archive URL/hash boundary. Preserve ANGLE and the media_kit CMake API; replace only the libmpv archive with a stable v0.41.0 build and verify the bundled DLL before declaring Windows upgraded.
 

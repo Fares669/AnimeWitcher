@@ -69,6 +69,49 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+
+  verify-app-integration:
+    name: Verify app with mpv 0.41 Android
+    needs: [build-runtime, publish-runtime]
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/mpv-0.41-upgrade' &&
+      github.actor == github.repository_owner
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout AnimeWitcher
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Prepare and verify pinned Android runtime
+        run: |
+          python3 scripts/mpv_runtime/prepare_android_runtime.py prepare
+          python3 scripts/mpv_runtime/prepare_android_runtime.py verify
+
+      - name: Build unsigned APK with pinned runtime
+        run: |
+          flutter build apk --release \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify packaged mpv runtime
+        run: |
+          python3 scripts/mpv_runtime/verify_android_runtime.py \
+            --apk build/app/outputs/flutter-apk/app-release.apk
+
   publish-runtime:
     name: Publish verified Android runtime candidates
     needs: build-runtime

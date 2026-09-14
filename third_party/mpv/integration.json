@@ -26,7 +26,7 @@
       "status": "pending",
       "replacement_strategy": "runtime-overlay",
       "replacement_boundary": "media_kit_libs_ios_video/ios/Makefile XCFramework archive URL + SHA256",
-      "provenance_url": "https://github.com/media-kit/media-kit/blob/a7f622e9f41026c02fae138450e411144614b60d/libs/ios/media_kit_libs_ios_video/ios/Makefile"
+      "provenance_url": "https://github.com/media-kit/media-kit/blob/b7a751986a2cce7e229190651b901be67b2ec62d/libs/ios/media_kit_libs_ios_video/ios/Makefile"
     },
     "macos": {
       "runtime_source": "libmpv-darwin-build",
@@ -36,7 +36,7 @@
       "status": "pending",
       "replacement_strategy": "runtime-overlay",
       "replacement_boundary": "media_kit_libs_macos_video/macos/Makefile XCFramework archive URL + SHA256",
-      "provenance_url": "https://github.com/media-kit/media-kit/blob/a7f622e9f41026c02fae138450e411144614b60d/libs/macos/media_kit_libs_macos_video/macos/Makefile"
+      "provenance_url": "https://github.com/media-kit/media-kit/blob/b7a751986a2cce7e229190651b901be67b2ec62d/libs/macos/media_kit_libs_macos_video/macos/Makefile"
     },
     "android": {
       "runtime_source": "libmpv-android-video-build",
@@ -50,13 +50,13 @@
     },
     "windows": {
       "runtime_source": "media_kit_libs_windows_video",
-      "runtime_ref": "20241021",
-      "actual_mpv": "0f7858451817c5fd5ebdb74a807a7c997662c390",
+      "runtime_ref": "2023-09-24",
+      "actual_mpv": "652a1dd90711839acdccc08004056d25514ef2d8",
       "target_mpv": "v0.41.0",
       "status": "pending",
       "replacement_strategy": "runtime-overlay",
       "replacement_boundary": "media_kit_libs_windows_video/windows/CMakeLists.txt LIBMPV archive URL + MD5",
-      "provenance_url": "https://github.com/media-kit/media-kit/blob/c533e446755f51cf53c7e57aea873f2aa5355f81/libs/windows/media_kit_libs_windows_video/windows/CMakeLists.txt"
+      "provenance_url": "https://github.com/media-kit/media-kit/blob/b7a751986a2cce7e229190651b901be67b2ec62d/libs/windows/media_kit_libs_windows_video/windows/CMakeLists.txt"
     }
   }
 }
