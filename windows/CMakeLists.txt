@@ -89,14 +89,14 @@ if(PLUGIN_BUNDLED_LIBRARIES)
 endif()
 
 # Windows MPV override:
-# Prefer a custom Shinchiro winbuild libmpv when provided.
+# Prefer the repository-controlled, SHA-verified libmpv runtime when prepared.
 # This is installed AFTER plugin bundled libraries so it replaces
 # media_kit's default libmpv-2.dll in the final bundle.
 set(ANIMEWITCHER_WINDOWS_MPV_DLL "$ENV{ANIMEWITCHER_WINDOWS_MPV_DLL}")
 if(NOT ANIMEWITCHER_WINDOWS_MPV_DLL)
   set(
     ANIMEWITCHER_WINDOWS_MPV_DLL
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv/shinchiro/libmpv-2.dll"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/mpv/shinchiro/libmpv-2.dll"
   )
 endif()
 
