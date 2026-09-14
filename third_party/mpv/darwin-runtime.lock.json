@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "target": {
+    "mpv_tag": "v0.41.0",
+    "mpv_commit": "41f6a645068483470267271e1d09966ca3b9f413"
+  },
+  "builder": {
+    "repository": "media-kit/libmpv-darwin-build",
+    "commit": "b4e3ce98826cd4a28f6121b29f56ea203346e6e3"
+  },
+  "source_pins": {
+    "ffmpeg": "d60c1d72c1299e683c1d2f86cb4332b4d88348a5",
+    "ffmpeg_release_marker": "8.0.git"
+  },
+  "build_policy": {
+    "variant": "video",
+    "flavor": "default",
+    "mpv_gpl": false,
+    "preserve_render_api": true,
+    "libplacebo_required_for_core_runtime": false,
+    "gpu_next_deferred_to_task_7": true
+  },
+  "targets": {
+    "ios": "mk-out-xcframeworks-ios-universal-video-default",
+    "macos": "mk-out-xcframeworks-macos-universal-video-default"
+  }
+}
