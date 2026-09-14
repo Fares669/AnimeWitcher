@@ -84,7 +84,9 @@ pin_git deps/mpv "$TARGET_MPV_COMMIT"
 # Keep AnimeWitcher's current media_kit distribution characteristics: FFmpeg
 # stays statically linked into libmpv and GPL-only features remain disabled.
 # The pinned builder uses mbedTLS 3.x, so FFmpeg requires --enable-version3;
-# this selects LGPLv3 while keeping GPL disabled.
+# this selects LGPLv3 while keeping GPL disabled. NDK r29 no longer ships
+# target-prefixed binutils such as aarch64-linux-android-ar, so static FFmpeg
+# must explicitly use the LLVM binutils that are present in the NDK toolchain.
 python3 - <<'PY'
 from pathlib import Path
 
@@ -94,10 +96,22 @@ old = '--disable-static --enable-shared --enable-{gpl,version3}'
 new = '--enable-static --disable-shared --disable-gpl --enable-version3'
 if old not in text:
     raise SystemExit('unexpected mpv-android ffmpeg.sh: license/linkage anchor missing')
-ffmpeg.write_text(text.replace(old, new, 1))
+text = text.replace(old, new, 1)
+
+tool_anchor = '--cross-prefix=$ndk_triple- --cc=$CC --pkg-config=pkg-config --nm=llvm-nm'
+tool_replacement = (
+    '--cross-prefix=$ndk_triple- --cc=$CC --pkg-config=pkg-config '
+    '--nm=llvm-nm --ar=llvm-ar --ranlib=llvm-ranlib'
+)
+if tool_anchor not in text:
+    raise SystemExit('unexpected mpv-android ffmpeg.sh: LLVM binutils anchor missing')
+text = text.replace(tool_anchor, tool_replacement, 1)
+ffmpeg.write_text(text)
 updated = ffmpeg.read_text()
 if '--enable-static --disable-shared --disable-gpl --enable-version3' not in updated:
     raise SystemExit('failed to configure FFmpeg for static LGPLv3 build')
+if '--ar=llvm-ar --ranlib=llvm-ranlib' not in updated:
+    raise SystemExit('failed to configure FFmpeg for NDK LLVM archive tools')
 
 mpv = Path('scripts/mpv.sh')
 text = mpv.read_text()
