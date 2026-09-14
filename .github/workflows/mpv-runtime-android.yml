@@ -7,6 +7,7 @@ on:
       - '.github/workflows/mpv-runtime-android.yml'
       - 'scripts/mpv_runtime/**'
       - 'third_party/mpv/**'
+      - 'android/**'
       - 'MPV_UPGRADE_PLAN.md'
   workflow_dispatch:
 
@@ -15,13 +16,17 @@ permissions:
 
 concurrency:
   group: mpv-android-runtime-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  build-arm64-smoke:
-    name: Build mpv 0.41 Android arm64
+  build-runtime:
+    name: Build mpv 0.41 Android ${{ matrix.abi }}
     runs-on: ubuntu-22.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86, x86_64]
     steps:
       - name: Checkout AnimeWitcher
         uses: actions/checkout@v5
@@ -48,18 +53,57 @@ jobs:
           python3 -m pip install --user 'meson>=1.4,<2'
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Build & verify media_kit-compatible arm64 runtime
+      - name: Build & verify media_kit-compatible runtime
         run: |
           chmod +x scripts/mpv_runtime/build_android_runtime.sh
           scripts/mpv_runtime/build_android_runtime.sh \
-            arm64-v8a \
+            '${{ matrix.abi }}' \
             "$GITHUB_WORKSPACE/_build/mpv-android" \
             "$RUNNER_TEMP/mpv-runtime"
 
-      - name: Upload verified arm64 runtime
+      - name: Upload verified runtime
         uses: actions/upload-artifact@v4
         with:
-          name: mpv-android-v0.41.0-arm64-v8a
+          name: mpv-android-v0.41.0-${{ matrix.abi }}
           path: ${{ runner.temp }}/mpv-runtime/**
           if-no-files-found: error
           retention-days: 7
+
+  publish-runtime:
+    name: Publish verified Android runtime candidates
+    needs: build-runtime
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/mpv-0.41-upgrade' &&
+      github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download verified candidates
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mpv-android-v0.41.0-*
+          path: candidates
+
+      - name: Publish immutable prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euxo pipefail
+          tag="mpv-v0.41.0-android-animewitcher-${HEAD_SHA:0:12}"
+          mapfile -t assets < <(find candidates -type f -name 'com.alexmercerind.media_kit_libs_android_video-default-*.jar' | sort)
+          test "${#assets[@]}" -eq 4
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$HEAD_SHA" \
+              --prerelease \
+              --title "mpv v0.41.0 Android runtime ${HEAD_SHA:0:12}" \
+              --notes "Verified AnimeWitcher Android mpv v0.41.0 runtime candidates for all media_kit ABIs. Exact source pins are recorded in third_party/mpv/android-runtime.lock.json."
+          fi
+          gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,url
