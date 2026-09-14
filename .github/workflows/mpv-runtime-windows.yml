@@ -1,0 +1,75 @@
+name: mpv Windows Runtime
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/mpv-runtime-windows.yml'
+      - 'scripts/mpv_runtime/**'
+      - 'third_party/mpv/**'
+      - 'MPV_UPGRADE_PLAN.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mpv-windows-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe-official-v041:
+    name: Probe official mpv 0.41 ${{ matrix.arch }} bundle
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            asset: mpv-v0.41.0-x86_64-pc-windows-msvc.zip
+            sha256: 4e197f729f5071c6772f35fffd96e0f36e3e8a044bd9479b136bb09b7c6a80ff
+          - arch: arm64
+            asset: mpv-v0.41.0-aarch64-pc-windows-msvc.zip
+            sha256: a822abeffd0ac88951f4084f3425f949842aa17d616f880637ebe9041e482e97
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download exact upstream release asset
+        run: |
+          set -euxo pipefail
+          curl --fail --location --retry 4 \
+            "https://github.com/mpv-player/mpv/releases/download/v0.41.0/${{ matrix.asset }}" \
+            --output "$RUNNER_TEMP/mpv.zip"
+          echo "${{ matrix.sha256 }}  $RUNNER_TEMP/mpv.zip" | sha256sum -c -
+
+      - name: Inspect libmpv payload
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/mpv"
+          unzip -q "$RUNNER_TEMP/mpv.zip" -d "$RUNNER_TEMP/mpv"
+          find "$RUNNER_TEMP/mpv" -maxdepth 4 -type f -printf '%P\n' | sort | tee "$RUNNER_TEMP/file-list.txt"
+
+          dll="$(find "$RUNNER_TEMP/mpv" -type f \( -iname 'libmpv-2.dll' -o -iname 'mpv-2.dll' \) -print -quit)"
+          if [[ -z "$dll" ]]; then
+            echo 'Official v0.41.0 player archive does not expose a shared libmpv DLL.' >&2
+            exit 2
+          fi
+
+          header="$(find "$RUNNER_TEMP/mpv" -type f -path '*/mpv/client.h' -print -quit)"
+          if [[ -z "$header" ]]; then
+            echo 'Official v0.41.0 player archive does not expose libmpv headers.' >&2
+            exit 3
+          fi
+
+          python3 scripts/mpv_runtime/verify_windows_runtime.py \
+            --dll "${{ matrix.arch }}=$dll" \
+            --allow-single-architecture
+
+      - name: Upload probe file list
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv-v0.41.0-windows-${{ matrix.arch }}-official-probe
+          path: ${{ runner.temp }}/file-list.txt
+          if-no-files-found: warn
+          retention-days: 3
