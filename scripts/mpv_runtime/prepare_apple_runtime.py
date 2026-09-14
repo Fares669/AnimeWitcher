@@ -9,6 +9,8 @@ import json
 import re
 import shutil
 import tarfile
+import tempfile
+import urllib.request
 from pathlib import Path, PurePosixPath
 
 PLATFORM_SPECS = {
@@ -36,12 +38,22 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_target_tag(repo_root: Path) -> str:
+def _load_lock(repo_root: Path) -> dict:
     lock = repo_root / "third_party/mpv/darwin-runtime.lock.json"
     try:
         obj = json.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"unable to read Darwin runtime lock: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise RuntimeError("Darwin runtime lock must contain a JSON object")
+    return obj
+
+
+def _load_target_tag(repo_root: Path) -> str:
+    obj = _load_lock(repo_root)
+    try:
         tag = obj["target"]["mpv_tag"]
-    except (OSError, KeyError, json.JSONDecodeError) as exc:
+    except (KeyError, TypeError) as exc:
         raise RuntimeError(f"unable to read Darwin runtime lock: {exc}") from exc
     if not isinstance(tag, str) or not tag.startswith("v"):
         raise RuntimeError("Darwin runtime lock has an invalid target.mpv_tag")
@@ -110,6 +122,7 @@ def prepare_runtime(
     archive: Path,
     expected_sha256: str,
     overlay_version: str,
+    source_url: str | None = None,
 ) -> dict[str, str]:
     spec = _spec(platform)
     target_tag = _load_target_tag(repo_root)
@@ -142,11 +155,13 @@ def prepare_runtime(
             marker = json.loads(marker_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"invalid existing runtime overlay marker: {exc}") from exc
+        source_matches = source_url is None or marker.get("source_url") == source_url
         if (
             marker.get("platform") == platform
             and marker.get("mpv_tag") == target_tag
             and marker.get("overlay_version") == overlay_version
             and marker.get("sha256") == expected_sha256
+            and source_matches
             and f"MPV_XCFRAMEWORKS_VERSION={overlay_version}" in text
             and f"MPV_XCFRAMEWORKS_SHA256SUM={expected_sha256}" in text
             and cache_file.is_file()
@@ -192,8 +207,56 @@ def prepare_runtime(
         "sha256": expected_sha256,
         "cache_file": cache_file.name,
     }
+    if source_url is not None:
+        marker["source_url"] = source_url
     marker_file.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
     return marker
+
+
+def prepare_pinned_runtime(
+    *,
+    repo_root: Path,
+    pub_cache: Path,
+    platform: str,
+) -> dict[str, str]:
+    _spec(platform)
+    lock = _load_lock(repo_root)
+    artifacts = lock.get("artifacts")
+    entry = artifacts.get(platform) if isinstance(artifacts, dict) else None
+    if not isinstance(entry, dict):
+        raise RuntimeError(f"Darwin runtime lock is missing pinned artifact for {platform}")
+
+    url = entry.get("url")
+    expected_sha256 = entry.get("sha256")
+    overlay_version = entry.get("overlay_version")
+    if not isinstance(url, str) or not url:
+        raise RuntimeError(f"Darwin runtime lock pinned artifact for {platform} has invalid url")
+    if not isinstance(expected_sha256, str) or not SHA256_RE.fullmatch(expected_sha256):
+        raise RuntimeError(f"Darwin runtime lock pinned artifact for {platform} has invalid sha256")
+    target_tag = _load_target_tag(repo_root)
+    if not isinstance(overlay_version, str) or not overlay_version.startswith(
+        f"{target_tag}-animewitcher."
+    ):
+        raise RuntimeError(
+            f"Darwin runtime lock pinned artifact for {platform} has invalid overlay_version"
+        )
+
+    with tempfile.TemporaryDirectory(prefix=f"animewitcher-mpv-{platform}-") as temp_dir:
+        archive = Path(temp_dir) / "runtime.tar.gz"
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, archive.open("wb") as output:
+                shutil.copyfileobj(response, output)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"unable to download pinned Apple runtime for {platform}: {exc}") from exc
+        return prepare_runtime(
+            repo_root=repo_root,
+            pub_cache=pub_cache,
+            platform=platform,
+            archive=archive,
+            expected_sha256=expected_sha256,
+            overlay_version=overlay_version,
+            source_url=url,
+        )
 
 
 def verify_runtime(
@@ -232,6 +295,17 @@ def verify_runtime(
         errors.append("runtime overlay version is invalid")
     if not isinstance(expected_sha256, str) or not SHA256_RE.fullmatch(expected_sha256):
         errors.append("runtime overlay SHA-256 is invalid")
+
+    lock = _load_lock(repo_root)
+    artifacts = lock.get("artifacts")
+    pinned = artifacts.get(platform) if isinstance(artifacts, dict) else None
+    if isinstance(pinned, dict):
+        if marker.get("overlay_version") != pinned.get("overlay_version"):
+            errors.append("runtime overlay version does not match pinned artifact")
+        if marker.get("sha256") != pinned.get("sha256"):
+            errors.append("runtime overlay SHA-256 does not match pinned artifact")
+        if marker.get("source_url") != pinned.get("url"):
+            errors.append("runtime overlay source URL does not match pinned artifact")
 
     makefile = platform_dir / "Makefile"
     try:
@@ -281,6 +355,11 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--pub-cache", type=Path, required=True)
     prepare.add_argument("--repo-root", type=Path, default=_default_repo_root())
 
+    prepare_pinned = sub.add_parser("prepare-pinned")
+    prepare_pinned.add_argument("--platform", choices=sorted(PLATFORM_SPECS), required=True)
+    prepare_pinned.add_argument("--pub-cache", type=Path, required=True)
+    prepare_pinned.add_argument("--repo-root", type=Path, default=_default_repo_root())
+
     verify = sub.add_parser("verify")
     verify.add_argument("--platform", choices=sorted(PLATFORM_SPECS), required=True)
     verify.add_argument("--pub-cache", type=Path, required=True)
@@ -296,6 +375,15 @@ def main(argv: list[str] | None = None) -> int:
             archive=args.archive,
             expected_sha256=args.sha256,
             overlay_version=args.overlay_version,
+        )
+        print(json.dumps(marker, sort_keys=True))
+        return 0
+
+    if args.command == "prepare-pinned":
+        marker = prepare_pinned_runtime(
+            repo_root=args.repo_root,
+            pub_cache=args.pub_cache,
+            platform=args.platform,
         )
         print(json.dumps(marker, sort_keys=True))
         return 0
