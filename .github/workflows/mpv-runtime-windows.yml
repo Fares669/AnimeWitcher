@@ -61,9 +61,16 @@ jobs:
             exit 3
           fi
 
-          python3 scripts/mpv_runtime/verify_windows_runtime.py \
-            --dll "${{ matrix.arch }}=$dll" \
-            --allow-single-architecture
+          python3 - "$GITHUB_WORKSPACE" "${{ matrix.arch }}" "$dll" <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, sys.argv[1])
+          from scripts.mpv_runtime.verify_windows_runtime import verify_dll
+          errors = verify_dll(sys.argv[2], Path(sys.argv[3]))
+          if errors:
+              raise SystemExit('\n'.join(errors))
+          print(f"verified {sys.argv[2]} upstream libmpv: {sys.argv[3]}")
+          PY
 
       - name: Upload probe file list
         if: always()
