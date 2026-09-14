@@ -20,6 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Verify mpv integration contract
+        run: python3 scripts/test_verify_mpv_integration.py
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
