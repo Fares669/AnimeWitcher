@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, feat/mpv-0.41-upgrade]
+    branches: [main]
 
 permissions:
   contents: read
@@ -14,72 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  materialize-mpv-headers:
-    name: Materialize mpv 0.41 headers
-    if: github.event_name == 'push' && github.ref == 'refs/heads/feat/mpv-0.41-upgrade'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: feat/mpv-0.41-upgrade
-
-      - name: Fetch exact upstream headers and commit once
-        shell: bash
-        run: |
-          set -euo pipefail
-          target_dir=third_party/mpv/v0.41.0
-          if [[ -f "$target_dir/client.h" ]]; then
-            echo "mpv v0.41.0 target headers already materialized"
-            exit 0
-          fi
-
-          mkdir -p "$target_dir"
-          declare -A expected=(
-            [client.h]=85cff63bd5d20797ca622834fd904d506d0d4fd8
-            [render.h]=99aadeb5d837dd47a8a170ae55672cf46ec5f4c4
-            [render_gl.h]=aa2719d5c4ebfa1ecaee469b563d138e10b1df4e
-            [stream_cb.h]=9ae6f31a16847d9a695886a78bc1b7a2c9942a27
-          )
-
-          for header in client.h render.h render_gl.h stream_cb.h; do
-            curl --fail --location --retry 3 \
-              "https://raw.githubusercontent.com/mpv-player/mpv/v0.41.0/include/mpv/$header" \
-              --output "$target_dir/$header"
-            actual="$(git hash-object "$target_dir/$header")"
-            if [[ "$actual" != "${expected[$header]}" ]]; then
-              echo "Unexpected upstream blob for $header: $actual" >&2
-              exit 1
-            fi
-          done
-
-          cat > "$target_dir/README.md" <<'EOF'
-          # Pinned libmpv v0.41.0 headers
-
-          These files are exact copies of `include/mpv/*.h` from `mpv-player/mpv`
-          tag `v0.41.0`. They are staged in the repository before activation so
-          Apple builds never compile 0.41 headers against the current 0.36 runtime.
-
-          | File | Upstream Git blob SHA |
-          | --- | --- |
-          | `client.h` | `85cff63bd5d20797ca622834fd904d506d0d4fd8` |
-          | `render.h` | `99aadeb5d837dd47a8a170ae55672cf46ec5f4c4` |
-          | `render_gl.h` | `aa2719d5c4ebfa1ecaee469b563d138e10b1df4e` |
-          | `stream_cb.h` | `9ae6f31a16847d9a695886a78bc1b7a2c9942a27` |
-
-          Do not make `scripts/prepare_media_kit_ios_headers.sh` consume this
-          directory until the linked Apple libmpv runtime is also v0.41.0.
-          EOF
-
-          python3 scripts/verify_mpv_integration.py --require-target-headers
-
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add "$target_dir"
-          git commit -m "chore: vendor verified mpv 0.41 headers"
-          git push origin HEAD:feat/mpv-0.41-upgrade
-
   analyze-and-test:
     name: Analyze and test
     runs-on: ubuntu-latest
@@ -89,7 +23,7 @@ jobs:
       - name: Verify mpv integration contract
         run: |
           python3 scripts/test_verify_mpv_integration.py
-          python3 scripts/verify_mpv_integration.py
+          python3 scripts/verify_mpv_integration.py --require-target-headers
 
       - uses: subosito/flutter-action@v2
         with:
