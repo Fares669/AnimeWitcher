@@ -121,6 +121,9 @@ jobs:
           mpv_zip="$(find -L result -maxdepth 1 -type f -name '*_Mpv.zip' -print -quit)"
           test -n "$runtime_archive"
           test -n "$mpv_zip"
+          python3 "$GITHUB_WORKSPACE/scripts/mpv_runtime/verify_apple_archive.py" \
+            --platform '${{ matrix.platform }}' \
+            --archive "$runtime_archive"
           mkdir -p "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}"
           cp "$runtime_archive" "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/"
           cp "$mpv_zip" "$RUNNER_TEMP/mpv-apple-${{ matrix.platform }}/"
@@ -143,3 +146,42 @@ jobs:
           path: ${{ runner.temp }}/mpv-apple-${{ matrix.platform }}
           if-no-files-found: error
           retention-days: 7
+
+  publish-runtime:
+    name: Publish verified Apple runtime candidates
+    needs: build-runtime
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/mpv-0.41-upgrade' &&
+      github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download verified candidates
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mpv-v0.41.0-apple-*
+          path: candidates
+
+      - name: Publish immutable prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euxo pipefail
+          tag="mpv-v0.41.0-animewitcher-${HEAD_SHA:0:12}"
+          mapfile -t assets < <(find candidates -type f -name 'libmpv-xcframeworks_*.tar.gz' | sort)
+          test "${#assets[@]}" -eq 2
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$HEAD_SHA" \
+              --prerelease \
+              --title "mpv v0.41.0 Apple runtime ${HEAD_SHA:0:12}" \
+              --notes "Verified AnimeWitcher Apple mpv v0.41.0 runtime candidate. Exact source pins are recorded in third_party/mpv/darwin-runtime.lock.json."
+          fi
+          gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,url
