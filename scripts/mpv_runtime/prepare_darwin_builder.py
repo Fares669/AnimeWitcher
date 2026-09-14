@@ -133,6 +133,20 @@ def prepare_libplacebo_dependency(builder: Path, lock: dict) -> None:
         ),
         encoding="utf-8",
     )
+    # Nix flakes only expose Git-tracked paths from the builder checkout.
+    # Intent-to-add is enough to make this generated package visible while
+    # keeping the ephemeral builder tree uncommitted.
+    subprocess.check_call(
+        [
+            "git",
+            "-C",
+            str(builder),
+            "add",
+            "-N",
+            "--",
+            package.relative_to(builder).as_posix(),
+        ]
+    )
 
     mpv_recipe = builder / "nix/packages/mk-pkg-mpv/default.nix"
     text = mpv_recipe.read_text(encoding="utf-8")

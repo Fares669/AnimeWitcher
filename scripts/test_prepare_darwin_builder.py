@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -139,6 +140,8 @@ class PrepareDarwinBuilderPatchTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         builder = Path(temp.name) / "builder"
+        builder.mkdir(parents=True)
+        subprocess.check_call(["git", "-C", str(builder), "init", "-q"])
         mpv_recipe = builder / "nix/packages/mk-pkg-mpv/default.nix"
         mpv_recipe.parent.mkdir(parents=True)
         mpv_recipe.write_text(
@@ -165,6 +168,10 @@ class PrepareDarwinBuilderPatchTests(unittest.TestCase):
         self.assertIn("-Dvulkan=disabled", package)
         self.assertIn("-Dopengl=disabled", package)
         self.assertIn("-Ddefault_library=static", package)
+        tracked = subprocess.check_output(
+            ["git", "-C", str(builder), "ls-files"], text=True
+        ).splitlines()
+        self.assertIn("nix/packages/mk-pkg-libplacebo/default.nix", tracked)
         recipe = mpv_recipe.read_text(encoding="utf-8")
         self.assertIn("libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };", recipe)
         self.assertIn("[ ffmpeg libplacebo ]", recipe)
@@ -173,6 +180,8 @@ class PrepareDarwinBuilderPatchTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         builder = Path(temp.name) / "builder"
+        builder.mkdir(parents=True)
+        subprocess.check_call(["git", "-C", str(builder), "init", "-q"])
         mpv_recipe = builder / "nix/packages/mk-pkg-mpv/default.nix"
         mpv_recipe.parent.mkdir(parents=True)
         mpv_recipe.write_text("unexpected recipe\n", encoding="utf-8")
