@@ -127,3 +127,40 @@
 +    },
 +    .options_prefix = "audiounit",
  };
++--- a/meson.options
+++++ b/meson.options
++@@ -1,5 +1,5 @@
++ option('alsa', type: 'feature', value: 'auto', description: 'ALSA audio output')
++ option('audiounit', type: 'feature', value: 'auto', description: 'AudioUnit output (iOS)')
++ option('coreaudio', type: 'feature', value: 'auto', description: 'CoreAudio audio output')
++-option('avfoundation', type: 'feature', value: 'auto', description: 'AVFoundation audio output')
+++option('avfoundation', type: 'feature', value: 'disabled', description: 'AVFoundation audio output')
++ option('jack', type: 'feature', value: 'auto', description: 'JACK audio output')
++--- a/player/clipboard/clipboard-mac.m
+++++ b/player/clipboard/clipboard-mac.m
++@@ -16,6 +16,8 @@
++  */
++ 
++ #include "clipboard.h"
+++
+++#if HAVE_SWIFT
++ #include "osdep/mac/swift.h"
++ 
++ struct clipboard_mac_priv {
++@@ -57,3 +59,5 @@ const struct clipboard_backend clipboard_backend_mac = {
++     .get_data = get_data,
++     .set_data = set_data,
++ };
+++
+++#endif
++--- a/player/clipboard/clipboard.c
+++++ b/player/clipboard/clipboard.c
++@@ -39,7 +39,7 @@ static const struct clipboard_backend *const clipboard_backend_list[] = {
++ #if HAVE_WIN32_DESKTOP
++     &clipboard_backend_win32,
++ #endif
++-#if HAVE_COCOA
+++#if HAVE_COCOA && HAVE_SWIFT
++     &clipboard_backend_mac,
++ #endif
++ #if HAVE_WAYLAND && HAVE_WAYLAND_PROTOCOLS_1_39
