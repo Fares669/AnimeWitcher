@@ -111,6 +111,12 @@ jobs:
             -B "build_${BIT}" \
             -S "$PWD"
 
+          # The builder's force-update target assumes ExternalProject sources
+          # have already been materialized. Without this first download pass,
+          # fresh CI jobs leave detached/placeholder source dirs and `update`
+          # fails before compilation with "HEAD does not point to a branch".
+          ninja -C "build_${BIT}" download || true
+
       - name: Build exact mpv 0.41 libmpv
         working-directory: _build/win-builder
         env:
