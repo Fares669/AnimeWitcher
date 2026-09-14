@@ -83,16 +83,21 @@ pin_git deps/mpv "$TARGET_MPV_COMMIT"
 
 # Keep AnimeWitcher's current media_kit distribution characteristics: FFmpeg
 # stays statically linked into libmpv and GPL-only features remain disabled.
+# The pinned builder uses mbedTLS 3.x, so FFmpeg requires --enable-version3;
+# this selects LGPLv3 while keeping GPL disabled.
 python3 - <<'PY'
 from pathlib import Path
 
 ffmpeg = Path('scripts/ffmpeg.sh')
 text = ffmpeg.read_text()
 old = '--disable-static --enable-shared --enable-{gpl,version3}'
-new = '--enable-static --disable-shared --disable-gpl --disable-version3'
+new = '--enable-static --disable-shared --disable-gpl --enable-version3'
 if old not in text:
     raise SystemExit('unexpected mpv-android ffmpeg.sh: license/linkage anchor missing')
 ffmpeg.write_text(text.replace(old, new, 1))
+updated = ffmpeg.read_text()
+if '--enable-static --disable-shared --disable-gpl --enable-version3' not in updated:
+    raise SystemExit('failed to configure FFmpeg for static LGPLv3 build')
 
 mpv = Path('scripts/mpv.sh')
 text = mpv.read_text()
@@ -168,5 +173,6 @@ printf '%s\n' \
   "mpv_commit=$TARGET_MPV_COMMIT" \
   "builder_commit=$BUILDER_COMMIT" \
   "ffmpeg_commit=$FFMPEG_COMMIT" \
+  "ffmpeg_license=LGPLv3" \
   "libplacebo_commit=$LIBPLACEBO_COMMIT" \
   "abi=$ABI" > "$OUTPUT_DIR/$BASE_JAR.provenance.txt"
