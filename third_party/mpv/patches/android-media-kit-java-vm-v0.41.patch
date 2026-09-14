@@ -1,8 +1,7 @@
 diff --git a/include/mpv/client.h b/include/mpv/client.h
-index 85cff63..0000000 100644
 --- a/include/mpv/client.h
 +++ b/include/mpv/client.h
-@@ -1724,6 +1724,16 @@ MPV_EXPORT mpv_event *mpv_wait_event(mpv_handle *ctx, double timeout);
+@@ -1724,6 +1724,17 @@ MPV_EXPORT mpv_event *mpv_wait_event(mpv_handle *ctx, double timeout);
   */
  MPV_EXPORT void mpv_wakeup(mpv_handle *ctx);
  
@@ -21,7 +20,6 @@ index 85cff63..0000000 100644
   * Set a custom function that should be called when there are new events. Use
   * this if blocking in mpv_wait_event() to wait for new events is not feasible.
 diff --git a/player/client.c b/player/client.c
-index e23b98b..0000000 100644
 --- a/player/client.c
 +++ b/player/client.c
 @@ -20,6 +20,8 @@
