@@ -23,6 +23,7 @@ import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/storage/settings_repository.dart';
 import '../../../../features/settings/presentation/player_settings_provider.dart';
 import '../data/anime4k.dart';
+import '../data/mpv_renderer_policy.dart';
 import 'widgets/animewitcher_player_controls.dart';
 import 'widgets/hotstar_player_style.dart';
 import 'widgets/player_ltr.dart';
@@ -162,11 +163,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       // _applyPlaybackProperties / applySubtitleSettings as well.
       native.setProperty('sub-visibility', 'no');
     }
-    // Anime4K is a GPU render-stage effect. Make the shader-capable mpv
-    // output explicit whenever the feature is enabled so Android cannot fall
-    // back to a direct decoder surface that bypasses GLSL. Read the persisted
-    // setting synchronously: PlayerSettings is async and can still be loading
-    // during a cold-start player launch.
+    // Keep the output policy explicit before the first media_kit frame:
+    // Android uses mpv's recommended gpu-next -> gpu priority list, while
+    // native media_kit platforms keep vo=libmpv for the render API and the
+    // Apple Metal bridge. Read Anime4K's persisted setting synchronously:
+    // PlayerSettings is async and can still be loading during cold start.
     final settingsStorage = ref.read(settingsRepositoryProvider);
     final storedAnime4kMode = Anime4kModeName.fromName(
       settingsStorage.getPlayerSetting<String>(
@@ -178,22 +179,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       stored: settingsStorage.getPlayerSetting<bool>('player_anime4k_enabled'),
       mode: storedAnime4kMode,
     );
-    final forceAnime4kGpuPath =
-        storedAnime4kEnabled &&
-        (Platform.isWindows ||
-            Platform.isMacOS ||
-            Platform.isLinux ||
-            Platform.isAndroid ||
-            Platform.isIOS);
+    final rendererOutput = MpvRendererPolicy.outputForPlatform(
+      isAndroid: Platform.isAndroid,
+    );
     _videoController = VideoController(
       _player,
       configuration: VideoControllerConfiguration(
-        vo: forceAnime4kGpuPath
-            ? (Platform.isAndroid ? 'gpu' : 'libmpv')
-            : null,
+        vo: rendererOutput,
         // auto-safe keeps Android hardware decoding where mpv can interop it
-        // safely while still routing the final image through vo=gpu.
-        hwdec: forceAnime4kGpuPath && Platform.isAndroid ? 'auto-safe' : null,
+        // safely while still routing the final image through the explicit
+        // gpu-next,gpu output policy.
+        hwdec: storedAnime4kEnabled && Platform.isAndroid
+            ? 'auto-safe'
+            : null,
       ),
     );
 

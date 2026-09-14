@@ -14,9 +14,12 @@ from pathlib import Path
 
 PACKAGE = "media_kit_libs_windows_video"
 PACKAGE_VERSION = "1.0.11"
-BASELINE_VERSION = "20241021"
-BASELINE_URL = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20241021/mpv-dev-x86_64-20241021-git-0f78584.7z"
-BASELINE_MD5 = "d82e6f02f290d391e9aa30121ace8ec8"
+BASELINE_ARCHIVE = "mpv-dev-x86_64-20230924-git-652a1dd.7z"
+BASELINE_URL = (
+    "https://github.com/media-kit/libmpv-win32-video-build/releases/download/"
+    f"2023-09-24/{BASELINE_ARCHIVE}"
+)
+BASELINE_MD5 = "a832ef24b3a6ff97cd2560b5b9d04cd8"
 TARGET_FILENAME = "libmpv-2.dll"
 
 
@@ -76,7 +79,7 @@ def _validate_media_kit_boundary(cmake: Path) -> None:
     except OSError as exc:
         raise RuntimeError(f"unable to read media_kit Windows CMake file: {exc}") from exc
     expected = (
-        f'set(LIBMPV_VERSION "{BASELINE_VERSION}" CACHE STRING "libmpv version")',
+        f'set(LIBMPV "{BASELINE_ARCHIVE}")',
         f'set(LIBMPV_URL "{BASELINE_URL}")',
         f'set(LIBMPV_MD5 "{BASELINE_MD5}")',
     )

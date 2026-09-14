@@ -206,7 +206,7 @@ jobs:
 
   publish-runtime:
     name: Publish verified Apple runtime candidates
-    needs: build-runtime
+    needs: [build-runtime, verify-app-integration]
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
