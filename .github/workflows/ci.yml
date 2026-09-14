@@ -26,6 +26,7 @@ jobs:
           python3 scripts/verify_mpv_integration.py --require-target-headers
           python3 scripts/test_mpv_runtime_provenance.py
           python3 scripts/test_verify_android_runtime.py
+          python3 scripts/test_verify_windows_runtime.py
 
       - uses: subosito/flutter-action@v2
         with:
