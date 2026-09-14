@@ -1,5 +1,9 @@
 name: mpv Windows Runtime
 
+defaults:
+  run:
+    shell: bash
+
 on:
   pull_request:
     branches: [main]
@@ -23,6 +27,7 @@ env:
   MPV_VERSION: v0.41.0
   MPV_COMMIT: 41f6a645068483470267271e1d09966ca3b9f413
   BUILDER_COMMIT: e99c86398bbe72fc97e716d25a4f1cc83f6fae4e
+  MESON_VERSION: 1.7.2
 
 jobs:
   build-libmpv:
@@ -52,6 +57,12 @@ jobs:
           ref: ${{ env.BUILDER_COMMIT }}
           path: _build/win-builder
           fetch-depth: 1
+
+      - name: Install pinned Meson required by builder
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --break-system-packages "meson==${MESON_VERSION}"
+          test "$(meson --version)" = "$MESON_VERSION"
 
       - name: Pin mpv source to exact 0.41.0 commit
         working-directory: _build/win-builder
@@ -146,6 +157,7 @@ jobs:
             "mpv=$MPV_VERSION" \
             "mpv_commit=$MPV_COMMIT" \
             "builder_commit=$BUILDER_COMMIT" \
+            "meson=$MESON_VERSION" \
             "arch=$ARCH" \
             "gpl=false" > "$out/provenance.txt"
 
