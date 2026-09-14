@@ -11,6 +11,7 @@ on:
       - '.github/workflows/mpv-runtime-windows.yml'
       - 'scripts/mpv_runtime/**'
       - 'third_party/mpv/**'
+      - 'windows/**'
       - 'MPV_UPGRADE_PLAN.md'
   workflow_dispatch:
 
@@ -19,9 +20,7 @@ permissions:
 
 concurrency:
   group: mpv-windows-runtime-${{ github.ref }}
-  # These cross builds are long. A documentation or Android commit must not
-  # kill an already-valid Windows build in the middle of compilation.
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   MPV_VERSION: v0.41.0
@@ -117,10 +116,6 @@ jobs:
           BIT: ${{ matrix.bit }}
         run: |
           set -euxo pipefail
-          # media-kit's mpv workflow normally restores clang_root and the
-          # architecture toolchain from private/upstream caches. AnimeWitcher
-          # must be reproducible on a clean runner, so build the exact targets
-          # used by the builder's own llvm_clang workflow before libmpv.
           ninja -C "build_${BIT}" llvm
           ninja -C "build_${BIT}" rustup
           ninja -C "build_${BIT}" llvm-clang
@@ -133,11 +128,6 @@ jobs:
           BIT: ${{ matrix.bit }}
         run: |
           set -euxo pipefail
-          # This is a clean, pinned ExternalProject build. Do not run the
-          # builder-wide `download`/`update` helper targets: they include
-          # unrelated packages and force-update partially materialized git
-          # trees. Building mpv-release directly lets Ninja fetch only its
-          # declared dependency graph and keeps all source revisions immutable.
           ninja -C "build_${BIT}" mpv-release
 
       - name: Verify and stage libmpv runtime
@@ -208,3 +198,42 @@ jobs:
           path: ${{ runner.temp }}/mpv-windows-${{ matrix.arch }}-logs
           if-no-files-found: warn
           retention-days: 3
+
+  publish-runtime:
+    name: Publish verified Windows x64 runtime candidate
+    needs: build-libmpv
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/mpv-0.41-upgrade' &&
+      github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download verified x64 candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: mpv-v0.41.0-windows-x64
+          path: candidate
+
+      - name: Publish immutable prerelease DLL
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euxo pipefail
+          tag="mpv-v0.41.0-windows-animewitcher-${HEAD_SHA:0:12}"
+          dll="$(find candidate -type f -name 'libmpv-2.dll' -print -quit)"
+          test -n "$dll"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$HEAD_SHA" \
+              --prerelease \
+              --title "mpv v0.41.0 Windows runtime ${HEAD_SHA:0:12}" \
+              --notes "Verified AnimeWitcher Windows x64 libmpv v0.41.0 runtime. Exact source pins are recorded by the mpv Windows workflow."
+          fi
+          gh release upload "$tag" "$dll#libmpv-2.dll" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,url
