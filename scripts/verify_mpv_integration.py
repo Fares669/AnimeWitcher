@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import argparse
+import hashlib
 import json
 import re
 import sys
@@ -55,6 +57,43 @@ def _constraint_allows_version(constraint: str, expected: str) -> bool:
     if constraint is None:
         return False
     return constraint in {expected, f"^{expected}"}
+
+
+def _git_blob_hash(data: bytes) -> str:
+    prefix = f"blob {len(data)}\0".encode("ascii")
+    return hashlib.sha1(prefix + data).hexdigest()
+
+
+def validate_target_headers(manifest, repo_root: Path):
+    errors = []
+    target = manifest.get("target") if isinstance(manifest, dict) else None
+    if not isinstance(target, dict):
+        return ["target must be an object before target headers can be verified"]
+
+    tag = target.get("tag")
+    hashes = target.get("headers")
+    if tag != TARGET_TAG or not isinstance(hashes, dict):
+        return ["target tag/header manifest is invalid before target headers can be verified"]
+
+    header_dir = Path(repo_root) / "third_party" / "mpv" / tag
+    for name, expected_hash in EXPECTED_HEADERS.items():
+        path = header_dir / name
+        if not path.is_file():
+            errors.append(f"target header {name} is missing at {path}")
+            continue
+        actual_hash = _git_blob_hash(path.read_bytes())
+        manifest_hash = hashes.get(name)
+        if manifest_hash != expected_hash:
+            errors.append(
+                f"target header manifest hash for {name} must be {expected_hash}; "
+                f"found {manifest_hash or 'missing'}"
+            )
+        if actual_hash != expected_hash:
+            errors.append(
+                f"target header {name} blob hash must be {expected_hash}; "
+                f"found {actual_hash}"
+            )
+    return errors
 
 
 def validate_manifest(manifest, repo_root: Path):
@@ -155,7 +194,15 @@ def validate_manifest(manifest, repo_root: Path):
     return errors
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Verify AnimeWitcher mpv integration")
+    parser.add_argument(
+        "--require-target-headers",
+        action="store_true",
+        help="also require vendored mpv v0.41.0 headers to match upstream Git blobs",
+    )
+    args = parser.parse_args(argv)
+
     repo_root = Path(__file__).resolve().parents[1]
     manifest_path = repo_root / "third_party" / "mpv" / "integration.json"
     if not manifest_path.is_file():
@@ -169,6 +216,8 @@ def main() -> int:
         return 1
 
     errors = validate_manifest(manifest, repo_root)
+    if args.require_target_headers:
+        errors.extend(validate_target_headers(manifest, repo_root))
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
@@ -185,6 +234,8 @@ def main() -> int:
             f"{platform}: {entry['status']} - {entry['runtime_source']} "
             f"{entry['runtime_ref']} -> mpv {entry['actual_mpv']}"
         )
+    if args.require_target_headers:
+        print("target headers: verified v0.41.0 upstream Git blobs")
     return 0
 
 
