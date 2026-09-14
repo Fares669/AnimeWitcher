@@ -111,6 +111,22 @@ jobs:
             -B "build_${BIT}" \
             -S "$PWD"
 
+      - name: Bootstrap pinned LLVM MinGW toolchain
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set -euxo pipefail
+          # media-kit's mpv workflow normally restores clang_root and the
+          # architecture toolchain from private/upstream caches. AnimeWitcher
+          # must be reproducible on a clean runner, so build the exact targets
+          # used by the builder's own llvm_clang workflow before libmpv.
+          ninja -C "build_${BIT}" llvm
+          ninja -C "build_${BIT}" rustup
+          ninja -C "build_${BIT}" llvm-clang
+          test -x "$PWD/clang_root/bin/clang"
+          test -x "$PWD/clang_root/bin/${{ matrix.target }}-w64-mingw32-gcc"
+
       - name: Build exact mpv 0.41 libmpv
         working-directory: _build/win-builder
         env:
