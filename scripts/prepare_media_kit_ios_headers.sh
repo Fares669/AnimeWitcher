@@ -67,7 +67,15 @@ runtime_candidates=("$pub_cache"/hosted/*/"$RUNTIME_PACKAGE"-"$MEDIA_KIT_RUNTIME
   fail "expected one resolved $RUNTIME_PACKAGE $MEDIA_KIT_RUNTIME_VERSION package, found ${#runtime_candidates[@]}"
 runtime_platform_dir="${runtime_candidates[0]}/$PLATFORM"
 marker="$runtime_platform_dir/.animewitcher-mpv-runtime.json"
-[[ -f "$marker" ]] || fail "runtime overlay marker is missing: $marker"
+
+if [[ ! -f "$marker" ]]; then
+  prepare_runtime="$repo_root/scripts/mpv_runtime/prepare_apple_runtime.sh"
+  [[ -f "$prepare_runtime" ]] || fail "Apple runtime preparation helper is missing"
+  if ! PUB_CACHE="$pub_cache" bash "$prepare_runtime" "$PLATFORM"; then
+    fail "failed to prepare pinned Apple runtime for $PLATFORM"
+  fi
+fi
+[[ -f "$marker" ]] || fail "runtime overlay marker is missing after preparation: $marker"
 
 python3 - "$marker" "$MPV_VERSION" "$MPV_OVERLAY_VERSION" "$MPV_RUNTIME_SHA256" "$MPV_RUNTIME_URL" "$PLATFORM" "$RUNTIME_PACKAGE" "$MEDIA_KIT_RUNTIME_VERSION" <<'PY'
 import json
@@ -97,8 +105,6 @@ makefile="$package_dir/common/darwin/Makefile"
 [[ -d "$source_dir" ]] || fail "vendored mpv headers not found at $source_dir"
 [[ -f "$makefile" ]] || fail "media_kit_video Darwin Makefile not found"
 
-# First activation must happen from the exact upstream media_kit 2.0.1 layout.
-# Subsequent invocations are idempotent and recognize our fail-closed stub.
 if ! grep -Fq "AnimeWitcher: already pinned local headers" "$makefile"; then
   grep -Fq "MPV_HEADERS_VERSION=v0.36.0" "$makefile" || \
     fail "media_kit_video Darwin header layout changed unexpectedly"
@@ -118,10 +124,6 @@ for entry in "${contract[@]:1:4}"; do
   cp -f "$source_file" "$headers_dir/$filename"
 done
 
-# CocoaPods evaluates the package podspec, which invokes this Makefile. The
-# upstream target downloads v0.36 headers at pod-install time. Once the runtime
-# marker proves the matching pinned v0.41 runtime is prepared, keep that hook
-# but make it validate the already pinned local headers instead.
 cat > "$makefile" <<'MAKEFILE'
 # AnimeWitcher: already pinned local headers after verified runtime alignment.
 all:
