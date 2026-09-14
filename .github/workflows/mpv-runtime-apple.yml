@@ -162,6 +162,11 @@ jobs:
       - name: Checkout AnimeWitcher
         uses: actions/checkout@v6
 
+      - name: Select Latest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:

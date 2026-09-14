@@ -151,6 +151,28 @@ jobs:
             -B "build_${BIT}" \
             -S "$PWD"
 
+      - name: Patch LLVM cleanup for pinned commit
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set -euxo pipefail
+          reset_script="build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh"
+          test -f "$reset_script"
+          python3 - "$reset_script" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          old = '@{u}'
+          if text.count(old) != 2:
+              raise SystemExit('unexpected LLVM cleanup script layout')
+          path.write_text(text.replace(old, 'HEAD'))
+          PY
+          ! grep -F '@{u}' "$reset_script"
+          grep -F 'reset --hard HEAD' "$reset_script"
+
       - name: Bootstrap pinned LLVM host compiler
         working-directory: _build/win-builder
         env:
