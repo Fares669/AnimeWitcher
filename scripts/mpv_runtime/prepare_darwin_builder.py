@@ -31,6 +31,35 @@ def git_head(directory: Path) -> str:
     ).strip()
 
 
+OBSOLETE_FFMPEG_DASH_PATCH = "    patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}\n"
+OLD_AUDIOUNIT_PATCH_MARKER = "-    [instance setCategory:AVAudioSessionCategoryPlayback error:nil];"
+
+
+def prepare_patch_compatibility(builder: Path, repo_root: Path) -> None:
+    ffmpeg_recipe = builder / "nix/packages/mk-pkg-ffmpeg/default.nix"
+    text = ffmpeg_recipe.read_text(encoding="utf-8")
+    count = text.count(OBSOLETE_FFMPEG_DASH_PATCH)
+    if count != 1:
+        raise RuntimeError(
+            "expected exactly one obsolete FFmpeg DASH patch application; "
+            f"found {count}"
+        )
+    ffmpeg_recipe.write_text(
+        text.replace(OBSOLETE_FFMPEG_DASH_PATCH, "", 1), encoding="utf-8"
+    )
+
+    audio_patch = builder / "patches/mpv-audiounit-shared-session.patch"
+    old_patch = audio_patch.read_text(encoding="utf-8")
+    if OLD_AUDIOUNIT_PATCH_MARKER not in old_patch:
+        raise RuntimeError("Darwin AudioUnit patch drifted before v0.41 rebase")
+
+    rebased_patch = (
+        repo_root
+        / "third_party/mpv/patches/darwin-audiounit-shared-session-v0.41.patch"
+    )
+    audio_patch.write_text(rebased_patch.read_text(encoding="utf-8"), encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--builder", type=Path, required=True)
@@ -69,6 +98,9 @@ def main() -> int:
         sha256=args.mpv_sha256,
     )
     package_lock.write_text(text, encoding="utf-8")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    prepare_patch_compatibility(args.builder, repo_root)
 
     mpv_recipe = (args.builder / "nix/packages/mk-pkg-mpv/default.nix").read_text(
         encoding="utf-8"
