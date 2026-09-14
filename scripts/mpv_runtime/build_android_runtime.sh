@@ -139,7 +139,7 @@ fi
   exit 1
 }
 
-STRIP="$(find sdk/android-ndk-r29/toolchains/llvm/prebuilt -type f -name llvm-strip -print -quit)"
+STRIP="$(find "$ANDROID_HOME/ndk" -type f -path '*/29.*/toolchains/llvm/prebuilt/*/bin/llvm-strip' -print -quit 2>/dev/null || true)"
 [[ -x "$STRIP" ]] || { echo "llvm-strip not found" >&2; exit 1; }
 "$STRIP" --strip-all "$LIBMPV"
 
