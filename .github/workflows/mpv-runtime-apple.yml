@@ -15,7 +15,7 @@ permissions:
 
 concurrency:
   group: mpv-apple-runtime-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   MPV_COMMIT: 41f6a645068483470267271e1d09966ca3b9f413
