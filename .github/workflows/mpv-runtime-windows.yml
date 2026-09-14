@@ -15,53 +15,122 @@ permissions:
 
 concurrency:
   group: mpv-windows-runtime-${{ github.ref }}
-  cancel-in-progress: true
+  # These cross builds are long. A documentation or Android commit must not
+  # kill an already-valid Windows build in the middle of compilation.
+  cancel-in-progress: false
+
+env:
+  MPV_VERSION: v0.41.0
+  MPV_COMMIT: 41f6a645068483470267271e1d09966ca3b9f413
+  BUILDER_COMMIT: e99c86398bbe72fc97e716d25a4f1cc83f6fae4e
 
 jobs:
-  probe-official-v041:
-    name: Probe official mpv 0.41 ${{ matrix.arch }} bundle
+  build-libmpv:
+    name: Build mpv 0.41 Windows ${{ matrix.arch }}
     runs-on: ubuntu-22.04
+    container:
+      image: ghcr.io/shinchiro/archlinux:latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x64
-            asset: mpv-v0.41.0-x86_64-pc-windows-msvc.zip
-            sha256: 4e197f729f5071c6772f35fffd96e0f36e3e8a044bd9479b136bb09b7c6a80ff
+            bit: x86_64
+            target: x86_64
           - arch: arm64
-            asset: mpv-v0.41.0-aarch64-pc-windows-msvc.zip
-            sha256: a822abeffd0ac88951f4084f3425f949842aa17d616f880637ebe9041e482e97
+            bit: aarch64
+            target: aarch64
+
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout AnimeWitcher
+        uses: actions/checkout@v5
 
-      - name: Download exact upstream release asset
+      - name: Checkout pinned media_kit Windows builder
+        uses: actions/checkout@v5
+        with:
+          repository: media-kit/libmpv-win32-video-cmake
+          ref: ${{ env.BUILDER_COMMIT }}
+          path: _build/win-builder
+          fetch-depth: 1
+
+      - name: Pin mpv source to exact 0.41.0 commit
+        working-directory: _build/win-builder
         run: |
           set -euxo pipefail
-          curl --fail --location --retry 4 \
-            "https://github.com/mpv-player/mpv/releases/download/v0.41.0/${{ matrix.asset }}" \
-            --output "$RUNNER_TEMP/mpv.zip"
-          echo "${{ matrix.sha256 }}  $RUNNER_TEMP/mpv.zip" | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Inspect libmpv payload
+          path = Path('packages/mpv-release.cmake')
+          text = path.read_text()
+          anchor = 'ExternalProject_Add(mpv-release'
+          if anchor not in text:
+              raise SystemExit('mpv-release.cmake layout changed: ExternalProject anchor missing')
+          tail = text[text.index(anchor):]
+          commit = '41f6a645068483470267271e1d09966ca3b9f413'
+          prefix = (
+              '# AnimeWitcher reproducibility pin: exact upstream mpv v0.41.0 commit.\n'
+              f'set(LINK "https://github.com/mpv-player/mpv/archive/{commit}.tar.gz")\n\n'
+          )
+          path.write_text(prefix + tail)
+          updated = path.read_text()
+          if commit not in updated or 'releases/latest' in updated:
+              raise SystemExit('failed to replace moving mpv release source with exact commit')
+          PY
+          grep -F "$MPV_COMMIT" packages/mpv-release.cmake
+          ! grep -F 'releases/latest' packages/mpv-release.cmake
+
+      - name: Configure pinned cross toolchain
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+          TARGET_CPU: ${{ matrix.target }}
         run: |
           set -euxo pipefail
-          mkdir -p "$RUNNER_TEMP/mpv"
-          unzip -q "$RUNNER_TEMP/mpv.zip" -d "$RUNNER_TEMP/mpv"
-          find "$RUNNER_TEMP/mpv" -maxdepth 4 -type f -printf '%P\n' | sort | tee "$RUNNER_TEMP/file-list.txt"
+          git config --global --add safe.directory "$PWD"
+          cmake \
+            -DTARGET_ARCH="${TARGET_CPU}-w64-mingw32" \
+            -DCOMPILER_TOOLCHAIN=clang \
+            -DCMAKE_INSTALL_PREFIX="$PWD/clang_root" \
+            -DMINGW_INSTALL_PREFIX="$PWD/build_${BIT}/${BIT}-w64-mingw32" \
+            -DSINGLE_SOURCE_LOCATION="$PWD/src_packages" \
+            -DRUSTUP_LOCATION="$PWD/clang_root/install_rustup" \
+            -DENABLE_CCACHE=ON \
+            -DCLANG_PACKAGES_LTO=ON \
+            -G Ninja --fresh \
+            -B "build_${BIT}" \
+            -S "$PWD"
 
-          dll="$(find "$RUNNER_TEMP/mpv" -type f \( -iname 'libmpv-2.dll' -o -iname 'mpv-2.dll' \) -print -quit)"
+      - name: Build exact mpv 0.41 libmpv
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set -euxo pipefail
+          ninja -C "build_${BIT}" update
+          ninja -C "build_${BIT}" mpv-release
+
+      - name: Verify and stage libmpv runtime
+        env:
+          BIT: ${{ matrix.bit }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          dll="$(find _build/win-builder/build_${BIT} -type f -iname 'libmpv-2.dll' -print -quit)"
           if [[ -z "$dll" ]]; then
-            echo 'Official v0.41.0 player archive does not expose a shared libmpv DLL.' >&2
+            echo 'Pinned builder completed but libmpv-2.dll was not produced.' >&2
+            find "_build/win-builder/build_${BIT}" -maxdepth 6 -type f -iname '*mpv*' -print >&2 || true
             exit 2
           fi
 
-          header="$(find "$RUNNER_TEMP/mpv" -type f -path '*/mpv/client.h' -print -quit)"
-          if [[ -z "$header" ]]; then
-            echo 'Official v0.41.0 player archive does not expose libmpv headers.' >&2
-            exit 3
-          fi
+          out="$RUNNER_TEMP/mpv-windows-${ARCH}"
+          mkdir -p "$out/include/mpv"
+          cp "$dll" "$out/libmpv-2.dll"
+          cp third_party/mpv/v0.41.0/client.h "$out/include/mpv/client.h"
+          cp third_party/mpv/v0.41.0/render.h "$out/include/mpv/render.h"
+          cp third_party/mpv/v0.41.0/render_gl.h "$out/include/mpv/render_gl.h"
+          cp third_party/mpv/v0.41.0/stream_cb.h "$out/include/mpv/stream_cb.h"
 
-          python3 - "$GITHUB_WORKSPACE" "${{ matrix.arch }}" "$dll" <<'PY'
+          python3 - "$GITHUB_WORKSPACE" "$ARCH" "$out/libmpv-2.dll" <<'PY'
           import sys
           from pathlib import Path
           sys.path.insert(0, sys.argv[1])
@@ -69,14 +138,41 @@ jobs:
           errors = verify_dll(sys.argv[2], Path(sys.argv[3]))
           if errors:
               raise SystemExit('\n'.join(errors))
-          print(f"verified {sys.argv[2]} upstream libmpv: {sys.argv[3]}")
+          print(f"verified {sys.argv[2]} libmpv: {sys.argv[3]}")
           PY
 
-      - name: Upload probe file list
+          sha256sum "$out/libmpv-2.dll" | tee "$out/libmpv-2.dll.sha256"
+          printf '%s\n' \
+            "mpv=$MPV_VERSION" \
+            "mpv_commit=$MPV_COMMIT" \
+            "builder_commit=$BUILDER_COMMIT" \
+            "arch=$ARCH" \
+            "gpl=false" > "$out/provenance.txt"
+
+      - name: Collect builder logs
         if: always()
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/mpv-windows-${{ matrix.arch }}-logs"
+          find "_build/win-builder/build_${BIT}" -type f \( -name '*.log' -o -path '*/ffbuild/config.log' \) \
+            -exec cp --parents '{}' "$RUNNER_TEMP/mpv-windows-${{ matrix.arch }}-logs"/ \; 2>/dev/null
+
+      - name: Upload verified runtime
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: mpv-v0.41.0-windows-${{ matrix.arch }}-official-probe
-          path: ${{ runner.temp }}/file-list.txt
+          name: mpv-v0.41.0-windows-${{ matrix.arch }}
+          path: ${{ runner.temp }}/mpv-windows-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv-v0.41.0-windows-${{ matrix.arch }}-logs
+          path: ${{ runner.temp }}/mpv-windows-${{ matrix.arch }}-logs
           if-no-files-found: warn
           retention-days: 3
