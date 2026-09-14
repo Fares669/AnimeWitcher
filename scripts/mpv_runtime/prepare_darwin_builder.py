@@ -32,6 +32,7 @@ def git_head(directory: Path) -> str:
 
 
 OBSOLETE_FFMPEG_DASH_PATCH = "    patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}\n"
+OBSOLETE_MPV_OBJC_PATCH = "    patch -p1 <${../../../patches/mpv-fix-missing-objc.patch}\n"
 OLD_AUDIOUNIT_PATCH_MARKER = "-    [instance setCategory:AVAudioSessionCategoryPlayback error:nil];"
 
 
@@ -46,6 +47,18 @@ def prepare_patch_compatibility(builder: Path, repo_root: Path) -> None:
         )
     ffmpeg_recipe.write_text(
         text.replace(OBSOLETE_FFMPEG_DASH_PATCH, "", 1), encoding="utf-8"
+    )
+
+    mpv_recipe = builder / "nix/packages/mk-pkg-mpv/default.nix"
+    text = mpv_recipe.read_text(encoding="utf-8")
+    count = text.count(OBSOLETE_MPV_OBJC_PATCH)
+    if count != 1:
+        raise RuntimeError(
+            "expected exactly one obsolete mpv Objective-C patch application; "
+            f"found {count}"
+        )
+    mpv_recipe.write_text(
+        text.replace(OBSOLETE_MPV_OBJC_PATCH, "", 1), encoding="utf-8"
     )
 
     audio_patch = builder / "patches/mpv-audiounit-shared-session.patch"
