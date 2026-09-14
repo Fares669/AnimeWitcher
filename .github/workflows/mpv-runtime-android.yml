@@ -1,0 +1,65 @@
+name: mpv Android Runtime
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/mpv-runtime-android.yml'
+      - 'scripts/mpv_runtime/**'
+      - 'third_party/mpv/**'
+      - 'MPV_UPGRADE_PLAN.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mpv-android-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-arm64-smoke:
+    name: Build mpv 0.41 Android arm64
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout AnimeWitcher
+        uses: actions/checkout@v5
+
+      - name: Checkout pinned mpv-android toolchain
+        uses: actions/checkout@v5
+        with:
+          repository: mpv-android/mpv-android
+          ref: 6deb01cee00e347c8e72fc57dd61fbb43916a528
+          path: _build/mpv-android
+          fetch-depth: 1
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf automake libtool pkg-config ninja-build nasm cmake gettext
+          python3 -m pip install --user 'meson>=1.4,<2'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build & verify media_kit-compatible arm64 runtime
+        run: |
+          chmod +x scripts/mpv_runtime/build_android_runtime.sh
+          scripts/mpv_runtime/build_android_runtime.sh \
+            arm64-v8a \
+            "$GITHUB_WORKSPACE/_build/mpv-android" \
+            "$RUNNER_TEMP/mpv-runtime"
+
+      - name: Upload verified arm64 runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv-android-v0.41.0-arm64-v8a
+          path: ${{ runner.temp }}/mpv-runtime/**
+          if-no-files-found: error
+          retention-days: 7
