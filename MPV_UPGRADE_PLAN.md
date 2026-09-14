@@ -10,7 +10,7 @@
 ## Shipping constraints
 
 - Target actual native runtime: mpv `v0.41.0` on every supported native platform.
-- Keep renderer explicitly on `gpu` during the migration; `gpu-next` benchmarking is a separate follow-up.
+- Target renderer: explicit `gpu-next`; keep explicit `gpu` only as fallback/A-B comparison while migration is validated.
 - Keep `media_kit 1.2.6`, `media_kit_video 2.0.1`, and `media_kit_libs_video 1.0.7` unless a verified blocker requires a focused dependency change.
 - Keep Anime4K behavior/presets and Apple Metal routing unchanged.
 - Header/runtime ABI alignment is mandatory; headers-only updates do not count as a runtime upgrade.
@@ -19,12 +19,14 @@
 ---
 
 - [x] **MPV-00 — Architecture and migration scope**
-  - Approved design isolates inventory, header/runtime alignment, platform upgrades, renderer lock, and acceptance verification.
-  - Rollback remains platform-by-platform.
+  - Approved design isolates inventory, header/runtime alignment, platform upgrades, renderer rollout, and acceptance verification.
+  - `gpu-next` is the target renderer; `gpu` remains an explicit fallback.
+  - Rollback remains platform-by-platform and renderer rollback is independent from runtime rollback.
 
 - [ ] **MPV-01 — Runtime inventory/version contract**
   - Add machine-readable target/header/media_kit/platform provenance manifest.
   - Add deterministic verifier and CI tests.
+  - Contract declares `renderer.primary = gpu-next` and `renderer.fallback = gpu`.
   - Current audited baselines: Darwin `v0.7.2 -> mpv v0.36.0`; Android `v1.1.7 -> mpv 78d43740...`; Windows `20241021 -> mpv 0f785845...`.
 
 - [ ] **MPV-02 — Exact mpv v0.41.0 target headers**
@@ -48,14 +50,16 @@
   - Replace the current 2024 development snapshot with stable v0.41.0.
   - Build and verify packaged runtime before marking complete.
 
-- [ ] **MPV-07 — Explicit `gpu` renderer compatibility lock**
-  - Playback configuration explicitly preserves `gpu` under mpv 0.41.
-  - No `gpu-next` default change is allowed in this PR.
-  - Anime4K native/fallback routing remains unchanged.
+- [ ] **MPV-07 — Explicit `gpu-next` renderer rollout**
+  - Playback configuration explicitly selects `gpu-next` under mpv 0.41.
+  - `gpu` remains available as an explicit fallback/A-B path, not the normal default.
+  - Anime4K native/fallback routing and A+A/A+S presets remain unchanged.
+  - Focused tests verify the renderer policy instead of relying on mpv defaults.
 
 - [ ] **MPV-08 — Full build/playback acceptance**
   - Contract verifier, Flutter analyze/tests, native patch tests and platform build matrix are green.
   - Playback acceptance covers local/HLS, seek, pause/resume, subtitles, audio tracks, hwdec/software fallback, Anime4K off/A+A/A+S, repeated player open/close.
+  - Acceptance compares `gpu-next` normal playback with explicit `gpu` fallback on the same mpv 0.41 runtime.
   - Exact PR head must be green before the draft is marked ready.
 
 ## Execution order
