@@ -33,6 +33,17 @@ def git_head(directory: Path) -> str:
 
 OBSOLETE_FFMPEG_DASH_PATCH = "    patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}\n"
 OBSOLETE_MPV_OBJC_PATCH = "    patch -p1 <${../../../patches/mpv-fix-missing-objc.patch}\n"
+OLD_FFMPEG_VP9_HUNK = "@@ -1906,6 +1906,35 @@ const FFCodec ff_vp9_decoder = {\n"
+NEW_FFMPEG_VP9_HUNK = "@@ -1906,6 +1906,34 @@ const FFCodec ff_vp9_decoder = {\n"
+OLD_FFMPEG_VP9_PROGRESS_BLOCK = (
+    "+    .caps_internal         = FF_CODEC_CAP_INIT_CLEANUP |\n"
+    "+                                FF_CODEC_CAP_SLICE_THREAD_HAS_MF |\n"
+    "+                                FF_CODEC_CAP_ALLOCATE_PROGRESS,\n"
+)
+NEW_FFMPEG_VP9_PROGRESS_BLOCK = (
+    "+    .caps_internal         = FF_CODEC_CAP_INIT_CLEANUP |\n"
+    "+                                FF_CODEC_CAP_SLICE_THREAD_HAS_MF,\n"
+)
 OLD_AUDIOUNIT_PATCH_MARKER = "-    [instance setCategory:AVAudioSessionCategoryPlayback error:nil];"
 
 
@@ -48,6 +59,23 @@ def prepare_patch_compatibility(builder: Path, repo_root: Path) -> None:
     ffmpeg_recipe.write_text(
         text.replace(OBSOLETE_FFMPEG_DASH_PATCH, "", 1), encoding="utf-8"
     )
+
+    vp9_patch = builder / "patches/ffmpeg-fix-vp9-hwaccel.patch"
+    text = vp9_patch.read_text(encoding="utf-8")
+    hunk_count = text.count(OLD_FFMPEG_VP9_HUNK)
+    progress_count = text.count(OLD_FFMPEG_VP9_PROGRESS_BLOCK)
+    if hunk_count != 1 or progress_count != 1:
+        raise RuntimeError(
+            "FFmpeg VP9 VideoToolbox patch drifted before FFmpeg 8 rebase: "
+            f"hunk={hunk_count}, progress={progress_count}"
+        )
+    text = text.replace(OLD_FFMPEG_VP9_HUNK, NEW_FFMPEG_VP9_HUNK, 1)
+    text = text.replace(
+        OLD_FFMPEG_VP9_PROGRESS_BLOCK,
+        NEW_FFMPEG_VP9_PROGRESS_BLOCK,
+        1,
+    )
+    vp9_patch.write_text(text, encoding="utf-8")
 
     mpv_recipe = builder / "nix/packages/mk-pkg-mpv/default.nix"
     text = mpv_recipe.read_text(encoding="utf-8")
