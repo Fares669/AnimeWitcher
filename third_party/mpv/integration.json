@@ -1,0 +1,46 @@
+{
+  "target": {
+    "tag": "v0.41.0",
+    "headers": {
+      "client.h": "9a902859c6176f89a6b6ac5f7b33fa73d371853a",
+      "render.h": "0803ce97af8c4a23708c6b37f80c653ab3659022",
+      "render_gl.h": "5c376bd8c359801b490ca04a2f19a13812acefed",
+      "stream_cb.h": "2d055363113652caeeef61b71fed1fea4ba09b3f"
+    }
+  },
+  "renderer": {
+    "primary": "gpu-next",
+    "fallback": "gpu"
+  },
+  "media_kit": {
+    "media_kit": "1.2.6",
+    "media_kit_video": "2.0.1",
+    "media_kit_libs_video": "1.0.7"
+  },
+  "platforms": {
+    "ios": {
+      "runtime_source": "libmpv-darwin-build",
+      "runtime_ref": "v0.7.2",
+      "actual_mpv": "v0.36.0",
+      "status": "pending"
+    },
+    "macos": {
+      "runtime_source": "libmpv-darwin-build",
+      "runtime_ref": "v0.7.2",
+      "actual_mpv": "v0.36.0",
+      "status": "pending"
+    },
+    "android": {
+      "runtime_source": "libmpv-android-video-build",
+      "runtime_ref": "v1.1.7",
+      "actual_mpv": "78d43740f52db817d98bcf24fb30a76ab6fa13ff",
+      "status": "pending"
+    },
+    "windows": {
+      "runtime_source": "media_kit_libs_windows_video",
+      "runtime_ref": "20241021",
+      "actual_mpv": "0f7858451817c5fd5ebdb74a807a7c997662c390",
+      "status": "pending"
+    }
+  }
+}
