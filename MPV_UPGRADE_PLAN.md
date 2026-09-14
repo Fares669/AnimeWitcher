@@ -23,19 +23,22 @@
   - `gpu-next` is the target renderer; `gpu` remains an explicit fallback.
   - Rollback remains platform-by-platform and renderer rollback is independent from runtime rollback.
 
-- [ ] **MPV-01 — Runtime inventory/version contract**
-  - Add machine-readable target/header/media_kit/platform provenance manifest.
-  - Add deterministic verifier and CI tests.
+- [x] **MPV-01 — Runtime inventory/version contract**
+  - Machine-readable `third_party/mpv/integration.json` records target/header/media_kit/platform provenance.
+  - Deterministic verifier and CI tests reject version/renderer/status drift.
   - Contract declares `renderer.primary = gpu-next` and `renderer.fallback = gpu`.
-  - Current audited baselines: Darwin `v0.7.2 -> mpv v0.36.0`; Android `v1.1.7 -> mpv 78d43740...`; Windows `20241021 -> mpv 0f785845...`.
+  - Audited baselines: Darwin `v0.7.2 -> mpv v0.36.0`; Android `v1.1.7 -> mpv 78d43740...`; Windows `20241021 -> mpv 0f785845...`.
 
-- [ ] **MPV-02 — Exact mpv v0.41.0 target headers**
-  - Vendor the exact four upstream libmpv headers with immutable Git blob verification.
-  - Do not activate them while Apple still links the v0.36 runtime.
+- [x] **MPV-02 — Exact mpv v0.41.0 target headers**
+  - Vendored the exact four upstream libmpv v0.41.0 headers and verify immutable Git blob SHAs in CI.
+  - They remain staged only; Apple still consumes v0.36 headers until its runtime is switched atomically in MPV-04.
 
-- [ ] **MPV-03 — Runtime replacement boundary per platform**
-  - Record whether each platform can use an upstream package or needs an isolated runtime overlay.
-  - Do not fork the media_kit Dart API unless no smaller native boundary is safe.
+- [x] **MPV-03 — Runtime replacement boundary per platform**
+  - `docs/mpv_runtime_provenance.md` records current binaries, evidence, and the smallest native replacement boundary.
+  - iOS/macOS: runtime overlay at media_kit's XCFramework archive URL/checksum boundary.
+  - Android: runtime overlay at media_kit's architecture JAR URL/hash boundary.
+  - Windows: runtime overlay at media_kit's libmpv archive URL/hash boundary.
+  - No media_kit Dart API fork is planned.
 
 - [ ] **MPV-04 — Apple runtime/header alignment**
   - iOS/macOS link mpv v0.41.0 and compile against matching v0.41.0 headers.
