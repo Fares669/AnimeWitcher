@@ -163,6 +163,50 @@ class IntegrationContractTest(unittest.TestCase):
 
 
 @unittest.skipUnless(VERIFIER_PATH.is_file(), "verifier not implemented yet")
+class TargetHeaderVerifierAvailabilityTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.verifier = load_verifier()
+
+    def test_target_header_integrity_verifier_exists(self):
+        self.assertTrue(
+            hasattr(self.verifier, "validate_target_headers"),
+            "target header integrity verification has not been implemented yet",
+        )
+
+
+HEADER_VERIFIER_AVAILABLE = False
+if VERIFIER_PATH.is_file():
+    HEADER_VERIFIER_AVAILABLE = hasattr(load_verifier(), "validate_target_headers")
+
+
+@unittest.skipUnless(HEADER_VERIFIER_AVAILABLE, "target header verifier not implemented yet")
+class TargetHeaderIntegrityTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.verifier = load_verifier()
+
+    def test_missing_target_headers_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            errors = self.verifier.validate_target_headers(valid_manifest(), Path(temp_dir))
+        self.assertTrue(any("client.h" in error and "missing" in error for error in errors), errors)
+
+    def test_wrong_target_header_content_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            header_dir = root / "third_party" / "mpv" / "v0.41.0"
+            header_dir.mkdir(parents=True)
+            for name in APPROVED_HEADERS:
+                (header_dir / name).write_text("not upstream mpv\n", encoding="utf-8")
+            errors = self.verifier.validate_target_headers(valid_manifest(), root)
+        self.assertTrue(any("blob hash" in error for error in errors), errors)
+
+    def test_repository_target_headers_match_upstream_blob_hashes(self):
+        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(self.verifier.validate_target_headers(manifest, REPO_ROOT), [])
+
+
+@unittest.skipUnless(VERIFIER_PATH.is_file(), "verifier not implemented yet")
 class RepositoryContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
