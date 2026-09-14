@@ -27,6 +27,28 @@ require_relative '../scripts/anime4k_media_kit_patch'
 require_relative '../scripts/anime4k_mpv_pacing_patch'
 require_relative '../scripts/anime4k_metal_capi_install'
 
+def prepare_animewitcher_apple_mpv(platform)
+  repo_root = File.expand_path('..', __dir__)
+  pub_cache = ENV['PUB_CACHE'] || File.expand_path('~/.pub-cache')
+  env = { 'PUB_CACHE' => pub_cache }
+  runtime_script = File.join(repo_root, 'scripts', 'mpv_runtime', 'prepare_apple_runtime.sh')
+  headers_script = File.join(repo_root, 'scripts', 'prepare_media_kit_ios_headers.sh')
+  verify_script = File.join(repo_root, 'scripts', 'mpv_runtime', 'verify_apple_runtime.sh')
+
+  unless system(env, 'bash', runtime_script, platform)
+    raise "[AnimeWitcher] failed to prepare pinned mpv runtime for #{platform}"
+  end
+  unless system(env, 'bash', headers_script, platform)
+    raise "[AnimeWitcher] failed to prepare runtime-aligned mpv headers for #{platform}"
+  end
+  unless system(env, 'bash', verify_script, platform)
+    raise "[AnimeWitcher] failed to verify pinned mpv runtime for #{platform}"
+  end
+end
+
+# Prepare the pinned runtime before media_kit podspecs evaluate their Makefiles.
+prepare_animewitcher_apple_mpv('macos')
+
 flutter_macos_podfile_setup
 
 target 'Runner' do
