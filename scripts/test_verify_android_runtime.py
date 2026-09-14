@@ -9,11 +9,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERIFIER = ROOT / "scripts" / "mpv_runtime" / "verify_android_runtime.py"
 ABIS = ("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+REQUIRED_HELPER_SYMBOL = b"mpv_lavc_set_java_vm"
 
 
-def _write_jar(path: Path, abi: str, marker: bytes) -> None:
+def _write_jar(
+    path: Path,
+    abi: str,
+    marker: bytes,
+    *,
+    include_helper_symbol: bool = True,
+) -> None:
+    payload = b"\x7fELF\x00" + marker + b"\x00"
+    if include_helper_symbol:
+        payload += REQUIRED_HELPER_SYMBOL + b"\x00"
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(f"jni/{abi}/libmpv.so", b"\x7fELF\x00" + marker + b"\x00")
+        archive.writestr(f"jni/{abi}/libmpv.so", payload)
 
 
 def _run_verifier(jars: dict[str, Path]):
@@ -38,6 +48,7 @@ class AndroidRuntimeVerifierTest(unittest.TestCase):
             result = _run_verifier(jars)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("android mpv runtime: v0.41.0", result.stdout)
+            self.assertIn("mpv_lavc_set_java_vm", result.stdout)
 
     def test_rejects_old_mpv_even_when_all_abis_are_present(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -81,6 +92,25 @@ class AndroidRuntimeVerifierTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("arm64-v8a", result.stderr)
             self.assertIn("libmpv.so", result.stderr)
+
+    def test_rejects_runtime_without_media_kit_java_vm_bridge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jars = {}
+            for abi in ABIS:
+                path = root / f"default-{abi}.jar"
+                _write_jar(
+                    path,
+                    abi,
+                    b"mpv 0.41.0",
+                    include_helper_symbol=abi != "x86_64",
+                )
+                jars[abi] = path
+
+            result = _run_verifier(jars)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("x86_64", result.stderr)
+            self.assertIn("mpv_lavc_set_java_vm", result.stderr)
 
 
 if __name__ == "__main__":
