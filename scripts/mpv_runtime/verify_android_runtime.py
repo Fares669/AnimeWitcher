@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that the Android media_kit runtime JARs actually bundle mpv v0.41.0."""
+"""Verify that Android media_kit runtime JARs actually bundle compatible mpv v0.41.0."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 TARGET_VERSION = "0.41.0"
 TARGET_TAG = f"v{TARGET_VERSION}"
 EXPECTED_ABIS = ("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+REQUIRED_HELPER_SYMBOL = b"mpv_lavc_set_java_vm"
 VERSION_PATTERN = re.compile(
     rb"mpv[^\x00\n\r]{0,32}v?0\.41\.0(?:[^0-9]|$)", re.IGNORECASE
 )
@@ -69,6 +70,11 @@ def verify_jar(abi: str, path: Path) -> list[str]:
         errors.append(
             f"{abi}: bundled libmpv.so does not identify as mpv {TARGET_TAG}"
         )
+    if REQUIRED_HELPER_SYMBOL not in payload:
+        errors.append(
+            f"{abi}: bundled libmpv.so is missing required media_kit bridge "
+            "mpv_lavc_set_java_vm"
+        )
     return errors
 
 
@@ -85,7 +91,7 @@ def verify(jars: dict[str, Path]) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Verify Android media_kit JARs bundle mpv v0.41.0"
+        description="Verify Android media_kit JARs bundle compatible mpv v0.41.0"
     )
     parser.add_argument(
         "--jar",
@@ -112,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"android mpv runtime: {TARGET_TAG}")
     print("abis: " + ", ".join(EXPECTED_ABIS))
+    print("required symbol: mpv_lavc_set_java_vm")
     return 0
 
 
