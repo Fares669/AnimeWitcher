@@ -179,4 +179,27 @@ void main() {
     expect(body, contains('keepLastKnownExpectedBytes('));
     expect(body, contains('lastKnownExpectedBytes: previous?.totalSize'));
   });
+
+  test('hot TaskProgressUpdate cannot shrink a known logical total', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final switchStart = source.indexOf('switch (update) {');
+    final progressStart = source.indexOf('case TaskProgressUpdate():', switchStart);
+    final statusStart = source.indexOf('case TaskStatusUpdate():', progressStart);
+    expect(switchStart, greaterThanOrEqualTo(0));
+    expect(progressStart, greaterThan(switchStart));
+    expect(statusStart, greaterThan(progressStart));
+    final body = source.substring(progressStart, statusStart);
+
+    expect(body, contains('keepLastKnownExpectedBytes('));
+    expect(body, contains('lastKnownExpectedBytes: previous?.totalSize'));
+    expect(
+      body,
+      isNot(
+        contains(
+          'knownDownloadSize(<int?>[\n            update.expectedFileSize,\n            _telemetry.expectedBytesFor(update.task.taskId),\n            previous?.totalSize,',
+        ),
+      ),
+    );
+  });
 }
