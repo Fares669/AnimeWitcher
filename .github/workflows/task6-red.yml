@@ -1,4 +1,4 @@
-name: Task 12 Legacy Migration RED
+name: Task 12 Legacy Migration GREEN
 
 on:
   push:
@@ -6,15 +6,16 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  legacy-migration-red:
+  legacy-migration-green:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
+          fetch-depth: 0
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -25,5 +26,207 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run Task 12 RED
-        run: flutter test test/core/services/download_legacy_migration_policy_test.dart
+      - name: Apply legacy adoption planner and startup guard
+        shell: python
+        run: |
+          from pathlib import Path
+
+          store_path = Path('lib/core/services/download_job_store.dart')
+          store = store_path.read_text()
+          if 'enum LegacyDownloadAdoption' not in store:
+              needle = 'const Duration kDownloadCanceledTombstoneRetention = Duration(days: 30);\n'
+              assert needle in store
+              addition = r'''
+
+enum LegacyDownloadAdoption {
+  continueLegacy,
+  pluginRehydrate,
+  completed,
+  paused,
+  orphaned,
+}
+
+/// Chooses exactly one startup disposition for a persisted logical episode.
+///
+/// Legacy manifest evidence always wins over a dormant plugin projection so
+/// active PR #231 ranges are never converted into plugin chunks. Conflicting
+/// live legacy/plugin ownership fails closed: startup must settle both owners
+/// and persist an orphan fence before any normal recovery can launch a writer.
+LegacyDownloadAdoption planLegacyDownloadAdoption({
+  required bool hasLegacyManifest,
+  required bool legacyIncompleteParts,
+  required bool hasPluginTask,
+  required bool finalFileComplete,
+  required bool userPaused,
+  required bool legacyWriterActive,
+  required bool pluginWriterActive,
+}) {
+  if (finalFileComplete) return LegacyDownloadAdoption.completed;
+  if (legacyWriterActive && pluginWriterActive) {
+    return LegacyDownloadAdoption.orphaned;
+  }
+  if (hasLegacyManifest) {
+    if (userPaused) return LegacyDownloadAdoption.paused;
+    if (legacyIncompleteParts || legacyWriterActive || hasPluginTask) {
+      return LegacyDownloadAdoption.continueLegacy;
+    }
+    return LegacyDownloadAdoption.continueLegacy;
+  }
+  if (userPaused) return LegacyDownloadAdoption.paused;
+  if (hasPluginTask || pluginWriterActive) {
+    return LegacyDownloadAdoption.pluginRehydrate;
+  }
+  return LegacyDownloadAdoption.orphaned;
+}
+'''
+              store = store.replace(needle, needle + addition, 1)
+              store_path.write_text(store)
+
+          service_path = Path('lib/core/services/download_service.dart')
+          service = service_path.read_text()
+          if 'final legacyAdoption = planLegacyDownloadAdoption(' not in service:
+              old = '''      final oldJob = await _jobStore.get(task.taskId);
+              final userPausedMeta = isUserPausedMetadata(metadata);
+              if (record.status == TaskStatus.complete) {
+                continue;
+              }
+              if (record.status == TaskStatus.canceled &&
+                  metadata == null &&
+                  oldJob == null &&
+                  !userPausedMeta) {
+                continue;
+              }
+              final legacyQueueWaiting = isQueueWaitingMetadata(metadata);
+          '''.replace('              ', '')
+              new = '''      final oldJob = await _jobStore.get(task.taskId);
+              final userPausedMeta = isUserPausedMetadata(metadata);
+              final manifestEvidence = manifestEvidenceById[task.taskId];
+              final legacyWriterActive =
+                  _parallel.isActive(task.taskId) ||
+                  _parallel.hasLiveConnections(task.taskId);
+              final pluginWriterActive = nativeIds.contains(task.taskId);
+              final hasPluginTask =
+                  manifestEvidence == null &&
+                  (pluginWriterActive ||
+                      persistedRecords.any(
+                        (candidate) =>
+                            candidate.task.taskId == task.taskId &&
+                            candidate.task is ParallelDownloadTask,
+                      ));
+              final migrationUserPaused = oldJob != null
+                  ? downloadJobHasUserPauseIntent(oldJob.state)
+                  : userPausedMeta || _userPausedIds.contains(task.taskId);
+              final legacyAdoption = planLegacyDownloadAdoption(
+                hasLegacyManifest: manifestEvidence != null,
+                legacyIncompleteParts:
+                    manifestEvidence != null &&
+                    manifestEvidence.durableBytes < manifestEvidence.expectedBytes,
+                hasPluginTask: hasPluginTask,
+                finalFileComplete: record.status == TaskStatus.complete,
+                userPaused: migrationUserPaused,
+                legacyWriterActive: legacyWriterActive,
+                pluginWriterActive: pluginWriterActive,
+              );
+              diagnosticLog.record('recovery.legacyAdoption', {
+                'taskId': task.taskId,
+                'adoption': legacyAdoption.name,
+                'legacyWriter': legacyWriterActive,
+                'pluginWriter': pluginWriterActive,
+              });
+              if (legacyAdoption == LegacyDownloadAdoption.completed) {
+                continue;
+              }
+              if (legacyAdoption == LegacyDownloadAdoption.orphaned &&
+                  legacyWriterActive &&
+                  pluginWriterActive) {
+                final orphanCommitted = await _checkpointLogicalJob(
+                  task,
+                  state: DownloadJobState.orphaned,
+                  expectedBytes: knownDownloadSize(<int?>[
+                    record.expectedFileSize,
+                    manifestEvidence?.expectedBytes,
+                    oldJob?.expectedBytes,
+                  ]),
+                  userPaused: false,
+                  queueWaiting: false,
+                );
+                if (!orphanCommitted) {
+                  diagnosticLog.record('recovery.ownershipConflict', {
+                    'taskId': task.taskId,
+                    'reason': 'orphanCheckpointFailed',
+                  });
+                  continue;
+                }
+                var legacySettled = true;
+                if (task is ParallelDownloadTask) {
+                  try {
+                    legacySettled = await _parallel.pause(task);
+                  } catch (_) {
+                    legacySettled = false;
+                  }
+                }
+                var pluginSettled = true;
+                try {
+                  pluginSettled = await _nativeTransport.pause(task);
+                } catch (_) {
+                  pluginSettled = false;
+                }
+                diagnosticLog.record('recovery.ownershipConflict', {
+                  'taskId': task.taskId,
+                  'legacySettled': legacySettled,
+                  'pluginSettled': pluginSettled,
+                });
+                _queueWaitingIds.remove(task.taskId);
+                _waitingPayloads.remove(task.taskId);
+                _forgetSessionTask(task.taskId);
+                continue;
+              }
+              if (legacyAdoption == LegacyDownloadAdoption.paused) {
+                _userPausedIds.add(task.taskId);
+              }
+              if (record.status == TaskStatus.canceled &&
+                  metadata == null &&
+                  oldJob == null &&
+                  !userPausedMeta) {
+                continue;
+              }
+              final legacyQueueWaiting = isQueueWaitingMetadata(metadata);
+          '''.replace('              ', '')
+              assert old in service, 'startup recovery adoption insertion point not found'
+              service = service.replace(old, new, 1)
+              service_path.write_text(service)
+      - name: Format migration changes
+        run: |
+          dart format \
+            lib/core/services/download_job_store.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_legacy_migration_policy_test.dart
+      - name: Run Task 12 migration and recovery suite
+        run: |
+          flutter test \
+            test/core/services/download_legacy_migration_policy_test.dart \
+            test/core/services/download_manifest_startup_inventory_test.dart \
+            test/core/services/persistent_parallel_download_manifest_discovery_test.dart \
+            test/core/services/download_recovery_inventory_test.dart
+      - name: Analyze migration files
+        run: |
+          flutter analyze --no-fatal-warnings --no-fatal-infos \
+            lib/core/services/download_job_store.dart \
+            lib/core/services/download_service.dart \
+            lib/core/services/persistent_parallel_download.dart \
+            test/core/services/download_legacy_migration_policy_test.dart
+      - name: Commit Task 12 GREEN
+        shell: bash
+        run: |
+          if git diff --quiet -- lib/core/services/download_job_store.dart lib/core/services/download_service.dart; then
+            echo 'Task 12 production wiring already present.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            lib/core/services/download_job_store.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_legacy_migration_policy_test.dart
+          git commit -m 'feat(downloads): preserve legacy multipart sessions during migration'
+          git push origin HEAD:refactor/background-downloader-authority
