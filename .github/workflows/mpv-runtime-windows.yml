@@ -119,6 +119,7 @@ jobs:
           anchor = 'FLAGS="$FLAGS -Wno-unused-command-line-argument"\n'
           explicit_defaults = (
               anchor
+              + 'FLAGS="$FLAGS -resource-dir @CMAKE_INSTALL_PREFIX@/lib/clang/20"\n'
               + 'FLAGS="$FLAGS --rtlib=compiler-rt --unwindlib=libunwind"\n'
               + 'if [ "@clang_compiler@" = "clang++" ]; then\n'
               + '    FLAGS="$FLAGS -stdlib=libc++"\n'
@@ -242,6 +243,17 @@ jobs:
           # The exact LLVM 20.1.8 source is still required by compiler-rt/libc++.
           # Download it without recompiling a second host Clang/LLVM toolchain.
           ninja -C "build_${BIT}" llvm-download
+
+          # The reused host Clang 22 keeps its own resource directory. The
+          # pinned LLVM runtime build installs compiler-rt under the builder's
+          # clang 20 layout, so expose only the host builtin headers in that
+          # local layout and let the generated target wrappers select it.
+          host_resource_dir="$(clang -print-resource-dir)"
+          test -d "$host_resource_dir/include"
+          mkdir -p "$PWD/clang_root/lib/clang/20"
+          ln -sfn "$host_resource_dir/include" "$PWD/clang_root/lib/clang/20/include"
+          test -e "$PWD/clang_root/lib/clang/20/include"
+
           ninja -C "build_${BIT}" llvm-wrapper
           test -d src_packages/llvm/libunwind
 

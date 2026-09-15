@@ -32,6 +32,15 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("ninja -C \"build_${BIT}\" llvm-download", workflow)
+        self.assertIn(
+            'FLAGS="$FLAGS -resource-dir @CMAKE_INSTALL_PREFIX@/lib/clang/20"',
+            workflow,
+        )
+        self.assertIn('host_resource_dir="$(clang -print-resource-dir)"', workflow)
+        self.assertIn(
+            'ln -sfn "$host_resource_dir/include" "$PWD/clang_root/lib/clang/20/include"',
+            workflow,
+        )
         self.assertIn("llvm-ranlib", workflow)
         self.assertIn('ninja -C "build_${BIT}" llvm-wrapper', workflow)
         self.assertIn('windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres"', workflow)
