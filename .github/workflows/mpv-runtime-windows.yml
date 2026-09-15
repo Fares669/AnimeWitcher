@@ -27,6 +27,7 @@ env:
   MPV_COMMIT: 41f6a645068483470267271e1d09966ca3b9f413
   BUILDER_COMMIT: e99c86398bbe72fc97e716d25a4f1cc83f6fae4e
   MESON_VERSION: 1.7.2
+  VULKAN_LOADER_COMMIT: bde79ad2dd832db9180c4a6eca2e84ceb12b1bb0
 
 jobs:
   build-libmpv:
@@ -137,6 +138,26 @@ jobs:
           PY
           grep -F "$MPV_COMMIT" packages/mpv-release.cmake
           ! grep -F 'releases/latest' packages/mpv-release.cmake
+
+      - name: Pin Vulkan Loader source and static-linking patch
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('packages/vulkan.cmake')
+          text = path.read_text()
+          old = '    GIT_TAG main'
+          new = f'    GIT_TAG {os.environ["VULKAN_LOADER_COMMIT"]}'
+          if text.count(old) != 1:
+              raise SystemExit('Vulkan Loader source tag layout changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cp "$GITHUB_WORKSPACE/third_party/mpv/patches/windows-vulkan-loader.patch" packages/vulkan-0001-cross-compile-static-linking-hacks.patch
+          grep -F "$VULKAN_LOADER_COMMIT" packages/vulkan.cmake
+          grep -F 'Subject: [PATCH] loader: rebase static linking patch onto pinned source' packages/vulkan-0001-cross-compile-static-linking-hacks.patch
 
       - name: Configure pinned cross toolchain
         working-directory: _build/win-builder
