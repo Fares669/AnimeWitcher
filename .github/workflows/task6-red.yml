@@ -1,4 +1,4 @@
-name: Task 8 Planner GREEN
+name: Task 8 Range Isolation RED
 
 on:
   push:
@@ -6,16 +6,15 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  planner-green:
+  range-isolation-red:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
-          fetch-depth: 0
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -26,52 +25,8 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Apply refreshed-transfer planner
-        shell: python
+      - name: Run Task 8 wiring RED
         run: |
-          from pathlib import Path
-          path = Path('lib/core/services/download_url_refresh.dart')
-          source = path.read_text()
-          if 'enum RefreshedTransferResumeMode' not in source:
-              needle = "const Duration kDownloadUrlRefreshDescriptorTtl = Duration(days: 30);\n"
-              assert needle in source
-              addition = ("\n\nenum RefreshedTransferResumeMode {\n"
-                          "  pluginResume,\n"
-                          "  verifiedRangeFallback,\n"
-                          "  restartRequired,\n"
-                          "  incompatibleResource,\n"
-                          "}\n\n"
-                          "RefreshedTransferResumeMode planRefreshedTransferResume({\n"
-                          "  required bool resourceCompatible,\n"
-                          "  required bool hasPartialBytes,\n"
-                          "  required bool pluginCanResumeChangedSource,\n"
-                          "}) {\n"
-                          "  if (!hasPartialBytes) return RefreshedTransferResumeMode.pluginResume;\n"
-                          "  if (!resourceCompatible) {\n"
-                          "    return RefreshedTransferResumeMode.incompatibleResource;\n"
-                          "  }\n"
-                          "  if (pluginCanResumeChangedSource) {\n"
-                          "    return RefreshedTransferResumeMode.pluginResume;\n"
-                          "  }\n"
-                          "  return RefreshedTransferResumeMode.verifiedRangeFallback;\n"
-                          "}\n")
-              source = source.replace(needle, needle + addition, 1)
-          path.write_text(source)
-      - name: Format planner
-        run: dart format lib/core/services/download_url_refresh.dart test/core/services/download_plugin_source_refresh_test.dart
-      - name: Run planner tests
-        run: flutter test test/core/services/download_plugin_source_refresh_test.dart
-      - name: Analyze planner files
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_url_refresh.dart test/core/services/download_plugin_source_refresh_test.dart
-      - name: Commit planner
-        shell: bash
-        run: |
-          if git diff --quiet -- lib/core/services/download_url_refresh.dart; then
-            echo 'Planner already present.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add lib/core/services/download_url_refresh.dart test/core/services/download_plugin_source_refresh_test.dart
-          git commit -m 'refactor(downloads): plan refreshed transfer resume mode'
-          git push origin HEAD:refactor/background-downloader-authority
+          flutter test \
+            test/core/services/download_plugin_source_refresh_test.dart \
+            test/core/services/download_source_refresh_service_wiring_test.dart
