@@ -46,4 +46,57 @@ void main() {
     expect(commit, greaterThanOrEqualTo(0));
     expect(resume, greaterThan(commit));
   });
+
+  test('plugin-owned parallel parents bypass custom iOS multipart promotion', () {
+    final service = File(
+      'lib/core/services/download_service.dart',
+    ).readAsStringSync();
+
+    final snapshotStart = service.indexOf(
+      'Future<void> _persistNativeWaitingSnapshot(',
+    );
+    final snapshotEnd = service.indexOf(
+      'String? _notificationConfigJson(',
+      snapshotStart,
+    );
+    expect(snapshotStart, greaterThanOrEqualTo(0));
+    expect(snapshotEnd, greaterThan(snapshotStart));
+    final snapshot = service.substring(snapshotStart, snapshotEnd);
+
+    expect(
+      snapshot,
+      contains('task is! ParallelDownloadTask'),
+      reason:
+          'a plugin ParallelDownloadTask must never be serialized as one raw Swift waiter',
+    );
+    expect(
+      snapshot,
+      contains('for (final plan in _parallel.nativeBackgroundPlans())'),
+      reason:
+          'custom multipart claims must originate only from the legacy PersistentParallelDownload owner',
+    );
+    expect(
+      snapshot,
+      isNot(contains('buildPluginTransportTask(')),
+      reason:
+          'the iOS custom handoff must not manufacture or adopt plugin-owned parallel parents',
+    );
+
+    final overlayStart = service.indexOf(
+      'Future<DownloadOverlaySession> _planSessionOverlay(',
+    );
+    final overlayEnd = service.indexOf(
+      'Future<void> _syncSessionOverlay(',
+      overlayStart,
+    );
+    expect(overlayStart, greaterThanOrEqualTo(0));
+    expect(overlayEnd, greaterThan(overlayStart));
+    final overlay = service.substring(overlayStart, overlayEnd);
+    expect(
+      overlay,
+      contains('if (!isLogicalEpisodeDownloadTask(record.task)) continue;'),
+      reason:
+          'continued-processing presentation must see one logical parent, never plugin chunks',
+    );
+  });
 }
