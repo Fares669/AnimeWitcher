@@ -15,7 +15,10 @@ Future<Uri> _backgroundDownloaderRoot() async {
   final package = packages.singleWhere(
     (entry) => entry['name'] == 'background_downloader',
   );
-  return packageConfigFile.parent.uri.resolve(package['rootUri'] as String);
+  final resolved = packageConfigFile.parent.uri.resolve(
+    package['rootUri'] as String,
+  );
+  return Directory.fromUri(resolved).uri;
 }
 
 Future<String> _packageSource(Uri root, String path) =>
