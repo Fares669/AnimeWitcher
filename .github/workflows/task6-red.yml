@@ -1,4 +1,4 @@
-name: Task 6 GREEN
+name: Task 7 RED
 
 on:
   push:
@@ -6,136 +6,21 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  green:
+  contract-red:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
-          fetch-depth: 0
-
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.47.1
           cache: true
-
-      - name: Install dependencies and generate sources
-        run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-
-      - name: Apply Task 6 production patch
-        shell: python
-        run: |
-          from pathlib import Path
-          import re
-
-          path = Path('lib/core/services/download_service.dart')
-          source = path.read_text()
-
-          if "import 'download_transport_policy.dart';" not in source:
-              needle = "import 'download_transfer_projection.dart';\n"
-              assert needle in source
-              source = source.replace(
-                  needle,
-                  needle + "import 'download_transport_policy.dart';\n",
-                  1,
-              )
-
-          if 'final bool _pluginParallelAccepted;' not in source:
-              needle = '  final Ref _ref;\n  final Dio _dio;\n'
-              assert needle in source
-              source = source.replace(
-                  needle,
-                  '  final Ref _ref;\n  final Dio _dio;\n  final bool _pluginParallelAccepted;\n',
-                  1,
-              )
-
-          if 'pluginParallelAccepted = false' not in source:
-              source, count = re.subn(
-                  r"  DownloadService\(this\._ref\)\s*:\s*_dio = _ref\.read\(dioClientProvider\)\s*\{",
-                  "  DownloadService(this._ref, {bool pluginParallelAccepted = false})\n"
-                  "    : _dio = _ref.read(dioClientProvider),\n"
-                  "      _pluginParallelAccepted = pluginParallelAccepted {",
-                  source,
-                  count=1,
-              )
-              assert count == 1
-
-          if 'final legacySessionExists = await _parallel.restore(task);' not in source:
-              new_enqueue = '''  Future<bool> _enqueueTransfer(DownloadTask task, int totalBytes) async {
-            if (!_networkAvailable) {
-              await _holdDownloadForNetwork(task);
-              return true;
-            }
-            if (task is! ParallelDownloadTask) return _nativeTransport.start(task);
-
-            // Durable legacy multipart evidence wins over platform capability:
-            // an existing session must never switch executors mid-transfer.
-            final legacySessionExists = await _parallel.restore(task);
-            final backend = selectDownloadExecutionBackend(
-              connections: downloadTaskPartCount(task),
-              pluginParallelAccepted: _pluginParallelAccepted,
-              legacySessionExists: legacySessionExists,
-            );
-            if (backend == DownloadExecutionBackend.pluginParallel) {
-              final pluginTask = buildPluginTransportTask(
-                template: task,
-                connections: downloadTaskPartCount(task),
-              );
-              return _nativeTransport.start(pluginTask);
-            }
-            if (backend == DownloadExecutionBackend.pluginSingle) {
-              return _nativeTransport.start(task);
-            }
-
-            if (totalBytes <= 0) {
-              totalBytes =
-                  (await getMetadata(task.url, headers: task.headers))?.size ?? -1;
-            }
-            return _parallel.start(task, totalBytes);
-          }
-
-          '''
-              source, count = re.subn(
-                  r"  Future<bool> _enqueueTransfer\(DownloadTask task, int totalBytes\) async \{.*?\n  \}\n\n(?=  Future<DownloadResourceFingerprint\?> _probeResourceFingerprint)",
-                  new_enqueue,
-                  source,
-                  count=1,
-                  flags=re.S,
-              )
-              assert count == 1
-
-          path.write_text(source)
-
-      - name: Format production file
-        run: dart format lib/core/services/download_service.dart
-
-      - name: Verify Task 6 focused suite
-        run: |
-          flutter test \
-            test/core/services/download_plugin_parallel_execution_test.dart \
-            test/core/services/download_logical_identity_start_test.dart \
-            test/core/services/download_job_logical_identity_test.dart \
-            test/core/services/download_start_outcome_guard_test.dart
-
-      - name: Analyze changed download services
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart lib/core/services/download_transport_policy.dart lib/core/services/download_parallel.dart lib/core/services/background_downloader_transport.dart
-
-      - name: Commit Task 6 production patch
-        shell: bash
-        run: |
-          if git diff --quiet -- lib/core/services/download_service.dart; then
-            echo 'Task 6 production patch already present.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add lib/core/services/download_service.dart
-          git commit -m 'feat(downloads): add plugin parallel execution path'
-          git push origin HEAD:refactor/background-downloader-authority
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Run Task 7 RED contract
+        run: flutter test test/core/services/download_plugin_parallel_contract_test.dart
