@@ -33,6 +33,7 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         )
         self.assertIn("ninja -C \"build_${BIT}\" llvm-download", workflow)
         self.assertIn("Patch pinned-source cleanup for detached commits", workflow)
+        self.assertIn("if old in text:", workflow)
         self.assertIn(
             '"build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh"',
             workflow,

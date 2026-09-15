@@ -217,9 +217,8 @@ jobs:
                   raise SystemExit(f'missing cleanup script: {path}')
               text = path.read_text()
               old = '@{u}'
-              if text.count(old) != 2:
-                  raise SystemExit(f'unexpected cleanup script layout: {path}')
-              path.write_text(text.replace(old, 'HEAD'))
+              if old in text:
+                  path.write_text(text.replace(old, 'HEAD'))
           PY
           for reset_script in             "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh"             "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh"             "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"; do
             ! grep -F '@{u}' "$reset_script"
