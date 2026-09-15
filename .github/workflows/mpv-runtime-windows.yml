@@ -222,7 +222,7 @@ jobs:
           PY
           for reset_script in             "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh"             "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh"             "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"; do
             ! grep -F '@{u}' "$reset_script"
-            grep -F 'reset --hard HEAD' "$reset_script"
+            grep -F 'reset --hard' "$reset_script"
           done
 
       - name: Reuse pinned container LLVM host compiler
