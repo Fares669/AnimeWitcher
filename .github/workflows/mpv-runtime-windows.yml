@@ -33,6 +33,7 @@ env:
   OPENSSL_COMMIT: 98acb6b02839c609ef5b837794e08d906d965335
   HARFBUZZ_COMMIT: 4e3df1c1383481ed5717603d5dd3453a04fb16ba
   FONTCONFIG_COMMIT: e1501970ca9a2719a7ca1a8840848ac8af213778
+  LZO_SOURCE_URL: https://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz
 
 jobs:
   build-libmpv:
@@ -255,6 +256,28 @@ jobs:
           PY
           grep -F "GIT_TAG $FONTCONFIG_COMMIT" packages/fontconfig.cmake
           ! grep -F 'GIT_TAG main' packages/fontconfig.cmake
+
+      - name: Pin LZO source URL for Windows builder
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('packages/lzo.cmake')
+          text = path.read_text()
+          old = 'https://fossies.org/linux/misc/lzo-2.10.tar.gz'
+          new = os.environ['LZO_SOURCE_URL']
+          if text.count(old) != 1:
+              raise SystemExit('LZO source URL layout changed')
+          updated = text.replace(old, new, 1)
+          if updated.count(new) != 1:
+              raise SystemExit('failed to replace retired LZO source URL')
+          path.write_text(updated)
+          PY
+          grep -F "$LZO_SOURCE_URL" packages/lzo.cmake
+          ! grep -F 'https://fossies.org/linux/misc/lzo-2.10.tar.gz' packages/lzo.cmake
 
       - name: Pin Vulkan Loader source and static-linking patch
         working-directory: _build/win-builder
