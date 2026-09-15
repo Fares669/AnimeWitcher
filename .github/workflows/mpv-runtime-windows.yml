@@ -253,7 +253,9 @@ jobs:
           unlink "$windres"
           cat > "$windres" <<EOF
           #!/bin/bash
-          exec -a "$0" "$PWD/clang_root/bin/llvm-rc" --preprocessor "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang" "\$@"
+          real_windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres-22"
+          ln -sf "$PWD/clang_root/bin/llvm-rc" "$real_windres"
+          exec "$real_windres" --preprocessor "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang" "\$@"
           EOF
           chmod +x "$windres"
           test -x "$windres"
