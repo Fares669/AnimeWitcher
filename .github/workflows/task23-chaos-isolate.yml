@@ -1,0 +1,63 @@
+name: Task 23 Chaos Isolate
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-writer:
+    runs-on: ubuntu-24.04
+    steps: &steps
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - run: flutter test test/core/services/download_manager_chaos_matrix_test.dart --plain-name 'DM-18 deterministic chaos matrix converges without a second writer'
+  policy-boundaries:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - run: flutter test test/core/services/download_manager_chaos_matrix_test.dart --plain-name 'DM-18 matrix covers queue, multipart, bytes, and platform policy boundaries'
+  task13-modes:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - run: flutter test test/core/services/download_manager_chaos_matrix_test.dart --plain-name 'Task 13 runs reliability decisions through legacy and plugin parallel modes'
+  teardown-lease:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - run: flutter test test/core/services/download_manager_chaos_matrix_test.dart --plain-name 'DM-18 matrix joins teardown and fences the old native handler lease'
