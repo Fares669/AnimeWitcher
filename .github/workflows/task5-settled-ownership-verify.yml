@@ -1,0 +1,56 @@
+name: Verify Task 5 settled ownership
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Apply guarded Task 5 patch
+        run: python3 .github/task5_settled_ownership_patch.py
+
+      - name: Format patched files
+        run: dart format lib/core/services/background_downloader_transport.dart test/core/services/download_recovery_reconciliation_guard_test.dart
+
+      - name: Install and generate
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Focused Task 5 tests
+        run: |
+          flutter test \
+            test/core/services/download_runtime_ownership_test.dart \
+            test/core/services/download_cancel_ownership_guard_test.dart \
+            test/core/services/download_pause_settlement_guard_test.dart \
+            test/core/services/download_recovery_reconciliation_guard_test.dart
+
+      - name: Analyze changed ownership surface
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Commit only after verification
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/task5-settled-ownership-verify.yml .github/task5_settled_ownership_patch.py
+          git add lib/core/services/background_downloader_transport.dart test/core/services/download_recovery_reconciliation_guard_test.dart
+          git diff --cached --check
+          git commit -m "fix(downloads): use settled plugin runtime ownership"
+          git push origin HEAD:refactor/background-downloader-authority
