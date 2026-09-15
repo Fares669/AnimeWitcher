@@ -76,3 +76,5 @@ void main() {
     expect(body, contains('projectedExpectedBytes: current?.totalSize'));
   });
 }
+
+// RED verification trigger
