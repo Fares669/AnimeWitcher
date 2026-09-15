@@ -1,4 +1,8 @@
 import 'dart:async';
+
+final Expando<bool> _legacyParallelUpdateOrigin = Expando<bool>(
+  'legacyParallelUpdateOrigin',
+);
 import 'dart:convert';
 import 'dart:io';
 
@@ -483,7 +487,17 @@ class DownloadService {
         unawaited(_syncSessionOverlay(completedSuccess: false));
       },
       onUpdate: (update) {
-        if (!_disposed) _sharedEvents.add(update);
+        _legacyParallelUpdateOrigin[update] = true;
+        if (!_disposed) {
+          if (update is TaskStatusUpdate &&
+              !isInternalDownloaderChunk(update.task)) {
+            BackgroundDownloaderCompat.updateSyntheticNotification(
+              update.task,
+              update.status,
+            );
+          }
+          _sharedEvents.add(update);
+        }
       },
       availableStorageBytes: (path) => DiskUsage.freeSpace(path),
       onAssemblyFailure: (failure) {
@@ -1117,6 +1131,7 @@ class DownloadService {
     // cannot duplicate callback consumers.
     await _updatesSubscription?.cancel();
     _updatesSubscription = _sharedEvents.stream.listen((update) {
+      final legacyParallelUpdate = _legacyParallelUpdateOrigin[update] == true;
       diagnosticLog.record('task.update', {
         'taskId': update.task.taskId,
         if (update is TaskStatusUpdate) ...{
@@ -1203,17 +1218,6 @@ class DownloadService {
 
       _updatesController.add(update);
 
-      if (update is TaskStatusUpdate && update.task is ParallelDownloadTask) {
-        // Custom multipart parents are not enqueued through FileDownloader,
-        // so the plugin never receives their synthetic status automatically.
-        // Updating the parent explicitly gives one notification per episode
-        // while the child parts stay silent.
-        BackgroundDownloaderCompat.updateSyntheticNotification(
-          update.task,
-          update.status,
-        );
-      }
-
       switch (update) {
         case TaskProgressUpdate():
           final current = _ref.read(downloadProgressProvider)[trackingUrl];
@@ -1233,7 +1237,7 @@ class DownloadService {
           // from PersistentParallelDownload. Let it correct an older inflated
           // UI value after manifest migration/recovery; ordinary downloads keep
           // the monotonic late-callback protection.
-          final progress = update.task is ParallelDownloadTask
+          final progress = legacyParallelUpdate
               ? update.progress.clamp(0.0, 1.0).toDouble()
               : keepLastKnownDownloadProgress(
                   incoming: update.progress,
@@ -1257,7 +1261,7 @@ class DownloadService {
             incomingExpectedBytes: incomingTotal,
             lastKnownExpectedBytes: previous?.totalSize,
           );
-          final isAggregateMultipart = update.task is ParallelDownloadTask;
+          final isAggregateMultipart = legacyParallelUpdate;
           final pluginTransferOwnsTelemetry =
               isBackgroundDownloaderTransportTask(update.task) &&
               _nativeTransport.handleFor(update.task.taskId) != null &&
@@ -3561,12 +3565,6 @@ class DownloadService {
     }
 
     _updatesController.add(update);
-    if (update.task is ParallelDownloadTask) {
-      BackgroundDownloaderCompat.updateSyntheticNotification(
-        update.task,
-        update.status,
-      );
-    }
     _rememberSessionTask(update.task.taskId);
     _queueWaitingIds.remove(update.task.taskId);
     _waitingPayloads.remove(update.task.taskId);
