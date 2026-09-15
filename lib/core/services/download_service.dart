@@ -1244,11 +1244,14 @@ class DownloadService {
             return;
           }
 
-          final knownTotal = knownDownloadSize(<int?>[
+          final incomingTotal = knownDownloadSize(<int?>[
             update.expectedFileSize,
             _telemetry.expectedBytesFor(update.task.taskId),
-            previous?.totalSize,
           ]);
+          final knownTotal = keepLastKnownExpectedBytes(
+            incomingExpectedBytes: incomingTotal,
+            lastKnownExpectedBytes: previous?.totalSize,
+          );
           final isAggregateMultipart = update.task is ParallelDownloadTask;
           final pluginTransferOwnsTelemetry =
               isBackgroundDownloaderTransportTask(update.task) &&

@@ -184,8 +184,14 @@ void main() {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
     final switchStart = source.indexOf('switch (update) {');
-    final progressStart = source.indexOf('case TaskProgressUpdate():', switchStart);
-    final statusStart = source.indexOf('case TaskStatusUpdate():', progressStart);
+    final progressStart = source.indexOf(
+      'case TaskProgressUpdate():',
+      switchStart,
+    );
+    final statusStart = source.indexOf(
+      'case TaskStatusUpdate():',
+      progressStart,
+    );
     expect(switchStart, greaterThanOrEqualTo(0));
     expect(progressStart, greaterThan(switchStart));
     expect(statusStart, greaterThan(progressStart));
@@ -203,5 +209,3 @@ void main() {
     );
   });
 }
-
-// hot progress RED trigger
