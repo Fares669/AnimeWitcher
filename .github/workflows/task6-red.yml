@@ -1,4 +1,4 @@
-name: Task 10 iOS Ownership Verification
+name: Task 11 Android Policy RED
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  ownership-contract:
+  android-policy-red:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -25,33 +25,5 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run iOS ownership source contracts
-        run: |
-          flutter test \
-            test/core/services/ios_multipart_ownership_handoff_source_test.dart \
-            test/core/services/download_native_claim_lifecycle_source_test.dart
-      - name: Analyze ownership-facing Dart
-        run: |
-          flutter analyze --no-fatal-warnings --no-fatal-infos \
-            lib/core/services/download_service.dart \
-            lib/core/services/download_continued_processing_service.dart \
-            test/core/services/ios_multipart_ownership_handoff_source_test.dart
-
-  ios-build:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: refactor/background-downloader-authority
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.47.1
-          cache: true
-      - name: Generate sources
-        run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-      - name: Build iOS ownership integration
-        run: flutter build ios --release --no-codesign
+      - name: Run Task 11 RED
+        run: flutter test test/core/services/download_android_transport_policy_test.dart
