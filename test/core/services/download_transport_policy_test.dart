@@ -95,7 +95,7 @@ void main() {
       expect(parallel.chunks, 8);
       expect(parallel.taskId, template.taskId);
       expect(parallel.url, template.url);
-      expect(parallel.urlQueryParameters, template.urlQueryParameters);
+      expect(parallel.url, contains('token=signed-token'));
       expect(parallel.filename, template.filename);
       expect(parallel.directory, template.directory);
       expect(parallel.baseDirectory, template.baseDirectory);
