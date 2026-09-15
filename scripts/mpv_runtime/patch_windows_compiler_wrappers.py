@@ -44,21 +44,11 @@ def _patch_wrapper(path: Path, required_args: list[str]) -> bool:
             f"generated compiler wrapper has no compiler invocation: {path} ({invocation})"
         )
 
-    # Replace prior copies so rerunning this helper is deterministic even when
-    # a partially patched wrapper was left by an interrupted CI job. Keep
-    # unrelated FLAGS assignments such as --sysroot and optimization flags.
-    required_prefixes = (
-        'FLAGS="$FLAGS -resource-dir ',
-        'FLAGS="$FLAGS --rtlib=',
-        'FLAGS="$FLAGS -stdlib=',
-        'FLAGS="$FLAGS -isystem ',
-    )
-    kept = []
-    for line in lines:
-        stripped = line.lstrip()
-        if any(stripped.startswith(prefix) for prefix in required_prefixes):
-            continue
-        kept.append(line)
+    # Keep the generated FLAGS assignments intact. Some builder versions wrap
+    # those assignments in a conditional block; removing only their bodies
+    # would leave an invalid shell script with a dangling `fi`. The direct
+    # arguments below are the authoritative cross-compiler defaults.
+    kept = lines
     invocation_index = next(
         index for index, line in enumerate(kept) if line.startswith("$CCACHE \"$PROG\"")
     )
