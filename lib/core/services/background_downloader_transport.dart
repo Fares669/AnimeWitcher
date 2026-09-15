@@ -4,24 +4,30 @@ import 'package:background_downloader/background_downloader.dart';
 
 import 'download_parallel.dart';
 
-/// Only non-final executor states can plausibly own a native writer. Persisted
-/// database state alone is never sufficient evidence of current ownership.
-bool runtimeTaskStatusCanOwnWriter(TaskStatus status) => switch (status) {
-  TaskStatus.enqueued ||
-  TaskStatus.running ||
-  TaskStatus.waitingToRetry => true,
-  TaskStatus.paused ||
-  TaskStatus.complete ||
-  TaskStatus.canceled ||
-  TaskStatus.failed ||
-  TaskStatus.notFound => false,
-};
-
 const int kDownloadLargeFileHintThresholdBytes = 50 * 1024 * 1024;
 
 /// Runtime ownership is intentionally separate from persisted task status.
 /// Only [notOwned] permits a new writer for the same execution identity.
 enum DownloadRuntimeOwnership { owned, notOwned, settling, unknown }
+
+/// Maps a settled Transfer status to writer ownership without consulting a
+/// persisted task row. Only executor-active states may own a writer.
+DownloadRuntimeOwnership ownershipFromStatus(TaskStatus status) =>
+    switch (status) {
+      TaskStatus.enqueued ||
+      TaskStatus.running ||
+      TaskStatus.waitingToRetry => DownloadRuntimeOwnership.owned,
+      TaskStatus.paused ||
+      TaskStatus.complete ||
+      TaskStatus.canceled ||
+      TaskStatus.failed ||
+      TaskStatus.notFound => DownloadRuntimeOwnership.notOwned,
+    };
+
+/// Only non-final executor states can plausibly own a native writer. Persisted
+/// database state alone is never sufficient evidence of current ownership.
+bool runtimeTaskStatusCanOwnWriter(TaskStatus status) =>
+    ownershipFromStatus(status) == DownloadRuntimeOwnership.owned;
 
 /// Result of issuing a cancellation command. A successful command is not by
 /// itself proof that the executor has released file ownership.
@@ -177,6 +183,22 @@ class BackgroundDownloaderTransport implements DownloadTransport {
   bool runtimeStatusCanOwnWriter(String taskId) {
     final status = statusFor(taskId);
     return status != null && runtimeTaskStatusCanOwnWriter(status);
+  }
+
+  /// Resolves writer ownership from the plugin's targeted runtime queue query.
+  ///
+  /// A rehydrated Transfer status is a useful projection but is not sufficient
+  /// proof of live native I/O. Conversely, failure of the runtime query cannot
+  /// be converted into [DownloadRuntimeOwnership.notOwned], because starting a
+  /// second writer in that state would violate the single-writer invariant.
+  Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async {
+    try {
+      final runtimeTask = await _downloader.taskForId(taskId);
+      if (runtimeTask != null) return DownloadRuntimeOwnership.owned;
+      return DownloadRuntimeOwnership.notOwned;
+    } catch (_) {
+      return DownloadRuntimeOwnership.unknown;
+    }
   }
 
   @override
