@@ -1,4 +1,4 @@
-name: Task 11 Android Policy RED
+name: Task 11 Android Policy GREEN
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  android-policy-red:
+  android-policy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -25,5 +25,13 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run Task 11 RED
+      - name: Run Android policy tests
         run: flutter test test/core/services/download_android_transport_policy_test.dart
+      - name: Analyze Android policy files
+        run: |
+          flutter analyze --no-fatal-warnings --no-fatal-infos \
+            lib/core/services/download_transport_policy.dart \
+            lib/core/services/background_downloader_transport.dart \
+            test/core/services/download_android_transport_policy_test.dart
+      - name: Build Android debug APK
+        run: flutter build apk --debug
