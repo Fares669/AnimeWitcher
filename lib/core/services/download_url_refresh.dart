@@ -12,6 +12,28 @@ import '../extensions/extension_manager.dart';
 const String kDownloadUrlRefreshBox = 'download_url_refresh_v1';
 const Duration kDownloadUrlRefreshDescriptorTtl = Duration(days: 30);
 
+enum RefreshedTransferResumeMode {
+  pluginResume,
+  verifiedRangeFallback,
+  restartRequired,
+  incompatibleResource,
+}
+
+RefreshedTransferResumeMode planRefreshedTransferResume({
+  required bool resourceCompatible,
+  required bool hasPartialBytes,
+  required bool pluginCanResumeChangedSource,
+}) {
+  if (!hasPartialBytes) return RefreshedTransferResumeMode.pluginResume;
+  if (!resourceCompatible) {
+    return RefreshedTransferResumeMode.incompatibleResource;
+  }
+  if (pluginCanResumeChangedSource) {
+    return RefreshedTransferResumeMode.pluginResume;
+  }
+  return RefreshedTransferResumeMode.verifiedRangeFallback;
+}
+
 class DownloadUrlRefreshDescriptor {
   const DownloadUrlRefreshDescriptor({
     required this.trackingUrl,
