@@ -46,4 +46,42 @@ void main() {
       reason: 'native ownership must be identified before source replacement',
     );
   });
+
+  test('Task 8 isolates custom Range to validated refreshed-source recovery', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final resumeStart = source.indexOf(
+      'Future<bool> _resumeDownloadTask(DownloadTask task) async {',
+    );
+    final rangeHelper = source.indexOf(
+      'Future<bool> _resumeUsingPartialFile(',
+      resumeStart,
+    );
+    expect(resumeStart, greaterThanOrEqualTo(0));
+    expect(rangeHelper, greaterThan(resumeStart));
+
+    final resumeBody = source.substring(resumeStart, rangeHelper);
+    expect(
+      resumeBody,
+      contains('planRefreshedTransferResume('),
+      reason:
+          'a changed signed URL must go through the explicit refresh-resume planner',
+    );
+    expect(
+      resumeBody,
+      contains('RefreshedTransferResumeMode.verifiedRangeFallback'),
+      reason:
+          'custom Range is allowed only as the planner-selected exceptional seam',
+    );
+
+    final ordinaryFallback = resumeBody.indexOf('return resumeOrRestartDownload(');
+    expect(ordinaryFallback, greaterThanOrEqualTo(0));
+    final ordinaryBody = resumeBody.substring(ordinaryFallback);
+    expect(
+      ordinaryBody,
+      isNot(contains('resumeFromPartial: () => _resumeUsingPartialFile(task)')),
+      reason:
+          'ordinary resume/retry must stay plugin-owned instead of using custom Range',
+    );
+  });
 }

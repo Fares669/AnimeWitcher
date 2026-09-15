@@ -5,8 +5,11 @@ import 'package:animewitcher/core/services/download_continued_processing_service
 import 'package:animewitcher/core/services/download_job_state.dart';
 import 'package:animewitcher/core/services/download_job_store.dart';
 import 'package:animewitcher/core/services/download_parallel.dart';
+import 'package:animewitcher/core/services/download_retry_policy.dart';
 import 'package:animewitcher/core/services/download_service.dart';
 import 'package:animewitcher/core/services/download_transport.dart';
+import 'package:animewitcher/core/services/download_transport_policy.dart';
+import 'package:animewitcher/core/services/download_url_refresh.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -269,6 +272,98 @@ void main() {
         multipartManifestBytes: 55,
       ).bytes,
       24,
+    );
+  });
+
+  test('Task 13 runs reliability decisions through legacy and plugin parallel modes', () {
+    final template = DownloadTask(
+      taskId: 'episode-chaos',
+      url: 'https://cdn.test/signed/episode.mp4?token=old',
+      filename: 'episode-chaos.mp4',
+      group: kLogicalDownloadGroup,
+      metaData: 'episode:chaos',
+    );
+
+    for (final accepted in <bool>[false, true]) {
+      final backend = selectDownloadExecutionBackend(
+        connections: 8,
+        pluginParallelAccepted: accepted,
+        legacySessionExists: false,
+      );
+      expect(
+        backend,
+        accepted
+            ? DownloadExecutionBackend.pluginParallel
+            : DownloadExecutionBackend.legacyParallel,
+      );
+      if (backend == DownloadExecutionBackend.pluginParallel) {
+        final task = buildPluginTransportTask(
+          template: template,
+          connections: 8,
+        );
+        expect(task, isA<ParallelDownloadTask>());
+        expect(task.taskId, template.taskId);
+        expect(task.group, kLogicalDownloadGroup);
+        expect(downloadTaskPartCount(task), 8);
+      }
+    }
+
+    expect(
+      selectDownloadExecutionBackend(
+        connections: 8,
+        pluginParallelAccepted: true,
+        legacySessionExists: true,
+      ),
+      DownloadExecutionBackend.legacyParallel,
+      reason: 'persisted PR #231 ownership wins over fresh plugin admission',
+    );
+
+    expect(
+      planDownloadFailure(statusCode: 403, canRefreshUrl: true).action,
+      DownloadFailureAction.refreshUrl,
+      reason: 'signed URL expiry remains an application-level refresh action',
+    );
+    expect(
+      planRefreshedTransferResume(
+        resourceCompatible: true,
+        hasPartialBytes: true,
+        pluginCanResumeChangedSource: false,
+      ),
+      RefreshedTransferResumeMode.verifiedRangeFallback,
+      reason: 'saved compatible bytes are never silently restarted',
+    );
+    expect(
+      planDownloadFailure(noSpaceLeft: true).action,
+      DownloadFailureAction.stopNoSpace,
+      reason: 'low disk stops transport rather than retrying blindly',
+    );
+
+    expect(
+      ownershipFromStatus(TaskStatus.running),
+      DownloadRuntimeOwnership.owned,
+    );
+    expect(
+      ownershipFromStatus(TaskStatus.paused),
+      DownloadRuntimeOwnership.notOwned,
+      reason: 'pause settlement releases the writer slot before resume',
+    );
+    expect(
+      resolveDownloadCancelCommand(
+        hadTrackedOwner: true,
+        commandSucceeded: true,
+        commandThrew: false,
+      ),
+      DownloadCancelSettlement.canceled,
+      reason: 'cancel command success is only the command acknowledgement',
+    );
+    expect(
+      resolveDownloadRuntimeOwnership(
+        runtimeQuerySucceeded: true,
+        runtimeTaskPresent: false,
+        operationSettling: true,
+      ),
+      DownloadRuntimeOwnership.settling,
+      reason: 'runtime settlement still blocks a replacement writer',
     );
   });
 

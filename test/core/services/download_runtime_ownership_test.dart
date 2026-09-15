@@ -1,8 +1,43 @@
 import 'package:animewitcher/core/services/download_transport.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('runtime download ownership', () {
+    test('plugin settled statuses do not reserve a writer slot', () {
+      expect(
+        ownershipFromStatus(TaskStatus.paused),
+        DownloadRuntimeOwnership.notOwned,
+      );
+      expect(
+        ownershipFromStatus(TaskStatus.failed),
+        DownloadRuntimeOwnership.notOwned,
+      );
+      expect(
+        ownershipFromStatus(TaskStatus.canceled),
+        DownloadRuntimeOwnership.notOwned,
+      );
+      expect(
+        ownershipFromStatus(TaskStatus.complete),
+        DownloadRuntimeOwnership.notOwned,
+      );
+    });
+
+    test('plugin executor-active statuses own the writer slot', () {
+      expect(
+        ownershipFromStatus(TaskStatus.running),
+        DownloadRuntimeOwnership.owned,
+      );
+      expect(
+        ownershipFromStatus(TaskStatus.enqueued),
+        DownloadRuntimeOwnership.owned,
+      );
+      expect(
+        ownershipFromStatus(TaskStatus.waitingToRetry),
+        DownloadRuntimeOwnership.owned,
+      );
+    });
+
     test('persisted paused status cannot negate a runtime-active task', () {
       final ownership = resolveDownloadRuntimeOwnership(
         runtimeQuerySucceeded: true,

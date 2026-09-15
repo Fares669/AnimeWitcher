@@ -44,8 +44,16 @@ import 'download_plugin_compat.dart';
 import 'download_transport.dart';
 import 'download_continued_processing_service.dart';
 import 'download_telemetry.dart';
+import 'download_transfer_projection.dart';
+import 'download_transport_policy.dart';
+
+export 'download_transfer_projection.dart' show DownloadProgressData;
 
 part 'download_service.g.dart';
+
+final Expando<bool> _legacyParallelUpdateOrigin = Expando<bool>(
+  'legacyParallelUpdateOrigin',
+);
 
 @Riverpod(keepAlive: true)
 DownloadService downloadService(Ref ref) {
@@ -156,36 +164,6 @@ class DownloadLogicalSnapshot {
   final double progress;
   final Map<String, dynamic> metadata;
   final DownloadJobState? logicalState;
-}
-
-class DownloadProgressData {
-  final String taskId;
-  final double progress;
-  final double networkSpeed; // MB/s
-  final Duration timeRemaining;
-  final int totalSize; // Bytes
-  final TaskStatus status;
-
-  DownloadProgressData({
-    required this.taskId,
-    required double progress,
-    required this.networkSpeed,
-    required this.timeRemaining,
-    required this.status,
-    this.totalSize = -1,
-  }) : progress = progress.clamp(0.0, 1.0);
-
-  String get speedString {
-    if (status == TaskStatus.paused) return 'متوقف';
-    if (progress >= 1.0) return 'اكتمل';
-    if (networkSpeed < 0) return 'جارٍ الحساب…';
-    if (networkSpeed == 0) return '0 MB/s';
-
-    if (networkSpeed < 1.0) {
-      return '${(networkSpeed * 1000).toStringAsFixed(2)} KB/s';
-    }
-    return '${networkSpeed.toStringAsFixed(2)} MB/s';
-  }
 }
 
 @Riverpod(keepAlive: true)
@@ -405,6 +383,7 @@ class DownloadService {
 
   final Ref _ref;
   final Dio _dio;
+  final bool _pluginParallelAccepted;
   final Set<String> _userPausedIds = {};
   final Set<String> _dequeuingPausedIds = {};
   late final DownloadContinuedProcessingService _continuedProcessing;
@@ -415,6 +394,7 @@ class DownloadService {
   Stream<ParallelAssemblyFailure> get parallelFailures =>
       _parallelFailures.stream;
   StreamSubscription<TaskUpdate>? _updatesSubscription;
+  StreamSubscription<TaskUpdate>? _nativeUpdatesSubscription;
   final Connectivity _connectivity = Connectivity();
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   bool _networkAvailable = true;
@@ -425,7 +405,7 @@ class DownloadService {
       DownloadServiceReadinessBarrier();
   late final PersistentParallelDownload _parallel;
   late final DownloadRangeTransfer _rangeTransfers;
-  late final NativeSingleDownloadTransport _nativeTransport;
+  late final BackgroundDownloaderTransport _nativeTransport;
   late final DownloadHostProfileStore _hostProfiles;
   late final DownloadJobStore _jobStore;
   final DownloadTelemetryEstimator _telemetry = DownloadTelemetryEstimator();
@@ -443,8 +423,10 @@ class DownloadService {
   String _overlayCurrentTaskId = '';
   final Map<String, Map<String, Object>> _waitingPayloads = {};
 
-  DownloadService(this._ref) : _dio = _ref.read(dioClientProvider) {
-    _nativeTransport = NativeSingleDownloadTransport();
+  DownloadService(this._ref, {bool pluginParallelAccepted = false})
+    : _dio = _ref.read(dioClientProvider),
+      _pluginParallelAccepted = pluginParallelAccepted {
+    _nativeTransport = BackgroundDownloaderTransport();
     _rangeTransfers = DownloadRangeTransfer(_dio, diagnosticLog: diagnosticLog);
     _hostProfiles = DownloadHostProfileStore(
       const HiveDownloadHostProfileBackend(),
@@ -505,7 +487,17 @@ class DownloadService {
         unawaited(_syncSessionOverlay(completedSuccess: false));
       },
       onUpdate: (update) {
-        if (!_disposed) _sharedEvents.add(update);
+        _legacyParallelUpdateOrigin[update] = true;
+        if (!_disposed) {
+          if (update is TaskStatusUpdate &&
+              !isInternalDownloaderChunk(update.task)) {
+            BackgroundDownloaderCompat.updateSyntheticNotification(
+              update.task,
+              update.status,
+            );
+          }
+          _sharedEvents.add(update);
+        }
       },
       availableStorageBytes: (path) => DiskUsage.freeSpace(path),
       onAssemblyFailure: (failure) {
@@ -868,6 +860,8 @@ class DownloadService {
     if (disposeForTesting != null) await disposeForTesting();
     await _updatesSubscription?.cancel();
     _updatesSubscription = null;
+    await _nativeUpdatesSubscription?.cancel();
+    _nativeUpdatesSubscription = null;
     await _connectivitySubscription?.cancel();
     _connectivitySubscription = null;
     await _rangeTransfers.dispose();
@@ -1130,11 +1124,14 @@ class DownloadService {
     // 4. Bridge FileDownloader updates into a shared broadcast stream (once),
     //    then let this instance listen to that broadcast proxy.
     _fdSubscription ??= FileDownloader().updates.listen(_sharedEvents.add);
+    await _nativeUpdatesSubscription?.cancel();
+    _nativeUpdatesSubscription = _nativeTransport.updates.listen(_sharedEvents.add);
     // A previous initialization attempt may have failed after installing
     // this instance listener. Cancel it before retrying so deliberate retry
     // cannot duplicate callback consumers.
     await _updatesSubscription?.cancel();
     _updatesSubscription = _sharedEvents.stream.listen((update) {
+      final legacyParallelUpdate = _legacyParallelUpdateOrigin[update] == true;
       diagnosticLog.record('task.update', {
         'taskId': update.task.taskId,
         if (update is TaskStatusUpdate) ...{
@@ -1212,7 +1209,7 @@ class DownloadService {
           update.status == TaskStatus.paused &&
           (_rangeTransfers.isActive(update.task.taskId) ||
               _parallel.isActive(update.task.taskId) ||
-              _nativeTransport.owns(update.task.taskId))) {
+              _nativeTransport.runtimeStatusCanOwnWriter(update.task.taskId))) {
         diagnosticLog.record('callback.stalePauseIgnored', {
           'taskId': update.task.taskId,
         });
@@ -1220,17 +1217,6 @@ class DownloadService {
       }
 
       _updatesController.add(update);
-
-      if (update is TaskStatusUpdate && update.task is ParallelDownloadTask) {
-        // Custom multipart parents are not enqueued through FileDownloader,
-        // so the plugin never receives their synthetic status automatically.
-        // Updating the parent explicitly gives one notification per episode
-        // while the child parts stay silent.
-        BackgroundDownloaderCompat.updateSyntheticNotification(
-          update.task,
-          update.status,
-        );
-      }
 
       switch (update) {
         case TaskProgressUpdate():
@@ -1251,7 +1237,7 @@ class DownloadService {
           // from PersistentParallelDownload. Let it correct an older inflated
           // UI value after manifest migration/recovery; ordinary downloads keep
           // the monotonic late-callback protection.
-          final progress = update.task is ParallelDownloadTask
+          final progress = legacyParallelUpdate
               ? update.progress.clamp(0.0, 1.0).toDouble()
               : keepLastKnownDownloadProgress(
                   incoming: update.progress,
@@ -1267,54 +1253,77 @@ class DownloadService {
             return;
           }
 
-          final knownTotal = knownDownloadSize(<int?>[
+          final incomingTotal = knownDownloadSize(<int?>[
             update.expectedFileSize,
             _telemetry.expectedBytesFor(update.task.taskId),
-            previous?.totalSize,
           ]);
-          final isAggregateMultipart = update.task is ParallelDownloadTask;
-          final fallbackSpeedBytes =
-              update.networkSpeed.isFinite && update.networkSpeed > 0
-              ? update.networkSpeed * 1000000
-              : 0.0;
-          final telemetry = _telemetry.observeProgress(
-            taskId: update.task.taskId,
-            progress: progress,
-            expectedBytes: knownTotal,
-            fallbackSpeedBytesPerSecond: fallbackSpeedBytes,
+          final knownTotal = keepLastKnownExpectedBytes(
+            incomingExpectedBytes: incomingTotal,
+            lastKnownExpectedBytes: previous?.totalSize,
           );
-          // PersistentParallelDownload already owns the aggregate byte clock
-          // and smoothing window. Re-estimating its synthetic parent here made
-          // the card and iOS continued-processing task use different speeds.
-          final measuredSpeed = isAggregateMultipart
-              ? fallbackSpeedBytes
-              : telemetry.speedBytesPerSecond;
-          final speed = isAggregateMultipart
-              ? (update.networkSpeed.isFinite && update.networkSpeed > 0
-                    ? update.networkSpeed
-                    : 0.0)
-              : (measuredSpeed > 0
-                    ? measuredSpeed / 1000000
-                    : (_telemetry.hasRecentBytes(update.task.taskId)
-                          ? -1.0
-                          : 0.0));
-          final remaining = isAggregateMultipart
-              ? update.timeRemaining
-              : (telemetry.timeRemaining > Duration.zero
-                    ? telemetry.timeRemaining
-                    : (update.timeRemaining > Duration.zero
-                          ? update.timeRemaining
-                          : (previous?.timeRemaining ?? Duration.zero)));
-          final progressData = DownloadProgressData(
-            taskId: update.task.taskId,
-            progress: progress,
-            networkSpeed: speed,
-            timeRemaining: remaining,
-            totalSize: telemetry.expectedBytes > 0
-                ? telemetry.expectedBytes
-                : knownTotal,
-            status: TaskStatus.running,
-          );
+          final isAggregateMultipart = legacyParallelUpdate;
+          final pluginTransferOwnsTelemetry =
+              isBackgroundDownloaderTransportTask(update.task) &&
+              _nativeTransport.handleFor(update.task.taskId) != null &&
+              !_parallel.isActive(update.task.taskId);
+          late final DownloadProgressData progressData;
+          if (pluginTransferOwnsTelemetry) {
+            // A real plugin progress callback is authoritative for Transfer
+            // telemetry. background_downloader already reports MB/s and ETA;
+            // estimating them again from sampled progress creates drift and
+            // double-smoothing, especially for ParallelDownloadTask.
+            progressData = projectTransferTelemetry(
+              task: update.task,
+              status: TaskStatus.running,
+              progress: progress,
+              networkSpeedMbPerSecond: update.networkSpeed,
+              timeRemaining: update.timeRemaining,
+              totalSize: knownTotal,
+            );
+          } else {
+            final fallbackSpeedBytes =
+                update.networkSpeed.isFinite && update.networkSpeed > 0
+                ? update.networkSpeed * 1000000
+                : 0.0;
+            final telemetry = _telemetry.observeProgress(
+              taskId: update.task.taskId,
+              progress: progress,
+              expectedBytes: knownTotal,
+              fallbackSpeedBytesPerSecond: fallbackSpeedBytes,
+            );
+            // Legacy PersistentParallelDownload already owns the aggregate byte
+            // clock and smoothing window. Keep its synthetic parent projection
+            // unchanged until that executor is retired by the migration plan.
+            final measuredSpeed = isAggregateMultipart
+                ? fallbackSpeedBytes
+                : telemetry.speedBytesPerSecond;
+            final speed = isAggregateMultipart
+                ? (update.networkSpeed.isFinite && update.networkSpeed > 0
+                      ? update.networkSpeed
+                      : 0.0)
+                : (measuredSpeed > 0
+                      ? measuredSpeed / 1000000
+                      : (_telemetry.hasRecentBytes(update.task.taskId)
+                            ? -1.0
+                            : 0.0));
+            final remaining = isAggregateMultipart
+                ? update.timeRemaining
+                : (telemetry.timeRemaining > Duration.zero
+                      ? telemetry.timeRemaining
+                      : (update.timeRemaining > Duration.zero
+                            ? update.timeRemaining
+                            : (previous?.timeRemaining ?? Duration.zero)));
+            progressData = DownloadProgressData(
+              taskId: update.task.taskId,
+              progress: progress,
+              networkSpeed: speed,
+              timeRemaining: remaining,
+              totalSize: telemetry.expectedBytes > 0
+                  ? telemetry.expectedBytes
+                  : knownTotal,
+              status: TaskStatus.running,
+            );
+          }
           if (progressData.totalSize > 0) {
             unawaited(
               _rememberExpectedBytes(
@@ -1461,14 +1470,17 @@ class DownloadService {
       }
     });
 
-    // 5. Catch up on native tasks. Do not reschedule killed tasks with a
-    //    fresh enqueue — that restarts the file from byte 0. Interrupted
-    //    transfers are resumed from leftover bytes below.
-    // Restore persisted host knowledge before any multipart session picks
-    // its slow-start target. Expired profiles are removed by the store.
+    // 5. Bring the plugin executor to a settled runtime view before legacy
+    // inventory or logical reconciliation is allowed to reason about writers.
+    await _startPluginExecutor();
+
+    // Restore persisted host knowledge before any legacy multipart session
+    // picks its slow-start target. Expired profiles are removed by the store.
     _parallel.seedHostCeilings(await _hostProfiles.validHostCeilings());
 
-    // Restore part identities before replaying native callbacks.
+    // Legacy PR #231 manifests are inventory only at this point. They are
+    // restored after plugin rehydration so later reconciliation can decide
+    // which executor, if any, still owns the logical episode.
     for (final record in await FileDownloader().database.allRecords()) {
       if (record.task is ParallelDownloadTask &&
           record.status != TaskStatus.complete) {
@@ -1477,20 +1489,24 @@ class DownloadService {
         } catch (_) {}
       }
     }
-    await FileDownloader().start(
-      doRescheduleKilledTasks: false,
-      markDownloadedComplete: false,
-    );
-    // Rebuild Transfer handles from the plugin database without enqueueing
-    // anything. Recovery below remains the only code allowed to decide whether
-    // an interrupted task should resume, wait, or stay user-paused.
-    await _nativeTransport.rehydrate(group: kLogicalDownloadGroup);
 
-    // 6. Restore UI rows and continue any download that was running when
-    //    the process died, keeping already-written bytes.
+    // 6. Restore UI rows and reconcile logical intent only after executor
+    // startup/rehydration and legacy inventory are both complete.
     await _serializeQueue(_recoverPersistedDownloads);
 
     _isInitialized = true;
+  }
+
+  Future<void> _startPluginExecutor() async {
+    // The update listener is installed before this helper is called. Restore
+    // durable user pause/delete intent even earlier in _initialize(), then let
+    // background_downloader reconnect/reschedule native work. Rehydration
+    // reconnects Transfer handles before any logical ownership decision.
+    await FileDownloader().start(
+      doRescheduleKilledTasks: true,
+      markDownloadedComplete: false,
+    );
+    await _nativeTransport.rehydrate(group: kLogicalDownloadGroup);
   }
 
   /// Test hook that replaces [FileDownloader.configure] for the holding queue.
@@ -1973,8 +1989,89 @@ class DownloadService {
       // executor row must not hide a durable logical job after process death.
       final oldJob = await _jobStore.get(task.taskId);
       final userPausedMeta = isUserPausedMetadata(metadata);
-      if (record.status == TaskStatus.complete) {
+      final manifestEvidence = manifestEvidenceById[task.taskId];
+      final legacyWriterActive =
+          _parallel.isActive(task.taskId) ||
+          _parallel.hasLiveConnections(task.taskId);
+      final pluginWriterActive = nativeIds.contains(task.taskId);
+      final hasPluginTask =
+          manifestEvidence == null &&
+          (pluginWriterActive ||
+              persistedRecords.any(
+                (candidate) =>
+                    candidate.task.taskId == task.taskId &&
+                    candidate.task is ParallelDownloadTask,
+              ));
+      final migrationUserPaused = oldJob != null
+          ? downloadJobHasUserPauseIntent(oldJob.state)
+          : userPausedMeta || _userPausedIds.contains(task.taskId);
+      final legacyAdoption = planLegacyDownloadAdoption(
+        hasLegacyManifest: manifestEvidence != null,
+        legacyIncompleteParts:
+            manifestEvidence != null &&
+            manifestEvidence.durableBytes < manifestEvidence.expectedBytes,
+        hasPluginTask: hasPluginTask,
+        finalFileComplete: record.status == TaskStatus.complete,
+        userPaused: migrationUserPaused,
+        legacyWriterActive: legacyWriterActive,
+        pluginWriterActive: pluginWriterActive,
+      );
+      diagnosticLog.record('recovery.legacyAdoption', {
+        'taskId': task.taskId,
+        'adoption': legacyAdoption.name,
+        'legacyWriter': legacyWriterActive,
+        'pluginWriter': pluginWriterActive,
+      });
+      if (legacyAdoption == LegacyDownloadAdoption.completed) {
         continue;
+      }
+      if (legacyAdoption == LegacyDownloadAdoption.orphaned &&
+          legacyWriterActive &&
+          pluginWriterActive) {
+        final orphanCommitted = await _checkpointLogicalJob(
+          task,
+          state: DownloadJobState.orphaned,
+          expectedBytes: knownDownloadSize(<int?>[
+            record.expectedFileSize,
+            manifestEvidence?.expectedBytes,
+            oldJob?.expectedBytes,
+          ]),
+          userPaused: false,
+          queueWaiting: false,
+        );
+        if (!orphanCommitted) {
+          diagnosticLog.record('recovery.ownershipConflict', {
+            'taskId': task.taskId,
+            'reason': 'orphanCheckpointFailed',
+          });
+          continue;
+        }
+        var legacySettled = true;
+        if (task is ParallelDownloadTask) {
+          try {
+            legacySettled = await _parallel.pause(task);
+          } catch (_) {
+            legacySettled = false;
+          }
+        }
+        var pluginSettled = true;
+        try {
+          pluginSettled = await _nativeTransport.pause(task);
+        } catch (_) {
+          pluginSettled = false;
+        }
+        diagnosticLog.record('recovery.ownershipConflict', {
+          'taskId': task.taskId,
+          'legacySettled': legacySettled,
+          'pluginSettled': pluginSettled,
+        });
+        _queueWaitingIds.remove(task.taskId);
+        _waitingPayloads.remove(task.taskId);
+        _forgetSessionTask(task.taskId);
+        continue;
+      }
+      if (legacyAdoption == LegacyDownloadAdoption.paused) {
+        _userPausedIds.add(task.taskId);
       }
       if (record.status == TaskStatus.canceled &&
           metadata == null &&
@@ -3123,13 +3220,14 @@ class DownloadService {
         lastKnown: downloadMetadataProgress(metadata),
       );
     }
-    final totalSize = knownDownloadSize([
-      current?.totalSize,
-      _telemetry.expectedBytesFor(task.taskId),
-      record?.expectedFileSize,
-      downloadMetadataExpectedBytes(metadata),
-      job?.expectedBytes,
-    ]);
+    final totalSize = authoritativeLifecycleExpectedBytes(
+      jobExpectedBytes: job?.expectedBytes,
+      fingerprintExpectedBytes: job?.fingerprint?.expectedBytes,
+      metadataExpectedBytes: downloadMetadataExpectedBytes(metadata),
+      databaseExpectedBytes: record?.expectedFileSize,
+      telemetryExpectedBytes: _telemetry.expectedBytesFor(task.taskId),
+      projectedExpectedBytes: current?.totalSize,
+    );
     if (job != null && job.expectedBytes > 0 && job.durableBytes > 0) {
       progress = keepLastKnownDownloadProgress(
         incoming: progress,
@@ -3313,7 +3411,7 @@ class DownloadService {
         taskId: update.task.taskId,
         trackingUrl: trackingUrl,
       );
-      if (live != null && update.task is! ParallelDownloadTask) {
+      if (live != null) {
         await _attachToLiveNativeTask(update.task as DownloadTask, live: live);
         return;
       }
@@ -3382,11 +3480,14 @@ class DownloadService {
   }) {
     final previous = _ref.read(downloadProgressProvider)[trackingUrl];
     final parallelProgress = _parallel.progressFor(taskId);
-    final knownTotal = knownDownloadSize(<int?>[
+    final incomingTotal = knownDownloadSize(<int?>[
       totalSize,
       _telemetry.expectedBytesFor(taskId),
-      previous?.totalSize,
     ]);
+    final knownTotal = keepLastKnownExpectedBytes(
+      incomingExpectedBytes: incomingTotal,
+      lastKnownExpectedBytes: previous?.totalSize,
+    );
     if (knownTotal > 0) {
       _telemetry.seed(taskId, expectedBytes: knownTotal);
     }
@@ -3464,12 +3565,6 @@ class DownloadService {
     }
 
     _updatesController.add(update);
-    if (update.task is ParallelDownloadTask) {
-      BackgroundDownloaderCompat.updateSyntheticNotification(
-        update.task,
-        update.status,
-      );
-    }
     _rememberSessionTask(update.task.taskId);
     _queueWaitingIds.remove(update.task.taskId);
     _waitingPayloads.remove(update.task.taskId);
@@ -3534,11 +3629,15 @@ class DownloadService {
       );
     }
 
-    final totalSize = knownDownloadSize([
-      current?.totalSize,
-      record?.expectedFileSize,
-      downloadMetadataExpectedBytes(metadata),
-    ]);
+    final job = await _jobStore.get(task.taskId);
+    final totalSize = authoritativeLifecycleExpectedBytes(
+      jobExpectedBytes: job?.expectedBytes,
+      fingerprintExpectedBytes: job?.fingerprint?.expectedBytes,
+      metadataExpectedBytes: downloadMetadataExpectedBytes(metadata),
+      databaseExpectedBytes: record?.expectedFileSize,
+      telemetryExpectedBytes: _telemetry.expectedBytesFor(task.taskId),
+      projectedExpectedBytes: current?.totalSize,
+    );
 
     // Never delete the DB record, metadata, or partial file here — only mark
     // paused so retry/unpause can continue from the saved offset.
@@ -3652,9 +3751,7 @@ class DownloadService {
       );
     }
 
-    final didPause = downloadTask is ParallelDownloadTask
-        ? await _parallel.pause(downloadTask, preserveLiveParts: Platform.isIOS)
-        : await _nativeTransport.pause(downloadTask);
+    final didPause = await _pauseTransfer(downloadTask);
     if (didPause) {
       await _syncSessionOverlay();
       return;
@@ -3747,27 +3844,71 @@ class DownloadService {
       _queueWaitingIds.remove(taskId);
       _waitingPayloads.remove(taskId);
       _forgetSessionTask(taskId);
-      final ids = <String>{taskId};
+      if (cancelTask == null) {
+        diagnosticLog.record('cancel.executorUnknown', {
+          'taskId': taskId,
+          'reason': 'missingTaskDescriptor',
+        });
+        await _persistNativeWaitingSnapshot();
+        if (notifyContinuedProcessing) {
+          await _syncSessionOverlay(completedSuccess: false);
+        }
+        return;
+      }
+
+      final controlTarget = await _controlTargetFor(cancelTask);
+      switch (controlTarget) {
+        case DownloadExecutorControlTarget.legacy:
+          if (cancelTask is! ParallelDownloadTask) {
+            diagnosticLog.record('cancel.executorUnknown', {
+              'taskId': taskId,
+              'reason': 'legacyTargetWithoutParallelTask',
+            });
+            await _persistNativeWaitingSnapshot();
+            if (notifyContinuedProcessing) {
+              await _syncSessionOverlay(completedSuccess: false);
+            }
+            return;
+          }
+          await _parallel.cancel(cancelTask);
+          break;
+        case DownloadExecutorControlTarget.plugin:
+          final settlement = await _nativeTransport.cancel(cancelTask);
+          diagnosticLog.record('cancel.commandSettlement', {
+            'taskId': taskId,
+            'settlement': settlement.name,
+            'executor': 'plugin',
+          });
+          break;
+        case DownloadExecutorControlTarget.unknown:
+          diagnosticLog.record('cancel.executorUnknown', {
+            'taskId': taskId,
+            'reason': 'legacyEvidenceUnavailable',
+          });
+          await _persistNativeWaitingSnapshot();
+          if (notifyContinuedProcessing) {
+            await _syncSessionOverlay(completedSuccess: false);
+          }
+          return;
+      }
+
+      // The selected owner is responsible for its implementation-detail
+      // chunks. Only cancel any additional *logical* duplicate rows here;
+      // manually canceling FileDownloader.chunkGroup children can race the
+      // plugin parent's own settlement/resume-data handling.
+      final duplicateLogicalIds = <String>[];
       for (final task in await FileDownloader().allTasks(allGroups: true)) {
-        if (task.taskId == taskId || downloadTrackingUrl(task) == trackingUrl) {
-          ids.add(task.taskId);
+        if (task.taskId == taskId ||
+            isInternalDownloaderChunk(task) ||
+            downloadTrackingUrl(task) != trackingUrl) {
+          continue;
+        }
+        if (isLogicalEpisodeDownloadTask(task)) {
+          duplicateLogicalIds.add(task.taskId);
         }
       }
-      if (parentRecord?.task is ParallelDownloadTask) {
-        await _parallel.cancel(parentRecord!.task as ParallelDownloadTask);
-      } else if (parentRecord?.task is DownloadTask &&
-          isNativeSingleDownloadTask(parentRecord!.task)) {
-        final settlement = await _nativeTransport.cancel(
-          parentRecord.task as DownloadTask,
-        );
-        diagnosticLog.record('cancel.commandSettlement', {
-          'taskId': taskId,
-          'settlement': settlement.name,
-        });
-        ids.remove(taskId);
-      }
-      if (ids.isNotEmpty) {
-        await FileDownloader().cancelTasksWithIds(ids.toList());
+      if (duplicateLogicalIds.isNotEmpty) {
+        await FileDownloader().cancelTasksWithIds(duplicateLogicalIds);
       }
 
       final cancelOwnership = await _waitForCancelOwnershipRelease(taskId);
@@ -3956,16 +4097,13 @@ class DownloadService {
               queueWaiting: false,
               userPaused: true,
             );
-        final stoppedRange = await _rangeTransfers.stop(taskId);
+        await _rangeTransfers.stop(taskId);
         // Plugin pause produces URLSession resumeData and drops the
         // transferring task so it no longer occupies a slot. Never cancel —
         // cancel deletes the temp file and forces a restart from byte 0.
         var didPause = false;
         try {
-          didPause = await _pauseTransfer(
-            downloadTask,
-            rangeAlreadyStopped: stoppedRange,
-          );
+          didPause = await _pauseTransfer(downloadTask);
         } catch (_) {}
         final trackingUrl = downloadTrackingUrl(downloadTask);
         final current = _ref.read(downloadProgressProvider)[trackingUrl];
@@ -3988,12 +4126,15 @@ class DownloadService {
             lastKnown: downloadMetadataProgress(metadata),
           );
         }
-        final totalSize = knownDownloadSize([
-          current?.totalSize,
-          _telemetry.expectedBytesFor(taskId),
-          record?.expectedFileSize,
-          downloadMetadataExpectedBytes(metadata),
-        ]);
+        final job = await _jobStore.get(taskId);
+        final totalSize = authoritativeLifecycleExpectedBytes(
+          jobExpectedBytes: job?.expectedBytes,
+          fingerprintExpectedBytes: job?.fingerprint?.expectedBytes,
+          metadataExpectedBytes: downloadMetadataExpectedBytes(metadata),
+          databaseExpectedBytes: record?.expectedFileSize,
+          telemetryExpectedBytes: _telemetry.expectedBytesFor(taskId),
+          projectedExpectedBytes: current?.totalSize,
+        );
         if (!didPause) {
           diagnosticLog.record('pause.settling', {
             'taskId': taskId,
@@ -4441,8 +4582,7 @@ class DownloadService {
         await _resumeUsingPartialFile(task)) {
       return true;
     }
-    final canNativeResume =
-        task is! ParallelDownloadTask && await _canNativeResume(task);
+    final canNativeResume = await _canNativeResume(task);
     final refreshResult = await _refreshTaskBeforeResume(
       task,
       expectedBytes: saved.totalSize,
@@ -4469,10 +4609,70 @@ class DownloadService {
     }
 
     if (task is ParallelDownloadTask) {
-      if (await _parallel.restore(task))
+      if (await _parallel.restore(task)) {
         return _parallel.start(task, saved.totalSize);
-      // Import completed/paused legacy chunks without using resumeChunkTasks,
-      // which cancels all siblings when one completed child cannot be resumed.
+      }
+
+      // A plugin-owned ParallelDownloadTask must resume through the plugin as
+      // one logical parent. The previous code skipped this entirely and fell
+      // through to a fresh enqueue, which created a brand-new set of chunk IDs
+      // after every pause on iOS. Parent Transfer evidence or any reserved
+      // plugin chunk is enough to classify this as plugin-owned persistence.
+      final pluginParentKnown = _nativeTransport.handleFor(task.taskId) != null;
+      var pluginChunkEvidence = false;
+      try {
+        pluginChunkEvidence = (await FileDownloader().allTasks(allGroups: true))
+            .any(
+              (candidate) =>
+                  candidate.group == FileDownloader.chunkGroup &&
+                  downloadInternalParentTaskId(candidate) == task.taskId,
+            );
+      } catch (_) {
+        // An unavailable runtime inventory is ambiguous. Fail closed below
+        // instead of creating replacement writers for hidden plugin chunks.
+        pluginChunkEvidence = pluginParentKnown;
+      }
+
+      if (pluginParentKnown) {
+        var pluginResumed = false;
+        try {
+          pluginResumed = await _nativeTransport.resume(task);
+        } catch (_) {
+          pluginResumed = false;
+        }
+        diagnosticLog.record('resume.pluginParallel', {
+          'taskId': task.taskId,
+          'accepted': pluginResumed,
+          'parentKnown': true,
+          'chunkEvidence': pluginChunkEvidence,
+        });
+        if (pluginResumed) return true;
+
+        final ownership = await _runtimeOwnershipFor(task.taskId);
+        diagnosticLog.record('resume.pluginParallelDeferred', {
+          'taskId': task.taskId,
+          'ownership': ownership.name,
+        });
+        // The plugin parent exists but did not settle resume. Never replace it
+        // with AnimeWitcher's legacy executor or a fresh parent.
+        return false;
+      }
+
+      if (pluginChunkEvidence) {
+        // background_downloader.start(doRescheduleKilledTasks: true) already
+        // owns killed-task recovery. If only child runtime evidence survives,
+        // the logical parent projection is incomplete: do not manufacture a
+        // replacement parent and risk a second writer/chunk generation.
+        diagnosticLog.record('resume.pluginParallelDeferred', {
+          'taskId': task.taskId,
+          'ownership': DownloadRuntimeOwnership.unknown.name,
+          'reason': 'parentProjectionMissing',
+        });
+        return false;
+      }
+
+      // Import only genuine pre-plugin legacy parent resume data. A current
+      // plugin parent was handled above and can never reach this migration seam.
       final data = await BackgroundDownloaderCompat.resumeDataForTaskId(
         task.taskId,
       );
@@ -4486,14 +4686,32 @@ class DownloadService {
       return _enqueueTransfer(task, saved.totalSize);
     }
 
-    // A refreshed signed URL cannot use native resume data that embeds the
-    // expired URL. When a verified partial file exists, go directly to the
-    // prefix-validated Range append path.
-    if (refreshResult.refreshed && saved.partialBytes > 0) {
-      return _resumeUsingPartialFile(task);
+    // Only a validated source replacement may cross the custom Range seam.
+    // Ordinary pause/retry/resume remains owned by background_downloader.
+    if (refreshResult.refreshed) {
+      final refreshResumeMode = planRefreshedTransferResume(
+        resourceCompatible: true,
+        hasPartialBytes: saved.partialBytes > 0,
+        // background_downloader resume data is tied to the original URL;
+        // a changed signed source cannot safely reuse that opaque state.
+        pluginCanResumeChangedSource: false,
+      );
+      if (refreshResumeMode ==
+          RefreshedTransferResumeMode.verifiedRangeFallback) {
+        return _resumeUsingPartialFile(task);
+      }
+      if (refreshResumeMode ==
+          RefreshedTransferResumeMode.incompatibleResource) {
+        return false;
+      }
     }
 
-    if (canNativeResume && !refreshResult.refreshed) {
+    if (!refreshResult.refreshed) {
+      // For an unchanged source, background_downloader owns the normal
+      // resume-vs-reenqueue decision through Transfer.resume(). The app-level
+      // taskCanResume probe above exists only to protect opaque bytes during a
+      // signed-source replacement; it must not become a second lifecycle
+      // policy for ordinary resume.
       var resumed = false;
       try {
         resumed = await _nativeTransport.resume(task);
@@ -4501,10 +4719,22 @@ class DownloadService {
         resumed = false;
       }
       if (resumed) return true;
-      if (saved.partialBytes <= 0) {
-        // taskCanResume proves opaque native ownership existed, but the executor
-        // could not adopt it. Never convert that hidden byte ownership into an
-        // implicit zero-byte restart.
+
+      // A missing/rejected Transfer is not permission to start another writer.
+      // Settle targeted runtime ownership before falling back to durable app
+      // recovery. Unknown/settling/owned all fail closed.
+      final ownership = await _runtimeOwnershipFor(task.taskId);
+      diagnosticLog.record('resume.pluginDeferred', {
+        'taskId': task.taskId,
+        'ownership': ownership.name,
+        'opaqueNativeResume': canNativeResume,
+      });
+      if (ownership.blocksNewWriter) return false;
+
+      if (canNativeResume && saved.partialBytes <= 0) {
+        // The plugin reported opaque native resume state but its Transfer could
+        // not adopt it. Never convert hidden bytes into an implicit zero-byte
+        // restart outside background_downloader.
         throw _DownloadRestartRequiredException(task.taskId);
       }
     }
@@ -4512,7 +4742,6 @@ class DownloadService {
     return resumeOrRestartDownload(
       canResume: () async => false,
       resume: () async => false,
-      resumeFromPartial: () => _resumeUsingPartialFile(task),
       restart: () =>
           _enqueueFreshAdaptiveTask(task, knownTotalBytes: saved.totalSize),
       savedProgress: saved.progress,
@@ -5000,14 +5229,30 @@ class DownloadService {
       return (task: task, refreshed: false, restartRequired: false);
     }
 
-    if (task is! ParallelDownloadTask &&
-        hasOpaqueNativeResume &&
-        partialBytes <= 0) {
-      // We proved the old source needs replacement and also proved that the
-      // only resumable bytes are opaque native resume data tied to that old
-      // source. The replacement itself is valid, but those bytes cannot be
-      // migrated safely, so leave durable/source state untouched and require an
-      // explicit user-visible restart decision.
+    var legacySessionExists = false;
+    if (task is ParallelDownloadTask) {
+      try {
+        legacySessionExists = await _parallel.restore(task);
+      } catch (error) {
+        // A failed legacy-evidence query is ambiguous. Never guess that a
+        // ParallelDownloadTask belongs to either executor while changing its
+        // remote source.
+        diagnosticLog.record('source.refreshLegacyEvidenceUnavailable', {
+          'taskId': task.taskId,
+          'error': error.toString(),
+        });
+        return (task: task, refreshed: false, restartRequired: false);
+      }
+    }
+
+    if (!legacySessionExists && hasOpaqueNativeResume && partialBytes <= 0) {
+      // background_downloader 9.6.1 owns plugin resume/re-enqueue. Its
+      // ParallelDownloadTask resume payload, however, contains the original
+      // child task descriptors and there is no public API to rewrite those
+      // child URLs. Never migrate that plugin state into AnimeWitcher's legacy
+      // executor and never discard opaque bytes silently. A user-visible
+      // restart decision is safer until the plugin exposes source replacement
+      // for paused parallel chunks.
       return (task: task, refreshed: false, restartRequired: true);
     }
 
@@ -5042,9 +5287,9 @@ class DownloadService {
       );
     }
 
-    if (task is ParallelDownloadTask) {
+    if (legacySessionExists) {
       final replaced = await _parallel.replaceSource(
-        task,
+        task as ParallelDownloadTask,
         url: refreshed.url,
         headers: refreshed.headers,
       );
@@ -5081,20 +5326,7 @@ class DownloadService {
         _parallel.hasLiveConnections(taskId)) {
       return DownloadRuntimeOwnership.owned;
     }
-    try {
-      final activeTasks = await _liveTransferTasks();
-      return resolveDownloadRuntimeOwnership(
-        runtimeQuerySucceeded: true,
-        runtimeTaskPresent: activeTasks.any((task) => task.taskId == taskId),
-        transferHandlePresent: _nativeTransport.handleFor(taskId) != null,
-      );
-    } catch (_) {
-      return resolveDownloadRuntimeOwnership(
-        runtimeQuerySucceeded: false,
-        runtimeTaskPresent: false,
-        transferHandlePresent: _nativeTransport.handleFor(taskId) != null,
-      );
-    }
+    return _nativeTransport.ownershipFor(taskId);
   }
 
   Future<DownloadRuntimeOwnership> _waitForCancelOwnershipRelease(
@@ -5146,15 +5378,45 @@ class DownloadService {
     ..._rangeTransfers.activeTaskIds,
   };
 
-  Future<bool> _pauseTransfer(
-    DownloadTask task, {
-    bool rangeAlreadyStopped = false,
-  }) async {
+  Future<DownloadExecutorControlTarget> _controlTargetFor(
+    DownloadTask task,
+  ) async {
+    if (task is! ParallelDownloadTask) {
+      return selectDownloadExecutorControlTarget(
+        isParallelTask: false,
+        legacyQuerySucceeded: false,
+        legacySessionExists: false,
+      );
+    }
+    try {
+      final legacySessionExists = await _parallel.restore(task);
+      return selectDownloadExecutorControlTarget(
+        isParallelTask: true,
+        legacyQuerySucceeded: true,
+        legacySessionExists: legacySessionExists,
+      );
+    } catch (error) {
+      diagnosticLog.record('executor.controlEvidenceUnavailable', {
+        'taskId': task.taskId,
+        'error': error.toString(),
+      });
+      return selectDownloadExecutorControlTarget(
+        isParallelTask: true,
+        legacyQuerySucceeded: false,
+        legacySessionExists: false,
+      );
+    }
+  }
+
+  Future<bool> _pauseTransfer(DownloadTask task) async {
     if (_rangeTransfers.isActive(task.taskId)) {
       await _rangeTransfers.stop(task.taskId);
       return true;
     }
-    if (task is ParallelDownloadTask && await _parallel.restore(task)) {
+    final controlTarget = await _controlTargetFor(task);
+    if (controlTarget == DownloadExecutorControlTarget.unknown) return false;
+    if (controlTarget == DownloadExecutorControlTarget.legacy) {
+      if (task is! ParallelDownloadTask) return false;
       return _parallel.pause(
         task,
         preserveLiveParts:
@@ -5180,11 +5442,16 @@ class DownloadService {
         'result': accepted,
       });
       if (!accepted) {
-        // pauseDownload already joined the Range writer before entering the
-        // control queue. A missing native task is expected in that case.
-        return rangeAlreadyStopped &&
-            await _runtimeOwnershipFor(task.taskId) ==
-                DownloadRuntimeOwnership.notOwned;
+        // A second pause against an already-paused plugin parent legitimately
+        // returns false. Command acknowledgement is not the authority here:
+        // if runtime ownership is already released, the requested pause is
+        // idempotently settled and must not leave the logical job in `pausing`.
+        final rejectedOwnership = await _runtimeOwnershipFor(task.taskId);
+        diagnosticLog.record('native.pauseRejectedOwnership', {
+          'taskId': task.taskId,
+          'ownership': rejectedOwnership.name,
+        });
+        return rejectedOwnership == DownloadRuntimeOwnership.notOwned;
       }
 
       // pause() acknowledges the command before URLSession has necessarily
@@ -5314,6 +5581,26 @@ class DownloadService {
       return true;
     }
     if (task is! ParallelDownloadTask) return _nativeTransport.start(task);
+
+    // Durable legacy multipart evidence wins over platform capability:
+    // an existing session must never switch executors mid-transfer.
+    final legacySessionExists = await _parallel.restore(task);
+    final backend = selectDownloadExecutionBackend(
+      connections: downloadTaskPartCount(task),
+      pluginParallelAccepted: _pluginParallelAccepted,
+      legacySessionExists: legacySessionExists,
+    );
+    if (backend == DownloadExecutionBackend.pluginParallel) {
+      final pluginTask = buildPluginTransportTask(
+        template: task,
+        connections: downloadTaskPartCount(task),
+      );
+      return _nativeTransport.start(pluginTask);
+    }
+    if (backend == DownloadExecutionBackend.pluginSingle) {
+      return _nativeTransport.start(task);
+    }
+
     if (totalBytes <= 0) {
       totalBytes =
           (await getMetadata(task.url, headers: task.headers))?.size ?? -1;

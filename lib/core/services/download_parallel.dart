@@ -171,6 +171,9 @@ DownloadTask buildAdaptiveDownloadTask({
   if (count <= 1 || template is ParallelDownloadTask) return template;
   return ParallelDownloadTask(
     taskId: template.taskId,
+    // Request.url already includes any urlQueryParameters supplied when the
+    // template was created. Reusing that effective URL avoids appending signed
+    // query parameters twice while preserving the exact executor request.
     url: template.url,
     filename: template.filename,
     displayName: template.displayName,
@@ -180,9 +183,16 @@ DownloadTask buildAdaptiveDownloadTask({
     httpRequestMethod: template.httpRequestMethod,
     group: template.group,
     updates: template.updates,
+    requiresWiFi: template.requiresWiFi,
     retries: template.retries,
-    allowPause: true,
+    allowPause: template.allowPause,
+    priority: template.priority,
     metaData: template.metaData,
+    creationTime: template.creationTime,
+    options: template.options,
+    transferHints: template.transferHints,
+    notificationConfig: template.notificationConfig,
+    stallTimeout: template.stallTimeout,
     chunks: count,
-  );
+  )..retriesRemaining = template.retriesRemaining;
 }

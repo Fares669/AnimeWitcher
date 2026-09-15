@@ -12,6 +12,47 @@ const int kDownloadJobSchemaVersion = 7;
 /// ownership settlement; only the tombstone itself is age-gated for GC.
 const Duration kDownloadCanceledTombstoneRetention = Duration(days: 30);
 
+enum LegacyDownloadAdoption {
+  continueLegacy,
+  pluginRehydrate,
+  completed,
+  paused,
+  orphaned,
+}
+
+/// Chooses exactly one startup disposition for a persisted logical episode.
+///
+/// Legacy manifest evidence always wins over a dormant plugin projection so
+/// active PR #231 ranges are never converted into plugin chunks. Conflicting
+/// live legacy/plugin ownership fails closed: startup must settle both owners
+/// and persist an orphan fence before any normal recovery can launch a writer.
+LegacyDownloadAdoption planLegacyDownloadAdoption({
+  required bool hasLegacyManifest,
+  required bool legacyIncompleteParts,
+  required bool hasPluginTask,
+  required bool finalFileComplete,
+  required bool userPaused,
+  required bool legacyWriterActive,
+  required bool pluginWriterActive,
+}) {
+  if (finalFileComplete) return LegacyDownloadAdoption.completed;
+  if (legacyWriterActive && pluginWriterActive) {
+    return LegacyDownloadAdoption.orphaned;
+  }
+  if (hasLegacyManifest) {
+    if (userPaused) return LegacyDownloadAdoption.paused;
+    if (legacyIncompleteParts || legacyWriterActive || hasPluginTask) {
+      return LegacyDownloadAdoption.continueLegacy;
+    }
+    return LegacyDownloadAdoption.continueLegacy;
+  }
+  if (userPaused) return LegacyDownloadAdoption.paused;
+  if (hasPluginTask || pluginWriterActive) {
+    return LegacyDownloadAdoption.pluginRehydrate;
+  }
+  return LegacyDownloadAdoption.orphaned;
+}
+
 bool downloadCanceledTombstoneEligibleForGc(
   DownloadJobRecord job, {
   required int nowMillis,

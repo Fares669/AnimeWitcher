@@ -11,10 +11,13 @@ void main() {
     expect(end, greaterThan(start));
     final body = source.substring(start, end);
     final parallel = body.indexOf('if (task is ParallelDownloadTask)');
-    final native = body.indexOf('// A refreshed signed URL', parallel);
+    final refreshedSourceRecovery = body.indexOf(
+      'if (refreshResult.refreshed)',
+      parallel,
+    );
     expect(parallel, greaterThanOrEqualTo(0));
-    expect(native, greaterThan(parallel));
-    final parallelBody = body.substring(parallel, native);
+    expect(refreshedSourceRecovery, greaterThan(parallel));
+    final parallelBody = body.substring(parallel, refreshedSourceRecovery);
 
     expect(parallelBody, isNot(contains('saved.progress > 0 ||')));
     expect(parallelBody, contains('if (saved.partialBytes > 0) return false;'));

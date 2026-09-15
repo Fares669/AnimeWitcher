@@ -18,6 +18,9 @@ class DownloadTelemetryReading {
   final Duration timeRemaining;
 }
 
+/// Sampling estimator retained for legacy/custom Range execution.
+/// Plugin-owned Transfer updates must use background_downloader speed/ETA
+/// directly instead of feeding them through this smoothing window.
 class DownloadTelemetryEstimator {
   DownloadTelemetryEstimator({
     this.window = kDownloadTelemetryWindow,
