@@ -119,11 +119,11 @@ void main() {
     test('parallel chunk count is capped at the supported maximum', () {
       final task = buildPluginTransportTask(
         template: template,
-        connections: kMaxDownloadConnections + 50,
+        connections: kDownloadPartsMax + 50,
       );
 
       expect(task, isA<ParallelDownloadTask>());
-      expect((task as ParallelDownloadTask).chunks, kMaxDownloadConnections);
+      expect((task as ParallelDownloadTask).chunks, kDownloadPartsMax);
     });
   });
 }
