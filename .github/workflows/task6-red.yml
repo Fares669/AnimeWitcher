@@ -30,6 +30,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           path = Path('lib/core/services/download_service.dart')
           source = path.read_text()
@@ -52,31 +53,19 @@ jobs:
                   1,
               )
 
-          old_ctor = "  DownloadService(this._ref) : _dio = _ref.read(dioClientProvider) {\n"
-          new_ctor = (
-              "  DownloadService(this._ref, {bool pluginParallelAccepted = false})\n"
-              "    : _dio = _ref.read(dioClientProvider),\n"
-              "      _pluginParallelAccepted = pluginParallelAccepted {\n"
-          )
-          if old_ctor in source:
-              source = source.replace(old_ctor, new_ctor, 1)
-          else:
-              assert new_ctor in source
+          if 'pluginParallelAccepted = false' not in source:
+              source, count = re.subn(
+                  r"  DownloadService\(this\._ref\)\s*:\s*_dio = _ref\.read\(dioClientProvider\)\s*\{",
+                  "  DownloadService(this._ref, {bool pluginParallelAccepted = false})\n"
+                  "    : _dio = _ref.read(dioClientProvider),\n"
+                  "      _pluginParallelAccepted = pluginParallelAccepted {",
+                  source,
+                  count=1,
+              )
+              assert count == 1
 
-          old_enqueue = '''  Future<bool> _enqueueTransfer(DownloadTask task, int totalBytes) async {
-            if (!_networkAvailable) {
-              await _holdDownloadForNetwork(task);
-              return true;
-            }
-            if (task is! ParallelDownloadTask) return _nativeTransport.start(task);
-            if (totalBytes <= 0) {
-              totalBytes =
-                  (await getMetadata(task.url, headers: task.headers))?.size ?? -1;
-            }
-            return _parallel.start(task, totalBytes);
-          }
-          '''
-          new_enqueue = '''  Future<bool> _enqueueTransfer(DownloadTask task, int totalBytes) async {
+          if 'final legacySessionExists = await _parallel.restore(task);' not in source:
+              new_enqueue = '''  Future<bool> _enqueueTransfer(DownloadTask task, int totalBytes) async {
             if (!_networkAvailable) {
               await _holdDownloadForNetwork(task);
               return true;
@@ -108,12 +97,16 @@ jobs:
             }
             return _parallel.start(task, totalBytes);
           }
+
           '''
-          if old_enqueue in source:
-              source = source.replace(old_enqueue, new_enqueue, 1)
-          else:
-              assert 'final legacySessionExists = await _parallel.restore(task);' in source
-              assert 'DownloadExecutionBackend.pluginParallel' in source
+              source, count = re.subn(
+                  r"  Future<bool> _enqueueTransfer\(DownloadTask task, int totalBytes\) async \{.*?\n  \}\n\n(?=  Future<DownloadResourceFingerprint\?> _probeResourceFingerprint)",
+                  new_enqueue,
+                  source,
+                  count=1,
+                  flags=re.S,
+              )
+              assert count == 1
 
           path.write_text(source)
 
