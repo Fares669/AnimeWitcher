@@ -170,3 +170,5 @@ void main() {
     expect(body, contains('lastKnownExpectedBytes: previous?.totalSize'));
   });
 }
+
+// lifecycle RED trigger
