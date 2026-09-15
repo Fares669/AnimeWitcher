@@ -4579,8 +4579,7 @@ class DownloadService {
         await _resumeUsingPartialFile(task)) {
       return true;
     }
-    final canNativeResume =
-        task is! ParallelDownloadTask && await _canNativeResume(task);
+    final canNativeResume = await _canNativeResume(task);
     final refreshResult = await _refreshTaskBeforeResume(
       task,
       expectedBytes: saved.totalSize,
@@ -5197,14 +5196,30 @@ class DownloadService {
       return (task: task, refreshed: false, restartRequired: false);
     }
 
-    if (task is! ParallelDownloadTask &&
-        hasOpaqueNativeResume &&
-        partialBytes <= 0) {
-      // We proved the old source needs replacement and also proved that the
-      // only resumable bytes are opaque native resume data tied to that old
-      // source. The replacement itself is valid, but those bytes cannot be
-      // migrated safely, so leave durable/source state untouched and require an
-      // explicit user-visible restart decision.
+    var legacySessionExists = false;
+    if (task is ParallelDownloadTask) {
+      try {
+        legacySessionExists = await _parallel.restore(task);
+      } catch (error) {
+        // A failed legacy-evidence query is ambiguous. Never guess that a
+        // ParallelDownloadTask belongs to either executor while changing its
+        // remote source.
+        diagnosticLog.record('source.refreshLegacyEvidenceUnavailable', {
+          'taskId': task.taskId,
+          'error': error.toString(),
+        });
+        return (task: task, refreshed: false, restartRequired: false);
+      }
+    }
+
+    if (!legacySessionExists && hasOpaqueNativeResume && partialBytes <= 0) {
+      // background_downloader 9.6.1 owns plugin resume/re-enqueue. Its
+      // ParallelDownloadTask resume payload, however, contains the original
+      // child task descriptors and there is no public API to rewrite those
+      // child URLs. Never migrate that plugin state into AnimeWitcher's legacy
+      // executor and never discard opaque bytes silently. A user-visible
+      // restart decision is safer until the plugin exposes source replacement
+      // for paused parallel chunks.
       return (task: task, refreshed: false, restartRequired: true);
     }
 
@@ -5239,9 +5254,9 @@ class DownloadService {
       );
     }
 
-    if (task is ParallelDownloadTask) {
+    if (legacySessionExists) {
       final replaced = await _parallel.replaceSource(
-        task,
+        task as ParallelDownloadTask,
         url: refreshed.url,
         headers: refreshed.headers,
       );

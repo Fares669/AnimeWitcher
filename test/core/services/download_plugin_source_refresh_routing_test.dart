@@ -9,7 +9,10 @@ void main() {
     final start = source.indexOf(
       'Future<({DownloadTask task, bool refreshed, bool restartRequired})>\n  _refreshTaskBeforeResume(',
     );
-    final end = source.indexOf('Future<List<Task>> _liveTransferTasks()', start);
+    final end = source.indexOf(
+      'Future<List<Task>> _liveTransferTasks()',
+      start,
+    );
     expect(start, greaterThanOrEqualTo(0));
     expect(end, greaterThan(start));
     final body = source.substring(start, end);
@@ -29,21 +32,27 @@ void main() {
     );
   });
 
-  test('plugin parallel opaque resume data never migrates into legacy refresh', () {
-    final source = File('lib/core/services/download_service.dart')
-        .readAsStringSync();
-    final start = source.indexOf(
-      'Future<({DownloadTask task, bool refreshed, bool restartRequired})>\n  _refreshTaskBeforeResume(',
-    );
-    final end = source.indexOf('Future<List<Task>> _liveTransferTasks()', start);
-    expect(start, greaterThanOrEqualTo(0));
-    expect(end, greaterThan(start));
-    final body = source.substring(start, end);
+  test(
+    'plugin parallel opaque resume data never migrates into legacy refresh',
+    () {
+      final source = File('lib/core/services/download_service.dart')
+          .readAsStringSync();
+      final start = source.indexOf(
+        'Future<({DownloadTask task, bool refreshed, bool restartRequired})>\n  _refreshTaskBeforeResume(',
+      );
+      final end = source.indexOf(
+        'Future<List<Task>> _liveTransferTasks()',
+        start,
+      );
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
 
-    expect(body, contains('hasOpaqueNativeResume'));
-    expect(body, contains('!legacySessionExists'));
-    expect(body, contains('restartRequired: true'));
-  });
+      expect(body, contains('hasOpaqueNativeResume'));
+      expect(body, contains('!legacySessionExists'));
+      expect(body, contains('restartRequired: true'));
+    },
+  );
 
   test('resume asks background_downloader about resumability for parallel parents too', () {
     final source = File('lib/core/services/download_service.dart')
@@ -54,10 +63,17 @@ void main() {
     expect(end, greaterThan(start));
     final body = source.substring(start, end);
 
-    expect(body, contains('final canNativeResume = await _canNativeResume(task);'));
     expect(
       body,
-      isNot(contains('task is! ParallelDownloadTask && await _canNativeResume(task)')),
+      contains('final canNativeResume = await _canNativeResume(task);'),
+    );
+    expect(
+      body,
+      isNot(
+        contains(
+          'task is! ParallelDownloadTask && await _canNativeResume(task)',
+        ),
+      ),
     );
   });
 
@@ -67,7 +83,10 @@ void main() {
     final start = source.indexOf(
       'Future<({DownloadTask task, bool refreshed, bool restartRequired})>\n  _refreshTaskBeforeResume(',
     );
-    final end = source.indexOf('Future<List<Task>> _liveTransferTasks()', start);
+    final end = source.indexOf(
+      'Future<List<Task>> _liveTransferTasks()',
+      start,
+    );
     expect(start, greaterThanOrEqualTo(0));
     expect(end, greaterThan(start));
     final body = source.substring(start, end);
@@ -77,5 +96,3 @@ void main() {
     expect(body, contains('_nativeTransport.forget(task.taskId)'));
   });
 }
-
-// Task 25 source refresh RED trigger

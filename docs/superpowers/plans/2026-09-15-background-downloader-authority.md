@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Target the currently pinned `background_downloader ^9.6.1` public contract first; no blind dependency upgrade.
+- For plugin-owned tasks, use `background_downloader 9.6.1` public `Transfer` / `Transfers` / `FileDownloader` lifecycle APIs first. New AnimeWitcher transport/retry/chunk logic requires a documented public-API gap; app-owned code should otherwise be limited to logical policy, resource/signed-URL integrity, and legacy migration.
 - Exactly one current writer may own a logical file/range.
 - Unknown or settling runtime ownership blocks another writer.
 - User pause survives process restart.
@@ -1182,27 +1183,29 @@ On a real iOS device start a plugin-parallel episode and verify continued-proces
 - Produces: one pure selector for lifecycle checkpoint expected bytes, preferring durable logical/metadata identity over transient plugin/chunk projections.
 - Contract: pause must never replace a previously known logical resource size with a smaller chunk-derived/transient total.
 
-- [ ] **Step 1: Write RED regression from device evidence**
+- [x] **Step 1: Write RED regression from device evidence**
 
 Use the observed case `durableExpected=353053603`, transient UI/plugin total `110329255`; the selected lifecycle expected size must remain `353053603`.
 
-- [ ] **Step 2: Verify RED on current pause implementation**
+- [x] **Step 2: Verify RED on current pause implementation**
 
 Run the new expected-size test plus `download_pause_settlement_guard_test.dart`.
 
-- [ ] **Step 3: Implement stable size selection**
+- [x] **Step 3: Implement stable size selection**
 
 When persisting pause/resume/cancel lifecycle boundaries, prefer JobStore expected bytes/resource fingerprint, then stable metadata/database size, and use transient projected totals only when no durable size exists. Do not weaken JobStore's mismatched-size rejection.
 
-- [ ] **Step 4: Run focused pause/resource integrity tests and analyzer**
+- [x] **Step 4: Run focused pause/resource integrity tests and analyzer**
 
 Expected: no `pause.superseded` caused solely by a smaller transient total; resource mismatch protection remains intact.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "fix(downloads): keep logical size stable across pause"
 ```
+
+Evidence: RED regressions reproduced the `353053603 -> 110329255` shrink; commits `877f89bbb2ff2597a3937fb565b15c900a54dce4` and `6ed7d33764421ad51e680fa90e146892c92cd5c8` passed lifecycle/resource/telemetry suites and analyzer.
 
 ---
 
@@ -1253,27 +1256,29 @@ Pause an active multi-chunk iOS transfer, resume it, and verify the same logical
 - Contract: plugin-owned parallel cancel uses `BackgroundDownloaderTransport`; legacy cancel is used only with positive legacy session/manifest ownership evidence.
 - Contract: iOS system cancel/expiration is a pause of the current owner, not a destructive migration to the legacy executor.
 
-- [ ] **Step 1: Write RED ownership-routing tests**
+- [x] **Step 1: Write RED ownership-routing tests**
 
 Cover plugin parent, legacy manifest parent, unknown/settling ownership, and system-UI cancel.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Expected: current code fails because `parentRecord.task is ParallelDownloadTask` and `_cancelFromSystemUI` choose `_parallel` by task shape.
 
-- [ ] **Step 3: Implement ownership-aware cancel planner**
+- [x] **Step 3: Implement ownership-aware cancel planner**
 
 Use legacy manifest/session evidence first; otherwise use plugin transport for logical plugin parents. Unknown ownership fails closed and keeps the cancel tombstone without deleting bytes.
 
-- [ ] **Step 4: Run cancel/delete/ownership suites and analyzer**
+- [x] **Step 4: Run cancel/delete/ownership suites and analyzer**
 
 Expected: no surviving writer after settled delete; no plugin parent is sent to legacy cancellation merely because it is parallel.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "fix(downloads): route parallel cancel by executor ownership"
 ```
+
+Evidence: RED run `35001961312` failed on task-shape routing; GREEN run `35002296470` passed focused cancel/ownership suites and analyzer; commit `98324a0b3800b6dece1e273b23c97e631ab0f272`.
 
 ---
 
@@ -1344,6 +1349,43 @@ At minimum: start, active speed, pause, repeated pause, resume, background, kill
 - [ ] **Step 6: Only then unblock Tasks 14/16/17 cleanup**
 
 Do not remove legacy fallback or transport-state compatibility until the device matrix proves the plugin path is a safe replacement.
+
+
+---
+
+### Task 25: Keep signed-source refresh plugin-owned unless legacy ownership is proven
+
+**Files:**
+- Modify: `lib/core/services/download_service.dart`
+- Add: `test/core/services/download_plugin_source_refresh_routing_test.dart`
+- Modify: this plan.
+
+**Interfaces:**
+- Contract: `ParallelDownloadTask` shape never routes source replacement to `PersistentParallelDownload`; only a successfully restored legacy manifest/session does.
+- Contract: plugin-owned refresh updates the tracked `TaskRecord` and returns to `background_downloader` `Transfer` lifecycle APIs.
+- Contract: `background_downloader 9.6.1` parallel resume data embeds original child task descriptors and exposes no public child-source rewrite API. If those opaque bytes exist when the signed source changes, fail closed with `restartRequired` rather than migrate to legacy or silently discard bytes.
+
+- [x] **Step 1: Write RED plugin-first source-refresh regressions**
+
+RED run `35004189110`: 1 test passed and 3 failed on legacy-by-shape routing, parallel resumability probing, and opaque plugin resume handling.
+
+- [x] **Step 2: Verify the public plugin gap before adding app logic**
+
+Reviewed `background_downloader 9.6.1`: `Transfer.resume()` owns resume/re-enqueue fallback; `ParallelDownloadTask` resumes stored child tasks from its `ResumeData`, and those stored child URLs are not replaceable through a public API. `TaskOptions.onTaskStart` on the parent is not propagated to restored chunk task descriptors.
+
+- [x] **Step 3: Implement minimal executor-aware refresh**
+
+Probe plugin resumability for parallel parents too. Use `_parallel.replaceSource` only after positive `_parallel.restore(task)` evidence. Otherwise update the plugin-tracked task record and return to the Transfer path. Opaque plugin-parallel resume data on an expired URL yields `restartRequired`.
+
+- [x] **Step 4: Run source-integrity, plugin-parallel, Transfer-authority, cancel-ownership tests and analyzer**
+
+GREEN one-shot run `35004697897` verifies the resulting head before commit.
+
+- [x] **Step 5: Commit**
+
+```bash
+git commit -m "fix(downloads): keep source refresh on plugin executor"
+```
 
 
 ## Plan self-review
