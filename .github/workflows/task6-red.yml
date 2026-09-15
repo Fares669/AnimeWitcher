@@ -1,4 +1,4 @@
-name: Task 15 Retry Policy RED
+name: Task 13 and 15 Verification
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  retry-policy-red:
+  reliability-and-retry:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -25,5 +25,15 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run Task 15 RED
-        run: flutter test test/core/services/download_retry_policy_test.dart
+      - name: Run Task 15 retry and Range suite
+        run: |
+          flutter test \
+            test/core/services/download_retry_policy_test.dart \
+            test/core/services/download_range_checkpoint_backpressure_test.dart \
+            test/core/services/download_resource_identity_service_guard_test.dart \
+            test/core/services/download_source_refresh_integrity_test.dart \
+            test/core/services/download_source_refresh_service_wiring_test.dart
+      - name: Run Task 13 chaos matrix
+        run: flutter test test/core/services/download_manager_chaos_matrix_test.dart
+      - name: Analyze download migration files
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services test/core/services
