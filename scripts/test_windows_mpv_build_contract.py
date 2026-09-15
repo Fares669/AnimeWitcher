@@ -33,7 +33,10 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         )
         self.assertIn("ninja -C \"build_${BIT}\" llvm-download", workflow)
         self.assertIn("llvm-ranlib", workflow)
-        self.assertIn('CPATH="$PWD/build_${BIT}/${BIT}-w64-mingw32/include"', workflow)
+        self.assertIn('ninja -C "build_${BIT}" llvm-wrapper', workflow)
+        self.assertIn('windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres"', workflow)
+        self.assertIn('--preprocessor "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang"', workflow)
+        self.assertNotIn("CPATH=", workflow)
         self.assertNotIn("ninja -C \"build_${BIT}\" llvm\n", workflow)
 
 

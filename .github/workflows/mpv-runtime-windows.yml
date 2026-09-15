@@ -241,7 +241,21 @@ jobs:
           # The exact LLVM 20.1.8 source is still required by compiler-rt/libc++.
           # Download it without recompiling a second host Clang/LLVM toolchain.
           ninja -C "build_${BIT}" llvm-download
+          ninja -C "build_${BIT}" llvm-wrapper
           test -d src_packages/llvm/libunwind
+
+          # llvm-rc finds the target clang by argv[0]. Keep the generated windres
+          # entrypoint, but make the preprocessor explicit so it receives the
+          # MinGW sysroot headers without leaking them into host tools.
+          windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres"
+          test -L "$windres"
+          unlink "$windres"
+          cat > "$windres" <<EOF
+          #!/bin/bash
+          exec "$PWD/clang_root/bin/llvm-rc" --preprocessor "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang" "\$@"
+          EOF
+          chmod +x "$windres"
+          test -x "$windres"
 
       - name: Patch LLVM MinGW libc++ compatibility
         working-directory: _build/win-builder
@@ -268,10 +282,7 @@ jobs:
         run: |
           set -euxo pipefail
           ninja -C "build_${BIT}" rustup
-          # llvm-rc delegates preprocessing to clang; expose the target headers
-          # explicitly because they are installed at the sysroot root by mingw-w64.
-          CPATH="$PWD/build_${BIT}/${BIT}-w64-mingw32/include" \
-            ninja -C "build_${BIT}" llvm-clang
+          ninja -C "build_${BIT}" llvm-clang
           test -x "$PWD/clang_root/bin/clang"
           test -x "$PWD/clang_root/bin/${{ matrix.target }}-w64-mingw32-gcc"
 
