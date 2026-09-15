@@ -35,7 +35,7 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         self.assertIn("llvm-ranlib", workflow)
         self.assertIn('ninja -C "build_${BIT}" llvm-wrapper', workflow)
         self.assertIn('windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres"', workflow)
-        self.assertIn('--preprocessor "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang"', workflow)
+        self.assertIn('--preprocessor "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang"', workflow)\n        self.assertIn('exec -a "$0" "$PWD/clang_root/bin/llvm-rc"', workflow)
         self.assertNotIn("CPATH=", workflow)
         reuse_start = workflow.index("      - name: Reuse pinned container LLVM host compiler")
         reuse_end = workflow.index("\n      - name: Patch LLVM MinGW libc++ compatibility", reuse_start)
