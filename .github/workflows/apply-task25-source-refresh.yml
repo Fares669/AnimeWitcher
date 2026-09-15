@@ -1,0 +1,57 @@
+name: Apply Task 25 Source Refresh
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+    paths:
+      - .github/apply_task25_source_refresh.py
+permissions:
+  contents: write
+jobs:
+  green:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: Apply guarded source refresh fix
+        run: python .github/apply_task25_source_refresh.py
+      - name: Format changed Dart
+        run: dart format lib/core/services/download_service.dart test/core/services/download_plugin_source_refresh_routing_test.dart
+      - name: Run focused source and lifecycle tests
+        run: |
+          flutter test \
+            test/core/services/download_plugin_source_refresh_routing_test.dart \
+            test/core/services/download_source_refresh_integrity_test.dart \
+            test/core/services/download_plugin_parallel_execution_test.dart \
+            test/core/services/background_downloader_transfer_api_authority_test.dart \
+            test/core/services/download_plugin_parallel_cancel_routing_test.dart \
+            test/core/services/download_expected_size_authority_test.dart
+      - name: Generate sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Finalize plan evidence
+        run: python .github/finalize_task25_plan.py
+      - name: Remove one-shot files
+        run: |
+          rm .github/apply_task25_source_refresh.py
+          rm .github/finalize_task25_plan.py
+          rm .github/workflows/apply-task25-source-refresh.yml
+          rm .github/workflows/task25-source-refresh-red.yml
+      - name: Commit verified fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_service.dart test/core/services/download_plugin_source_refresh_routing_test.dart docs/superpowers/plans/2026-09-15-background-downloader-authority.md .github
+          git diff --cached --check
+          git commit -m "fix(downloads): keep source refresh on plugin executor"
+          git push origin HEAD:refactor/background-downloader-authority
