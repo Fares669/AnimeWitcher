@@ -38,7 +38,8 @@ final class DownloadServiceUnavailableException implements Exception {
 ///
 /// A failed attempt is deliberately forgotten so the next command can retry.
 /// The Future returned to concurrent callers is the exact same object, making
-/// recovery completion a single ordering boundary for all public controls.
+/// plugin startup/rehydration plus logical recovery one ordering boundary for
+/// every public control. Readiness is never published between those phases.
 final class DownloadServiceReadinessBarrier {
   Future<void>? _inFlight;
   bool _ready = false;

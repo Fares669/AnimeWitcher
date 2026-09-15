@@ -1454,14 +1454,17 @@ class DownloadService {
       }
     });
 
-    // 5. Catch up on native tasks. Do not reschedule killed tasks with a
-    //    fresh enqueue — that restarts the file from byte 0. Interrupted
-    //    transfers are resumed from leftover bytes below.
-    // Restore persisted host knowledge before any multipart session picks
-    // its slow-start target. Expired profiles are removed by the store.
+    // 5. Bring the plugin executor to a settled runtime view before legacy
+    // inventory or logical reconciliation is allowed to reason about writers.
+    await _startPluginExecutor();
+
+    // Restore persisted host knowledge before any legacy multipart session
+    // picks its slow-start target. Expired profiles are removed by the store.
     _parallel.seedHostCeilings(await _hostProfiles.validHostCeilings());
 
-    // Restore part identities before replaying native callbacks.
+    // Legacy PR #231 manifests are inventory only at this point. They are
+    // restored after plugin rehydration so later reconciliation can decide
+    // which executor, if any, still owns the logical episode.
     for (final record in await FileDownloader().database.allRecords()) {
       if (record.task is ParallelDownloadTask &&
           record.status != TaskStatus.complete) {
@@ -1470,20 +1473,24 @@ class DownloadService {
         } catch (_) {}
       }
     }
-    await FileDownloader().start(
-      doRescheduleKilledTasks: false,
-      markDownloadedComplete: false,
-    );
-    // Rebuild Transfer handles from the plugin database without enqueueing
-    // anything. Recovery below remains the only code allowed to decide whether
-    // an interrupted task should resume, wait, or stay user-paused.
-    await _nativeTransport.rehydrate(group: kLogicalDownloadGroup);
 
-    // 6. Restore UI rows and continue any download that was running when
-    //    the process died, keeping already-written bytes.
+    // 6. Restore UI rows and reconcile logical intent only after executor
+    // startup/rehydration and legacy inventory are both complete.
     await _serializeQueue(_recoverPersistedDownloads);
 
     _isInitialized = true;
+  }
+
+  Future<void> _startPluginExecutor() async {
+    // The update listener is installed before this helper is called. Restore
+    // durable user pause/delete intent even earlier in _initialize(), then let
+    // background_downloader reconnect/reschedule native work. Rehydration
+    // reconnects Transfer handles before any logical ownership decision.
+    await FileDownloader().start(
+      doRescheduleKilledTasks: true,
+      markDownloadedComplete: false,
+    );
+    await _nativeTransport.rehydrate(group: kLogicalDownloadGroup);
   }
 
   /// Test hook that replaces [FileDownloader.configure] for the holding queue.
