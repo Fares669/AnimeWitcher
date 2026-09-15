@@ -60,7 +60,7 @@ class AndroidRuntimeVerifierTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("artifact: APK", result.stdout)
             self.assertIn("arm64-v8a, armeabi-v7a, x86_64", result.stdout)
-            self.assertNotIn("x86", result.stdout)
+            self.assertNotIn("abis: arm64-v8a, armeabi-v7a, x86\n", result.stdout)
 
     def test_rejects_old_mpv_in_built_apk(self):
         with tempfile.TemporaryDirectory() as tmp:
