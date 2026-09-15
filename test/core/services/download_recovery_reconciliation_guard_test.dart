@@ -42,4 +42,27 @@ void main() {
     expect(ownershipSource, isNot(contains('_liveTransferTasks()')));
     expect(ownershipSource, isNot(contains('activeTasks.any')));
   });
+
+  test('transport ownership uses targeted plugin runtime evidence', () {
+    final source = File(
+      'lib/core/services/background_downloader_transport.dart',
+    ).readAsStringSync();
+    final ownershipStart = source.indexOf(
+      'Future<DownloadRuntimeOwnership> ownershipFor(String taskId)',
+    );
+    final ownershipEnd = source.indexOf(
+      '@override\n  Future<bool> start(',
+      ownershipStart,
+    );
+
+    expect(ownershipStart, greaterThanOrEqualTo(0));
+    expect(ownershipEnd, greaterThan(ownershipStart));
+    final ownershipSource = source.substring(ownershipStart, ownershipEnd);
+    expect(ownershipSource, contains('_downloader.taskForId(taskId)'));
+    expect(ownershipSource, isNot(contains('allTasks(')));
+    expect(
+      ownershipSource,
+      contains('return DownloadRuntimeOwnership.unknown;'),
+    );
+  });
 }
