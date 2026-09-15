@@ -3,7 +3,123 @@ import 'dart:async';
 import 'package:background_downloader/background_downloader.dart';
 
 import 'download_parallel.dart';
-import 'download_transport.dart';
+
+/// Only non-final executor states can plausibly own a native writer. Persisted
+/// database state alone is never sufficient evidence of current ownership.
+bool runtimeTaskStatusCanOwnWriter(TaskStatus status) => switch (status) {
+  TaskStatus.enqueued ||
+  TaskStatus.running ||
+  TaskStatus.waitingToRetry => true,
+  TaskStatus.paused ||
+  TaskStatus.complete ||
+  TaskStatus.canceled ||
+  TaskStatus.failed ||
+  TaskStatus.notFound => false,
+};
+
+const int kDownloadLargeFileHintThresholdBytes = 50 * 1024 * 1024;
+
+/// Runtime ownership is intentionally separate from persisted task status.
+/// Only [notOwned] permits a new writer for the same execution identity.
+enum DownloadRuntimeOwnership { owned, notOwned, settling, unknown }
+
+/// Result of issuing a cancellation command. A successful command is not by
+/// itself proof that the executor has released file ownership.
+enum DownloadCancelSettlement { canceled, alreadyGone, stillOwned, unknown }
+
+/// Low-level result of issuing a non-terminal transport command. This remains
+/// distinct from DownloadService's logical/user-visible command outcome.
+enum DownloadTransportCommandOutcome { accepted, rejected, unavailable }
+
+DownloadTransportCommandOutcome resolveDownloadTransportCommandOutcome({
+  required bool commandAccepted,
+  bool transportAvailable = true,
+}) {
+  if (!transportAvailable) return DownloadTransportCommandOutcome.unavailable;
+  return commandAccepted
+      ? DownloadTransportCommandOutcome.accepted
+      : DownloadTransportCommandOutcome.rejected;
+}
+
+DownloadCancelSettlement resolveDownloadCancelCommand({
+  required bool hadTrackedOwner,
+  required bool commandSucceeded,
+  required bool commandThrew,
+}) {
+  if (commandThrew) return DownloadCancelSettlement.unknown;
+  if (commandSucceeded) return DownloadCancelSettlement.canceled;
+  return hadTrackedOwner
+      ? DownloadCancelSettlement.stillOwned
+      : DownloadCancelSettlement.unknown;
+}
+
+extension DownloadRuntimeOwnershipSafety on DownloadRuntimeOwnership {
+  bool get blocksNewWriter => this != DownloadRuntimeOwnership.notOwned;
+}
+
+/// Resolve ownership from executor/runtime evidence only. A persisted database
+/// status is deliberately not an input: it may describe an older projection.
+DownloadRuntimeOwnership resolveDownloadRuntimeOwnership({
+  required bool runtimeQuerySucceeded,
+  required bool runtimeTaskPresent,
+  bool localRangeWriterActive = false,
+  bool operationSettling = false,
+  bool transferHandlePresent = false,
+}) {
+  if (localRangeWriterActive || runtimeTaskPresent) {
+    return DownloadRuntimeOwnership.owned;
+  }
+  if (operationSettling) return DownloadRuntimeOwnership.settling;
+  if (!runtimeQuerySucceeded) {
+    // A Transfer handle can be rehydrated from persistence, so presence alone
+    // cannot prove ownership; query failure therefore remains unknown.
+    return DownloadRuntimeOwnership.unknown;
+  }
+  return DownloadRuntimeOwnership.notOwned;
+}
+
+/// Android 14+ UIDT requires a user-visible notification. When notifications
+/// are disabled in-app or permission is denied, fall back to the normal
+/// resumable WorkManager path instead of requesting userInitiated priority.
+bool shouldUseUserInitiatedDownloadHint({
+  required bool isAndroid,
+  required bool notificationsConfigured,
+  required bool notificationPermissionGranted,
+}) {
+  if (!isAndroid) return true;
+  return notificationsConfigured && notificationPermissionGranted;
+}
+
+/// Anime episodes remain pause/resume capable for long-running WorkManager
+/// fallback even when Android UIDT cannot be used.
+Set<TransferHint> animeDownloadTransferHints({
+  required int expectedBytes,
+  bool useUserInitiated = true,
+}) {
+  final hints = <TransferHint>{};
+  if (useUserInitiated) {
+    hints.add(TransferHint.userInitiated);
+  }
+  if (expectedBytes <= 0 ||
+      expectedBytes >= kDownloadLargeFileHintThresholdBytes) {
+    hints.add(TransferHint.largeFile);
+  }
+  return hints;
+}
+
+abstract interface class DownloadTransport {
+  bool owns(String taskId);
+
+  Future<bool> start(DownloadTask task);
+  Future<bool> pause(DownloadTask task);
+  Future<bool> resume(DownloadTask task);
+  Future<DownloadTransportCommandOutcome> startOutcome(DownloadTask task);
+  Future<DownloadTransportCommandOutcome> pauseOutcome(DownloadTask task);
+  Future<DownloadTransportCommandOutcome> resumeOutcome(DownloadTask task);
+  Future<DownloadCancelSettlement> cancel(DownloadTask task);
+  Stream<TaskUpdate> updatesFor(String taskId);
+  Future<void> dispose();
+}
 
 /// True for logical episode tasks that may be owned directly by
 /// background_downloader. Plugin-generated chunk tasks and AnimeWitcher's
