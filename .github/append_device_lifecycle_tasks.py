@@ -228,3 +228,5 @@ Do not remove legacy fallback or transport-state compatibility until the device 
 
 text = text.replace(anchor, '\n' + block + anchor, 1)
 plan.write_text(text)
+
+# trigger one-shot workflow after its definition exists
