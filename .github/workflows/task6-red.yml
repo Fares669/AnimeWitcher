@@ -1,4 +1,4 @@
-name: Task 12 Legacy Migration GREEN
+name: Task 13 Reliability Matrix
 
 on:
   push:
@@ -6,16 +6,15 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  legacy-migration-green:
+  reliability-matrix:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
-          fetch-depth: 0
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -26,62 +25,7 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Apply legacy adoption planner and startup guard
-        shell: python
-        run: |
-          from pathlib import Path
-          import base64
-
-          addition = base64.b64decode('ZW51bSBMZWdhY3lEb3dubG9hZEFkb3B0aW9uIHsKICBjb250aW51ZUxlZ2FjeSwKICBwbHVnaW5SZWh5ZHJhdGUsCiAgY29tcGxldGVkLAogIHBhdXNlZCwKICBvcnBoYW5lZCwKfQoKLy8vIENob29zZXMgZXhhY3RseSBvbmUgc3RhcnR1cCBkaXNwb3NpdGlvbiBmb3IgYSBwZXJzaXN0ZWQgbG9naWNhbCBlcGlzb2RlLgovLy8KLy8vIExlZ2FjeSBtYW5pZmVzdCBldmlkZW5jZSBhbHdheXMgd2lucyBvdmVyIGEgZG9ybWFudCBwbHVnaW4gcHJvamVjdGlvbiBzbwovLy8gYWN0aXZlIFBSICMyMzEgcmFuZ2VzIGFyZSBuZXZlciBjb252ZXJ0ZWQgaW50byBwbHVnaW4gY2h1bmtzLiBDb25mbGljdGluZwovLy8gbGl2ZSBsZWdhY3kvcGx1Z2luIG93bmVyc2hpcCBmYWlscyBjbG9zZWQ6IHN0YXJ0dXAgbXVzdCBzZXR0bGUgYm90aCBvd25lcnMKLy8vIGFuZCBwZXJzaXN0IGFuIG9ycGhhbiBmZW5jZSBiZWZvcmUgYW55IG5vcm1hbCByZWNvdmVyeSBjYW4gbGF1bmNoIGEgd3JpdGVyLgpMZWdhY3lEb3dubG9hZEFkb3B0aW9uIHBsYW5MZWdhY3lEb3dubG9hZEFkb3B0aW9uKHsKICByZXF1aXJlZCBib29sIGhhc0xlZ2FjeU1hbmlmZXN0LAogIHJlcXVpcmVkIGJvb2wgbGVnYWN5SW5jb21wbGV0ZVBhcnRzLAogIHJlcXVpcmVkIGJvb2wgaGFzUGx1Z2luVGFzaywKICByZXF1aXJlZCBib29sIGZpbmFsRmlsZUNvbXBsZXRlLAogIHJlcXVpcmVkIGJvb2wgdXNlclBhdXNlZCwKICByZXF1aXJlZCBib29sIGxlZ2FjeVdyaXRlckFjdGl2ZSwKICByZXF1aXJlZCBib29sIHBsdWdpbldyaXRlckFjdGl2ZSwKfSkgewogIGlmIChmaW5hbEZpbGVDb21wbGV0ZSkgcmV0dXJuIExlZ2FjeURvd25sb2FkQWRvcHRpb24uY29tcGxldGVkOwogIGlmIChsZWdhY3lXcml0ZXJBY3RpdmUgJiYgcGx1Z2luV3JpdGVyQWN0aXZlKSB7CiAgICByZXR1cm4gTGVnYWN5RG93bmxvYWRBZG9wdGlvbi5vcnBoYW5lZDsKICB9CiAgaWYgKGhhc0xlZ2FjeU1hbmlmZXN0KSB7CiAgICBpZiAodXNlclBhdXNlZCkgcmV0dXJuIExlZ2FjeURvd25sb2FkQWRvcHRpb24ucGF1c2VkOwogICAgaWYgKGxlZ2FjeUluY29tcGxldGVQYXJ0cyB8fCBsZWdhY3lXcml0ZXJBY3RpdmUgfHwgaGFzUGx1Z2luVGFzaykgewogICAgICByZXR1cm4gTGVnYWN5RG93bmxvYWRBZG9wdGlvbi5jb250aW51ZUxlZ2FjeTsKICAgIH0KICAgIHJldHVybiBMZWdhY3lEb3dubG9hZEFkb3B0aW9uLmNvbnRpbnVlTGVnYWN5OwogIH0KICBpZiAodXNlclBhdXNlZCkgcmV0dXJuIExlZ2FjeURvd25sb2FkQWRvcHRpb24ucGF1c2VkOwogIGlmIChoYXNQbHVnaW5UYXNrIHx8IHBsdWdpbldyaXRlckFjdGl2ZSkgewogICAgcmV0dXJuIExlZ2FjeURvd25sb2FkQWRvcHRpb24ucGx1Z2luUmVoeWRyYXRlOwogIH0KICByZXR1cm4gTGVnYWN5RG93bmxvYWRBZG9wdGlvbi5vcnBoYW5lZDsKfQo=').decode()
-          old = base64.b64decode('ICAgICAgZmluYWwgb2xkSm9iID0gYXdhaXQgX2pvYlN0b3JlLmdldCh0YXNrLnRhc2tJZCk7CiAgICAgIGZpbmFsIHVzZXJQYXVzZWRNZXRhID0gaXNVc2VyUGF1c2VkTWV0YWRhdGEobWV0YWRhdGEpOwogICAgICBpZiAocmVjb3JkLnN0YXR1cyA9PSBUYXNrU3RhdHVzLmNvbXBsZXRlKSB7CiAgICAgICAgY29udGludWU7CiAgICAgIH0KICAgICAgaWYgKHJlY29yZC5zdGF0dXMgPT0gVGFza1N0YXR1cy5jYW5jZWxlZCAmJgogICAgICAgICAgbWV0YWRhdGEgPT0gbnVsbCAmJgogICAgICAgICAgb2xkSm9iID09IG51bGwgJiYKICAgICAgICAgICF1c2VyUGF1c2VkTWV0YSkgewogICAgICAgIGNvbnRpbnVlOwogICAgICB9CiAgICAgIGZpbmFsIGxlZ2FjeVF1ZXVlV2FpdGluZyA9IGlzUXVldWVXYWl0aW5nTWV0YWRhdGEobWV0YWRhdGEpOwo=').decode()
-          new = base64.b64decode('ICAgICAgZmluYWwgb2xkSm9iID0gYXdhaXQgX2pvYlN0b3JlLmdldCh0YXNrLnRhc2tJZCk7CiAgICAgIGZpbmFsIHVzZXJQYXVzZWRNZXRhID0gaXNVc2VyUGF1c2VkTWV0YWRhdGEobWV0YWRhdGEpOwogICAgICBmaW5hbCBtYW5pZmVzdEV2aWRlbmNlID0gbWFuaWZlc3RFdmlkZW5jZUJ5SWRbdGFzay50YXNrSWRdOwogICAgICBmaW5hbCBsZWdhY3lXcml0ZXJBY3RpdmUgPQogICAgICAgICAgX3BhcmFsbGVsLmlzQWN0aXZlKHRhc2sudGFza0lkKSB8fAogICAgICAgICAgX3BhcmFsbGVsLmhhc0xpdmVDb25uZWN0aW9ucyh0YXNrLnRhc2tJZCk7CiAgICAgIGZpbmFsIHBsdWdpbldyaXRlckFjdGl2ZSA9IG5hdGl2ZUlkcy5jb250YWlucyh0YXNrLnRhc2tJZCk7CiAgICAgIGZpbmFsIGhhc1BsdWdpblRhc2sgPQogICAgICAgICAgbWFuaWZlc3RFdmlkZW5jZSA9PSBudWxsICYmCiAgICAgICAgICAocGx1Z2luV3JpdGVyQWN0aXZlIHx8CiAgICAgICAgICAgICAgcGVyc2lzdGVkUmVjb3Jkcy5hbnkoCiAgICAgICAgICAgICAgICAoY2FuZGlkYXRlKSA9PgogICAgICAgICAgICAgICAgICAgIGNhbmRpZGF0ZS50YXNrLnRhc2tJZCA9PSB0YXNrLnRhc2tJZCAmJgogICAgICAgICAgICAgICAgICAgIGNhbmRpZGF0ZS50YXNrIGlzIFBhcmFsbGVsRG93bmxvYWRUYXNrLAogICAgICAgICAgICAgICkpOwogICAgICBmaW5hbCBtaWdyYXRpb25Vc2VyUGF1c2VkID0gb2xkSm9iICE9IG51bGwKICAgICAgICAgID8gZG93bmxvYWRKb2JIYXNVc2VyUGF1c2VJbnRlbnQob2xkSm9iLnN0YXRlKQogICAgICAgICAgOiB1c2VyUGF1c2VkTWV0YSB8fCBfdXNlclBhdXNlZElkcy5jb250YWlucyh0YXNrLnRhc2tJZCk7CiAgICAgIGZpbmFsIGxlZ2FjeUFkb3B0aW9uID0gcGxhbkxlZ2FjeURvd25sb2FkQWRvcHRpb24oCiAgICAgICAgaGFzTGVnYWN5TWFuaWZlc3Q6IG1hbmlmZXN0RXZpZGVuY2UgIT0gbnVsbCwKICAgICAgICBsZWdhY3lJbmNvbXBsZXRlUGFydHM6CiAgICAgICAgICAgIG1hbmlmZXN0RXZpZGVuY2UgIT0gbnVsbCAmJgogICAgICAgICAgICBtYW5pZmVzdEV2aWRlbmNlLmR1cmFibGVCeXRlcyA8IG1hbmlmZXN0RXZpZGVuY2UuZXhwZWN0ZWRCeXRlcywKICAgICAgICBoYXNQbHVnaW5UYXNrOiBoYXNQbHVnaW5UYXNrLAogICAgICAgIGZpbmFsRmlsZUNvbXBsZXRlOiByZWNvcmQuc3RhdHVzID09IFRhc2tTdGF0dXMuY29tcGxldGUsCiAgICAgICAgdXNlclBhdXNlZDogbWlncmF0aW9uVXNlclBhdXNlZCwKICAgICAgICBsZWdhY3lXcml0ZXJBY3RpdmU6IGxlZ2FjeVdyaXRlckFjdGl2ZSwKICAgICAgICBwbHVnaW5Xcml0ZXJBY3RpdmU6IHBsdWdpbldyaXRlckFjdGl2ZSwKICAgICAgKTsKICAgICAgZGlhZ25vc3RpY0xvZy5yZWNvcmQoJ3JlY292ZXJ5LmxlZ2FjeUFkb3B0aW9uJywgewogICAgICAgICd0YXNrSWQnOiB0YXNrLnRhc2tJZCwKICAgICAgICAnYWRvcHRpb24nOiBsZWdhY3lBZG9wdGlvbi5uYW1lLAogICAgICAgICdsZWdhY3lXcml0ZXInOiBsZWdhY3lXcml0ZXJBY3RpdmUsCiAgICAgICAgJ3BsdWdpbldyaXRlcic6IHBsdWdpbldyaXRlckFjdGl2ZSwKICAgICAgfSk7CiAgICAgIGlmIChsZWdhY3lBZG9wdGlvbiA9PSBMZWdhY3lEb3dubG9hZEFkb3B0aW9uLmNvbXBsZXRlZCkgewogICAgICAgIGNvbnRpbnVlOwogICAgICB9CiAgICAgIGlmIChsZWdhY3lBZG9wdGlvbiA9PSBMZWdhY3lEb3dubG9hZEFkb3B0aW9uLm9ycGhhbmVkICYmCiAgICAgICAgICBsZWdhY3lXcml0ZXJBY3RpdmUgJiYKICAgICAgICAgIHBsdWdpbldyaXRlckFjdGl2ZSkgewogICAgICAgIGZpbmFsIG9ycGhhbkNvbW1pdHRlZCA9IGF3YWl0IF9jaGVja3BvaW50TG9naWNhbEpvYigKICAgICAgICAgIHRhc2ssCiAgICAgICAgICBzdGF0ZTogRG93bmxvYWRKb2JTdGF0ZS5vcnBoYW5lZCwKICAgICAgICAgIGV4cGVjdGVkQnl0ZXM6IGtub3duRG93bmxvYWRTaXplKDxpbnQ/PlsKICAgICAgICAgICAgcmVjb3JkLmV4cGVjdGVkRmlsZVNpemUsCiAgICAgICAgICAgIG1hbmlmZXN0RXZpZGVuY2U/LmV4cGVjdGVkQnl0ZXMsCiAgICAgICAgICAgIG9sZEpvYj8uZXhwZWN0ZWRCeXRlcywKICAgICAgICAgIF0pLAogICAgICAgICAgdXNlclBhdXNlZDogZmFsc2UsCiAgICAgICAgICBxdWV1ZVdhaXRpbmc6IGZhbHNlLAogICAgICAgICk7CiAgICAgICAgaWYgKCFvcnBoYW5Db21taXR0ZWQpIHsKICAgICAgICAgIGRpYWdub3N0aWNMb2cucmVjb3JkKCdyZWNvdmVyeS5vd25lcnNoaXBDb25mbGljdCcsIHsKICAgICAgICAgICAgJ3Rhc2tJZCc6IHRhc2sudGFza0lkLAogICAgICAgICAgICAncmVhc29uJzogJ29ycGhhbkNoZWNrcG9pbnRGYWlsZWQnLAogICAgICAgICAgfSk7CiAgICAgICAgICBjb250aW51ZTsKICAgICAgICB9CiAgICAgICAgdmFyIGxlZ2FjeVNldHRsZWQgPSB0cnVlOwogICAgICAgIGlmICh0YXNrIGlzIFBhcmFsbGVsRG93bmxvYWRUYXNrKSB7CiAgICAgICAgICB0cnkgewogICAgICAgICAgICBsZWdhY3lTZXR0bGVkID0gYXdhaXQgX3BhcmFsbGVsLnBhdXNlKHRhc2spOwogICAgICAgICAgfSBjYXRjaCAoXykgewogICAgICAgICAgICBsZWdhY3lTZXR0bGVkID0gZmFsc2U7CiAgICAgICAgICB9CiAgICAgICAgfQogICAgICAgIHZhciBwbHVnaW5TZXR0bGVkID0gdHJ1ZTsKICAgICAgICB0cnkgewogICAgICAgICAgcGx1Z2luU2V0dGxlZCA9IGF3YWl0IF9uYXRpdmVUcmFuc3BvcnQucGF1c2UodGFzayk7CiAgICAgICAgfSBjYXRjaCAoXykgewogICAgICAgICAgcGx1Z2luU2V0dGxlZCA9IGZhbHNlOwogICAgICAgIH0KICAgICAgICBkaWFnbm9zdGljTG9nLnJlY29yZCgncmVjb3Zlcnkub3duZXJzaGlwQ29uZmxpY3QnLCB7CiAgICAgICAgICAndGFza0lkJzogdGFzay50YXNrSWQsCiAgICAgICAgICAnbGVnYWN5U2V0dGxlZCc6IGxlZ2FjeVNldHRsZWQsCiAgICAgICAgICAncGx1Z2luU2V0dGxlZCc6IHBsdWdpblNldHRsZWQsCiAgICAgICAgfSk7CiAgICAgICAgX3F1ZXVlV2FpdGluZ0lkcy5yZW1vdmUodGFzay50YXNrSWQpOwogICAgICAgIF93YWl0aW5nUGF5bG9hZHMucmVtb3ZlKHRhc2sudGFza0lkKTsKICAgICAgICBfZm9yZ2V0U2Vzc2lvblRhc2sodGFzay50YXNrSWQpOwogICAgICAgIGNvbnRpbnVlOwogICAgICB9CiAgICAgIGlmIChsZWdhY3lBZG9wdGlvbiA9PSBMZWdhY3lEb3dubG9hZEFkb3B0aW9uLnBhdXNlZCkgewogICAgICAgIF91c2VyUGF1c2VkSWRzLmFkZCh0YXNrLnRhc2tJZCk7CiAgICAgIH0KICAgICAgaWYgKHJlY29yZC5zdGF0dXMgPT0gVGFza1N0YXR1cy5jYW5jZWxlZCAmJgogICAgICAgICAgbWV0YWRhdGEgPT0gbnVsbCAmJgogICAgICAgICAgb2xkSm9iID09IG51bGwgJiYKICAgICAgICAgICF1c2VyUGF1c2VkTWV0YSkgewogICAgICAgIGNvbnRpbnVlOwogICAgICB9CiAgICAgIGZpbmFsIGxlZ2FjeVF1ZXVlV2FpdGluZyA9IGlzUXVldWVXYWl0aW5nTWV0YWRhdGEobWV0YWRhdGEpOwo=').decode()
-
-          store_path = Path('lib/core/services/download_job_store.dart')
-          store = store_path.read_text()
-          if 'enum LegacyDownloadAdoption' not in store:
-              needle = 'const Duration kDownloadCanceledTombstoneRetention = Duration(days: 30);\n'
-              assert needle in store
-              store = store.replace(needle, needle + '\n' + addition, 1)
-              store_path.write_text(store)
-
-          service_path = Path('lib/core/services/download_service.dart')
-          service = service_path.read_text()
-          if 'final legacyAdoption = planLegacyDownloadAdoption(' not in service:
-              assert old in service, 'startup recovery adoption insertion point not found'
-              service = service.replace(old, new, 1)
-              service_path.write_text(service)
-      - name: Format migration changes
-        run: |
-          dart format \
-            lib/core/services/download_job_store.dart \
-            lib/core/services/download_service.dart \
-            test/core/services/download_legacy_migration_policy_test.dart
-      - name: Run Task 12 migration and recovery suite
-        run: |
-          flutter test \
-            test/core/services/download_legacy_migration_policy_test.dart \
-            test/core/services/download_manifest_startup_inventory_test.dart \
-            test/core/services/persistent_parallel_download_manifest_discovery_test.dart \
-            test/core/services/download_recovery_inventory_test.dart
-      - name: Analyze migration files
-        run: |
-          flutter analyze --no-fatal-warnings --no-fatal-infos \
-            lib/core/services/download_job_store.dart \
-            lib/core/services/download_service.dart \
-            lib/core/services/persistent_parallel_download.dart \
-            test/core/services/download_legacy_migration_policy_test.dart
-      - name: Commit Task 12 GREEN
-        shell: bash
-        run: |
-          if git diff --quiet -- lib/core/services/download_job_store.dart lib/core/services/download_service.dart; then
-            echo 'Task 12 production wiring already present.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            lib/core/services/download_job_store.dart \
-            lib/core/services/download_service.dart \
-            test/core/services/download_legacy_migration_policy_test.dart
-          git commit -m 'feat(downloads): preserve legacy multipart sessions during migration'
-          git push origin HEAD:refactor/background-downloader-authority
+      - name: Run Task 13 chaos matrix
+        run: flutter test test/core/services/download_manager_chaos_matrix_test.dart
+      - name: Analyze download migration files
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services test/core/services
