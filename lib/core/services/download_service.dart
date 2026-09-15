@@ -5081,20 +5081,7 @@ class DownloadService {
         _parallel.hasLiveConnections(taskId)) {
       return DownloadRuntimeOwnership.owned;
     }
-    try {
-      final activeTasks = await _liveTransferTasks();
-      return resolveDownloadRuntimeOwnership(
-        runtimeQuerySucceeded: true,
-        runtimeTaskPresent: activeTasks.any((task) => task.taskId == taskId),
-        transferHandlePresent: _nativeTransport.handleFor(taskId) != null,
-      );
-    } catch (_) {
-      return resolveDownloadRuntimeOwnership(
-        runtimeQuerySucceeded: false,
-        runtimeTaskPresent: false,
-        transferHandlePresent: _nativeTransport.handleFor(taskId) != null,
-      );
-    }
+    return _nativeTransport.ownershipFor(taskId);
   }
 
   Future<DownloadRuntimeOwnership> _waitForCancelOwnershipRelease(
