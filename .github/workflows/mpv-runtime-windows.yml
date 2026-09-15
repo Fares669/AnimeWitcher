@@ -160,6 +160,41 @@ jobs:
           grep -F "$MPV_COMMIT" packages/mpv-release.cmake
           ! grep -F 'releases/latest' packages/mpv-release.cmake
 
+      - name: Pin graphengine and zimg source mirrors
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path('packages/graphengine.cmake'): (
+                  'https://bitbucket.org/the-sekrit-twc/graphengine.git',
+                  'https://github.com/sekrit-twc/graphengine.git',
+                  '    GIT_TAG 91c6af4c795c5396d8b974f24b4d2e2ecca04e2d',
+              ),
+              Path('packages/libzimg.cmake'): (
+                  'https://bitbucket.org/the-sekrit-twc/zimg.git',
+                  'https://github.com/sekrit-twc/zimg.git',
+                  '    GIT_TAG 67e0603271c080e22c8429856dd4a8a56587e61e',
+              ),
+          }
+          clone_anchor = '    GIT_CLONE_FLAGS "--filter=tree:0"'
+          for path, (old_url, new_url, git_tag) in replacements.items():
+              text = path.read_text()
+              if text.count(old_url) != 1 or text.count(clone_anchor) != 1:
+                  raise SystemExit(f'unexpected source layout: {path}')
+              if '    GIT_TAG ' in text:
+                  raise SystemExit(f'unexpected existing GIT_TAG: {path}')
+              text = text.replace(old_url, new_url, 1)
+              text = text.replace(clone_anchor, clone_anchor + git_tag + chr(10), 1)
+              path.write_text(text)
+          PY
+          grep -F 'GIT_REPOSITORY https://github.com/sekrit-twc/graphengine.git' packages/graphengine.cmake
+          grep -F 'GIT_TAG 91c6af4c795c5396d8b974f24b4d2e2ecca04e2d' packages/graphengine.cmake
+          grep -F 'GIT_REPOSITORY https://github.com/sekrit-twc/zimg.git' packages/libzimg.cmake
+          grep -F 'GIT_TAG 67e0603271c080e22c8429856dd4a8a56587e61e' packages/libzimg.cmake
+
       - name: Pin Vulkan Loader source and static-linking patch
         working-directory: _build/win-builder
         run: |
@@ -207,7 +242,12 @@ jobs:
           BIT: ${{ matrix.bit }}
         run: |
           set -euxo pipefail
-          python3 -             "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh"             "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh"             "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" <<'PY'
+          python3 - \
+            "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh" \
+            "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh" \
+            "build_${BIT}/packages/graphengine-prefix/src/graphengine-stamp/reset_head.sh" \
+            "build_${BIT}/packages/libzimg-prefix/src/libzimg-stamp/reset_head.sh" \
+            "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" <<'PY'
           import sys
           from pathlib import Path
 
@@ -220,11 +260,15 @@ jobs:
               if old in text:
                   path.write_text(text.replace(old, 'HEAD'))
           PY
-          for reset_script in             "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh"             "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh"             "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"; do
+          for reset_script in \
+            "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh" \
+            "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh" \
+            "build_${BIT}/packages/graphengine-prefix/src/graphengine-stamp/reset_head.sh" \
+            "build_${BIT}/packages/libzimg-prefix/src/libzimg-stamp/reset_head.sh" \
+            "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"; do
             ! grep -F '@{u}' "$reset_script"
             grep -F 'reset --hard' "$reset_script"
           done
-
       - name: Reuse pinned container LLVM host compiler
         working-directory: _build/win-builder
         env:
