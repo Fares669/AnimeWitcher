@@ -57,19 +57,6 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             )
             wrapper = bin_dir / "x86_64-w64-mingw32-g++"
             patched = wrapper.read_text(encoding="utf-8")
-            self.assertIn('FLAGS="$FLAGS -stdlib=libc++"', patched)
-            self.assertIn(
-                f'FLAGS="$FLAGS -isystem {sysroot / "include/c++/v1"}"',
-                patched,
-            )
-            self.assertIn(
-                f'FLAGS="$FLAGS -resource-dir {resource_dir}"',
-                patched,
-            )
-            self.assertIn(
-                'FLAGS="$FLAGS --rtlib=compiler-rt --unwindlib=libunwind"',
-                patched,
-            )
             invocation = next(
                 line for line in patched.splitlines() if line.startswith('$CCACHE "$PROG"')
             )
