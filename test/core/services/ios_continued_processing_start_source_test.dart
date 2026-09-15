@@ -43,7 +43,7 @@ void main() {
     expect(end, greaterThan(start));
     final body = source.substring(start, end);
 
-    expect(body, contains('activeTask != nil'));
+    expect(body, contains('if let task = activeTask'));
     expect(body, contains('submittedAt'));
     expect(body, contains('identifier = nil'));
     expect(
