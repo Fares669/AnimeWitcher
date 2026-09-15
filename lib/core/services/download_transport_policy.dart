@@ -1,3 +1,7 @@
+import 'package:background_downloader/background_downloader.dart';
+
+import 'download_parallel.dart';
+
 /// Transport backend selected for one logical episode.
 ///
 /// This policy is deliberately independent from platform I/O. Platform
@@ -26,4 +30,16 @@ DownloadExecutionBackend selectDownloadExecutionBackend({
   return pluginParallelAccepted
       ? DownloadExecutionBackend.pluginParallel
       : DownloadExecutionBackend.legacyParallel;
+}
+
+/// Builds the executor task for a fresh plugin-owned logical download.
+///
+/// Single-connection downloads keep their existing [DownloadTask] identity.
+/// Multipart downloads are converted exactly once, preserving the logical
+/// taskId and every option supported by [ParallelDownloadTask].
+DownloadTask buildPluginTransportTask({
+  required DownloadTask template,
+  required int connections,
+}) {
+  return buildAdaptiveDownloadTask(template: template, parts: connections);
 }
