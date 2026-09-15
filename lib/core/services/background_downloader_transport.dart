@@ -253,16 +253,20 @@ class BackgroundDownloaderTransport implements DownloadTransport {
   Future<bool> resume(DownloadTask task) async {
     if (!isBackgroundDownloaderTransportTask(task)) return false;
     try {
-      final transfer = await _downloader.transfers.getOrStart(
-        task,
-        matchBy: (existingTask) => existingTask.taskId == task.taskId,
-        reEnqueueIfFailed: false,
-      );
+      // Resume is a reconnect operation, never a start operation. A process
+      // relaunch can leave plugin-owned parallel chunks alive while the parent
+      // database projection is missing. Calling Transfers.getOrStart here
+      // would be allowed to enqueue a replacement parent and create a second
+      // writer/chunk generation. Rehydrate only what background_downloader
+      // already knows, then let that existing Transfer own resume semantics.
+      var transfer = handleFor(task.taskId);
+      if (transfer == null) {
+        await _downloader.transfers.rehydrateFromDatabase(group: task.group);
+        transfer = handleFor(task.taskId);
+      }
+      if (transfer == null) return false;
       _attach(transfer);
 
-      // Transfers.getOrStart may reconnect to an already-running/completed
-      // execution. Otherwise delegate resume-data handling and the documented
-      // re-enqueue fallback to Transfer.resume() instead of duplicating it.
       if (transfer.status == TaskStatus.complete ||
           runtimeTaskStatusCanOwnWriter(transfer.status)) {
         return true;

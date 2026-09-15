@@ -4630,7 +4630,7 @@ class DownloadService {
         pluginChunkEvidence = pluginParentKnown;
       }
 
-      if (pluginParentKnown || pluginChunkEvidence) {
+      if (pluginParentKnown) {
         var pluginResumed = false;
         try {
           pluginResumed = await _nativeTransport.resume(task);
@@ -4640,7 +4640,7 @@ class DownloadService {
         diagnosticLog.record('resume.pluginParallel', {
           'taskId': task.taskId,
           'accepted': pluginResumed,
-          'parentKnown': pluginParentKnown,
+          'parentKnown': true,
           'chunkEvidence': pluginChunkEvidence,
         });
         if (pluginResumed) return true;
@@ -4650,8 +4650,21 @@ class DownloadService {
           'taskId': task.taskId,
           'ownership': ownership.name,
         });
-        // Never convert a known plugin parent/chunk set into AnimeWitcher's
-        // legacy multipart executor, and never silently enqueue fresh chunks.
+        // The plugin parent exists but did not settle resume. Never replace it
+        // with AnimeWitcher's legacy executor or a fresh parent.
+        return false;
+      }
+
+      if (pluginChunkEvidence) {
+        // background_downloader.start(doRescheduleKilledTasks: true) already
+        // owns killed-task recovery. If only child runtime evidence survives,
+        // the logical parent projection is incomplete: do not manufacture a
+        // replacement parent and risk a second writer/chunk generation.
+        diagnosticLog.record('resume.pluginParallelDeferred', {
+          'taskId': task.taskId,
+          'ownership': DownloadRuntimeOwnership.unknown.name,
+          'reason': 'parentProjectionMissing',
+        });
         return false;
       }
 

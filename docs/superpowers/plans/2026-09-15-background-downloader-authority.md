@@ -1294,17 +1294,19 @@ Evidence: RED run `35001961312` failed on task-shape routing; GREEN run `3500229
 - Contract: relaunch rehydrates/settles the plugin parent before any replacement writer is allowed.
 - Contract: user-paused rows remain paused after relaunch; running/interrupted rows reconnect or reschedule without duplicate writers.
 
-- [ ] **Step 1: Extend deterministic recovery regressions**
+- [x] **Step 1: Extend deterministic recovery regressions**
 
 Cover kill while running, kill while pausing, kill after pause settlement, and relaunch with stale plugin database rows.
 
-- [ ] **Step 2: Run recovery/ownership chaos suites**
+- [x] **Step 2: Run recovery/ownership chaos suites**
 
 Expected: one logical writer maximum and no silent byte-zero restart.
 
-- [ ] **Step 3: Fix any deterministic failures**
+- [x] **Step 3: Fix any deterministic failures**
 
 Do not open a platform acceptance flag as part of this step.
+
+Deterministic evidence: RED run `35005364609` exposed two duplicate-writer hazards: `BackgroundDownloaderTransport.resume()` could call `Transfers.getOrStart`, and plugin chunk-only evidence could invoke parent resume when the parent projection was absent. Diagnostic run `35006974375` passed adapter/parent, pause/ownership, and recovery-matrix suites. Chaos A/B run `35007197695` showed the earlier chaos failure existed with and without the patch; the verifier was missing the source-generation step used by normal CI. Final GREEN run `35007843976` generates sources before tests, then passes the full focused relaunch/recovery/ownership/zero-restart/chaos matrix and analyzer. Killed-task reschedule remains owned by `FileDownloader.start(doRescheduleKilledTasks: true)`; Transfer rehydration reconnects existing parents, and child-only evidence fails closed without creating a new writer.
 
 - [ ] **Step 4: Real-device iOS lifecycle matrix**
 
