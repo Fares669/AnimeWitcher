@@ -70,6 +70,13 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
                 'FLAGS="$FLAGS --rtlib=compiler-rt --unwindlib=libunwind"',
                 patched,
             )
+            invocation = next(
+                line for line in patched.splitlines() if line.startswith('$CCACHE "$PROG"')
+            )
+            self.assertIn(f'-resource-dir {resource_dir}', invocation)
+            self.assertIn('--rtlib=compiler-rt --unwindlib=libunwind', invocation)
+            self.assertIn('-stdlib=libc++', invocation)
+            self.assertIn(f'-isystem {sysroot / "include/c++/v1"}', invocation)
 
             self.assertEqual(
                 helper.patch_wrappers(
