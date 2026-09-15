@@ -77,3 +77,5 @@ void main() {
     expect(body, contains('_nativeTransport.forget(task.taskId)'));
   });
 }
+
+// Task 25 source refresh RED trigger
