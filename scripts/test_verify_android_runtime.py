@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERIFIER = ROOT / "scripts" / "mpv_runtime" / "verify_android_runtime.py"
 ABIS = ("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+APK_ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 REQUIRED_HELPER_SYMBOL = b"mpv_lavc_set_java_vm"
 
 
@@ -38,7 +39,7 @@ def _run_verifier(jars: dict[str, Path]):
 
 def _write_apk(path: Path, markers: dict[str, bytes]) -> None:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for abi in ABIS:
+        for abi in APK_ABIS:
             payload = b"\x7fELF\x00" + markers[abi] + b"\x00"
             payload += REQUIRED_HELPER_SYMBOL + b"\x00"
             archive.writestr(f"lib/{abi}/libmpv.so", payload)
@@ -53,11 +54,13 @@ class AndroidRuntimeVerifierTest(unittest.TestCase):
     def test_accepts_exact_target_version_in_built_apk(self):
         with tempfile.TemporaryDirectory() as tmp:
             apk = Path(tmp) / "app-release.apk"
-            _write_apk(apk, {abi: b"mpv 0.41.0" for abi in ABIS})
+            _write_apk(apk, {abi: b"mpv 0.41.0" for abi in APK_ABIS})
 
             result = _run_apk_verifier(apk)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("artifact: APK", result.stdout)
+            self.assertIn("arm64-v8a, armeabi-v7a, x86_64", result.stdout)
+            self.assertNotIn("x86", result.stdout)
 
     def test_rejects_old_mpv_in_built_apk(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -66,7 +69,7 @@ class AndroidRuntimeVerifierTest(unittest.TestCase):
                 apk,
                 {
                     abi: (b"mpv 0.36.0" if abi == "x86_64" else b"mpv 0.41.0")
-                    for abi in ABIS
+                    for abi in APK_ABIS
                 },
             )
 

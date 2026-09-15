@@ -12,6 +12,9 @@ from pathlib import Path
 TARGET_VERSION = "0.41.0"
 TARGET_TAG = f"v{TARGET_VERSION}"
 EXPECTED_ABIS = ("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+# Flutter release APKs support ARMv7, ARM64, and x86_64; the standalone
+# media_kit overlay still verifies the legacy x86 JAR above.
+EXPECTED_APK_ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 REQUIRED_HELPER_SYMBOL = b"mpv_lavc_set_java_vm"
 VERSION_PATTERN = re.compile(
     rb"mpv[^\x00\n\r]{0,32}v?0\.41\.0(?:[^0-9]|$)", re.IGNORECASE
@@ -85,7 +88,7 @@ def verify_apk(path: Path) -> list[str]:
 
     try:
         with zipfile.ZipFile(path) as archive:
-            for abi in EXPECTED_ABIS:
+            for abi in EXPECTED_APK_ABIS:
                 candidates = _candidate_entries(archive, abi)
                 if len(candidates) != 1:
                     if not candidates:
@@ -144,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--apk",
         type=Path,
-        help="built APK containing all four packaged libmpv.so runtimes",
+        help="built Flutter release APK containing all supported libmpv.so runtimes",
     )
     args = parser.parse_args(argv)
 
@@ -166,7 +169,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"android mpv runtime: {TARGET_TAG}")
     if args.apk is not None:
         print("artifact: APK")
-    print("abis: " + ", ".join(EXPECTED_ABIS))
+        print("abis: " + ", ".join(EXPECTED_APK_ABIS))
+    else:
+        print("abis: " + ", ".join(EXPECTED_ABIS))
     print("required symbol: mpv_lavc_set_java_vm")
     return 0
 
