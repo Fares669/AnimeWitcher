@@ -69,6 +69,8 @@ void main() {
     final store = DownloadJobStore(backend);
     expect(await store.put(_chaosSeed()), isTrue);
 
+    // Start, retry, and deliver the old callback after the new generation has
+    // become current. The old callback must not restore bytes or state.
     final first = await store.beginAttempt(
       'episode-7',
       state: DownloadJobState.running,
@@ -113,6 +115,9 @@ void main() {
       isTrue,
     );
 
+    // A stronger exact-disk observation may correct bytes downward. That
+    // correction advances the generation and fences the pre-reconciliation
+    // writer before a new range writer is allowed to start.
     final corrected = await store.reconcileDurableBytes(
       retry,
       durableBytes: 24,
@@ -138,6 +143,8 @@ void main() {
       DownloadByteReconciliationReason.exactDiskLoss,
     );
 
+    // A command acknowledgement is not ownership settlement. Unknown and
+    // settling both keep a second writer out until the runtime oracle clears.
     expect(
       resolveDownloadCancelCommand(
         hadTrackedOwner: true,
