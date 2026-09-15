@@ -6,12 +6,12 @@ Subject: [PATCH] loader: rebase static linking patch onto pinned source
 ---
  loader/CMakeLists.txt       | 24 ++++++------------------
  loader/loader.c             |  4 ++--
- loader/loader.h             |  2 ++
+ loader/loader.h             |  4 +++-
  loader/loader.rc.in         |  4 ++++
  loader/loader_windows.c     |  2 ++
  loader/vk_loader_platform.h | 11 ++++-------
  loader/vulkan_own.pc.in     | 11 +++++++++++
- 7 files changed, 31 insertions(+), 27 deletions(-)
+ 7 files changed, 32 insertions(+), 28 deletions(-)
  create mode 100644 loader/vulkan_own.pc.in
 
 diff --git a/loader/CMakeLists.txt b/loader/CMakeLists.txt
@@ -94,7 +94,7 @@ index f95c759..b766c53 100644
  #endif
  }
 diff --git a/loader/loader.h b/loader/loader.h
-index ad498ed..182ae6c 100644
+index ad498ed..fae579a 100644
 --- a/loader/loader.h
 +++ b/loader/loader.h
 @@ -33,7 +33,9 @@
@@ -107,6 +107,15 @@ index ad498ed..182ae6c 100644
  
  static inline VkPhysicalDevice loader_unwrap_physical_device(VkPhysicalDevice physicalDevice) {
      if (VK_NULL_HANDLE == physicalDevice) {
+@@ -92,7 +94,7 @@ VkResult loader_validate_instance_extensions(struct loader_instance *inst, cons
+                                              const struct loader_pointer_layer_list *expanded_layers,
+                                              const VkInstanceCreateInfo *pCreateInfo);
+ 
+-#if defined(_WIN32)
++#if defined(LOADER_DYNAMIC_LIB)
+ BOOL __stdcall loader_initialize(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *Context);
+ #else
+ void loader_initialize(void);
 diff --git a/loader/loader.rc.in b/loader/loader.rc.in
 index 0dc4227..e7fcea0 100644
 --- a/loader/loader.rc.in
@@ -202,4 +211,3 @@ index 0000000..ed2f30b
 +Cflags: -I${includedir}
 -- 
 2.47.3
-
