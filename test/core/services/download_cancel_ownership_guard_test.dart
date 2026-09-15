@@ -4,10 +4,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('native cancel keeps tracking until independent ownership proof', () {
-    final source = File('lib/core/services/download_transport.dart')
-        .readAsStringSync();
+    final source = File(
+      'lib/core/services/background_downloader_transport.dart',
+    ).readAsStringSync();
     final classStart = source.indexOf(
-      'class NativeSingleDownloadTransport implements DownloadTransport',
+      'class BackgroundDownloaderTransport implements DownloadTransport',
     );
     final start = source.indexOf(
       'Future<DownloadCancelSettlement> cancel(',
