@@ -1977,8 +1977,89 @@ class DownloadService {
       // executor row must not hide a durable logical job after process death.
       final oldJob = await _jobStore.get(task.taskId);
       final userPausedMeta = isUserPausedMetadata(metadata);
-      if (record.status == TaskStatus.complete) {
+      final manifestEvidence = manifestEvidenceById[task.taskId];
+      final legacyWriterActive =
+          _parallel.isActive(task.taskId) ||
+          _parallel.hasLiveConnections(task.taskId);
+      final pluginWriterActive = nativeIds.contains(task.taskId);
+      final hasPluginTask =
+          manifestEvidence == null &&
+          (pluginWriterActive ||
+              persistedRecords.any(
+                (candidate) =>
+                    candidate.task.taskId == task.taskId &&
+                    candidate.task is ParallelDownloadTask,
+              ));
+      final migrationUserPaused = oldJob != null
+          ? downloadJobHasUserPauseIntent(oldJob.state)
+          : userPausedMeta || _userPausedIds.contains(task.taskId);
+      final legacyAdoption = planLegacyDownloadAdoption(
+        hasLegacyManifest: manifestEvidence != null,
+        legacyIncompleteParts:
+            manifestEvidence != null &&
+            manifestEvidence.durableBytes < manifestEvidence.expectedBytes,
+        hasPluginTask: hasPluginTask,
+        finalFileComplete: record.status == TaskStatus.complete,
+        userPaused: migrationUserPaused,
+        legacyWriterActive: legacyWriterActive,
+        pluginWriterActive: pluginWriterActive,
+      );
+      diagnosticLog.record('recovery.legacyAdoption', {
+        'taskId': task.taskId,
+        'adoption': legacyAdoption.name,
+        'legacyWriter': legacyWriterActive,
+        'pluginWriter': pluginWriterActive,
+      });
+      if (legacyAdoption == LegacyDownloadAdoption.completed) {
         continue;
+      }
+      if (legacyAdoption == LegacyDownloadAdoption.orphaned &&
+          legacyWriterActive &&
+          pluginWriterActive) {
+        final orphanCommitted = await _checkpointLogicalJob(
+          task,
+          state: DownloadJobState.orphaned,
+          expectedBytes: knownDownloadSize(<int?>[
+            record.expectedFileSize,
+            manifestEvidence?.expectedBytes,
+            oldJob?.expectedBytes,
+          ]),
+          userPaused: false,
+          queueWaiting: false,
+        );
+        if (!orphanCommitted) {
+          diagnosticLog.record('recovery.ownershipConflict', {
+            'taskId': task.taskId,
+            'reason': 'orphanCheckpointFailed',
+          });
+          continue;
+        }
+        var legacySettled = true;
+        if (task is ParallelDownloadTask) {
+          try {
+            legacySettled = await _parallel.pause(task);
+          } catch (_) {
+            legacySettled = false;
+          }
+        }
+        var pluginSettled = true;
+        try {
+          pluginSettled = await _nativeTransport.pause(task);
+        } catch (_) {
+          pluginSettled = false;
+        }
+        diagnosticLog.record('recovery.ownershipConflict', {
+          'taskId': task.taskId,
+          'legacySettled': legacySettled,
+          'pluginSettled': pluginSettled,
+        });
+        _queueWaitingIds.remove(task.taskId);
+        _waitingPayloads.remove(task.taskId);
+        _forgetSessionTask(task.taskId);
+        continue;
+      }
+      if (legacyAdoption == LegacyDownloadAdoption.paused) {
+        _userPausedIds.add(task.taskId);
       }
       if (record.status == TaskStatus.canceled &&
           metadata == null &&
