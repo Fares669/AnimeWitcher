@@ -38,16 +38,19 @@ void main() {
       );
     });
 
-    test('parallel task fails closed when legacy ownership cannot be queried', () {
-      expect(
-        selectDownloadExecutorControlTarget(
-          isParallelTask: true,
-          legacyQuerySucceeded: false,
-          legacySessionExists: false,
-        ),
-        DownloadExecutorControlTarget.unknown,
-      );
-    });
+    test(
+      'parallel task fails closed when legacy ownership cannot be queried',
+      () {
+        expect(
+          selectDownloadExecutorControlTarget(
+            isParallelTask: true,
+            legacyQuerySucceeded: false,
+            legacySessionExists: false,
+          ),
+          DownloadExecutorControlTarget.unknown,
+        );
+      },
+    );
   });
 
   test('system cancel pauses whichever executor actually owns the task', () {
@@ -64,30 +67,37 @@ void main() {
     expect(body, isNot(contains('_parallel.pause(downloadTask')));
   });
 
-  test('destructive cancel routes through ownership evidence, not task shape', () {
-    final source = File('lib/core/services/download_service.dart')
-        .readAsStringSync();
-    final start = source.indexOf('Future<void> cancelDownload(');
-    final end = source.indexOf(
-      'Future<DownloadCommandOutcome> cancelDownloadOutcome(',
-      start,
-    );
-    expect(start, greaterThanOrEqualTo(0));
-    expect(end, greaterThan(start));
-    final body = source.substring(start, end);
+  test(
+    'destructive cancel routes through ownership evidence, not task shape',
+    () {
+      final source = File('lib/core/services/download_service.dart')
+          .readAsStringSync();
+      final start = source.indexOf('Future<void> cancelDownload(');
+      final end = source.indexOf(
+        'Future<DownloadCommandOutcome> cancelDownloadOutcome(',
+        start,
+      );
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
 
-    expect(body, contains('final controlTarget = await _controlTargetFor(cancelTask);'));
-    expect(body, contains('DownloadExecutorControlTarget.legacy'));
-    expect(body, contains('DownloadExecutorControlTarget.plugin'));
-    expect(body, contains('DownloadExecutorControlTarget.unknown'));
-    expect(body, contains('await _nativeTransport.cancel(cancelTask)'));
-    expect(body, contains('await _parallel.cancel(cancelTask)'));
-    expect(
-      body,
-      isNot(contains('if (parentRecord?.task is ParallelDownloadTask)')),
-      reason: 'ParallelDownloadTask is a task shape, not legacy ownership proof',
-    );
-  });
+      expect(
+        body,
+        contains('final controlTarget = await _controlTargetFor(cancelTask);'),
+      );
+      expect(body, contains('DownloadExecutorControlTarget.legacy'));
+      expect(body, contains('DownloadExecutorControlTarget.plugin'));
+      expect(body, contains('DownloadExecutorControlTarget.unknown'));
+      expect(body, contains('await _nativeTransport.cancel(cancelTask)'));
+      expect(body, contains('await _parallel.cancel(cancelTask)'));
+      expect(
+        body,
+        isNot(contains('if (parentRecord?.task is ParallelDownloadTask)')),
+        reason:
+            'ParallelDownloadTask is a task shape, not legacy ownership proof',
+      );
+    },
+  );
 
   test('control target queries legacy manifest evidence behind one helper', () {
     final source = File('lib/core/services/download_service.dart')
@@ -106,5 +116,3 @@ void main() {
     expect(body, contains('legacyQuerySucceeded: false'));
   });
 }
-
-// Task 22 RED trigger

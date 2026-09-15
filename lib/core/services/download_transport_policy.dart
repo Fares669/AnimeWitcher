@@ -10,10 +10,26 @@ import 'download_parallel.dart';
 /// This policy is deliberately independent from platform I/O. Platform
 /// acceptance for plugin-owned parallel execution is supplied by the caller
 /// only after that platform's lifecycle matrix has passed.
-enum DownloadExecutionBackend {
-  pluginSingle,
-  pluginParallel,
-  legacyParallel,
+enum DownloadExecutionBackend { pluginSingle, pluginParallel, legacyParallel }
+
+/// Executor that owns control operations for an already-created logical task.
+///
+/// [ParallelDownloadTask] is only a task shape: both background_downloader and
+/// AnimeWitcher's legacy multipart executor use it. A positive legacy manifest
+/// query is therefore the only reason to route pause/cancel/source mutation to
+/// the legacy coordinator. Query failure stays unknown and fails closed.
+enum DownloadExecutorControlTarget { plugin, legacy, unknown }
+
+DownloadExecutorControlTarget selectDownloadExecutorControlTarget({
+  required bool isParallelTask,
+  required bool legacyQuerySucceeded,
+  required bool legacySessionExists,
+}) {
+  if (!isParallelTask) return DownloadExecutorControlTarget.plugin;
+  if (!legacyQuerySucceeded) return DownloadExecutorControlTarget.unknown;
+  return legacySessionExists
+      ? DownloadExecutorControlTarget.legacy
+      : DownloadExecutorControlTarget.plugin;
 }
 
 /// Android-specific executor and scheduler hints for one logical episode.

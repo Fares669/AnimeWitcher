@@ -3748,9 +3748,7 @@ class DownloadService {
       );
     }
 
-    final didPause = downloadTask is ParallelDownloadTask
-        ? await _parallel.pause(downloadTask, preserveLiveParts: Platform.isIOS)
-        : await _nativeTransport.pause(downloadTask);
+    final didPause = await _pauseTransfer(downloadTask);
     if (didPause) {
       await _syncSessionOverlay();
       return;
@@ -3843,27 +3841,71 @@ class DownloadService {
       _queueWaitingIds.remove(taskId);
       _waitingPayloads.remove(taskId);
       _forgetSessionTask(taskId);
-      final ids = <String>{taskId};
+      if (cancelTask == null) {
+        diagnosticLog.record('cancel.executorUnknown', {
+          'taskId': taskId,
+          'reason': 'missingTaskDescriptor',
+        });
+        await _persistNativeWaitingSnapshot();
+        if (notifyContinuedProcessing) {
+          await _syncSessionOverlay(completedSuccess: false);
+        }
+        return;
+      }
+
+      final controlTarget = await _controlTargetFor(cancelTask);
+      switch (controlTarget) {
+        case DownloadExecutorControlTarget.legacy:
+          if (cancelTask is! ParallelDownloadTask) {
+            diagnosticLog.record('cancel.executorUnknown', {
+              'taskId': taskId,
+              'reason': 'legacyTargetWithoutParallelTask',
+            });
+            await _persistNativeWaitingSnapshot();
+            if (notifyContinuedProcessing) {
+              await _syncSessionOverlay(completedSuccess: false);
+            }
+            return;
+          }
+          await _parallel.cancel(cancelTask);
+          break;
+        case DownloadExecutorControlTarget.plugin:
+          final settlement = await _nativeTransport.cancel(cancelTask);
+          diagnosticLog.record('cancel.commandSettlement', {
+            'taskId': taskId,
+            'settlement': settlement.name,
+            'executor': 'plugin',
+          });
+          break;
+        case DownloadExecutorControlTarget.unknown:
+          diagnosticLog.record('cancel.executorUnknown', {
+            'taskId': taskId,
+            'reason': 'legacyEvidenceUnavailable',
+          });
+          await _persistNativeWaitingSnapshot();
+          if (notifyContinuedProcessing) {
+            await _syncSessionOverlay(completedSuccess: false);
+          }
+          return;
+      }
+
+      // The selected owner is responsible for its implementation-detail
+      // chunks. Only cancel any additional *logical* duplicate rows here;
+      // manually canceling FileDownloader.chunkGroup children can race the
+      // plugin parent's own settlement/resume-data handling.
+      final duplicateLogicalIds = <String>[];
       for (final task in await FileDownloader().allTasks(allGroups: true)) {
-        if (task.taskId == taskId || downloadTrackingUrl(task) == trackingUrl) {
-          ids.add(task.taskId);
+        if (task.taskId == taskId ||
+            isInternalDownloaderChunk(task) ||
+            downloadTrackingUrl(task) != trackingUrl) {
+          continue;
+        }
+        if (isLogicalEpisodeDownloadTask(task)) {
+          duplicateLogicalIds.add(task.taskId);
         }
       }
-      if (parentRecord?.task is ParallelDownloadTask) {
-        await _parallel.cancel(parentRecord!.task as ParallelDownloadTask);
-      } else if (parentRecord?.task is DownloadTask &&
-          isNativeSingleDownloadTask(parentRecord!.task)) {
-        final settlement = await _nativeTransport.cancel(
-          parentRecord.task as DownloadTask,
-        );
-        diagnosticLog.record('cancel.commandSettlement', {
-          'taskId': taskId,
-          'settlement': settlement.name,
-        });
-        ids.remove(taskId);
-      }
-      if (ids.isNotEmpty) {
-        await FileDownloader().cancelTasksWithIds(ids.toList());
+      if (duplicateLogicalIds.isNotEmpty) {
+        await FileDownloader().cancelTasksWithIds(duplicateLogicalIds);
       }
 
       final cancelOwnership = await _waitForCancelOwnershipRelease(taskId);
@@ -5288,12 +5330,45 @@ class DownloadService {
     ..._rangeTransfers.activeTaskIds,
   };
 
+  Future<DownloadExecutorControlTarget> _controlTargetFor(
+    DownloadTask task,
+  ) async {
+    if (task is! ParallelDownloadTask) {
+      return selectDownloadExecutorControlTarget(
+        isParallelTask: false,
+        legacyQuerySucceeded: false,
+        legacySessionExists: false,
+      );
+    }
+    try {
+      final legacySessionExists = await _parallel.restore(task);
+      return selectDownloadExecutorControlTarget(
+        isParallelTask: true,
+        legacyQuerySucceeded: true,
+        legacySessionExists: legacySessionExists,
+      );
+    } catch (error) {
+      diagnosticLog.record('executor.controlEvidenceUnavailable', {
+        'taskId': task.taskId,
+        'error': error.toString(),
+      });
+      return selectDownloadExecutorControlTarget(
+        isParallelTask: true,
+        legacyQuerySucceeded: false,
+        legacySessionExists: false,
+      );
+    }
+  }
+
   Future<bool> _pauseTransfer(DownloadTask task) async {
     if (_rangeTransfers.isActive(task.taskId)) {
       await _rangeTransfers.stop(task.taskId);
       return true;
     }
-    if (task is ParallelDownloadTask && await _parallel.restore(task)) {
+    final controlTarget = await _controlTargetFor(task);
+    if (controlTarget == DownloadExecutorControlTarget.unknown) return false;
+    if (controlTarget == DownloadExecutorControlTarget.legacy) {
+      if (task is! ParallelDownloadTask) return false;
       return _parallel.pause(
         task,
         preserveLiveParts:
