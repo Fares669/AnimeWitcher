@@ -9,19 +9,23 @@ from pathlib import Path
 
 
 CPP_WRAPPERS = ("clang++", "g++", "c++")
+DIRECT_FLAGS_MARKER = " # AnimeWitcher: explicit libc++ compiler flags"
 
 
-def _required_lines(*, sysroot: Path, resource_dir: Path) -> list[str]:
+def _required_args(*, sysroot: Path, resource_dir: Path) -> list[str]:
     include_dir = sysroot / "include" / "c++" / "v1"
     return [
-        f'FLAGS="$FLAGS -resource-dir {shlex.quote(str(resource_dir))}"',
-        'FLAGS="$FLAGS --rtlib=compiler-rt --unwindlib=libunwind"',
-        'FLAGS="$FLAGS -stdlib=libc++"',
-        f'FLAGS="$FLAGS -isystem {shlex.quote(str(include_dir))}"',
+        "-resource-dir",
+        str(resource_dir),
+        "--rtlib=compiler-rt",
+        "--unwindlib=libunwind",
+        "-stdlib=libc++",
+        "-isystem",
+        str(include_dir),
     ]
 
 
-def _patch_wrapper(path: Path, required_lines: list[str]) -> bool:
+def _patch_wrapper(path: Path, required_args: list[str]) -> bool:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -49,15 +53,26 @@ def _patch_wrapper(path: Path, required_lines: list[str]) -> bool:
         'FLAGS="$FLAGS -stdlib=',
         'FLAGS="$FLAGS -isystem ',
     )
-    kept = [
-        line
-        for line in lines
-        if not any(line.startswith(prefix) for prefix in required_prefixes)
-    ]
+    kept = []
+    for line in lines:
+        stripped = line.lstrip()
+        if any(stripped.startswith(prefix) for prefix in required_prefixes):
+            continue
+        kept.append(line)
     invocation_index = next(
         index for index, line in enumerate(kept) if line.startswith("$CCACHE \"$PROG\"")
     )
-    patched = kept[:invocation_index] + required_lines + kept[invocation_index:]
+    direct_args = shlex.join(required_args)
+    invocation = kept[invocation_index]
+    if DIRECT_FLAGS_MARKER in invocation:
+        invocation = invocation.split(DIRECT_FLAGS_MARKER, 1)[0].rstrip()
+        if not invocation.endswith(direct_args):
+            raise RuntimeError(
+                f"generated compiler wrapper has an invalid existing libc++ suffix: {path}"
+            )
+        invocation = invocation[: -len(direct_args)].rstrip()
+    kept[invocation_index] = f"{invocation} {direct_args}{DIRECT_FLAGS_MARKER}"
+    patched = kept
     new_text = "\n".join(patched) + "\n"
     if new_text == text:
         return False
@@ -83,7 +98,7 @@ def patch_wrappers(
     if not bin_dir.is_dir():
         raise RuntimeError(f"compiler wrapper directory is missing: {bin_dir}")
 
-    required = _required_lines(sysroot=sysroot, resource_dir=resource_dir)
+    required = _required_args(sysroot=sysroot, resource_dir=resource_dir)
     changed: list[str] = []
     for compiler in CPP_WRAPPERS:
         path = bin_dir / f"{target_prefix}-{compiler}"
@@ -95,9 +110,17 @@ def patch_wrappers(
     for compiler in CPP_WRAPPERS:
         path = bin_dir / f"{target_prefix}-{compiler}"
         text = path.read_text(encoding="utf-8")
-        for line in required:
-            if line not in text:
-                raise RuntimeError(f"failed to verify generated wrapper flag in {path}: {line}")
+        invocation = next(
+            (line for line in text.splitlines() if line.startswith("$CCACHE \"$PROG\"")),
+            None,
+        )
+        if invocation is None or DIRECT_FLAGS_MARKER not in invocation:
+            raise RuntimeError(f"failed to verify direct libc++ arguments in {path}")
+        for argument in required:
+            if argument not in invocation:
+                raise RuntimeError(
+                    f"failed to verify generated wrapper argument in {path}: {argument}"
+                )
     return changed
 
 
