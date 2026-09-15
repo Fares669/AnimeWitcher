@@ -6,18 +6,19 @@ void main() {
   test('legacy multipart marks update provenance at its source', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
-    final constructorStart = source.indexOf('DownloadService(this._ref');
-    final constructorEnd = source.indexOf('Future<void> setDiagnosticLogging', constructorStart);
-    expect(constructorStart, greaterThanOrEqualTo(0));
-    expect(constructorEnd, greaterThan(constructorStart));
-    final constructor = source.substring(constructorStart, constructorEnd);
+    final onUpdateStart = source.indexOf('onUpdate: (update) {');
+    final onUpdateEnd = source.indexOf('availableStorageBytes:', onUpdateStart);
+    expect(onUpdateStart, greaterThanOrEqualTo(0));
+    expect(onUpdateEnd, greaterThan(onUpdateStart));
+    final onUpdate = source.substring(onUpdateStart, onUpdateEnd);
 
     expect(source, contains('final Expando<bool> _legacyParallelUpdateOrigin'));
-    expect(constructor, contains('_legacyParallelUpdateOrigin[update] = true;'));
+    expect(onUpdate, contains('_legacyParallelUpdateOrigin[update] = true;'));
     expect(
-      constructor,
+      onUpdate,
       contains('BackgroundDownloaderCompat.updateSyntheticNotification('),
-      reason: 'synthetic notification belongs only to the legacy executor callback',
+      reason:
+          'synthetic notification belongs only to the legacy executor callback',
     );
   });
 
@@ -27,25 +28,39 @@ void main() {
     final listenerStart = source.indexOf(
       '_updatesSubscription = _sharedEvents.stream.listen((update) {',
     );
-    final listenerEnd = source.indexOf('// 5. Bring the plugin executor', listenerStart);
+    final listenerEnd = source.indexOf(
+      '// 5. Bring the plugin executor',
+      listenerStart,
+    );
     expect(listenerStart, greaterThanOrEqualTo(0));
     expect(listenerEnd, greaterThan(listenerStart));
     final listener = source.substring(listenerStart, listenerEnd);
 
     expect(
       listener,
-      contains('final legacyParallelUpdate = _legacyParallelUpdateOrigin[update] == true;'),
+      contains(
+        'final legacyParallelUpdate = _legacyParallelUpdateOrigin[update] == true;',
+      ),
     );
     expect(
       listener,
       contains('final progress = legacyParallelUpdate'),
-      reason: 'only legacy parent telemetry may bypass monotonic plugin projection',
+      reason:
+          'only legacy parent telemetry may bypass monotonic plugin projection',
     );
-    expect(listener, contains('final isAggregateMultipart = legacyParallelUpdate;'));
     expect(
       listener,
-      isNot(contains('if (update is TaskStatusUpdate && update.task is ParallelDownloadTask)')),
-      reason: 'plugin ParallelDownloadTask notifications are already owned by background_downloader',
+      contains('final isAggregateMultipart = legacyParallelUpdate;'),
+    );
+    expect(
+      listener,
+      isNot(
+        contains(
+          'if (update is TaskStatusUpdate && update.task is ParallelDownloadTask)',
+        ),
+      ),
+      reason:
+          'plugin ParallelDownloadTask notifications are already owned by background_downloader',
     );
   });
 
@@ -60,7 +75,9 @@ void main() {
 
     expect(
       body,
-      isNot(contains('BackgroundDownloaderCompat.updateSyntheticNotification(')),
+      isNot(
+        contains('BackgroundDownloaderCompat.updateSyntheticNotification('),
+      ),
     );
   });
 }
