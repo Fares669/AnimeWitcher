@@ -106,3 +106,5 @@ void main() {
     expect(body, contains('legacyQuerySucceeded: false'));
   });
 }
+
+// Task 22 RED trigger
