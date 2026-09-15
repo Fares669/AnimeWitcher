@@ -425,7 +425,7 @@ class DownloadService {
       DownloadServiceReadinessBarrier();
   late final PersistentParallelDownload _parallel;
   late final DownloadRangeTransfer _rangeTransfers;
-  late final NativeSingleDownloadTransport _nativeTransport;
+  late final BackgroundDownloaderTransport _nativeTransport;
   late final DownloadHostProfileStore _hostProfiles;
   late final DownloadJobStore _jobStore;
   final DownloadTelemetryEstimator _telemetry = DownloadTelemetryEstimator();
@@ -444,7 +444,7 @@ class DownloadService {
   final Map<String, Map<String, Object>> _waitingPayloads = {};
 
   DownloadService(this._ref) : _dio = _ref.read(dioClientProvider) {
-    _nativeTransport = NativeSingleDownloadTransport();
+    _nativeTransport = BackgroundDownloaderTransport();
     _rangeTransfers = DownloadRangeTransfer(_dio, diagnosticLog: diagnosticLog);
     _hostProfiles = DownloadHostProfileStore(
       const HiveDownloadHostProfileBackend(),
