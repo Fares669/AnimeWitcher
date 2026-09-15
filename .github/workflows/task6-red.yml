@@ -1,4 +1,4 @@
-name: Task 9 Episode Queue Verification
+name: Task 10 iOS Ownership Verification
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  episode-queue:
+  ownership-contract:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -25,16 +25,33 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run Task 9 queue suite
+      - name: Run iOS ownership source contracts
         run: |
           flutter test \
-            test/core/services/download_plugin_episode_queue_test.dart \
-            test/core/services/download_job_state_queue_authority_test.dart \
-            test/features/settings/presentation/download_concurrency_settings_test.dart
-      - name: Analyze queue files
+            test/core/services/ios_multipart_ownership_handoff_source_test.dart \
+            test/core/services/download_native_claim_lifecycle_source_test.dart
+      - name: Analyze ownership-facing Dart
         run: |
           flutter analyze --no-fatal-warnings --no-fatal-infos \
-            lib/core/services/download_concurrency.dart \
-            lib/core/services/download_parallel.dart \
             lib/core/services/download_service.dart \
-            test/core/services/download_plugin_episode_queue_test.dart
+            lib/core/services/download_continued_processing_service.dart \
+            test/core/services/ios_multipart_ownership_handoff_source_test.dart
+
+  ios-build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Build iOS ownership integration
+        run: flutter build ios --release --no-codesign
