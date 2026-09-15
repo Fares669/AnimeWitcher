@@ -32,6 +32,15 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("ninja -C \"build_${BIT}\" llvm-download", workflow)
+        self.assertIn("Patch pinned-source cleanup for detached commits", workflow)
+        self.assertIn(
+            '"build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh"',
+            workflow,
+        )
+        self.assertIn(
+            '"build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"',
+            workflow,
+        )
         self.assertIn(
             'FLAGS="$FLAGS -resource-dir @CMAKE_INSTALL_PREFIX@/lib/clang/20"',
             workflow,

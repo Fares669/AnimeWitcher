@@ -201,27 +201,30 @@ jobs:
             -B "build_${BIT}" \
             -S "$PWD"
 
-      - name: Patch LLVM cleanup for pinned commit
+      - name: Patch pinned-source cleanup for detached commits
         working-directory: _build/win-builder
         env:
           BIT: ${{ matrix.bit }}
         run: |
           set -euxo pipefail
-          reset_script="build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh"
-          test -f "$reset_script"
-          python3 - "$reset_script" <<'PY'
+          python3 -             "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh"             "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh"             "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" <<'PY'
           import sys
           from pathlib import Path
 
-          path = Path(sys.argv[1])
-          text = path.read_text()
-          old = '@{u}'
-          if text.count(old) != 2:
-              raise SystemExit('unexpected LLVM cleanup script layout')
-          path.write_text(text.replace(old, 'HEAD'))
+          for raw in sys.argv[1:]:
+              path = Path(raw)
+              if not path.is_file():
+                  raise SystemExit(f'missing cleanup script: {path}')
+              text = path.read_text()
+              old = '@{u}'
+              if text.count(old) != 2:
+                  raise SystemExit(f'unexpected cleanup script layout: {path}')
+              path.write_text(text.replace(old, 'HEAD'))
           PY
-          ! grep -F '@{u}' "$reset_script"
-          grep -F 'reset --hard HEAD' "$reset_script"
+          for reset_script in             "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh"             "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh"             "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"; do
+            ! grep -F '@{u}' "$reset_script"
+            grep -F 'reset --hard HEAD' "$reset_script"
+          done
 
       - name: Reuse pinned container LLVM host compiler
         working-directory: _build/win-builder
