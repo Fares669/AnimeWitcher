@@ -1,8 +1,4 @@
 import 'dart:async';
-
-final Expando<bool> _legacyParallelUpdateOrigin = Expando<bool>(
-  'legacyParallelUpdateOrigin',
-);
 import 'dart:convert';
 import 'dart:io';
 
@@ -54,6 +50,10 @@ import 'download_transport_policy.dart';
 export 'download_transfer_projection.dart' show DownloadProgressData;
 
 part 'download_service.g.dart';
+
+final Expando<bool> _legacyParallelUpdateOrigin = Expando<bool>(
+  'legacyParallelUpdateOrigin',
+);
 
 @Riverpod(keepAlive: true)
 DownloadService downloadService(Ref ref) {
