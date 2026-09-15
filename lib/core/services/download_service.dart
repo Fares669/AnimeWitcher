@@ -3402,7 +3402,7 @@ class DownloadService {
         taskId: update.task.taskId,
         trackingUrl: trackingUrl,
       );
-      if (live != null && update.task is! ParallelDownloadTask) {
+      if (live != null) {
         await _attachToLiveNativeTask(update.task as DownloadTask, live: live);
         return;
       }
