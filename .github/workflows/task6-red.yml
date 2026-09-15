@@ -1,4 +1,4 @@
-name: Task 8 Range Isolation RED
+name: Task 8 Range Isolation GREEN
 
 on:
   push:
@@ -6,15 +6,16 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  range-isolation-red:
+  range-isolation-green:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
+          fetch-depth: 0
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -25,8 +26,79 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run Task 8 wiring RED
+      - name: Apply Task 8 range isolation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('lib/core/services/download_service.dart')
+          source = path.read_text()
+
+          old_refresh = '''    // A refreshed signed URL cannot use native resume data that embeds the
+              // expired URL. When a verified partial file exists, go directly to the
+              // prefix-validated Range append path.
+              if (refreshResult.refreshed && saved.partialBytes > 0) {
+                return _resumeUsingPartialFile(task);
+              }
+          '''.replace('              ', '')
+          new_refresh = '''    // Only a validated source replacement may cross the custom Range seam.
+              // Ordinary pause/retry/resume remains owned by background_downloader.
+              if (refreshResult.refreshed) {
+                final refreshResumeMode = planRefreshedTransferResume(
+                  resourceCompatible: true,
+                  hasPartialBytes: saved.partialBytes > 0,
+                  // background_downloader resume data is tied to the original URL;
+                  // a changed signed source cannot safely reuse that opaque state.
+                  pluginCanResumeChangedSource: false,
+                );
+                if (refreshResumeMode ==
+                    RefreshedTransferResumeMode.verifiedRangeFallback) {
+                  return _resumeUsingPartialFile(task);
+                }
+                if (refreshResumeMode ==
+                    RefreshedTransferResumeMode.incompatibleResource) {
+                  return false;
+                }
+              }
+          '''.replace('              ', '')
+
+          if old_refresh in source:
+              source = source.replace(old_refresh, new_refresh, 1)
+          elif 'final refreshResumeMode = planRefreshedTransferResume(' not in source:
+              raise SystemExit('Task 8 refreshed-source block not found')
+
+          ordinary_range = '      resumeFromPartial: () => _resumeUsingPartialFile(task),\n'
+          if ordinary_range in source:
+              source = source.replace(ordinary_range, '', 1)
+
+          path.write_text(source)
+      - name: Format production change
+        run: dart format lib/core/services/download_service.dart
+      - name: Run Task 8 reliability suite
         run: |
           flutter test \
             test/core/services/download_plugin_source_refresh_test.dart \
+            test/core/services/download_source_refresh_integrity_test.dart \
+            test/core/services/download_source_refresh_service_wiring_test.dart \
+            test/core/services/download_resource_identity_test.dart \
+            test/core/services/download_durable_only_recovery_test.dart
+      - name: Analyze Task 8 files
+        run: |
+          flutter analyze --no-fatal-warnings --no-fatal-infos \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_url_refresh.dart \
+            lib/core/services/download_range_transfer.dart \
+            test/core/services/download_plugin_source_refresh_test.dart \
             test/core/services/download_source_refresh_service_wiring_test.dart
+      - name: Commit Task 8 GREEN
+        shell: bash
+        run: |
+          if git diff --quiet -- lib/core/services/download_service.dart; then
+            echo 'Task 8 production wiring already present.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/download_service.dart
+          git commit -m 'refactor(downloads): isolate verified range source refresh'
+          git push origin HEAD:refactor/background-downloader-authority
