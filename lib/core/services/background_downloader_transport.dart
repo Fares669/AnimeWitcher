@@ -218,17 +218,16 @@ class BackgroundDownloaderTransport implements DownloadTransport {
   Future<bool> start(DownloadTask task) async {
     if (!isBackgroundDownloaderTransportTask(task)) return false;
 
-    final existing = handleFor(task.taskId);
-    if (existing != null && runtimeTaskStatusCanOwnWriter(existing.status)) {
-      _attach(existing);
-      return true;
-    }
-
     try {
-      // Callers may reach fresh start only after logical reconciliation proved
-      // that another writer cannot own this identity and durable bytes do not
-      // require a stricter resume path.
-      final transfer = await _downloader.transfers.start(task);
+      // Let background_downloader own duplicate lookup and database
+      // reattachment. Callers reach this method only after logical
+      // reconciliation has fenced competing writers, so a persisted failed or
+      // paused transfer is returned but never re-enqueued implicitly here.
+      final transfer = await _downloader.transfers.getOrStart(
+        task,
+        matchBy: (existingTask) => existingTask.taskId == task.taskId,
+        reEnqueueIfFailed: false,
+      );
       _attach(transfer);
       return runtimeTaskStatusCanOwnWriter(transfer.status) ||
           transfer.status == TaskStatus.complete;
@@ -254,17 +253,21 @@ class BackgroundDownloaderTransport implements DownloadTransport {
   Future<bool> resume(DownloadTask task) async {
     if (!isBackgroundDownloaderTransportTask(task)) return false;
     try {
-      // Use the low-level resume API so missing resume data returns false and
-      // AnimeWitcher can fall back to its verified on-disk Range recovery.
-      final resumed = await _downloader.resume(task);
-      if (!resumed) return false;
       final transfer = await _downloader.transfers.getOrStart(
         task,
         matchBy: (existingTask) => existingTask.taskId == task.taskId,
         reEnqueueIfFailed: false,
       );
       _attach(transfer);
-      return true;
+
+      // Transfers.getOrStart may reconnect to an already-running/completed
+      // execution. Otherwise delegate resume-data handling and the documented
+      // re-enqueue fallback to Transfer.resume() instead of duplicating it.
+      if (transfer.status == TaskStatus.complete ||
+          runtimeTaskStatusCanOwnWriter(transfer.status)) {
+        return true;
+      }
+      return await transfer.resume();
     } catch (_) {
       return false;
     }
