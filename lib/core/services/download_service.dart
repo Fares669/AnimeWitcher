@@ -3208,13 +3208,14 @@ class DownloadService {
         lastKnown: downloadMetadataProgress(metadata),
       );
     }
-    final totalSize = knownDownloadSize([
-      current?.totalSize,
-      _telemetry.expectedBytesFor(task.taskId),
-      record?.expectedFileSize,
-      downloadMetadataExpectedBytes(metadata),
-      job?.expectedBytes,
-    ]);
+    final totalSize = authoritativeLifecycleExpectedBytes(
+      jobExpectedBytes: job?.expectedBytes,
+      fingerprintExpectedBytes: job?.fingerprint?.expectedBytes,
+      metadataExpectedBytes: downloadMetadataExpectedBytes(metadata),
+      databaseExpectedBytes: record?.expectedFileSize,
+      telemetryExpectedBytes: _telemetry.expectedBytesFor(task.taskId),
+      projectedExpectedBytes: current?.totalSize,
+    );
     if (job != null && job.expectedBytes > 0 && job.durableBytes > 0) {
       progress = keepLastKnownDownloadProgress(
         incoming: progress,
@@ -3467,11 +3468,14 @@ class DownloadService {
   }) {
     final previous = _ref.read(downloadProgressProvider)[trackingUrl];
     final parallelProgress = _parallel.progressFor(taskId);
-    final knownTotal = knownDownloadSize(<int?>[
+    final incomingTotal = knownDownloadSize(<int?>[
       totalSize,
       _telemetry.expectedBytesFor(taskId),
-      previous?.totalSize,
     ]);
+    final knownTotal = keepLastKnownExpectedBytes(
+      incomingExpectedBytes: incomingTotal,
+      lastKnownExpectedBytes: previous?.totalSize,
+    );
     if (knownTotal > 0) {
       _telemetry.seed(taskId, expectedBytes: knownTotal);
     }
@@ -3619,11 +3623,15 @@ class DownloadService {
       );
     }
 
-    final totalSize = knownDownloadSize([
-      current?.totalSize,
-      record?.expectedFileSize,
-      downloadMetadataExpectedBytes(metadata),
-    ]);
+    final job = await _jobStore.get(task.taskId);
+    final totalSize = authoritativeLifecycleExpectedBytes(
+      jobExpectedBytes: job?.expectedBytes,
+      fingerprintExpectedBytes: job?.fingerprint?.expectedBytes,
+      metadataExpectedBytes: downloadMetadataExpectedBytes(metadata),
+      databaseExpectedBytes: record?.expectedFileSize,
+      telemetryExpectedBytes: _telemetry.expectedBytesFor(task.taskId),
+      projectedExpectedBytes: current?.totalSize,
+    );
 
     // Never delete the DB record, metadata, or partial file here — only mark
     // paused so retry/unpause can continue from the saved offset.

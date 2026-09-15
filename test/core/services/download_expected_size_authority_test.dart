@@ -107,34 +107,44 @@ void main() {
     expect(body, contains('projectedExpectedBytes: current?.totalSize'));
   });
 
-  test('saved progress gives durable identity priority over transient totals', () {
-    final source = File('lib/core/services/download_service.dart')
-        .readAsStringSync();
-    final start = source.indexOf('_savedProgressFor(DownloadTask task) async');
-    final end = source.indexOf('Future<DownloadTask?> _liveNativeTaskFor(', start);
-    expect(start, greaterThanOrEqualTo(0));
-    expect(end, greaterThan(start));
-    final body = source.substring(start, end);
+  test(
+    'saved progress gives durable identity priority over transient totals',
+    () {
+      final source = File('lib/core/services/download_service.dart')
+          .readAsStringSync();
+      final start = source.indexOf(
+        '_savedProgressFor(DownloadTask task) async',
+      );
+      final end = source.indexOf(
+        'Future<DownloadTask?> _liveNativeTaskFor(',
+        start,
+      );
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
 
-    expect(body, contains('authoritativeLifecycleExpectedBytes('));
-    expect(body, contains('jobExpectedBytes: job?.expectedBytes'));
-    expect(
-      body,
-      contains('fingerprintExpectedBytes: job?.fingerprint?.expectedBytes'),
-    );
-    expect(
-      body,
-      contains('metadataExpectedBytes: downloadMetadataExpectedBytes(metadata)'),
-    );
-    expect(body, contains('databaseExpectedBytes: record?.expectedFileSize'));
-    expect(
-      body,
-      contains(
-        'telemetryExpectedBytes: _telemetry.expectedBytesFor(task.taskId)',
-      ),
-    );
-    expect(body, contains('projectedExpectedBytes: current?.totalSize'));
-  });
+      expect(body, contains('authoritativeLifecycleExpectedBytes('));
+      expect(body, contains('jobExpectedBytes: job?.expectedBytes'));
+      expect(
+        body,
+        contains('fingerprintExpectedBytes: job?.fingerprint?.expectedBytes'),
+      );
+      expect(
+        body,
+        contains(
+          'metadataExpectedBytes: downloadMetadataExpectedBytes(metadata)',
+        ),
+      );
+      expect(body, contains('databaseExpectedBytes: record?.expectedFileSize'));
+      expect(
+        body,
+        contains(
+          'telemetryExpectedBytes: _telemetry.expectedBytesFor(task.taskId)',
+        ),
+      );
+      expect(body, contains('projectedExpectedBytes: current?.totalSize'));
+    },
+  );
 
   test('system-pause preservation keeps JobStore size authoritative', () {
     final source = File('lib/core/services/download_service.dart')
@@ -170,5 +180,3 @@ void main() {
     expect(body, contains('lastKnownExpectedBytes: previous?.totalSize'));
   });
 }
-
-// lifecycle RED trigger
