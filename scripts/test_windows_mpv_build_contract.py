@@ -26,8 +26,12 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
             "ghcr.io/shinchiro/archlinux@sha256:e96fbcab07052b6173981cffca3828a07b2f469bd2c07bd43d514080dab78b9b",
             workflow,
         )
+        self.assertIn("HOST_CLANG_VERSION: 22.1.8", workflow)
+        self.assertIn(
+            'grep -F "clang version ${HOST_CLANG_VERSION}" /tmp/host-clang-version.txt',
+            workflow,
+        )
         self.assertIn("ninja -C \"build_${BIT}\" llvm-download", workflow)
-        self.assertIn("clang version 22.1.8", workflow)
         self.assertNotIn("ninja -C \"build_${BIT}\" llvm\n", workflow)
 
 
