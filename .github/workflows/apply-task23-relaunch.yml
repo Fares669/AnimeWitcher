@@ -1,0 +1,102 @@
+name: Apply Task 23 Relaunch Fix
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: Apply guarded Task 23 fix
+        run: python .github/apply_task23_relaunch.py
+      - name: Format changed Dart
+        run: dart format lib/core/services/background_downloader_transport.dart lib/core/services/download_service.dart
+      - name: Run relaunch/recovery focused suites
+        run: |
+          flutter test \
+            test/core/services/background_downloader_transfer_api_authority_test.dart \
+            test/core/services/download_plugin_relaunch_single_writer_test.dart \
+            test/core/services/download_plugin_recovery_contract_test.dart \
+            test/core/services/download_plugin_parallel_execution_test.dart \
+            test/core/services/download_pause_settlement_guard_test.dart \
+            test/core/services/download_runtime_ownership_test.dart \
+            test/core/services/download_startup_reconciliation_matrix_test.dart \
+            test/core/services/download_relaunch_chaos_test.dart \
+            test/core/services/download_recovery_fault_injection_test.dart \
+            test/core/services/download_recovery_inventory_test.dart \
+            test/core/services/download_zero_restart_invariant_test.dart \
+            test/core/services/download_manager_chaos_matrix_test.dart
+      - name: Generate sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Analyze
+        run: flutter analyze
+      - name: Record deterministic Task 23 evidence
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path('docs/superpowers/plans/2026-09-15-background-downloader-authority.md')
+          text = path.read_text()
+          start = text.index('### Task 23: Prove kill/relaunch and background survival without duplicate writers')
+          end = text.index('\n---\n\n### Task 24:', start)
+          section = text[start:end]
+          section = section.replace('- [ ] **Step 1: Extend deterministic recovery regressions**', '- [x] **Step 1: Extend deterministic recovery regressions**', 1)
+          section = section.replace('- [ ] **Step 2: Run recovery/ownership chaos suites**', '- [x] **Step 2: Run recovery/ownership chaos suites**', 1)
+          section = section.replace('- [ ] **Step 3: Fix any deterministic failures**', '- [x] **Step 3: Fix any deterministic failures**', 1)
+          evidence = (
+              f"\nDeterministic evidence: RED run `35005364609` exposed two duplicate-writer hazards: "
+              "`BackgroundDownloaderTransport.resume()` could call `Transfers.getOrStart`, and plugin chunk-only "
+              "evidence could invoke parent resume when the parent projection was absent. GREEN run `" + os.environ['RUN_ID'] + "` "
+              "uses `FileDownloader.start(doRescheduleKilledTasks: true)` plus Transfer rehydration as the plugin recovery authority; "
+              "resume reconnects only an existing/rehydrated parent and child-only evidence fails closed without creating a new writer. "
+              "Focused relaunch/recovery/ownership/zero-restart suites and analyzer passed.\n"
+          )
+          marker = 'Do not open a platform acceptance flag as part of this step.\n'
+          if evidence.strip() not in section:
+              section = section.replace(marker, marker + evidence, 1)
+          path.write_text(text[:start] + section + text[end:])
+          PY
+      - name: Remove one-shot files
+        run: |
+          rm -f .github/apply_task23_relaunch.py
+          rm -f .github/workflows/apply-task23-relaunch.yml
+          rm -f .github/workflows/task23-relaunch-red.yml
+      - name: Verify production diff
+        run: |
+          git status --short
+          git diff --check
+          test ! -e .github/apply_task23_relaunch.py
+          test ! -e .github/workflows/apply-task23-relaunch.yml
+          test ! -e .github/workflows/task23-relaunch-red.yml
+      - name: Commit verified fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/core/services/background_downloader_transport.dart \
+                  lib/core/services/download_service.dart \
+                  docs/superpowers/plans/2026-09-15-background-downloader-authority.md \
+                  .github/apply_task23_relaunch.py \
+                  .github/workflows/apply-task23-relaunch.yml \
+                  .github/workflows/task23-relaunch-red.yml
+          git diff --cached --check
+          git commit -m 'fix(downloads): prevent duplicate parent after relaunch'
+          git push origin HEAD:refactor/background-downloader-authority
