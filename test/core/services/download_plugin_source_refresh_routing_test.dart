@@ -14,7 +14,7 @@ void main() {
     expect(end, greaterThan(start));
     final body = source.substring(start, end);
 
-    expect(body, contains('final legacySessionExists ='));
+    expect(body, contains('legacySessionExists ='));
     expect(body, contains('await _parallel.restore(task)'));
     expect(body, contains('if (legacySessionExists) {'));
     expect(body, contains('await _parallel.replaceSource('));
