@@ -4703,7 +4703,12 @@ class DownloadService {
       }
     }
 
-    if (canNativeResume && !refreshResult.refreshed) {
+    if (!refreshResult.refreshed) {
+      // For an unchanged source, background_downloader owns the normal
+      // resume-vs-reenqueue decision through Transfer.resume(). The app-level
+      // taskCanResume probe above exists only to protect opaque bytes during a
+      // signed-source replacement; it must not become a second lifecycle
+      // policy for ordinary resume.
       var resumed = false;
       try {
         resumed = await _nativeTransport.resume(task);
@@ -4711,10 +4716,22 @@ class DownloadService {
         resumed = false;
       }
       if (resumed) return true;
-      if (saved.partialBytes <= 0) {
-        // taskCanResume proves opaque native ownership existed, but the executor
-        // could not adopt it. Never convert that hidden byte ownership into an
-        // implicit zero-byte restart.
+
+      // A missing/rejected Transfer is not permission to start another writer.
+      // Settle targeted runtime ownership before falling back to durable app
+      // recovery. Unknown/settling/owned all fail closed.
+      final ownership = await _runtimeOwnershipFor(task.taskId);
+      diagnosticLog.record('resume.pluginDeferred', {
+        'taskId': task.taskId,
+        'ownership': ownership.name,
+        'opaqueNativeResume': canNativeResume,
+      });
+      if (ownership.blocksNewWriter) return false;
+
+      if (canNativeResume && saved.partialBytes <= 0) {
+        // The plugin reported opaque native resume state but its Transfer could
+        // not adopt it. Never convert hidden bytes into an implicit zero-byte
+        // restart outside background_downloader.
         throw _DownloadRestartRequiredException(task.taskId);
       }
     }
