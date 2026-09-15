@@ -254,8 +254,11 @@ jobs:
           cat > "$windres" <<EOF
           #!/bin/bash
           real_windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres-22"
+          real_preprocessor="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres-preprocessor"
+          printf '%s\n' '#!/bin/bash' 'exec "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang" -E -xc -DRC_INVOKED "\$@"' > "\$real_preprocessor"
+          chmod +x "\$real_preprocessor"
           ln -sf "$PWD/clang_root/bin/llvm-rc" "\$real_windres"
-          exec "\$real_windres" --preprocessor "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang" "\$@"
+          exec "\$real_windres" --preprocessor "\$real_preprocessor" "\$@"
           EOF
           chmod +x "$windres"
           test -x "$windres"
