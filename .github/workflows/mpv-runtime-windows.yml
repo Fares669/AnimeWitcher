@@ -232,7 +232,7 @@ jobs:
           grep -F "clang version ${HOST_CLANG_VERSION}" /tmp/host-clang-version.txt
 
           mkdir -p clang_root/bin
-          for tool in clang clang++ ld.lld llvm-ar llvm-objcopy llvm-size llvm-strings llvm-nm llvm-readelf llvm-rc llvm-addr2line; do
+          for tool in clang clang++ ld.lld llvm-ar llvm-ranlib llvm-objcopy llvm-size llvm-strings llvm-nm llvm-readelf llvm-rc llvm-addr2line; do
             source_path="$(command -v "$tool")"
             test -x "$source_path"
             ln -sf "$source_path" "clang_root/bin/$tool"
@@ -268,7 +268,10 @@ jobs:
         run: |
           set -euxo pipefail
           ninja -C "build_${BIT}" rustup
-          ninja -C "build_${BIT}" llvm-clang
+          # llvm-rc delegates preprocessing to clang; expose the target headers
+          # explicitly because they are installed at the sysroot root by mingw-w64.
+          CPATH="$PWD/build_${BIT}/${BIT}-w64-mingw32/include" \
+            ninja -C "build_${BIT}" llvm-clang
           test -x "$PWD/clang_root/bin/clang"
           test -x "$PWD/clang_root/bin/${{ matrix.target }}-w64-mingw32-gcc"
 
