@@ -21,6 +21,26 @@ class DownloadRetryDecision {
   bool get shouldRetry => action == DownloadFailureAction.retry;
 }
 
+/// Application action to take when the transfer itself is plugin-owned.
+///
+/// Generic transport failures deliberately have no AnimeWitcher retry action:
+/// background_downloader owns its retry/backoff/reconnect lifecycle. Only
+/// application-specific boundaries escape the plugin executor.
+enum PluginTransportAction {
+  leaveToPlugin,
+  waitForNetwork,
+  refreshUrl,
+  reconcileRange,
+  stopNoSpace,
+  park,
+}
+
+class PluginFailureDecision {
+  const PluginFailureDecision(this.transportAction);
+
+  final PluginTransportAction transportAction;
+}
+
 bool isRetryableDownloadStatus(int? statusCode) {
   if (statusCode == null) return false;
   if (statusCode == 408 || statusCode == 425 || statusCode == 429) return true;
@@ -56,6 +76,44 @@ Duration downloadRetryDelay({
   );
 }
 
+/// Planner for background_downloader-owned transfers.
+///
+/// 5xx/408/425/429 and transient connection errors are intentionally left to
+/// the plugin while connectivity still exists. AnimeWitcher intervenes only
+/// for source refresh, resource/range reconciliation, storage exhaustion,
+/// explicit offline parking, and permanent application-level failures.
+PluginFailureDecision planPluginFailure({
+  int? statusCode,
+  bool connectionFailure = false,
+  bool networkAvailable = true,
+  bool noSpaceLeft = false,
+  bool canRefreshUrl = false,
+  bool refreshOn404 = true,
+}) {
+  if (noSpaceLeft) {
+    return const PluginFailureDecision(PluginTransportAction.stopNoSpace);
+  }
+  if (statusCode == 416) {
+    return const PluginFailureDecision(PluginTransportAction.reconcileRange);
+  }
+  if (canRefreshUrl &&
+      isDownloadUrlRefreshStatus(statusCode, include404: refreshOn404)) {
+    return const PluginFailureDecision(PluginTransportAction.refreshUrl);
+  }
+  if (connectionFailure && !networkAvailable) {
+    return const PluginFailureDecision(PluginTransportAction.waitForNetwork);
+  }
+  if (connectionFailure || isRetryableDownloadStatus(statusCode)) {
+    return const PluginFailureDecision(PluginTransportAction.leaveToPlugin);
+  }
+  return const PluginFailureDecision(PluginTransportAction.park);
+}
+
+/// Legacy/exceptional Range retry planner.
+///
+/// New plugin-owned tasks must use [planPluginFailure]. This backoff remains
+/// only for PR #231 legacy multipart workers and the verified changed-source
+/// Range fallback where AnimeWitcher still owns the HTTP connection itself.
 DownloadRetryDecision planDownloadFailure({
   int? statusCode,
   bool connectionFailure = false,
