@@ -4,19 +4,22 @@ import 'package:animewitcher/core/utils/download_resume.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('durable logical size wins over smaller transient plugin projection', () {
-    expect(
-      authoritativeLifecycleExpectedBytes(
-        jobExpectedBytes: 353053603,
-        fingerprintExpectedBytes: 353053603,
-        metadataExpectedBytes: 353053603,
-        databaseExpectedBytes: 353053603,
-        telemetryExpectedBytes: 110329255,
-        projectedExpectedBytes: 110329255,
-      ),
-      353053603,
-    );
-  });
+  test(
+    'durable logical size wins over smaller transient plugin projection',
+    () {
+      expect(
+        authoritativeLifecycleExpectedBytes(
+          jobExpectedBytes: 353053603,
+          fingerprintExpectedBytes: 353053603,
+          metadataExpectedBytes: 353053603,
+          databaseExpectedBytes: 353053603,
+          telemetryExpectedBytes: 110329255,
+          projectedExpectedBytes: 110329255,
+        ),
+        353053603,
+      );
+    },
+  );
 
   test('stable metadata wins when JobStore has not learned the size yet', () {
     expect(
@@ -49,7 +52,9 @@ void main() {
   test('pause wiring uses authoritative expected-size selector', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
-    final start = source.indexOf('Future<void> pauseDownload(String taskId) async');
+    final start = source.indexOf(
+      'Future<void> pauseDownload(String taskId) async',
+    );
     final end = source.indexOf(
       'Future<void> resumeDownload(String taskId) async',
       start,
@@ -66,7 +71,9 @@ void main() {
     );
     expect(
       body,
-      contains('metadataExpectedBytes: downloadMetadataExpectedBytes(metadata)'),
+      contains(
+        'metadataExpectedBytes: downloadMetadataExpectedBytes(metadata)',
+      ),
     );
     expect(body, contains('databaseExpectedBytes: record?.expectedFileSize'));
     expect(
@@ -76,5 +83,3 @@ void main() {
     expect(body, contains('projectedExpectedBytes: current?.totalSize'));
   });
 }
-
-// RED verification trigger

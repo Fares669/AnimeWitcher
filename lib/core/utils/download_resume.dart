@@ -65,6 +65,28 @@ int knownDownloadSize(Iterable<int?> candidates) {
   return -1;
 }
 
+/// Select the expected resource size used for lifecycle checkpoints.
+///
+/// Durable logical/resource identity must outrank plugin/UI telemetry because
+/// parallel chunk callbacks can temporarily expose a child-derived total. A
+/// smaller transient total must never rewrite the resource length already
+/// accepted by JobStore.
+int authoritativeLifecycleExpectedBytes({
+  int? jobExpectedBytes,
+  int? fingerprintExpectedBytes,
+  int? metadataExpectedBytes,
+  int? databaseExpectedBytes,
+  int? telemetryExpectedBytes,
+  int? projectedExpectedBytes,
+}) => knownDownloadSize(<int?>[
+  jobExpectedBytes,
+  fingerprintExpectedBytes,
+  metadataExpectedBytes,
+  databaseExpectedBytes,
+  telemetryExpectedBytes,
+  projectedExpectedBytes,
+]);
+
 /// True when [existingPartialBytes] is a usable prefix of the download.
 bool shouldResumeFromPartialBytes({
   required int existingPartialBytes,

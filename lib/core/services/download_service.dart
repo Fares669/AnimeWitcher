@@ -4070,12 +4070,15 @@ class DownloadService {
             lastKnown: downloadMetadataProgress(metadata),
           );
         }
-        final totalSize = knownDownloadSize([
-          current?.totalSize,
-          _telemetry.expectedBytesFor(taskId),
-          record?.expectedFileSize,
-          downloadMetadataExpectedBytes(metadata),
-        ]);
+        final job = await _jobStore.get(taskId);
+        final totalSize = authoritativeLifecycleExpectedBytes(
+          jobExpectedBytes: job?.expectedBytes,
+          fingerprintExpectedBytes: job?.fingerprint?.expectedBytes,
+          metadataExpectedBytes: downloadMetadataExpectedBytes(metadata),
+          databaseExpectedBytes: record?.expectedFileSize,
+          telemetryExpectedBytes: _telemetry.expectedBytesFor(taskId),
+          projectedExpectedBytes: current?.totalSize,
+        );
         if (!didPause) {
           diagnosticLog.record('pause.settling', {
             'taskId': taskId,
