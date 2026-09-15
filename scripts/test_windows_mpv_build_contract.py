@@ -37,6 +37,9 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         self.assertIn('windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres"', workflow)
         self.assertIn('--preprocessor "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang"', workflow)
         self.assertNotIn("CPATH=", workflow)
+        reuse_start = workflow.index("      - name: Reuse pinned container LLVM host compiler")
+        reuse_end = workflow.index("\n      - name: Patch LLVM MinGW libc++ compatibility", reuse_start)
+        self.assertIn("          TARGET_CPU: ${{ matrix.target }}", workflow[reuse_start:reuse_end])
         self.assertNotIn("ninja -C \"build_${BIT}\" llvm\n", workflow)
 
 

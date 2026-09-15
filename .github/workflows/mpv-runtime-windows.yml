@@ -226,6 +226,7 @@ jobs:
         working-directory: _build/win-builder
         env:
           BIT: ${{ matrix.bit }}
+          TARGET_CPU: ${{ matrix.target }}
         run: |
           set -euxo pipefail
           clang --version | tee /tmp/host-clang-version.txt
