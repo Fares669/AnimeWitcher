@@ -45,6 +45,7 @@ import 'download_transport.dart';
 import 'download_continued_processing_service.dart';
 import 'download_telemetry.dart';
 import 'download_transfer_projection.dart';
+import 'download_transport_policy.dart';
 
 export 'download_transfer_projection.dart' show DownloadProgressData;
 
@@ -378,6 +379,7 @@ class DownloadService {
 
   final Ref _ref;
   final Dio _dio;
+  final bool _pluginParallelAccepted;
   final Set<String> _userPausedIds = {};
   final Set<String> _dequeuingPausedIds = {};
   late final DownloadContinuedProcessingService _continuedProcessing;
@@ -416,7 +418,9 @@ class DownloadService {
   String _overlayCurrentTaskId = '';
   final Map<String, Map<String, Object>> _waitingPayloads = {};
 
-  DownloadService(this._ref) : _dio = _ref.read(dioClientProvider) {
+  DownloadService(this._ref, {bool pluginParallelAccepted = false})
+    : _dio = _ref.read(dioClientProvider),
+      _pluginParallelAccepted = pluginParallelAccepted {
     _nativeTransport = BackgroundDownloaderTransport();
     _rangeTransfers = DownloadRangeTransfer(_dio, diagnosticLog: diagnosticLog);
     _hostProfiles = DownloadHostProfileStore(
@@ -5301,6 +5305,26 @@ class DownloadService {
       return true;
     }
     if (task is! ParallelDownloadTask) return _nativeTransport.start(task);
+
+    // Durable legacy multipart evidence wins over platform capability:
+    // an existing session must never switch executors mid-transfer.
+    final legacySessionExists = await _parallel.restore(task);
+    final backend = selectDownloadExecutionBackend(
+      connections: downloadTaskPartCount(task),
+      pluginParallelAccepted: _pluginParallelAccepted,
+      legacySessionExists: legacySessionExists,
+    );
+    if (backend == DownloadExecutionBackend.pluginParallel) {
+      final pluginTask = buildPluginTransportTask(
+        template: task,
+        connections: downloadTaskPartCount(task),
+      );
+      return _nativeTransport.start(pluginTask);
+    }
+    if (backend == DownloadExecutionBackend.pluginSingle) {
+      return _nativeTransport.start(task);
+    }
+
     if (totalBytes <= 0) {
       totalBytes =
           (await getMetadata(task.url, headers: task.headers))?.size ?? -1;
