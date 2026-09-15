@@ -456,9 +456,10 @@ jobs:
             --target-prefix "${TARGET_CPU}-w64-mingw32"
           for compiler in clang++ g++ c++; do
             wrapper="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-${compiler}"
-            grep -F -- 'FLAGS="$FLAGS -stdlib=libc++"' "$wrapper"
-            grep -F -- 'FLAGS="$FLAGS -isystem ' "$wrapper"
-            grep -F -- 'FLAGS="$FLAGS -resource-dir ' "$wrapper"
+            grep -F -- '-stdlib=libc++' "$wrapper"
+            grep -F -- '-isystem ' "$wrapper"
+            grep -F -- '-resource-dir ' "$wrapper"
+            grep -F -- '# AnimeWitcher: explicit libc++ compiler flags' "$wrapper"
           done
 
       - name: Patch libvpl MinGW compatibility
