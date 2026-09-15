@@ -1,3 +1,4 @@
+# one-shot evidence recorder
 from pathlib import Path
 
 plan_path = Path('docs/superpowers/plans/2026-09-15-background-downloader-authority.md')
