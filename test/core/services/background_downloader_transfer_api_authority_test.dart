@@ -38,3 +38,5 @@ void main() {
     expect(body, isNot(contains('_downloader.transfers.start(task)')));
   });
 }
+
+// Transfer API authority RED trigger
