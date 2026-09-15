@@ -25,3 +25,5 @@ service.write_text(text)
 test = Path('test/core/services/download_plugin_source_refresh_routing_test.dart')
 content = test.read_text().replace('\n// Task 25 source refresh RED trigger\n', '\n')
 test.write_text(content)
+
+# trigger one-shot workflow after its definition exists
