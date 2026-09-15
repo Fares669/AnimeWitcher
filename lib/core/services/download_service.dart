@@ -44,6 +44,9 @@ import 'download_plugin_compat.dart';
 import 'download_transport.dart';
 import 'download_continued_processing_service.dart';
 import 'download_telemetry.dart';
+import 'download_transfer_projection.dart';
+
+export 'download_transfer_projection.dart' show DownloadProgressData;
 
 part 'download_service.g.dart';
 
@@ -156,36 +159,6 @@ class DownloadLogicalSnapshot {
   final double progress;
   final Map<String, dynamic> metadata;
   final DownloadJobState? logicalState;
-}
-
-class DownloadProgressData {
-  final String taskId;
-  final double progress;
-  final double networkSpeed; // MB/s
-  final Duration timeRemaining;
-  final int totalSize; // Bytes
-  final TaskStatus status;
-
-  DownloadProgressData({
-    required this.taskId,
-    required double progress,
-    required this.networkSpeed,
-    required this.timeRemaining,
-    required this.status,
-    this.totalSize = -1,
-  }) : progress = progress.clamp(0.0, 1.0);
-
-  String get speedString {
-    if (status == TaskStatus.paused) return 'متوقف';
-    if (progress >= 1.0) return 'اكتمل';
-    if (networkSpeed < 0) return 'جارٍ الحساب…';
-    if (networkSpeed == 0) return '0 MB/s';
-
-    if (networkSpeed < 1.0) {
-      return '${(networkSpeed * 1000).toStringAsFixed(2)} KB/s';
-    }
-    return '${networkSpeed.toStringAsFixed(2)} MB/s';
-  }
 }
 
 @Riverpod(keepAlive: true)
@@ -1273,48 +1246,68 @@ class DownloadService {
             previous?.totalSize,
           ]);
           final isAggregateMultipart = update.task is ParallelDownloadTask;
-          final fallbackSpeedBytes =
-              update.networkSpeed.isFinite && update.networkSpeed > 0
-              ? update.networkSpeed * 1000000
-              : 0.0;
-          final telemetry = _telemetry.observeProgress(
-            taskId: update.task.taskId,
-            progress: progress,
-            expectedBytes: knownTotal,
-            fallbackSpeedBytesPerSecond: fallbackSpeedBytes,
-          );
-          // PersistentParallelDownload already owns the aggregate byte clock
-          // and smoothing window. Re-estimating its synthetic parent here made
-          // the card and iOS continued-processing task use different speeds.
-          final measuredSpeed = isAggregateMultipart
-              ? fallbackSpeedBytes
-              : telemetry.speedBytesPerSecond;
-          final speed = isAggregateMultipart
-              ? (update.networkSpeed.isFinite && update.networkSpeed > 0
-                    ? update.networkSpeed
-                    : 0.0)
-              : (measuredSpeed > 0
-                    ? measuredSpeed / 1000000
-                    : (_telemetry.hasRecentBytes(update.task.taskId)
-                          ? -1.0
-                          : 0.0));
-          final remaining = isAggregateMultipart
-              ? update.timeRemaining
-              : (telemetry.timeRemaining > Duration.zero
-                    ? telemetry.timeRemaining
-                    : (update.timeRemaining > Duration.zero
-                          ? update.timeRemaining
-                          : (previous?.timeRemaining ?? Duration.zero)));
-          final progressData = DownloadProgressData(
-            taskId: update.task.taskId,
-            progress: progress,
-            networkSpeed: speed,
-            timeRemaining: remaining,
-            totalSize: telemetry.expectedBytes > 0
-                ? telemetry.expectedBytes
-                : knownTotal,
-            status: TaskStatus.running,
-          );
+          final pluginTransferOwnsTelemetry =
+              isBackgroundDownloaderTransportTask(update.task) &&
+              _nativeTransport.handleFor(update.task.taskId) != null &&
+              !_parallel.isActive(update.task.taskId);
+          late final DownloadProgressData progressData;
+          if (pluginTransferOwnsTelemetry) {
+            // A real plugin progress callback is authoritative for Transfer
+            // telemetry. background_downloader already reports MB/s and ETA;
+            // estimating them again from sampled progress creates drift and
+            // double-smoothing, especially for ParallelDownloadTask.
+            progressData = projectTransferTelemetry(
+              task: update.task,
+              status: TaskStatus.running,
+              progress: progress,
+              networkSpeedMbPerSecond: update.networkSpeed,
+              timeRemaining: update.timeRemaining,
+              totalSize: knownTotal,
+            );
+          } else {
+            final fallbackSpeedBytes =
+                update.networkSpeed.isFinite && update.networkSpeed > 0
+                ? update.networkSpeed * 1000000
+                : 0.0;
+            final telemetry = _telemetry.observeProgress(
+              taskId: update.task.taskId,
+              progress: progress,
+              expectedBytes: knownTotal,
+              fallbackSpeedBytesPerSecond: fallbackSpeedBytes,
+            );
+            // Legacy PersistentParallelDownload already owns the aggregate byte
+            // clock and smoothing window. Keep its synthetic parent projection
+            // unchanged until that executor is retired by the migration plan.
+            final measuredSpeed = isAggregateMultipart
+                ? fallbackSpeedBytes
+                : telemetry.speedBytesPerSecond;
+            final speed = isAggregateMultipart
+                ? (update.networkSpeed.isFinite && update.networkSpeed > 0
+                      ? update.networkSpeed
+                      : 0.0)
+                : (measuredSpeed > 0
+                      ? measuredSpeed / 1000000
+                      : (_telemetry.hasRecentBytes(update.task.taskId)
+                            ? -1.0
+                            : 0.0));
+            final remaining = isAggregateMultipart
+                ? update.timeRemaining
+                : (telemetry.timeRemaining > Duration.zero
+                      ? telemetry.timeRemaining
+                      : (update.timeRemaining > Duration.zero
+                            ? update.timeRemaining
+                            : (previous?.timeRemaining ?? Duration.zero)));
+            progressData = DownloadProgressData(
+              taskId: update.task.taskId,
+              progress: progress,
+              networkSpeed: speed,
+              timeRemaining: remaining,
+              totalSize: telemetry.expectedBytes > 0
+                  ? telemetry.expectedBytes
+                  : knownTotal,
+              status: TaskStatus.running,
+            );
+          }
           if (progressData.totalSize > 0) {
             unawaited(
               _rememberExpectedBytes(
