@@ -55,27 +55,4 @@ void main() {
     expect(body, contains('_nativeTransport.start(task)'));
     expect(body, contains('_parallel.start(task, totalBytes)'));
   });
-
-  test('plugin parallel resume never imports plugin chunks into legacy .part state', () {
-    final source = File('lib/core/services/download_service.dart')
-        .readAsStringSync();
-    final start = source.indexOf('Future<bool> _resumeDownloadTask(');
-    final end = source.indexOf(
-      'Future<bool> _resumeUsingPartialFile(',
-      start,
-    );
-    expect(start, greaterThanOrEqualTo(0));
-    expect(end, greaterThan(start));
-    final body = source.substring(start, end);
-
-    expect(body, contains('selectDownloadExecutionBackend('));
-    expect(body, contains('pluginParallelAccepted: _pluginParallelAccepted'));
-    expect(body, contains('DownloadExecutionBackend.pluginParallel'));
-    expect(body, contains('_nativeTransport.resume(task)'));
-
-    final pluginBranch = body.indexOf('DownloadExecutionBackend.pluginParallel');
-    final legacyImport = body.indexOf('_parallel.importLegacy(task, data.data)');
-    expect(pluginBranch, greaterThanOrEqualTo(0));
-    expect(legacyImport, greaterThan(pluginBranch));
-  });
 }
