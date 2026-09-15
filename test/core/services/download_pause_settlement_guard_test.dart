@@ -35,38 +35,41 @@ void main() {
     );
   });
 
-  test('rejected pause is idempotent once runtime ownership is already released', () {
-    final body = methodBody(
-      source,
-      'Future<bool> _pauseTransfer(',
-      'Future<bool> _startPart(',
-    );
-    final rejectedStart = body.indexOf('if (!accepted) {');
-    final rejectedEnd = body.indexOf(
-      '// pause() acknowledges the command',
-      rejectedStart,
-    );
-    expect(rejectedStart, greaterThanOrEqualTo(0));
-    expect(rejectedEnd, greaterThan(rejectedStart));
-    final rejected = body.substring(rejectedStart, rejectedEnd);
+  test(
+    'rejected pause is idempotent once runtime ownership is already released',
+    () {
+      final body = methodBody(
+        source,
+        'Future<bool> _pauseTransfer(',
+        'Future<bool> _startPart(',
+      );
+      final rejectedStart = body.indexOf('if (!accepted) {');
+      final rejectedEnd = body.indexOf(
+        '// pause() acknowledges the command',
+        rejectedStart,
+      );
+      expect(rejectedStart, greaterThanOrEqualTo(0));
+      expect(rejectedEnd, greaterThan(rejectedStart));
+      final rejected = body.substring(rejectedStart, rejectedEnd);
 
-    expect(
-      rejected,
-      contains('await _runtimeOwnershipFor(task.taskId)'),
-      reason: 'a false pause acknowledgement must be resolved from ownership',
-    );
-    expect(
-      rejected,
-      isNot(contains('rangeAlreadyStopped &&')),
-      reason:
-          'an already-paused plugin parent is settled even when no Range writer existed',
-    );
-    expect(
-      rejected,
-      contains('DownloadRuntimeOwnership.notOwned'),
-      reason: 'only proven ownership release makes a rejected pause idempotent',
-    );
-  });
+      expect(
+        rejected,
+        contains('await _runtimeOwnershipFor(task.taskId)'),
+        reason: 'a false pause acknowledgement must be resolved from ownership',
+      );
+      expect(
+        rejected,
+        isNot(contains('rangeAlreadyStopped &&')),
+        reason: 'an already-paused plugin parent is settled even when no Range writer existed',
+      );
+      expect(
+        rejected,
+        contains('DownloadRuntimeOwnership.notOwned'),
+        reason:
+            'only proven ownership release makes a rejected pause idempotent',
+      );
+    },
+  );
 
   test('unsettled user pause stays durable pausing instead of rolling back to running', () {
     final body = methodBody(
@@ -118,7 +121,8 @@ void main() {
     expect(
       recovery,
       contains('status: downloadJobDisplayStatus(projectedState),'),
-      reason: 'startup UI projection must come from authoritative JobStore state',
+      reason:
+          'startup UI projection must come from authoritative JobStore state',
     );
   });
 }

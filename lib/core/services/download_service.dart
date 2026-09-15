@@ -4041,16 +4041,13 @@ class DownloadService {
               queueWaiting: false,
               userPaused: true,
             );
-        final stoppedRange = await _rangeTransfers.stop(taskId);
+        await _rangeTransfers.stop(taskId);
         // Plugin pause produces URLSession resumeData and drops the
         // transferring task so it no longer occupies a slot. Never cancel —
         // cancel deletes the temp file and forces a restart from byte 0.
         var didPause = false;
         try {
-          didPause = await _pauseTransfer(
-            downloadTask,
-            rangeAlreadyStopped: stoppedRange,
-          );
+          didPause = await _pauseTransfer(downloadTask);
         } catch (_) {}
         final trackingUrl = downloadTrackingUrl(downloadTask);
         final current = _ref.read(downloadProgressProvider)[trackingUrl];
@@ -4554,10 +4551,57 @@ class DownloadService {
     }
 
     if (task is ParallelDownloadTask) {
-      if (await _parallel.restore(task))
+      if (await _parallel.restore(task)) {
         return _parallel.start(task, saved.totalSize);
-      // Import completed/paused legacy chunks without using resumeChunkTasks,
-      // which cancels all siblings when one completed child cannot be resumed.
+      }
+
+      // A plugin-owned ParallelDownloadTask must resume through the plugin as
+      // one logical parent. The previous code skipped this entirely and fell
+      // through to a fresh enqueue, which created a brand-new set of chunk IDs
+      // after every pause on iOS. Parent Transfer evidence or any reserved
+      // plugin chunk is enough to classify this as plugin-owned persistence.
+      final pluginParentKnown = _nativeTransport.handleFor(task.taskId) != null;
+      var pluginChunkEvidence = false;
+      try {
+        pluginChunkEvidence = (await FileDownloader().allTasks(allGroups: true))
+            .any(
+              (candidate) =>
+                  candidate.group == FileDownloader.chunkGroup &&
+                  downloadInternalParentTaskId(candidate) == task.taskId,
+            );
+      } catch (_) {
+        // An unavailable runtime inventory is ambiguous. Fail closed below
+        // instead of creating replacement writers for hidden plugin chunks.
+        pluginChunkEvidence = pluginParentKnown;
+      }
+
+      if (pluginParentKnown || pluginChunkEvidence) {
+        var pluginResumed = false;
+        try {
+          pluginResumed = await _nativeTransport.resume(task);
+        } catch (_) {
+          pluginResumed = false;
+        }
+        diagnosticLog.record('resume.pluginParallel', {
+          'taskId': task.taskId,
+          'accepted': pluginResumed,
+          'parentKnown': pluginParentKnown,
+          'chunkEvidence': pluginChunkEvidence,
+        });
+        if (pluginResumed) return true;
+
+        final ownership = await _runtimeOwnershipFor(task.taskId);
+        diagnosticLog.record('resume.pluginParallelDeferred', {
+          'taskId': task.taskId,
+          'ownership': ownership.name,
+        });
+        // Never convert a known plugin parent/chunk set into AnimeWitcher's
+        // legacy multipart executor, and never silently enqueue fresh chunks.
+        return false;
+      }
+
+      // Import only genuine pre-plugin legacy parent resume data. A current
+      // plugin parent was handled above and can never reach this migration seam.
       final data = await BackgroundDownloaderCompat.resumeDataForTaskId(
         task.taskId,
       );
@@ -5230,10 +5274,7 @@ class DownloadService {
     ..._rangeTransfers.activeTaskIds,
   };
 
-  Future<bool> _pauseTransfer(
-    DownloadTask task, {
-    bool rangeAlreadyStopped = false,
-  }) async {
+  Future<bool> _pauseTransfer(DownloadTask task) async {
     if (_rangeTransfers.isActive(task.taskId)) {
       await _rangeTransfers.stop(task.taskId);
       return true;
@@ -5264,11 +5305,16 @@ class DownloadService {
         'result': accepted,
       });
       if (!accepted) {
-        // pauseDownload already joined the Range writer before entering the
-        // control queue. A missing native task is expected in that case.
-        return rangeAlreadyStopped &&
-            await _runtimeOwnershipFor(task.taskId) ==
-                DownloadRuntimeOwnership.notOwned;
+        // A second pause against an already-paused plugin parent legitimately
+        // returns false. Command acknowledgement is not the authority here:
+        // if runtime ownership is already released, the requested pause is
+        // idempotently settled and must not leave the logical job in `pausing`.
+        final rejectedOwnership = await _runtimeOwnershipFor(task.taskId);
+        diagnosticLog.record('native.pauseRejectedOwnership', {
+          'taskId': task.taskId,
+          'ownership': rejectedOwnership.name,
+        });
+        return rejectedOwnership == DownloadRuntimeOwnership.notOwned;
       }
 
       // pause() acknowledges the command before URLSession has necessarily
