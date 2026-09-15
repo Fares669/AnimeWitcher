@@ -55,4 +55,49 @@ void main() {
     expect(body, contains('_nativeTransport.start(task)'));
     expect(body, contains('_parallel.start(task, totalBytes)'));
   });
+
+  test('paused plugin parallel resumes parent before any fresh chunk enqueue', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final methodStart = source.indexOf('Future<bool> _resumeDownloadTask(');
+    final methodEnd = source.indexOf(
+      'Future<bool> _resumeUsingPartialFile(',
+      methodStart,
+    );
+    expect(methodStart, greaterThanOrEqualTo(0));
+    expect(methodEnd, greaterThan(methodStart));
+    final body = source.substring(methodStart, methodEnd);
+
+    final parallelStart = body.indexOf('if (task is ParallelDownloadTask) {');
+    final parallelEnd = body.indexOf(
+      '// Only a validated source replacement may cross the custom Range seam.',
+      parallelStart,
+    );
+    expect(parallelStart, greaterThanOrEqualTo(0));
+    expect(parallelEnd, greaterThan(parallelStart));
+    final parallel = body.substring(parallelStart, parallelEnd);
+
+    final legacyRestore = parallel.indexOf('await _parallel.restore(task)');
+    final pluginResume = parallel.indexOf('await _nativeTransport.resume(task)');
+    final legacyImport = parallel.indexOf(
+      'BackgroundDownloaderCompat.resumeDataForTaskId',
+    );
+    final freshEnqueue = parallel.indexOf('_enqueueTransfer(task, saved.totalSize)');
+
+    expect(legacyRestore, greaterThanOrEqualTo(0));
+    expect(
+      pluginResume,
+      greaterThan(legacyRestore),
+      reason:
+          'without a legacy manifest, a paused ParallelDownloadTask must resume through background_downloader',
+    );
+    if (legacyImport >= 0) {
+      expect(
+        pluginResume,
+        lessThan(legacyImport),
+        reason: 'plugin parent resume must be attempted before legacy adoption',
+      );
+    }
+    expect(freshEnqueue, greaterThan(pluginResume));
+  });
 }
