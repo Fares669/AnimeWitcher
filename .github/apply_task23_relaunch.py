@@ -126,3 +126,5 @@ new_parallel = '''      if (pluginParentKnown) {
 if text.count(old_parallel) != 1:
     raise SystemExit(f'parallel resume anchor count={text.count(old_parallel)}')
 service.write_text(text.replace(old_parallel, new_parallel, 1))
+
+# Diagnostic trigger only; production patch content above is unchanged.
