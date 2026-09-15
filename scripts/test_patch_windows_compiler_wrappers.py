@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -37,6 +38,12 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
                     "#!/bin/bash\n"
                     "PROG=/clang_root/bin/clang++\n"
                     "FLAGS=\"$FLAGS --sysroot /old/sysroot\"\n"
+                    "if [ \"clang++\" = \"clang++\" ]; then\n"
+                    "    FLAGS=\"$FLAGS -stdlib=libc++\"\n"
+                    "    FLAGS=\"$FLAGS -isystem /old/sysroot/include/c++/v1\"\n"
+                    "    FLAGS=\"$FLAGS -resource-dir /old/clang\"\n"
+                    "    FLAGS=\"$FLAGS --rtlib=compiler-rt --unwindlib=libunwind\"\n"
+                    "fi\n"
                     "$CCACHE \"$PROG\" \"$@\" $FLAGS\n",
                     encoding="utf-8",
                 )
@@ -57,6 +64,13 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             )
             wrapper = bin_dir / "x86_64-w64-mingw32-g++"
             patched = wrapper.read_text(encoding="utf-8")
+            syntax = subprocess.run(
+                ["bash", "-n", str(wrapper)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
             invocation = next(
                 line for line in patched.splitlines() if line.startswith('$CCACHE "$PROG"')
             )
