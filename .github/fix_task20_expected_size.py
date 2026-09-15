@@ -21,3 +21,5 @@ service.write_text(text)
 test = Path('test/core/services/download_expected_size_authority_test.dart')
 text = test.read_text().replace('\n// RED verification trigger\n', '\n')
 test.write_text(text)
+
+# trigger one-shot workflow after its definition exists
