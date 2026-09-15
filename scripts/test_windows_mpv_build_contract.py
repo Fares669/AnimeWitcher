@@ -62,6 +62,10 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
+            '"build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" <<\\'PY\\'',
+            workflow,
+        )
+        self.assertIn(
             '"build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"',
             workflow,
         )
