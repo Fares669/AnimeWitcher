@@ -56,6 +56,8 @@ final class DownloadContinuedProcessingManager {
   private var activeTask: BGContinuedProcessingTask?
   private var snapshot: Snapshot?
   private var identifier: String?
+  private var submittedAt: Date?
+  private let attachmentGraceInterval: TimeInterval = 2.0
   private var didRegisterIdentifier = false
   private var currentEpisodeTaskId = ""
 
@@ -114,10 +116,18 @@ final class DownloadContinuedProcessingManager {
       return identifier
     }
 
-    // Request already submitted for this session — never start a second
-    // Live Activity / continued-processing task when ep2 begins.
+    // A submitted identifier is not proof that iOS actually attached a
+    // BGContinuedProcessingTask. Keep a short grace window for the scheduler
+    // callback, then clear a stale request so Dart can retry on the next live
+    // progress sample instead of believing a queued request is active forever.
     if let existingIdentifier = identifier {
-      return existingIdentifier
+      if let submittedAt,
+         Date().timeIntervalSince(submittedAt) < attachmentGraceInterval {
+        return existingIdentifier
+      }
+      cancelPendingRequest()
+      identifier = nil
+      submittedAt = nil
     }
 
     let sessionId = try sessionIdentifier()
@@ -155,11 +165,17 @@ final class DownloadContinuedProcessingManager {
       title: title(for: snapshot),
       subtitle: subtitle(for: snapshot)
     )
-    request.strategy = .queue
+    // This workload is user-initiated and only useful as system UI when
+    // it starts now. `.queue` can accept a request that never attaches while
+    // our Dart side incorrectly marks the overlay active. `.fail` gives an
+    // immediate rejection instead, and live progress will retry later.
+    request.strategy = .fail
     do {
       try scheduler.submit(request)
+      submittedAt = Date()
     } catch {
       identifier = nil
+      submittedAt = nil
       throw error
     }
     return sessionId
@@ -224,8 +240,22 @@ final class DownloadContinuedProcessingManager {
 
     if let task = activeTask {
       apply(snapshot, to: task)
+      return true
     }
-    return activeTask != nil || identifier != nil
+
+    if let submittedAt,
+       Date().timeIntervalSince(submittedAt) < attachmentGraceInterval {
+      return true
+    }
+
+    // Submission was accepted but the launch handler never attached. Report
+    // the session as lost so Dart drops `_sessionOverlayActive` and retries.
+    if identifier != nil {
+      cancelPendingRequest()
+      identifier = nil
+      self.submittedAt = nil
+    }
+    return false
   }
 
   func finish(taskId: String, success: Bool, status: String, endSession: Bool = false) {
@@ -286,11 +316,13 @@ final class DownloadContinuedProcessingManager {
 
     snapshot = nil
     identifier = nil
+    submittedAt = nil
     currentEpisodeTaskId = ""
   }
 
   private func attach(_ task: BGContinuedProcessingTask) {
     activeTask = task
+    submittedAt = nil
 
     task.expirationHandler = { [weak self, weak task] in
       Task { @MainActor in
@@ -306,6 +338,7 @@ final class DownloadContinuedProcessingManager {
         self.activeTask = nil
         self.snapshot = nil
         self.identifier = nil
+        self.submittedAt = nil
         self.currentEpisodeTaskId = ""
       }
     }
