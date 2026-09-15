@@ -58,6 +58,14 @@ void main() {
     expect(ownershipStart, greaterThanOrEqualTo(0));
     expect(ownershipEnd, greaterThan(ownershipStart));
     final ownershipSource = source.substring(ownershipStart, ownershipEnd);
+    expect(
+      ownershipSource,
+      contains('final projectedStatus = statusFor(taskId);'),
+    );
+    expect(
+      ownershipSource.indexOf('ownershipFromStatus(projectedStatus)'),
+      lessThan(ownershipSource.indexOf('_downloader.taskForId(taskId)')),
+    );
     expect(ownershipSource, contains('_downloader.taskForId(taskId)'));
     expect(ownershipSource, isNot(contains('allTasks(')));
     expect(

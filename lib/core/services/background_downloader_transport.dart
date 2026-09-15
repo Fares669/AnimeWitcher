@@ -192,7 +192,20 @@ class BackgroundDownloaderTransport implements DownloadTransport {
   /// be converted into [DownloadRuntimeOwnership.notOwned], because starting a
   /// second writer in that state would violate the single-writer invariant.
   Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async {
+    // Rehydrated Transfer handles may come from persistence, but a settled
+    // status is still definitive negative ownership: paused/final transfers
+    // cannot own a writer and must not reserve a slot merely because the
+    // plugin can still look up their task descriptor.
+    final projectedStatus = statusFor(taskId);
+    if (projectedStatus != null &&
+        ownershipFromStatus(projectedStatus) ==
+            DownloadRuntimeOwnership.notOwned) {
+      return DownloadRuntimeOwnership.notOwned;
+    }
+
     try {
+      // Active-looking projections still require targeted executor evidence.
+      // Failure is ambiguous and therefore fail-closed as unknown.
       final runtimeTask = await _downloader.taskForId(taskId);
       if (runtimeTask != null) return DownloadRuntimeOwnership.owned;
       return DownloadRuntimeOwnership.notOwned;
