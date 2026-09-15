@@ -440,6 +440,27 @@ jobs:
           test -x "$PWD/clang_root/bin/clang"
           test -x "$PWD/clang_root/bin/${{ matrix.target }}-w64-mingw32-gcc"
 
+      - name: Patch libvpl MinGW compatibility
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set -euxo pipefail
+          ninja -C "build_${BIT}" libvpl-download
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src_packages/libvpl/libvpl/src/windows/mfx_dispatcher_defs.h')
+          text = path.read_text()
+          old = '#if _MSC_VER < 1400\n'
+          new = '#if defined(_MSC_VER) && _MSC_VER < 1400\n'
+          if text.count(old) != 1:
+              raise SystemExit('libvpl dispatcher compatibility layout changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          grep -F '#if defined(_MSC_VER) && _MSC_VER < 1400' src_packages/libvpl/libvpl/src/windows/mfx_dispatcher_defs.h
+          ! grep -F '#if _MSC_VER < 1400' src_packages/libvpl/libvpl/src/windows/mfx_dispatcher_defs.h
+
       - name: Build exact mpv 0.41 libmpv
         working-directory: _build/win-builder
         env:
