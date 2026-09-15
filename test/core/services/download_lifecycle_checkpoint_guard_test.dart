@@ -39,7 +39,7 @@ void main() {
         pause.indexOf('final checkpointed = await _checkpointLogicalJob('),
         lessThan(
           pause.indexOf(
-            'final stoppedRange = await _rangeTransfers.stop(taskId);',
+            'await _rangeTransfers.stop(taskId);',
           ),
         ),
       );
