@@ -114,6 +114,25 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         self.assertIn("          TARGET_CPU: ${{ matrix.target }}", workflow[reuse_start:reuse_end])
         self.assertNotIn("ninja -C \"build_${BIT}\" llvm\n", workflow)
 
+    def test_windows_ci_repairs_generated_wrappers_after_template_patch(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "scripts/mpv_runtime/patch_windows_compiler_wrappers.py",
+            workflow,
+        )
+        self.assertIn(
+            "Patch generated cross-compiler wrappers for libc++",
+            workflow,
+        )
+        self.assertIn(
+            "stdlib=libc++",
+            workflow,
+        )
+        self.assertIn(
+            "include/c++/v1",
+            workflow,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
