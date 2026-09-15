@@ -23,4 +23,23 @@ void main() {
       );
     },
   );
+
+  test('logical runtime ownership is delegated to transfer adapter', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final ownershipStart = source.indexOf(
+      'Future<DownloadRuntimeOwnership> _runtimeOwnershipFor(String taskId)',
+    );
+    final ownershipEnd = source.indexOf(
+      'Future<DownloadRuntimeOwnership> _waitForCancelOwnershipRelease(',
+      ownershipStart,
+    );
+
+    expect(ownershipStart, greaterThanOrEqualTo(0));
+    expect(ownershipEnd, greaterThan(ownershipStart));
+    final ownershipSource = source.substring(ownershipStart, ownershipEnd);
+    expect(ownershipSource, contains('_nativeTransport.ownershipFor(taskId)'));
+    expect(ownershipSource, isNot(contains('_liveTransferTasks()')));
+    expect(ownershipSource, isNot(contains('activeTasks.any')));
+  });
 }
