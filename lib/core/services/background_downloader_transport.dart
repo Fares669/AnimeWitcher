@@ -149,6 +149,10 @@ class BackgroundDownloaderTransport implements DownloadTransport {
       <String, StreamController<TaskUpdate>>{};
   final Map<String, StreamSubscription<TaskUpdate>> _subscriptions =
       <String, StreamSubscription<TaskUpdate>>{};
+  final StreamController<TaskUpdate> _updates =
+      StreamController<TaskUpdate>.broadcast();
+
+  Stream<TaskUpdate> get updates => _updates.stream;
 
   /// Rehydrates plugin Transfer handles without enqueueing anything.
   ///
@@ -364,9 +368,11 @@ class BackgroundDownloaderTransport implements DownloadTransport {
     _subscriptions[id] = transfer.updates.listen(
       (update) {
         if (!controller.isClosed) controller.add(update);
+        if (!_updates.isClosed) _updates.add(update);
       },
       onError: (Object error, StackTrace stack) {
         if (!controller.isClosed) controller.addError(error, stack);
+        if (!_updates.isClosed) _updates.addError(error, stack);
       },
     );
   }
@@ -389,6 +395,7 @@ class BackgroundDownloaderTransport implements DownloadTransport {
     for (final controller in controllers) {
       await controller.close();
     }
+    await _updates.close();
     for (final id in _handles.keys.toList(growable: false)) {
       _downloader.transfers.remove(id, dispose: true);
     }

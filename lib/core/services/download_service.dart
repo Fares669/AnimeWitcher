@@ -390,6 +390,7 @@ class DownloadService {
   Stream<ParallelAssemblyFailure> get parallelFailures =>
       _parallelFailures.stream;
   StreamSubscription<TaskUpdate>? _updatesSubscription;
+  StreamSubscription<TaskUpdate>? _nativeUpdatesSubscription;
   final Connectivity _connectivity = Connectivity();
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   bool _networkAvailable = true;
@@ -845,6 +846,8 @@ class DownloadService {
     if (disposeForTesting != null) await disposeForTesting();
     await _updatesSubscription?.cancel();
     _updatesSubscription = null;
+    await _nativeUpdatesSubscription?.cancel();
+    _nativeUpdatesSubscription = null;
     await _connectivitySubscription?.cancel();
     _connectivitySubscription = null;
     await _rangeTransfers.dispose();
@@ -1107,6 +1110,8 @@ class DownloadService {
     // 4. Bridge FileDownloader updates into a shared broadcast stream (once),
     //    then let this instance listen to that broadcast proxy.
     _fdSubscription ??= FileDownloader().updates.listen(_sharedEvents.add);
+    await _nativeUpdatesSubscription?.cancel();
+    _nativeUpdatesSubscription = _nativeTransport.updates.listen(_sharedEvents.add);
     // A previous initialization attempt may have failed after installing
     // this instance listener. Cancel it before retrying so deliberate retry
     // cannot duplicate callback consumers.
