@@ -1,0 +1,36 @@
+name: Apply Task 5 ownership delegation
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+
+      - name: Apply guarded ownership patch
+        run: python3 .github/task5_ownership_patch.py
+
+      - name: Verify patch shape
+        run: |
+          git diff --check
+          grep -F "return _nativeTransport.ownershipFor(taskId);" lib/core/services/download_service.dart
+          ! sed -n '/Future<DownloadRuntimeOwnership> _runtimeOwnershipFor/,/Future<DownloadRuntimeOwnership> _waitForCancelOwnershipRelease/p' lib/core/services/download_service.dart | grep -F "_liveTransferTasks()"
+
+      - name: Commit guarded patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/task5-ownership-apply.yml .github/task5_ownership_patch.py
+          git add lib/core/services/download_service.dart
+          git diff --cached --check
+          git commit -m "fix(downloads): delegate runtime ownership to transport adapter"
+          git push origin HEAD:refactor/background-downloader-authority
