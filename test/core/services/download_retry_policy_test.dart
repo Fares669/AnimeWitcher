@@ -73,4 +73,58 @@ void main() {
       DownloadFailureAction.park,
     );
   });
+
+  group('plugin-owned retry policy', () {
+    test('generic 5xx and transient HTTP retry remain plugin-owned', () {
+      for (final status in [408, 425, 429, 500, 503, 599]) {
+        expect(
+          planPluginFailure(statusCode: status).transportAction,
+          PluginTransportAction.leaveToPlugin,
+          reason: '$status',
+        );
+      }
+    });
+
+    test('socket failure stays plugin-owned while network is available', () {
+      expect(
+        planPluginFailure(
+          connectionFailure: true,
+          networkAvailable: true,
+        ).transportAction,
+        PluginTransportAction.leaveToPlugin,
+      );
+      expect(
+        planPluginFailure(
+          connectionFailure: true,
+          networkAvailable: false,
+        ).transportAction,
+        PluginTransportAction.waitForNetwork,
+      );
+    });
+
+    test('application-specific failures stay AnimeWitcher-owned', () {
+      expect(
+        planPluginFailure(
+          statusCode: 403,
+          canRefreshUrl: true,
+        ).transportAction,
+        PluginTransportAction.refreshUrl,
+      );
+      expect(
+        planPluginFailure(statusCode: 416).transportAction,
+        PluginTransportAction.reconcileRange,
+      );
+      expect(
+        planPluginFailure(
+          statusCode: 503,
+          noSpaceLeft: true,
+        ).transportAction,
+        PluginTransportAction.stopNoSpace,
+      );
+      expect(
+        planPluginFailure(statusCode: 400).transportAction,
+        PluginTransportAction.park,
+      );
+    });
+  });
 }
