@@ -110,7 +110,12 @@ void main() {
     test('iOS multipart pause preserves live URLSession range bytes', () {
       final source = File('lib/core/services/download_service.dart')
           .readAsStringSync();
-      expect(source, contains('preserveLiveParts: Platform.isIOS'));
+      expect(
+        RegExp(r'preserveLiveParts:\s*Platform\.isIOS').hasMatch(source),
+        isTrue,
+        reason:
+            'iOS multipart pause must preserve live native range bytes',
+      );
       expect(source, contains('shouldDrainPartOnPause: (task) =>'));
       expect(
         source,
