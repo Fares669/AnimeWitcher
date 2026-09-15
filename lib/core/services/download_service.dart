@@ -4490,11 +4490,24 @@ class DownloadService {
       return _enqueueTransfer(task, saved.totalSize);
     }
 
-    // A refreshed signed URL cannot use native resume data that embeds the
-    // expired URL. When a verified partial file exists, go directly to the
-    // prefix-validated Range append path.
-    if (refreshResult.refreshed && saved.partialBytes > 0) {
-      return _resumeUsingPartialFile(task);
+    // Only a validated source replacement may cross the custom Range seam.
+    // Ordinary pause/retry/resume remains owned by background_downloader.
+    if (refreshResult.refreshed) {
+      final refreshResumeMode = planRefreshedTransferResume(
+        resourceCompatible: true,
+        hasPartialBytes: saved.partialBytes > 0,
+        // background_downloader resume data is tied to the original URL;
+        // a changed signed source cannot safely reuse that opaque state.
+        pluginCanResumeChangedSource: false,
+      );
+      if (refreshResumeMode ==
+          RefreshedTransferResumeMode.verifiedRangeFallback) {
+        return _resumeUsingPartialFile(task);
+      }
+      if (refreshResumeMode ==
+          RefreshedTransferResumeMode.incompatibleResource) {
+        return false;
+      }
     }
 
     if (canNativeResume && !refreshResult.refreshed) {
@@ -4516,7 +4529,6 @@ class DownloadService {
     return resumeOrRestartDownload(
       canResume: () async => false,
       resume: () async => false,
-      resumeFromPartial: () => _resumeUsingPartialFile(task),
       restart: () =>
           _enqueueFreshAdaptiveTask(task, knownTotalBytes: saved.totalSize),
       savedProgress: saved.progress,
