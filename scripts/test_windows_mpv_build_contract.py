@@ -88,6 +88,10 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
             'FLAGS="$FLAGS -resource-dir @CMAKE_INSTALL_PREFIX@/lib/clang/20"',
             workflow,
         )
+        self.assertIn(
+            'FLAGS="$FLAGS -isystem @MINGW_INSTALL_PREFIX@/include/c++/v1"',
+            workflow,
+        )
         self.assertIn('host_resource_dir="$(clang -print-resource-dir)"', workflow)
         self.assertIn(
             'ln -sfn "$host_resource_dir/include" "$PWD/clang_root/lib/clang/20/include"',

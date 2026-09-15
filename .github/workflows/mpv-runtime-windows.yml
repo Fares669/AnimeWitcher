@@ -129,6 +129,7 @@ jobs:
               + 'FLAGS="$FLAGS --rtlib=compiler-rt --unwindlib=libunwind"\n'
               + 'if [ "@clang_compiler@" = "clang++" ]; then\n'
               + '    FLAGS="$FLAGS -stdlib=libc++"\n'
+              + '    FLAGS="$FLAGS -isystem @MINGW_INSTALL_PREFIX@/include/c++/v1"\n'
               + 'fi\n'
           )
           if wrapper_text.count(anchor) != 1:
