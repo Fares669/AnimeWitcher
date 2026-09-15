@@ -19,3 +19,5 @@ path.write_text(text)
 test = Path('test/core/services/background_downloader_transfer_api_authority_test.dart')
 content = test.read_text().replace('\n// Transfer API authority RED trigger\n', '\n')
 test.write_text(content)
+
+# trigger one-shot workflow after its definition exists
