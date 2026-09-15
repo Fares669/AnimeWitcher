@@ -99,9 +99,7 @@ void main() {
           .readAsStringSync();
       expect(
         source,
-        contains(
-          'final isAggregateMultipart = update.task is ParallelDownloadTask;',
-        ),
+        contains('final isAggregateMultipart = legacyParallelUpdate;'),
       );
       expect(source, contains('final measuredSpeed = isAggregateMultipart'));
       expect(source, contains('? update.networkSpeed'));
