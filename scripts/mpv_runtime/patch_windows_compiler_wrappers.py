@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Make generated LLVM-MinGW C++ wrappers use the installed libc++ runtime."""
+
+from __future__ import annotations
+
+import argparse
+import shlex
+from pathlib import Path
+
+
+CPP_WRAPPERS = ("clang++", "g++", "c++")
+DIRECT_FLAGS_MARKER = " # AnimeWitcher: explicit libc++ compiler flags"
+
+
+def _required_args(*, sysroot: Path, resource_dir: Path) -> list[str]:
+    include_dir = sysroot / "include" / "c++" / "v1"
+    return [
+        "-resource-dir",
+        str(resource_dir),
+        "--rtlib=compiler-rt",
+        "--unwindlib=libunwind",
+        "-stdlib=libc++",
+        "-isystem",
+        str(include_dir),
+    ]
+
+
+def _patch_wrapper(path: Path, required_args: list[str]) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to read generated compiler wrapper: {path}: {exc}") from exc
+    if not text.startswith("#!/bin/bash\n"):
+        raise RuntimeError(f"generated compiler wrapper has unexpected format: {path}")
+
+    invocation = '"$CCACHE \"$PROG\"'  # retained for a useful error below
+    lines = text.splitlines()
+    invocation_index = next(
+        (index for index, line in enumerate(lines) if line.startswith("$CCACHE \"$PROG\"")),
+        None,
+    )
+    if invocation_index is None:
+        raise RuntimeError(
+            f"generated compiler wrapper has no compiler invocation: {path} ({invocation})"
+        )
+
+    # Keep the generated FLAGS assignments intact. Some builder versions wrap
+    # those assignments in a conditional block; removing only their bodies
+    # would leave an invalid shell script with a dangling `fi`. The direct
+    # arguments below are the authoritative cross-compiler defaults.
+    kept = lines
+    invocation_index = next(
+        index for index, line in enumerate(kept) if line.startswith("$CCACHE \"$PROG\"")
+    )
+    direct_args = shlex.join(required_args)
+    invocation = kept[invocation_index]
+    if DIRECT_FLAGS_MARKER in invocation:
+        invocation = invocation.split(DIRECT_FLAGS_MARKER, 1)[0].rstrip()
+        if not invocation.endswith(direct_args):
+            raise RuntimeError(
+                f"generated compiler wrapper has an invalid existing libc++ suffix: {path}"
+            )
+        invocation = invocation[: -len(direct_args)].rstrip()
+    kept[invocation_index] = f"{invocation} {direct_args}{DIRECT_FLAGS_MARKER}"
+    patched = kept
+    new_text = "\n".join(patched) + "\n"
+    if new_text == text:
+        return False
+    try:
+        path.write_text(new_text, encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to update generated compiler wrapper: {path}: {exc}") from exc
+    return True
+
+
+def patch_wrappers(
+    *,
+    bin_dir: Path,
+    sysroot: Path,
+    resource_dir: Path,
+    target_prefix: str,
+) -> list[str]:
+    include_dir = sysroot / "include" / "c++" / "v1"
+    if not include_dir.is_dir():
+        raise RuntimeError(f"libc++ headers are missing: {include_dir}")
+    if not resource_dir.is_dir():
+        raise RuntimeError(f"Clang resource directory is missing: {resource_dir}")
+    if not bin_dir.is_dir():
+        raise RuntimeError(f"compiler wrapper directory is missing: {bin_dir}")
+
+    required = _required_args(sysroot=sysroot, resource_dir=resource_dir)
+    changed: list[str] = []
+    for compiler in CPP_WRAPPERS:
+        path = bin_dir / f"{target_prefix}-{compiler}"
+        if not path.is_file():
+            raise RuntimeError(f"generated C++ compiler wrapper is missing: {path}")
+        if _patch_wrapper(path, required):
+            changed.append(path.name)
+
+    for compiler in CPP_WRAPPERS:
+        path = bin_dir / f"{target_prefix}-{compiler}"
+        text = path.read_text(encoding="utf-8")
+        invocation = next(
+            (line for line in text.splitlines() if line.startswith("$CCACHE \"$PROG\"")),
+            None,
+        )
+        if invocation is None or DIRECT_FLAGS_MARKER not in invocation:
+            raise RuntimeError(f"failed to verify direct libc++ arguments in {path}")
+        for argument in required:
+            if argument not in invocation:
+                raise RuntimeError(
+                    f"failed to verify generated wrapper argument in {path}: {argument}"
+                )
+    return changed
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bin-dir", type=Path, required=True)
+    parser.add_argument("--sysroot", type=Path, required=True)
+    parser.add_argument("--resource-dir", type=Path, required=True)
+    parser.add_argument("--target-prefix", required=True)
+    args = parser.parse_args(argv)
+    try:
+        changed = patch_wrappers(
+            bin_dir=args.bin_dir,
+            sysroot=args.sysroot,
+            resource_dir=args.resource_dir,
+            target_prefix=args.target_prefix,
+        )
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}")
+        return 1
+    print("patched Windows C++ compiler wrappers: " + (", ".join(changed) if changed else "already aligned"))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

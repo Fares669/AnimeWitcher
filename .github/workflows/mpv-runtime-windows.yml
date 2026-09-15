@@ -1,0 +1,687 @@
+name: mpv Windows Runtime
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/mpv-runtime-windows.yml'
+      - 'scripts/mpv_runtime/**'
+      - 'third_party/mpv/**'
+      - 'windows/**'
+      - 'MPV_UPGRADE_PLAN.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mpv-windows-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MPV_VERSION: v0.41.0
+  MPV_COMMIT: 41f6a645068483470267271e1d09966ca3b9f413
+  BUILDER_COMMIT: e99c86398bbe72fc97e716d25a4f1cc83f6fae4e
+  MESON_VERSION: 1.7.2
+  LLVM_COMMIT: 87f0227cb60147a26a1eeb4fb06e3b505e9c7261
+  HOST_CLANG_VERSION: 22.1.8
+  VULKAN_LOADER_COMMIT: bde79ad2dd832db9180c4a6eca2e84ceb12b1bb0
+  OPENSSL_COMMIT: 98acb6b02839c609ef5b837794e08d906d965335
+  HARFBUZZ_COMMIT: 4e3df1c1383481ed5717603d5dd3453a04fb16ba
+  FONTCONFIG_COMMIT: e1501970ca9a2719a7ca1a8840848ac8af213778
+  LZO_SOURCE_URL: https://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz
+
+jobs:
+  build-libmpv:
+    name: Build mpv 0.41 Windows ${{ matrix.arch }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/shinchiro/archlinux@sha256:e96fbcab07052b6173981cffca3828a07b2f469bd2c07bd43d514080dab78b9b
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            bit: x86_64
+            target: x86_64
+          - arch: arm64
+            bit: aarch64
+            target: aarch64
+
+    steps:
+      - name: Checkout AnimeWitcher
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Checkout pinned media_kit Windows builder
+        uses: actions/checkout@v5
+        with:
+          repository: media-kit/libmpv-win32-video-cmake
+          ref: ${{ env.BUILDER_COMMIT }}
+          path: _build/win-builder
+          fetch-depth: 1
+
+      - name: Configure git identity for builder patches
+        run: |
+          set -euxo pipefail
+          git config --global user.name "AnimeWitcher build"
+          git config --global user.email "build@animewitcher.invalid"
+          test "$(git config --global user.name)" = "AnimeWitcher build"
+          test "$(git config --global user.email)" = "build@animewitcher.invalid"
+
+      - name: Install pinned Meson required by builder
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --break-system-packages "meson==${MESON_VERSION}"
+          test "$(meson --version)" = "$MESON_VERSION"
+
+      - name: Pin cppwinrt Windows metadata source
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('toolchain/cppwinrt.cmake')
+          text = path.read_text()
+          old = 'https://github.com/microsoft/windows-rs/raw/master/crates/libs/bindgen/default/Windows.winmd'
+          new = 'https://raw.githubusercontent.com/microsoft/windows-rs/af7b0b6a165fde6166f00a5892f1910d4ccd6433/crates/libs/default/Windows.winmd'
+          clone_flags = '    GIT_CLONE_FLAGS "--filter=tree:0"'
+          git_tag = '    GIT_TAG 856eaff70a48d6b053c2ad3dffec15b81ca34b10'
+          if text.count(old) != 1 or text.count(clone_flags) != 1:
+              raise SystemExit('cppwinrt toolchain layout changed')
+          text = text.replace(old, new, 1)
+          text = text.replace(clone_flags, clone_flags + '\n' + git_tag, 1)
+          path.write_text(text)
+          PY
+          grep -F 'af7b0b6a165fde6166f00a5892f1910d4ccd6433/crates/libs/default/Windows.winmd' toolchain/cppwinrt.cmake
+          grep -F 'GIT_TAG 856eaff70a48d6b053c2ad3dffec15b81ca34b10' toolchain/cppwinrt.cmake
+          ! grep -F 'raw/master' toolchain/cppwinrt.cmake
+
+      - name: Pin LLVM 20.1.8 source and explicit cross defaults
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('toolchain/llvm/llvm.cmake')
+          text = path.read_text()
+          old = '    GIT_TAG release/20.x'
+          new = f'    GIT_TAG {os.environ["LLVM_COMMIT"]}'
+          if text.count(old) != 1:
+              raise SystemExit('LLVM source tag layout changed')
+          path.write_text(text.replace(old, new, 1))
+
+          wrapper = Path('toolchain/llvm/llvm-compiler.in')
+          wrapper_text = wrapper.read_text()
+          anchor = 'FLAGS="$FLAGS -Wno-unused-command-line-argument"\n'
+          explicit_defaults = (
+              anchor
+              + 'FLAGS="$FLAGS -resource-dir @CMAKE_INSTALL_PREFIX@/lib/clang/20"\n'
+              + 'FLAGS="$FLAGS --rtlib=compiler-rt --unwindlib=libunwind"\n'
+              + 'if [ "@clang_compiler@" = "clang++" ]; then\n'
+              + '    FLAGS="$FLAGS -stdlib=libc++"\n'
+              + '    FLAGS="$FLAGS -isystem @MINGW_INSTALL_PREFIX@/include/c++/v1"\n'
+              + 'fi\n'
+          )
+          if wrapper_text.count(anchor) != 1:
+              raise SystemExit('LLVM compiler wrapper layout changed')
+          wrapper.write_text(wrapper_text.replace(anchor, explicit_defaults, 1))
+          PY
+          grep -F "GIT_TAG $LLVM_COMMIT" toolchain/llvm/llvm.cmake
+          ! grep -F 'GIT_TAG release/20.x' toolchain/llvm/llvm.cmake
+          grep -F -- '--rtlib=compiler-rt --unwindlib=libunwind' toolchain/llvm/llvm-compiler.in
+          grep -F -- '-stdlib=libc++' toolchain/llvm/llvm-compiler.in
+
+      - name: Pin mpv source to exact 0.41.0 commit
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/mpv-release.cmake')
+          text = path.read_text()
+          anchor = 'ExternalProject_Add(mpv-release'
+          if anchor not in text:
+              raise SystemExit('mpv-release.cmake layout changed: ExternalProject anchor missing')
+          tail = text[text.index(anchor):]
+          commit = '41f6a645068483470267271e1d09966ca3b9f413'
+          prefix = (
+              '# AnimeWitcher reproducibility pin: exact upstream mpv v0.41.0 commit.\n'
+              f'set(LINK "https://github.com/mpv-player/mpv/archive/{commit}.tar.gz")\n\n'
+          )
+          path.write_text(prefix + tail)
+          updated = path.read_text()
+          if commit not in updated or 'releases/latest' in updated:
+              raise SystemExit('failed to replace moving mpv release source with exact commit')
+          PY
+          grep -F "$MPV_COMMIT" packages/mpv-release.cmake
+          ! grep -F 'releases/latest' packages/mpv-release.cmake
+
+      - name: Pin graphengine and zimg source mirrors
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path('packages/graphengine.cmake'): (
+                  'https://bitbucket.org/the-sekrit-twc/graphengine.git',
+                  'https://github.com/sekrit-twc/graphengine.git',
+                  '    GIT_TAG 91c6af4c795c5396d8b974f24b4d2e2ecca04e2d',
+              ),
+              Path('packages/libzimg.cmake'): (
+                  'https://bitbucket.org/the-sekrit-twc/zimg.git',
+                  'https://github.com/sekrit-twc/zimg.git',
+                  '    GIT_TAG 67e0603271c080e22c8429856dd4a8a56587e61e',
+              ),
+          }
+          clone_anchor = '    GIT_CLONE_FLAGS "--filter=tree:0"'
+          for path, (old_url, new_url, git_tag) in replacements.items():
+              text = path.read_text()
+              if text.count(old_url) != 1 or text.count(clone_anchor) != 1:
+                  raise SystemExit(f'unexpected source layout: {path}')
+              if '    GIT_TAG ' in text:
+                  raise SystemExit(f'unexpected existing GIT_TAG: {path}')
+              text = text.replace(old_url, new_url, 1)
+              text = text.replace(clone_anchor, clone_anchor + git_tag + chr(10), 1)
+              path.write_text(text)
+          PY
+          grep -F 'GIT_REPOSITORY https://github.com/sekrit-twc/graphengine.git' packages/graphengine.cmake
+          grep -F 'GIT_TAG 91c6af4c795c5396d8b974f24b4d2e2ecca04e2d' packages/graphengine.cmake
+          grep -F 'GIT_REPOSITORY https://github.com/sekrit-twc/zimg.git' packages/libzimg.cmake
+          grep -F 'GIT_TAG 67e0603271c080e22c8429856dd4a8a56587e61e' packages/libzimg.cmake
+
+      - name: Pin OpenSSL and HarfBuzz source commits
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          replacements = {
+              Path('packages/openssl.cmake'): (
+                  '    GIT_CLONE_POST_COMMAND "sparse-checkout set --no-cone /* !test"\n',
+                  '    GIT_CLONE_POST_COMMAND "sparse-checkout set --no-cone /* !test"\n'
+                  f'    GIT_TAG {os.environ["OPENSSL_COMMIT"]}\n',
+                  os.environ['OPENSSL_COMMIT'],
+              ),
+              Path('packages/harfbuzz.cmake'): (
+                  '    GIT_TAG main\n',
+                  f'    GIT_TAG {os.environ["HARFBUZZ_COMMIT"]}\n',
+                  os.environ['HARFBUZZ_COMMIT'],
+              ),
+          }
+          for path, (old, new, commit) in replacements.items():
+              text = path.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'unexpected source layout: {path}')
+              updated = text.replace(old, new, 1)
+              if updated.count(commit) != 1:
+                  raise SystemExit(f'failed to pin source commit: {path}')
+              path.write_text(updated)
+          PY
+          grep -F "GIT_TAG $OPENSSL_COMMIT" packages/openssl.cmake
+          grep -F "GIT_TAG $HARFBUZZ_COMMIT" packages/harfbuzz.cmake
+          ! grep -F 'GIT_TAG main' packages/harfbuzz.cmake
+
+      - name: Pin Fontconfig source for Windows patch
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('packages/fontconfig.cmake')
+          text = path.read_text()
+          old = '    GIT_TAG main\n'
+          new = f'    GIT_TAG {os.environ["FONTCONFIG_COMMIT"]}\n'
+          if text.count(old) != 1:
+              raise SystemExit('Fontconfig source tag layout changed')
+          updated = text.replace(old, new, 1)
+          if updated.count(os.environ['FONTCONFIG_COMMIT']) != 1:
+              raise SystemExit('failed to pin Fontconfig source commit')
+          path.write_text(updated)
+          PY
+          grep -F "GIT_TAG $FONTCONFIG_COMMIT" packages/fontconfig.cmake
+          ! grep -F 'GIT_TAG main' packages/fontconfig.cmake
+
+      - name: Pin LZO source URL for Windows builder
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('packages/lzo.cmake')
+          text = path.read_text()
+          old = 'https://fossies.org/linux/misc/lzo-2.10.tar.gz'
+          new = os.environ['LZO_SOURCE_URL']
+          if text.count(old) != 1:
+              raise SystemExit('LZO source URL layout changed')
+          updated = text.replace(old, new, 1)
+          if updated.count(new) != 1:
+              raise SystemExit('failed to replace retired LZO source URL')
+          path.write_text(updated)
+          PY
+          grep -F "$LZO_SOURCE_URL" packages/lzo.cmake
+          ! grep -F 'https://fossies.org/linux/misc/lzo-2.10.tar.gz' packages/lzo.cmake
+
+      - name: Pin Vulkan Loader source and static-linking patch
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('packages/vulkan.cmake')
+          text = path.read_text()
+          old = '    GIT_TAG main'
+          new = f'    GIT_TAG {os.environ["VULKAN_LOADER_COMMIT"]}'
+          if text.count(old) != 1:
+              raise SystemExit('Vulkan Loader source tag layout changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cp "$GITHUB_WORKSPACE/third_party/mpv/patches/windows-vulkan-loader.patch" packages/vulkan-0001-cross-compile-static-linking-hacks.patch
+          grep -F "$VULKAN_LOADER_COMMIT" packages/vulkan.cmake
+          grep -F 'Subject: [PATCH] loader: rebase static linking patch onto pinned source' packages/vulkan-0001-cross-compile-static-linking-hacks.patch
+
+      - name: Configure pinned cross toolchain
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+          TARGET_CPU: ${{ matrix.target }}
+        run: |
+          set -euxo pipefail
+          git config --global --add safe.directory "$PWD"
+          cmake \
+            -DTARGET_ARCH="${TARGET_CPU}-w64-mingw32" \
+            -DCOMPILER_TOOLCHAIN=clang \
+            -DCMAKE_INSTALL_PREFIX="$PWD/clang_root" \
+            -DMINGW_INSTALL_PREFIX="$PWD/build_${BIT}/${BIT}-w64-mingw32" \
+            -DSINGLE_SOURCE_LOCATION="$PWD/src_packages" \
+            -DRUSTUP_LOCATION="$PWD/clang_root/install_rustup" \
+            -DENABLE_CCACHE=ON \
+            -DCLANG_PACKAGES_LTO=ON \
+            -G Ninja --fresh \
+            -B "build_${BIT}" \
+            -S "$PWD"
+
+      - name: Patch pinned-source cleanup for detached commits
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set -euxo pipefail
+          python3 - \
+            "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh" \
+            "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh" \
+            "build_${BIT}/packages/graphengine-prefix/src/graphengine-stamp/reset_head.sh" \
+            "build_${BIT}/packages/libzimg-prefix/src/libzimg-stamp/reset_head.sh" \
+            "build_${BIT}/packages/openssl-prefix/src/openssl-stamp/reset_head.sh" \
+            "build_${BIT}/packages/harfbuzz-prefix/src/harfbuzz-stamp/reset_head.sh" \
+            "build_${BIT}/packages/fontconfig-prefix/src/fontconfig-stamp/reset_head.sh" \
+            "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" <<'PY'
+          import sys
+          from pathlib import Path
+
+          for raw in sys.argv[1:]:
+              path = Path(raw)
+              if not path.is_file():
+                  raise SystemExit(f'missing cleanup script: {path}')
+              text = path.read_text()
+              old = '@{u}'
+              if old in text:
+                  path.write_text(text.replace(old, 'HEAD'))
+          PY
+          for reset_script in \
+            "build_${BIT}/toolchain/llvm-prefix/src/llvm-stamp/reset_head.sh" \
+            "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh" \
+            "build_${BIT}/packages/graphengine-prefix/src/graphengine-stamp/reset_head.sh" \
+            "build_${BIT}/packages/libzimg-prefix/src/libzimg-stamp/reset_head.sh" \
+            "build_${BIT}/packages/openssl-prefix/src/openssl-stamp/reset_head.sh" \
+            "build_${BIT}/packages/harfbuzz-prefix/src/harfbuzz-stamp/reset_head.sh" \
+            "build_${BIT}/packages/fontconfig-prefix/src/fontconfig-stamp/reset_head.sh" \
+            "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"; do
+            ! grep -F '@{u}' "$reset_script"
+            grep -F 'reset --hard' "$reset_script"
+          done
+      - name: Reuse pinned container LLVM host compiler
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+          TARGET_CPU: ${{ matrix.target }}
+        run: |
+          set -euxo pipefail
+          clang --version | tee /tmp/host-clang-version.txt
+          grep -F "clang version ${HOST_CLANG_VERSION}" /tmp/host-clang-version.txt
+
+          mkdir -p clang_root/bin
+          for tool in clang clang++ ld.lld llvm-ar llvm-ranlib llvm-objcopy llvm-size llvm-strings llvm-nm llvm-readelf llvm-rc llvm-addr2line; do
+            source_path="$(command -v "$tool")"
+            test -x "$source_path"
+            ln -sf "$source_path" "clang_root/bin/$tool"
+          done
+
+          # The exact LLVM 20.1.8 source is still required by compiler-rt/libc++.
+          # Download it without recompiling a second host Clang/LLVM toolchain.
+          ninja -C "build_${BIT}" llvm-download
+
+          # The reused host Clang 22 keeps its own resource directory. The
+          # pinned LLVM runtime build installs compiler-rt under the builder's
+          # clang 20 layout, so expose only the host builtin headers in that
+          # local layout and let the generated target wrappers select it.
+          host_resource_dir="$(clang -print-resource-dir)"
+          test -d "$host_resource_dir/include"
+          mkdir -p "$PWD/clang_root/lib/clang/20"
+          ln -sfn "$host_resource_dir/include" "$PWD/clang_root/lib/clang/20/include"
+          test -e "$PWD/clang_root/lib/clang/20/include"
+
+          ninja -C "build_${BIT}" llvm-wrapper
+          test -d src_packages/llvm/libunwind
+
+          # llvm-rc finds the target clang by argv[0]. Keep the generated windres
+          # entrypoint, but make the preprocessor explicit so it receives the
+          # MinGW sysroot headers without leaking them into host tools.
+          windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres"
+          test -L "$windres"
+          unlink "$windres"
+          cat > "$windres" <<EOF
+          #!/bin/bash
+          real_windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres-22"
+          real_preprocessor="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres-preprocessor"
+          printf '%s\n' '#!/bin/bash' 'exec "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang" -E -xc -DRC_INVOKED "\$@"' > "\$real_preprocessor"
+          chmod +x "\$real_preprocessor"
+          ln -sf "$PWD/clang_root/bin/llvm-rc" "\$real_windres"
+          exec "\$real_windres" --preprocessor "\$real_preprocessor" "\$@"
+          EOF
+          chmod +x "$windres"
+          test -x "$windres"
+
+      - name: Patch LLVM MinGW libc++ compatibility
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src_packages/llvm/libunwind/src/Unwind-seh.cpp')
+          text = path.read_text()
+          old = 'return 4 /* ExceptionExecuteHandler in mingw */;'
+          new = 'return static_cast<EXCEPTION_DISPOSITION>(4);'
+          if text.count(old) != 2:
+              raise SystemExit('unexpected LLVM Unwind-seh.cpp compatibility layout')
+          path.write_text(text.replace(old, new))
+          PY
+          grep -F 'return static_cast<EXCEPTION_DISPOSITION>(4);' src_packages/llvm/libunwind/src/Unwind-seh.cpp
+          test "$(grep -Fc 'return static_cast<EXCEPTION_DISPOSITION>(4);' src_packages/llvm/libunwind/src/Unwind-seh.cpp)" = 2
+
+      - name: Bootstrap pinned LLVM MinGW runtime libraries
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set -euxo pipefail
+          ninja -C "build_${BIT}" rustup
+          ninja -C "build_${BIT}" llvm-clang
+          test -x "$PWD/clang_root/bin/clang"
+          test -x "$PWD/clang_root/bin/${{ matrix.target }}-w64-mingw32-gcc"
+
+
+      - name: Patch generated cross-compiler wrappers for libc++
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+          TARGET_CPU: ${{ matrix.target }}
+        run: |
+          set -euxo pipefail
+          python3 "$GITHUB_WORKSPACE/scripts/mpv_runtime/patch_windows_compiler_wrappers.py" \
+            --bin-dir "$PWD/clang_root/bin" \
+            --sysroot "$PWD/build_${BIT}/${BIT}-w64-mingw32" \
+            --resource-dir "$PWD/clang_root/lib/clang/20" \
+            --target-prefix "${TARGET_CPU}-w64-mingw32"
+          for compiler in clang++ g++ c++; do
+            wrapper="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-${compiler}"
+            grep -F -- '-stdlib=libc++' "$wrapper"
+            grep -F -- '-isystem ' "$wrapper"
+            grep -F -- '-resource-dir ' "$wrapper"
+            grep -F -- '# AnimeWitcher: explicit libc++ compiler flags' "$wrapper"
+          done
+
+      - name: Patch libvpl MinGW compatibility
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set -euxo pipefail
+          ninja -C "build_${BIT}" libvpl-download
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src_packages/libvpl/libvpl/src/windows/mfx_dispatcher_defs.h')
+          text = path.read_text()
+          old = '#if _MSC_VER < 1400\n'
+          new = '#if defined(_MSC_VER) && _MSC_VER < 1400\n'
+          if text.count(old) != 1:
+              raise SystemExit('libvpl dispatcher compatibility layout changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          grep -F '#if defined(_MSC_VER) && _MSC_VER < 1400' src_packages/libvpl/libvpl/src/windows/mfx_dispatcher_defs.h
+          ! grep -F '#if _MSC_VER < 1400' src_packages/libvpl/libvpl/src/windows/mfx_dispatcher_defs.h
+
+      - name: Build exact mpv 0.41 libmpv
+        working-directory: _build/win-builder
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set -euxo pipefail
+          ninja -C "build_${BIT}" mpv-release
+
+      - name: Verify and stage libmpv runtime
+        env:
+          BIT: ${{ matrix.bit }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          dll="$(find _build/win-builder/build_${BIT} -type f -iname 'libmpv-2.dll' -print -quit)"
+          if [[ -z "$dll" ]]; then
+            echo 'Pinned builder completed but libmpv-2.dll was not produced.' >&2
+            find "_build/win-builder/build_${BIT}" -maxdepth 6 -type f -iname '*mpv*' -print >&2 || true
+            exit 2
+          fi
+
+          out="$RUNNER_TEMP/mpv-windows-${ARCH}"
+          mkdir -p "$out/include/mpv"
+          cp "$dll" "$out/libmpv-2.dll"
+          cp third_party/mpv/v0.41.0/client.h "$out/include/mpv/client.h"
+          cp third_party/mpv/v0.41.0/render.h "$out/include/mpv/render.h"
+          cp third_party/mpv/v0.41.0/render_gl.h "$out/include/mpv/render_gl.h"
+          cp third_party/mpv/v0.41.0/stream_cb.h "$out/include/mpv/stream_cb.h"
+
+          python3 - "$GITHUB_WORKSPACE" "$ARCH" "$out/libmpv-2.dll" <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, sys.argv[1])
+          from scripts.mpv_runtime.verify_windows_runtime import verify_dll
+          errors = verify_dll(sys.argv[2], Path(sys.argv[3]))
+          if errors:
+              raise SystemExit('\n'.join(errors))
+          print(f"verified {sys.argv[2]} libmpv: {sys.argv[3]}")
+          PY
+
+          sha256sum "$out/libmpv-2.dll" | tee "$out/libmpv-2.dll.sha256"
+          printf '%s\n' \
+            "mpv=$MPV_VERSION" \
+            "mpv_commit=$MPV_COMMIT" \
+            "builder_commit=$BUILDER_COMMIT" \
+            "meson=$MESON_VERSION" \
+            "llvm_source_commit=$LLVM_COMMIT" \
+            "host_clang=$HOST_CLANG_VERSION" \
+            "arch=$ARCH" \
+            "gpl=false" > "$out/provenance.txt"
+
+      - name: Collect builder logs
+        if: always()
+        env:
+          BIT: ${{ matrix.bit }}
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/mpv-windows-${{ matrix.arch }}-logs"
+          find "_build/win-builder/build_${BIT}" -type f \( -name '*.log' -o -path '*/ffbuild/config.log' \) \
+            -exec cp --parents '{}' "$RUNNER_TEMP/mpv-windows-${{ matrix.arch }}-logs"/ \; 2>/dev/null
+
+      - name: Upload verified runtime
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv-v0.41.0-windows-${{ matrix.arch }}
+          path: ${{ runner.temp }}/mpv-windows-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv-v0.41.0-windows-${{ matrix.arch }}-logs
+          path: ${{ runner.temp }}/mpv-windows-${{ matrix.arch }}-logs
+          if-no-files-found: warn
+          retention-days: 3
+
+  verify-app-integration:
+    name: Verify app with mpv 0.41 Windows
+    needs: [build-libmpv, publish-runtime]
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/mpv-0.41-upgrade' &&
+      github.actor == github.repository_owner
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout AnimeWitcher
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Download built x64 runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: mpv-v0.41.0-windows-x64
+          path: runtime
+
+      - name: Stage and verify built x64 runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          dll="$(find runtime -type f -name 'libmpv-2.dll' -print -quit)"
+          test -n "$dll"
+          grep -F 'mpv=v0.41.0' "$(dirname "$dll")/provenance.txt"
+          mkdir -p third_party/mpv/shinchiro
+          cp "$dll" third_party/mpv/shinchiro/libmpv-2.dll
+          printf '%s\n' "ANIMEWITCHER_WINDOWS_MPV_DLL=$PWD/third_party/mpv/shinchiro/libmpv-2.dll" >> "$GITHUB_ENV"
+          python3 - "$PWD/third_party/mpv/shinchiro/libmpv-2.dll" <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path.cwd()))
+          from scripts.mpv_runtime.verify_windows_runtime import verify_dll
+
+          errors = verify_dll('x64', Path(sys.argv[1]))
+          if errors:
+              raise SystemExit('\\n'.join(errors))
+          print(f'verified built Windows libmpv: {sys.argv[1]}')
+          PY
+
+      - name: Build Windows application with pinned runtime
+        run: |
+          flutter build windows --release \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Verify packaged Windows runtime
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import sys
+
+          sys.path.insert(0, str(Path.cwd()))
+          from scripts.mpv_runtime.verify_windows_runtime import verify_dll
+
+          dll = Path('build/windows/x64/runner/Release/libmpv-2.dll')
+          errors = verify_dll('x64', dll)
+          if errors:
+              raise SystemExit('\\n'.join(errors))
+          print(f'verified packaged Windows libmpv: {dll}')
+          PY
+
+  publish-runtime:
+    name: Publish verified Windows x64 runtime candidate
+    needs: build-libmpv
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/mpv-0.41-upgrade' &&
+      github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download verified x64 candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: mpv-v0.41.0-windows-x64
+          path: candidate
+
+      - name: Publish immutable prerelease DLL
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euxo pipefail
+          tag="mpv-v0.41.0-windows-animewitcher-${HEAD_SHA:0:12}"
+          dll="$(find candidate -type f -name 'libmpv-2.dll' -print -quit)"
+          checksum="$(find candidate -type f -name 'libmpv-2.dll.sha256' -print -quit)"
+          test -n "$dll"
+          test -n "$checksum"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$HEAD_SHA" \
+              --prerelease \
+              --title "mpv v0.41.0 Windows runtime ${HEAD_SHA:0:12}" \
+              --notes "Verified AnimeWitcher Windows x64 libmpv v0.41.0 runtime. Exact source pins are recorded by the mpv Windows workflow."
+          fi
+          gh release upload "$tag" \
+            "$dll#libmpv-2.dll" \
+            "$checksum#libmpv-2.dll.sha256" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,url

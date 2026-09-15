@@ -68,6 +68,10 @@ jobs:
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
 
+      - name: Prepare and verify pinned Android runtime
+        run: |
+          python3 scripts/mpv_runtime/prepare_android_runtime.py prepare
+          python3 scripts/mpv_runtime/prepare_android_runtime.py verify
       - name: Decode Keystore
         if: env.ANDROID_KEYSTORE_BASE64 != ''
         run: |
@@ -124,8 +128,11 @@ jobs:
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
 
-      - name: Prepare media_kit iOS Headers
-        run: bash scripts/prepare_media_kit_ios_headers.sh
+      - name: Prepare pinned iOS runtime and matching headers
+        run: |
+          bash scripts/mpv_runtime/prepare_apple_runtime.sh ios
+          bash scripts/prepare_media_kit_ios_headers.sh ios
+          bash scripts/mpv_runtime/verify_apple_runtime.sh ios
 
       - name: Generate dart-defines file
         shell: bash
@@ -192,6 +199,11 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
+      - name: Prepare pinned macOS runtime and matching headers
+        run: |
+          bash scripts/mpv_runtime/prepare_apple_runtime.sh macos
+          bash scripts/prepare_media_kit_ios_headers.sh macos
+          bash scripts/mpv_runtime/verify_apple_runtime.sh macos
       - name: Generate dart-defines file
         shell: bash
         run: |
@@ -288,32 +300,10 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Download libmpv-2.dll
-        shell: pwsh
+      - name: Prepare and verify pinned Windows runtime
         run: |
-          choco install 7zip -y --no-progress
-          $assetPattern = '^mpv-dev-x86_64-(?!v\d+-)\d{8}-git-[a-f0-9]+\.7z$'
-
-          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest'
-          $asset = $release.assets | Where-Object { $_.name -match $assetPattern } | Select-Object -First 1
-          if (-not $asset) {
-            throw "Could not find matching mpv asset for pattern: $assetPattern"
-          }
-
-          $archivePath = Join-Path $env:RUNNER_TEMP 'mpv-dev.7z'
-          $extractDir = Join-Path $env:RUNNER_TEMP 'mpv-dev-extract'
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archivePath
-          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
-          & 7z x $archivePath "-o$extractDir" -y | Out-Null
-
-          $dll = Get-ChildItem -Path $extractDir -Filter 'libmpv-2.dll' -Recurse | Select-Object -First 1
-          if (-not $dll) {
-            throw 'libmpv-2.dll was not found in extracted mpv archive'
-          }
-
-          "ANIMEWITCHER_WINDOWS_MPV_DLL=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Using downloaded libmpv: $($dll.FullName)"
-
+          python scripts/mpv_runtime/prepare_windows_runtime.py prepare
+          python scripts/mpv_runtime/prepare_windows_runtime.py verify
       - name: Generate dart-defines file
         shell: bash
         run: |

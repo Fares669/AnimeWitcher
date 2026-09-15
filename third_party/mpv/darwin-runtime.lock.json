@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "target": {
+    "mpv_tag": "v0.41.0",
+    "mpv_commit": "41f6a645068483470267271e1d09966ca3b9f413"
+  },
+  "builder": {
+    "repository": "media-kit/libmpv-darwin-build",
+    "commit": "b4e3ce98826cd4a28f6121b29f56ea203346e6e3"
+  },
+  "source_pins": {
+    "ffmpeg": "d60c1d72c1299e683c1d2f86cb4332b4d88348a5",
+    "ffmpeg_release_marker": "8.0.git",
+    "libplacebo": {
+      "repository": "https://github.com/haasn/libplacebo.git",
+      "version": "6.338.2",
+      "tag": "v6.338.2",
+      "commit": "64c1954570f1cd57f8570a57e51fb0249b57bb90"
+    }
+  },
+  "build_policy": {
+    "variant": "video",
+    "flavor": "default",
+    "mpv_gpl": false,
+    "preserve_render_api": true,
+    "libplacebo_required_for_core_runtime": true,
+    "gpu_next_deferred_to_task_7": true
+  },
+  "targets": {
+    "ios": "mk-out-archive-xcframeworks-ios-universal-video-default",
+    "macos": "mk-out-archive-xcframeworks-macos-universal-video-default"
+  },
+  "release": {
+    "tag": "mpv-v0.41.0-animewitcher-60833ea2a7db",
+    "source_head": "60833ea2a7db7a76fe841bcf26e34716a183b2d0"
+  },
+  "artifacts": {
+    "ios": {
+      "overlay_version": "v0.41.0-animewitcher.60833ea2a7db",
+      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-animewitcher-60833ea2a7db/libmpv-xcframeworks_v0.41.0-animewitcher_ios-universal-video-default.tar.gz",
+      "sha256": "88fc14516fdb87bfa27b14916043388630cfd6a8d9855d8e42e31c78003c0fd5"
+    },
+    "macos": {
+      "overlay_version": "v0.41.0-animewitcher.60833ea2a7db",
+      "url": "https://github.com/Fares669/AnimeWitcher/releases/download/mpv-v0.41.0-animewitcher-60833ea2a7db/libmpv-xcframeworks_v0.41.0-animewitcher_macos-universal-video-default.tar.gz",
+      "sha256": "613284194da74cb44600270fa238f87a52c1a37d5bad7def6b7912b10fc5b18f"
+    }
+  }
+}

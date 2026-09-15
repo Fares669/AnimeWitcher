@@ -1,0 +1,62 @@
+{
+  "target": {
+    "tag": "v0.41.0",
+    "headers": {
+      "client.h": "85cff63bd5d20797ca622834fd904d506d0d4fd8",
+      "render.h": "99aadeb5d837dd47a8a170ae55672cf46ec5f4c4",
+      "render_gl.h": "aa2719d5c4ebfa1ecaee469b563d138e10b1df4e",
+      "stream_cb.h": "9ae6f31a16847d9a695886a78bc1b7a2c9942a27"
+    }
+  },
+  "renderer": {
+    "primary": "gpu-next",
+    "fallback": "gpu"
+  },
+  "media_kit": {
+    "media_kit": "1.2.6",
+    "media_kit_video": "2.0.1",
+    "media_kit_libs_video": "1.0.7"
+  },
+  "platforms": {
+    "ios": {
+      "runtime_source": "libmpv-darwin-build",
+      "runtime_ref": "v0.6.0",
+      "actual_mpv": "v0.36.0",
+      "target_mpv": "v0.41.0",
+      "status": "pending",
+      "replacement_strategy": "runtime-overlay",
+      "replacement_boundary": "media_kit_libs_ios_video/ios/Makefile XCFramework archive URL + SHA256",
+      "provenance_url": "https://github.com/media-kit/media-kit/blob/b7a751986a2cce7e229190651b901be67b2ec62d/libs/ios/media_kit_libs_ios_video/ios/Makefile"
+    },
+    "macos": {
+      "runtime_source": "libmpv-darwin-build",
+      "runtime_ref": "v0.6.0",
+      "actual_mpv": "v0.36.0",
+      "target_mpv": "v0.41.0",
+      "status": "pending",
+      "replacement_strategy": "runtime-overlay",
+      "replacement_boundary": "media_kit_libs_macos_video/macos/Makefile XCFramework archive URL + SHA256",
+      "provenance_url": "https://github.com/media-kit/media-kit/blob/b7a751986a2cce7e229190651b901be67b2ec62d/libs/macos/media_kit_libs_macos_video/macos/Makefile"
+    },
+    "android": {
+      "runtime_source": "libmpv-android-video-build",
+      "runtime_ref": "v1.1.7",
+      "actual_mpv": "78d43740f52db817d98bcf24fb30a76ab6fa13ff",
+      "target_mpv": "v0.41.0",
+      "status": "pending",
+      "replacement_strategy": "runtime-overlay",
+      "replacement_boundary": "media_kit_libs_android_video/android/build.gradle filesToDownload JAR set + hashes",
+      "provenance_url": "https://github.com/media-kit/media-kit/blob/c533e446755f51cf53c7e57aea873f2aa5355f81/libs/android/media_kit_libs_android_video/android/build.gradle"
+    },
+    "windows": {
+      "runtime_source": "media_kit_libs_windows_video",
+      "runtime_ref": "2023-09-24",
+      "actual_mpv": "652a1dd90711839acdccc08004056d25514ef2d8",
+      "target_mpv": "v0.41.0",
+      "status": "pending",
+      "replacement_strategy": "runtime-overlay",
+      "replacement_boundary": "media_kit_libs_windows_video/windows/CMakeLists.txt LIBMPV archive URL + MD5",
+      "provenance_url": "https://github.com/media-kit/media-kit/blob/b7a751986a2cce7e229190651b901be67b2ec62d/libs/windows/media_kit_libs_windows_video/windows/CMakeLists.txt"
+    }
+  }
+}
