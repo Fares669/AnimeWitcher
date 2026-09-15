@@ -35,7 +35,7 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         self.assertIn("llvm-ranlib", workflow)
         self.assertIn('ninja -C "build_${BIT}" llvm-wrapper', workflow)
         self.assertIn('windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres"', workflow)
-        self.assertIn('--preprocessor "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang"', workflow)
+        self.assertIn('exec "$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-clang" -E -xc -DRC_INVOKED', workflow)
         self.assertIn('real_windres="$PWD/clang_root/bin/${TARGET_CPU}-w64-mingw32-windres-22"', workflow)
         self.assertIn('ln -sf "$PWD/clang_root/bin/llvm-rc" "\\$real_windres"', workflow)
         self.assertIn('exec "\\$real_windres"', workflow)
