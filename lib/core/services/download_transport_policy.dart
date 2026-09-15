@@ -1,6 +1,8 @@
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart' show TargetPlatform;
 
+import 'background_downloader_transport.dart'
+    show animeDownloadTransferHints, shouldUseUserInitiatedDownloadHint;
 import 'download_parallel.dart';
 
 /// Transport backend selected for one logical episode.
@@ -12,6 +14,55 @@ enum DownloadExecutionBackend {
   pluginSingle,
   pluginParallel,
   legacyParallel,
+}
+
+/// Android-specific executor and scheduler hints for one logical episode.
+///
+/// The backend decision remains single-writer safe, while UIDT priority is
+/// independently gated by the notification preconditions required on Android.
+class AndroidDownloadExecutionPolicy {
+  const AndroidDownloadExecutionPolicy({
+    required this.backend,
+    required this.transferHints,
+  });
+
+  final DownloadExecutionBackend backend;
+  final Set<TransferHint> transferHints;
+}
+
+/// Plans Android execution without performing platform I/O.
+///
+/// A denied/missing notification permission never requests
+/// [TransferHint.userInitiated]; the task remains pause/resume capable and may
+/// still carry [TransferHint.largeFile] so background_downloader can use its
+/// normal resumable WorkManager path. Multipart selection stays behind the
+/// independently proven plugin-parallel capability gate, and any durable legacy
+/// multipart evidence wins over that gate.
+AndroidDownloadExecutionPolicy planAndroidDownloadExecutionPolicy({
+  required int connections,
+  required bool pluginParallelAccepted,
+  required bool legacySessionExists,
+  required bool notificationsConfigured,
+  required bool notificationPermissionGranted,
+  required int expectedBytes,
+}) {
+  final backend = selectDownloadExecutionBackend(
+    connections: connections,
+    pluginParallelAccepted: pluginParallelAccepted,
+    legacySessionExists: legacySessionExists,
+  );
+  final useUserInitiated = shouldUseUserInitiatedDownloadHint(
+    isAndroid: true,
+    notificationsConfigured: notificationsConfigured,
+    notificationPermissionGranted: notificationPermissionGranted,
+  );
+  return AndroidDownloadExecutionPolicy(
+    backend: backend,
+    transferHints: animeDownloadTransferHints(
+      expectedBytes: expectedBytes,
+      useUserInitiated: useUserInitiated,
+    ),
+  );
 }
 
 /// Capability table for fresh plugin-owned parallel downloads.
