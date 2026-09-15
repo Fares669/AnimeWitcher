@@ -27,14 +27,17 @@ env:
   MPV_COMMIT: 41f6a645068483470267271e1d09966ca3b9f413
   BUILDER_COMMIT: e99c86398bbe72fc97e716d25a4f1cc83f6fae4e
   MESON_VERSION: 1.7.2
+  LLVM_COMMIT: 87f0227cb60147a26a1eeb4fb06e3b505e9c7261
+  HOST_CLANG_VERSION: 22.1.8
   VULKAN_LOADER_COMMIT: bde79ad2dd832db9180c4a6eca2e84ceb12b1bb0
 
 jobs:
   build-libmpv:
     name: Build mpv 0.41 Windows ${{ matrix.arch }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     container:
-      image: ghcr.io/shinchiro/archlinux:latest
+      image: ghcr.io/shinchiro/archlinux@sha256:e96fbcab07052b6173981cffca3828a07b2f469bd2c07bd43d514080dab78b9b
     strategy:
       fail-fast: false
       matrix:
@@ -95,23 +98,40 @@ jobs:
           grep -F 'GIT_TAG 856eaff70a48d6b053c2ad3dffec15b81ca34b10' toolchain/cppwinrt.cmake
           ! grep -F 'raw/master' toolchain/cppwinrt.cmake
 
-      - name: Pin LLVM release source
+      - name: Pin LLVM 20.1.8 source and explicit cross defaults
         working-directory: _build/win-builder
         run: |
           set -euxo pipefail
           python3 - <<'PY'
+          import os
           from pathlib import Path
 
           path = Path('toolchain/llvm/llvm.cmake')
           text = path.read_text()
           old = '    GIT_TAG release/20.x'
-          new = '    GIT_TAG 87f0227cb60147a26a1eeb4fb06e3b505e9c7261'
+          new = f'    GIT_TAG {os.environ["LLVM_COMMIT"]}'
           if text.count(old) != 1:
               raise SystemExit('LLVM source tag layout changed')
           path.write_text(text.replace(old, new, 1))
+
+          wrapper = Path('toolchain/llvm/llvm-compiler.in')
+          wrapper_text = wrapper.read_text()
+          anchor = 'FLAGS="$FLAGS -Wno-unused-command-line-argument"\n'
+          explicit_defaults = (
+              anchor
+              + 'FLAGS="$FLAGS --rtlib=compiler-rt --unwindlib=libunwind"\n'
+              + 'if [ "@clang_compiler@" = "clang++" ]; then\n'
+              + '    FLAGS="$FLAGS -stdlib=libc++"\n'
+              + 'fi\n'
+          )
+          if wrapper_text.count(anchor) != 1:
+              raise SystemExit('LLVM compiler wrapper layout changed')
+          wrapper.write_text(wrapper_text.replace(anchor, explicit_defaults, 1))
           PY
-          grep -F 'GIT_TAG 87f0227cb60147a26a1eeb4fb06e3b505e9c7261' toolchain/llvm/llvm.cmake
+          grep -F "GIT_TAG $LLVM_COMMIT" toolchain/llvm/llvm.cmake
           ! grep -F 'GIT_TAG release/20.x' toolchain/llvm/llvm.cmake
+          grep -F -- '--rtlib=compiler-rt --unwindlib=libunwind' toolchain/llvm/llvm-compiler.in
+          grep -F -- '-stdlib=libc++' toolchain/llvm/llvm-compiler.in
 
       - name: Pin mpv source to exact 0.41.0 commit
         working-directory: _build/win-builder
@@ -202,13 +222,26 @@ jobs:
           ! grep -F '@{u}' "$reset_script"
           grep -F 'reset --hard HEAD' "$reset_script"
 
-      - name: Bootstrap pinned LLVM host compiler
+      - name: Reuse pinned container LLVM host compiler
         working-directory: _build/win-builder
         env:
           BIT: ${{ matrix.bit }}
         run: |
           set -euxo pipefail
-          ninja -C "build_${BIT}" llvm
+          clang --version | tee /tmp/host-clang-version.txt
+          grep -F "clang version ${HOST_CLANG_VERSION}" /tmp/host-clang-version.txt
+
+          mkdir -p clang_root/bin
+          for tool in clang clang++ ld.lld llvm-ar llvm-objcopy llvm-size llvm-strings llvm-nm llvm-readelf llvm-rc llvm-addr2line; do
+            source_path="$(command -v "$tool")"
+            test -x "$source_path"
+            ln -sf "$source_path" "clang_root/bin/$tool"
+          done
+
+          # The exact LLVM 20.1.8 source is still required by compiler-rt/libc++.
+          # Download it without recompiling a second host Clang/LLVM toolchain.
+          ninja -C "build_${BIT}" llvm-download
+          test -d src_packages/llvm/libunwind
 
       - name: Patch LLVM MinGW libc++ compatibility
         working-directory: _build/win-builder
@@ -238,6 +271,7 @@ jobs:
           ninja -C "build_${BIT}" llvm-clang
           test -x "$PWD/clang_root/bin/clang"
           test -x "$PWD/clang_root/bin/${{ matrix.target }}-w64-mingw32-gcc"
+
       - name: Build exact mpv 0.41 libmpv
         working-directory: _build/win-builder
         env:
@@ -284,6 +318,8 @@ jobs:
             "mpv_commit=$MPV_COMMIT" \
             "builder_commit=$BUILDER_COMMIT" \
             "meson=$MESON_VERSION" \
+            "llvm_source_commit=$LLVM_COMMIT" \
+            "host_clang=$HOST_CLANG_VERSION" \
             "arch=$ARCH" \
             "gpl=false" > "$out/provenance.txt"
 
@@ -314,7 +350,6 @@ jobs:
           path: ${{ runner.temp }}/mpv-windows-${{ matrix.arch }}-logs
           if-no-files-found: warn
           retention-days: 3
-
 
   verify-app-integration:
     name: Verify app with mpv 0.41 Windows
@@ -372,6 +407,7 @@ jobs:
               raise SystemExit('\\n'.join(errors))
           print(f'verified built Windows libmpv: {sys.argv[1]}')
           PY
+
       - name: Build Windows application with pinned runtime
         run: |
           flutter build windows --release \
