@@ -1,0 +1,37 @@
+name: Task 17 V7 Compatibility
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: read
+
+jobs:
+  v7-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Run v7 compatibility and JobStore suite
+        run: |
+          flutter test \
+            test/core/services/download_job_store_v7_compat_test.dart \
+            test/core/services/download_job_store_test.dart \
+            test/core/services/download_job_state_authority_test.dart \
+            test/core/services/download_job_logical_identity_test.dart \
+            test/core/services/download_recovery_snapshot_test.dart
+      - name: Analyze JobStore compatibility files
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_job_store.dart lib/core/services/download_job_state.dart test/core/services/download_job_store_v7_compat_test.dart
