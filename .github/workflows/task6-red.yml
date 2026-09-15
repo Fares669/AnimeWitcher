@@ -1,4 +1,4 @@
-name: Task 10 iOS Ownership Recheck
+name: Task 12 Legacy Migration RED
 
 on:
   push:
@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  ios-ownership:
-    runs-on: macos-26
+  legacy-migration-red:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
@@ -25,10 +25,5 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run iOS ownership contracts
-        run: |
-          flutter test \
-            test/core/services/ios_multipart_ownership_handoff_source_test.dart \
-            test/core/services/download_native_claim_lifecycle_source_test.dart
-      - name: Build iOS release without signing
-        run: flutter build ios --release --no-codesign
+      - name: Run Task 12 RED
+        run: flutter test test/core/services/download_legacy_migration_policy_test.dart
