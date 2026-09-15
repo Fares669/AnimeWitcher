@@ -285,7 +285,7 @@ jobs:
             "build_${BIT}/packages/libzimg-prefix/src/libzimg-stamp/reset_head.sh" \
             "build_${BIT}/packages/openssl-prefix/src/openssl-stamp/reset_head.sh" \
             "build_${BIT}/packages/harfbuzz-prefix/src/harfbuzz-stamp/reset_head.sh" \
-            "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" \
+            "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" <<'PY'
           import sys
           from pathlib import Path
 
