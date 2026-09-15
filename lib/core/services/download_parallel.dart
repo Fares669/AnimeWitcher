@@ -190,7 +190,7 @@ DownloadTask buildAdaptiveDownloadTask({
     metaData: template.metaData,
     creationTime: template.creationTime,
     options: template.options,
-    transferHints: Set<TransferHint>.from(template.transferHints),
+    transferHints: template.transferHints,
     notificationConfig: template.notificationConfig,
     stallTimeout: template.stallTimeout,
     chunks: count,
