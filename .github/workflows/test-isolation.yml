@@ -1,0 +1,39 @@
+name: Test Isolation
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: read
+
+jobs:
+  isolate:
+    name: isolate ${{ matrix.path }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        path:
+          - test/core
+          - test/features
+          - test/native
+          - test/shared
+          - test/download_diagnostic_log_test.dart
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Run isolated tests
+        run: flutter test "${{ matrix.path }}" --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
