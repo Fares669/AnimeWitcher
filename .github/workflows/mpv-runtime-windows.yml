@@ -54,6 +54,8 @@ jobs:
     steps:
       - name: Checkout AnimeWitcher
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Checkout pinned media_kit Windows builder
         uses: actions/checkout@v5
@@ -482,6 +484,8 @@ jobs:
     steps:
       - name: Checkout AnimeWitcher
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2

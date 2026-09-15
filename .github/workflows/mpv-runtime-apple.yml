@@ -37,6 +37,8 @@ jobs:
     steps:
       - name: Checkout AnimeWitcher
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Checkout pinned media_kit Darwin builder
         uses: actions/checkout@v6
@@ -161,6 +163,8 @@ jobs:
     steps:
       - name: Checkout AnimeWitcher
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Select Latest Xcode
         uses: maxim-lobanov/setup-xcode@v1
