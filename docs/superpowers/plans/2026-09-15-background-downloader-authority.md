@@ -830,7 +830,7 @@ git commit -m "feat(downloads): preserve legacy multipart sessions during migrat
 
 Every invariant from the design spec must have at least one automated test. Plugin-path cases include kill/relaunch, pause/resume, 403 refresh, cancel/delete, low disk, and multiple queued episodes.
 
-- [ ] **Step 2: Run full Flutter verification**
+- [x] **Step 2: Run full Flutter verification**
 
 ```bash
 flutter pub get
@@ -838,6 +838,8 @@ flutter analyze --no-fatal-warnings --no-fatal-infos
 flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 ```
 Expected: 0 analyzer errors and 0 test failures.
+
+Evidence: PR CI run `34991783176` passed generation, analyzer, full Flutter tests, and native Swift logger typecheck on head `2a8d4209bcd0e09224ec4fc154db94eac2d269c7`.
 
 - [x] **Step 3: Run platform builds**
 
@@ -1021,15 +1023,17 @@ git commit -m "refactor(ios): remove duplicate multipart scheduler"
 - Increment `kDownloadJobSchemaVersion` only with a tested migration.
 - Keep logical id, task identity/adoption information, user pause/delete intent, queue intent, resource fingerprint, refresh linkage, and migration metadata.
 
-- [ ] **Step 1: Write migration RED tests from schema v7 rows**
+- [x] **Step 1: Write migration RED tests from schema v7 rows**
 
 Ensure rows produced by PR #231 decode without losing user pause/delete, logical identity or resource fingerprint.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_job_store_test.dart
 ```
+
+Evidence: schema-v7 compatibility and JobStore/state/logical-identity/recovery verification passed in focused run `34988261570`; the compatibility test preserves pause/delete intent, logical identity, and resource fingerprint.
 
 - [ ] **Step 3: Remove transport-owned fields only after all callers are gone**
 
@@ -1065,7 +1069,7 @@ git commit -m "refactor(downloads): reduce job store to logical intent"
 **Interfaces:**
 - No new interface. This is the removal/verification gate.
 
-- [ ] **Step 1: Prove no normal-path references remain**
+- [x] **Step 1: Prove no normal-path references remain**
 
 Search for:
 
@@ -1075,7 +1079,9 @@ git grep -n "PersistentParallelDownload\|kNativeMultipartClaimOfferLease\|downlo
 
 Every surviving reference must be either explicit legacy migration/exceptional refreshed-source recovery or removed.
 
-- [ ] **Step 2: Run full analyzer/test suite fresh**
+Audit evidence: `_rangeTransfers.start(...)` survives only in verified partial/source recovery; `downloadConnectionRampBatches(...)` and the remaining iOS multipart claim state are confined to the still-active legacy fallback and therefore are not removable until real-device plugin-parallel acceptance closes that fallback.
+
+- [x] **Step 2: Run full analyzer/test suite fresh**
 
 ```bash
 flutter pub get
@@ -1083,6 +1089,8 @@ flutter analyze --no-fatal-warnings --no-fatal-infos
 flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 ```
 Expected: 0 failures.
+
+Evidence: run `34991783176` completed with 0 analyzer errors and 0 Flutter test failures; native Swift logger typecheck also passed.
 
 - [ ] **Step 3: Run supported-platform builds and device acceptance**
 
