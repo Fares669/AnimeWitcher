@@ -1,0 +1,40 @@
+name: Task 23 Relaunch GREEN
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - run: flutter pub get
+      - name: Generate sources
+        run: |
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Verify relaunch and ownership lifecycle
+        run: |
+          flutter test \
+            test/core/services/background_downloader_transfer_api_authority_test.dart \
+            test/core/services/download_plugin_relaunch_single_writer_test.dart \
+            test/core/services/download_plugin_recovery_contract_test.dart \
+            test/core/services/download_startup_reconciliation_matrix_test.dart \
+            test/core/services/download_relaunch_chaos_test.dart \
+            test/core/services/download_runtime_ownership_test.dart \
+            test/core/services/download_pause_settlement_guard_test.dart \
+            test/core/services/download_plugin_parallel_execution_test.dart
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
