@@ -72,7 +72,7 @@
 - Produces: `DownloadExecutionBackend selectDownloadExecutionBackend({required int connections, required bool pluginParallelAccepted, required bool legacySessionExists})`
 - Produces: `DownloadTask buildPluginTransportTask({required DownloadTask template, required int connections})`
 
-- [ ] **Step 1: Write RED policy tests**
+- [x] **Step 1: Write RED policy tests**
 
 ```dart
 void main() {
@@ -111,7 +111,7 @@ void main() {
 }
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run:
 ```bash
@@ -119,7 +119,7 @@ flutter test test/core/services/download_transport_policy_test.dart
 ```
 Expected: FAIL because the new policy/interface does not exist.
 
-- [ ] **Step 3: Implement the minimal pure policy**
+- [x] **Step 3: Implement the minimal pure policy**
 
 ```dart
 enum DownloadExecutionBackend {
@@ -143,7 +143,7 @@ DownloadExecutionBackend selectDownloadExecutionBackend({
 
 `buildPluginTransportTask` must preserve `taskId`, URL, headers, target path, logical metadata, notification settings/options/hints that are valid for the selected task type, and use `ParallelDownloadTask(chunks: connections)` only when `connections > 1`.
 
-- [ ] **Step 4: Run policy and existing adaptive-part tests**
+- [x] **Step 4: Run policy and existing adaptive-part tests**
 
 ```bash
 flutter test \
@@ -152,7 +152,7 @@ flutter test \
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_transport_policy.dart lib/core/services/download_parallel.dart test/core/services/download_transport_policy_test.dart
@@ -177,7 +177,7 @@ git commit -m "refactor(downloads): define plugin transport policy"
 - Produces: `TaskStatus? statusFor(String taskId)`
 - Produces: `bool runtimeStatusCanOwnWriter(String taskId)`
 
-- [ ] **Step 1: Write RED tests that accept both ordinary and parallel tasks**
+- [x] **Step 1: Write RED tests that accept both ordinary and parallel tasks**
 
 Test the adapter classification separately from platform I/O:
 
@@ -196,14 +196,14 @@ test('plugin transport accepts ParallelDownloadTask', () {
 
 Also assert internal legacy child tasks (`animewitcher_parts`) are not promoted as logical plugin transfers.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/background_downloader_transport_test.dart
 ```
 Expected: FAIL because the generalized adapter does not exist.
 
-- [ ] **Step 3: Move the existing Transfer implementation into `BackgroundDownloaderTransport`**
+- [x] **Step 3: Move the existing Transfer implementation into `BackgroundDownloaderTransport`**
 
 The new adapter uses only public plugin APIs:
 
@@ -230,7 +230,7 @@ Keep `NativeSingleDownloadTransport` temporarily as a deprecated typedef/compati
 typedef NativeSingleDownloadTransport = BackgroundDownloaderTransport;
 ```
 
-- [ ] **Step 4: Run transport tests and analyzer**
+- [x] **Step 4: Run transport tests and analyzer**
 
 ```bash
 flutter test \
@@ -240,7 +240,7 @@ flutter analyze --no-fatal-warnings --no-fatal-infos
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/background_downloader_transport.dart lib/core/services/download_transport.dart lib/core/services/download_service.dart test/core/services/background_downloader_transport_test.dart
@@ -261,7 +261,7 @@ git commit -m "refactor(downloads): generalize background downloader transport"
 - Produces: `DownloadProgressData projectTransferTelemetry({required Task task, required TaskStatus status, required double progress, required double networkSpeedMbPerSecond, required Duration timeRemaining, required int totalSize})`
 - Contract: plugin `networkSpeed` is already MB/s; never divide/multiply it through a competing estimator.
 
-- [ ] **Step 1: Write RED telemetry tests**
+- [x] **Step 1: Write RED telemetry tests**
 
 ```dart
 test('plugin speed remains authoritative while progress advances', () {
@@ -280,18 +280,18 @@ test('plugin speed remains authoritative while progress advances', () {
 
 Add a stale/status test proving `paused` does not display an invented speed.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_transfer_projection_test.dart
 ```
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the projection and route plugin-owned transfers through it**
+- [x] **Step 3: Implement the projection and route plugin-owned transfers through it**
 
 For plugin-authoritative tasks, stop calling `_telemetry.observeProgress` to recompute speed. `DownloadTelemetryEstimator` remains only for legacy custom Range/multipart and compatibility UI where the plugin does not provide a stable metric.
 
-- [ ] **Step 4: Run speed regression suite**
+- [x] **Step 4: Run speed regression suite**
 
 ```bash
 flutter test \
@@ -302,7 +302,7 @@ flutter test \
 ```
 Expected: PASS; legacy tests continue to use legacy telemetry, plugin path uses plugin speed directly.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_transfer_projection.dart lib/core/services/download_service.dart lib/core/services/download_telemetry.dart test/core/services/download_transfer_projection_test.dart
@@ -323,7 +323,7 @@ git commit -m "refactor(downloads): trust plugin transfer telemetry"
 - Contract: update listener/callback registration occurs before `FileDownloader.start()`.
 - Contract: plugin startup completes before runtime ownership is considered settled.
 
-- [ ] **Step 1: Write RED source/behavior contract tests**
+- [x] **Step 1: Write RED source/behavior contract tests**
 
 Assert startup order:
 
@@ -335,14 +335,14 @@ expect(source.indexOf('FileDownloader().start('), lessThan(source.indexOf('_nati
 
 The exact helper may replace these literal calls; test the helper behavior rather than strings once injectable seams exist.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_plugin_recovery_contract_test.dart
 ```
 Expected: FAIL because current startup deliberately uses `doRescheduleKilledTasks: false` and subscribes later.
 
-- [ ] **Step 3: Reorder initialization**
+- [x] **Step 3: Reorder initialization**
 
 Required order:
 
@@ -360,7 +360,7 @@ readiness complete
 
 `userPaused` and delete tombstones must be restored **before** plugin reschedule results are projected; if plugin reschedules a task the user intended paused/deleted, AnimeWitcher immediately applies the authoritative logical command before exposing it as active.
 
-- [ ] **Step 4: Run recovery/readiness tests**
+- [x] **Step 4: Run recovery/readiness tests**
 
 ```bash
 flutter test \
@@ -372,7 +372,7 @@ flutter test \
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_service.dart lib/core/services/download_service_readiness.dart test/core/services/download_plugin_recovery_contract_test.dart
@@ -393,7 +393,7 @@ git commit -m "refactor(downloads): delegate startup recovery to plugin executor
 - Produces: `Future<DownloadRuntimeOwnership> ownershipFor(String taskId)` on the adapter.
 - Consumes: completed plugin startup/reconciliation from Task 4.
 
-- [ ] **Step 1: Write RED ownership tests**
+- [x] **Step 1: Write RED ownership tests**
 
 Cover:
 
@@ -406,19 +406,19 @@ expect(ownershipFromStatus(TaskStatus.enqueued), DownloadRuntimeOwnership.owned)
 
 Also cover `runtime query unavailable -> unknown`, not `notOwned`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_runtime_ownership_test.dart
 ```
 
-- [ ] **Step 3: Implement adapter-owned ownership resolution**
+- [x] **Step 3: Implement adapter-owned ownership resolution**
 
 Remove ordinary logical ownership decisions based on raw `FileDownloader().allTasks()` membership. A persisted paused/retry row must never reserve a writer slot merely because `allTasks()` returned it.
 
 For iOS gaps where the public plugin API still cannot distinguish a stale `running` projection from a live URLSession task, retain the existing minimal native liveness oracle only as a platform compatibility seam. Do not use it for scheduling plugin parallel children.
 
-- [ ] **Step 4: Run ownership/cancel/pause tests**
+- [x] **Step 4: Run ownership/cancel/pause tests**
 
 ```bash
 flutter test \
@@ -429,7 +429,7 @@ flutter test \
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/background_downloader_transport.dart lib/core/services/download_service.dart test/core/services/download_runtime_ownership_test.dart test/core/services/download_recovery_reconciliation_guard_test.dart
@@ -450,7 +450,7 @@ git commit -m "fix(downloads): use settled plugin runtime ownership"
 - Consumes: `selectDownloadExecutionBackend` and `buildPluginTransportTask`.
 - Produces: one logical parent `ParallelDownloadTask`; plugin owns internal chunk tasks.
 
-- [ ] **Step 1: Write RED tests for new-download routing**
+- [x] **Step 1: Write RED tests for new-download routing**
 
 ```dart
 test('accepted 8-connection download builds one plugin ParallelDownloadTask', () {
@@ -464,19 +464,19 @@ test('accepted 8-connection download builds one plugin ParallelDownloadTask', ()
 
 Verify no AnimeWitcher `.part.*` child IDs or custom manifest are created for this backend.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_plugin_parallel_execution_test.dart
 ```
 
-- [ ] **Step 3: Route only new eligible multipart starts to plugin parallel**
+- [x] **Step 3: Route only new eligible multipart starts to plugin parallel**
 
 Keep the acceptance flag false by default per platform until Task 10/11 evidence exists. Tests may inject `pluginParallelAccepted: true`.
 
 Do not alter an already-active legacy `PersistentParallelDownload` session.
 
-- [ ] **Step 4: Run focused start/identity tests**
+- [x] **Step 4: Run focused start/identity tests**
 
 ```bash
 flutter test \
@@ -487,7 +487,7 @@ flutter test \
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_service.dart lib/core/services/download_parallel.dart lib/core/services/background_downloader_transport.dart test/core/services/download_plugin_parallel_execution_test.dart
@@ -506,7 +506,7 @@ git commit -m "feat(downloads): add plugin parallel execution path"
 **Interfaces:**
 - Produces evidence, not a new production abstraction.
 
-- [ ] **Step 1: Add deterministic contract cases**
+- [x] **Step 1: Add deterministic contract cases**
 
 Required cases:
 
@@ -519,7 +519,7 @@ kill/relaunch with native survivor -> reconnect without duplicate writer
 kill/relaunch with killed worker -> reschedule/recover without permanent running/0 B/s
 ```
 
-- [ ] **Step 2: Run the Dart-side contract suite**
+- [x] **Step 2: Run the Dart-side contract suite**
 
 ```bash
 flutter test test/core/services/download_plugin_parallel_contract_test.dart
@@ -538,7 +538,7 @@ flutter build windows --release
 
 And run the repository's available iOS native tests/source guards that exercise background downloader callbacks. Device-only kill/background observations must be recorded in the PR checklist before default enablement.
 
-- [ ] **Step 4: Encode platform capability constants only from evidence**
+- [x] **Step 4: Encode platform capability constants only from evidence**
 
 Example pure API:
 
@@ -552,7 +552,7 @@ bool pluginParallelAcceptedForPlatform(TargetPlatform platform) => switch (platf
 
 Do not set a platform to `true` merely because it compiles.
 
-- [ ] **Step 5: Commit characterization and accepted capability table**
+- [x] **Step 5: Commit characterization and accepted capability table**
 
 ```bash
 git add test/core/services/download_plugin_parallel_contract_test.dart lib/core/services/download_transport_policy.dart
@@ -574,7 +574,7 @@ git commit -m "test(downloads): characterize plugin parallel lifecycle"
 - Produces: `enum RefreshedTransferResumeMode { pluginResume, verifiedRangeFallback, restartRequired, incompatibleResource }`
 - Produces: a pure planner selecting mode from resource compatibility, known partial bytes, and plugin resume capability.
 
-- [ ] **Step 1: Write RED refresh planner tests**
+- [x] **Step 1: Write RED refresh planner tests**
 
 ```dart
 test('changed signed URL with compatible bytes never blindly fresh-starts', () {
@@ -591,19 +591,19 @@ test('changed signed URL with compatible bytes never blindly fresh-starts', () {
 
 Also test incompatible ETag/size -> `incompatibleResource`, and zero partial bytes -> safe plugin fresh start.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_plugin_source_refresh_test.dart
 ```
 
-- [ ] **Step 3: Isolate `DownloadRangeTransfer` to this exceptional seam**
+- [x] **Step 3: Isolate `DownloadRangeTransfer` to this exceptional seam**
 
 Normal starts, ordinary retry, and ordinary resume must not call `DownloadRangeTransfer`. Only a refreshed URL with valid existing bytes and no safe plugin resume path may enter verified Range recovery.
 
 Retain prefix/If-Range/resource validation for that exceptional case.
 
-- [ ] **Step 4: Run refresh/integrity suite**
+- [x] **Step 4: Run refresh/integrity suite**
 
 ```bash
 flutter test \
@@ -615,7 +615,7 @@ flutter test \
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_url_refresh.dart lib/core/services/download_service.dart lib/core/services/download_range_transfer.dart test/core/services/download_plugin_source_refresh_test.dart
@@ -634,21 +634,21 @@ git commit -m "refactor(downloads): isolate verified range source refresh"
 **Interfaces:**
 - Contract: one `ParallelDownloadTask` reserves one logical episode slot, regardless of plugin chunk count.
 
-- [ ] **Step 1: Write RED queue tests**
+- [x] **Step 1: Write RED queue tests**
 
 For `maxConcurrent=2`, enqueue three 8-chunk episodes and assert only two logical parents are handed to transport. Internal plugin chunk count must not influence the third episode's eligibility.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_plugin_episode_queue_test.dart
 ```
 
-- [ ] **Step 3: Remove custom child accounting from logical queue decisions**
+- [x] **Step 3: Remove custom child accounting from logical queue decisions**
 
 Keep `Config.holdingQueue` disabled initially if plugin child accounting can deadlock or distort episode semantics. The logical queue may later enable a plugin safety cap only after a dedicated test proves it counts the intended entities.
 
-- [ ] **Step 4: Run queue tests**
+- [x] **Step 4: Run queue tests**
 
 ```bash
 flutter test \
@@ -658,7 +658,7 @@ flutter test \
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_concurrency.dart lib/core/services/download_service.dart test/core/services/download_plugin_episode_queue_test.dart
@@ -680,11 +680,11 @@ git commit -m "refactor(downloads): preserve logical episode queue over plugin c
 - Contract: a plugin-owned `ParallelDownloadTask` is never serialized into AnimeWitcher custom `multipartPlans` / claims.
 - Contract: continued-processing session receives parent presentation only.
 
-- [ ] **Step 1: Write RED source/behavior tests**
+- [x] **Step 1: Write RED source/behavior tests**
 
 Assert plugin-authoritative parent snapshots contain no custom multipart claim payload and that normal plugin callbacks still update the session overlay.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test \
@@ -693,18 +693,18 @@ flutter test \
 ```
 Expected: at least the new plugin-owned expectations FAIL before production changes.
 
-- [ ] **Step 3: Bypass custom claim/promotion for plugin-owned parallel tasks**
+- [x] **Step 3: Bypass custom claim/promotion for plugin-owned parallel tasks**
 
 Legacy custom multipart continues to use the old path until removed. Plugin-owned parents remain entirely within `background_downloader` native parallel execution.
 
-- [ ] **Step 4: Verify Swift compilation and native tests**
+- [x] **Step 4: Verify Swift compilation and native tests**
 
 ```bash
 flutter build ios --release --no-codesign
 ```
 Run repository native/XCTest coverage for `DownloadNativeWaitingQueue` and callback compatibility. Expected: build/test PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_continued_processing_service.dart lib/core/services/download_service.dart ios/Runner/DownloadNativeWaitingQueue.swift ios/Runner/AppDelegate.swift test/core/services/ios_multipart_ownership_handoff_source_test.dart
@@ -724,7 +724,7 @@ git commit -m "refactor(ios): let plugin own parallel transport"
 **Interfaces:**
 - Produces: `AndroidDownloadExecutionPolicy` with ordinary/parallel choice and transfer hints.
 
-- [ ] **Step 1: Write RED Android policy tests**
+- [x] **Step 1: Write RED Android policy tests**
 
 Cover:
 
@@ -735,17 +735,17 @@ multiple connections -> plugin parallel only if Android acceptance flag is true
 otherwise -> current safe legacy parallel fallback
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_android_transport_policy_test.dart
 ```
 
-- [ ] **Step 3: Implement policy without changing iOS behavior**
+- [x] **Step 3: Implement policy without changing iOS behavior**
 
 No unconditional `TransferHint.userInitiated` when notification requirements are not satisfied.
 
-- [ ] **Step 4: Build Android and run policy suite**
+- [x] **Step 4: Build Android and run policy suite**
 
 ```bash
 flutter test test/core/services/download_android_transport_policy_test.dart
@@ -753,7 +753,7 @@ flutter build apk --debug
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_transport_policy.dart lib/core/services/background_downloader_transport.dart test/core/services/download_android_transport_policy_test.dart android/app/src/main/AndroidManifest.xml
@@ -774,7 +774,7 @@ git commit -m "refactor(android): define plugin download execution policy"
 - Produces: `enum LegacyDownloadAdoption { continueLegacy, pluginRehydrate, completed, paused, orphaned }`
 - Produces: pure planner using manifest evidence, JobStore intent, plugin record/Transfer state, and final-file evidence.
 
-- [ ] **Step 1: Write RED migration tests**
+- [x] **Step 1: Write RED migration tests**
 
 Required cases:
 
@@ -786,17 +786,17 @@ userPaused legacy session -> continue paused, no writer
 conflicting active ownership -> fail closed/orphaned, never launch both
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_legacy_migration_policy_test.dart
 ```
 
-- [ ] **Step 3: Apply planner during startup inventory**
+- [x] **Step 3: Apply planner during startup inventory**
 
 Do not convert active legacy ranges into plugin chunks. Legacy sessions drain to a stable boundary; only new downloads use the plugin path by default once enabled.
 
-- [ ] **Step 4: Run migration/recovery tests**
+- [x] **Step 4: Run migration/recovery tests**
 
 ```bash
 flutter test \
@@ -807,7 +807,7 @@ flutter test \
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_service.dart lib/core/services/persistent_parallel_download.dart lib/core/services/download_job_store.dart test/core/services/download_legacy_migration_policy_test.dart
@@ -826,7 +826,7 @@ git commit -m "feat(downloads): preserve legacy multipart sessions during migrat
 **Interfaces:**
 - Changes acceptance flags from test-only to production defaults only for proven platforms.
 
-- [ ] **Step 1: Expand chaos matrix to run both executor modes where applicable**
+- [x] **Step 1: Expand chaos matrix to run both executor modes where applicable**
 
 Every invariant from the design spec must have at least one automated test. Plugin-path cases include kill/relaunch, pause/resume, 403 refresh, cancel/delete, low disk, and multiple queued episodes.
 
@@ -839,15 +839,15 @@ flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 ```
 Expected: 0 analyzer errors and 0 test failures.
 
-- [ ] **Step 3: Run platform builds**
+- [x] **Step 3: Run platform builds**
 
 Use the repository CI/build matrix for supported platforms. At minimum the branch must compile iOS Swift changes and Android plugin configuration before enabling those platforms.
 
-- [ ] **Step 4: Enable only platforms with completed evidence**
+- [x] **Step 4: Enable only platforms with completed evidence**
 
 If Android or another platform has an unresolved lifecycle gap, leave that platform on the legacy fallback and keep its plan checkbox open. Do not lower the acceptance bar to make the migration look complete.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_transport_policy.dart test/core/services/download_manager_chaos_matrix_test.dart
@@ -923,7 +923,7 @@ git commit -m "refactor(downloads): retire custom multipart for new transfers"
 - Contract: generic socket/5xx/stall retry is plugin-owned for plugin tasks.
 - Contract: AnimeWitcher retry planner returns application actions only (`refreshUrl`, `reconcileRange`, `stopNoSpace`, `park/wait`).
 
-- [ ] **Step 1: Write RED tests preventing ordinary plugin tasks from entering Range transport**
+- [x] **Step 1: Write RED tests preventing ordinary plugin tasks from entering Range transport**
 
 ```dart
 expect(planPluginFailure(statusCode: 503).transportAction,
@@ -932,17 +932,17 @@ expect(planPluginFailure(statusCode: 503).transportAction,
 
 403 with refresh capability must remain `refreshUrl`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 flutter test test/core/services/download_retry_policy_test.dart
 ```
 
-- [ ] **Step 3: Remove duplicated generic retry paths**
+- [x] **Step 3: Remove duplicated generic retry paths**
 
 Keep exact byte/prefix/If-Range logic only in the changed-source exceptional fallback until it can be deleted safely.
 
-- [ ] **Step 4: Run retry/range/resource tests**
+- [x] **Step 4: Run retry/range/resource tests**
 
 ```bash
 flutter test \
@@ -953,7 +953,7 @@ flutter test \
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/core/services/download_range_transfer.dart lib/core/services/download_retry_policy.dart lib/core/services/download_service.dart test/core/services
@@ -1035,7 +1035,7 @@ flutter test test/core/services/download_job_store_test.dart
 
 Do not delete a field because it looks redundant; first prove `git grep`/tests show no correctness dependency. Preserve a compatibility reader for old persisted JSON.
 
-- [ ] **Step 4: Run JobStore/identity/recovery suite**
+- [x] **Step 4: Run JobStore/identity/recovery suite**
 
 ```bash
 flutter test \
