@@ -30,6 +30,8 @@ env:
   LLVM_COMMIT: 87f0227cb60147a26a1eeb4fb06e3b505e9c7261
   HOST_CLANG_VERSION: 22.1.8
   VULKAN_LOADER_COMMIT: bde79ad2dd832db9180c4a6eca2e84ceb12b1bb0
+  OPENSSL_COMMIT: 98acb6b02839c609ef5b837794e08d906d965335
+  HARFBUZZ_COMMIT: 4e3df1c1383481ed5717603d5dd3453a04fb16ba
 
 jobs:
   build-libmpv:
@@ -195,6 +197,40 @@ jobs:
           grep -F 'GIT_REPOSITORY https://github.com/sekrit-twc/zimg.git' packages/libzimg.cmake
           grep -F 'GIT_TAG 67e0603271c080e22c8429856dd4a8a56587e61e' packages/libzimg.cmake
 
+      - name: Pin OpenSSL and HarfBuzz source commits
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          replacements = {
+              Path('packages/openssl.cmake'): (
+                  '    GIT_CLONE_POST_COMMAND "sparse-checkout set --no-cone /* !test"\n',
+                  '    GIT_CLONE_POST_COMMAND "sparse-checkout set --no-cone /* !test"\n'
+                  f'    GIT_TAG {os.environ["OPENSSL_COMMIT"]}\n',
+                  os.environ['OPENSSL_COMMIT'],
+              ),
+              Path('packages/harfbuzz.cmake'): (
+                  '    GIT_TAG main\n',
+                  f'    GIT_TAG {os.environ["HARFBUZZ_COMMIT"]}\n',
+                  os.environ['HARFBUZZ_COMMIT'],
+              ),
+          }
+          for path, (old, new, commit) in replacements.items():
+              text = path.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'unexpected source layout: {path}')
+              updated = text.replace(old, new, 1)
+              if updated.count(commit) != 1:
+                  raise SystemExit(f'failed to pin source commit: {path}')
+              path.write_text(updated)
+          PY
+          grep -F "GIT_TAG $OPENSSL_COMMIT" packages/openssl.cmake
+          grep -F "GIT_TAG $HARFBUZZ_COMMIT" packages/harfbuzz.cmake
+          ! grep -F 'GIT_TAG main' packages/harfbuzz.cmake
+
       - name: Pin Vulkan Loader source and static-linking patch
         working-directory: _build/win-builder
         run: |
@@ -247,7 +283,9 @@ jobs:
             "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh" \
             "build_${BIT}/packages/graphengine-prefix/src/graphengine-stamp/reset_head.sh" \
             "build_${BIT}/packages/libzimg-prefix/src/libzimg-stamp/reset_head.sh" \
-            "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" <<'PY'
+            "build_${BIT}/packages/openssl-prefix/src/openssl-stamp/reset_head.sh" \
+            "build_${BIT}/packages/harfbuzz-prefix/src/harfbuzz-stamp/reset_head.sh" \
+            "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" \
           import sys
           from pathlib import Path
 
@@ -265,6 +303,8 @@ jobs:
             "build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh" \
             "build_${BIT}/packages/graphengine-prefix/src/graphengine-stamp/reset_head.sh" \
             "build_${BIT}/packages/libzimg-prefix/src/libzimg-stamp/reset_head.sh" \
+            "build_${BIT}/packages/openssl-prefix/src/openssl-stamp/reset_head.sh" \
+            "build_${BIT}/packages/harfbuzz-prefix/src/harfbuzz-stamp/reset_head.sh" \
             "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"; do
             ! grep -F '@{u}' "$reset_script"
             grep -F 'reset --hard' "$reset_script"

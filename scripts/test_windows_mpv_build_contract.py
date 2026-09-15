@@ -34,6 +34,11 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         self.assertIn("ninja -C \"build_${BIT}\" llvm-download", workflow)
         self.assertIn("Patch pinned-source cleanup for detached commits", workflow)
         self.assertIn("Pin graphengine and zimg source mirrors", workflow)
+        self.assertIn("Pin OpenSSL and HarfBuzz source commits", workflow)
+        self.assertIn("OPENSSL_COMMIT: 98acb6b02839c609ef5b837794e08d906d965335", workflow)
+        self.assertIn("HARFBUZZ_COMMIT: 4e3df1c1383481ed5717603d5dd3453a04fb16ba", workflow)
+        self.assertIn('grep -F "GIT_TAG $OPENSSL_COMMIT" packages/openssl.cmake', workflow)
+        self.assertIn('grep -F "GIT_TAG $HARFBUZZ_COMMIT" packages/harfbuzz.cmake', workflow)
         self.assertIn("https://github.com/sekrit-twc/graphengine.git", workflow)
         self.assertIn("GIT_TAG 91c6af4c795c5396d8b974f24b4d2e2ecca04e2d", workflow)
         self.assertIn("https://github.com/sekrit-twc/zimg.git", workflow)
@@ -46,6 +51,14 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         self.assertIn('grep -F \'reset --hard\' "$reset_script"', workflow)
         self.assertIn(
             '"build_${BIT}/toolchain/cppwinrt-prefix/src/cppwinrt-stamp/reset_head.sh"',
+            workflow,
+        )
+        self.assertIn(
+            '"build_${BIT}/packages/openssl-prefix/src/openssl-stamp/reset_head.sh"',
+            workflow,
+        )
+        self.assertIn(
+            '"build_${BIT}/packages/harfbuzz-prefix/src/harfbuzz-stamp/reset_head.sh"',
             workflow,
         )
         self.assertIn(
