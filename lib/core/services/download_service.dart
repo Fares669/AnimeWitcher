@@ -1189,7 +1189,7 @@ class DownloadService {
           update.status == TaskStatus.paused &&
           (_rangeTransfers.isActive(update.task.taskId) ||
               _parallel.isActive(update.task.taskId) ||
-              _nativeTransport.owns(update.task.taskId))) {
+              _nativeTransport.runtimeStatusCanOwnWriter(update.task.taskId))) {
         diagnosticLog.record('callback.stalePauseIgnored', {
           'taskId': update.task.taskId,
         });
