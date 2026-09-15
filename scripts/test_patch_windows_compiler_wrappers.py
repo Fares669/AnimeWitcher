@@ -32,14 +32,14 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             (sysroot / "include" / "c++" / "v1").mkdir(parents=True)
             resource_dir.mkdir(parents=True)
             bin_dir.mkdir()
-            wrapper = bin_dir / "x86_64-w64-mingw32-g++"
-            wrapper.write_text(
-                '#!/bin/bash\n'
-                'PROG=/clang_root/bin/clang++\n'
-                'FLAGS="$FLAGS --sysroot /old/sysroot"\n'
-                '$CCACHE "$PROG" "$@" $FLAGS\n',
-                encoding="utf-8",
-            )
+            for compiler in ("clang++", "g++", "c++"):
+                (bin_dir / f"x86_64-w64-mingw32-{compiler}").write_text(
+                    "#!/bin/bash\n"
+                    "PROG=/clang_root/bin/clang++\n"
+                    "FLAGS=\"$FLAGS --sysroot /old/sysroot\"\n"
+                    "$CCACHE \"$PROG\" \"$@\" $FLAGS\n",
+                    encoding="utf-8",
+                )
 
             changed = helper.patch_wrappers(
                 bin_dir=bin_dir,
@@ -47,7 +47,15 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
                 resource_dir=resource_dir,
                 target_prefix="x86_64-w64-mingw32",
             )
-            self.assertEqual(changed, ["x86_64-w64-mingw32-g++"])
+            self.assertEqual(
+                changed,
+                [
+                    "x86_64-w64-mingw32-clang++",
+                    "x86_64-w64-mingw32-g++",
+                    "x86_64-w64-mingw32-c++",
+                ],
+            )
+            wrapper = bin_dir / "x86_64-w64-mingw32-g++"
             patched = wrapper.read_text(encoding="utf-8")
             self.assertIn('FLAGS="$FLAGS -stdlib=libc++"', patched)
             self.assertIn(
@@ -79,7 +87,7 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
         helper = _load_helper()
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            with self.assertRaisesRegex(RuntimeError, "libc\+\+ headers"):
+            with self.assertRaisesRegex(RuntimeError, "libc\\+\\+ headers"):
                 helper.patch_wrappers(
                     bin_dir=root / "bin",
                     sysroot=root / "sysroot",
