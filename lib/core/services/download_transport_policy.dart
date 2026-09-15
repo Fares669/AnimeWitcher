@@ -1,4 +1,5 @@
 import 'package:background_downloader/background_downloader.dart';
+import 'package:flutter/foundation.dart' show TargetPlatform;
 
 import 'download_parallel.dart';
 
@@ -12,6 +13,22 @@ enum DownloadExecutionBackend {
   pluginParallel,
   legacyParallel,
 }
+
+/// Capability table for fresh plugin-owned parallel downloads.
+///
+/// Compilation/source characterization is not sufficient to accept a
+/// platform. Keep every platform fail-closed until the platform-specific
+/// pause/resume/cancel and kill/relaunch acceptance matrix has produced real
+/// evidence. Tasks 10 and 11 may open individual entries after that evidence.
+bool pluginParallelAcceptedForPlatform(TargetPlatform platform) =>
+    switch (platform) {
+      TargetPlatform.android ||
+      TargetPlatform.fuchsia ||
+      TargetPlatform.iOS ||
+      TargetPlatform.linux ||
+      TargetPlatform.macOS ||
+      TargetPlatform.windows => false,
+    };
 
 /// Selects exactly one executor for a logical episode.
 ///
