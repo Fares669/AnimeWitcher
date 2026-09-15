@@ -1,4 +1,4 @@
-name: Task 13 Reliability Matrix
+name: Task 15 Retry Policy RED
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  reliability-matrix:
+  retry-policy-red:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -25,7 +25,5 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Run Task 13 chaos matrix
-        run: flutter test test/core/services/download_manager_chaos_matrix_test.dart
-      - name: Analyze download migration files
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services test/core/services
+      - name: Run Task 15 RED
+        run: flutter test test/core/services/download_retry_policy_test.dart
