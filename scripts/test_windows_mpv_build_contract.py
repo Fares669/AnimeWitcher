@@ -35,6 +35,9 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         self.assertIn("Patch pinned-source cleanup for detached commits", workflow)
         self.assertIn("Pin graphengine and zimg source mirrors", workflow)
         self.assertIn("Pin OpenSSL and HarfBuzz source commits", workflow)
+        self.assertIn("Pin Fontconfig source for Windows patch", workflow)
+        self.assertIn("FONTCONFIG_COMMIT: e1501970ca9a2719a7ca1a8840848ac8af213778", workflow)
+        self.assertIn('grep -F "GIT_TAG $FONTCONFIG_COMMIT" packages/fontconfig.cmake', workflow)
         self.assertIn("OPENSSL_COMMIT: 98acb6b02839c609ef5b837794e08d906d965335", workflow)
         self.assertIn("HARFBUZZ_COMMIT: 4e3df1c1383481ed5717603d5dd3453a04fb16ba", workflow)
         self.assertIn('grep -F "GIT_TAG $OPENSSL_COMMIT" packages/openssl.cmake', workflow)
@@ -55,6 +58,10 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         )
         self.assertIn(
             '"build_${BIT}/packages/openssl-prefix/src/openssl-stamp/reset_head.sh"',
+            workflow,
+        )
+        self.assertIn(
+            '"build_${BIT}/packages/fontconfig-prefix/src/fontconfig-stamp/reset_head.sh"',
             workflow,
         )
         self.assertIn(

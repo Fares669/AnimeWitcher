@@ -32,6 +32,7 @@ env:
   VULKAN_LOADER_COMMIT: bde79ad2dd832db9180c4a6eca2e84ceb12b1bb0
   OPENSSL_COMMIT: 98acb6b02839c609ef5b837794e08d906d965335
   HARFBUZZ_COMMIT: 4e3df1c1383481ed5717603d5dd3453a04fb16ba
+  FONTCONFIG_COMMIT: e1501970ca9a2719a7ca1a8840848ac8af213778
 
 jobs:
   build-libmpv:
@@ -233,6 +234,28 @@ jobs:
           grep -F "GIT_TAG $HARFBUZZ_COMMIT" packages/harfbuzz.cmake
           ! grep -F 'GIT_TAG main' packages/harfbuzz.cmake
 
+      - name: Pin Fontconfig source for Windows patch
+        working-directory: _build/win-builder
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('packages/fontconfig.cmake')
+          text = path.read_text()
+          old = '    GIT_TAG main\n'
+          new = f'    GIT_TAG {os.environ["FONTCONFIG_COMMIT"]}\n'
+          if text.count(old) != 1:
+              raise SystemExit('Fontconfig source tag layout changed')
+          updated = text.replace(old, new, 1)
+          if updated.count(os.environ['FONTCONFIG_COMMIT']) != 1:
+              raise SystemExit('failed to pin Fontconfig source commit')
+          path.write_text(updated)
+          PY
+          grep -F "GIT_TAG $FONTCONFIG_COMMIT" packages/fontconfig.cmake
+          ! grep -F 'GIT_TAG main' packages/fontconfig.cmake
+
       - name: Pin Vulkan Loader source and static-linking patch
         working-directory: _build/win-builder
         run: |
@@ -287,6 +310,7 @@ jobs:
             "build_${BIT}/packages/libzimg-prefix/src/libzimg-stamp/reset_head.sh" \
             "build_${BIT}/packages/openssl-prefix/src/openssl-stamp/reset_head.sh" \
             "build_${BIT}/packages/harfbuzz-prefix/src/harfbuzz-stamp/reset_head.sh" \
+            "build_${BIT}/packages/fontconfig-prefix/src/fontconfig-stamp/reset_head.sh" \
             "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh" <<'PY'
           import sys
           from pathlib import Path
@@ -307,6 +331,7 @@ jobs:
             "build_${BIT}/packages/libzimg-prefix/src/libzimg-stamp/reset_head.sh" \
             "build_${BIT}/packages/openssl-prefix/src/openssl-stamp/reset_head.sh" \
             "build_${BIT}/packages/harfbuzz-prefix/src/harfbuzz-stamp/reset_head.sh" \
+            "build_${BIT}/packages/fontconfig-prefix/src/fontconfig-stamp/reset_head.sh" \
             "build_${BIT}/packages/vulkan-prefix/src/vulkan-stamp/reset_head.sh"; do
             ! grep -F '@{u}' "$reset_script"
             grep -F 'reset --hard' "$reset_script"
