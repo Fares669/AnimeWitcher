@@ -1,4 +1,4 @@
-name: Task 24 Presentation Authority RED
+name: Task 24 System Cancel RED
 
 on:
   push:
@@ -21,4 +21,4 @@ jobs:
           flutter-version: 3.47.1
           cache: true
       - run: flutter pub get
-      - run: flutter test test/core/services/download_plugin_parallel_presentation_authority_test.dart
+      - run: flutter test test/core/services/download_plugin_parallel_cancel_routing_test.dart
