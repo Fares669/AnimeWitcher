@@ -5,9 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('multipart resume never treats historical percentage as durable bytes', () {
     final source = File('lib/core/services/download_service.dart').readAsStringSync();
-    final start = source.indexOf('Future<bool> _resumeDownloadTask(DownloadTask task)');
-    final end = source.indexOf('Future<bool> _resumeUsingPartialFile(', start);
+    final start = source.indexOf('Future<bool> _resumeDownloadTask(');
     expect(start, greaterThanOrEqualTo(0));
+    final end = source.indexOf('Future<bool> _resumeUsingPartialFile(', start);
     expect(end, greaterThan(start));
     final body = source.substring(start, end);
     final parallel = body.indexOf('if (task is ParallelDownloadTask)');
