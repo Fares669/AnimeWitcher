@@ -6,18 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('pluginParallelAcceptedForPlatform', () {
-    test('fresh iOS multipart delegates execution to background_downloader', () {
-      expect(pluginParallelAcceptedForPlatform(TargetPlatform.iOS), isTrue);
-    });
-
-    test('other platforms remain fail-closed until device acceptance', () {
-      for (final platform in <TargetPlatform>[
-        TargetPlatform.android,
-        TargetPlatform.fuchsia,
-        TargetPlatform.linux,
-        TargetPlatform.macOS,
-        TargetPlatform.windows,
-      ]) {
+    test('all platforms remain fail-closed until device acceptance', () {
+      for (final platform in TargetPlatform.values) {
         expect(
           pluginParallelAcceptedForPlatform(platform),
           isFalse,
