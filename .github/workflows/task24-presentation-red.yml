@@ -1,4 +1,4 @@
-name: Task 24 Parked Failure RED
+name: Task 24 Parked Failure GREEN
 
 on:
   push:
@@ -6,19 +6,100 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  red:
+  green:
+    if: "${{ github.event.head_commit.message == 'chore(ci): apply parked failure fix' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
+      - name: Patch parked failure checkpoint ordering
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/core/services/download_service.dart')
+          text = path.read_text()
+          old = "\n".join([
+              "    // Never delete the DB record, metadata, or partial file here — only mark",
+              "    // paused so retry/unpause can continue from the saved offset.",
+              "    await FileDownloader().database.updateRecord(",
+              "      TaskRecord(task, TaskStatus.paused, progress, totalSize),",
+              "    );",
+              "    await _ref",
+              "        .read(storageServiceProvider)",
+              "        .patchDownloadMetadata(",
+              "          task.taskId,",
+              "          lastProgress: progress,",
+              "          lastExpectedBytes: totalSize,",
+              "        );",
+              "    await _checkpointLogicalJob(",
+              "      task,",
+              "      state: DownloadJobState.interrupted,",
+              "      expectedBytes: totalSize,",
+              "      userPaused: false,",
+              "      queueWaiting: false,",
+              "    );",
+          ])
+          new = "\n".join([
+              "    final checkpointed = await _checkpointLogicalJob(",
+              "      task,",
+              "      state: DownloadJobState.interrupted,",
+              "      expectedBytes: totalSize,",
+              "      userPaused: false,",
+              "      queueWaiting: false,",
+              "    );",
+              "    if (!checkpointed) {",
+              "      diagnosticLog.record('failurePark.checkpointFailed', {",
+              "        'taskId': task.taskId,",
+              "        'sourceStatus': update.status.name,",
+              "      });",
+              "      return;",
+              "    }",
+              "",
+              "    // Never delete the DB record, metadata, or partial file here — only mark",
+              "    // paused so retry/unpause can continue from the saved offset.",
+              "    await FileDownloader().database.updateRecord(",
+              "      TaskRecord(task, TaskStatus.paused, progress, totalSize),",
+              "    );",
+              "    await _ref",
+              "        .read(storageServiceProvider)",
+              "        .patchDownloadMetadata(",
+              "          task.taskId,",
+              "          lastProgress: progress,",
+              "          lastExpectedBytes: totalSize,",
+              "        );",
+          ])
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one parked failure block, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.47.1
           cache: true
-      - run: flutter pub get
-      - run: flutter test test/core/services/download_lifecycle_checkpoint_guard_test.dart
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Verify focused lifecycle regressions
+        run: |
+          flutter test \
+            test/core/services/download_lifecycle_checkpoint_guard_test.dart \
+            test/core/services/download_plugin_parallel_cancel_routing_test.dart \
+            test/core/services/download_pause_settlement_guard_test.dart
+      - name: Verify service analyzer
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart
+      - name: Commit verified fix
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_service.dart
+          git commit -m "fix(downloads): persist parked failure state first"
+          git push origin HEAD:refactor/background-downloader-authority
