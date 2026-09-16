@@ -180,7 +180,7 @@ void main() {
       'lib/core/services/background_downloader_transport.dart',
     ).readAsStringSync();
     final ownershipStart = source.indexOf(
-      'Future<bool> _runtimeInventoryTaskCanOwnWriter(',
+      'Future<DownloadRuntimeOwnership> _runtimeInventoryTaskOwnership(',
     );
     final ownershipEnd = source.indexOf(
       "  /// Resolves writer ownership from background_downloader's runtime inventory.",
@@ -195,7 +195,7 @@ void main() {
     expect(ownership, contains('runtimeTaskStatusCanOwnWriter'));
     expect(
       ownership,
-      contains('return false;'),
+      contains('return DownloadRuntimeOwnership.notOwned;'),
       reason:
           'a paused item returned by allTasks is not a live file writer',
     );
