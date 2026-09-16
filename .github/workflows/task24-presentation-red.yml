@@ -6,11 +6,10 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   audit:
-    if: "${{ !contains(github.event.head_commit.message, 'docs(downloads): record task 24 presentation audit') }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -67,48 +66,3 @@ jobs:
             lib/core/services/download_continued_processing_service.dart \
             lib/core/services/persistent_parallel_download.dart \
             lib/features/library/presentation/downloads_provider.dart
-      - name: Record Task 24 integrity and presentation evidence
-        env:
-          STEP3_RUN_ID: ${{ github.run_id }}
-        run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          path = Path('docs/superpowers/plans/2026-09-15-background-downloader-authority.md')
-          text = path.read_text()
-
-          step2_old = '''- [ ] **Step 2: Audit integrity/error transitions**
-
-Review 401/403 signed-URL refresh, incompatible resource fingerprint, 5xx/socket retry ownership, low-disk/no-space, complete-file verification, and stale callbacks after terminal/delete tombstones.'''
-          step2_new = '''- [x] **Step 2: Audit integrity/error transitions**
-
-Review 401/403 signed-URL refresh, incompatible resource fingerprint, 5xx/socket retry ownership, low-disk/no-space, complete-file verification, and stale callbacks after terminal/delete tombstones.
-
-**Evidence:** Task 24 integrity/error audit run `35058906039` passed the signed-source/resource-identity/retry/completion/tombstone matrix, a real bounded-tmpfs ENOSPC test that preserves verified parts and resumes, and the focused analyzer. The only failure in the preceding run was a stale source guard tied to the pre-`executionToken` `_resumeDownloadTask` signature; commit `05f799724c39050185d916069d06421d3202486d` made that guard signature-agnostic without changing production behavior.'''
-          if step2_old in text:
-              text = text.replace(step2_old, step2_new, 1)
-          elif step2_new not in text:
-              raise SystemExit('Task 24 Step 2 plan block no longer matches expected text')
-
-          step3_old = '''- [ ] **Step 3: Audit queue/session presentation**
-
-Verify episode-level concurrency, one parent slot regardless of chunk count, progress/speed/ETA monotonicity, continued-processing overlay truthfulness, and no stale active UI after pause/cancel.'''
-          run_id = os.environ['STEP3_RUN_ID']
-          step3_new = f'''- [x] **Step 3: Audit queue/session presentation**
-
-Verify episode-level concurrency, one parent slot regardless of chunk count, progress/speed/ETA monotonicity, continued-processing overlay truthfulness, and no stale active UI after pause/cancel.
-
-**Evidence:** Task 24 queue/session presentation audit run `{run_id}` passed episode-level queue/parent-slot accounting, plugin and legacy progress/speed/ETA projection, phantom-progress fencing, pause/cancel/delete presentation settlement, logical overlay identity, missing-presentation recovery, continued-processing start/update/completion/expiration truthfulness, and the focused analyzer.'''
-          if step3_old not in text:
-              raise SystemExit('Task 24 Step 3 plan block no longer matches expected text')
-          text = text.replace(step3_old, step3_new, 1)
-
-          path.write_text(text)
-          PY
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/superpowers/plans/2026-09-15-background-downloader-authority.md
-          git commit -m "docs(downloads): record task 24 presentation audit"
-          git push origin HEAD:refactor/background-downloader-authority
