@@ -188,15 +188,26 @@ void main() {
         );
         expect(body, contains('tombstoneForDeletion('));
         expect(body, isNot(contains('_jobStore.remove(taskId)')));
-        final settled = body.indexOf('_waitForCancelOwnershipRelease(taskId)');
+        final settled = body.indexOf(
+          'final unsettledCancellationIds = <String>[];',
+        );
         final pluginDelete = body.indexOf(
           'FileDownloader().database.deleteRecordWithId(taskId)',
         );
         expect(settled, greaterThanOrEqualTo(0));
         expect(pluginDelete, greaterThan(settled));
+        final settlement = body.substring(settled, pluginDelete);
         expect(
-          body.substring(settled, pluginDelete),
+          settlement,
+          contains('_waitForCancelOwnershipRelease(id)'),
+        );
+        expect(
+          settlement,
           contains('DownloadRuntimeOwnership.notOwned'),
+        );
+        expect(
+          settlement,
+          contains('if (unsettledCancellationIds.isNotEmpty)'),
         );
       },
     );
