@@ -6,10 +6,10 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  flutter-ci:
+  flutter_ci:
     name: Full Flutter CI
     runs-on: ubuntu-24.04
     steps:
@@ -31,7 +31,7 @@ jobs:
       - name: Full test suite
         run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
-  native-checks:
+  native_checks:
     name: Native Swift checks
     runs-on: macos-latest
     steps:
@@ -49,7 +49,7 @@ jobs:
           PYCODE
           swiftc -typecheck /tmp/download-log.swift
 
-  android-build:
+  android_build:
     name: Android debug build
     runs-on: ubuntu-24.04
     steps:
@@ -69,7 +69,7 @@ jobs:
       - name: Build Android debug APK
         run: flutter build apk --debug
 
-  ios-build:
+  ios_build:
     name: iOS release no-codesign build
     runs-on: macos-latest
     steps:
@@ -95,7 +95,7 @@ jobs:
       - name: Build iOS release without codesigning
         run: flutter build ios --release --no-codesign
 
-  windows-build:
+  windows_build:
     name: Windows release build
     runs-on: windows-2022
     steps:
@@ -132,78 +132,3 @@ jobs:
           "ANIMEWITCHER_WINDOWS_MPV_DLL=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build Windows release
         run: flutter build windows --release
-
-  finalize:
-    name: Record evidence and remove temporary audit workflows
-    needs:
-      - flutter-ci
-      - native-checks
-      - android-build
-      - ios-build
-      - windows-build
-    if: ${{ always() && needs.flutter-ci.result == 'success' && needs.native-checks.result == 'success' && needs.android-build.result == 'success' && needs.ios-build.result == 'success' && needs.windows-build.result == 'success' }}
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: refactor/background-downloader-authority
-          fetch-depth: 0
-      - name: Record Task 24 automated evidence
-        env:
-          STEP4_RUN_ID: ${{ github.run_id }}
-        run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          path = Path('docs/superpowers/plans/2026-09-15-background-downloader-authority.md')
-          text = path.read_text()
-
-          step2_old = '''- [ ] **Step 2: Audit integrity/error transitions**
-
-Review 401/403 signed-URL refresh, incompatible resource fingerprint, 5xx/socket retry ownership, low-disk/no-space, complete-file verification, and stale callbacks after terminal/delete tombstones.'''
-          step2_new = '''- [x] **Step 2: Audit integrity/error transitions**
-
-Review 401/403 signed-URL refresh, incompatible resource fingerprint, 5xx/socket retry ownership, low-disk/no-space, complete-file verification, and stale callbacks after terminal/delete tombstones.
-
-**Evidence:** Task 24 integrity/error audit run `35058906039` passed the signed-source/resource-identity/retry/completion/tombstone matrix, a real bounded-tmpfs ENOSPC test that preserves verified parts and resumes, and the focused analyzer. The preceding run's only failure was a stale source guard tied to the pre-`executionToken` `_resumeDownloadTask` signature; commit `05f799724c39050185d916069d06421d3202486d` made that guard signature-agnostic without changing production behavior.'''
-          if step2_old in text:
-              text = text.replace(step2_old, step2_new, 1)
-          elif step2_new not in text:
-              raise SystemExit('Task 24 Step 2 block no longer matches expected text')
-
-          step3_old = '''- [ ] **Step 3: Audit queue/session presentation**
-
-Verify episode-level concurrency, one parent slot regardless of chunk count, progress/speed/ETA monotonicity, continued-processing overlay truthfulness, and no stale active UI after pause/cancel.'''
-          step3_new = '''- [x] **Step 3: Audit queue/session presentation**
-
-Verify episode-level concurrency, one parent slot regardless of chunk count, progress/speed/ETA monotonicity, continued-processing overlay truthfulness, and no stale active UI after pause/cancel.
-
-**Evidence:** Task 24 queue/session presentation audit run `35059394783` passed episode-level queue/parent-slot accounting, plugin and legacy progress/speed/ETA projection, phantom-progress fencing, pause/cancel/delete presentation settlement, logical overlay identity, missing-presentation recovery, continued-processing start/update/completion/expiration truthfulness, and the focused analyzer.'''
-          if step3_old in text:
-              text = text.replace(step3_old, step3_new, 1)
-          elif step3_new not in text:
-              raise SystemExit('Task 24 Step 3 block no longer matches expected text')
-
-          step4_old = '''- [ ] **Step 4: Run focused suites, full Flutter CI, native checks, and supported-platform builds**
-
-Expected: zero failures on the final branch head, with no temporary patch workflow or diagnostic patch script remaining.'''
-          run_id = os.environ['STEP4_RUN_ID']
-          step4_new = f'''- [x] **Step 4: Run focused suites, full Flutter CI, native checks, and supported-platform builds**
-
-Expected: zero failures on the final branch head, with no temporary patch workflow or diagnostic patch script remaining.
-
-**Evidence:** Task 24 final automated gate run `{run_id}` passed the full Flutter analyzer/test suite, native Swift logger typecheck, Android debug APK build, iOS release/no-codesign build, and Windows release build. Its finalizer removes the temporary Task 24 audit workflows before committing this evidence, leaving the branch head without diagnostic workflows.'''
-          if step4_old not in text:
-              raise SystemExit('Task 24 Step 4 block no longer matches expected text')
-          text = text.replace(step4_old, step4_new, 1)
-          path.write_text(text)
-          PY
-          rm -f .github/workflows/task24-presentation-red.yml
-          rm -f .github/workflows/task24-transfer-update-bridge-red.yml
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/superpowers/plans/2026-09-15-background-downloader-authority.md .github/workflows/task24-presentation-red.yml .github/workflows/task24-transfer-update-bridge-red.yml
-          git commit -m "test(downloads): record task 24 automated gate"
-          git push origin HEAD:refactor/background-downloader-authority
