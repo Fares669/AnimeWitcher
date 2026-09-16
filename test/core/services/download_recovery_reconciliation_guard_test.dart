@@ -43,7 +43,7 @@ void main() {
     expect(ownershipSource, isNot(contains('activeTasks.any')));
   });
 
-  test('transport ownership uses targeted plugin runtime evidence', () {
+  test('transport ownership uses targeted Transfer runtime evidence', () {
     final source = File(
       'lib/core/services/background_downloader_transport.dart',
     ).readAsStringSync();
@@ -60,7 +60,7 @@ void main() {
     final ownershipSource = source.substring(ownershipStart, ownershipEnd);
     expect(
       ownershipSource,
-      contains('final projectedStatus = statusFor(taskId);'),
+      contains('final projectedStatus = transfer?.status;'),
     );
     expect(
       ownershipSource.indexOf('ownershipFromStatus(projectedStatus)'),
