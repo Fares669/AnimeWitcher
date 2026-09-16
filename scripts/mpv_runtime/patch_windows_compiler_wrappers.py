@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make generated LLVM-MinGW C++ wrappers use the installed libc++ runtime."""
+"""Align generated LLVM-MinGW C++ wrappers and OpenAL module scanning with libc++."""
 
 from __future__ import annotations
 
@@ -10,6 +10,11 @@ from pathlib import Path
 
 CPP_WRAPPERS = ("clang++", "g++", "c++")
 DIRECT_FLAGS_MARKER = " # AnimeWitcher: explicit libc++ compiler flags"
+OPENAL_MODULES_MARKER = "# AnimeWitcher: disable OpenAL modules for wrapper-based cross compiler"
+OPENAL_MODULES_SETTING = (
+    'set(ALSOFT_ENABLE_MODULES OFF CACHE BOOL '
+    '"Disable OpenAL C++20 modules for cross compiler wrapper compatibility" FORCE)'
+)
 
 
 def _required_args(*, sysroot: Path, resource_dir: Path) -> list[str]:
@@ -73,6 +78,42 @@ def _patch_wrapper(path: Path, required_args: list[str]) -> bool:
     return True
 
 
+def _patch_openal_module_setting(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to read generated CMake toolchain: {path}: {exc}") from exc
+
+    if OPENAL_MODULES_MARKER in text:
+        if OPENAL_MODULES_SETTING not in text:
+            raise RuntimeError(f"generated CMake toolchain has an invalid OpenAL module override: {path}")
+        return False
+    if "ALSOFT_ENABLE_MODULES" in text:
+        raise RuntimeError(f"generated CMake toolchain already configures OpenAL modules: {path}")
+
+    # OpenAL auto-enables C++20 modules with modern Clang + Ninja. CMake then
+    # invokes clang-scan-deps using the visible compiler command line, but our
+    # generated cross compiler is a shell wrapper whose libc++ flags are added
+    # internally. The scanner therefore cannot see the libc++ include path and
+    # fails on standard headers. Modules are optional, so disable them only for
+    # OpenAL while leaving the normal cross-compiler path unchanged.
+    separator = "" if text.endswith("\n") else "\n"
+    new_text = (
+        text
+        + separator
+        + "\n"
+        + OPENAL_MODULES_MARKER
+        + "\n"
+        + OPENAL_MODULES_SETTING
+        + "\n"
+    )
+    try:
+        path.write_text(new_text, encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to update generated CMake toolchain: {path}: {exc}") from exc
+    return True
+
+
 def patch_wrappers(
     *,
     bin_dir: Path,
@@ -87,6 +128,11 @@ def patch_wrappers(
         raise RuntimeError(f"Clang resource directory is missing: {resource_dir}")
     if not bin_dir.is_dir():
         raise RuntimeError(f"compiler wrapper directory is missing: {bin_dir}")
+
+    toolchain_file = sysroot.parent / "toolchain.cmake"
+    if not toolchain_file.is_file():
+        raise RuntimeError(f"generated CMake toolchain is missing: {toolchain_file}")
+    _patch_openal_module_setting(toolchain_file)
 
     required = _required_args(sysroot=sysroot, resource_dir=resource_dir)
     changed: list[str] = []
@@ -111,6 +157,12 @@ def patch_wrappers(
                 raise RuntimeError(
                     f"failed to verify generated wrapper argument in {path}: {argument}"
                 )
+
+    toolchain_text = toolchain_file.read_text(encoding="utf-8")
+    if toolchain_text.count(OPENAL_MODULES_MARKER) != 1 or toolchain_text.count(
+        OPENAL_MODULES_SETTING
+    ) != 1:
+        raise RuntimeError(f"failed to verify OpenAL module override in {toolchain_file}")
     return changed
 
 
