@@ -22,36 +22,38 @@ jobs:
           from pathlib import Path
           path = Path('lib/core/services/download_service.dart')
           text = path.read_text()
-          old = """    final didPause = await _pauseTransfer(downloadTask);
-    if (didPause) {
-      await _syncSessionOverlay();
-      return;
-    }
-
-    await _preserveDownloadAsPaused(
-"""
-          new = """    final didPause = await _pauseTransfer(downloadTask);
-    if (didPause) {
-      final checkpointed = await _checkpointLogicalJob(
-        downloadTask,
-        state: DownloadJobState.interrupted,
-        userPaused: false,
-        queueWaiting: false,
-      );
-      if (!checkpointed) {
-        diagnosticLog.record('systemPause.checkpointFailed', {
-          'taskId': taskId,
-        });
-        await _syncSessionOverlay(completedSuccess: false);
-        return;
-      }
-      await _serializeQueue(_syncQueueToCapUnlocked);
-      await _syncSessionOverlay(completedSuccess: false);
-      return;
-    }
-
-    await _preserveDownloadAsPaused(
-"""
+          old = "\n".join([
+              "    final didPause = await _pauseTransfer(downloadTask);",
+              "    if (didPause) {",
+              "      await _syncSessionOverlay();",
+              "      return;",
+              "    }",
+              "",
+              "    await _preserveDownloadAsPaused(",
+          ]) + "\n"
+          new = "\n".join([
+              "    final didPause = await _pauseTransfer(downloadTask);",
+              "    if (didPause) {",
+              "      final checkpointed = await _checkpointLogicalJob(",
+              "        downloadTask,",
+              "        state: DownloadJobState.interrupted,",
+              "        userPaused: false,",
+              "        queueWaiting: false,",
+              "      );",
+              "      if (!checkpointed) {",
+              "        diagnosticLog.record('systemPause.checkpointFailed', {",
+              "          'taskId': taskId,",
+              "        });",
+              "        await _syncSessionOverlay(completedSuccess: false);",
+              "        return;",
+              "      }",
+              "      await _serializeQueue(_syncQueueToCapUnlocked);",
+              "      await _syncSessionOverlay(completedSuccess: false);",
+              "      return;",
+              "    }",
+              "",
+              "    await _preserveDownloadAsPaused(",
+          ]) + "\n"
           count = text.count(old)
           if count != 1:
               raise SystemExit(f'expected exactly one system-cancel success block, found {count}')
