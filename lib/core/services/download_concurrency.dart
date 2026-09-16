@@ -39,9 +39,11 @@ int parseDownloadConcurrency(Object? raw) {
   return kDownloadConcurrencyDefault;
 }
 
-/// A dead URL must not occupy the only slot with plugin retries. Park that
-/// episode as paused and let the next waiter run; the user can resume later.
-const int kDownloadTaskRetries = 0;
+/// Generic transient transport failures are retried by
+/// background_downloader. Application-level URL refresh, resource validation,
+/// disk policy and explicit offline/user-intent transitions remain owned by
+/// AnimeWitcher.
+const int kDownloadTaskRetries = 3;
 
 /// ParallelDownloadTask creates native child DownloadTasks in the reserved
 /// `chunk` group. background_downloader's HoldingQueue counts both the parent
