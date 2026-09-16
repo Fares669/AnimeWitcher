@@ -325,6 +325,25 @@ void main() {
   });
 
 
+  test('live recovery lets runtime ownership resolve stale paused projections', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final methodStart = source.indexOf(
+      'Future<List<Task>> _liveTransferTasks()',
+    );
+    final methodEnd = source.indexOf(
+      'Future<DownloadRuntimeOwnership> _runtimeOwnershipFor(',
+      methodStart,
+    );
+    expect(methodStart, greaterThanOrEqualTo(0));
+    expect(methodEnd, greaterThan(methodStart));
+    final method = source.substring(methodStart, methodEnd);
+
+    expect(method, contains('await _nativeTransport.ownershipFor(task.taskId)'));
+    expect(method, isNot(contains('record?.status == TaskStatus.paused')));
+    expect(method, isNot(contains('transfer?.status == TaskStatus.paused')));
+  });
+
   test('transport resume requires runtime ownership before accepting active handles', () {
     final source = File(
       'lib/core/services/background_downloader_transport.dart',
