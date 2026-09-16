@@ -83,15 +83,16 @@ AndroidDownloadExecutionPolicy planAndroidDownloadExecutionPolicy({
 
 /// Capability table for fresh plugin-owned parallel downloads.
 ///
-/// Compilation/source characterization is not sufficient to accept a
-/// platform. Keep every platform fail-closed until the platform-specific
-/// pause/resume/cancel and kill/relaunch acceptance matrix has produced real
-/// evidence. Tasks 10 and 11 may open individual entries after that evidence.
+/// iOS now deliberately uses background_downloader's native
+/// [ParallelDownloadTask] executor for fresh multipart work. Durable PR #231
+/// manifests still win in [selectDownloadExecutionBackend], so an existing
+/// legacy session never changes executor mid-transfer. Other platforms stay
+/// fail-closed until their device lifecycle matrix is accepted.
 bool pluginParallelAcceptedForPlatform(TargetPlatform platform) =>
     switch (platform) {
+      TargetPlatform.iOS => true,
       TargetPlatform.android ||
       TargetPlatform.fuchsia ||
-      TargetPlatform.iOS ||
       TargetPlatform.linux ||
       TargetPlatform.macOS ||
       TargetPlatform.windows => false,
@@ -103,7 +104,7 @@ bool pluginParallelAcceptedForPlatform(TargetPlatform platform) =>
 /// changing executor mid-session could create overlapping writers for the same
 /// durable ranges. Fresh single-connection downloads use background_downloader
 /// directly. Fresh multipart downloads move to background_downloader only after
-/// the caller has proven plugin parallel support for the current platform.
+/// the caller has enabled plugin parallel support for the current platform.
 DownloadExecutionBackend selectDownloadExecutionBackend({
   required int connections,
   required bool pluginParallelAccepted,
