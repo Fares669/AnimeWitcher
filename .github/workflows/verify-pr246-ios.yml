@@ -1,0 +1,39 @@
+name: Verify PR246 iOS Build
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-pr246-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-release-no-codesign:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Verify ownership regressions
+        run: |
+          flutter test \
+            test/core/services/ios_legacy_swizzle_scope_test.dart \
+            test/core/services/ios_plugin_native_callback_authority_test.dart \
+            test/core/services/ios_multipart_ownership_handoff_source_test.dart \
+            test/core/services/download_plugin_relaunch_single_writer_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+      - name: Build iOS release without codesign
+        run: flutter build ios --release --no-codesign
