@@ -35,6 +35,38 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             bin_dir.mkdir()
             toolchain = sysroot.parent / "toolchain.cmake"
             toolchain.write_text("set(CMAKE_SYSTEM_NAME Windows)\n", encoding="utf-8")
+
+            cmake = root / "cmake"
+            cmake.mkdir()
+            cleanup_generator = cmake / "custom_steps.cmake"
+            cleanup_generator.write_text(
+                "function(force_rebuild_git _name)\n"
+                "    get_property(git_tag TARGET ${_name} PROPERTY _EP_GIT_TAG)\n"
+                "    get_property(git_reset TARGET ${_name} PROPERTY _EP_GIT_RESET)\n"
+                "    get_property(git_remote_name TARGET ${_name} PROPERTY _EP_GIT_REMOTE_NAME)\n"
+                "    get_property(stamp_dir TARGET ${_name} PROPERTY _EP_STAMP_DIR)\n"
+                "    get_property(source_dir TARGET ${_name} PROPERTY _EP_SOURCE_DIR)\n"
+                "\n"
+                '    if("${git_remote_name}" STREQUAL "" AND NOT "${git_tag}" STREQUAL "")\n'
+                "        # GIT_REMOTE_NAME is not set when commit hash is specified\n"
+                '        set(reset "")\n'
+                '    elseif(NOT "${git_reset}" STREQUAL "")\n'
+                '        set(reset "${git_reset}")\n'
+                "    else()\n"
+                '        set(reset "@{u}") # eg: origin/master\n'
+                "    endif()\n"
+                "\n"
+                "file(WRITE ${stamp_dir}/reset_head.sh\n"
+                '"#!/bin/bash\\n'
+                "set -e\\n"
+                'if [[ ! -f \\"${stamp_dir}/${_name}-patch\\"  || \\"${stamp_dir}/${_name}-download\\" -nt \\"${stamp_dir}/${_name}-patch\\" || ! -f \\"${stamp_dir}/HEAD\\" || \\"$(cat ${stamp_dir}/HEAD)\\" != \\"$(git -C ${source_dir} rev-parse @{u})\\" ]]; then\\n'
+                "    echo ${source_dir}\\n"
+                '    git -C ${source_dir} reset --hard ${reset} -q\\n'
+                'fi")\n'
+                "endfunction()\n",
+                encoding="utf-8",
+            )
+
             packages = root / "packages"
             packages.mkdir()
             openal_package = packages / "openal-soft.cmake"
@@ -50,14 +82,14 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
                 (bin_dir / f"x86_64-w64-mingw32-{compiler}").write_text(
                     "#!/bin/bash\n"
                     "PROG=/clang_root/bin/clang++\n"
-                    "FLAGS=\"$FLAGS --sysroot /old/sysroot\"\n"
-                    "if [ \"clang++\" = \"clang++\" ]; then\n"
-                    "    FLAGS=\"$FLAGS -stdlib=libc++\"\n"
-                    "    FLAGS=\"$FLAGS -isystem /old/sysroot/include/c++/v1\"\n"
-                    "    FLAGS=\"$FLAGS -resource-dir /old/clang\"\n"
-                    "    FLAGS=\"$FLAGS --rtlib=compiler-rt --unwindlib=libunwind\"\n"
+                    'FLAGS="$FLAGS --sysroot /old/sysroot"\n'
+                    'if [ "clang++" = "clang++" ]; then\n'
+                    '    FLAGS="$FLAGS -stdlib=libc++"\n'
+                    '    FLAGS="$FLAGS -isystem /old/sysroot/include/c++/v1"\n'
+                    '    FLAGS="$FLAGS -resource-dir /old/clang"\n'
+                    '    FLAGS="$FLAGS --rtlib=compiler-rt --unwindlib=libunwind"\n'
                     "fi\n"
-                    "$CCACHE \"$PROG\" \"$@\" $FLAGS\n",
+                    '$CCACHE "$PROG" "$@" $FLAGS\n',
                     encoding="utf-8",
                 )
 
@@ -87,9 +119,9 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             invocation = next(
                 line for line in patched.splitlines() if line.startswith('$CCACHE "$PROG"')
             )
-            self.assertIn(f'-resource-dir {resource_dir}', invocation)
-            self.assertIn('--rtlib=compiler-rt --unwindlib=libunwind', invocation)
-            self.assertIn('-stdlib=libc++', invocation)
+            self.assertIn(f"-resource-dir {resource_dir}", invocation)
+            self.assertIn("--rtlib=compiler-rt --unwindlib=libunwind", invocation)
+            self.assertIn("-stdlib=libc++", invocation)
             self.assertIn(f'-isystem {sysroot / "include/c++/v1"}', invocation)
 
             toolchain_text = toolchain.read_text(encoding="utf-8")
@@ -100,6 +132,16 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             openal_text = openal_package.read_text(encoding="utf-8")
             self.assertEqual(openal_text.count("-DALSOFT_ENABLE_MODULES=OFF"), 1)
             self.assertEqual(openal_text.count("-DCMAKE_CXX_SCAN_FOR_MODULES=OFF"), 1)
+
+            cleanup_text = cleanup_generator.read_text(encoding="utf-8")
+            self.assertEqual(
+                cleanup_text.count("# AnimeWitcher: detached-safe cleanup comparison"),
+                1,
+            )
+            self.assertIn('MATCHES "^[0-9a-fA-F]{40}$"', cleanup_text)
+            self.assertIn('set(reset_compare_ref "HEAD")', cleanup_text)
+            self.assertIn("rev-parse ${reset_compare_ref}", cleanup_text)
+            self.assertNotIn("rev-parse @{u})", cleanup_text)
 
             self.assertEqual(
                 helper.patch_wrappers(
@@ -117,6 +159,12 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             )
             self.assertEqual(
                 openal_package.read_text(encoding="utf-8").count("CMAKE_CXX_SCAN_FOR_MODULES"),
+                1,
+            )
+            self.assertEqual(
+                cleanup_generator.read_text(encoding="utf-8").count(
+                    "# AnimeWitcher: detached-safe cleanup comparison"
+                ),
                 1,
             )
 

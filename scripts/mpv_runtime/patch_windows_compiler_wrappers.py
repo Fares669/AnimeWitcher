@@ -17,6 +17,20 @@ OPENAL_MODULES_SETTING = (
 )
 OPENAL_PACKAGE_MODULE_FLAG = "        -DALSOFT_ENABLE_MODULES=OFF"
 OPENAL_PACKAGE_SCAN_FLAG = "        -DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
+CLEANUP_GENERATOR_MARKER = "# AnimeWitcher: detached-safe cleanup comparison"
+CLEANUP_COMPARE_BLOCK = (
+    CLEANUP_GENERATOR_MARKER
+    + "\n"
+    + '    if("${git_tag}" MATCHES "^[0-9a-fA-F]{40}$")\n'
+    + '        set(reset_compare_ref "HEAD")\n'
+    + '    elseif("${git_remote_name}" STREQUAL "" AND NOT "${git_tag}" STREQUAL "")\n'
+    + '        set(reset_compare_ref "HEAD")\n'
+    + "    else()\n"
+    + '        set(reset_compare_ref "@{u}")\n'
+    + "    endif()\n"
+)
+CLEANUP_COMPARE_OLD = "git -C ${source_dir} rev-parse @{u})"
+CLEANUP_COMPARE_NEW = "git -C ${source_dir} rev-parse ${reset_compare_ref})"
 
 
 def _required_args(*, sysroot: Path, resource_dir: Path) -> list[str]:
@@ -40,10 +54,10 @@ def _patch_wrapper(path: Path, required_args: list[str]) -> bool:
     if not text.startswith("#!/bin/bash\n"):
         raise RuntimeError(f"generated compiler wrapper has unexpected format: {path}")
 
-    invocation = '"$CCACHE \"$PROG\"'  # retained for a useful error below
+    invocation = '"$CCACHE \\"$PROG\\"'  # retained for a useful error below
     lines = text.splitlines()
     invocation_index = next(
-        (index for index, line in enumerate(lines) if line.startswith("$CCACHE \"$PROG\"")),
+        (index for index, line in enumerate(lines) if line.startswith('$CCACHE "$PROG"')),
         None,
     )
     if invocation_index is None:
@@ -57,7 +71,7 @@ def _patch_wrapper(path: Path, required_args: list[str]) -> bool:
     # arguments below are the authoritative cross-compiler defaults.
     kept = lines
     invocation_index = next(
-        index for index, line in enumerate(kept) if line.startswith("$CCACHE \"$PROG\"")
+        index for index, line in enumerate(kept) if line.startswith('$CCACHE "$PROG"')
     )
     direct_args = shlex.join(required_args)
     invocation = kept[invocation_index]
@@ -141,6 +155,48 @@ def _patch_openal_package(path: Path) -> bool:
     return True
 
 
+def _patch_cleanup_generator(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to read builder cleanup generator: {path}: {exc}") from exc
+
+    if CLEANUP_GENERATOR_MARKER in text:
+        if text.count(CLEANUP_GENERATOR_MARKER) != 1:
+            raise RuntimeError(f"builder cleanup generator has duplicate detached-safe markers: {path}")
+        if CLEANUP_COMPARE_BLOCK not in text or CLEANUP_COMPARE_NEW not in text:
+            raise RuntimeError(f"builder cleanup generator has an invalid detached-safe override: {path}")
+        if CLEANUP_COMPARE_OLD in text:
+            raise RuntimeError(f"builder cleanup generator still compares against upstream: {path}")
+        return False
+
+    if "reset_compare_ref" in text:
+        raise RuntimeError(f"builder cleanup generator already has an unknown compare-ref override: {path}")
+
+    anchor = (
+        '    if("${git_remote_name}" STREQUAL "" AND NOT "${git_tag}" STREQUAL "")\n'
+        "        # GIT_REMOTE_NAME is not set when commit hash is specified\n"
+        '        set(reset "")\n'
+        '    elseif(NOT "${git_reset}" STREQUAL "")\n'
+        '        set(reset "${git_reset}")\n'
+        "    else()\n"
+        '        set(reset "@{u}") # eg: origin/master\n'
+        "    endif()\n"
+    )
+    if text.count(anchor) != 1:
+        raise RuntimeError(f"builder cleanup generator layout changed: expected reset selection block: {path}")
+    if text.count(CLEANUP_COMPARE_OLD) != 1:
+        raise RuntimeError(f"builder cleanup generator layout changed: expected upstream comparison: {path}")
+
+    updated = text.replace(anchor, anchor + "\n" + CLEANUP_COMPARE_BLOCK, 1)
+    updated = updated.replace(CLEANUP_COMPARE_OLD, CLEANUP_COMPARE_NEW, 1)
+    try:
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to update builder cleanup generator: {path}: {exc}") from exc
+    return True
+
+
 def patch_wrappers(
     *,
     bin_dir: Path,
@@ -162,6 +218,12 @@ def patch_wrappers(
     _patch_openal_module_setting(toolchain_file)
 
     builder_root = sysroot.parent.parent
+    cmake = builder_root / "cmake"
+    cleanup_generator = cmake / "custom_steps.cmake"
+    if not cleanup_generator.is_file():
+        raise RuntimeError(f"builder cleanup generator is missing: {cleanup_generator}")
+    _patch_cleanup_generator(cleanup_generator)
+
     packages = builder_root / "packages"
     openal_package = packages / "openal-soft.cmake"
     if not openal_package.is_file():
@@ -181,7 +243,7 @@ def patch_wrappers(
         path = bin_dir / f"{target_prefix}-{compiler}"
         text = path.read_text(encoding="utf-8")
         invocation = next(
-            (line for line in text.splitlines() if line.startswith("$CCACHE \"$PROG\"")),
+            (line for line in text.splitlines() if line.startswith('$CCACHE "$PROG"')),
             None,
         )
         if invocation is None or DIRECT_FLAGS_MARKER not in invocation:
@@ -197,6 +259,14 @@ def patch_wrappers(
         OPENAL_MODULES_SETTING
     ) != 1:
         raise RuntimeError(f"failed to verify OpenAL module override in {toolchain_file}")
+
+    cleanup_text = cleanup_generator.read_text(encoding="utf-8")
+    if cleanup_text.count(CLEANUP_GENERATOR_MARKER) != 1:
+        raise RuntimeError(f"failed to verify detached-safe cleanup generator in {cleanup_generator}")
+    if CLEANUP_COMPARE_BLOCK not in cleanup_text or CLEANUP_COMPARE_NEW not in cleanup_text:
+        raise RuntimeError(f"failed to verify cleanup compare ref in {cleanup_generator}")
+    if CLEANUP_COMPARE_OLD in cleanup_text:
+        raise RuntimeError(f"cleanup generator still contains unsafe upstream comparison: {cleanup_generator}")
 
     openal_text = openal_package.read_text(encoding="utf-8")
     if openal_text.count(OPENAL_PACKAGE_MODULE_FLAG) != 1 or openal_text.count(
