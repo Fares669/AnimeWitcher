@@ -73,9 +73,10 @@ pause_anchor = '''  @override
 '''
 restart_method = '''  /// Replaces a stale zero-byte package-owned generation with [task].
   ///
-  /// background_downloader owns cleanup and child recreation: cancel settles
-  /// the old Transfer and its package-managed pause/resume state, then
-  /// Transfers.start creates a fresh generation from the refreshed task.
+  /// background_downloader owns cleanup, duplicate lookup, and child
+  /// recreation: cancel settles the old Transfer and its package-managed
+  /// pause/resume state, then getOrStart creates or reattaches the refreshed
+  /// generation without permitting a duplicate writer.
   Future<bool> restartFromZero(DownloadTask task) async {
     if (!isBackgroundDownloaderTransportTask(task)) return false;
     try {
@@ -98,7 +99,11 @@ restart_method = '''  /// Replaces a stale zero-byte package-owned generation wi
 
       _detach(task.taskId);
       _downloader.transfers.remove(task.taskId);
-      final replacement = await _downloader.transfers.start(task);
+      final replacement = await _downloader.transfers.getOrStart(
+        task,
+        matchBy: (existingTask) => existingTask.taskId == task.taskId,
+        reEnqueueIfFailed: true,
+      );
       _attach(replacement);
       return runtimeTaskStatusCanOwnWriter(replacement.status) ||
           replacement.status == TaskStatus.complete;
