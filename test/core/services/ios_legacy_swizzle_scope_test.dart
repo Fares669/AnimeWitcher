@@ -24,7 +24,7 @@ void main() {
     final bytes = _slice(
       source,
       'static func handleBytesWritten(',
-      'private static func rememberDownloadSession(',
+      'private static func postSingleTaskUpdate(',
     );
     expect(bytes, contains('if isPluginDownloadChunk(downloadTask) { return }'));
     expect(bytes, contains('if isLegacyDownloadPart(downloadTask) {'));
