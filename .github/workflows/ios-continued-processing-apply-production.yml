@@ -38,10 +38,10 @@ jobs:
 
           helper = Path('.github/workflows/ios-continued-processing-sync-green.yml').read_text()
           match = re.search(
-              r"run: echo '([^']+)' \\| base64 -d \\| python3",
+              r"run: echo '([^']+)' \| base64 -d \| python3",
               helper,
           )
-          if match is None:
+          if match is None or match.group(1) is None:
               raise SystemExit('continued-processing patch payload not found')
           patch = Path('/tmp/apply-continued-processing.py')
           patch.write_bytes(base64.b64decode(match.group(1)))
@@ -83,7 +83,7 @@ jobs:
             .github/workflows/ios-continued-processing-finalize.yml \
             .github/workflows/ios-continued-processing-apply-production.yml
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+Fares669@users.noreply.github.com"
           git add \
             ios/Runner/DownloadContinuedProcessingManager.swift \
             ios/Runner/AppDelegate.swift \
