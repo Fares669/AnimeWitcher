@@ -111,8 +111,7 @@ void main() {
       expect(
         RegExp(r'preserveLiveParts:\s*Platform\.isIOS').hasMatch(source),
         isTrue,
-        reason:
-            'iOS multipart pause must preserve live native range bytes',
+        reason: 'iOS multipart pause must preserve live native range bytes',
       );
       expect(source, contains('shouldDrainPartOnPause: (task) =>'));
       expect(
@@ -352,7 +351,9 @@ void main() {
           .readAsStringSync();
       expect(
         appDelegate,
-        contains('if !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates()'),
+        contains(
+          'if !forcePresentation && !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates()',
+        ),
       );
     });
 
