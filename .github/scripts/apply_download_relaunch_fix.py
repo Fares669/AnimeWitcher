@@ -116,7 +116,7 @@ replacement = """  Future<List<ParallelManifestRecoveryEvidence>>
       }
 
       final parentId = downloadInternalParentTaskId(task);
-      if (isInternalDownloaderChunk(task) &&
+      if (task.group == FileDownloader.chunkGroup &&
           parentId != null &&
           parentIds.contains(parentId)) {
         rogueChunkIds.add(task.taskId);
@@ -167,13 +167,14 @@ replacement = """  Future<List<ParallelManifestRecoveryEvidence>>
         markDownloadedComplete: false,
       );
 
-      // Broken builds may already have created plugin-owned chunks for a
-      // legacy parent. Settle those exact identities through the supported
-      // plugin API before restoring the legacy projection.
+      // Broken builds may already have created background_downloader-owned
+      // chunk rows for a legacy parent. Settle only the plugin chunk group;
+      // PR #231 animewitcher_parts children are the valid legacy executor and
+      // must remain available for manifest recovery.
       final rogueChunkIds = <String>{...quarantine.rogueChunkIds};
       for (final task in await FileDownloader().allTasks(allGroups: true)) {
         final parentId = downloadInternalParentTaskId(task);
-        if (isInternalDownloaderChunk(task) &&
+        if (task.group == FileDownloader.chunkGroup &&
             parentId != null &&
             quarantine.parentIds.contains(parentId)) {
           rogueChunkIds.add(task.taskId);
