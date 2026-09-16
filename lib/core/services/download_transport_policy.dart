@@ -98,6 +98,16 @@ bool pluginParallelAcceptedForPlatform(TargetPlatform platform) =>
       TargetPlatform.windows => false,
     };
 
+/// Allows a deliberately-built acceptance artifact to exercise plugin-owned
+/// parallel transport without changing the production platform capability
+/// table. Normal builds pass [acceptanceBuildOverride] as false and therefore
+/// remain fail-closed until real-device acceptance is recorded.
+bool pluginParallelAcceptedForBuild(
+  TargetPlatform platform, {
+  required bool acceptanceBuildOverride,
+}) =>
+    acceptanceBuildOverride || pluginParallelAcceptedForPlatform(platform);
+
 /// Selects exactly one executor for a logical episode.
 ///
 /// Existing legacy multipart sessions always stay on their original executor;
