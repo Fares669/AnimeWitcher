@@ -4347,7 +4347,7 @@ class DownloadService {
         final started = await _resumeDownloadTask(downloadTask);
         if (!started) {
           final saved = await _savedProgressFor(downloadTask);
-          await _checkpointLogicalJob(
+          final resumeFailureCheckpointed = await _checkpointLogicalJob(
             downloadTask,
             state: DownloadJobState.interrupted,
             durableBytes: saved.partialBytes,
@@ -4356,6 +4356,12 @@ class DownloadService {
             userPaused: false,
             queueWaiting: false,
           );
+          if (!resumeFailureCheckpointed) {
+            diagnosticLog.record('resume.failureCheckpointFailed', {
+              'taskId': taskId,
+            });
+            return;
+          }
           await FileDownloader().database.updateRecord(
             TaskRecord(
               downloadTask,
