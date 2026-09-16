@@ -94,4 +94,41 @@ void main() {
       );
     },
   );
+
+  test('parked executor failure persists before paused replica projection', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final start = source.indexOf('Future<void> _preserveDownloadAsPaused(');
+    final end = source.indexOf(
+      'Future<void> _startNextAfterParkedFailureUnlocked()',
+      start,
+    );
+    expect(start, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(start));
+    final body = source.substring(start, end);
+
+    final checkpoint = body.indexOf(
+      'final checkpointed = await _checkpointLogicalJob(',
+    );
+    final replicaWrite = body.indexOf(
+      'await FileDownloader().database.updateRecord(',
+    );
+    expect(
+      checkpoint,
+      greaterThanOrEqualTo(0),
+      reason:
+          'a parked failure must prove the durable interrupted state was committed',
+    );
+    expect(
+      checkpoint,
+      lessThan(replicaWrite),
+      reason:
+          'JobStore authority must commit before executor/UI replicas are projected as paused',
+    );
+    expect(body, contains('if (!checkpointed) {'));
+    expect(
+      body,
+      contains("diagnosticLog.record('failurePark.checkpointFailed'"),
+    );
+  });
 }
