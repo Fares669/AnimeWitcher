@@ -1463,7 +1463,8 @@ enum DownloadNativeWaitingQueue {
         ? min(max(Double(totalWritten) / Double(totalExpected), 0), 1)
         : nil,
       completed: completed,
-      attemptGeneration: attemptGeneration(from: task)
+      attemptGeneration: attemptGeneration(from: task),
+      bridgeToDart: true
     )
   }
 
@@ -1488,7 +1489,8 @@ enum DownloadNativeWaitingQueue {
       totalExpected: expected,
       normalizedProgress: progress,
       completed: false,
-      attemptGeneration: attemptGeneration(fromPluginTask: task)
+      attemptGeneration: attemptGeneration(fromPluginTask: task),
+      bridgeToDart: task.group == "animewitcher_parts"
     )
     return true
   }
@@ -1569,9 +1571,11 @@ enum DownloadNativeWaitingQueue {
     totalExpected: Int64,
     normalizedProgress: Double?,
     completed: Bool,
-    attemptGeneration: Int?
+    attemptGeneration: Int?,
+    bridgeToDart: Bool
   ) {
-    if totalWritten > 0 || completed || (normalizedProgress ?? 0) > 0 {
+    if bridgeToDart &&
+       (totalWritten > 0 || completed || (normalizedProgress ?? 0) > 0) {
       settleMultipartClaim(childTaskId: childId)
     }
 
@@ -1687,11 +1691,13 @@ enum DownloadNativeWaitingQueue {
       values["speedBytesPerSecond"] = speed
     }
 
-    NotificationCenter.default.post(
-      name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
-      object: nil,
-      userInfo: values
-    )
+    if bridgeToDart {
+      NotificationCenter.default.post(
+        name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
+        object: nil,
+        userInfo: values
+      )
+    }
 
     // Dart owns the overlay while foreground. When it is suspended, keep the
     // same BGContinuedProcessingTask alive from native plugin progress so iOS

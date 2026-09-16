@@ -11,129 +11,122 @@ String _slice(String source, String startMarker, String endMarker) {
 }
 
 void main() {
-  test('legacy URLSession seam never owns background_downloader plugin chunks', () {
-    final source = File(
-      'ios/Runner/DownloadNativeWaitingQueue.swift',
-    ).readAsStringSync();
+  test(
+    'legacy URLSession seam never owns background_downloader plugin chunks',
+    () {
+      final source = File('ios/Runner/DownloadNativeWaitingQueue.swift')
+          .readAsStringSync();
 
-    expect(
-      source,
-      contains(
-        'static func isPluginDownloadChunk(_ task: URLSessionTask) -> Bool',
-      ),
-    );
-    expect(
-      source,
-      contains(
-        'static func isLegacyDownloadPart(_ task: URLSessionTask) -> Bool',
-      ),
-    );
-    expect(source, contains('return downloadTaskGroup(task) == "chunk"'));
-    expect(
-      source,
-      contains('return downloadTaskGroup(task) == "animewitcher_parts"'),
-    );
+      expect(
+        source,
+        contains(
+          'static func isPluginDownloadChunk(_ task: URLSessionTask) -> Bool',
+        ),
+      );
+      expect(
+        source,
+        contains(
+          'static func isLegacyDownloadPart(_ task: URLSessionTask) -> Bool',
+        ),
+      );
+      expect(source, contains('return downloadTaskGroup(task) == "chunk"'));
+      expect(
+        source,
+        contains('return downloadTaskGroup(task) == "animewitcher_parts"'),
+      );
 
-    final bytes = _slice(
-      source,
-      'static func handleBytesWritten(',
-      'private static func postSingleTaskUpdate(',
-    );
-    expect(
-      bytes,
-      contains('if isPluginDownloadChunk(downloadTask) { return }'),
-    );
-    expect(bytes, contains('if isLegacyDownloadPart(downloadTask) {'));
-    expect(bytes, isNot(contains('if isDownloadPart(downloadTask) {')));
+      final bytes = _slice(
+        source,
+        'static func handleBytesWritten(',
+        'private static func postSingleTaskUpdate(',
+      );
+      expect(
+        bytes,
+        contains('if isPluginDownloadChunk(downloadTask) { return }'),
+      );
+      expect(bytes, contains('if isLegacyDownloadPart(downloadTask) {'));
+      expect(bytes, isNot(contains('if isDownloadPart(downloadTask) {')));
 
-    final completion = _slice(
-      source,
-      'static func handlePluginTaskCompleted(',
-      'static func parkFailedTask(',
-    );
-    final pluginReturn = completion.indexOf(
-      'if isPluginDownloadChunk(task) { return }',
-    );
-    final legacyBranch = completion.indexOf(
-      'if isLegacyDownloadPart(task) {',
-    );
-    final promoteNext = completion.indexOf('promoteNext(on: session)');
-    expect(pluginReturn, greaterThanOrEqualTo(0));
-    expect(legacyBranch, greaterThan(pluginReturn));
-    expect(
-      promoteNext,
-      greaterThan(legacyBranch),
-      reason:
-          'a plugin chunk completion must return before legacy multipart or logical-episode queue promotion runs',
-    );
+      final completion = _slice(
+        source,
+        'static func handlePluginTaskCompleted(',
+        'static func parkFailedTask(',
+      );
+      final pluginReturn = completion.indexOf(
+        'if isPluginDownloadChunk(task) { return }',
+      );
+      final legacyBranch = completion.indexOf(
+        'if isLegacyDownloadPart(task) {',
+      );
+      final promoteNext = completion.indexOf('promoteNext(on: session)');
+      expect(pluginReturn, greaterThanOrEqualTo(0));
+      expect(legacyBranch, greaterThan(pluginReturn));
+      expect(
+        promoteNext,
+        greaterThan(legacyBranch),
+        reason: 'a plugin chunk completion must return before legacy multipart or logical-episode queue promotion runs',
+      );
 
-    final chunkBridge = _slice(
-      source,
-      'private static func postMultipartChunkUpdate(',
-      '#if canImport(background_downloader)',
-    );
-    expect(chunkBridge, contains('guard isLegacyDownloadPart(task),'));
-    expect(chunkBridge, contains('bridgeToDart: true'));
+      final chunkBridge = _slice(
+        source,
+        'private static func postMultipartChunkUpdate(',
+        '#if canImport(background_downloader)',
+      );
+      expect(chunkBridge, contains('guard isLegacyDownloadPart(task),'));
+      expect(chunkBridge, contains('bridgeToDart: true'));
 
-    final retry = _slice(
-      source,
-      'static func retryBackgroundTransferIfNeeded(',
-      'static func handlePluginTaskCompleted(',
-    );
-    expect(
-      retry,
-      contains('if isPluginDownloadChunk(task) { return false }'),
-    );
-    expect(
-      retry,
-      contains('let multipartPart = isLegacyDownloadPart(task)'),
-    );
+      final retry = _slice(
+        source,
+        'static func retryBackgroundTransferIfNeeded(',
+        'static func handlePluginTaskCompleted(',
+      );
+      expect(
+        retry,
+        contains('if isPluginDownloadChunk(task) { return false }'),
+      );
+      expect(retry, contains('let multipartPart = isLegacyDownloadPart(task)'));
 
-    final promotion = _slice(
-      source,
-      'static func promoteMultipartIfPossible(',
-      'private static func startMultipartChild(',
-    );
-    expect(promotion, contains('isLegacyDownloadPart(task),'));
+      final promotion = _slice(
+        source,
+        'static func promoteMultipartIfPossible(',
+        'private static func startMultipartChild(',
+      );
+      expect(promotion, contains('isLegacyDownloadPart(task),'));
 
-    final supported = _slice(
-      source,
-      'private static func postSupportedMultipartProgress(',
-      'private static func parentTaskId(',
-    );
-    expect(
-      supported,
-      contains(
-        'task.group == "chunk" || task.group == "animewitcher_parts"',
-      ),
-      reason:
-          'official background_downloader callbacks remain authoritative for plugin chunks and can still observe migrated legacy children',
-    );
-    expect(
-      supported,
-      contains('bridgeToDart: task.group == "animewitcher_parts"'),
-      reason:
-          'plugin-owned chunks may feed native overlay aggregation but must not re-enter the legacy Dart chunk coordinator',
-    );
+      final supported = _slice(
+        source,
+        'private static func postSupportedMultipartProgress(',
+        'private static func parentTaskId(',
+      );
+      expect(
+        supported,
+        contains('task.group == "chunk" || task.group == "animewitcher_parts"'),
+        reason: 'official background_downloader callbacks remain authoritative for plugin chunks and can still observe migrated legacy children',
+      );
+      expect(
+        supported,
+        contains('bridgeToDart: task.group == "animewitcher_parts"'),
+        reason: 'plugin-owned chunks may feed native overlay aggregation but must not re-enter the legacy Dart chunk coordinator',
+      );
 
-    final sample = _slice(
-      source,
-      'private static func postMultipartChunkSample(',
-      'private static func rememberDownloadSession(',
-    );
-    expect(sample, contains('bridgeToDart: Bool'));
-    expect(
-      sample,
-      contains('if bridgeToDart &&'),
-      reason:
-          'plugin-owned progress must not settle legacy multipart claims',
-    );
-    expect(sample, contains('if bridgeToDart {'));
-    expect(
-      sample,
-      contains(
-        'Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate")',
-      ),
-    );
-  });
+      final sample = _slice(
+        source,
+        'private static func postMultipartChunkSample(',
+        'private static func rememberDownloadSession(',
+      );
+      expect(sample, contains('bridgeToDart: Bool'));
+      expect(
+        sample,
+        contains('if bridgeToDart &&'),
+        reason: 'plugin-owned progress must not settle legacy multipart claims',
+      );
+      expect(sample, contains('if bridgeToDart {'));
+      expect(
+        sample,
+        contains(
+          'Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate")',
+        ),
+      );
+    },
+  );
 }
