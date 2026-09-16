@@ -15,6 +15,26 @@ void main() {
         );
       }
     });
+
+    test('acceptance build override is explicit and does not change platform gate', () {
+      for (final platform in TargetPlatform.values) {
+        expect(
+          pluginParallelAcceptedForBuild(
+            platform,
+            acceptanceBuildOverride: false,
+          ),
+          isFalse,
+        );
+        expect(
+          pluginParallelAcceptedForBuild(
+            platform,
+            acceptanceBuildOverride: true,
+          ),
+          isTrue,
+        );
+        expect(pluginParallelAcceptedForPlatform(platform), isFalse);
+      }
+    });
   });
 
   group('selectDownloadExecutionBackend', () {
