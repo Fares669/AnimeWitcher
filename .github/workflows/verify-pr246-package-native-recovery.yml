@@ -1,0 +1,263 @@
+name: Verify PR246 package-native recovery
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/background-downloader-authority
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Apply package-native recovery patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          transport_path = Path('lib/core/services/background_downloader_transport.dart')
+          transport = transport_path.read_text()
+          marker = '''  @override
+          Future<DownloadTransportCommandOutcome> startOutcome(
+          '''
+          if marker not in transport:
+              raise SystemExit('transport insertion marker not found')
+          method = '''  /// Discards a zero-byte stale execution generation and starts [task] again.
+          ///
+          /// Source replacement is delegated to background_downloader: cancel clears
+          /// package-owned pause/resume state for the old generation, and start creates
+          /// the replacement generation and ParallelDownloadTask children from [task].
+          Future<bool> restartFromZero(DownloadTask task) async {
+            if (!isBackgroundDownloaderTransportTask(task)) return false;
+            try {
+              final existing = handleFor(task.taskId);
+              final canceled = existing != null
+                  ? await existing.cancel()
+                  : await _downloader.cancelTaskWithId(task.taskId);
+              if (!canceled) {
+                final ownership = await ownershipFor(task.taskId);
+                if (ownership.blocksNewWriter) return false;
+              }
+              _detach(task.taskId);
+              final replacement = await _downloader.transfers.start(task);
+              _attach(replacement);
+              return runtimeTaskStatusCanOwnWriter(replacement.status) ||
+                  replacement.status == TaskStatus.complete;
+            } catch (_) {
+              return false;
+            }
+          }
+
+          '''
+          transport_path.write_text(transport.replace(marker, method + marker, 1))
+
+          service_path = Path('lib/core/services/download_service.dart')
+          service = service_path.read_text()
+
+          field_marker = '  final Set<String> _refreshingParallelParentIds = <String>{};\n'
+          if field_marker not in service:
+              raise SystemExit('source replacement field marker not found')
+          service = service.replace(field_marker, field_marker + '  final Set<String> _sourceReplacingNativeIds = <String>{};\n', 1)
+
+          listener_marker = '''      if (_parallel.handleUpdate(update)) return;
+              if (isInternalDownloaderChunk(update.task)) return;
+              if (_terminalJobIds.contains(update.task.taskId)) return;
+          '''
+          if listener_marker not in service:
+              raise SystemExit('shared update listener marker not found')
+          service = service.replace(listener_marker, '''      if (_parallel.handleUpdate(update)) return;
+              if (isInternalDownloaderChunk(update.task)) return;
+              if (_terminalJobIds.contains(update.task.taskId)) return;
+              if (_sourceReplacingNativeIds.contains(update.task.taskId) &&
+                  update is TaskStatusUpdate &&
+                  update.status == TaskStatus.canceled) {
+                diagnosticLog.record('source.replacementCancelIgnored', {
+                  'taskId': update.task.taskId,
+                });
+                return;
+              }
+          ''', 1)
+
+          old_reconcile = '''  Future<void> _reconcileTransferOwnership() async {
+            await _parallel.reconcile(_livePartIds);
+            final liveIds = await _livePartIds();
+            for (final record in await FileDownloader().database.allRecords()) {
+              if (!isLogicalEpisodeDownloadTask(record.task) ||
+                  _queueWaitingIds.contains(record.taskId) ||
+                  _startingTaskIds.contains(record.taskId) ||
+                  liveIds.contains(record.taskId) ||
+                  _parallel.isActive(record.taskId) ||
+                  !isLiveNativeDownloadStatus(record.status))
+                continue;
+              final task = record.task as DownloadTask;
+              final saved = await _savedProgressFor(task);
+              await FileDownloader().database.updateRecord(
+                TaskRecord(task, TaskStatus.paused, saved.progress, saved.totalSize),
+              );
+              _publishProgress(
+                trackingUrl: downloadTrackingUrl(task),
+                taskId: task.taskId,
+                progress: saved.progress,
+                totalSize: saved.totalSize,
+                status: TaskStatus.paused,
+              );
+              _updatesController.add(TaskStatusUpdate(task, TaskStatus.paused));
+            }
+          }
+          '''
+          if old_reconcile not in service:
+              raise SystemExit('reconcile block not found')
+          service = service.replace(old_reconcile, '''  Future<void> _reconcileTransferOwnership() async {
+            await _parallel.reconcile(_livePartIds);
+            for (final record in await FileDownloader().database.allRecords()) {
+              if (!isLogicalEpisodeDownloadTask(record.task) ||
+                  _queueWaitingIds.contains(record.taskId) ||
+                  _startingTaskIds.contains(record.taskId) ||
+                  _parallel.isActive(record.taskId) ||
+                  !isLiveNativeDownloadStatus(record.status)) {
+                continue;
+              }
+              final ownership = await _runtimeOwnershipFor(record.taskId);
+              if (ownership != DownloadRuntimeOwnership.notOwned) continue;
+              final task = record.task as DownloadTask;
+              final saved = await _savedProgressFor(task);
+              await FileDownloader().database.updateRecord(
+                TaskRecord(task, TaskStatus.paused, saved.progress, saved.totalSize),
+              );
+              _publishProgress(
+                trackingUrl: downloadTrackingUrl(task),
+                taskId: task.taskId,
+                progress: saved.progress,
+                totalSize: saved.totalSize,
+                status: TaskStatus.paused,
+              );
+              _updatesController.add(TaskStatusUpdate(task, TaskStatus.paused));
+            }
+          }
+          ''', 1)
+
+          old_guard = '''    if (!legacySessionExists && hasOpaqueNativeResume && partialBytes <= 0) {
+              // background_downloader 9.6.1 owns plugin resume/re-enqueue. Its
+              // ParallelDownloadTask resume payload, however, contains the original
+              // child task descriptors and there is no public API to rewrite those
+              // child URLs. Never migrate that plugin state into AnimeWitcher's legacy
+              // executor and never discard opaque bytes silently. A user-visible
+              // restart decision is safer until the plugin exposes source replacement
+              // for paused parallel chunks.
+              return (task: task, refreshed: false, restartRequired: true);
+            }
+
+          '''
+          if old_guard not in service:
+              raise SystemExit('old zero-byte source guard not found')
+          service = service.replace(old_guard, '''    final restartPluginFromZero =
+                !legacySessionExists && partialBytes <= 0;
+
+          ''', 1)
+
+          old_checkpoint = '''    final refreshCheckpointed = await _checkpointLogicalJob(
+              task,
+              state: DownloadJobState.interrupted,
+              expectedBytes: expectedBytes,
+              userPaused: false,
+              queueWaiting: false,
+              fingerprint: fingerprintWithExpectedBytes(
+                remote: refreshedFingerprint,
+                expectedBytes: expectedBytes,
+                fallbackFinalUrl: refreshed.url,
+              ),
+            );
+          '''
+          if old_checkpoint not in service:
+              raise SystemExit('refresh checkpoint block not found')
+          service = service.replace(old_checkpoint, '''    final updated = legacySessionExists
+                ? task
+                : task.copyWith(
+                    url: refreshed.url,
+                    headers: Map<String, String>.from(refreshed.headers),
+                  );
+            final refreshCheckpointed = await _checkpointLogicalJob(
+              updated,
+              state: DownloadJobState.interrupted,
+              durableBytes: partialBytes,
+              durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
+              expectedBytes: expectedBytes,
+              userPaused: false,
+              queueWaiting: false,
+              fingerprint: fingerprintWithExpectedBytes(
+                remote: refreshedFingerprint,
+                expectedBytes: expectedBytes,
+                fallbackFinalUrl: refreshed.url,
+              ),
+            );
+          ''', 1)
+
+          old_updated = '''    final updated = task.copyWith(
+              url: refreshed.url,
+              headers: Map<String, String>.from(refreshed.headers),
+            );
+            final record = await FileDownloader().database.recordForId(task.taskId);
+          '''
+          if old_updated not in service:
+              raise SystemExit('updated task block not found')
+          service = service.replace(old_updated, '''    if (restartPluginFromZero) {
+              _sourceReplacingNativeIds.add(task.taskId);
+              try {
+                final restarted = await _nativeTransport.restartFromZero(updated);
+                diagnosticLog.record('source.refreshPluginRestart', {
+                  'taskId': task.taskId,
+                  'accepted': restarted,
+                  'opaqueNativeResume': hasOpaqueNativeResume,
+                });
+                if (!restarted) {
+                  return (task: updated, refreshed: true, restartRequired: true);
+                }
+                await Future<void>.delayed(Duration.zero);
+                return (task: updated, refreshed: true, restartRequired: false);
+              } finally {
+                _sourceReplacingNativeIds.remove(task.taskId);
+              }
+            }
+
+            final record = await FileDownloader().database.recordForId(task.taskId);
+          ''', 1)
+          service_path.write_text(service)
+          PY
+
+          dart format lib/core/services/background_downloader_transport.dart lib/core/services/download_service.dart
+
+      - name: Focused tests
+        run: |
+          flutter test test/core/services/background_downloader_transport_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_plugin_source_refresh_routing_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_plugin_zero_byte_rebuild_contract_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+          flutter test test/core/services/download_plugin_relaunch_single_writer_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr246-package-native-recovery
+          path: |
+            pubspec.lock
+            lib/core/services/background_downloader_transport.dart
+            lib/core/services/download_service.dart
+          if-no-files-found: error
