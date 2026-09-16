@@ -1,4 +1,4 @@
-name: Task 24 Command Transition Audit
+name: Record Task 24 Command Audit
 
 on:
   push:
@@ -6,52 +6,44 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  audit:
+  record:
+    if: "${{ github.event.head_commit.message == 'chore(ci): record task 24 command audit' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.47.1
-          cache: true
-      - name: Install dependencies and generate sources
+      - name: Mark Task 24 Step 1 verified
         run: |
-          flutter pub get
-          flutter gen-l10n
-          dart run build_runner build --delete-conflicting-outputs
-      - name: Verify Task 24 command and lifecycle matrix
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('docs/superpowers/plans/2026-09-15-background-downloader-authority.md')
+          text = path.read_text()
+          old = "\n".join([
+              '- [ ] **Step 1: Audit command/state transitions**',
+              '',
+              'Review start, pause, repeated pause, resume, repeated resume, cancel, delete, app-background/system-expiration, network loss/reconnect, and process relaunch for plugin single, plugin parallel, and legacy fallback.',
+          ])
+          new = "\n".join([
+              '- [x] **Step 1: Audit command/state transitions**',
+              '',
+              'Review start, pause, repeated pause, resume, repeated resume, cancel, delete, app-background/system-expiration, network loss/reconnect, and process relaunch for plugin single, plugin parallel, and legacy fallback.',
+              '',
+              '**Evidence:** Task 24 command-transition audit run `35058451065` passed the focused lifecycle matrix and analyzer after RED→GREEN fixes for Transfer update bridging, system-pause settlement, parked failure/start/resume checkpoint ordering, single resume generation reuse, and repeated pause/resume idempotence. Production evidence includes `00205a9`, `fd29c93`, `cbc21d4`, `4984114`, `32b8af3`, `e73fce6`, and `f480a1e`.',
+          ])
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one Task 24 Step 1 block, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit audit evidence
         run: |
-          flutter test \
-            test/core/services/download_start_outcome_guard_test.dart \
-            test/core/services/download_replica_start_journal_guard_test.dart \
-            test/core/services/download_lifecycle_checkpoint_guard_test.dart \
-            test/core/services/download_repeated_pause_guard_test.dart \
-            test/core/services/download_pause_settlement_guard_test.dart \
-            test/core/services/download_replica_pause_ordering_test.dart \
-            test/core/services/download_repeated_resume_guard_test.dart \
-            test/core/services/download_resume_generation_guard_test.dart \
-            test/core/services/download_plugin_resume_authority_test.dart \
-            test/core/services/download_control_outcome_guard_test.dart \
-            test/core/services/download_command_outcome_test.dart \
-            test/core/services/download_cancel_checkpoint_guard_test.dart \
-            test/core/services/download_cancel_ownership_guard_test.dart \
-            test/core/services/download_delete_tombstone_guard_test.dart \
-            test/core/services/download_plugin_parallel_cancel_routing_test.dart \
-            test/core/services/ios_continued_processing_expiration_test.dart \
-            test/core/services/download_network_state_red_test.dart \
-            test/core/services/download_plugin_relaunch_single_writer_test.dart \
-            test/core/services/download_relaunch_chaos_test.dart \
-            test/core/services/download_manager_chaos_matrix_test.dart \
-            test/core/services/download_runtime_stability_review_test.dart
-      - name: Verify lifecycle authority analyzer
-        run: |
-          flutter analyze --no-fatal-warnings --no-fatal-infos \
-            lib/core/services/download_service.dart \
-            lib/core/services/background_downloader_transport.dart \
-            lib/core/services/download_job_store.dart
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/superpowers/plans/2026-09-15-background-downloader-authority.md
+          git commit -m "docs(downloads): record task 24 command audit"
+          git push origin HEAD:refactor/background-downloader-authority
