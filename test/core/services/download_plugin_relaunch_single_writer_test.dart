@@ -104,7 +104,15 @@ void main() {
 
     expect(helper, contains('isInternalDownloaderChunk(task)'));
     expect(helper, contains('downloadInternalParentTaskId(task)'));
-    expect(helper, contains("'startup.legacyPluginUpdateIgnored'"));
+
+    final listenerFence = source.indexOf("'startup.legacyPluginUpdateIgnored'");
+    expect(listenerFence, greaterThanOrEqualTo(0));
+    expect(
+      listenerFence,
+      lessThan(startHelper),
+      reason:
+          'startup listener must fence legacy parent/chunk callbacks before plugin recovery starts',
+    );
 
     final initializeStart = source.indexOf('Future<void> _initialize() async {');
     final initializeEnd = source.indexOf(

@@ -47,7 +47,7 @@ void main() {
     expect(legacyInventory, lessThan(reconcile));
   });
 
-  test('plugin executor reschedules before Transfer rehydration', () {
+  test('plugin executor synchronously reschedules before Transfer rehydration', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
     final helper = _methodBody(
@@ -57,12 +57,16 @@ void main() {
     );
 
     final start = helper.indexOf('await FileDownloader().start(');
+    final reschedule = helper.indexOf(
+      'await FileDownloader().rescheduleKilledTasks()',
+    );
     final rehydrate = helper.indexOf(
       'await _nativeTransport.rehydrate(group: kLogicalDownloadGroup)',
     );
     expect(start, greaterThanOrEqualTo(0));
-    expect(rehydrate, greaterThan(start));
-    expect(helper, contains('doRescheduleKilledTasks: true'));
+    expect(reschedule, greaterThan(start));
+    expect(rehydrate, greaterThan(reschedule));
+    expect(helper, contains('doRescheduleKilledTasks: false'));
     expect(helper, contains('markDownloadedComplete: false'));
   });
 }

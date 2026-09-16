@@ -43,7 +43,11 @@ void main() {
 
     expect(
       provider,
-      contains('pluginParallelAcceptedForPlatform(defaultTargetPlatform)'),
+      matches(
+        RegExp(
+          r'pluginParallelAccepted:\s*pluginParallelAcceptedForPlatform\(\s*defaultTargetPlatform,?\s*\)',
+        ),
+      ),
       reason:
           'production must not leave the constructor default false and silently disable accepted plugin-parallel platforms',
     );

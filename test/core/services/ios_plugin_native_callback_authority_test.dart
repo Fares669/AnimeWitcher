@@ -31,7 +31,7 @@ void main() {
         'private static func handleSupportedPluginProgress(',
       );
       final progressEnd = source.indexOf(
-        'private static func handleSupportedPluginStatus(',
+        'static func handleBytesWritten(',
         progressStart,
       );
       expect(progressStart, greaterThanOrEqualTo(0));
