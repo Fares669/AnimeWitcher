@@ -233,7 +233,13 @@ class BackgroundDownloaderTransport implements DownloadTransport {
     return DownloadRuntimeOwnership.unknown;
   }
 
-  Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async {
+  /// Resolves writer ownership from background_downloader's runtime inventory.
+  ///
+  /// A ParallelDownloadTask parent is synthetic: its native writers are
+  /// package-managed child tasks, so parent ownership is proven by a matching
+  /// parent task or child identity in [allTasks]. A Transfer projection alone
+  /// can be rehydrated from the database and is therefore never sufficient.
+    Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async {
     final transfer = handleFor(taskId);
     final projectedStatus = transfer?.status;
     final projectedOwnership = projectedStatus == null
