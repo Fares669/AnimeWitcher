@@ -869,7 +869,7 @@ void main() {
         ),
         isTrue,
       );
-      expect(kDownloadTaskRetries, 0);
+      expect(kDownloadTaskRetries, 3);
       expect(kDownloadParkedNotificationBody, 'التنزيل متوقف مؤقتاً');
       expect(
         downloadSessionFinishStatus(success: false, parkedFailure: true),
