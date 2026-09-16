@@ -40,14 +40,17 @@ void main() {
     expect(
       chunkOnlyBody,
       isNot(contains('await _nativeTransport.resume(task)')),
-      reason: 'resume must not getOrStart a replacement parent from child-only evidence',
+      reason:
+          'resume must not getOrStart a replacement parent from child-only evidence',
     );
   });
 
-  test('startup delegates killed-task reschedule before logical recovery', () {
+  test('startup quarantines legacy parents before plugin killed-task reschedule', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
-    final startHelper = source.indexOf('Future<void> _startPluginExecutor() async {');
+    final startHelper = source.indexOf(
+      'Future<void> _startPluginExecutor() async {',
+    );
     final startHelperEnd = source.indexOf(
       '/// Test hook that replaces [FileDownloader.configure]',
       startHelper,
@@ -55,9 +58,31 @@ void main() {
     expect(startHelper, greaterThanOrEqualTo(0));
     expect(startHelperEnd, greaterThan(startHelper));
     final helper = source.substring(startHelper, startHelperEnd);
-    expect(helper, contains('FileDownloader().start('));
+
+    final quarantine = helper.indexOf(
+      '_quarantineLegacyParallelParentsBeforePluginStart()',
+    );
+    final pluginStart = helper.indexOf('FileDownloader().start(');
+    final restore = helper.indexOf(
+      '_restoreLegacyParallelParentsAfterPluginStart(',
+    );
+    final rehydrate = helper.indexOf('_nativeTransport.rehydrate(');
+
+    expect(
+      quarantine,
+      greaterThanOrEqualTo(0),
+      reason:
+          'legacy ParallelDownloadTask rows must be identified before background_downloader sees killed work',
+    );
+    expect(pluginStart, greaterThan(quarantine));
     expect(helper, contains('doRescheduleKilledTasks: true'));
-    expect(helper, contains('_nativeTransport.rehydrate('));
+    expect(
+      restore,
+      greaterThan(pluginStart),
+      reason:
+          'the original legacy DB projection can be restored only after plugin rescheduling is complete',
+    );
+    expect(rehydrate, greaterThan(restore));
 
     final initializeStart = source.indexOf('Future<void> _initialize() async {');
     final initializeEnd = source.indexOf(
@@ -67,9 +92,9 @@ void main() {
     final initialize = source.substring(initializeStart, initializeEnd);
     expect(
       initialize.indexOf('await _startPluginExecutor()'),
-      lessThan(initialize.indexOf('await _serializeQueue(_recoverPersistedDownloads)')),
+      lessThan(
+        initialize.indexOf('await _serializeQueue(_recoverPersistedDownloads)'),
+      ),
     );
   });
 }
-
-// Task 23 RED trigger
