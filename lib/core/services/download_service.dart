@@ -4344,7 +4344,10 @@ class DownloadService {
         await _ref
             .read(storageServiceProvider)
             .patchDownloadMetadata(taskId, queueWaiting: false);
-        final started = await _resumeDownloadTask(downloadTask);
+        final started = await _resumeDownloadTask(
+          downloadTask,
+          executionToken: resumeOperation,
+        );
         if (!started) {
           final saved = await _savedProgressFor(downloadTask);
           final resumeFailureCheckpointed = await _checkpointLogicalJob(
@@ -4575,7 +4578,10 @@ class DownloadService {
     }
   }
 
-  Future<bool> _resumeDownloadTask(DownloadTask task) async {
+  Future<bool> _resumeDownloadTask(
+    DownloadTask task, {
+    DownloadAttemptToken? executionToken,
+  }) async {
     if (!_networkAvailable) {
       await _holdDownloadForNetwork(task);
       return true;
@@ -4596,12 +4602,12 @@ class DownloadService {
     }
 
     final currentJob = await _jobStore.get(task.taskId);
-    if (currentJob != null) {
-      final execution = await _jobStore.beginOperation(
+    if (currentJob != null && executionToken == null) {
+      executionToken = await _jobStore.beginOperation(
         task.taskId,
         state: DownloadJobState.starting,
       );
-      if (execution == null) return false;
+      if (executionToken == null) return false;
     }
 
     final saved = await _savedProgressFor(task);
