@@ -189,27 +189,29 @@ class BackgroundDownloaderTransport implements DownloadTransport {
     return status != null && runtimeTaskStatusCanOwnWriter(status);
   }
 
-  /// Resolves writer ownership from the plugin's targeted runtime queue query.
+  /// Resolves writer ownership from background_downloader's Transfer projection.
   ///
-  /// A rehydrated Transfer status is a useful projection but is not sufficient
-  /// proof of live native I/O. Conversely, failure of the runtime query cannot
-  /// be converted into [DownloadRuntimeOwnership.notOwned], because starting a
-  /// second writer in that state would violate the single-writer invariant.
+  /// A ParallelDownloadTask parent is synthetic: the native writers are its
+  /// package-managed child tasks, so querying taskForId(parentId) cannot prove
+  /// parent liveness. An active parent Transfer is therefore authoritative for
+  /// that writer generation. Settled states remain definitive non-ownership.
   Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async {
-    // Rehydrated Transfer handles may come from persistence, but a settled
-    // status is still definitive negative ownership: paused/final transfers
-    // cannot own a writer and must not reserve a slot merely because the
-    // plugin can still look up their task descriptor.
-    final projectedStatus = statusFor(taskId);
+    final transfer = handleFor(taskId);
+    final projectedStatus = transfer?.status;
     if (projectedStatus != null &&
         ownershipFromStatus(projectedStatus) ==
             DownloadRuntimeOwnership.notOwned) {
       return DownloadRuntimeOwnership.notOwned;
     }
+    if (transfer?.task is ParallelDownloadTask &&
+        projectedStatus != null &&
+        runtimeTaskStatusCanOwnWriter(projectedStatus)) {
+      return DownloadRuntimeOwnership.owned;
+    }
 
     try {
-      // Active-looking projections still require targeted executor evidence.
-      // Failure is ambiguous and therefore fail-closed as unknown.
+      // Ordinary tasks have a native task with the same identity. Failure of
+      // the targeted runtime query is ambiguous and remains fail-closed.
       final runtimeTask = await _downloader.taskForId(taskId);
       if (runtimeTask != null) return DownloadRuntimeOwnership.owned;
       return DownloadRuntimeOwnership.notOwned;
@@ -235,6 +237,46 @@ class BackgroundDownloaderTransport implements DownloadTransport {
       _attach(transfer);
       return runtimeTaskStatusCanOwnWriter(transfer.status) ||
           transfer.status == TaskStatus.complete;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Replaces a stale zero-byte package-owned generation with [task].
+  ///
+  /// background_downloader owns cancellation, resume-state cleanup, duplicate
+  /// lookup, and recreation of ParallelDownloadTask children. AnimeWitcher
+  /// only fences the logical identity and supplies the refreshed source.
+  Future<bool> restartFromZero(DownloadTask task) async {
+    if (!isBackgroundDownloaderTransportTask(task)) return false;
+    try {
+      var existing = handleFor(task.taskId);
+      if (existing == null) {
+        await _downloader.transfers.rehydrateFromDatabase(group: task.group);
+        existing = handleFor(task.taskId);
+      }
+
+      if (existing != null && !existing.status.isFinalState) {
+        if (!await existing.cancel()) return false;
+        final settled = await existing.result.timeout(
+          const Duration(seconds: 5),
+        );
+        if (!settled.status.isFinalState) return false;
+      }
+
+      final ownership = await ownershipFor(task.taskId);
+      if (ownership.blocksNewWriter) return false;
+
+      _detach(task.taskId);
+      _downloader.transfers.remove(task.taskId);
+      final replacement = await _downloader.transfers.getOrStart(
+        task,
+        matchBy: (existingTask) => existingTask.taskId == task.taskId,
+        reEnqueueIfFailed: true,
+      );
+      _attach(replacement);
+      return runtimeTaskStatusCanOwnWriter(replacement.status) ||
+          replacement.status == TaskStatus.complete;
     } catch (_) {
       return false;
     }
