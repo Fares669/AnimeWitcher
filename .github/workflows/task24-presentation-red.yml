@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   green:
-    if: "${{ github.event.head_commit.message == 'chore(ci): apply resume generation fix' }}"
+    if: "${{ github.event.head_commit.message == 'chore(ci): retry resume generation fix' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -24,39 +24,47 @@ jobs:
           text = path.read_text()
 
           old_signature = '  Future<bool> _resumeDownloadTask(DownloadTask task) async {'
-          new_signature = '''  Future<bool> _resumeDownloadTask(
-            DownloadTask task, {
-            DownloadAttemptToken? executionToken,
-          }) async {'''
+          new_signature = "\n".join([
+              '  Future<bool> _resumeDownloadTask(',
+              '    DownloadTask task, {',
+              '    DownloadAttemptToken? executionToken,',
+              '  }) async {',
+          ])
           if text.count(old_signature) != 1:
               raise SystemExit(f'expected one resume helper signature, found {text.count(old_signature)}')
           text = text.replace(old_signature, new_signature, 1)
 
-          old_generation = '''    final currentJob = await _jobStore.get(task.taskId);
-            if (currentJob != null) {
-              final execution = await _jobStore.beginOperation(
-                task.taskId,
-                state: DownloadJobState.starting,
-              );
-              if (execution == null) return false;
-            }'''
-          new_generation = '''    final currentJob = await _jobStore.get(task.taskId);
-            if (currentJob != null && executionToken == null) {
-              executionToken = await _jobStore.beginOperation(
-                task.taskId,
-                state: DownloadJobState.starting,
-              );
-              if (executionToken == null) return false;
-            }'''
+          old_generation = "\n".join([
+              '    final currentJob = await _jobStore.get(task.taskId);',
+              '    if (currentJob != null) {',
+              '      final execution = await _jobStore.beginOperation(',
+              '        task.taskId,',
+              '        state: DownloadJobState.starting,',
+              '      );',
+              '      if (execution == null) return false;',
+              '    }',
+          ])
+          new_generation = "\n".join([
+              '    final currentJob = await _jobStore.get(task.taskId);',
+              '    if (currentJob != null && executionToken == null) {',
+              '      executionToken = await _jobStore.beginOperation(',
+              '        task.taskId,',
+              '        state: DownloadJobState.starting,',
+              '      );',
+              '      if (executionToken == null) return false;',
+              '    }',
+          ])
           if text.count(old_generation) != 1:
               raise SystemExit(f'expected one resume generation block, found {text.count(old_generation)}')
           text = text.replace(old_generation, new_generation, 1)
 
           old_call = '        final started = await _resumeDownloadTask(downloadTask);'
-          new_call = '''        final started = await _resumeDownloadTask(
-          downloadTask,
-          executionToken: resumeOperation,
-        );'''
+          new_call = "\n".join([
+              '        final started = await _resumeDownloadTask(',
+              '          downloadTask,',
+              '          executionToken: resumeOperation,',
+              '        );',
+          ])
           if text.count(old_call) != 1:
               raise SystemExit(f'expected one user-resume helper call, found {text.count(old_call)}')
           text = text.replace(old_call, new_call, 1)
