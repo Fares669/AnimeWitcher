@@ -292,7 +292,7 @@ Evidence: regression test commit `676348e74690befbcd418c060d867eb9bb9a4e51` and 
 
 ### Task 39 — Require runtime ownership before accepting Transfer resume
 
-**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run **35155579187**.**
+**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run 35155579187.**
 
 A rehydrated Transfer with an active projected status must not be accepted as a successful resume unless the package runtime inventory proves that the task is still present. This protects the non-parallel fallback path, which can call the transport resume method after live lookup has already failed.
 
@@ -303,7 +303,7 @@ A rehydrated Transfer with an active projected status must not be accepted as a 
 Evidence: test/implementation commits `500ea5a2edee33a3d194f8ac9646649050767fb2`, `86fd802f9114b255861810f9eb40378996a32e57`, `67a4f0dc605331c7a740d7765639c2153b7d2557`, `a256f8534a258e674d73737bbd78993edfeca5ef`, and follow-up typed-contract fixes `991e7830d57bf4426f3e4cd7f945652ba4b275e3`, `9469da45d926f5086ce4cc19e26a6f16eadabc9e`, `d728a343016d06756ced22258844ebc1c63aaa1e`, and `faf492a2e3a6bb01edffbc74d4e942df976028a1`; final CI run **35155579187** on **b0f558bce908306e7b0ed845d1a6439250f1efa2** passed.
 ### Task 40 — Discover duplicate logical rows from plugin database persistence
 
-**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run **35155579187**.**
+**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run 35155579187.**
 
 Duplicate cancellation previously started from allTasks, but a plugin database row can outlive the runtime inventory. Such a row must still be tombstoned, canceled/settled, and cleaned before primary deletion completes.
 
@@ -314,7 +314,7 @@ Duplicate cancellation previously started from allTasks, but a plugin database r
 Evidence: test commits `30c4095b9e444b46031a22e367cf0c1c13b9d824`, `a7a43805cf1d1b2f6b9f8b336347de1eefae9a76`, implementation commit `a256f8534a258e674d73737bbd78993edfeca5ef`, and final CI run **35155579187** on **b0f558bce908306e7b0ed845d1a6439250f1efa2**.
 ### Task 41 — Treat ambiguous package inventory as unknown, not live
 
-**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run **35155579187**.**
+**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run 35155579187.**
 
 FileDownloader.allTasks(allGroups: true) combines native inventory with package retry/paused stores. The adapter now distinguishes explicit release evidence from ambiguity while retaining single-writer fail-closed behavior.
 
@@ -332,6 +332,7 @@ Evidence: test commits `500ea5a2edee33a3d194f8ac9646649050767fb2`, `30c4095b9e44
 - Intermediate audit-fix run: **35143172041** on `b9bdced314a9b0bc0814e310d889b98cc1fbc2df` — native typecheck and analyze green; Flutter tests exposed one remaining stale projection-only ownership source contract, fixed in `94ac956036647050c148f5eac3aea1bfed4f1e7a`.
 - Verified automated head before final plan bookkeeping: run **35149954380** on `da190bd463fb70fbfe28456b44fcfcdeb6a4fb8c` — status success; native logger typecheck PASS, source generation PASS, Flutter analyze PASS, full Flutter tests PASS (`1577` passed, `1` skipped).
 - Final audit verification: run **35155579187** on `b0f558bce908306e7b0ed845d1a6439250f1efa2` — status success; native logger typecheck PASS, source generation PASS, Flutter analyze PASS, full Flutter tests PASS (`1584` passed, `1` skipped).
+- Tracker-head verification: run **35156377270** on `9157697fba88e0324bd7332936685b2d22f8d70c` — status success; the tracker-only head retained native logger typecheck PASS, source generation PASS, Flutter analyze PASS, and full Flutter tests PASS (`1584` passed, `1` skipped).
 - The current green run includes the Task 26–32 and Task 34 focused coverage: plugin contract, zero-byte source replacement, runtime parent/child ownership, startup settlement, offline terminal projection, bounded retry, relaunch/single-writer, pause/resume, cancel routing, queue, and source-refresh tests.
 - Final hardening commits for Tasks 35–41 are on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; CI run **35155579187** passed: native typecheck, source generation, analyze, and full Flutter tests (`1584` passed, `1` skipped).
 - No current run may count as final device acceptance merely because it builds; Task 33 still requires actual iOS device evidence.
