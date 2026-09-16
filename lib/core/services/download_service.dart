@@ -6437,13 +6437,19 @@ class DownloadService {
 
         if (!success) {
           _waitingPayloads.remove(task.taskId);
-          await _checkpointLogicalJob(
+          final failureCheckpointed = await _checkpointLogicalJob(
             transferTask,
             state: DownloadJobState.interrupted,
             expectedBytes: expectedBytes,
             userPaused: false,
             queueWaiting: false,
           );
+          if (!failureCheckpointed) {
+            diagnosticLog.record('start.failureCheckpointFailed', {
+              'taskId': transferTask.taskId,
+            });
+            return DownloadCommandOutcome.recoverableFailure;
+          }
           await FileDownloader().database.updateRecord(
             TaskRecord(transferTask, TaskStatus.paused, 0, expectedBytes),
           );
