@@ -56,26 +56,8 @@ jobs:
               raise SystemExit('Nullable downloader ownership predicate still present')
           app_delegate.write_text(text)
 
-          regression = Path('test/core/services/ios_background_owner_source_test.dart')
-          regression.write_text("""import 'dart:io';
-
-import 'package:flutter_test/flutter_test.dart';
-
-void main() {
-  final source = File('ios/Runner/AppDelegate.swift').readAsStringSync();
-
-  test('native ownership only recognizes active background_downloader states', () {
-    expect(source, contains('activeBackgroundOwner(for taskId: String)'));
-    expect(source, contains('AND status IN (?, ?, ?, ?)'));
-    expect(
-      source,
-      isNot(contains('status IS NULL')),
-      reason:
-          'background_downloader TaskStatus has explicit active states; a missing status must not claim native ownership',
-    );
-  });
-}
-""")
+          regression = base64.b64decode('aW1wb3J0ICdkYXJ0OmlvJzsKCmltcG9ydCAncGFja2FnZTpmbHV0dGVyX3Rlc3QvZmx1dHRlcl90ZXN0LmRhcnQnOwoKdm9pZCBtYWluKCkgewogIGZpbmFsIHNvdXJjZSA9IEZpbGUoJ2lvcy9SdW5uZXIvQXBwRGVsZWdhdGUuc3dpZnQnKS5yZWFkQXNTdHJpbmdTeW5jKCk7CgogIHRlc3QoJ25hdGl2ZSBvd25lcnNoaXAgb25seSByZWNvZ25pemVzIGFjdGl2ZSBiYWNrZ3JvdW5kX2Rvd25sb2FkZXIgc3RhdGVzJywgKCkgewogICAgZXhwZWN0KHNvdXJjZSwgY29udGFpbnMoJ2FjdGl2ZUJhY2tncm91bmRPd25lcihmb3IgdGFza0lkOiBTdHJpbmcpJykpOwogICAgZXhwZWN0KHNvdXJjZSwgY29udGFpbnMoJ0FORCBzdGF0dXMgSU4gKD8sID8sID8sID8pJykpOwogICAgZXhwZWN0KAogICAgICBzb3VyY2UsCiAgICAgIGlzTm90KGNvbnRhaW5zKCdzdGF0dXMgSVMgTlVMTCcpKSwKICAgICAgcmVhc29uOgogICAgICAgICAgJ2JhY2tncm91bmRfZG93bmxvYWRlciBUYXNrU3RhdHVzIGhhcyBleHBsaWNpdCBhY3RpdmUgc3RhdGVzOyBhIG1pc3Npbmcgc3RhdHVzIG11c3Qgbm90IGNsYWltIG5hdGl2ZSBvd25lcnNoaXAnLAogICAgKTsKICB9KTsKfQo=').decode('utf-8')
+          Path('test/core/services/ios_background_owner_source_test.dart').write_text(regression)
           PY
 
       - name: Format changed Dart sources
