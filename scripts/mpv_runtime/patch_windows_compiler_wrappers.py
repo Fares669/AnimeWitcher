@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Align generated LLVM-MinGW C++ wrappers and OpenAL module scanning with libc++."""
+"""Align generated LLVM-MinGW C++ wrappers and OpenAL scanning with libc++."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ OPENAL_MODULES_SETTING = (
     'set(ALSOFT_ENABLE_MODULES OFF CACHE BOOL '
     '"Disable OpenAL C++20 modules for cross compiler wrapper compatibility" FORCE)'
 )
+OPENAL_PACKAGE_MODULE_FLAG = "        -DALSOFT_ENABLE_MODULES=OFF"
+OPENAL_PACKAGE_SCAN_FLAG = "        -DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
 
 
 def _required_args(*, sysroot: Path, resource_dir: Path) -> list[str]:
@@ -67,8 +69,7 @@ def _patch_wrapper(path: Path, required_args: list[str]) -> bool:
             )
         invocation = invocation[: -len(direct_args)].rstrip()
     kept[invocation_index] = f"{invocation} {direct_args}{DIRECT_FLAGS_MARKER}"
-    patched = kept
-    new_text = "\n".join(patched) + "\n"
+    new_text = "\n".join(kept) + "\n"
     if new_text == text:
         return False
     try:
@@ -91,12 +92,6 @@ def _patch_openal_module_setting(path: Path) -> bool:
     if "ALSOFT_ENABLE_MODULES" in text:
         raise RuntimeError(f"generated CMake toolchain already configures OpenAL modules: {path}")
 
-    # OpenAL auto-enables C++20 modules with modern Clang + Ninja. CMake then
-    # invokes clang-scan-deps using the visible compiler command line, but our
-    # generated cross compiler is a shell wrapper whose libc++ flags are added
-    # internally. The scanner therefore cannot see the libc++ include path and
-    # fails on standard headers. Modules are optional, so disable them only for
-    # OpenAL while leaving the normal cross-compiler path unchanged.
     separator = "" if text.endswith("\n") else "\n"
     new_text = (
         text
@@ -111,6 +106,38 @@ def _patch_openal_module_setting(path: Path) -> bool:
         path.write_text(new_text, encoding="utf-8")
     except OSError as exc:
         raise RuntimeError(f"unable to update generated CMake toolchain: {path}: {exc}") from exc
+    return True
+
+
+def _patch_openal_package(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to read OpenAL package definition: {path}: {exc}") from exc
+
+    module_count = text.count(OPENAL_PACKAGE_MODULE_FLAG)
+    scan_count = text.count(OPENAL_PACKAGE_SCAN_FLAG)
+    if module_count == 1 and scan_count == 1:
+        return False
+    if module_count != 0 or scan_count != 0:
+        raise RuntimeError(f"OpenAL package has a partial scanner override: {path}")
+
+    anchor = "        -DALSOFT_TESTS=OFF\n"
+    if text.count(anchor) != 1:
+        raise RuntimeError(f"OpenAL package layout changed: expected one test-option anchor: {path}")
+
+    replacement = (
+        anchor
+        + OPENAL_PACKAGE_MODULE_FLAG
+        + "\n"
+        + OPENAL_PACKAGE_SCAN_FLAG
+        + "\n"
+    )
+    updated = text.replace(anchor, replacement, 1)
+    try:
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to update OpenAL package definition: {path}: {exc}") from exc
     return True
 
 
@@ -133,6 +160,13 @@ def patch_wrappers(
     if not toolchain_file.is_file():
         raise RuntimeError(f"generated CMake toolchain is missing: {toolchain_file}")
     _patch_openal_module_setting(toolchain_file)
+
+    builder_root = sysroot.parent.parent
+    packages = builder_root / "packages"
+    openal_package = packages / "openal-soft.cmake"
+    if not openal_package.is_file():
+        raise RuntimeError(f"OpenAL package definition is missing: {openal_package}")
+    _patch_openal_package(openal_package)
 
     required = _required_args(sysroot=sysroot, resource_dir=resource_dir)
     changed: list[str] = []
@@ -163,6 +197,12 @@ def patch_wrappers(
         OPENAL_MODULES_SETTING
     ) != 1:
         raise RuntimeError(f"failed to verify OpenAL module override in {toolchain_file}")
+
+    openal_text = openal_package.read_text(encoding="utf-8")
+    if openal_text.count(OPENAL_PACKAGE_MODULE_FLAG) != 1 or openal_text.count(
+        OPENAL_PACKAGE_SCAN_FLAG
+    ) != 1:
+        raise RuntimeError(f"failed to verify OpenAL dependency scanner override in {openal_package}")
     return changed
 
 
