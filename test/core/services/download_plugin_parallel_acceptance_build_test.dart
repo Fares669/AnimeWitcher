@@ -41,7 +41,9 @@ void main() {
     );
     expect(
       workflow,
-      contains('"ANIMEWITCHER_PLUGIN_PARALLEL_ACCEPTANCE": ${{ github.event.inputs.plugin_parallel_acceptance }}'),
+      contains(
+        r'"ANIMEWITCHER_PLUGIN_PARALLEL_ACCEPTANCE": ${{ github.event.inputs.plugin_parallel_acceptance }}',
+      ),
       reason: 'preview artifacts must receive the opt-in compile-time define',
     );
   });
