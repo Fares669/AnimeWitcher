@@ -1328,9 +1328,11 @@ Enable iOS plugin parallel only if every device acceptance item passes; otherwis
 **Interfaces:**
 - No new transport abstraction by default. This task is a cross-cutting correctness gate.
 
-- [ ] **Step 1: Audit command/state transitions**
+- [x] **Step 1: Audit command/state transitions**
 
 Review start, pause, repeated pause, resume, repeated resume, cancel, delete, app-background/system-expiration, network loss/reconnect, and process relaunch for plugin single, plugin parallel, and legacy fallback.
+
+**Evidence:** Task 24 command-transition audit run `35058451065` passed the focused lifecycle matrix and analyzer after RED→GREEN fixes for Transfer update bridging, system-pause settlement, parked failure/start/resume checkpoint ordering, single resume generation reuse, and repeated pause/resume idempotence. Production evidence includes `00205a9`, `fd29c93`, `cbc21d4`, `4984114`, `32b8af3`, `e73fce6`, and `f480a1e`.
 
 - [ ] **Step 2: Audit integrity/error transitions**
 
