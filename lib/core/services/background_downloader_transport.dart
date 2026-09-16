@@ -70,15 +70,22 @@ DownloadRuntimeOwnership resolveDownloadRuntimeOwnership({
   required bool runtimeTaskPresent,
   bool localRangeWriterActive = false,
   bool operationSettling = false,
+  bool transferRuntimeActive = false,
   bool transferHandlePresent = false,
 }) {
   if (localRangeWriterActive || runtimeTaskPresent) {
     return DownloadRuntimeOwnership.owned;
   }
   if (operationSettling) return DownloadRuntimeOwnership.settling;
-  if (!runtimeQuerySucceeded) {
-    // A Transfer handle can be rehydrated from persistence, so presence alone
-    // cannot prove ownership; query failure therefore remains unknown.
+  if (transferHandlePresent && !runtimeQuerySucceeded) {
+    // A rehydrated Transfer is not runtime proof; a failed inventory query is
+    // still ambiguous and must remain fail-closed.
+    return DownloadRuntimeOwnership.unknown;
+  }
+  if (!runtimeQuerySucceeded) return DownloadRuntimeOwnership.unknown;
+  if (transferRuntimeActive) {
+    // A non-final Transfer projection can be stale when the native task list
+    // has not confirmed the writer.
     return DownloadRuntimeOwnership.unknown;
   }
   return DownloadRuntimeOwnership.notOwned;
@@ -189,31 +196,37 @@ class BackgroundDownloaderTransport implements DownloadTransport {
     return status != null && runtimeTaskStatusCanOwnWriter(status);
   }
 
-  /// Resolves writer ownership from background_downloader's Transfer projection.
+  /// Resolves writer ownership from background_downloader's runtime inventory.
   ///
-  /// A ParallelDownloadTask parent is synthetic: the native writers are its
-  /// package-managed child tasks, so querying taskForId(parentId) cannot prove
-  /// parent liveness. An active parent Transfer is therefore authoritative for
-  /// that writer generation. Settled states remain definitive non-ownership.
+  /// A ParallelDownloadTask parent is synthetic: its native writers are
+  /// package-managed child tasks, so parent ownership is proven by a matching
+  /// parent task or child identity in [allTasks]. A Transfer projection alone
+  /// can be rehydrated from the database and is therefore never sufficient.
   Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async {
     final transfer = handleFor(taskId);
     final projectedStatus = transfer?.status;
-    if (projectedStatus != null &&
-        ownershipFromStatus(projectedStatus) ==
-            DownloadRuntimeOwnership.notOwned) {
-      return DownloadRuntimeOwnership.notOwned;
-    }
-    if (transfer?.task is ParallelDownloadTask &&
-        projectedStatus != null &&
-        runtimeTaskStatusCanOwnWriter(projectedStatus)) {
-      return DownloadRuntimeOwnership.owned;
-    }
+    final projectedOwnership = projectedStatus == null
+        ? null
+        : ownershipFromStatus(projectedStatus);
 
     try {
-      // Ordinary tasks have a native task with the same identity. Failure of
-      // the targeted runtime query is ambiguous and remains fail-closed.
-      final runtimeTask = await _downloader.taskForId(taskId);
-      if (runtimeTask != null) return DownloadRuntimeOwnership.owned;
+      final runtimeTasks = await _downloader.allTasks(allGroups: true);
+      final runtimeOwner = runtimeTasks.any((task) {
+        if (task.taskId == taskId) return true;
+        return isInternalDownloaderChunk(task) &&
+            downloadInternalParentTaskId(task) == taskId;
+      });
+      if (runtimeOwner) return DownloadRuntimeOwnership.owned;
+
+      // A settled projection is useful only after the runtime inventory has
+      // confirmed that no writer remains. An active projection with no runtime
+      // evidence is ambiguous, not proof that a replacement is safe.
+      if (projectedOwnership == DownloadRuntimeOwnership.notOwned) {
+        return DownloadRuntimeOwnership.notOwned;
+      }
+      if (projectedOwnership == DownloadRuntimeOwnership.owned) {
+        return DownloadRuntimeOwnership.unknown;
+      }
       return DownloadRuntimeOwnership.notOwned;
     } catch (_) {
       return DownloadRuntimeOwnership.unknown;
