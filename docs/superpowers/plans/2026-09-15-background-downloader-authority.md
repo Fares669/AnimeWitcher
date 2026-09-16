@@ -71,7 +71,7 @@ The previously recorded automated blocker has been resolved.
 - A stale projection-only parent-ownership source test was then updated in commit `94ac956036647050c148f5eac3aea1bfed4f1e7a` to assert the runtime-inventory contract.
 - Current automated head: CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` is green: native logger typecheck PASS, source generation PASS, Flutter analyze PASS, and full Flutter tests PASS (`1569` passed, `1` skipped).
 
-**Current state:** Tasks 35–37 are implemented and awaiting final CI verification. Task 33 remains a real-device-only acceptance gate; the manual acceptance workflow remains untriggered and no IPA has been built.
+**Current state:** Tasks 35–38 are implemented and awaiting final CI verification. Task 33 remains a real-device-only acceptance gate; the manual acceptance workflow remains untriggered and no IPA has been built.
 
 ## Original task status (Tasks 1–25)
 
@@ -275,6 +275,20 @@ A follow-up review found that parallel resume checked only child evidence when t
 
 Evidence: regression test commit `bcb11a6a41aa651723dc254d20e6c615ef2a86ef` and implementation commit `946f1ac1a3d2e71d05b5ecc18c53dbcbb4bbc41c`; final verification is pending.
 
+### Task 38 — Preserve protected intent across legacy quarantine restore
+
+**Status: IMPLEMENTED; verification pending on the resulting head.**
+
+The startup legacy quarantine captured pre-quarantine `TaskRecord` values and restored them unconditionally in `finally`. That could overwrite a canceled or network-held fence after protected recovery had already updated the package record, and child records were not associated with their logical parent.
+
+- [x] Make restore consult current JobStore intent and leave canceled/network-held records in their protected post-quarantine state.
+- [x] Resolve internal child records through `downloadInternalParentTaskId` so a protected logical parent fences its package children too.
+- [x] Apply the same parent/child association while canceling or parking protected startup records.
+- [x] Keep ownership settlement fail-closed when concrete child rows remain in runtime inventory.
+- [ ] Run the focused guard, Flutter analyze, native logger typecheck, and full Flutter suite on the resulting head.
+
+Evidence: regression test commit `676348e74690befbcd418c060d867eb9bb9a4e51` and implementation commit `1f3a8b40c2e5450c60646529cce167a72fb3b198`; verification is pending.
+
 ## Verification ledger
 
 - Historical clean full CI before the latest recovery work: run **35103545336** on `ac82f44959606ed2aa60c6fa08f0d24aaec2542f` — generation/analyze/full Flutter tests/native Swift green.
@@ -288,7 +302,7 @@ Evidence: regression test commit `bcb11a6a41aa651723dc254d20e6c615ef2a86ef` and 
 
 ## Handoff: exact next actions
 
-1. Automated Tasks 26–32 and Task 34 are complete; Tasks 35–37 are implemented and must be marked DONE only after their resulting-head CI verification completes.
+1. Automated Tasks 26–32 and Task 34 are complete; Tasks 35–38 are implemented and must be marked DONE only after their resulting-head CI verification completes.
 2. Task 33 is the only remaining required physical-device gate after Task 35 is green: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
 3. Only after real-device acceptance passes may Tasks 14/16/17 cleanup remove the legacy executor, obsolete iOS multipart state, or transport-owned JobStore fields.
 4. Do not merge PR #246 or enable a permanent platform acceptance gate without explicit user approval.
