@@ -8,7 +8,7 @@ This design starts from `main` after PR #231 (`fix(downloads): download manager 
 
 ## Problem
 
-AnimeWitcher currently uses `background_downloader 9.6.1`, but transport ownership is split across several layers:
+AnimeWitcher currently uses `background_downloader 9.6.2`, but transport ownership is split across several layers:
 
 - `FileDownloader` / `Transfer` for native single-file execution.
 - `PersistentParallelDownload` for multipart scheduling, recovery, manifests, connection slots, retry, progress aggregation, and assembly.
@@ -33,7 +33,7 @@ Make `background_downloader` the authoritative transport executor for ordinary a
 - Do not restart valid partial downloads from byte zero merely to simplify migration.
 - Do not make `HoldingQueue` the logical episode queue unless characterization proves parent/chunk accounting matches AnimeWitcher's user-facing concurrency semantics.
 - Do not remove iOS continued-processing UI. Reduce it to presentation/lifecycle support rather than a second transport scheduler.
-- Do not blindly upgrade `background_downloader`; the migration targets the currently pinned `^9.6.1` contract first. A dependency upgrade is a separate, evidence-driven change.
+- Do not blindly upgrade `background_downloader`; the migration targets the currently pinned `^9.6.2` public contract. Any later dependency upgrade remains a separate, evidence-driven change.
 
 ## External capability baseline
 
