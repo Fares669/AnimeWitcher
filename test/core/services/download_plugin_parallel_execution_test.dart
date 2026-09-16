@@ -30,6 +30,25 @@ void main() {
     },
   );
 
+  test('production provider wires the platform acceptance gate', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final providerStart = source.indexOf(
+      '@Riverpod(keepAlive: true)\nDownloadService downloadService(Ref ref)',
+    );
+    final providerEnd = source.indexOf('enum DownloadCommandOutcome', providerStart);
+    expect(providerStart, greaterThanOrEqualTo(0));
+    expect(providerEnd, greaterThan(providerStart));
+    final provider = source.substring(providerStart, providerEnd);
+
+    expect(
+      provider,
+      contains('pluginParallelAcceptedForPlatform(defaultTargetPlatform)'),
+      reason:
+          'production must not leave the constructor default false and silently disable accepted plugin-parallel platforms',
+    );
+  });
+
   test(
     'fresh parallel start is selected by policy before legacy multipart',
     () {
@@ -101,7 +120,8 @@ void main() {
     expect(
       pluginResume,
       greaterThan(legacyRestore),
-      reason: 'without a legacy manifest, a paused ParallelDownloadTask must resume through background_downloader',
+      reason:
+          'without a legacy manifest, a paused ParallelDownloadTask must resume through background_downloader',
     );
     if (legacyImport >= 0) {
       expect(
