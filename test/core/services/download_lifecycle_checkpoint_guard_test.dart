@@ -167,4 +167,40 @@ void main() {
       contains("diagnosticLog.record('start.failureCheckpointFailed'"),
     );
   });
+
+  test('failed resume persists interruption before paused projection', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final resumeStart = source.indexOf(
+      'Future<void> _resumeUserPausedUnlocked(String taskId)',
+    );
+    final resumeEnd = source.indexOf('bool _isOccupyingTaskId(', resumeStart);
+    expect(resumeStart, greaterThanOrEqualTo(0));
+    expect(resumeEnd, greaterThan(resumeStart));
+    final resume = source.substring(resumeStart, resumeEnd);
+    final failedStart = resume.indexOf('if (!started) {');
+    final failedEnd = resume.indexOf('\n      } else {', failedStart);
+    expect(failedStart, greaterThanOrEqualTo(0));
+    expect(failedEnd, greaterThan(failedStart));
+    final body = resume.substring(failedStart, failedEnd);
+
+    final checkpoint = body.indexOf(
+      'final resumeFailureCheckpointed = await _checkpointLogicalJob(',
+    );
+    final replicaWrite = body.indexOf(
+      'await FileDownloader().database.updateRecord(',
+    );
+    expect(
+      checkpoint,
+      greaterThanOrEqualTo(0),
+      reason:
+          'a rejected resume must prove interrupted authority before projecting paused replicas',
+    );
+    expect(checkpoint, lessThan(replicaWrite));
+    expect(body, contains('if (!resumeFailureCheckpointed) {'));
+    expect(
+      body,
+      contains("diagnosticLog.record('resume.failureCheckpointFailed'"),
+    );
+  });
 }
