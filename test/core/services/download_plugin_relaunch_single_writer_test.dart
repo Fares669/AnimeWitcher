@@ -25,7 +25,7 @@ void main() {
 
     expect(body, contains('if (pluginParentKnown) {'));
     expect(body, contains('await _nativeTransport.resume(task)'));
-    expect(body, contains('if (pluginChunkEvidence) {'));
+    expect(body, contains('if (pluginRuntimeEvidence) {'));
     expect(
       body,
       contains("'reason': 'parentProjectionMissing'"),
@@ -33,7 +33,7 @@ void main() {
     );
 
     final parentBranch = body.indexOf('if (pluginParentKnown) {');
-    final chunkOnlyBranch = body.indexOf('if (pluginChunkEvidence) {');
+    final chunkOnlyBranch = body.indexOf('if (pluginRuntimeEvidence) {');
     expect(parentBranch, greaterThanOrEqualTo(0));
     expect(chunkOnlyBranch, greaterThan(parentBranch));
     final chunkOnlyBody = body.substring(chunkOnlyBranch);
