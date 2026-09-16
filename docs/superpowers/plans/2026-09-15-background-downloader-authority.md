@@ -116,7 +116,7 @@ These statuses preserve the original task numbering while making the handoff rea
 - [x] Verify focused download transport coverage on the resulting production head.
 - [x] Verify full Flutter tests and analyze on the resulting production head.
 
-Evidence: dependency/design commits `bc8ab4a20fd0b99a4ef894da176c145761fe6a27` and `bc8ab4a20fd0b99a4ef894da176c145761fe6a27`; current CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` — generation, analyze, native logger typecheck, and full Flutter tests green; `1569` tests passed and `1` skipped.
+Evidence: dependency/design commits `e56a9c43aea5dc19aa1f9ab9c88247e3d0835c55` and `bc8ab4a20fd0b99a4ef894da176c145761fe6a27`; current CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` — generation, analyze, native logger typecheck, and full Flutter tests green; `1569` tests passed and `1` skipped.
 ### Task 27 — Recover zero-byte stale signed-URL plugin state using package lifecycle APIs
 
 **Status: DONE for the automatable scope; real-device evidence remains in Task 33.**
