@@ -285,7 +285,9 @@ void main() {
     final source = File(
       'lib/core/services/background_downloader_transport.dart',
     ).readAsStringSync();
-    final start = source.indexOf('Future<bool> resume(DownloadTask task)');
+    final start = source.indexOf(
+      '@override\n  Future<bool> resume(DownloadTask task)',
+    );
     final end = source.indexOf(
       'Future<DownloadTransportCommandOutcome> startOutcome(',
       start,
