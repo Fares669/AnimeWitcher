@@ -940,22 +940,21 @@ class DownloadService {
     if (hold == null) return;
     _queueWaitingIds.remove(task.taskId);
     _waitingPayloads.remove(task.taskId);
-    await FileDownloader().database.updateRecord(
-      TaskRecord(
-        task,
-        TaskStatus.waitingToRetry,
-        saved.progress,
-        saved.totalSize,
-      ),
-    );
+
+    // Keep the terminal plugin record/Transfer terminal. The durable logical
+    // JobStore state is the offline hold; rewriting the plugin row to
+    // waitingToRetry would turn a completed Transfer into a ghost active one
+    // and bypass Transfer.resume() when connectivity returns.
+    final heldStatus =
+        downloadJobDisplayStatus(DownloadJobState.waitingForNetwork);
     _publishProgress(
       trackingUrl: downloadTrackingUrl(task),
       taskId: task.taskId,
       progress: saved.progress,
       totalSize: saved.totalSize,
-      status: TaskStatus.waitingToRetry,
+      status: heldStatus,
     );
-    _updatesController.add(TaskStatusUpdate(task, TaskStatus.waitingToRetry));
+    _updatesController.add(TaskStatusUpdate(task, heldStatus));
     diagnosticLog.record('network.hold', {
       'taskId': task.taskId,
       'generation': hold.generation,
@@ -1633,6 +1632,12 @@ class DownloadService {
         doRescheduleKilledTasks: false,
         markDownloadedComplete: false,
       );
+
+      // The package normally waits five seconds before comparing its database
+      // with the native queue. Preserve that settle window while legacy rows
+      // remain quarantined; an early inventory can look like a killed task and
+      // create a second writer.
+      await Future<void>.delayed(const Duration(seconds: 5));
 
       // Broken builds may already have created background_downloader-owned
       // chunk rows for a legacy parent. Settle only the plugin chunk group;
@@ -2520,15 +2525,18 @@ class DownloadService {
         _queueWaitingIds.remove(task.taskId);
         _waitingPayloads.remove(task.taskId);
         _rememberSessionTask(task.taskId);
-        await FileDownloader().database.updateRecord(
-          TaskRecord(task, TaskStatus.waitingToRetry, progress, expectedBytes),
-        );
+
+        // Keep a terminal plugin row terminal during the logical offline hold.
+        // The JobStore/UI projection carries waitingForNetwork and reconnect
+        // later calls the package Transfer resume path.
+        final heldStatus =
+            downloadJobDisplayStatus(DownloadJobState.waitingForNetwork);
         _publishProgress(
           trackingUrl: trackingUrl,
           taskId: task.taskId,
           progress: progress,
           totalSize: expectedBytes,
-          status: TaskStatus.waitingToRetry,
+          status: heldStatus,
         );
         diagnosticLog.record('recovery.networkHeld', {'taskId': task.taskId});
         continue;
