@@ -200,7 +200,7 @@ class BackgroundDownloaderTransport implements DownloadTransport {
   /// store as well as the native queue. Only an item that is not paused can
   /// represent a writer; the inventory itself remains the source of truth for
   /// whether the item exists.
-  Future<bool> _runtimeInventoryTaskCanOwnWriter(
+  Future<DownloadRuntimeOwnership> _runtimeInventoryTaskOwnership(
     Task task, {
     required String requestedTaskId,
     required TaskStatus? projectedStatus,
@@ -213,32 +213,26 @@ class BackgroundDownloaderTransport implements DownloadTransport {
         transferStatus == TaskStatus.paused ||
         (task.taskId == requestedTaskId &&
             projectedStatus == TaskStatus.paused)) {
-      return false;
+      return DownloadRuntimeOwnership.notOwned;
     }
 
-    // A positive item in the native inventory is still conservative evidence
-    // when its status projection is final/stale. Only the package-paused
-    // projection is explicitly known not to own a writer.
+    // allTasks() merges native inventory with retry/paused stores. A matching
+    // row without enough status evidence is ambiguous: it blocks replacement
+    // writers but cannot be attached as a live writer.
     if (recordStatus != null && runtimeTaskStatusCanOwnWriter(recordStatus)) {
-      return true;
+      return DownloadRuntimeOwnership.owned;
     }
     if (transferStatus != null && runtimeTaskStatusCanOwnWriter(transferStatus)) {
-      return true;
+      return DownloadRuntimeOwnership.owned;
     }
     if (task.taskId == requestedTaskId &&
         projectedStatus != null &&
         runtimeTaskStatusCanOwnWriter(projectedStatus)) {
-      return true;
+      return DownloadRuntimeOwnership.owned;
     }
-    return true;
+    return DownloadRuntimeOwnership.unknown;
   }
 
-  /// Resolves writer ownership from background_downloader's runtime inventory.
-  ///
-  /// A ParallelDownloadTask parent is synthetic: its native writers are
-  /// package-managed child tasks, so parent ownership is proven by a matching
-  /// parent task or child identity in [allTasks]. A Transfer projection alone
-  /// can be rehydrated from the database and is therefore never sufficient.
   Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async {
     final transfer = handleFor(taskId);
     final projectedStatus = transfer?.status;
@@ -249,21 +243,28 @@ class BackgroundDownloaderTransport implements DownloadTransport {
     try {
       final runtimeTasks = await _downloader.allTasks(allGroups: true);
       var runtimeOwner = false;
+      var runtimeUnknown = false;
       for (final task in runtimeTasks) {
         final matches = task.taskId == taskId ||
             (isInternalDownloaderChunk(task) &&
                 downloadInternalParentTaskId(task) == taskId);
         if (!matches) continue;
-        if (await _runtimeInventoryTaskCanOwnWriter(
+        final inventoryOwnership =
+            await _runtimeInventoryTaskOwnership(
           task,
           requestedTaskId: taskId,
           projectedStatus: projectedStatus,
-        )) {
+        );
+        if (inventoryOwnership == DownloadRuntimeOwnership.owned) {
           runtimeOwner = true;
           break;
         }
+        if (inventoryOwnership == DownloadRuntimeOwnership.unknown) {
+          runtimeUnknown = true;
+        }
       }
       if (runtimeOwner) return DownloadRuntimeOwnership.owned;
+      if (runtimeUnknown) return DownloadRuntimeOwnership.unknown;
 
       // A settled projection is useful only after the runtime inventory has
       // confirmed that no writer remains. An active projection with no runtime
@@ -373,10 +374,16 @@ class BackgroundDownloaderTransport implements DownloadTransport {
       if (transfer == null) return false;
       _attach(transfer);
 
+      final ownership = await ownershipFor(task.taskId);
+      if (ownership == DownloadRuntimeOwnership.unknown ||
+          ownership == DownloadRuntimeOwnership.settling) {
+        return false;
+      }
       if (transfer.status == TaskStatus.complete ||
-          runtimeTaskStatusCanOwnWriter(transfer.status)) {
+          runtimeStatusCanOwnWriter(transfer.status)) {
         return true;
       }
+      if (ownership != DownloadRuntimeOwnership.notOwned) return false;
       return await transfer.resume();
     } catch (_) {
       return false;
