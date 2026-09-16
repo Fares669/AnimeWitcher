@@ -28,11 +28,13 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             bin_dir = root / "bin"
-            sysroot = root / "sysroot"
+            sysroot = root / "build_x86_64" / "x86_64-w64-mingw32"
             resource_dir = root / "clang_root" / "lib" / "clang" / "20"
             (sysroot / "include" / "c++" / "v1").mkdir(parents=True)
             resource_dir.mkdir(parents=True)
             bin_dir.mkdir()
+            toolchain = sysroot.parent / "toolchain.cmake"
+            toolchain.write_text("set(CMAKE_SYSTEM_NAME Windows)\n", encoding="utf-8")
             for compiler in ("clang++", "g++", "c++"):
                 (bin_dir / f"x86_64-w64-mingw32-{compiler}").write_text(
                     "#!/bin/bash\n"
@@ -79,6 +81,12 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             self.assertIn('-stdlib=libc++', invocation)
             self.assertIn(f'-isystem {sysroot / "include/c++/v1"}', invocation)
 
+            toolchain_text = toolchain.read_text(encoding="utf-8")
+            self.assertIn(
+                'set(ALSOFT_ENABLE_MODULES OFF CACHE BOOL "Disable OpenAL C++20 modules for cross compiler wrapper compatibility" FORCE)',
+                toolchain_text,
+            )
+
             self.assertEqual(
                 helper.patch_wrappers(
                     bin_dir=bin_dir,
@@ -89,6 +97,10 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
                 [],
             )
             self.assertEqual(wrapper.read_text(encoding="utf-8"), patched)
+            self.assertEqual(
+                toolchain.read_text(encoding="utf-8").count("ALSOFT_ENABLE_MODULES"),
+                1,
+            )
 
     def test_rejects_missing_libcxx_headers(self):
         self.assertTrue(HELPER.is_file(), f"missing wrapper patch helper: {HELPER}")
