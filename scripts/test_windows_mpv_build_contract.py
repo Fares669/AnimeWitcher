@@ -133,6 +133,14 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
             workflow,
         )
 
+    def test_windows_ci_disables_openal_modules_for_cross_compiler_wrapper(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "Disable OpenAL C++20 modules for cross compiler wrapper",
+            workflow,
+        )
+        self.assertIn("-DALSOFT_ENABLE_MODULES=OFF", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
