@@ -4,51 +4,55 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
-    'zero-byte plugin parallel source refresh discards stale opaque resume state',
+    'zero-byte signed source replacement delegates stale generation cleanup to Transfers',
     () {
-      final source = File('lib/core/services/download_service.dart')
+      final service = File('lib/core/services/download_service.dart')
           .readAsStringSync();
+      final transport = File(
+        'lib/core/services/background_downloader_transport.dart',
+      ).readAsStringSync();
+      final lock = File('pubspec.lock').readAsStringSync();
 
+      expect(lock, contains('version: "9.6.2"'));
+      expect(service, contains('partialBytes <= 0'));
+      expect(service, contains('_nativeTransport.restartFromZero(updated)'));
+      expect(service, contains('source.refreshPluginRestart'));
+      expect(transport, contains('Future<bool> restartFromZero('));
+      expect(transport, contains('await existing.cancel()'));
+      expect(transport, contains('await existing.result.timeout('));
+      expect(transport, contains('_downloader.transfers.remove(task.taskId)'));
+      expect(transport, contains('_downloader.transfers.start(task)'));
       expect(
-        source,
-        contains('_resetZeroBytePluginParallelResumeState('),
+        service,
+        isNot(contains('BackgroundDownloaderCompat.clearResumeStateForTaskIds(')),
         reason:
-            'device logs show a refreshed parent can otherwise resume stale child URLs and loop on HTTP 403',
-      );
-      expect(
-        source,
-        contains('partialBytes <= 0'),
-        reason: 'resume state may only be discarded when no durable bytes exist',
-      );
-      expect(
-        source,
-        contains('BackgroundDownloaderCompat.clearResumeStateForTaskIds('),
-        reason:
-            'the stale background_downloader ResumeData/pausedTask must be removed before rebuilding chunks',
-      );
-      expect(
-        source,
-        contains('source.refreshPluginParallelZeroByteReset'),
-        reason: 'the recovery path must be explicit in diagnostic logs',
+            'pause/resume state cleanup must remain owned by background_downloader',
       );
     },
   );
 
-  test('plugin parallel parent pause is ignored while a chunk writer is live', () {
+  test('parent reconciliation asks the transport for targeted ownership', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
+    final start = source.indexOf('Future<void> _reconcileTransferOwnership()');
+    final end = source.indexOf('Future<Set<String>> _livePartIds()', start);
+    expect(start, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(start));
+    final reconcile = source.substring(start, end);
 
-    expect(source, contains('Future<bool> _hasLivePluginParallelChunks('));
-    expect(source, contains('FileDownloader().allTasks(allGroups: true)'));
     expect(
-      source,
-      contains('downloadInternalParentTaskId(candidate) == parentTaskId'),
+      reconcile,
+      contains('final ownership = await _runtimeOwnershipFor(record.taskId);'),
     );
     expect(
-      source,
-      contains('paused.pluginParallelLiveChildIgnored'),
+      reconcile,
+      contains('ownership != DownloadRuntimeOwnership.notOwned'),
+    );
+    expect(
+      reconcile,
+      isNot(contains('liveIds.contains(record.taskId)')),
       reason:
-          'device logs showed parent paused callbacks while child byte progress was still increasing',
+          'plugin parallel writers use child ids, so parent liveness must come from transport ownership',
     );
   });
 }
