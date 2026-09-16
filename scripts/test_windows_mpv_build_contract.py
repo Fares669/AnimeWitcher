@@ -143,6 +143,18 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
             helper,
         )
 
+    def test_windows_ci_disables_openal_cxx_dependency_scanning_at_package_boundary(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        step_name = "Patch OpenAL C++20 dependency scanning"
+        self.assertIn(step_name, workflow)
+        self.assertIn("packages/openal-soft.cmake", workflow)
+        self.assertIn("-DALSOFT_ENABLE_MODULES=OFF", workflow)
+        self.assertIn("-DCMAKE_CXX_SCAN_FOR_MODULES=OFF", workflow)
+        self.assertLess(
+            workflow.index(step_name),
+            workflow.index("Configure pinned cross toolchain"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
