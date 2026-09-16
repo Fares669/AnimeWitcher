@@ -43,6 +43,7 @@ jobs:
           python3 scripts/test_prepare_android_runtime.py
           python3 scripts/test_verify_windows_runtime.py
           python3 scripts/test_prepare_windows_runtime.py
+          python3 scripts/test_patch_windows_compiler_wrappers.py
           python3 scripts/test_windows_mpv_build_contract.py
 
       - uses: subosito/flutter-action@v2
