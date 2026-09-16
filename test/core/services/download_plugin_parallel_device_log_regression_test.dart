@@ -57,16 +57,29 @@ void main() {
     );
   });
 
-  test('parallel parent ownership is sourced from the Transfer projection', () {
-    final transport = File(
-      'lib/core/services/background_downloader_transport.dart',
-    ).readAsStringSync();
+  test(
+    'parallel parent ownership requires runtime inventory, not projection alone',
+    () {
+      final transport = File(
+        'lib/core/services/background_downloader_transport.dart',
+      ).readAsStringSync();
 
-    expect(transport, contains('final transfer = handleFor(taskId);'));
-    expect(transport, contains('transfer?.task is ParallelDownloadTask'));
-    expect(
-      transport,
-      contains('runtimeTaskStatusCanOwnWriter(projectedStatus)'),
-    );
-  });
+      expect(transport, contains('final transfer = handleFor(taskId);'));
+      expect(
+        transport,
+        contains('final runtimeTasks = await _downloader.allTasks(allGroups: true);'),
+      );
+      expect(transport, contains('final runtimeOwner = runtimeTasks.any((task)'));
+      expect(transport, contains('downloadInternalParentTaskId(task)'));
+      expect(
+        transport,
+        contains('if (projectedOwnership == DownloadRuntimeOwnership.owned)'),
+      );
+      expect(
+        transport,
+        isNot(contains('transfer?.task is ParallelDownloadTask')),
+        reason: 'a rehydrated parent projection is not runtime ownership proof',
+      );
+    },
+  );
 }
