@@ -280,4 +280,73 @@ void main() {
     );
   });
 
+
+  test('transport resume requires runtime ownership before accepting active handles', () {
+    final source = File(
+      'lib/core/services/background_downloader_transport.dart',
+    ).readAsStringSync();
+    final start = source.indexOf('Future<bool> resume(DownloadTask task)');
+    final end = source.indexOf(
+      'Future<DownloadTransportCommandOutcome> startOutcome(',
+      start,
+    );
+    expect(start, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(start));
+    final body = source.substring(start, end);
+
+    final ownership = body.indexOf(
+      'final ownership = await ownershipFor(task.taskId);',
+    );
+    final unknown = body.indexOf(
+      'if (ownership == DownloadRuntimeOwnership.unknown) return false;',
+    );
+    final active = body.indexOf('runtimeStatusCanOwnWriter(transfer.status)');
+    final resume = body.indexOf('return await transfer.resume();');
+
+    expect(ownership, greaterThanOrEqualTo(0));
+    expect(unknown, greaterThan(ownership));
+    expect(active, greaterThan(unknown));
+    expect(resume, greaterThan(active));
+  });
+
+  test('ambiguous package inventory stays unknown and is excluded from live recovery', () {
+    final transport = File(
+      'lib/core/services/background_downloader_transport.dart',
+    ).readAsStringSync();
+    final helperStart = transport.indexOf(
+      'Future<DownloadRuntimeOwnership> _runtimeInventoryTaskOwnership(',
+    );
+    final helperEnd = transport.indexOf(
+      '/// Resolves writer ownership from background_downloader',
+      helperStart,
+    );
+    expect(helperStart, greaterThanOrEqualTo(0));
+    expect(helperEnd, greaterThan(helperStart));
+    final helper = transport.substring(helperStart, helperEnd);
+    expect(
+      helper,
+      contains('return DownloadRuntimeOwnership.unknown;'),
+    );
+
+    final service = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final liveStart = service.indexOf('Future<List<Task>> _liveTransferTasks()');
+    final liveEnd = service.indexOf(
+      'Future<DownloadRuntimeOwnership> _runtimeOwnershipFor(',
+      liveStart,
+    );
+    expect(liveStart, greaterThanOrEqualTo(0));
+    expect(liveEnd, greaterThan(liveStart));
+    final live = service.substring(liveStart, liveEnd);
+    expect(
+      live,
+      contains('final ownership = await _nativeTransport.ownershipFor(task.taskId);'),
+    );
+    expect(
+      live,
+      contains('if (ownership != DownloadRuntimeOwnership.owned) continue;'),
+    );
+  });
+
+
 }
