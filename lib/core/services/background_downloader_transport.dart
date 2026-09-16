@@ -230,6 +230,12 @@ class BackgroundDownloaderTransport implements DownloadTransport {
         runtimeTaskStatusCanOwnWriter(projectedStatus)) {
       return DownloadRuntimeOwnership.owned;
     }
+    if (recordStatus?.isFinalState == true ||
+        transferStatus?.isFinalState == true ||
+        (task.taskId == requestedTaskId &&
+            projectedStatus?.isFinalState == true)) {
+      return DownloadRuntimeOwnership.notOwned;
+    }
     return DownloadRuntimeOwnership.unknown;
   }
 
@@ -239,7 +245,7 @@ class BackgroundDownloaderTransport implements DownloadTransport {
   /// package-managed child tasks, so parent ownership is proven by a matching
   /// parent task or child identity in [allTasks]. A Transfer projection alone
   /// can be rehydrated from the database and is therefore never sufficient.
-    Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async {
+  Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async {
     final transfer = handleFor(taskId);
     final projectedStatus = transfer?.status;
     final projectedOwnership = projectedStatus == null
