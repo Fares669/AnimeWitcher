@@ -42,7 +42,24 @@ jobs:
           flutter test test/core/services/download_plugin_relaunch_single_writer_test.dart --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
       - name: Analyze
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+        shell: bash
+        run: |
+          set +e
+          flutter analyze --no-fatal-warnings --no-fatal-infos > analyze.log 2>&1
+          code=$?
+          cat analyze.log
+          echo "ANALYZE_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Upload analyzer output
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr246-analyze-log
+          path: analyze.log
+          if-no-files-found: error
+
+      - name: Fail on analyzer errors
+        run: test "$ANALYZE_EXIT" = "0"
 
       - name: Commit verified production patch
         run: |
