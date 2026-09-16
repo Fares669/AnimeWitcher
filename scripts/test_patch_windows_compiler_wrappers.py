@@ -138,7 +138,13 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
                 cleanup_text.count("# AnimeWitcher: detached-safe cleanup comparison"),
                 1,
             )
-            self.assertIn('MATCHES "^[0-9a-fA-F]{40}$"', cleanup_text)
+            self.assertIn('string(LENGTH "${git_tag}" git_tag_length)', cleanup_text)
+            self.assertIn(
+                'if(git_tag_length EQUAL 40 AND "${git_tag}" MATCHES "^[0-9a-fA-F]+$")',
+                cleanup_text,
+            )
+            self.assertNotIn('{40}', cleanup_text)
+            self.assertIn('set(reset "HEAD")', cleanup_text)
             self.assertIn('set(reset_compare_ref "HEAD")', cleanup_text)
             self.assertIn("rev-parse ${reset_compare_ref}", cleanup_text)
             self.assertNotIn("rev-parse @{u})", cleanup_text)
@@ -167,6 +173,36 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
                 ),
                 1,
             )
+
+    def test_cmake_detects_exact_40_character_commit_hash(self):
+        with tempfile.TemporaryDirectory() as temp:
+            probe = Path(temp) / "probe.cmake"
+            probe.write_text(
+                'set(git_tag "bde79ad2dd832db9180c4a6eca2e84ceb12b1bb0")\n'
+                'set(git_remote_name "origin")\n'
+                'set(git_reset "")\n'
+                'string(LENGTH "${git_tag}" git_tag_length)\n'
+                'if(git_tag_length EQUAL 40 AND "${git_tag}" MATCHES "^[0-9a-fA-F]+$")\n'
+                '  set(reset "HEAD")\n'
+                '  set(reset_compare_ref "HEAD")\n'
+                'elseif("${git_remote_name}" STREQUAL "" AND NOT "${git_tag}" STREQUAL "")\n'
+                '  set(reset "")\n'
+                '  set(reset_compare_ref "HEAD")\n'
+                'else()\n'
+                '  set(reset "@{u}")\n'
+                '  set(reset_compare_ref "@{u}")\n'
+                'endif()\n'
+                'message(STATUS "reset=${reset};compare=${reset_compare_ref}")\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["cmake", "-P", str(probe)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("reset=HEAD;compare=HEAD", result.stdout + result.stderr)
 
     def test_rejects_missing_libcxx_headers(self):
         self.assertTrue(HELPER.is_file(), f"missing wrapper patch helper: {HELPER}")
