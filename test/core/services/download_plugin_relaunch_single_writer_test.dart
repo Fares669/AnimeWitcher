@@ -63,13 +63,15 @@ void main() {
       '_quarantineLegacyParallelParentsBeforePluginStart()',
     );
     final pluginStart = helper.indexOf('FileDownloader().start(');
+    final cancelRogue = helper.indexOf('cancelTasksWithIds(');
     final reschedule = helper.indexOf(
       'await FileDownloader().rescheduleKilledTasks()',
     );
+    final rehydrate = helper.indexOf('_nativeTransport.rehydrate(');
+    final forgetLegacy = helper.indexOf('_nativeTransport.forget(parentId)');
     final restore = helper.indexOf(
       '_restoreLegacyParallelParentsAfterPluginStart(',
     );
-    final rehydrate = helper.indexOf('_nativeTransport.rehydrate(');
 
     expect(
       quarantine,
@@ -84,14 +86,25 @@ void main() {
       reason:
           'FileDownloader.start schedules killed-task recovery on a delayed Timer; startup needs synchronous reconciliation while legacy rows are quarantined',
     );
-    expect(reschedule, greaterThan(pluginStart));
+    expect(cancelRogue, greaterThan(pluginStart));
+    expect(reschedule, greaterThan(cancelRogue));
+    expect(rehydrate, greaterThan(reschedule));
+    expect(
+      forgetLegacy,
+      greaterThan(rehydrate),
+      reason:
+          'rehydration may observe stale legacy parent rows, so transport handles must be fenced before restoring legacy projections',
+    );
     expect(
       restore,
-      greaterThan(reschedule),
+      greaterThan(forgetLegacy),
       reason:
-          'the original legacy DB projection can be restored only after plugin rescheduling is complete',
+          'the original legacy DB projection can be restored only after plugin rescheduling and Transfer fencing are complete',
     );
-    expect(rehydrate, greaterThan(restore));
+
+    expect(helper, contains('isInternalDownloaderChunk(task)'));
+    expect(helper, contains('downloadInternalParentTaskId(task)'));
+    expect(helper, contains("'startup.legacyPluginUpdateIgnored'"));
 
     final initializeStart = source.indexOf('Future<void> _initialize() async {');
     final initializeEnd = source.indexOf(
