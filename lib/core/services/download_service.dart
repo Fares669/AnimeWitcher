@@ -3639,6 +3639,21 @@ class DownloadService {
       projectedExpectedBytes: current?.totalSize,
     );
 
+    final checkpointed = await _checkpointLogicalJob(
+      task,
+      state: DownloadJobState.interrupted,
+      expectedBytes: totalSize,
+      userPaused: false,
+      queueWaiting: false,
+    );
+    if (!checkpointed) {
+      diagnosticLog.record('failurePark.checkpointFailed', {
+        'taskId': task.taskId,
+        'sourceStatus': update.status.name,
+      });
+      return;
+    }
+
     // Never delete the DB record, metadata, or partial file here — only mark
     // paused so retry/unpause can continue from the saved offset.
     await FileDownloader().database.updateRecord(
@@ -3651,13 +3666,6 @@ class DownloadService {
           lastProgress: progress,
           lastExpectedBytes: totalSize,
         );
-    await _checkpointLogicalJob(
-      task,
-      state: DownloadJobState.interrupted,
-      expectedBytes: totalSize,
-      userPaused: false,
-      queueWaiting: false,
-    );
 
     _ref.read(activeDownloadsProvider.notifier).add(trackingUrl);
     _ref
