@@ -1,4 +1,4 @@
-name: Task 24 System Cancel RED
+name: Task 24 System Cancel GREEN
 
 on:
   push:
@@ -6,19 +6,75 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  red:
+  green:
+    if: github.event.head_commit.message == 'chore(ci): apply task24 system cancel fix'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
+      - name: Patch durable system pause state
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/core/services/download_service.dart')
+          text = path.read_text()
+          old = """    final didPause = await _pauseTransfer(downloadTask);
+    if (didPause) {
+      await _syncSessionOverlay();
+      return;
+    }
+
+    await _preserveDownloadAsPaused(
+"""
+          new = """    final didPause = await _pauseTransfer(downloadTask);
+    if (didPause) {
+      final checkpointed = await _checkpointLogicalJob(
+        downloadTask,
+        state: DownloadJobState.interrupted,
+        userPaused: false,
+        queueWaiting: false,
+      );
+      if (!checkpointed) {
+        diagnosticLog.record('systemPause.checkpointFailed', {
+          'taskId': taskId,
+        });
+        await _syncSessionOverlay(completedSuccess: false);
+        return;
+      }
+      await _serializeQueue(_syncQueueToCapUnlocked);
+      await _syncSessionOverlay(completedSuccess: false);
+      return;
+    }
+
+    await _preserveDownloadAsPaused(
+"""
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one system-cancel success block, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.47.1
           cache: true
       - run: flutter pub get
-      - run: flutter test test/core/services/download_plugin_parallel_cancel_routing_test.dart
+      - name: Verify focused lifecycle regressions
+        run: |
+          flutter test \
+            test/core/services/download_plugin_parallel_cancel_routing_test.dart \
+            test/core/services/download_pause_settlement_guard_test.dart
+      - name: Verify service analyzer
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart
+      - name: Commit verified fix
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_service.dart
+          git commit -m "fix(downloads): persist system pause state"
+          git push origin HEAD:refactor/background-downloader-authority
