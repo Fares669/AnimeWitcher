@@ -327,6 +327,7 @@ enum DownloadNativeWaitingQueue {
   private static let backgroundRetryMaxConsecutiveFailures = 12
   private static let backgroundRetryMaxTotalRetries = 128
   private static let lock = NSLock()
+  private static var pluginObserversInstalled = false
   private static var hookInstalled = false
 
   static var nativePromotionAvailable: Bool {
@@ -364,21 +365,24 @@ enum DownloadNativeWaitingQueue {
   static func installUrlSessionHook() {
     lock.lock()
     defer { lock.unlock() }
-    guard !hookInstalled else { return }
     #if canImport(background_downloader)
-    BDPlugin.onNativeTaskStatusChange = { task, statusUpdate in
-      DownloadNativeWaitingQueue.handleSupportedPluginStatus(
-        task: task,
-        statusUpdate: statusUpdate
-      )
-    }
-    BDPlugin.onNativeTaskProgressChange = { task, progress in
-      DownloadNativeWaitingQueue.handleSupportedPluginProgress(
-        task: task,
-        progress: progress
-      )
+    if !pluginObserversInstalled {
+      BDPlugin.onNativeTaskStatusChange = { task, statusUpdate in
+        DownloadNativeWaitingQueue.handleSupportedPluginStatus(
+          task: task,
+          statusUpdate: statusUpdate
+        )
+      }
+      BDPlugin.onNativeTaskProgressChange = { task, progress in
+        DownloadNativeWaitingQueue.handleSupportedPluginProgress(
+          task: task,
+          progress: progress
+        )
+      }
+      pluginObserversInstalled = true
     }
     #endif
+    guard !hookInstalled else { return }
     hookInstalled = DownloadUrlSessionHook.install()
   }
 
@@ -1871,7 +1875,7 @@ enum DownloadNativeWaitingQueue {
     task: background_downloader.Task,
     progress: Double
   ) {
-    guard nativePromotionAvailable, progress.isFinite, progress >= 0 else { return }
+    guard progress.isFinite, progress >= 0 else { return }
     let normalized = min(max(progress, 0), 1)
     let id = task.taskId
     guard !id.isEmpty else { return }

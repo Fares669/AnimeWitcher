@@ -57,7 +57,12 @@ final Expando<bool> _legacyParallelUpdateOrigin = Expando<bool>(
 
 @Riverpod(keepAlive: true)
 DownloadService downloadService(Ref ref) {
-  final service = DownloadService(ref);
+  final service = DownloadService(
+    ref,
+    pluginParallelAccepted: pluginParallelAcceptedForPlatform(
+      defaultTargetPlatform,
+    ),
+  );
   // Cancel the FileDownloader stream subscription when the ProviderScope is
   // disposed (e.g. on app restart). Without this the subscription outlives the
   // scope and the next DownloadService.init() throws "Stream already listened".
@@ -384,6 +389,7 @@ class DownloadService {
   final Ref _ref;
   final Dio _dio;
   final bool _pluginParallelAccepted;
+  final Set<String> _startupLegacyParentFence = <String>{};
   final Set<String> _userPausedIds = {};
   final Set<String> _dequeuingPausedIds = {};
   late final DownloadContinuedProcessingService _continuedProcessing;
@@ -1133,6 +1139,16 @@ class DownloadService {
     // cannot duplicate callback consumers.
     await _updatesSubscription?.cancel();
     _updatesSubscription = _sharedEvents.stream.listen((update) {
+      final startupParentId = downloadInternalParentTaskId(update.task);
+      if (_startupLegacyParentFence.contains(update.task.taskId) ||
+          (startupParentId != null &&
+              _startupLegacyParentFence.contains(startupParentId))) {
+        diagnosticLog.record('startup.legacyPluginUpdateIgnored', {
+          'taskId': update.task.taskId,
+          if (startupParentId != null) 'parentTaskId': startupParentId,
+        });
+        return;
+      }
       final legacyParallelUpdate = _legacyParallelUpdateOrigin[update] == true;
       diagnosticLog.record('task.update', {
         'taskId': update.task.taskId,
@@ -1496,19 +1512,143 @@ class DownloadService {
     // startup/rehydration and legacy inventory are both complete.
     await _serializeQueue(_recoverPersistedDownloads);
 
+    _startupLegacyParentFence.clear();
     _isInitialized = true;
   }
 
-  Future<void> _startPluginExecutor() async {
-    // The update listener is installed before this helper is called. Restore
-    // durable user pause/delete intent even earlier in _initialize(), then let
-    // background_downloader reconnect/reschedule native work. Rehydration
-    // reconnects Transfer handles before any logical ownership decision.
-    await FileDownloader().start(
-      doRescheduleKilledTasks: true,
-      markDownloadedComplete: false,
+  Future<List<ParallelManifestRecoveryEvidence>>
+  _discoverLegacyParallelManifestEvidence() async {
+    return discoverParallelManifestRecoveryEvidence([
+      Directory(
+        p.join(await _getPublicDownloadsPath(), 'AnimeWitcher', 'Downloads'),
+      ),
+    ]);
+  }
+
+  Future<
+    ({
+      Set<String> parentIds,
+      List<TaskRecord> parentRecords,
+      Set<String> rogueChunkIds,
+    })
+  >
+  _quarantineLegacyParallelParentsBeforePluginStart() async {
+    final evidence = await _discoverLegacyParallelManifestEvidence();
+    final parentIds = <String>{
+      for (final manifest in evidence)
+        if (manifest.parentTaskId.isNotEmpty) manifest.parentTaskId,
+    };
+    _startupLegacyParentFence.addAll(parentIds);
+    if (parentIds.isEmpty) {
+      return (
+        parentIds: parentIds,
+        parentRecords: <TaskRecord>[],
+        rogueChunkIds: <String>{},
+      );
+    }
+
+    final parentRecords = <TaskRecord>[];
+    final rogueChunkIds = <String>{};
+    for (final record in await FileDownloader().database.allRecords()) {
+      final task = record.task;
+      if (task is ParallelDownloadTask &&
+          parentIds.contains(task.taskId) &&
+          record.status != TaskStatus.complete) {
+        parentRecords.add(record);
+        await FileDownloader().database.updateRecord(
+          TaskRecord(
+            task,
+            TaskStatus.paused,
+            record.progress,
+            record.expectedFileSize,
+          ),
+        );
+      }
+
+      final parentId = downloadInternalParentTaskId(task);
+      if (task.group == FileDownloader.chunkGroup &&
+          parentId != null &&
+          parentIds.contains(parentId)) {
+        rogueChunkIds.add(task.taskId);
+        if (record.status != TaskStatus.complete &&
+            record.status != TaskStatus.canceled) {
+          await FileDownloader().database.updateRecord(
+            TaskRecord(
+              task,
+              TaskStatus.paused,
+              record.progress,
+              record.expectedFileSize,
+            ),
+          );
+        }
+      }
+    }
+
+    diagnosticLog.record('startup.legacyPluginQuarantine', {
+      'parents': parentIds.length,
+      'parentRecords': parentRecords.length,
+      'rogueChunks': rogueChunkIds.length,
+    });
+    return (
+      parentIds: parentIds,
+      parentRecords: parentRecords,
+      rogueChunkIds: rogueChunkIds,
     );
-    await _nativeTransport.rehydrate(group: kLogicalDownloadGroup);
+  }
+
+  Future<void> _restoreLegacyParallelParentsAfterPluginStart(
+    List<TaskRecord> records,
+  ) async {
+    for (final record in records) {
+      await FileDownloader().database.updateRecord(record);
+    }
+  }
+
+  Future<void> _startPluginExecutor() async {
+    // PR #231 stored legacy parents in background_downloader's database as
+    // ParallelDownloadTask rows. Quarantine those rows before the plugin
+    // reconciles killed tasks or it can create a second random chunk set
+    // beside PersistentParallelDownload's deterministic .part.N writers.
+    final quarantine =
+        await _quarantineLegacyParallelParentsBeforePluginStart();
+    try {
+      await FileDownloader().start(
+        doRescheduleKilledTasks: false,
+        markDownloadedComplete: false,
+      );
+
+      // Broken builds may already have created background_downloader-owned
+      // chunk rows for a legacy parent. Settle only the plugin chunk group;
+      // PR #231 animewitcher_parts children are the valid legacy executor and
+      // must remain available for manifest recovery.
+      final rogueChunkIds = <String>{...quarantine.rogueChunkIds};
+      for (final task in await FileDownloader().allTasks(allGroups: true)) {
+        final parentId = downloadInternalParentTaskId(task);
+        if (task.group == FileDownloader.chunkGroup &&
+            parentId != null &&
+            quarantine.parentIds.contains(parentId)) {
+          rogueChunkIds.add(task.taskId);
+        }
+      }
+      if (rogueChunkIds.isNotEmpty) {
+        await FileDownloader().cancelTasksWithIds(rogueChunkIds.toList());
+        diagnosticLog.record('startup.legacyPluginChunksCanceled', {
+          'count': rogueChunkIds.length,
+        });
+      }
+
+      // FileDownloader.start normally does this on a delayed 5-second Timer.
+      // Run it synchronously while legacy rows are quarantined.
+      await FileDownloader().rescheduleKilledTasks();
+      await _nativeTransport.rehydrate(group: kLogicalDownloadGroup);
+      for (final parentId in quarantine.parentIds) {
+        _nativeTransport.forget(parentId);
+      }
+    } finally {
+      await _restoreLegacyParallelParentsAfterPluginStart(
+        quarantine.parentRecords,
+      );
+    }
   }
 
   /// Test hook that replaces [FileDownloader.configure] for the holding queue.
