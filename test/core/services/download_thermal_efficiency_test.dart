@@ -114,7 +114,7 @@ void main() {
     expect(end, greaterThan(start));
     final writeHandler = swift.substring(start, end);
     final multipartStart = writeHandler.indexOf(
-      'if isDownloadPart(downloadTask) {',
+      'if isLegacyDownloadPart(downloadTask) {',
     );
     final multipartEnd = writeHandler.indexOf(
       'guard let id = taskId(from: downloadTask)',
