@@ -4269,15 +4269,26 @@ class DownloadService {
       // chunks. First persist tombstones for every logical duplicate so a
       // process death cannot resurrect one after the primary delete.
       final duplicateLogicalTasks = <String, DownloadTask>{};
-      for (final task in await FileDownloader().allTasks(allGroups: true)) {
+
+      void considerDuplicate(Task task) {
         if (task.taskId == taskId ||
             isInternalDownloaderChunk(task) ||
             downloadTrackingUrl(task) != trackingUrl) {
-          continue;
+          return;
         }
         if (isLogicalEpisodeDownloadTask(task)) {
           duplicateLogicalTasks[task.taskId] = task as DownloadTask;
         }
+      }
+
+      // Runtime inventory catches active native rows. The database pass also
+      // catches a persisted duplicate that disappeared from native inventory
+      // after process death but is still eligible for package rescheduling.
+      for (final task in await FileDownloader().allTasks(allGroups: true)) {
+        considerDuplicate(task);
+      }
+      for (final record in await FileDownloader().database.allRecords()) {
+        considerDuplicate(record.task);
       }
 
       final duplicateLogicalIds = duplicateLogicalTasks.keys.toList(
