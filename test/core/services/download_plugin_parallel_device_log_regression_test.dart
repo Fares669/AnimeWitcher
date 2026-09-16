@@ -21,7 +21,8 @@ void main() {
       expect(transport, contains('await existing.cancel()'));
       expect(transport, contains('await existing.result.timeout('));
       expect(transport, contains('_downloader.transfers.remove(task.taskId)'));
-      expect(transport, contains('_downloader.transfers.start(task)'));
+      expect(transport, contains('_downloader.transfers.getOrStart('));
+      expect(transport, contains('reEnqueueIfFailed: true'));
       expect(
         service,
         isNot(contains('BackgroundDownloaderCompat.clearResumeStateForTaskIds(')),
@@ -53,6 +54,19 @@ void main() {
       isNot(contains('liveIds.contains(record.taskId)')),
       reason:
           'plugin parallel writers use child ids, so parent liveness must come from transport ownership',
+    );
+  });
+
+  test('parallel parent ownership is sourced from the Transfer projection', () {
+    final transport = File(
+      'lib/core/services/background_downloader_transport.dart',
+    ).readAsStringSync();
+
+    expect(transport, contains('final transfer = handleFor(taskId);'));
+    expect(transport, contains('transfer?.task is ParallelDownloadTask'));
+    expect(
+      transport,
+      contains('runtimeTaskStatusCanOwnWriter(projectedStatus)'),
     );
   });
 }
