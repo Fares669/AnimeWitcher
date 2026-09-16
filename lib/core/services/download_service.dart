@@ -420,6 +420,7 @@ class DownloadService {
   final Set<String> _queueWaitingIds = {};
   final Set<String> _startingTaskIds = {};
   final Set<String> _refreshingParallelParentIds = <String>{};
+  final Set<String> _sourceReplacingTaskIds = <String>{};
   final Set<String> _terminalJobIds = <String>{};
   final List<String> _sessionOrder = [];
   bool _sessionOverlayActive = false;
@@ -1178,6 +1179,22 @@ class DownloadService {
       // row stays **متوقف مؤقتاً** with its saved percent.
       if (_userPausedIds.contains(update.task.taskId) ||
           _dequeuingPausedIds.contains(update.task.taskId)) {
+        return;
+      }
+
+      // restartFromZero deliberately cancels the stale package generation.
+      // That terminal callback belongs to the old signed URL, not to the
+      // logical episode. Keep it behind the source-replacement fence while
+      // background_downloader settles and starts the refreshed Transfer.
+      if (update is TaskStatusUpdate &&
+          _sourceReplacingTaskIds.contains(update.task.taskId) &&
+          (update.status == TaskStatus.failed ||
+              update.status == TaskStatus.canceled ||
+              update.status == TaskStatus.notFound)) {
+        diagnosticLog.record('source.staleGenerationTerminalIgnored', {
+          'taskId': update.task.taskId,
+          'status': update.status.name,
+        });
         return;
       }
 
@@ -5446,24 +5463,25 @@ class DownloadService {
       }
     }
 
-    if (!legacySessionExists && hasOpaqueNativeResume && partialBytes <= 0) {
-      // background_downloader 9.6.1 owns plugin resume/re-enqueue. Its
-      // ParallelDownloadTask resume payload, however, contains the original
-      // child task descriptors and there is no public API to rewrite those
-      // child URLs. Never migrate that plugin state into AnimeWitcher's legacy
-      // executor and never discard opaque bytes silently. A user-visible
-      // restart decision is safer until the plugin exposes source replacement
-      // for paused parallel chunks.
-      return (task: task, refreshed: false, restartRequired: true);
-    }
+    // A refreshed zero-byte package generation has no durable bytes to lose.
+    // Keep source identity in AnimeWitcher, but delegate stale resume cleanup,
+    // child recreation and duplicate suppression to background_downloader.
+    final restartPluginFromZero =
+        !legacySessionExists && hasOpaqueNativeResume && partialBytes <= 0;
+    final updated = task.copyWith(
+      url: refreshed.url,
+      headers: Map<String, String>.from(refreshed.headers),
+    );
 
     // Source replacement changes executor/manifest identity. Persist an
     // interrupted write-ahead boundary first so a storage failure cannot let
     // the old durable state race a newly installed URL. DM-11/DM-31 later
     // make the source capability itself transactional and generation-aware.
     final refreshCheckpointed = await _checkpointLogicalJob(
-      task,
+      updated,
       state: DownloadJobState.interrupted,
+      durableBytes: partialBytes,
+      durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
       expectedBytes: expectedBytes,
       userPaused: false,
       queueWaiting: false,
@@ -5499,10 +5517,27 @@ class DownloadService {
           : (task: replaced, refreshed: true, restartRequired: false);
     }
 
-    final updated = task.copyWith(
-      url: refreshed.url,
-      headers: Map<String, String>.from(refreshed.headers),
-    );
+    if (restartPluginFromZero) {
+      _sourceReplacingTaskIds.add(task.taskId);
+      try {
+        final restarted = await _nativeTransport.restartFromZero(updated);
+        diagnosticLog.record('source.refreshPluginRestart', {
+          'taskId': task.taskId,
+          'accepted': restarted,
+          'opaqueNativeResume': hasOpaqueNativeResume,
+        });
+        if (!restarted) {
+          return (task: updated, refreshed: true, restartRequired: true);
+        }
+        return (task: updated, refreshed: true, restartRequired: false);
+      } finally {
+        // Let any already-queued terminal callback from the canceled stale
+        // generation drain while the fence is still active.
+        await Future<void>.delayed(Duration.zero);
+        _sourceReplacingTaskIds.remove(task.taskId);
+      }
+    }
+
     final record = await FileDownloader().database.recordForId(task.taskId);
     if (record != null) {
       await FileDownloader().database.updateRecord(
@@ -5549,15 +5584,16 @@ class DownloadService {
 
   Future<void> _reconcileTransferOwnership() async {
     await _parallel.reconcile(_livePartIds);
-    final liveIds = await _livePartIds();
     for (final record in await FileDownloader().database.allRecords()) {
       if (!isLogicalEpisodeDownloadTask(record.task) ||
           _queueWaitingIds.contains(record.taskId) ||
           _startingTaskIds.contains(record.taskId) ||
-          liveIds.contains(record.taskId) ||
           _parallel.isActive(record.taskId) ||
-          !isLiveNativeDownloadStatus(record.status))
+          !isLiveNativeDownloadStatus(record.status)) {
         continue;
+      }
+      final ownership = await _runtimeOwnershipFor(record.taskId);
+      if (ownership != DownloadRuntimeOwnership.notOwned) continue;
       final task = record.task as DownloadTask;
       final saved = await _savedProgressFor(task);
       await FileDownloader().database.updateRecord(
