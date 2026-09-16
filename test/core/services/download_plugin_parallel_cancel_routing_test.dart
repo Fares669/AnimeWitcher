@@ -68,6 +68,37 @@ void main() {
   });
 
   test(
+    'successful system pause durably releases the logical running slot',
+    () {
+      final source = File('lib/core/services/download_service.dart')
+          .readAsStringSync();
+      final start = source.indexOf('Future<void> _cancelFromSystemUI(');
+      final end = source.indexOf('Future<void> cancelDownload(', start);
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
+      final successStart = body.indexOf('if (didPause) {');
+      expect(successStart, greaterThanOrEqualTo(0));
+      final successEnd = body.indexOf('\n    }', successStart);
+      expect(successEnd, greaterThan(successStart));
+      final success = body.substring(successStart, successEnd);
+
+      expect(
+        success,
+        contains('state: DownloadJobState.interrupted'),
+        reason:
+            'once native ownership is released, JobStore must stop reserving a running slot',
+      );
+      expect(
+        success,
+        contains('_syncQueueToCapUnlocked'),
+        reason:
+            'a system-paused episode must allow the next logical waiter to start',
+      );
+    },
+  );
+
+  test(
     'destructive cancel routes through ownership evidence, not task shape',
     () {
       final source = File('lib/core/services/download_service.dart')
