@@ -5805,6 +5805,8 @@ class DownloadService {
           transfer?.status == TaskStatus.paused) {
         continue;
       }
+      final ownership = await _nativeTransport.ownershipFor(task.taskId);
+      if (ownership != DownloadRuntimeOwnership.owned) continue;
       live.add(task);
     }
     return live;
