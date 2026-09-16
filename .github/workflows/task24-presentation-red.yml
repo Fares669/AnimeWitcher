@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   audit:
-    if: ${{ !contains(github.event.head_commit.message, 'docs(downloads): record task 24 presentation audit') }}
+    if: "${{ !contains(github.event.head_commit.message, 'docs(downloads): record task 24 presentation audit') }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
