@@ -56,6 +56,16 @@ void main() {
       expect(ownership.blocksNewWriter, isFalse);
     });
 
+    test('active Transfer projection without runtime inventory stays unknown', () {
+      final ownership = resolveDownloadRuntimeOwnership(
+        runtimeQuerySucceeded: true,
+        runtimeTaskPresent: false,
+        transferRuntimeActive: true,
+      );
+      expect(ownership, DownloadRuntimeOwnership.unknown);
+      expect(ownership.blocksNewWriter, isTrue);
+    });
+
     test(
       'rehydrated Transfer handle plus failed executor query stays unknown',
       () {
