@@ -1,4 +1,4 @@
-name: Task 24 Integrity Transition Audit
+name: Task 24 Queue Session Presentation Audit
 
 on:
   push:
@@ -6,10 +6,11 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   audit:
+    if: ${{ !contains(github.event.head_commit.message, 'docs(downloads): record task 24 presentation audit') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -25,55 +26,89 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
-      - name: Verify signed URL, identity, retry, completion, and stale callback matrix
+      - name: Verify episode queue and parent-slot authority
         run: |
           flutter test \
-            test/core/services/download_plugin_source_refresh_routing_test.dart \
-            test/core/services/download_plugin_source_refresh_test.dart \
-            test/core/services/download_source_refresh_capability_test.dart \
-            test/core/services/download_source_refresh_checkpoint_guard_test.dart \
-            test/core/services/download_source_refresh_integrity_test.dart \
-            test/core/services/download_source_refresh_service_wiring_test.dart \
-            test/core/services/download_url_refresh_generation_test.dart \
-            test/core/services/download_url_refresh_test.dart \
-            test/core/services/download_refresh_descriptor_ownership_guard_test.dart \
-            test/core/services/download_resource_identity_guard_test.dart \
-            test/core/services/download_resource_identity_service_guard_test.dart \
-            test/core/services/download_resource_identity_test.dart \
-            test/core/services/persistent_parallel_download_range_identity_test.dart \
-            test/core/services/download_retry_policy_test.dart \
-            test/core/services/download_range_fast_fail_policy_test.dart \
-            test/core/services/download_runtime_ownership_test.dart \
-            test/core/services/download_parallel_complete_artifact_guard_test.dart \
-            test/core/services/download_zero_restart_invariant_test.dart \
-            test/core/services/download_durable_byte_contract_guard_test.dart \
-            test/core/services/download_durable_byte_provenance_guard_test.dart \
-            test/core/services/download_expected_size_authority_test.dart \
-            test/core/services/download_callback_generation_test.dart \
-            test/core/services/download_delete_tombstone_guard_test.dart \
-            test/core/services/download_cancel_checkpoint_guard_test.dart \
-            test/core/services/download_canceled_parallel_artifact_gc_guard_test.dart \
-            test/core/services/download_job_store_attempt_test.dart \
-            test/core/services/download_manager_chaos_matrix_test.dart
-      - name: Create bounded filesystem for deterministic ENOSPC
+            test/core/services/download_plugin_episode_queue_test.dart \
+            test/core/services/download_concurrency_test.dart \
+            test/core/services/download_service_queue_test.dart \
+            test/core/services/download_job_state_queue_authority_test.dart
+      - name: Verify progress speed ETA and stale presentation fencing
         run: |
-          sudo mkdir -p /mnt/animewitcher-dm27
-          sudo mount -t tmpfs -o size=8M tmpfs /mnt/animewitcher-dm27
-          sudo chmod 777 /mnt/animewitcher-dm27
-      - name: Verify real ENOSPC preserves verified parts and resumes
-        env:
-          DM27_TEST_ROOT: /mnt/animewitcher-dm27
-        run: flutter test test/core/services/persistent_parallel_download_storage_headroom_test.dart
-      - name: Verify integrity authority analyzer
+          flutter test \
+            test/core/services/download_transfer_projection_test.dart \
+            test/core/services/download_plugin_parallel_presentation_authority_test.dart \
+            test/core/services/persistent_parallel_download_progress_test.dart \
+            test/core/services/persistent_parallel_download_phantom_progress_test.dart \
+            test/core/services/download_expected_size_authority_test.dart \
+            test/core/services/download_ui_responsiveness_test.dart \
+            test/core/services/download_plugin_pause_callback_authority_test.dart \
+            test/core/services/download_plugin_parallel_live_callback_authority_test.dart
+      - name: Verify overlay continued-processing and control truthfulness
+        run: |
+          flutter test \
+            test/core/services/download_presentation_ownership_test.dart \
+            test/core/services/download_overlay_logical_identity_test.dart \
+            test/core/services/download_missing_presentation_recovery_test.dart \
+            test/core/services/download_continued_processing_start_ack_test.dart \
+            test/core/services/ios_continued_processing_start_source_test.dart \
+            test/core/services/ios_continued_processing_update_ack_source_test.dart \
+            test/core/services/ios_continued_processing_completion_guard_test.dart \
+            test/core/services/ios_continued_processing_expiration_test.dart \
+            test/core/services/download_control_outcome_guard_test.dart \
+            test/core/services/download_plugin_parallel_cancel_routing_test.dart \
+            test/core/services/download_cancel_settlement_test.dart
+      - name: Verify presentation authority analyzer
         run: |
           flutter analyze --no-fatal-warnings --no-fatal-infos \
             lib/core/services/download_service.dart \
-            lib/core/services/download_retry_policy.dart \
-            lib/core/services/download_range_transfer.dart \
-            lib/core/services/download_resource_identity.dart \
-            lib/core/services/download_url_refresh.dart \
-            lib/core/services/download_job_store.dart \
-            lib/core/services/persistent_parallel_download.dart
-      - name: Unmount bounded filesystem
-        if: always()
-        run: sudo umount /mnt/animewitcher-dm27 || true
+            lib/core/services/download_concurrency.dart \
+            lib/core/services/download_transfer_projection.dart \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/persistent_parallel_download.dart \
+            lib/features/library/presentation/downloads_provider.dart
+      - name: Record Task 24 integrity and presentation evidence
+        env:
+          STEP3_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path('docs/superpowers/plans/2026-09-15-background-downloader-authority.md')
+          text = path.read_text()
+
+          step2_old = '''- [ ] **Step 2: Audit integrity/error transitions**
+
+Review 401/403 signed-URL refresh, incompatible resource fingerprint, 5xx/socket retry ownership, low-disk/no-space, complete-file verification, and stale callbacks after terminal/delete tombstones.'''
+          step2_new = '''- [x] **Step 2: Audit integrity/error transitions**
+
+Review 401/403 signed-URL refresh, incompatible resource fingerprint, 5xx/socket retry ownership, low-disk/no-space, complete-file verification, and stale callbacks after terminal/delete tombstones.
+
+**Evidence:** Task 24 integrity/error audit run `35058906039` passed the signed-source/resource-identity/retry/completion/tombstone matrix, a real bounded-tmpfs ENOSPC test that preserves verified parts and resumes, and the focused analyzer. The only failure in the preceding run was a stale source guard tied to the pre-`executionToken` `_resumeDownloadTask` signature; commit `05f799724c39050185d916069d06421d3202486d` made that guard signature-agnostic without changing production behavior.'''
+          if step2_old in text:
+              text = text.replace(step2_old, step2_new, 1)
+          elif step2_new not in text:
+              raise SystemExit('Task 24 Step 2 plan block no longer matches expected text')
+
+          step3_old = '''- [ ] **Step 3: Audit queue/session presentation**
+
+Verify episode-level concurrency, one parent slot regardless of chunk count, progress/speed/ETA monotonicity, continued-processing overlay truthfulness, and no stale active UI after pause/cancel.'''
+          run_id = os.environ['STEP3_RUN_ID']
+          step3_new = f'''- [x] **Step 3: Audit queue/session presentation**
+
+Verify episode-level concurrency, one parent slot regardless of chunk count, progress/speed/ETA monotonicity, continued-processing overlay truthfulness, and no stale active UI after pause/cancel.
+
+**Evidence:** Task 24 queue/session presentation audit run `{run_id}` passed episode-level queue/parent-slot accounting, plugin and legacy progress/speed/ETA projection, phantom-progress fencing, pause/cancel/delete presentation settlement, logical overlay identity, missing-presentation recovery, continued-processing start/update/completion/expiration truthfulness, and the focused analyzer.'''
+          if step3_old not in text:
+              raise SystemExit('Task 24 Step 3 plan block no longer matches expected text')
+          text = text.replace(step3_old, step3_new, 1)
+
+          path.write_text(text)
+          PY
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/superpowers/plans/2026-09-15-background-downloader-authority.md
+          git commit -m "docs(downloads): record task 24 presentation audit"
+          git push origin HEAD:refactor/background-downloader-authority
