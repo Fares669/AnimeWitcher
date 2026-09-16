@@ -18,13 +18,13 @@ void main() {
 
     expect(source, contains('static func isPluginDownloadChunk(_ task: URLSessionTask) -> Bool'));
     expect(source, contains('static func isLegacyDownloadPart(_ task: URLSessionTask) -> Bool'));
-    expect(source, contains('return group == "chunk"'));
-    expect(source, contains('return group == "animewitcher_parts"'));
+    expect(source, contains('return downloadTaskGroup(task) == "chunk"'));
+    expect(source, contains('return downloadTaskGroup(task) == "animewitcher_parts"'));
 
     final bytes = _slice(
       source,
       'static func handleBytesWritten(',
-      'static func rememberDownloadSession(',
+      'private static func rememberDownloadSession(',
     );
     expect(bytes, contains('if isPluginDownloadChunk(downloadTask) { return }'));
     expect(bytes, contains('if isLegacyDownloadPart(downloadTask) {'));
@@ -50,7 +50,7 @@ void main() {
     final chunkBridge = _slice(
       source,
       'private static func postMultipartChunkUpdate(',
-      'private static func postMultipartChunkSample(',
+      '#if canImport(background_downloader)',
     );
     expect(chunkBridge, contains('guard isLegacyDownloadPart(task),'));
 
@@ -65,14 +65,14 @@ void main() {
     final promotion = _slice(
       source,
       'static func promoteMultipartIfPossible(',
-      'private static func startMultipartWaiter(',
+      'private static func startMultipartChild(',
     );
     expect(promotion, contains('isLegacyDownloadPart(task),'));
 
     final supported = _slice(
       source,
       'private static func postSupportedMultipartProgress(',
-      'private static func handleSupportedPluginProgress(',
+      'private static func parentTaskId(',
     );
     expect(
       supported,
