@@ -1,0 +1,61 @@
+name: Isolate Legacy iOS Download Seam
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: write
+
+concurrency:
+  group: isolate-legacy-ios-download-seam-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Apply legacy seam isolation
+        run: |
+          python3 .github/scripts/apply_ios_legacy_seam_isolation.py
+          dart format test/core/services/ios_legacy_swizzle_scope_test.dart
+          git diff --check
+
+      - name: Verify plugin ownership contracts
+        run: |
+          flutter test \
+            test/core/services/ios_legacy_swizzle_scope_test.dart \
+            test/core/services/ios_plugin_native_callback_authority_test.dart \
+            test/core/services/ios_multipart_ownership_handoff_source_test.dart \
+            test/core/services/download_plugin_relaunch_single_writer_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Commit verified cleanup and remove helpers
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/isolate-legacy-ios-download-seam.yml
+          git rm .github/scripts/apply_ios_legacy_seam_isolation.py
+          git add ios/Runner/DownloadNativeWaitingQueue.swift
+          git diff --cached --check
+          git commit -m "refactor(ios): isolate legacy multipart seam from plugin chunks"
+          git push origin HEAD:refactor/background-downloader-authority
