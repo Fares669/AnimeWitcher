@@ -131,4 +131,40 @@ void main() {
       contains("diagnosticLog.record('failurePark.checkpointFailed'"),
     );
   });
+
+  test('failed fresh start persists interruption before paused projection', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final enqueue = source.indexOf(
+      'final success = await _enqueueTransfer(transferTask, expectedBytes);',
+    );
+    final start = source.indexOf('if (!success) {', enqueue);
+    final end = source.indexOf(
+      'await _persistNativeWaitingSnapshot();',
+      start,
+    );
+    expect(enqueue, greaterThanOrEqualTo(0));
+    expect(start, greaterThan(enqueue));
+    expect(end, greaterThan(start));
+    final body = source.substring(start, end);
+
+    final checkpoint = body.indexOf(
+      'final failureCheckpointed = await _checkpointLogicalJob(',
+    );
+    final replicaWrite = body.indexOf(
+      'await FileDownloader().database.updateRecord(',
+    );
+    expect(
+      checkpoint,
+      greaterThanOrEqualTo(0),
+      reason:
+          'a rejected fresh executor start must prove interrupted authority before projecting paused replicas',
+    );
+    expect(checkpoint, lessThan(replicaWrite));
+    expect(body, contains('if (!failureCheckpointed) {'));
+    expect(
+      body,
+      contains("diagnosticLog.record('start.failureCheckpointFailed'"),
+    );
+  });
 }
