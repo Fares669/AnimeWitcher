@@ -325,6 +325,28 @@ void main() {
   });
 
 
+  test('live attachment projects runtime status over stale persisted pause', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final methodStart = source.indexOf(
+      'Future<void> _attachToLiveNativeTask(',
+    );
+    final methodEnd = source.indexOf(
+      'Future<void> _attachUiToLiveNativeTasks(',
+      methodStart,
+    );
+    expect(methodStart, greaterThanOrEqualTo(0));
+    expect(methodEnd, greaterThan(methodStart));
+    final method = source.substring(methodStart, methodEnd);
+
+    final runtimeStatus = method.indexOf(
+      '_nativeTransport.statusFor(attached.taskId)',
+    );
+    final transferring = method.indexOf('final transferring =');
+    expect(runtimeStatus, greaterThanOrEqualTo(0));
+    expect(transferring, greaterThan(runtimeStatus));
+  });
+
   test('live recovery lets runtime ownership resolve stale paused projections', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
