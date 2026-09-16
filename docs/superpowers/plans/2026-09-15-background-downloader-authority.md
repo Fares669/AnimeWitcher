@@ -71,7 +71,8 @@ The previously recorded automated blocker has been resolved.
 - A stale projection-only parent-ownership source test was then updated in commit `94ac956036647050c148f5eac3aea1bfed4f1e7a` to assert the runtime-inventory contract.
 - Current automated head: CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` is green: native logger typecheck PASS, source generation PASS, Flutter analyze PASS, and full Flutter tests PASS (`1569` passed, `1` skipped).
 
-**Current state:** no automated blocker remains. Task 34 records the post-audit hardening. Task 33 is now the only remaining acceptance gate because its steps require a real iOS device; the manual acceptance workflow remains untriggered and no IPA has been built.
+**Current state:** Task 35 is implemented and awaiting final CI verification. Task 33 remains a real-device-only acceptance gate; the manual acceptance workflow remains untriggered and no IPA has been built.
+
 ## Original task status (Tasks 1–25)
 
 These statuses preserve the original task numbering while making the handoff readable. Historical detailed implementation remains represented by the commits/tests in PR #246; any reopened behavior must be tracked below rather than assumed complete.
@@ -188,7 +189,7 @@ Ruling: retain the legacy executor and custom Range/iOS paths until the real-dev
 - [x] Convert the old static plan into this living status/handoff tracker.
 - [x] Add the mandatory update protocol above.
 - [x] Record this session's test-contract fixes, dependency-design alignment, CI evidence, lifecycle audit, post-audit hardening, and remaining device gate before handoff.
-- [x] Record every implementation/verification commit or discovery from this session through Task 34 in the corresponding task/status sections.
+- [x] Record every implementation/verification commit or discovery from this session through Task 35 in the corresponding task/status sections.
 
 ### Task 32 — Restore green automated verification on the current branch
 
@@ -204,7 +205,7 @@ Ruling: retain the legacy executor and custom Range/iOS paths until the real-dev
 
 ### Task 33 — Real-device acceptance, cleanup, and one final IPA
 
-**Status: BLOCKED / DEVICE ONLY; all automatable prerequisites, including Task 34, are green.**
+**Status: BLOCKED / DEVICE ONLY; Task 35 is implemented and awaiting final CI verification before the device gate.**
 
 Do not trigger the IPA before this gate.
 
@@ -236,6 +237,18 @@ The independent lifecycle audit of the download authority boundary identified fo
 
 Evidence: production commits `f7c5dafdef91ffa31073b8df8a01c86cf08cf427`, `b9bdced314a9b0bc0814e310d889b98cc1fbc2df`, and `93fb1bd92e62f8f25b47474b63a775875d33b25b`; test-contract commits `0f776b2175f8dc69a26338a9ca8428a3dc3e4774`, `d876596779f14c3d186bb66ad94abaa0395d675e`, `d010f5a2bddce66f850bafbf44ad7e962d93c831`, `40b9f94d27dc30409d4b21fc868ec1f27ae42e13`, `42f045f51674b8e9d2082ba0391c9742c7cd401e`, `3513ba4ee8110f6de682c7cf83c0182e4884bcc8`, and `94ac956036647050c148f5eac3aea1bfed4f1e7a`; CI run **35143865770** is green with `1569` tests passed and `1` skipped.
 
+### Task 35 — Fail closed when parallel runtime inventory is unavailable
+
+**Status: IMPLEMENTED; verification pending on the resulting head.**
+
+Final review found that `_resumeDownloadTask` could fall through to legacy adoption or a fresh plugin parent when `allTasks(allGroups: true)` threw and no parent Transfer handle was present. That is ambiguous runtime ownership and must not create another writer.
+
+- [x] Add a regression guard requiring an explicit successful runtime-inventory query before legacy adoption or fresh enqueue.
+- [x] Preserve the safe package-native path: a known parent Transfer may still attempt `Transfer.resume()`; a failed/unknown parent path returns without creating a replacement writer.
+- [ ] Run the focused guard, Flutter analyze, native logger typecheck, and full Flutter suite on the resulting branch head.
+
+Evidence: test commit `b6ffa2f9b81bf7d9e0fa1c718c708f217202f447`; implementation commit `0f32de9f0d6482abb7efb978636cf4121fe4ee8d`; verification is pending.
+
 ## Verification ledger
 
 - Historical clean full CI before the latest recovery work: run **35103545336** on `ac82f44959606ed2aa60c6fa08f0d24aaec2542f` — generation/analyze/full Flutter tests/native Swift green.
@@ -248,14 +261,7 @@ Evidence: production commits `f7c5dafdef91ffa31073b8df8a01c86cf08cf427`, `b9bdce
 
 ## Handoff: exact next actions
 
-1. Automated Tasks 26–32 and Task 34 are complete and verified on the current automated head; keep the CI evidence above as the source of truth.
-2. Task 33 is the only remaining required physical-device gate: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
+1. Automated Tasks 26–32 and Task 34 are complete; Task 35 is implemented and must be marked DONE only after its resulting-head CI verification completes.
+2. Task 33 is the only remaining required physical-device gate after Task 35 is green: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
 3. Only after real-device acceptance passes may Tasks 14/16/17 cleanup remove the legacy executor, obsolete iOS multipart state, or transport-owned JobStore fields.
 4. Do not merge PR #246 or enable a permanent platform acceptance gate without explicit user approval.
-
-
-1. Automated Tasks 26–32 are verified on the current head; keep the CI evidence above as the source of truth.
-2. Task 33 remains the only required physical-device gate: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
-3. Only after real-device acceptance passes may Tasks 14/16/17 cleanup remove the legacy executor, obsolete iOS multipart state, or transport-owned JobStore fields.
-4. Do not merge PR #246 or enable a permanent platform acceptance gate without explicit user approval.
-
