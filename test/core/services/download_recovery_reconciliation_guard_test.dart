@@ -230,6 +230,32 @@ void main() {
     expect(helper, contains('safeToReschedule'));
   });
 
+  test('legacy quarantine restore cannot undo protected job intent', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final restoreStart = source.indexOf(
+      'Future<void> _restoreLegacyParallelParentsAfterPluginStart(',
+    );
+    final restoreEnd = source.indexOf(
+      'Future<bool> _quarantineProtectedJobsBeforePluginReschedule(',
+      restoreStart,
+    );
+    expect(restoreStart, greaterThanOrEqualTo(0));
+    expect(restoreEnd, greaterThan(restoreStart));
+    final restore = source.substring(restoreStart, restoreEnd);
+
+    expect(restore, contains('final jobsById'));
+    expect(restore, contains('DownloadJobState.canceled'));
+    expect(restore, contains('DownloadJobState.waitingForNetwork'));
+    expect(restore, contains('continue;'));
+    expect(
+      restore,
+      contains('downloadInternalParentTaskId(record.task)'),
+      reason:
+          'legacy child records must inherit the protected logical parent fence',
+    );
+  });
+
   test('live native lookup requires runtime ownership before attaching a handle', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
