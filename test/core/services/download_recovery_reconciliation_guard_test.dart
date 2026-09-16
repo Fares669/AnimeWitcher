@@ -126,4 +126,83 @@ void main() {
           'an unavailable runtime inventory must not create a replacement writer',
     );
   });
+  test('runtime inventory excludes package-paused rows from writer ownership', () {
+    final source = File(
+      'lib/core/services/background_downloader_transport.dart',
+    ).readAsStringSync();
+    final ownershipStart = source.indexOf(
+      'Future<DownloadRuntimeOwnership> ownershipFor(String taskId)',
+    );
+    final ownershipEnd = source.indexOf(
+      '@override\n  Future<bool> start(',
+      ownershipStart,
+    );
+    expect(ownershipStart, greaterThanOrEqualTo(0));
+    expect(ownershipEnd, greaterThan(ownershipStart));
+    final ownership = source.substring(ownershipStart, ownershipEnd);
+
+    expect(ownership, contains('TaskStatus.paused'));
+    expect(ownership, contains('_downloader.database.recordForId'));
+    expect(ownership, contains('runtimeTaskStatusCanOwnWriter'));
+    expect(
+      ownership,
+      contains('return false;'),
+      reason:
+          'a paused item returned by allTasks is not a live file writer',
+    );
+  });
+
+  test('startup fences canceled and network-held jobs before rescheduling', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final helperStart = source.indexOf(
+      'Future<void> _startPluginExecutor() async {',
+    );
+    final helperEnd = source.indexOf(
+      '  /// Test hook that replaces [FileDownloader.configure]',
+      helperStart,
+    );
+    expect(helperStart, greaterThanOrEqualTo(0));
+    expect(helperEnd, greaterThan(helperStart));
+    final helper = source.substring(helperStart, helperEnd);
+
+    final protected = helper.indexOf(
+      'await _quarantineProtectedJobsBeforePluginReschedule()',
+    );
+    final reschedule = helper.indexOf(
+      'await FileDownloader().rescheduleKilledTasks()',
+    );
+    expect(protected, greaterThanOrEqualTo(0));
+    expect(reschedule, greaterThan(protected));
+    expect(helper, contains('DownloadJobState.canceled'));
+    expect(helper, contains('DownloadJobState.waitingForNetwork'));
+    expect(helper, contains('TaskStatus.paused'));
+    expect(helper, contains('TaskStatus.canceled'));
+    expect(helper, contains('safeToReschedule'));
+  });
+
+  test('live native lookup requires runtime ownership before attaching a handle', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final methodStart = source.indexOf(
+      'Future<DownloadTask?> _liveNativeTaskFor(',
+    );
+    final methodEnd = source.indexOf(
+      'Future<void> _attachToLiveNativeTask(',
+      methodStart,
+    );
+    expect(methodStart, greaterThanOrEqualTo(0));
+    expect(methodEnd, greaterThan(methodStart));
+    final method = source.substring(methodStart, methodEnd);
+
+    final ownership = method.indexOf('await _runtimeOwnershipFor(taskId)');
+    final handle = method.indexOf('_nativeTransport.handleFor(taskId)');
+    expect(ownership, greaterThanOrEqualTo(0));
+    expect(handle, greaterThan(ownership));
+    expect(
+      method,
+      contains('ownership != DownloadRuntimeOwnership.owned'),
+    );
+  });
+
 }
