@@ -68,9 +68,9 @@ void main() {
       'await _nativeTransport.rehydrate(group: kLogicalDownloadGroup)',
     );
     expect(start, greaterThanOrEqualTo(0));
-    expect(cancelRogue, greaterThan(start));
-    expect(settle, greaterThan(cancelRogue));
-    expect(reschedule, greaterThan(settle));
+    expect(settle, greaterThan(start));
+    expect(cancelRogue, greaterThan(settle));
+    expect(reschedule, greaterThan(cancelRogue));
     expect(rehydrate, greaterThan(reschedule));
     expect(helper, contains('doRescheduleKilledTasks: false'));
     expect(helper, contains('markDownloadedComplete: false'));
