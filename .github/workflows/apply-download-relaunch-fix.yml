@@ -1,0 +1,299 @@
+name: Apply Download Relaunch Fix
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-download-relaunch-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Apply production ownership fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('lib/core/services/download_service.dart')
+          text = path.read_text()
+
+          replacements = []
+
+          old_provider = '''@Riverpod(keepAlive: true)
+          DownloadService downloadService(Ref ref) {
+            final service = DownloadService(ref);
+          '''.replace('          ', '')
+          new_provider = '''@Riverpod(keepAlive: true)
+          DownloadService downloadService(Ref ref) {
+            final service = DownloadService(
+              ref,
+              pluginParallelAccepted: pluginParallelAcceptedForPlatform(
+                defaultTargetPlatform,
+              ),
+            );
+          '''.replace('          ', '')
+          replacements.append((old_provider, new_provider, 'provider platform gate'))
+
+          old_field = '''  final bool _pluginParallelAccepted;
+          final Set<String> _userPausedIds = {};
+          '''.replace('          ', '')
+          new_field = '''  final bool _pluginParallelAccepted;
+          final Set<String> _startupLegacyParentFence = <String>{};
+          final Set<String> _userPausedIds = {};
+          '''.replace('          ', '')
+          replacements.append((old_field, new_field, 'startup fence field'))
+
+          old_listener = '''    _updatesSubscription = _sharedEvents.stream.listen((update) {
+              final legacyParallelUpdate = _legacyParallelUpdateOrigin[update] == true;
+              diagnosticLog.record('task.update', {
+          '''.replace('          ', '')
+          new_listener = '''    _updatesSubscription = _sharedEvents.stream.listen((update) {
+              final startupParentId = downloadInternalParentTaskId(update.task);
+              if (_startupLegacyParentFence.contains(update.task.taskId) ||
+                  (startupParentId != null &&
+                      _startupLegacyParentFence.contains(startupParentId))) {
+                diagnosticLog.record('startup.legacyPluginUpdateIgnored', {
+                  'taskId': update.task.taskId,
+                  if (startupParentId != null) 'parentTaskId': startupParentId,
+                });
+                return;
+              }
+              final legacyParallelUpdate = _legacyParallelUpdateOrigin[update] == true;
+              diagnosticLog.record('task.update', {
+          '''.replace('          ', '')
+          replacements.append((old_listener, new_listener, 'startup update fence'))
+
+          old_complete = '''    await _serializeQueue(_recoverPersistedDownloads);
+
+              _isInitialized = true;
+            }
+
+            Future<void> _startPluginExecutor() async {
+              // The update listener is installed before this helper is called. Restore
+              // durable user pause/delete intent even earlier in _initialize(), then let
+              // background_downloader reconnect/reschedule native work. Rehydration
+              // reconnects Transfer handles before any logical ownership decision.
+              await FileDownloader().start(
+                doRescheduleKilledTasks: true,
+                markDownloadedComplete: false,
+              );
+              await _nativeTransport.rehydrate(group: kLogicalDownloadGroup);
+            }
+          '''.replace('          ', '')
+
+          new_complete = '''    await _serializeQueue(_recoverPersistedDownloads);
+
+              _startupLegacyParentFence.clear();
+              _isInitialized = true;
+            }
+
+            Future<List<ParallelManifestRecoveryEvidence>>
+            _discoverLegacyParallelManifestEvidence() async {
+              return discoverParallelManifestRecoveryEvidence([
+                Directory(
+                  p.join(
+                    await _getPublicDownloadsPath(),
+                    'AnimeWitcher',
+                    'Downloads',
+                  ),
+                ),
+              ]);
+            }
+
+            Future<({
+              Set<String> parentIds,
+              List<TaskRecord> parentRecords,
+              Set<String> rogueChunkIds,
+            })>
+            _quarantineLegacyParallelParentsBeforePluginStart() async {
+              final evidence = await _discoverLegacyParallelManifestEvidence();
+              final parentIds = <String>{
+                for (final manifest in evidence)
+                  if (manifest.parentTaskId.isNotEmpty) manifest.parentTaskId,
+              };
+              _startupLegacyParentFence.addAll(parentIds);
+              if (parentIds.isEmpty) {
+                return (
+                  parentIds: parentIds,
+                  parentRecords: <TaskRecord>[],
+                  rogueChunkIds: <String>{},
+                );
+              }
+
+              final parentRecords = <TaskRecord>[];
+              final rogueChunkIds = <String>{};
+              for (final record in await FileDownloader().database.allRecords()) {
+                final task = record.task;
+                if (task is ParallelDownloadTask &&
+                    parentIds.contains(task.taskId) &&
+                    record.status != TaskStatus.complete) {
+                  parentRecords.add(record);
+                  await FileDownloader().database.updateRecord(
+                    TaskRecord(
+                      task,
+                      TaskStatus.paused,
+                      record.progress,
+                      record.expectedFileSize,
+                    ),
+                  );
+                }
+
+                final parentId = downloadInternalParentTaskId(task);
+                if (isInternalDownloaderChunk(task) &&
+                    parentId != null &&
+                    parentIds.contains(parentId)) {
+                  rogueChunkIds.add(task.taskId);
+                  if (record.status != TaskStatus.complete &&
+                      record.status != TaskStatus.canceled) {
+                    await FileDownloader().database.updateRecord(
+                      TaskRecord(
+                        task,
+                        TaskStatus.paused,
+                        record.progress,
+                        record.expectedFileSize,
+                      ),
+                    );
+                  }
+                }
+              }
+
+              diagnosticLog.record('startup.legacyPluginQuarantine', {
+                'parents': parentIds.length,
+                'parentRecords': parentRecords.length,
+                'rogueChunks': rogueChunkIds.length,
+              });
+              return (
+                parentIds: parentIds,
+                parentRecords: parentRecords,
+                rogueChunkIds: rogueChunkIds,
+              );
+            }
+
+            Future<void> _restoreLegacyParallelParentsAfterPluginStart(
+              List<TaskRecord> records,
+            ) async {
+              for (final record in records) {
+                await FileDownloader().database.updateRecord(record);
+              }
+            }
+
+            Future<void> _startPluginExecutor() async {
+              // PR #231 stored legacy parents in background_downloader's database as
+              // ParallelDownloadTask records. If the plugin sees one as killed work it
+              // creates its own random chunk set while PersistentParallelDownload later
+              // restores the deterministic .part.N writers. Fence those legacy rows
+              // before asking the plugin to reconcile killed tasks so exactly one
+              // executor can own each logical episode.
+              final quarantine =
+                  await _quarantineLegacyParallelParentsBeforePluginStart();
+              try {
+                await FileDownloader().start(
+                  doRescheduleKilledTasks: false,
+                  markDownloadedComplete: false,
+                );
+
+                // Older broken builds may already have produced plugin chunk rows for
+                // a legacy parent. Include both database and live runtime evidence and
+                // settle those exact plugin-owned identities through the plugin API.
+                final rogueChunkIds = <String>{...quarantine.rogueChunkIds};
+                for (final task in await FileDownloader().allTasks(allGroups: true)) {
+                  final parentId = downloadInternalParentTaskId(task);
+                  if (isInternalDownloaderChunk(task) &&
+                      parentId != null &&
+                      quarantine.parentIds.contains(parentId)) {
+                    rogueChunkIds.add(task.taskId);
+                  }
+                }
+                if (rogueChunkIds.isNotEmpty) {
+                  await FileDownloader().cancelTasksWithIds(rogueChunkIds.toList());
+                  diagnosticLog.record('startup.legacyPluginChunksCanceled', {
+                    'count': rogueChunkIds.length,
+                  });
+                }
+
+                // FileDownloader.start normally schedules this on a 5 second timer.
+                // Run it synchronously while legacy parent rows are quarantined so
+                // genuine plugin tasks recover without racing legacy restoration.
+                await FileDownloader().rescheduleKilledTasks();
+                await _nativeTransport.rehydrate(group: kLogicalDownloadGroup);
+                for (final parentId in quarantine.parentIds) {
+                  _nativeTransport.forget(parentId);
+                }
+              } finally {
+                await _restoreLegacyParallelParentsAfterPluginStart(
+                  quarantine.parentRecords,
+                );
+              }
+            }
+          '''.replace('          ', '')
+          replacements.append((old_complete, new_complete, 'synchronous startup reconciliation'))
+
+          old_discovery = '''    final discoveredManifests = await discoverParallelManifestRecoveryEvidence([
+              Directory(
+                p.join(await _getPublicDownloadsPath(), 'AnimeWitcher', 'Downloads'),
+              ),
+            ]);
+          '''.replace('          ', '')
+          new_discovery = '''    final discoveredManifests =
+                await _discoverLegacyParallelManifestEvidence();
+          '''.replace('          ', '')
+          replacements.append((old_discovery, new_discovery, 'shared manifest discovery'))
+
+          for old, new, label in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one source match, found {count}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+          dart format lib/core/services/download_service.dart
+          git diff --check
+
+      - name: Verify focused relaunch and plugin authority contracts
+        run: |
+          flutter test \
+            test/core/services/download_transport_policy_test.dart \
+            test/core/services/download_plugin_parallel_execution_test.dart \
+            test/core/services/download_plugin_relaunch_single_writer_test.dart \
+            test/core/services/download_plugin_recovery_contract_test.dart \
+            test/core/services/download_legacy_migration_policy_test.dart \
+            test/core/services/download_runtime_ownership_test.dart \
+            --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+      - name: Analyze production download sources
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Commit verified production fix and remove helper
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-download-relaunch-fix.yml
+          git add lib/core/services/download_service.dart
+          git diff --cached --check
+          git commit -m "fix(downloads): reconcile plugin relaunch before legacy restore"
+          git push origin HEAD:refactor/background-downloader-authority
