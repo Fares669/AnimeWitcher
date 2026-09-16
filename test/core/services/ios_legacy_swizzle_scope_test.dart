@@ -16,17 +16,33 @@ void main() {
       'ios/Runner/DownloadNativeWaitingQueue.swift',
     ).readAsStringSync();
 
-    expect(source, contains('static func isPluginDownloadChunk(_ task: URLSessionTask) -> Bool'));
-    expect(source, contains('static func isLegacyDownloadPart(_ task: URLSessionTask) -> Bool'));
+    expect(
+      source,
+      contains(
+        'static func isPluginDownloadChunk(_ task: URLSessionTask) -> Bool',
+      ),
+    );
+    expect(
+      source,
+      contains(
+        'static func isLegacyDownloadPart(_ task: URLSessionTask) -> Bool',
+      ),
+    );
     expect(source, contains('return downloadTaskGroup(task) == "chunk"'));
-    expect(source, contains('return downloadTaskGroup(task) == "animewitcher_parts"'));
+    expect(
+      source,
+      contains('return downloadTaskGroup(task) == "animewitcher_parts"'),
+    );
 
     final bytes = _slice(
       source,
       'static func handleBytesWritten(',
       'private static func postSingleTaskUpdate(',
     );
-    expect(bytes, contains('if isPluginDownloadChunk(downloadTask) { return }'));
+    expect(
+      bytes,
+      contains('if isPluginDownloadChunk(downloadTask) { return }'),
+    );
     expect(bytes, contains('if isLegacyDownloadPart(downloadTask) {'));
     expect(bytes, isNot(contains('if isDownloadPart(downloadTask) {')));
 
@@ -35,8 +51,12 @@ void main() {
       'static func handlePluginTaskCompleted(',
       'static func parkFailedTask(',
     );
-    final pluginReturn = completion.indexOf('if isPluginDownloadChunk(task) { return }');
-    final legacyBranch = completion.indexOf('if isLegacyDownloadPart(task) {');
+    final pluginReturn = completion.indexOf(
+      'if isPluginDownloadChunk(task) { return }',
+    );
+    final legacyBranch = completion.indexOf(
+      'if isLegacyDownloadPart(task) {',
+    );
     final promoteNext = completion.indexOf('promoteNext(on: session)');
     expect(pluginReturn, greaterThanOrEqualTo(0));
     expect(legacyBranch, greaterThan(pluginReturn));
@@ -53,14 +73,21 @@ void main() {
       '#if canImport(background_downloader)',
     );
     expect(chunkBridge, contains('guard isLegacyDownloadPart(task),'));
+    expect(chunkBridge, contains('bridgeToDart: true'));
 
     final retry = _slice(
       source,
       'static func retryBackgroundTransferIfNeeded(',
       'static func handlePluginTaskCompleted(',
     );
-    expect(retry, contains('if isPluginDownloadChunk(task) { return false }'));
-    expect(retry, contains('let multipartPart = isLegacyDownloadPart(task)'));
+    expect(
+      retry,
+      contains('if isPluginDownloadChunk(task) { return false }'),
+    );
+    expect(
+      retry,
+      contains('let multipartPart = isLegacyDownloadPart(task)'),
+    );
 
     final promotion = _slice(
       source,
@@ -76,9 +103,31 @@ void main() {
     );
     expect(
       supported,
-      contains('task.group == "chunk" || task.group == "animewitcher_parts"'),
+      contains(
+        'task.group == "chunk" || task.group == "animewitcher_parts"',
+      ),
       reason:
           'official background_downloader callbacks remain authoritative for plugin chunks and can still observe migrated legacy children',
+    );
+    expect(
+      supported,
+      contains('bridgeToDart: task.group == "animewitcher_parts"'),
+      reason:
+          'plugin-owned chunks may feed native overlay aggregation but must not re-enter the legacy Dart chunk coordinator',
+    );
+
+    final sample = _slice(
+      source,
+      'private static func postMultipartChunkSample(',
+      'private static func rememberDownloadSession(',
+    );
+    expect(sample, contains('bridgeToDart: Bool'));
+    expect(sample, contains('if bridgeToDart {'));
+    expect(
+      sample,
+      contains(
+        'Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate")',
+      ),
     );
   });
 }
