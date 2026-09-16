@@ -133,12 +133,10 @@ replacement_guard = '''    // A refreshed zero-byte plugin generation has no dur
     // child URLs and pause/resume state never leak into the refreshed source.
     final restartPluginFromZero =
         !legacySessionExists && partialBytes <= 0;
-    final updated = legacySessionExists
-        ? task
-        : task.copyWith(
-            url: refreshed.url,
-            headers: Map<String, String>.from(refreshed.headers),
-          );
+    final updated = task.copyWith(
+      url: refreshed.url,
+      headers: Map<String, String>.from(refreshed.headers),
+    );
 
 '''
 service = replace_once(service, old_guard, replacement_guard, "zero-byte refresh guard")
@@ -159,12 +157,20 @@ service = replace_once(
     service, old_checkpoint, new_checkpoint, "source refresh checkpoint"
 )
 
+source_refresh_start = service.index(
+    "  Future<({DownloadTask task, bool refreshed, bool restartRequired})>"
+)
+legacy_index = service.index("    if (legacySessionExists) {", source_refresh_start)
 old_updated = '''    final updated = task.copyWith(
       url: refreshed.url,
       headers: Map<String, String>.from(refreshed.headers),
     );
 '''
-service = replace_once(service, old_updated, "", "duplicate refreshed task")
+old_updated_index = service.index(old_updated, legacy_index)
+service = (
+    service[:old_updated_index]
+    + service[old_updated_index + len(old_updated) :]
+)
 
 record_anchor = '''    final record = await FileDownloader().database.recordForId(task.taskId);
 '''
@@ -175,17 +181,15 @@ restart_block = '''    if (restartPluginFromZero) {
         'accepted': restarted,
         'opaqueNativeResume': hasOpaqueNativeResume,
       });
-      return (
-        task: updated,
-        refreshed: true,
-        restartRequired: !restarted,
-      );
+      if (!restarted) {
+        return (task: updated, refreshed: true, restartRequired: true);
+      }
+      return (task: updated, refreshed: true, restartRequired: false);
     }
 
 '''
-# Insert only in the source-refresh tail, after legacy replacement handling.
-source_refresh_start = service.index("  Future<({DownloadTask task, bool refreshed, bool restartRequired})>")
-record_index = service.index(record_anchor, source_refresh_start)
+# Insert only in the non-legacy source-refresh tail.
+record_index = service.index(record_anchor, legacy_index)
 service = service[:record_index] + restart_block + service[record_index:]
 
 old_reconcile = '''  Future<void> _reconcileTransferOwnership() async {
