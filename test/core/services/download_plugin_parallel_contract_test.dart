@@ -31,9 +31,9 @@ void main() {
     pluginRoot = await _backgroundDownloaderRoot();
   });
 
-  test('characterization is pinned to background_downloader 9.6.1', () async {
+  test('characterization is pinned to background_downloader 9.6.2', () async {
     final pubspec = await _packageSource(pluginRoot, 'pubspec.yaml');
-    expect(pubspec, contains('version: 9.6.1'));
+    expect(pubspec, contains('version: 9.6.2'));
   });
 
   test('plugin parallel keeps one logical parent identity', () {
