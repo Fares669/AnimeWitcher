@@ -167,7 +167,7 @@ void main() {
     final helper = source.substring(helperStart, helperEnd);
 
     final protected = helper.indexOf(
-      'await _quarantineProtectedJobsBeforePluginReschedule()',
+      'await _quarantineProtectedJobsBeforePluginReschedule(runtimeTasks)',
     );
     final reschedule = helper.indexOf(
       'await FileDownloader().rescheduleKilledTasks()',
