@@ -36,6 +36,27 @@ void main() {
     );
   });
 
+  test('each new continued-processing session uses a fresh task identifier', () {
+    expect(
+      source,
+      contains('UUID().uuidString'),
+      reason:
+          'BGContinuedProcessingTask identifiers are per-job; pause then resume must submit a fresh identifier instead of reusing download.session',
+    );
+    expect(
+      source,
+      contains('private var registeredIdentifiers: Set<String> = []'),
+      reason:
+          'every fresh identifier must be registered once without re-registering the same identifier',
+    );
+    expect(
+      source,
+      isNot(contains('return "\\(bundleId).download.\\(Self.sessionKey)"')),
+      reason:
+          'a fixed identifier makes the resumed continued-processing task stale after the previous session completes',
+    );
+  });
+
   test('update reports lost session after attachment grace expires', () {
     final start = source.indexOf('  func update(');
     final end = source.indexOf('  func finish(', start);
