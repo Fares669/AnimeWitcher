@@ -386,7 +386,7 @@ class BackgroundDownloaderTransport implements DownloadTransport {
         return false;
       }
       if (transfer.status == TaskStatus.complete ||
-          runtimeStatusCanOwnWriter(transfer.status)) {
+          runtimeTaskStatusCanOwnWriter(transfer.status)) {
         return true;
       }
       if (ownership != DownloadRuntimeOwnership.notOwned) return false;
