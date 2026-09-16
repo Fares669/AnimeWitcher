@@ -5037,14 +5037,15 @@ class DownloadService {
       // after every pause on iOS. Parent Transfer evidence or any reserved
       // plugin chunk is enough to classify this as plugin-owned persistence.
       final pluginParentKnown = _nativeTransport.handleFor(task.taskId) != null;
-      var pluginChunkEvidence = false;
+      var pluginRuntimeEvidence = false;
       var pluginChunkEvidenceQuerySucceeded = false;
       try {
-        pluginChunkEvidence = (await FileDownloader().allTasks(allGroups: true))
+        pluginRuntimeEvidence = (await FileDownloader().allTasks(allGroups: true))
             .any(
               (candidate) =>
-                  candidate.group == FileDownloader.chunkGroup &&
-                  downloadInternalParentTaskId(candidate) == task.taskId,
+                  candidate.taskId == task.taskId ||
+                  (candidate.group == FileDownloader.chunkGroup &&
+                      downloadInternalParentTaskId(candidate) == task.taskId),
             );
         pluginChunkEvidenceQuerySucceeded = true;
       } catch (_) {
@@ -5064,7 +5065,7 @@ class DownloadService {
           'taskId': task.taskId,
           'accepted': pluginResumed,
           'parentKnown': true,
-          'chunkEvidence': pluginChunkEvidence,
+          'runtimeEvidence': pluginRuntimeEvidence,
         });
         if (pluginResumed) return true;
 
@@ -5087,9 +5088,9 @@ class DownloadService {
         return false;
       }
 
-      if (pluginChunkEvidence) {
+      if (pluginRuntimeEvidence) {
         // background_downloader.start(doRescheduleKilledTasks: true) already
-        // owns killed-task recovery. If only child runtime evidence survives,
+        // owns killed-task recovery. If any plugin parent/child runtime evidence survives,
         // the logical parent projection is incomplete: do not manufacture a
         // replacement parent and risk a second writer/chunk generation.
         diagnosticLog.record('resume.pluginParallelDeferred', {
