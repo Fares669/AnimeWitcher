@@ -1,9 +1,32 @@
 import 'package:animewitcher/core/services/download_parallel.dart';
 import 'package:animewitcher/core/services/download_transport_policy.dart';
 import 'package:background_downloader/background_downloader.dart';
+import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('pluginParallelAcceptedForPlatform', () {
+    test('fresh iOS multipart delegates execution to background_downloader', () {
+      expect(pluginParallelAcceptedForPlatform(TargetPlatform.iOS), isTrue);
+    });
+
+    test('other platforms remain fail-closed until device acceptance', () {
+      for (final platform in <TargetPlatform>[
+        TargetPlatform.android,
+        TargetPlatform.fuchsia,
+        TargetPlatform.linux,
+        TargetPlatform.macOS,
+        TargetPlatform.windows,
+      ]) {
+        expect(
+          pluginParallelAcceptedForPlatform(platform),
+          isFalse,
+          reason: '$platform has no real-device plugin-parallel acceptance yet',
+        );
+      }
+    });
+  });
+
   group('selectDownloadExecutionBackend', () {
     test('single connection always uses plugin single transport', () {
       expect(
