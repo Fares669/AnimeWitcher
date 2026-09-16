@@ -64,4 +64,29 @@ void main() {
       expect(callback, contains('Multipart cancel ownership did not settle'));
     },
   );
+  test('duplicate logical cancellation settles every writer before cleanup', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final cancelStart = source.indexOf('Future<void> cancelDownload(');
+    final cancelEnd = source.indexOf(
+      'Future<DownloadCommandOutcome> cancelDownloadOutcome(',
+      cancelStart,
+    );
+    expect(cancelStart, greaterThanOrEqualTo(0));
+    expect(cancelEnd, greaterThan(cancelStart));
+    final cancel = source.substring(cancelStart, cancelEnd);
+
+    expect(cancel, contains('duplicateLogicalTasks'));
+    expect(cancel, contains('_terminalJobIds.addAll(duplicateLogicalIds)'));
+    expect(cancel, contains('canceledLogicalIds'));
+    expect(cancel, contains('unsettledCancellationIds'));
+    expect(cancel, contains('_waitForCancelOwnershipRelease(id)'));
+    expect(
+      cancel,
+      contains('if (unsettledCancellationIds.isNotEmpty)'),
+      reason:
+          'primary-file cleanup must wait for every duplicate logical writer',
+    );
+  });
+
 }
