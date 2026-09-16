@@ -1,0 +1,53 @@
+name: Full Test Diagnostic
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-test-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Run full test suite and capture output
+        id: full_test
+        shell: bash
+        run: |
+          set +e
+          flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key > full-test.log 2>&1
+          status=$?
+          cat full-test.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload full test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-test-diagnostic
+          path: full-test.log
+          retention-days: 1
+
+      - name: Preserve test result
+        run: test "${{ steps.full_test.outputs.status }}" -eq 0
