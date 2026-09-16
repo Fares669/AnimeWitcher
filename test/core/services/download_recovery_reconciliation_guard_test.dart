@@ -43,7 +43,7 @@ void main() {
     expect(ownershipSource, isNot(contains('activeTasks.any')));
   });
 
-  test('transport ownership uses targeted Transfer runtime evidence', () {
+  test('transport ownership requires runtime inventory evidence', () {
     final source = File(
       'lib/core/services/background_downloader_transport.dart',
     ).readAsStringSync();
@@ -63,11 +63,12 @@ void main() {
       contains('final projectedStatus = transfer?.status;'),
     );
     expect(
-      ownershipSource.indexOf('ownershipFromStatus(projectedStatus)'),
-      lessThan(ownershipSource.indexOf('_downloader.taskForId(taskId)')),
+      ownershipSource,
+      contains('final runtimeTasks = await _downloader.allTasks(allGroups: true);'),
     );
-    expect(ownershipSource, contains('_downloader.taskForId(taskId)'));
-    expect(ownershipSource, isNot(contains('allTasks(')));
+    expect(ownershipSource, contains('downloadInternalParentTaskId(task)'));
+    expect(ownershipSource, contains('runtimeOwner'));
+    expect(ownershipSource, isNot(contains('_downloader.taskForId(taskId)')));
     expect(
       ownershipSource,
       contains('return DownloadRuntimeOwnership.unknown;'),
