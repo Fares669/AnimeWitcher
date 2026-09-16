@@ -5807,15 +5807,9 @@ class DownloadService {
     final tasks = await FileDownloader().allTasks(allGroups: true);
     final live = <Task>[];
     for (final task in tasks) {
-      final record = await FileDownloader().database.recordForId(task.taskId);
-      final transfer = _nativeTransport.handleFor(task.taskId);
-      // FileDownloader.allTasks also returns the package's paused store. A
-      // paused projection is not a live writer and must not enter recovery as
-      // native-owned.
-      if (record?.status == TaskStatus.paused ||
-          transfer?.status == TaskStatus.paused) {
-        continue;
-      }
+      // FileDownloader.allTasks also returns the package's paused store.
+      // Delegate that distinction to the transport so stale persisted pause
+      // projections cannot hide a writer that is active in the runtime.
       final ownership = await _nativeTransport.ownershipFor(task.taskId);
       if (ownership != DownloadRuntimeOwnership.owned) continue;
       live.add(task);
