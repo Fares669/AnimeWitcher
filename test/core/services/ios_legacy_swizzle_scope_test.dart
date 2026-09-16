@@ -122,6 +122,12 @@ void main() {
       'private static func rememberDownloadSession(',
     );
     expect(sample, contains('bridgeToDart: Bool'));
+    expect(
+      sample,
+      contains('if bridgeToDart &&'),
+      reason:
+          'plugin-owned progress must not settle legacy multipart claims',
+    );
     expect(sample, contains('if bridgeToDart {'));
     expect(
       sample,
