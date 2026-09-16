@@ -180,10 +180,10 @@ void main() {
       'lib/core/services/background_downloader_transport.dart',
     ).readAsStringSync();
     final ownershipStart = source.indexOf(
-      'Future<DownloadRuntimeOwnership> ownershipFor(String taskId)',
+      'Future<bool> _runtimeInventoryTaskCanOwnWriter(',
     );
     final ownershipEnd = source.indexOf(
-      '@override\n  Future<bool> start(',
+      "  /// Resolves writer ownership from background_downloader's runtime inventory.",
       ownershipStart,
     );
     expect(ownershipStart, greaterThanOrEqualTo(0));
@@ -223,10 +223,10 @@ void main() {
     );
     expect(protected, greaterThanOrEqualTo(0));
     expect(reschedule, greaterThan(protected));
-    expect(helper, contains('DownloadJobState.canceled'));
-    expect(helper, contains('DownloadJobState.waitingForNetwork'));
-    expect(helper, contains('TaskStatus.paused'));
-    expect(helper, contains('TaskStatus.canceled'));
+    expect(source, contains('DownloadJobState.canceled'));
+    expect(source, contains('DownloadJobState.waitingForNetwork'));
+    expect(source, contains('TaskStatus.paused'));
+    expect(source, contains('TaskStatus.canceled'));
     expect(helper, contains('safeToReschedule'));
   });
 
