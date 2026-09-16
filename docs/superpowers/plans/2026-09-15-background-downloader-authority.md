@@ -251,7 +251,7 @@ Evidence: test commit `b6ffa2f9b81bf7d9e0fa1c718c708f217202f447`, test syntax co
 
 ### Task 36 — Close final lifecycle review findings
 
-**Status: IMPLEMENTED; verification pending on the resulting head.**
+**Status: DONE on verified automated head da190bd463fb70fbfe28456b44fcfcdeb6a4fb8c.**
 
 The final independent review identified four additional automatable lifecycle hazards beyond Task 34. All are addressed with explicit guards and source-contract coverage while retaining fail-closed ownership.
 
@@ -265,7 +265,7 @@ Evidence: test commits `30c4095b9e444b46031a22e367cf0c1c13b9d824`, `a7a43805cf1d
 
 ### Task 37 — Fail closed when an orphan plugin parent is in runtime inventory
 
-**Status: IMPLEMENTED; verification pending on the resulting head.**
+**Status: DONE on verified automated head da190bd463fb70fbfe28456b44fcfcdeb6a4fb8c.**
 
 A follow-up review found that parallel resume checked only child evidence when the parent `Transfer` handle was absent. An exact runtime parent with a missing handle could therefore fall through to a fresh enqueue and create a second writer.
 
@@ -277,7 +277,7 @@ Evidence: regression test commit `bcb11a6a41aa651723dc254d20e6c615ef2a86ef` and 
 
 ### Task 38 — Preserve protected intent across legacy quarantine restore
 
-**Status: IMPLEMENTED; verification pending on the resulting head.**
+**Status: DONE on verified automated head da190bd463fb70fbfe28456b44fcfcdeb6a4fb8c.**
 
 The startup legacy quarantine captured pre-quarantine `TaskRecord` values and restored them unconditionally in `finally`. That could overwrite a canceled or network-held fence after protected recovery had already updated the package record, and child records were not associated with their logical parent.
 
@@ -303,6 +303,6 @@ Evidence: regression test commit `676348e74690befbcd418c060d867eb9bb9a4e51` and 
 ## Handoff: exact next actions
 
 1. Automated Tasks 26–32 and Tasks 34–38 are complete and verified by CI run **35149954380**; Task 33 is the only remaining required physical-device gate.
-2. Task 33 is the only remaining required physical-device gate after Task 35 is green: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
+2. Task 33 is the only remaining required physical-device gate after Tasks 35–38 are green: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
 3. Only after real-device acceptance passes may Tasks 14/16/17 cleanup remove the legacy executor, obsolete iOS multipart state, or transport-owned JobStore fields.
 4. Do not merge PR #246 or enable a permanent platform acceptance gate without explicit user approval.
