@@ -1615,7 +1615,21 @@ class DownloadService {
   Future<void> _restoreLegacyParallelParentsAfterPluginStart(
     List<TaskRecord> records,
   ) async {
+    final jobsById = <String, DownloadJobRecord>{
+      for (final job in await _jobStore.all()) job.taskId: job,
+    };
     for (final record in records) {
+      final internalParentId = downloadInternalParentTaskId(record.task);
+      final job = jobsById[record.taskId] ??
+          (internalParentId == null ? null : jobsById[internalParentId]);
+      // The startup quarantine may have converted this record to canceled or
+      // paused after a legacy snapshot was captured. Never restore the stale
+      // pre-quarantine status over a durable user-intent fence.
+      if (job != null &&
+          (job.state == DownloadJobState.canceled ||
+              job.state == DownloadJobState.waitingForNetwork)) {
+        continue;
+      }
       await FileDownloader().database.updateRecord(record);
     }
   }
@@ -1629,31 +1643,43 @@ class DownloadService {
     var safeToReschedule = true;
 
     for (final record in await FileDownloader().database.allRecords()) {
-      final job = jobsById[record.taskId];
+      final internalParentId = downloadInternalParentTaskId(record.task);
+      final job = jobsById[record.taskId] ??
+          (internalParentId == null ? null : jobsById[internalParentId]);
       if (job == null ||
           (job.state != DownloadJobState.canceled &&
               job.state != DownloadJobState.waitingForNetwork)) {
         continue;
       }
-
+      final protectedTaskId = job.taskId;
       final hasRuntimeEvidence = runtimeTasks.any(
         (task) =>
             task.taskId == record.taskId ||
+            task.taskId == protectedTaskId ||
             (isInternalDownloaderChunk(task) &&
-                downloadInternalParentTaskId(task) == record.taskId),
+                (downloadInternalParentTaskId(task) == protectedTaskId ||
+                    downloadInternalParentTaskId(task) == record.taskId)),
       );
 
       if (job.state == DownloadJobState.canceled) {
-        _terminalJobIds.add(record.taskId);
+        _terminalJobIds
+          ..add(protectedTaskId)
+          ..add(record.taskId);
         if (hasRuntimeEvidence) {
           try {
+            // Cancel the concrete parent/child row present in the package
+            // inventory; parent cancellation alone is not guaranteed to settle
+            // internal parallel children.
             await FileDownloader().cancelTasksWithIds([record.taskId]);
           } catch (_) {}
-          final ownership = await _waitForCancelOwnershipRelease(record.taskId);
+          final ownership = await _waitForCancelOwnershipRelease(
+            protectedTaskId,
+          );
           if (ownership != DownloadRuntimeOwnership.notOwned) {
             safeToReschedule = false;
             diagnosticLog.record('startup.canceledOwnershipUnsettled', {
-              'taskId': record.taskId,
+              'taskId': protectedTaskId,
+              'recordTaskId': record.taskId,
               'ownership': ownership.name,
             });
           }
@@ -1672,7 +1698,7 @@ class DownloadService {
       }
 
       var ownership = hasRuntimeEvidence
-          ? await _runtimeOwnershipFor(record.taskId)
+          ? await _runtimeOwnershipFor(protectedTaskId)
           : DownloadRuntimeOwnership.notOwned;
       if (ownership == DownloadRuntimeOwnership.owned) {
         var pauseAccepted = false;
@@ -1684,14 +1710,15 @@ class DownloadService {
           } catch (_) {}
         }
         if (pauseAccepted) {
-          ownership = await _waitForCancelOwnershipRelease(record.taskId);
+          ownership = await _waitForCancelOwnershipRelease(protectedTaskId);
         }
       }
 
       if (ownership != DownloadRuntimeOwnership.notOwned) {
         safeToReschedule = false;
         diagnosticLog.record('startup.networkHoldOwnershipUnsettled', {
-          'taskId': record.taskId,
+          'taskId': protectedTaskId,
+          'recordTaskId': record.taskId,
           'ownership': ownership.name,
         });
         continue;
