@@ -35,6 +35,17 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             bin_dir.mkdir()
             toolchain = sysroot.parent / "toolchain.cmake"
             toolchain.write_text("set(CMAKE_SYSTEM_NAME Windows)\n", encoding="utf-8")
+            packages = root / "packages"
+            packages.mkdir()
+            openal_package = packages / "openal-soft.cmake"
+            openal_package.write_text(
+                "ExternalProject_Add(openal-soft\n"
+                "    CONFIGURE_COMMAND cmake -H<SOURCE_DIR> -B<BINARY_DIR>\n"
+                "        -DALSOFT_TESTS=OFF\n"
+                "        -DALSOFT_BACKEND_PIPEWIRE=OFF\n"
+                ")\n",
+                encoding="utf-8",
+            )
             for compiler in ("clang++", "g++", "c++"):
                 (bin_dir / f"x86_64-w64-mingw32-{compiler}").write_text(
                     "#!/bin/bash\n"
@@ -86,6 +97,9 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
                 'set(ALSOFT_ENABLE_MODULES OFF CACHE BOOL "Disable OpenAL C++20 modules for cross compiler wrapper compatibility" FORCE)',
                 toolchain_text,
             )
+            openal_text = openal_package.read_text(encoding="utf-8")
+            self.assertEqual(openal_text.count("-DALSOFT_ENABLE_MODULES=OFF"), 1)
+            self.assertEqual(openal_text.count("-DCMAKE_CXX_SCAN_FOR_MODULES=OFF"), 1)
 
             self.assertEqual(
                 helper.patch_wrappers(
@@ -99,6 +113,10 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             self.assertEqual(wrapper.read_text(encoding="utf-8"), patched)
             self.assertEqual(
                 toolchain.read_text(encoding="utf-8").count("ALSOFT_ENABLE_MODULES"),
+                1,
+            )
+            self.assertEqual(
+                openal_package.read_text(encoding="utf-8").count("CMAKE_CXX_SCAN_FOR_MODULES"),
                 1,
             )
 
