@@ -300,7 +300,7 @@ void main() {
       'final ownership = await ownershipFor(task.taskId);',
     );
     final unknown = body.indexOf(
-      'if (ownership == DownloadRuntimeOwnership.unknown) return false;',
+      'ownership == DownloadRuntimeOwnership.unknown',
     );
     final active = body.indexOf('runtimeTaskStatusCanOwnWriter(transfer.status)');
     final resume = body.indexOf('return await transfer.resume();');
