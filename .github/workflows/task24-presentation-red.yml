@@ -1,4 +1,4 @@
-name: Record Task 24 Command Audit
+name: Task 24 Integrity Transition Audit
 
 on:
   push:
@@ -6,44 +6,74 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  record:
-    if: "${{ github.event.head_commit.message == 'chore(ci): record task 24 command audit' }}"
+  audit:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
-      - name: Mark Task 24 Step 1 verified
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Install dependencies and generate sources
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('docs/superpowers/plans/2026-09-15-background-downloader-authority.md')
-          text = path.read_text()
-          old = "\n".join([
-              '- [ ] **Step 1: Audit command/state transitions**',
-              '',
-              'Review start, pause, repeated pause, resume, repeated resume, cancel, delete, app-background/system-expiration, network loss/reconnect, and process relaunch for plugin single, plugin parallel, and legacy fallback.',
-          ])
-          new = "\n".join([
-              '- [x] **Step 1: Audit command/state transitions**',
-              '',
-              'Review start, pause, repeated pause, resume, repeated resume, cancel, delete, app-background/system-expiration, network loss/reconnect, and process relaunch for plugin single, plugin parallel, and legacy fallback.',
-              '',
-              '**Evidence:** Task 24 command-transition audit run `35058451065` passed the focused lifecycle matrix and analyzer after RED→GREEN fixes for Transfer update bridging, system-pause settlement, parked failure/start/resume checkpoint ordering, single resume generation reuse, and repeated pause/resume idempotence. Production evidence includes `00205a9`, `fd29c93`, `cbc21d4`, `4984114`, `32b8af3`, `e73fce6`, and `f480a1e`.',
-          ])
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'expected one Task 24 Step 1 block, found {count}')
-          path.write_text(text.replace(old, new, 1))
-          PY
-      - name: Commit audit evidence
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Verify signed URL, identity, retry, completion, and stale callback matrix
         run: |
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/superpowers/plans/2026-09-15-background-downloader-authority.md
-          git commit -m "docs(downloads): record task 24 command audit"
-          git push origin HEAD:refactor/background-downloader-authority
+          flutter test \
+            test/core/services/download_plugin_source_refresh_routing_test.dart \
+            test/core/services/download_plugin_source_refresh_test.dart \
+            test/core/services/download_source_refresh_capability_test.dart \
+            test/core/services/download_source_refresh_checkpoint_guard_test.dart \
+            test/core/services/download_source_refresh_integrity_test.dart \
+            test/core/services/download_source_refresh_service_wiring_test.dart \
+            test/core/services/download_url_refresh_generation_test.dart \
+            test/core/services/download_url_refresh_test.dart \
+            test/core/services/download_refresh_descriptor_ownership_guard_test.dart \
+            test/core/services/download_resource_identity_guard_test.dart \
+            test/core/services/download_resource_identity_service_guard_test.dart \
+            test/core/services/download_resource_identity_test.dart \
+            test/core/services/persistent_parallel_download_range_identity_test.dart \
+            test/core/services/download_retry_policy_test.dart \
+            test/core/services/download_range_fast_fail_policy_test.dart \
+            test/core/services/download_runtime_ownership_test.dart \
+            test/core/services/download_parallel_complete_artifact_guard_test.dart \
+            test/core/services/download_zero_restart_invariant_test.dart \
+            test/core/services/download_durable_byte_contract_guard_test.dart \
+            test/core/services/download_durable_byte_provenance_guard_test.dart \
+            test/core/services/download_expected_size_authority_test.dart \
+            test/core/services/download_callback_generation_test.dart \
+            test/core/services/download_delete_tombstone_guard_test.dart \
+            test/core/services/download_cancel_checkpoint_guard_test.dart \
+            test/core/services/download_canceled_parallel_artifact_gc_guard_test.dart \
+            test/core/services/download_job_store_attempt_test.dart \
+            test/core/services/download_manager_chaos_matrix_test.dart
+      - name: Create bounded filesystem for deterministic ENOSPC
+        run: |
+          sudo mkdir -p /mnt/animewitcher-dm27
+          sudo mount -t tmpfs -o size=8M tmpfs /mnt/animewitcher-dm27
+          sudo chmod 777 /mnt/animewitcher-dm27
+      - name: Verify real ENOSPC preserves verified parts and resumes
+        env:
+          DM27_TEST_ROOT: /mnt/animewitcher-dm27
+        run: flutter test test/core/services/persistent_parallel_download_storage_headroom_test.dart
+      - name: Verify integrity authority analyzer
+        run: |
+          flutter analyze --no-fatal-warnings --no-fatal-infos \
+            lib/core/services/download_service.dart \
+            lib/core/services/download_retry_policy.dart \
+            lib/core/services/download_range_transfer.dart \
+            lib/core/services/download_resource_identity.dart \
+            lib/core/services/download_url_refresh.dart \
+            lib/core/services/download_job_store.dart \
+            lib/core/services/persistent_parallel_download.dart
+      - name: Unmount bounded filesystem
+        if: always()
+        run: sudo umount /mnt/animewitcher-dm27 || true
