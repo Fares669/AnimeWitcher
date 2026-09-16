@@ -129,6 +129,52 @@ void main() {
           'an unavailable runtime inventory must not create a replacement writer',
     );
   });
+  test('parallel resume fails closed when a runtime parent lacks a Transfer handle', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final methodStart = source.indexOf('Future<bool> _resumeDownloadTask(');
+    final methodEnd = source.indexOf(
+      'Future<bool> _resumeUsingPartialFile(',
+      methodStart,
+    );
+    expect(methodStart, greaterThanOrEqualTo(0));
+    expect(methodEnd, greaterThan(methodStart));
+    final body = source.substring(methodStart, methodEnd);
+    final parallelStart = body.indexOf('if (task is ParallelDownloadTask) {');
+    final parallelEnd = body.indexOf(
+      '// Only a validated source replacement may cross the custom Range seam.',
+      parallelStart,
+    );
+    expect(parallelStart, greaterThanOrEqualTo(0));
+    expect(parallelEnd, greaterThan(parallelStart));
+    final parallel = body.substring(parallelStart, parallelEnd);
+
+    final evidenceVariable = parallel.indexOf(
+      'var pluginRuntimeEvidence = false;',
+    );
+    final exactParent = parallel.indexOf(
+      'candidate.taskId == task.taskId',
+      evidenceVariable,
+    );
+    final childParent = parallel.indexOf(
+      'downloadInternalParentTaskId(candidate) == task.taskId',
+      exactParent,
+    );
+    final evidenceGuard = parallel.indexOf(
+      'if (pluginRuntimeEvidence) {',
+      childParent,
+    );
+    final freshEnqueue = parallel.indexOf(
+      '_enqueueTransfer(task, saved.totalSize)',
+    );
+
+    expect(evidenceVariable, greaterThanOrEqualTo(0));
+    expect(exactParent, greaterThan(evidenceVariable));
+    expect(childParent, greaterThan(exactParent));
+    expect(evidenceGuard, greaterThan(childParent));
+    expect(evidenceGuard, lessThan(freshEnqueue));
+  });
+
   test('runtime inventory excludes package-paused rows from writer ownership', () {
     final source = File(
       'lib/core/services/background_downloader_transport.dart',
