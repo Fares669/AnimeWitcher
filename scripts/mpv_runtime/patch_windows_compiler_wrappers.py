@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Align generated LLVM-MinGW C++ wrappers and OpenAL scanning with libc++."""
+"""Align generated LLVM-MinGW wrappers, OpenAL scanning, and pinned-source cleanup."""
 
 from __future__ import annotations
 
@@ -18,14 +18,21 @@ OPENAL_MODULES_SETTING = (
 OPENAL_PACKAGE_MODULE_FLAG = "        -DALSOFT_ENABLE_MODULES=OFF"
 OPENAL_PACKAGE_SCAN_FLAG = "        -DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
 CLEANUP_GENERATOR_MARKER = "# AnimeWitcher: detached-safe cleanup comparison"
-CLEANUP_COMPARE_BLOCK = (
+CLEANUP_RESET_BLOCK = (
     CLEANUP_GENERATOR_MARKER
     + "\n"
-    + '    if("${git_tag}" MATCHES "^[0-9a-fA-F]{40}$")\n'
+    + '    string(LENGTH "${git_tag}" git_tag_length)\n'
+    + '    if(git_tag_length EQUAL 40 AND "${git_tag}" MATCHES "^[0-9a-fA-F]+$")\n'
+    + '        set(reset "HEAD")\n'
     + '        set(reset_compare_ref "HEAD")\n'
     + '    elseif("${git_remote_name}" STREQUAL "" AND NOT "${git_tag}" STREQUAL "")\n'
+    + '        set(reset "")\n'
     + '        set(reset_compare_ref "HEAD")\n'
+    + '    elseif(NOT "${git_reset}" STREQUAL "")\n'
+    + '        set(reset "${git_reset}")\n'
+    + '        set(reset_compare_ref "@{u}")\n'
     + "    else()\n"
+    + '        set(reset "@{u}") # eg: origin/master\n'
     + '        set(reset_compare_ref "@{u}")\n'
     + "    endif()\n"
 )
@@ -164,7 +171,7 @@ def _patch_cleanup_generator(path: Path) -> bool:
     if CLEANUP_GENERATOR_MARKER in text:
         if text.count(CLEANUP_GENERATOR_MARKER) != 1:
             raise RuntimeError(f"builder cleanup generator has duplicate detached-safe markers: {path}")
-        if CLEANUP_COMPARE_BLOCK not in text or CLEANUP_COMPARE_NEW not in text:
+        if CLEANUP_RESET_BLOCK not in text or CLEANUP_COMPARE_NEW not in text:
             raise RuntimeError(f"builder cleanup generator has an invalid detached-safe override: {path}")
         if CLEANUP_COMPARE_OLD in text:
             raise RuntimeError(f"builder cleanup generator still compares against upstream: {path}")
@@ -188,7 +195,7 @@ def _patch_cleanup_generator(path: Path) -> bool:
     if text.count(CLEANUP_COMPARE_OLD) != 1:
         raise RuntimeError(f"builder cleanup generator layout changed: expected upstream comparison: {path}")
 
-    updated = text.replace(anchor, anchor + "\n" + CLEANUP_COMPARE_BLOCK, 1)
+    updated = text.replace(anchor, CLEANUP_RESET_BLOCK, 1)
     updated = updated.replace(CLEANUP_COMPARE_OLD, CLEANUP_COMPARE_NEW, 1)
     try:
         path.write_text(updated, encoding="utf-8")
@@ -263,8 +270,8 @@ def patch_wrappers(
     cleanup_text = cleanup_generator.read_text(encoding="utf-8")
     if cleanup_text.count(CLEANUP_GENERATOR_MARKER) != 1:
         raise RuntimeError(f"failed to verify detached-safe cleanup generator in {cleanup_generator}")
-    if CLEANUP_COMPARE_BLOCK not in cleanup_text or CLEANUP_COMPARE_NEW not in cleanup_text:
-        raise RuntimeError(f"failed to verify cleanup compare ref in {cleanup_generator}")
+    if CLEANUP_RESET_BLOCK not in cleanup_text or CLEANUP_COMPARE_NEW not in cleanup_text:
+        raise RuntimeError(f"failed to verify cleanup reset/compare refs in {cleanup_generator}")
     if CLEANUP_COMPARE_OLD in cleanup_text:
         raise RuntimeError(f"cleanup generator still contains unsafe upstream comparison: {cleanup_generator}")
 
