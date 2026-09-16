@@ -69,6 +69,15 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
 
             packages = root / "packages"
             packages.mkdir()
+            ffmpeg_package = packages / "ffmpeg.cmake"
+            ffmpeg_package.write_text(
+                "ExternalProject_Add(ffmpeg\n"
+                "    GIT_REPOSITORY https://github.com/FFmpeg/FFmpeg.git\n"
+                "    GIT_TAG release/7.1\n"
+                '    PATCH_COMMAND ${EXEC} git apply ${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg-*.patch\n'
+                ")\n",
+                encoding="utf-8",
+            )
             openal_package = packages / "openal-soft.cmake"
             openal_package.write_text(
                 "ExternalProject_Add(openal-soft\n"
@@ -132,6 +141,12 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             openal_text = openal_package.read_text(encoding="utf-8")
             self.assertEqual(openal_text.count("-DALSOFT_ENABLE_MODULES=OFF"), 1)
             self.assertEqual(openal_text.count("-DCMAKE_CXX_SCAN_FOR_MODULES=OFF"), 1)
+            ffmpeg_text = ffmpeg_package.read_text(encoding="utf-8")
+            self.assertEqual(
+                ffmpeg_text.count("GIT_TAG 8f77695e65a69c8009804e9d457762d2d394403d"),
+                1,
+            )
+            self.assertNotIn("GIT_TAG release/7.1", ffmpeg_text)
 
             cleanup_text = cleanup_generator.read_text(encoding="utf-8")
             self.assertEqual(
@@ -165,6 +180,12 @@ class WindowsCompilerWrapperPatchTests(unittest.TestCase):
             )
             self.assertEqual(
                 openal_package.read_text(encoding="utf-8").count("CMAKE_CXX_SCAN_FOR_MODULES"),
+                1,
+            )
+            self.assertEqual(
+                ffmpeg_package.read_text(encoding="utf-8").count(
+                    "GIT_TAG 8f77695e65a69c8009804e9d457762d2d394403d"
+                ),
                 1,
             )
             self.assertEqual(
