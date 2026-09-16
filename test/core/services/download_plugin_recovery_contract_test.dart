@@ -47,7 +47,7 @@ void main() {
     expect(legacyInventory, lessThan(reconcile));
   });
 
-  test('plugin executor synchronously reschedules before Transfer rehydration', () {
+  test('plugin executor waits for native inventory before killed-task reschedule', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
     final helper = _methodBody(
@@ -57,6 +57,10 @@ void main() {
     );
 
     final start = helper.indexOf('await FileDownloader().start(');
+    final cancelRogue = helper.indexOf('cancelTasksWithIds(');
+    final settle = helper.indexOf(
+      'await Future<void>.delayed(const Duration(seconds: 5));',
+    );
     final reschedule = helper.indexOf(
       'await FileDownloader().rescheduleKilledTasks()',
     );
@@ -64,7 +68,9 @@ void main() {
       'await _nativeTransport.rehydrate(group: kLogicalDownloadGroup)',
     );
     expect(start, greaterThanOrEqualTo(0));
-    expect(reschedule, greaterThan(start));
+    expect(cancelRogue, greaterThan(start));
+    expect(settle, greaterThan(cancelRogue));
+    expect(reschedule, greaterThan(settle));
     expect(rehydrate, greaterThan(reschedule));
     expect(helper, contains('doRescheduleKilledTasks: false'));
     expect(helper, contains('markDownloadedComplete: false'));
