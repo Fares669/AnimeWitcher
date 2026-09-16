@@ -50,9 +50,7 @@ void main() {
   test('Task 8 isolates custom Range to validated refreshed-source recovery', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
-    final resumeStart = source.indexOf(
-      'Future<bool> _resumeDownloadTask(DownloadTask task) async {',
-    );
+    final resumeStart = source.indexOf('Future<bool> _resumeDownloadTask(');
     final rangeHelper = source.indexOf(
       'Future<bool> _resumeUsingPartialFile(',
       resumeStart,
