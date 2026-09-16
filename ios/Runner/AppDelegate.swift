@@ -285,8 +285,15 @@ import UserNotifications
             }
 
           case "update":
-            if !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates() {
-              result(true)
+            let forcePresentation = arguments["foregroundHandoff"] as? Bool ?? false
+            if !forcePresentation && !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates() {
+              // Native URLSession progress owns the system presentation while
+              // the scene is backgrounded. Tell Dart the session is alive but
+              // do not pretend this specific Dart sample was applied.
+              result([
+                "accepted": true,
+                "owner": "native",
+              ])
               return
             }
             let progress =
@@ -304,7 +311,10 @@ import UserNotifications
               displayName: arguments["displayName"] as? String ?? "",
               currentIndex: (arguments["currentIndex"] as? NSNumber)?.intValue ?? -1
             )
-            result(active)
+            result([
+              "accepted": active,
+              "owner": active ? "dart" : "none",
+            ])
 
           case "finish":
             let success = arguments["success"] as? Bool ?? false

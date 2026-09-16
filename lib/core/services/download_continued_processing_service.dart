@@ -142,8 +142,9 @@ class DownloadContinuedProcessingService {
     double speedBytesPerSecond = 0,
     String displayName = '',
     int currentIndex = 0,
+    bool foregroundHandoff = false,
   }) async {
-    await _queueUpdate(<String, Object>{
+    final arguments = <String, Object>{
       'taskId': taskId,
       'progress': progress.clamp(0.0, 1.0).toDouble(),
       'totalBytes': totalBytes,
@@ -153,7 +154,21 @@ class DownloadContinuedProcessingService {
       'speedBytesPerSecond': speedBytesPerSecond,
       if (displayName.isNotEmpty) 'displayName': displayName,
       'currentIndex': currentIndex,
-    });
+      'foregroundHandoff': foregroundHandoff,
+    };
+
+    // Foreground reattachment is a lifecycle synchronization point, not a
+    // metric sample. Do not leave it behind the one-second presentation timer:
+    // the scene can become active before another network progress event arrives.
+    if (foregroundHandoff) {
+      _updateTimer?.cancel();
+      _updateTimer = null;
+      _pendingUpdate = null;
+      _lastUpdateAt = DateTime.now();
+      await _sendUpdate(arguments);
+      return;
+    }
+    await _queueUpdate(arguments);
   }
 
   Future<void> _queueUpdate(Map<String, Object> arguments) async {
@@ -183,8 +198,15 @@ class DownloadContinuedProcessingService {
   }
 
   Future<void> _sendUpdate(Map<String, Object> arguments) async {
-    final accepted = await _invokeForResult<Object?>('update', arguments);
-    if (accepted is bool && !accepted && !_disposed) {
+    final response = await _invokeForResult<Object?>('update', arguments);
+    bool? accepted;
+    if (response is bool) {
+      accepted = response;
+    } else if (response is Map) {
+      final rawAccepted = response['accepted'];
+      if (rawAccepted is bool) accepted = rawAccepted;
+    }
+    if (accepted == false && !_disposed) {
       onSessionLost?.call();
     }
   }

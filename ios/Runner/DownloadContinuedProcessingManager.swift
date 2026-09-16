@@ -32,7 +32,8 @@ private enum DownloadContinuedProcessingError: LocalizedError {
 final class DownloadContinuedProcessingManager {
   static let shared = DownloadContinuedProcessingManager()
 
-  /// Stable key / identifier suffix. Info.plist `download.*` matches.
+  /// Logical queue-overlay task id. Each BGContinuedProcessingTask request
+  /// gets a separate unique scheduler identifier below.
   static let sessionKey = "session"
 
   struct Snapshot {
@@ -58,7 +59,7 @@ final class DownloadContinuedProcessingManager {
   private var identifier: String?
   private var submittedAt: Date?
   private let attachmentGraceInterval: TimeInterval = 2.0
-  private var didRegisterIdentifier = false
+  private var registeredIdentifiers: Set<String> = []
   private var currentEpisodeTaskId = ""
 
   private init() {}
@@ -138,7 +139,7 @@ final class DownloadContinuedProcessingManager {
       throw DownloadContinuedProcessingError.identifierNotPermitted(sessionId)
     }
 
-    if !didRegisterIdentifier {
+    if !registeredIdentifiers.contains(sessionId) {
       let accepted = scheduler.register(
         forTaskWithIdentifier: sessionId,
         using: DispatchQueue.main
@@ -157,7 +158,7 @@ final class DownloadContinuedProcessingManager {
         identifier = nil
         throw DownloadContinuedProcessingError.registrationRejected(sessionId)
       }
-      didRegisterIdentifier = true
+      registeredIdentifiers.insert(sessionId)
     }
 
     let request = BGContinuedProcessingTaskRequest(
@@ -391,7 +392,7 @@ final class DownloadContinuedProcessingManager {
     guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else {
       throw DownloadContinuedProcessingError.missingBundleIdentifier
     }
-    return "\(bundleId).download.\(Self.sessionKey)"
+    return "\(bundleId).download.\(Self.sessionKey).\(UUID().uuidString.lowercased())"
   }
 
   private func isPermittedTaskIdentifier(_ identifier: String) -> Bool {

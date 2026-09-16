@@ -1125,7 +1125,9 @@ class DownloadService {
     //    then let this instance listen to that broadcast proxy.
     _fdSubscription ??= FileDownloader().updates.listen(_sharedEvents.add);
     await _nativeUpdatesSubscription?.cancel();
-    _nativeUpdatesSubscription = _nativeTransport.updates.listen(_sharedEvents.add);
+    _nativeUpdatesSubscription = _nativeTransport.updates.listen(
+      _sharedEvents.add,
+    );
     // A previous initialization attempt may have failed after installing
     // this instance listener. Cancel it before retrying so deliberate retry
     // cannot duplicate callback consumers.
@@ -2661,7 +2663,10 @@ class DownloadService {
       await _attachUiToLiveNativeTasks();
       await _syncQueueToCapUnlocked();
     });
-    await _syncSessionOverlay();
+    // Flutter's resumed notification can arrive while UIScene is still
+    // foregroundInactive. Force one immediate presentation handoff so the
+    // system task catches up even if no network sample arrives afterward.
+    await _syncSessionOverlay(forceDartPresentation: true);
   }
 
   List<String> _queueOrder() => List<String>.from(_sessionOrder);
@@ -2827,6 +2832,7 @@ class DownloadService {
 
   Future<void> _syncSessionOverlay({
     bool completedSuccess = true,
+    bool forceDartPresentation = false,
     String? preferTaskId,
     double? progress,
     int? totalBytes,
@@ -2911,6 +2917,7 @@ class DownloadService {
         speedBytesPerSecond: speed,
         displayName: session.displayName,
         currentIndex: session.currentIndex,
+        foregroundHandoff: forceDartPresentation,
       );
     } else {
       final started = await _continuedProcessing.start(
@@ -4081,9 +4088,7 @@ class DownloadService {
       if (pausePreflightJob?.state == DownloadJobState.pausedByUser) {
         final pausePreflightOwnership = await _runtimeOwnershipFor(taskId);
         if (pausePreflightOwnership == DownloadRuntimeOwnership.notOwned) {
-          diagnosticLog.record('pause.idempotentSettled', {
-            'taskId': taskId,
-          });
+          diagnosticLog.record('pause.idempotentSettled', {'taskId': taskId});
           return;
         }
       }
