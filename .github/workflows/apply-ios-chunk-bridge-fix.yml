@@ -35,8 +35,6 @@ jobs:
             test/core/services/ios_multipart_ownership_handoff_source_test.dart \
             test/core/services/download_plugin_relaunch_single_writer_test.dart \
             --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
-      - name: Analyze
-        run: flutter analyze --no-fatal-warnings --no-fatal-infos
       - name: Commit verified production fix and remove helpers
         shell: bash
         run: |
@@ -49,3 +47,5 @@ jobs:
           git diff --cached --check
           git commit -m "fix(ios): keep plugin chunk telemetry out of legacy coordinator"
           git push origin HEAD:refactor/background-downloader-authority
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
