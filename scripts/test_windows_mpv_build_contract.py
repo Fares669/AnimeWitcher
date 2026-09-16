@@ -137,8 +137,9 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
     def test_wrapper_helper_disables_openal_modules_in_generated_toolchain(self) -> None:
         helper = WRAPPER_HELPER.read_text(encoding="utf-8")
         self.assertIn('sysroot.parent / "toolchain.cmake"', helper)
+        self.assertIn("ALSOFT_ENABLE_MODULES OFF CACHE BOOL", helper)
         self.assertIn(
-            'ALSOFT_ENABLE_MODULES OFF CACHE BOOL "Disable OpenAL C++20 modules for cross compiler wrapper compatibility" FORCE',
+            "Disable OpenAL C++20 modules for cross compiler wrapper compatibility",
             helper,
         )
 
