@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/mpv-runtime-windows.yml"
 VULKAN_PATCH = ROOT / "third_party/mpv/patches/windows-vulkan-loader.patch"
+WRAPPER_HELPER = ROOT / "scripts/mpv_runtime/patch_windows_compiler_wrappers.py"
 
 
 class WindowsMpvBuildContractTests(unittest.TestCase):
@@ -131,6 +132,14 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         self.assertIn(
             "include/c++/v1",
             workflow,
+        )
+
+    def test_wrapper_helper_disables_openal_modules_in_generated_toolchain(self) -> None:
+        helper = WRAPPER_HELPER.read_text(encoding="utf-8")
+        self.assertIn('sysroot.parent / "toolchain.cmake"', helper)
+        self.assertIn(
+            'ALSOFT_ENABLE_MODULES OFF CACHE BOOL "Disable OpenAL C++20 modules for cross compiler wrapper compatibility" FORCE',
+            helper,
         )
 
 
