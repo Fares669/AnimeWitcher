@@ -196,6 +196,43 @@ class BackgroundDownloaderTransport implements DownloadTransport {
     return status != null && runtimeTaskStatusCanOwnWriter(status);
   }
 
+  /// A task returned by [allTasks] may come from the package's paused
+  /// store as well as the native queue. Only an item that is not paused can
+  /// represent a writer; the inventory itself remains the source of truth for
+  /// whether the item exists.
+  Future<bool> _runtimeInventoryTaskCanOwnWriter(
+    Task task, {
+    required String requestedTaskId,
+    required TaskStatus? projectedStatus,
+  }) async {
+    final record = await _downloader.database.recordForId(task.taskId);
+    final transfer = _downloader.transfers.forId(task.taskId);
+    final recordStatus = record?.status;
+    final transferStatus = transfer?.status;
+    if (recordStatus == TaskStatus.paused ||
+        transferStatus == TaskStatus.paused ||
+        (task.taskId == requestedTaskId &&
+            projectedStatus == TaskStatus.paused)) {
+      return false;
+    }
+
+    // A positive item in the native inventory is still conservative evidence
+    // when its status projection is final/stale. Only the package-paused
+    // projection is explicitly known not to own a writer.
+    if (recordStatus != null && runtimeTaskStatusCanOwnWriter(recordStatus)) {
+      return true;
+    }
+    if (transferStatus != null && runtimeTaskStatusCanOwnWriter(transferStatus)) {
+      return true;
+    }
+    if (task.taskId == requestedTaskId &&
+        projectedStatus != null &&
+        runtimeTaskStatusCanOwnWriter(projectedStatus)) {
+      return true;
+    }
+    return true;
+  }
+
   /// Resolves writer ownership from background_downloader's runtime inventory.
   ///
   /// A ParallelDownloadTask parent is synthetic: its native writers are
@@ -211,11 +248,21 @@ class BackgroundDownloaderTransport implements DownloadTransport {
 
     try {
       final runtimeTasks = await _downloader.allTasks(allGroups: true);
-      final runtimeOwner = runtimeTasks.any((task) {
-        if (task.taskId == taskId) return true;
-        return isInternalDownloaderChunk(task) &&
-            downloadInternalParentTaskId(task) == taskId;
-      });
+      var runtimeOwner = false;
+      for (final task in runtimeTasks) {
+        final matches = task.taskId == taskId ||
+            (isInternalDownloaderChunk(task) &&
+                downloadInternalParentTaskId(task) == taskId);
+        if (!matches) continue;
+        if (await _runtimeInventoryTaskCanOwnWriter(
+          task,
+          requestedTaskId: taskId,
+          projectedStatus: projectedStatus,
+        )) {
+          runtimeOwner = true;
+          break;
+        }
+      }
       if (runtimeOwner) return DownloadRuntimeOwnership.owned;
 
       // A settled projection is useful only after the runtime inventory has
