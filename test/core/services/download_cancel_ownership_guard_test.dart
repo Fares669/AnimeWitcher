@@ -89,4 +89,31 @@ void main() {
     );
   });
 
+
+  test('duplicate cancellation discovers logical rows from plugin database persistence', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final cancelStart = source.indexOf('Future<void> cancelDownload(');
+    final cancelEnd = source.indexOf(
+      'Future<DownloadCommandOutcome> cancelDownloadOutcome(',
+      cancelStart,
+    );
+    expect(cancelStart, greaterThanOrEqualTo(0));
+    expect(cancelEnd, greaterThan(cancelStart));
+    final cancel = source.substring(cancelStart, cancelEnd);
+
+    final runtimeScan = cancel.indexOf(
+      'await FileDownloader().allTasks(allGroups: true)',
+    );
+    final databaseScan = cancel.indexOf(
+      'await FileDownloader().database.allRecords()',
+      runtimeScan,
+    );
+    expect(runtimeScan, greaterThanOrEqualTo(0));
+    expect(databaseScan, greaterThan(runtimeScan));
+    expect(cancel, contains('considerDuplicate(record.task)'));
+    expect(cancel, contains('duplicateLogicalTasks[task.taskId]'));
+  });
+
+
 }
