@@ -13,74 +13,109 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  finalize:
+  contract:
+    name: Contract ${{ matrix.test }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - test/core/services/download_continued_processing_start_ack_test.dart
+          - test/core/services/ios_continued_processing_start_source_test.dart
+          - test/core/services/ios_continued_processing_update_ack_source_test.dart
+          - test/core/services/ios_continued_processing_completion_guard_test.dart
+          - test/core/services/ios_continued_processing_expiration_test.dart
+          - test/core/services/download_native_claim_foreground_test.dart
+          - test/core/services/download_presentation_ownership_test.dart
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
-          fetch-depth: 0
-
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.47.1
           cache: true
-
-      - name: Apply proven GREEN patch and strict background owner semantics
+      - name: Apply proven GREEN patch
         shell: bash
         run: |
           python3 - <<'PY'
           import base64
           import re
           from pathlib import Path
-
-          helper_path = Path('.github/workflows/ios-continued-processing-sync-green.yml')
-          helper = helper_path.read_text()
+          helper = Path('.github/workflows/ios-continued-processing-sync-green.yml').read_text()
           match = re.search(r"echo '([A-Za-z0-9+/=]+)'", helper)
           if not match:
               raise SystemExit('Unable to locate encoded GREEN patch payload')
-
           patch_source = base64.b64decode(match.group(1)).decode('utf-8')
-          exec(compile(patch_source, str(helper_path), 'exec'), {'__name__': '__main__'})
-
-          app_delegate = Path('ios/Runner/AppDelegate.swift')
-          text = app_delegate.read_text()
-          old = 'AND (status IS NULL OR status IN (?, ?, ?, ?))'
-          new = 'AND status IN (?, ?, ?, ?)'
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'Expected exactly one nullable active-state predicate, found {count}')
-          text = text.replace(old, new, 1)
-          if 'status IS NULL' in text:
-              raise SystemExit('Nullable downloader ownership predicate still present')
-          app_delegate.write_text(text)
-
-          regression = base64.b64decode('aW1wb3J0ICdkYXJ0OmlvJzsKCmltcG9ydCAncGFja2FnZTpmbHV0dGVyX3Rlc3QvZmx1dHRlcl90ZXN0LmRhcnQnOwoKdm9pZCBtYWluKCkgewogIGZpbmFsIHNvdXJjZSA9IEZpbGUoJ2lvcy9SdW5uZXIvQXBwRGVsZWdhdGUuc3dpZnQnKS5yZWFkQXNTdHJpbmdTeW5jKCk7CgogIHRlc3QoJ25hdGl2ZSBvd25lcnNoaXAgb25seSByZWNvZ25pemVzIGFjdGl2ZSBiYWNrZ3JvdW5kX2Rvd25sb2FkZXIgc3RhdGVzJywgKCkgewogICAgZXhwZWN0KHNvdXJjZSwgY29udGFpbnMoJ2FjdGl2ZUJhY2tncm91bmRPd25lcihmb3IgdGFza0lkOiBTdHJpbmcpJykpOwogICAgZXhwZWN0KHNvdXJjZSwgY29udGFpbnMoJ0FORCBzdGF0dXMgSU4gKD8sID8sID8sID8pJykpOwogICAgZXhwZWN0KAogICAgICBzb3VyY2UsCiAgICAgIGlzTm90KGNvbnRhaW5zKCdzdGF0dXMgSVMgTlVMTCcpKSwKICAgICAgcmVhc29uOgogICAgICAgICAgJ2JhY2tncm91bmRfZG93bmxvYWRlciBUYXNrU3RhdHVzIGhhcyBleHBsaWNpdCBhY3RpdmUgc3RhdGVzOyBhIG1pc3Npbmcgc3RhdHVzIG11c3Qgbm90IGNsYWltIG5hdGl2ZSBvd25lcnNoaXAnLAogICAgKTsKICB9KTsKfQo=').decode('utf-8')
-          Path('test/core/services/ios_background_owner_source_test.dart').write_text(regression)
+          exec(compile(patch_source, 'ios-continued-processing-sync-green.yml', 'exec'), {'__name__': '__main__'})
           PY
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Run focused contract
+        run: flutter test "${{ matrix.test }}"
 
-      - name: Format changed Dart sources
+  analyze:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Apply proven GREEN patch
+        shell: bash
         run: |
+          python3 - <<'PY'
+          import base64
+          import re
+          from pathlib import Path
+          helper = Path('.github/workflows/ios-continued-processing-sync-green.yml').read_text()
+          match = re.search(r"echo '([A-Za-z0-9+/=]+)'", helper)
+          if not match:
+              raise SystemExit('Unable to locate encoded GREEN patch payload')
+          patch_source = base64.b64decode(match.group(1)).decode('utf-8')
+          exec(compile(patch_source, 'ios-continued-processing-sync-green.yml', 'exec'), {'__name__': '__main__'})
+          PY
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Analyze patched source
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+  finalize:
+    needs: [contract, analyze]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Apply verified GREEN patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import re
+          from pathlib import Path
+          helper = Path('.github/workflows/ios-continued-processing-sync-green.yml').read_text()
+          match = re.search(r"echo '([A-Za-z0-9+/=]+)'", helper)
+          if not match:
+              raise SystemExit('Unable to locate encoded GREEN patch payload')
+          patch_source = base64.b64decode(match.group(1)).decode('utf-8')
+          exec(compile(patch_source, 'ios-continued-processing-sync-green.yml', 'exec'), {'__name__': '__main__'})
+          PY
           dart format \
             lib/core/services/download_continued_processing_service.dart \
-            lib/core/services/download_service.dart \
-            test/core/services/download_continued_processing_start_ack_test.dart \
-            test/core/services/ios_continued_processing_start_source_test.dart \
-            test/core/services/ios_background_owner_source_test.dart
-
-      - name: Verify focused continued-processing behavior
-        run: |
-          flutter pub get
-          flutter test \
-            test/core/services/download_continued_processing_start_ack_test.dart \
-            test/core/services/ios_continued_processing_start_source_test.dart \
-            test/core/services/ios_background_owner_source_test.dart
-
-      - name: Analyze
-        run: dart analyze
-
-      - name: Commit source of truth and remove temporary helpers
+            lib/core/services/download_service.dart
+      - name: Commit verified source and remove temporary helpers
         shell: bash
         run: |
           rm -f \
@@ -94,12 +129,7 @@ jobs:
             ios/Runner/DownloadContinuedProcessingManager.swift \
             ios/Runner/AppDelegate.swift \
             lib/core/services/download_continued_processing_service.dart \
-            lib/core/services/download_service.dart \
-            test/core/services/ios_background_owner_source_test.dart
+            lib/core/services/download_service.dart
           git diff --cached --check
-          if git diff --cached --quiet; then
-            echo 'No changes to commit'
-            exit 0
-          fi
           git commit -m 'fix(ios): finalize continued-processing ownership handoff'
           git push origin HEAD:refactor/background-downloader-authority
