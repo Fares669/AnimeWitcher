@@ -4846,6 +4846,7 @@ class DownloadService {
       // plugin chunk is enough to classify this as plugin-owned persistence.
       final pluginParentKnown = _nativeTransport.handleFor(task.taskId) != null;
       var pluginChunkEvidence = false;
+      var pluginChunkEvidenceQuerySucceeded = false;
       try {
         pluginChunkEvidence = (await FileDownloader().allTasks(allGroups: true))
             .any(
@@ -4853,10 +4854,11 @@ class DownloadService {
                   candidate.group == FileDownloader.chunkGroup &&
                   downloadInternalParentTaskId(candidate) == task.taskId,
             );
+        pluginChunkEvidenceQuerySucceeded = true;
       } catch (_) {
-        // An unavailable runtime inventory is ambiguous. Fail closed below
-        // instead of creating replacement writers for hidden plugin chunks.
-        pluginChunkEvidence = pluginParentKnown;
+        // An unavailable runtime inventory is ambiguous. A known parent can
+        // still be resumed through its package Transfer; without that parent,
+        // fail closed below instead of creating a replacement writer.
       }
 
       if (pluginParentKnown) {
@@ -4881,6 +4883,15 @@ class DownloadService {
         });
         // The plugin parent exists but did not settle resume. Never replace it
         // with AnimeWitcher's legacy executor or a fresh parent.
+        return false;
+      }
+
+      if (!pluginChunkEvidenceQuerySucceeded) {
+        diagnosticLog.record('resume.pluginParallelDeferred', {
+          'taskId': task.taskId,
+          'ownership': DownloadRuntimeOwnership.unknown.name,
+          'reason': 'runtimeInventoryQueryFailed',
+        });
         return false;
       }
 
