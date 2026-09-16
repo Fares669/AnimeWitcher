@@ -302,7 +302,7 @@ void main() {
     final unknown = body.indexOf(
       'if (ownership == DownloadRuntimeOwnership.unknown) return false;',
     );
-    final active = body.indexOf('runtimeStatusCanOwnWriter(transfer.status)');
+    final active = body.indexOf('runtimeTaskStatusCanOwnWriter(transfer.status)');
     final resume = body.indexOf('return await transfer.resume();');
 
     expect(ownership, greaterThanOrEqualTo(0));
