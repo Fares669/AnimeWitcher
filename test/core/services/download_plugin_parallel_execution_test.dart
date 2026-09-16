@@ -136,4 +136,31 @@ void main() {
     }
     expect(freshEnqueue, greaterThan(pluginResume));
   });
+  test('rehydrated Transfer handles require runtime evidence before attach', () {
+    final source = File('lib/core/services/download_service.dart')
+        .readAsStringSync();
+    final methodStart = source.indexOf(
+      'Future<DownloadTask?> _liveNativeTaskFor(',
+    );
+    final methodEnd = source.indexOf(
+      'Future<void> _attachToLiveNativeTask(',
+      methodStart,
+    );
+    expect(methodStart, greaterThanOrEqualTo(0));
+    expect(methodEnd, greaterThan(methodStart));
+    final method = source.substring(methodStart, methodEnd);
+
+    expect(method, contains('await _runtimeOwnershipFor(taskId)'));
+    expect(
+      method,
+      contains('ownership != DownloadRuntimeOwnership.owned'),
+    );
+    expect(
+      method,
+      contains('return null;'),
+      reason:
+          'a stale rehydrated Transfer must not be treated as a live native task',
+    );
+  });
+
 }
