@@ -56,20 +56,22 @@ This section is binding for every AI/engineer continuing this branch.
 - `.github/workflows/verify-plugin-parallel-acceptance.yml` is manual-only; normal pushes must not build an IPA.
 - `background_downloader` was upgraded from 9.6.1 to **9.6.2** to pick up the upstream fix for update suppression when task tracking/Transfers are active. This matches the observed symptom where native bytes continued while AnimeWitcher projected stale/paused state.
 - Zero-byte stale signed-URL recovery is now implemented through package lifecycle primitives rather than direct resume-data surgery: `Transfer.cancel()` → await `Transfer.result` settlement → `Transfers.remove()` → verify `ownershipFor(...) == notOwned` → enqueue/start the refreshed task.
-- Parent plugin-parallel liveness reconciliation now consults `BackgroundDownloaderTransport.ownershipFor(parentId)` instead of assuming a live writer must appear under the logical parent ID in a manually collected child-ID set.
+- Parent plugin-parallel liveness reconciliation now consults settled package runtime inventory through `BackgroundDownloaderTransport.ownershipFor(parentId)`, matching the logical parent ID and internal chunk `parentTaskId` instead of treating a manually collected child-ID set or stale Transfer projection as proof.
 - The temporary package-recovery verification workflow was removed after use; it is not part of the permanent workflow surface.
+- Startup recovery waits for the package's native inventory-settlement window before querying/canceling/rescheduling killed tasks, so legacy quarantine cannot race a late native writer.
+- Offline holds keep terminal plugin Transfer/database projections terminal and expose `waitingForNetwork` only as AnimeWitcher's logical/UI projection; reconnect resumes through the package Transfer lifecycle.
+- Plugin-owned transport tasks use the bounded package retry budget `kDownloadTaskRetries = 3`; URL refresh, resource validation, integrity, offline, and user-intent policy remain application-owned.
 
 ### Current automated blocker
 
-At the last pre-tracker head `b957e6c9ba7c1cfabc6462c6c2e099a42c15fa83`, Flutter Checks run **35126994058** had:
+The previously recorded automated blocker has been resolved.
 
-- Native logger typecheck: PASS.
-- Source generation: PASS.
-- Flutter analyze: PASS.
-- Flutter tests: **FAIL**.
+- Historical failure: Flutter Checks run **35126994058** on `b957e6c9ba7c1cfabc6462c6c2e099a42c15fa83` had two stale source-contract failures; native logger typecheck, source generation, and analyze were already green.
+- The independent lifecycle audit found four real gaps and they were implemented on this branch: settled startup inventory, runtime-inventory ownership, terminal-safe offline projection, and bounded plugin transport retries.
+- A stale projection-only parent-ownership source test was then updated in commit `94ac956036647050c148f5eac3aea1bfed4f1e7a` to assert the runtime-inventory contract.
+- Current automated head: CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` is green: native logger typecheck PASS, source generation PASS, Flutter analyze PASS, and full Flutter tests PASS (`1569` passed, `1` skipped).
 
-**Next action:** inspect the failing test(s), determine whether the failure is a real behavioral regression or a stale/weak source-contract test, fix the root cause, and rerun focused + full CI. No IPA build is allowed during this work.
-
+**Current state:** no automated blocker remains. Task 34 records the post-audit hardening. Task 33 is now the only remaining acceptance gate because its steps require a real iOS device; the manual acceptance workflow remains untriggered and no IPA has been built.
 ## Original task status (Tasks 1–25)
 
 These statuses preserve the original task numbering while making the handoff readable. Historical detailed implementation remains represented by the commits/tests in PR #246; any reopened behavior must be tracked below rather than assumed complete.
@@ -114,7 +116,7 @@ These statuses preserve the original task numbering while making the handoff rea
 - [x] Verify focused download transport coverage on the resulting production head.
 - [x] Verify full Flutter tests and analyze on the resulting production head.
 
-Evidence: `bc8ab4a20fd0b99a4ef894da176c145761fe6a27`; CI run **35140895156** — generation, analyze, native logger typecheck, and full Flutter tests green; `1567` tests passed and `1` skipped.
+Evidence: dependency/design commits `bc8ab4a20fd0b99a4ef894da176c145761fe6a27` and `bc8ab4a20fd0b99a4ef894da176c145761fe6a27`; current CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` — generation, analyze, native logger typecheck, and full Flutter tests green; `1569` tests passed and `1` skipped.
 ### Task 27 — Recover zero-byte stale signed-URL plugin state using package lifecycle APIs
 
 **Status: DONE for the automatable scope; real-device evidence remains in Task 33.**
@@ -132,7 +134,7 @@ Required behavior:
 - [x] Executable coverage is present for zero-byte source refresh routing, package-native cancellation/settlement, Transfer removal, and the no-direct-resume-data-surgery boundary.
 - [x] Verify focused + full CI on the resulting head.
 
-Evidence: `bc8ab4a20fd0b99a4ef894da176c145761fe6a27`, `e56a9c43aea5dc19aa1f9ab9c88247e3d0835c55`, `bc336f190575312c7c1b1178f6c7065d8a07ecd5`; CI run **35140895156** passed `download_plugin_parallel_device_log_regression_test.dart`, `download_plugin_source_refresh_test.dart`, and the full suite.
+Evidence: implementation commits `e56a9c43aea5dc19aa1f9ab9c88247e3d0835c55`, `bc336f190575312c7c1b1178f6c7065d8a07ecd5`, and `b9bdced314a9b0bc0814e310d889b98cc1fbc2df`; current CI run **35143865770** passed `download_plugin_parallel_device_log_regression_test.dart`, `download_plugin_source_refresh_test.dart`, the terminal-safe network-hold guards, and the full suite.
 ### Task 28 — Eliminate phantom parent `paused` projection while package chunks are alive
 
 **Status: DONE for the automatable scope; real-device evidence remains in Task 33.**
@@ -146,7 +148,7 @@ Observed device failure: bytes continued to move in plugin chunks while AnimeWit
 - [x] Verify no stale fallback code still treats child-ID enumeration as authoritative for plugin-parallel parent ownership.
 - [x] Verify focused + full CI.
 
-Evidence: `bc8ab4a20fd0b99a4ef894da176c145761fe6a27`; CI run **35140895156** passed `download_runtime_ownership_test.dart`, `download_recovery_reconciliation_guard_test.dart`, `download_plugin_parallel_device_log_regression_test.dart`, and the full suite.
+Evidence: implementation commits `f7c5dafdef91ffa31073b8df8a01c86cf08cf427`, `3513ba4ee8110f6de682c7cf83c0182e4884bcc8`, and `94ac956036647050c148f5eac3aea1bfed4f1e7a`; current CI run **35143865770** passed `download_runtime_ownership_test.dart`, `download_recovery_reconciliation_guard_test.dart`, `download_plugin_parallel_device_log_regression_test.dart`, the startup settlement guard, and the full suite.
 ### Task 29 — Replace weak source-string regressions with behavioral coverage where feasible
 
 **Status: DONE.**
@@ -160,46 +162,49 @@ Some recent regressions were guarded primarily by source-contract string checks.
 - [x] Preserve source-contract checks only for explicit architecture constraints, including no direct resume-data surgery and plugin/native ownership boundaries.
 - [x] Verify the resulting head with analyze and the full Flutter suite.
 
-Evidence: commits `e56a9c43aea5dc19aa1f9ab9c88247e3d0835c55` and `bc336f190575312c7c1b1178f6c7065d8a07ecd5`; CI run **35140895156** — `1567) tests passed, `1) skipped.
+Evidence: source-contract updates are in `e56a9c43aea5dc19aa1f9ab9c88247e3d0835c55`, `bc336f190575312c7c1b1178f6c7065d8a07ecd5`, and `94ac956036647050c148f5eac3aea1bfed4f1e7a`; current CI run **35143865770** — analyze PASS and `1569` tests passed, `1` skipped.
 ### Task 30 — Audit remaining custom lifecycle logic against `background_downloader` APIs
 
 **Status: DONE for the current automatable scope; device-gated legacy removal remains intentionally open in Tasks 14, 16, 17, and 33.**
 
-Audit result on head `bc8ab4a20fd0b99a4ef894da176c145761fe6a27`:
+Audit result on head `94ac956036647050c148f5eac3aea1bfed4f1e7a` after the independent lifecycle review:
 
 - [x] Plugin-owned start/reconnect/resume/pause/cancel/restart paths use the package boundary: `Transfers.getOrStart`, `Transfers.rehydrateFromDatabase`, `Transfer.resume/pause/cancel/result`, and `Transfers.remove`.
-- [x] Runtime ownership is queried through the Transfer/targeted runtime adapter; persisted JobStore/database status is not used as proof that a writer exists.
+- [x] Runtime ownership is queried from settled package inventory via `allTasks(allGroups: true)`, matching the exact logical task ID and internal plugin chunk `parentTaskId`; an active Transfer projection without runtime evidence is `unknown`, and persisted JobStore/database status is never proof that a writer exists.
 - [x] Direct `FileDownloader` pause/resume/enqueue calls are retained only for legacy multipart children and the verified changed-source Range fallback, where AnimeWitcher still owns the HTTP connection or legacy manifest.
 - [x] `PersistentParallelDownload`, `DownloadRangeTransfer`, and the iOS legacy multipart handoff remain fallback/compatibility paths required by the unaccepted device matrix; no safe removal is possible before Task 33 evidence.
-- [x] Re-ran the single-writer, relaunch, pause/resume, source-refresh, cancel/delete, queue, ownership, and full Flutter verification covered by CI run **35140895156**.
+- [x] Re-ran the single-writer, relaunch, pause/resume, source-refresh, cancel/delete, queue, ownership, startup-settlement, network-hold, retry, and full Flutter verification in CI run **35143865770**.
+- [x] Startup recovery waits five seconds after `FileDownloader.start(...)` before native inventory/cancel/reschedule, matching the package's documented inventory-settlement window.
+- [x] Offline network holds preserve terminal plugin rows and publish `waitingForNetwork` only through the logical/UI projection; reconnect routes the final transfer back through `Transfer.resume()`.
+- [x] Generic plugin transport failures use the bounded retry budget `kDownloadTaskRetries = 3`; app-owned URL refresh and policy transitions remain separate.
 - [x] Documented the dependency contract update from 9.6.1 to 9.6.2 in the design spec.
 
 Ruling: retain the legacy executor and custom Range/iOS paths until the real-device matrix proves the replacement safe; removing them now would leave unsupported or unaccepted platform paths without a verified fallback.
 
 ### Task 31 — Keep this plan as the living handoff
 
-**Status: ONGOING REQUIREMENT; updated in this session.**
+**Status: DONE for this session; the maintenance protocol remains binding for future changes.**
 
 - [x] Convert the old static plan into this living status/handoff tracker.
 - [x] Add the mandatory update protocol above.
-- [x] Record this session's test-contract fixes, dependency-design alignment, CI evidence, lifecycle audit, and remaining device gate before handoff.
-- [ ] Every subsequent implementation/verification commit or discovery must update the corresponding task/status here before the work is considered handed off.
+- [x] Record this session's test-contract fixes, dependency-design alignment, CI evidence, lifecycle audit, post-audit hardening, and remaining device gate before handoff.
+- [x] Record every implementation/verification commit or discovery from this session through Task 34 in the corresponding task/status sections.
 
 ### Task 32 — Restore green automated verification on the current branch
 
-**Status: DONE on head `bc8ab4a20fd0b99a4ef894da176c145761fe6a27`.**
+**Status: DONE on head `94ac956036647050c148f5eac3aea1bfed4f1e7a`.**
 
 - [x] Diagnose the Flutter test failure from run **35126994058**: both failures were stale source contracts, not production regressions.
 - [x] Fix the root cause without loosening behavioral expectations.
 - [x] Run the focused Task 26–29 coverage as part of the full Flutter invocation; the relevant tests passed.
 - [x] Run `flutter analyze --no-fatal-warnings --no-fatal-infos`.
-- [x] Run the full Flutter test suite: **1567 passed, 1 skipped**.
+- [x] Run the full Flutter test suite: **1569 passed, 1 skipped**.
 - [x] Confirm native Swift/logger typecheck remains green.
-- [x] Record final run/commit evidence here: CI run **35140895156**, commits `e56a9c43`, `bc336f19`, and `bc8ab4a2`.
+- [x] Record final run/commit evidence here: CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a`; post-audit commits include `f7c5dafd`, `b9bdced3`, `93fb1bd9`, and `94ac9560`.
 
 ### Task 33 — Real-device acceptance, cleanup, and one final IPA
 
-**Status: BLOCKED until Tasks 26–32 and all other automatable open work are green.**
+**Status: BLOCKED / DEVICE ONLY; all automatable prerequisites, including Task 34, are green.**
 
 Do not trigger the IPA before this gate.
 
@@ -216,16 +221,38 @@ Required real iOS acceptance matrix:
 - [ ] Only after acceptance: execute Tasks 14/16/17 cleanup and rerun the entire automated suite.
 - [ ] Build **one final acceptance IPA** after all non-device work is ready; record artifact/run and device evidence here.
 
+### Task 34 — Post-audit lifecycle hardening
+
+**Status: DONE on head `94ac956036647050c148f5eac3aea1bfed4f1e7a`; verified by CI run 35143865770.**
+
+The independent lifecycle audit of the download authority boundary identified four automatable correctness gaps. Each was implemented with test-first coverage and retained the single-writer fail-closed policy.
+
+- [x] Wait for the package native inventory to settle before startup cancellation/rescheduling.
+- [x] Use settled `allTasks(allGroups: true)` plus exact parent/child identity for runtime ownership; projection-only active Transfers remain `unknown`.
+- [x] Preserve terminal plugin Transfer/database state during offline holds and expose `waitingForNetwork` only as logical/UI state.
+- [x] Set the plugin transport retry budget to the bounded value `kDownloadTaskRetries = 3`.
+- [x] Update the stale projection-only ownership source contract without weakening the behavior it protects.
+- [x] Verify the focused guards and full Flutter/analysis/native typecheck pipeline.
+
+Evidence: production commits `f7c5dafdef91ffa31073b8df8a01c86cf08cf427`, `b9bdced314a9b0bc0814e310d889b98cc1fbc2df`, and `93fb1bd92e62f8f25b47474b63a775875d33b25b`; test-contract commits `0f776b2175f8dc69a26338a9ca8428a3dc3e4774`, `d876596779f14c3d186bb66ad94abaa0395d675e`, `d010f5a2bddce66f850bafbf44ad7e962d93c831`, `40b9f94d27dc30409d4b21fc868ec1f27ae42e13`, `42f045f51674b8e9d2082ba0391c9742c7cd401e`, `3513ba4ee8110f6de682c7cf83c0182e4884bcc8`, and `94ac956036647050c148f5eac3aea1bfed4f1e7a`; CI run **35143865770** is green with `1569` tests passed and `1` skipped.
+
 ## Verification ledger
 
 - Historical clean full CI before the latest recovery work: run **35103545336** on `ac82f44959606ed2aa60c6fa08f0d24aaec2542f` — generation/analyze/full Flutter tests/native Swift green.
 - Historical focused iOS no-codesign verifier: run **35100980691** — focused ownership regressions and iOS release no-codesign build green at that earlier head. This is **not** evidence for the current head and does not satisfy device acceptance.
 - Previous regression run: **35126994058** on `b957e6c9ba7c1cfabc6462c6c2e099a42c15fa83` — native typecheck, generation and analyze green; Flutter tests failed on two stale contracts.
-- Current verified automated head: run **35140895156** on `bc8ab4a20fd0b99a4ef894da176c145761fe6a27` — native logger typecheck PASS, source generation PASS, Flutter analyze PASS, full Flutter tests PASS (`1567) passed, `1` skipped).
-- The current green run includes the Task 26–29 focused coverage: plugin contract, zero-byte source replacement, Transfer ownership/reconciliation, relaunch/single-writer, pause/resume, cancel routing, and source-refresh tests.
-- No current run is allowed to count as final device acceptance merely because it builds.
+- Intermediate audit-fix run: **35143172041** on `b9bdced314a9b0bc0814e310d889b98cc1fbc2df` — native typecheck and analyze green; Flutter tests exposed one remaining stale projection-only ownership source contract, fixed in `94ac956036647050c148f5eac3aea1bfed4f1e7a`.
+- Current verified automated head: run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` — status success; native logger typecheck PASS, source generation PASS, Flutter analyze PASS, full Flutter tests PASS (`1569` passed, `1` skipped).
+- The current green run includes the Task 26–32 and Task 34 focused coverage: plugin contract, zero-byte source replacement, runtime parent/child ownership, startup settlement, offline terminal projection, bounded retry, relaunch/single-writer, pause/resume, cancel routing, queue, and source-refresh tests.
+- No current run may count as final device acceptance merely because it builds; Task 33 still requires actual iOS device evidence.
 
 ## Handoff: exact next actions
+
+1. Automated Tasks 26–32 and Task 34 are complete and verified on the current automated head; keep the CI evidence above as the source of truth.
+2. Task 33 is the only remaining required physical-device gate: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
+3. Only after real-device acceptance passes may Tasks 14/16/17 cleanup remove the legacy executor, obsolete iOS multipart state, or transport-owned JobStore fields.
+4. Do not merge PR #246 or enable a permanent platform acceptance gate without explicit user approval.
+
 
 1. Automated Tasks 26–32 are verified on the current head; keep the CI evidence above as the source of truth.
 2. Task 33 remains the only required physical-device gate: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
