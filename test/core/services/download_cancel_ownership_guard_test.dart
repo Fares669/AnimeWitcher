@@ -40,7 +40,7 @@ void main() {
       expect(source, contains("'cancel.ownershipUnsettled'"));
       expect(
         source,
-        contains('if (cancelOwnership != DownloadRuntimeOwnership.notOwned)'),
+        contains('if (unsettledCancellationIds.isNotEmpty)'),
       );
 
       final cancelStart = source.indexOf('Future<void> cancelDownload(');
