@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('acceptance build stays opt-in and is wired into DownloadService', () {
-    final source = File('lib/core/services/download_service.dart')
+  test('acceptance override is compile-time only and production stays closed', () {
+    final source = File('lib/core/services/download_transport_policy.dart')
         .readAsStringSync();
 
     expect(
@@ -20,7 +20,7 @@ void main() {
     expect(
       source,
       contains('pluginParallelAcceptedForBuild('),
-      reason: 'DownloadService must consult the build gate, not bypass it',
+      reason: 'platform routing must pass through the acceptance build gate',
     );
     expect(
       source,
@@ -31,20 +31,20 @@ void main() {
     );
   });
 
-  test('preview workflow exposes a fail-closed acceptance build input', () {
-    final workflow = File('.github/workflows/preview.yml').readAsStringSync();
+  test('iOS acceptance workflow explicitly opts into plugin parallel mode', () {
+    final workflow = File(
+      '.github/workflows/verify-plugin-parallel-acceptance.yml',
+    ).readAsStringSync();
 
-    expect(workflow, contains('plugin_parallel_acceptance:'));
-    expect(
-      workflow,
-      contains("description: 'Enable plugin-parallel device acceptance mode'"),
-    );
+    expect(workflow, contains('Build Plugin Parallel Acceptance'));
     expect(
       workflow,
       contains(
-        r'"ANIMEWITCHER_PLUGIN_PARALLEL_ACCEPTANCE": ${{ github.event.inputs.plugin_parallel_acceptance }}',
+        '--dart-define=ANIMEWITCHER_PLUGIN_PARALLEL_ACCEPTANCE=true',
       ),
-      reason: 'preview artifacts must receive the opt-in compile-time define',
+      reason: 'the acceptance IPA must opt in explicitly at compile time',
     );
+    expect(workflow, contains('flutter build ios --release --no-codesign'));
+    expect(workflow, contains('animewitcher-ios-plugin-parallel-acceptance.ipa'));
   });
 }
