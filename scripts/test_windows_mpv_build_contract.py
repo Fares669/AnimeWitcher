@@ -154,6 +154,13 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
             workflow.index("Build exact mpv 0.41 libmpv"),
         )
 
+    def test_wrapper_helper_patches_cleanup_generator_for_detached_commit_regeneration(self) -> None:
+        helper = WRAPPER_HELPER.read_text(encoding="utf-8")
+        self.assertIn('cmake / "custom_steps.cmake"', helper)
+        self.assertIn("reset_compare_ref", helper)
+        self.assertIn('MATCHES "^[0-9a-fA-F]{40}$"', helper)
+        self.assertIn("rev-parse ${reset_compare_ref}", helper)
+
 
 if __name__ == "__main__":
     unittest.main()
