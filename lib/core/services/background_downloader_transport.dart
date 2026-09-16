@@ -209,26 +209,26 @@ class BackgroundDownloaderTransport implements DownloadTransport {
     final transfer = _downloader.transfers.forId(task.taskId);
     final recordStatus = record?.status;
     final transferStatus = transfer?.status;
-    if (recordStatus == TaskStatus.paused ||
-        transferStatus == TaskStatus.paused ||
+    final runtimeActive =
+        (recordStatus != null &&
+            runtimeTaskStatusCanOwnWriter(recordStatus)) ||
+        (transferStatus != null &&
+            runtimeTaskStatusCanOwnWriter(transferStatus)) ||
         (task.taskId == requestedTaskId &&
-            projectedStatus == TaskStatus.paused)) {
-      return DownloadRuntimeOwnership.notOwned;
+            projectedStatus != null &&
+            runtimeTaskStatusCanOwnWriter(projectedStatus));
+    if (runtimeActive) {
+      return DownloadRuntimeOwnership.owned;
     }
 
     // allTasks() merges native inventory with retry/paused stores. A matching
     // row without enough status evidence is ambiguous: it blocks replacement
     // writers but cannot be attached as a live writer.
-    if (recordStatus != null && runtimeTaskStatusCanOwnWriter(recordStatus)) {
-      return DownloadRuntimeOwnership.owned;
-    }
-    if (transferStatus != null && runtimeTaskStatusCanOwnWriter(transferStatus)) {
-      return DownloadRuntimeOwnership.owned;
-    }
-    if (task.taskId == requestedTaskId &&
-        projectedStatus != null &&
-        runtimeTaskStatusCanOwnWriter(projectedStatus)) {
-      return DownloadRuntimeOwnership.owned;
+    if (recordStatus == TaskStatus.paused ||
+        transferStatus == TaskStatus.paused ||
+        (task.taskId == requestedTaskId &&
+            projectedStatus == TaskStatus.paused)) {
+      return DownloadRuntimeOwnership.notOwned;
     }
     if (recordStatus?.isFinalState == true ||
         transferStatus?.isFinalState == true ||
