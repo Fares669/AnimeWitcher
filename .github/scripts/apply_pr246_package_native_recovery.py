@@ -8,6 +8,19 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def replace_once_or_keep(
+    text: str,
+    old: str,
+    new: str,
+    *,
+    applied_marker: str,
+    label: str,
+) -> str:
+    if applied_marker in text:
+        return text
+    return replace_once(text, old, new, label)
+
+
 transport_path = Path("lib/core/services/background_downloader_transport.dart")
 transport = transport_path.read_text()
 
@@ -64,8 +77,12 @@ new_ownership = '''  Future<DownloadRuntimeOwnership> ownershipFor(String taskId
     }
   }
 '''
-transport = replace_once(
-    transport, old_ownership, new_ownership, "transport ownershipFor"
+transport = replace_once_or_keep(
+    transport,
+    old_ownership,
+    new_ownership,
+    applied_marker="final transfer = handleFor(taskId);",
+    label="transport ownershipFor",
 )
 
 pause_anchor = '''  @override
@@ -113,13 +130,61 @@ restart_method = '''  /// Replaces a stale zero-byte package-owned generation wi
   }
 
 '''
-transport = replace_once(
-    transport, pause_anchor, restart_method + pause_anchor, "transport pause anchor"
-)
+if "Future<bool> restartFromZero(" not in transport:
+    transport = replace_once(
+        transport,
+        pause_anchor,
+        restart_method + pause_anchor,
+        "transport pause anchor",
+    )
 transport_path.write_text(transport)
 
 service_path = Path("lib/core/services/download_service.dart")
 service = service_path.read_text()
+
+refreshing_field = '''  final Set<String> _refreshingParallelParentIds = <String>{};
+'''
+source_replacing_field = '''  final Set<String> _refreshingParallelParentIds = <String>{};
+  final Set<String> _sourceReplacingTaskIds = <String>{};
+'''
+service = replace_once_or_keep(
+    service,
+    refreshing_field,
+    source_replacing_field,
+    applied_marker="final Set<String> _sourceReplacingTaskIds = <String>{};",
+    label="source replacement fence field",
+)
+
+pause_intent_guard = '''      if (_userPausedIds.contains(update.task.taskId) ||
+          _dequeuingPausedIds.contains(update.task.taskId)) {
+        return;
+      }
+
+'''
+source_replacement_guard = pause_intent_guard + '''      // restartFromZero deliberately cancels the stale package generation.
+      // That terminal callback belongs to the old signed URL, not to the
+      // logical episode. Keep it behind the source-replacement fence while
+      // background_downloader settles and starts the refreshed Transfer.
+      if (update is TaskStatusUpdate &&
+          _sourceReplacingTaskIds.contains(update.task.taskId) &&
+          (update.status == TaskStatus.failed ||
+              update.status == TaskStatus.canceled ||
+              update.status == TaskStatus.notFound)) {
+        diagnosticLog.record('source.staleGenerationTerminalIgnored', {
+          'taskId': update.task.taskId,
+          'status': update.status.name,
+        });
+        return;
+      }
+
+'''
+service = replace_once_or_keep(
+    service,
+    pause_intent_guard,
+    source_replacement_guard,
+    applied_marker="source.staleGenerationTerminalIgnored",
+    label="source replacement callback fence",
+)
 
 old_guard = '''    if (!legacySessionExists && hasOpaqueNativeResume && partialBytes <= 0) {
       // background_downloader 9.6.1 owns plugin resume/re-enqueue. Its
@@ -133,18 +198,24 @@ old_guard = '''    if (!legacySessionExists && hasOpaqueNativeResume && partialB
     }
 
 '''
-replacement_guard = '''    // A refreshed zero-byte plugin generation has no durable bytes to lose.
-    // Replace that generation through background_downloader itself so stale
-    // child URLs and pause/resume state never leak into the refreshed source.
+replacement_guard = '''    // A refreshed zero-byte package generation has no durable bytes to lose.
+    // Keep source identity in AnimeWitcher, but delegate stale resume cleanup,
+    // child recreation and duplicate suppression to background_downloader.
     final restartPluginFromZero =
-        !legacySessionExists && partialBytes <= 0;
+        !legacySessionExists && hasOpaqueNativeResume && partialBytes <= 0;
     final updated = task.copyWith(
       url: refreshed.url,
       headers: Map<String, String>.from(refreshed.headers),
     );
 
 '''
-service = replace_once(service, old_guard, replacement_guard, "zero-byte refresh guard")
+service = replace_once_or_keep(
+    service,
+    old_guard,
+    replacement_guard,
+    applied_marker="final restartPluginFromZero =",
+    label="zero-byte refresh guard",
+)
 
 old_checkpoint = '''    final refreshCheckpointed = await _checkpointLogicalJob(
       task,
@@ -158,8 +229,12 @@ new_checkpoint = '''    final refreshCheckpointed = await _checkpointLogicalJob(
       durableByteProvenance: DownloadDurableByteProvenance.exactDisk,
       expectedBytes: expectedBytes,
 '''
-service = replace_once(
-    service, old_checkpoint, new_checkpoint, "source refresh checkpoint"
+service = replace_once_or_keep(
+    service,
+    old_checkpoint,
+    new_checkpoint,
+    applied_marker="durableByteProvenance: DownloadDurableByteProvenance.exactDisk,\n      expectedBytes: expectedBytes,",
+    label="source refresh checkpoint",
 )
 
 source_refresh_start = service.index(
@@ -171,31 +246,43 @@ old_updated = '''    final updated = task.copyWith(
       headers: Map<String, String>.from(refreshed.headers),
     );
 '''
-old_updated_index = service.index(old_updated, legacy_index)
-service = (
-    service[:old_updated_index]
-    + service[old_updated_index + len(old_updated) :]
-)
+# After applying replacement_guard, only the later duplicate remains. Remove it
+# exactly once before installing restartFromZero. On subsequent runs the restart
+# marker makes this section a no-op.
+if "source.refreshPluginRestart" not in service:
+    old_updated_index = service.index(old_updated, legacy_index)
+    service = (
+        service[:old_updated_index]
+        + service[old_updated_index + len(old_updated) :]
+    )
 
 record_anchor = '''    final record = await FileDownloader().database.recordForId(task.taskId);
 '''
 restart_block = '''    if (restartPluginFromZero) {
-      final restarted = await _nativeTransport.restartFromZero(updated);
-      diagnosticLog.record('source.refreshPluginRestart', {
-        'taskId': task.taskId,
-        'accepted': restarted,
-        'opaqueNativeResume': hasOpaqueNativeResume,
-      });
-      if (!restarted) {
-        return (task: updated, refreshed: true, restartRequired: true);
+      _sourceReplacingTaskIds.add(task.taskId);
+      try {
+        final restarted = await _nativeTransport.restartFromZero(updated);
+        diagnosticLog.record('source.refreshPluginRestart', {
+          'taskId': task.taskId,
+          'accepted': restarted,
+          'opaqueNativeResume': hasOpaqueNativeResume,
+        });
+        if (!restarted) {
+          return (task: updated, refreshed: true, restartRequired: true);
+        }
+        return (task: updated, refreshed: true, restartRequired: false);
+      } finally {
+        // Let any already-queued terminal callback from the canceled stale
+        // generation drain while the fence is still active.
+        await Future<void>.delayed(Duration.zero);
+        _sourceReplacingTaskIds.remove(task.taskId);
       }
-      return (task: updated, refreshed: true, restartRequired: false);
     }
 
 '''
-# Insert only in the non-legacy source-refresh tail.
-record_index = service.index(record_anchor, legacy_index)
-service = service[:record_index] + restart_block + service[record_index:]
+if "source.refreshPluginRestart" not in service:
+    record_index = service.index(record_anchor, legacy_index)
+    service = service[:record_index] + restart_block + service[record_index:]
 
 old_reconcile = '''  Future<void> _reconcileTransferOwnership() async {
     await _parallel.reconcile(_livePartIds);
@@ -252,7 +339,11 @@ new_reconcile = '''  Future<void> _reconcileTransferOwnership() async {
     }
   }
 '''
-service = replace_once(
-    service, old_reconcile, new_reconcile, "transfer ownership reconciliation"
+service = replace_once_or_keep(
+    service,
+    old_reconcile,
+    new_reconcile,
+    applied_marker="final ownership = await _runtimeOwnershipFor(record.taskId);",
+    label="transfer ownership reconciliation",
 )
 service_path.write_text(service)
