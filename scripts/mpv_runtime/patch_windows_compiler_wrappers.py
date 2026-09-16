@@ -17,6 +17,9 @@ OPENAL_MODULES_SETTING = (
 )
 OPENAL_PACKAGE_MODULE_FLAG = "        -DALSOFT_ENABLE_MODULES=OFF"
 OPENAL_PACKAGE_SCAN_FLAG = "        -DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
+FFMPEG_COMMIT = "8f77695e65a69c8009804e9d457762d2d394403d"
+FFMPEG_MOVING_TAG = "    GIT_TAG release/7.1"
+FFMPEG_PINNED_TAG = f"    GIT_TAG {FFMPEG_COMMIT}"
 CLEANUP_GENERATOR_MARKER = "# AnimeWitcher: detached-safe cleanup comparison"
 CLEANUP_RESET_BLOCK = (
     CLEANUP_GENERATOR_MARKER
@@ -162,6 +165,27 @@ def _patch_openal_package(path: Path) -> bool:
     return True
 
 
+def _patch_ffmpeg_package(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to read FFmpeg package definition: {path}: {exc}") from exc
+
+    if FFMPEG_PINNED_TAG in text:
+        if text.count(FFMPEG_PINNED_TAG) != 1 or FFMPEG_MOVING_TAG in text:
+            raise RuntimeError(f"FFmpeg package has an invalid source pin: {path}")
+        return False
+    if text.count(FFMPEG_MOVING_TAG) != 1:
+        raise RuntimeError(f"FFmpeg package layout changed: expected release/7.1 source tag: {path}")
+
+    updated = text.replace(FFMPEG_MOVING_TAG, FFMPEG_PINNED_TAG, 1)
+    try:
+        path.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to pin FFmpeg source commit: {path}: {exc}") from exc
+    return True
+
+
 def _patch_cleanup_generator(path: Path) -> bool:
     try:
         text = path.read_text(encoding="utf-8")
@@ -232,6 +256,11 @@ def patch_wrappers(
     _patch_cleanup_generator(cleanup_generator)
 
     packages = builder_root / "packages"
+    ffmpeg_package = packages / "ffmpeg.cmake"
+    if not ffmpeg_package.is_file():
+        raise RuntimeError(f"FFmpeg package definition is missing: {ffmpeg_package}")
+    _patch_ffmpeg_package(ffmpeg_package)
+
     openal_package = packages / "openal-soft.cmake"
     if not openal_package.is_file():
         raise RuntimeError(f"OpenAL package definition is missing: {openal_package}")
@@ -274,6 +303,10 @@ def patch_wrappers(
         raise RuntimeError(f"failed to verify cleanup reset/compare refs in {cleanup_generator}")
     if CLEANUP_COMPARE_OLD in cleanup_text:
         raise RuntimeError(f"cleanup generator still contains unsafe upstream comparison: {cleanup_generator}")
+
+    ffmpeg_text = ffmpeg_package.read_text(encoding="utf-8")
+    if ffmpeg_text.count(FFMPEG_PINNED_TAG) != 1 or FFMPEG_MOVING_TAG in ffmpeg_text:
+        raise RuntimeError(f"failed to verify FFmpeg source pin in {ffmpeg_package}")
 
     openal_text = openal_package.read_text(encoding="utf-8")
     if openal_text.count(OPENAL_PACKAGE_MODULE_FLAG) != 1 or openal_text.count(
