@@ -1334,17 +1334,23 @@ Review start, pause, repeated pause, resume, repeated resume, cancel, delete, ap
 
 **Evidence:** Task 24 command-transition audit run `35058451065` passed the focused lifecycle matrix and analyzer after RED→GREEN fixes for Transfer update bridging, system-pause settlement, parked failure/start/resume checkpoint ordering, single resume generation reuse, and repeated pause/resume idempotence. Production evidence includes `00205a9`, `fd29c93`, `cbc21d4`, `4984114`, `32b8af3`, `e73fce6`, and `f480a1e`.
 
-- [ ] **Step 2: Audit integrity/error transitions**
+- [x] **Step 2: Audit integrity/error transitions**
 
 Review 401/403 signed-URL refresh, incompatible resource fingerprint, 5xx/socket retry ownership, low-disk/no-space, complete-file verification, and stale callbacks after terminal/delete tombstones.
 
-- [ ] **Step 3: Audit queue/session presentation**
+**Evidence:** run `35058906039` passed the integrity/error transition audit, including signed-source/resource compatibility, plugin-vs-legacy retry ownership, real ENOSPC/no-space handling, completion verification, stale-terminal/delete callback fencing, and focused analyzer coverage.
+
+- [x] **Step 3: Audit queue/session presentation**
 
 Verify episode-level concurrency, one parent slot regardless of chunk count, progress/speed/ETA monotonicity, continued-processing overlay truthfulness, and no stale active UI after pause/cancel.
 
-- [ ] **Step 4: Run focused suites, full Flutter CI, native checks, and supported-platform builds**
+**Evidence:** run `35059394783` passed episode queue/parent-slot authority, plugin telemetry and stale/phantom UI fencing, continued-processing overlay/control truthfulness, pause/cancel presentation coverage, and analyzer.
+
+- [x] **Step 4: Run focused suites, full Flutter CI, native checks, and supported-platform builds**
 
 Expected: zero failures on the final head; no temporary patch workflow/script remains.
+
+**Evidence:** final automated gate run `35060817204` on commit `452592e22a7c1061f52a93335256055a431a864b` passed full Flutter generation/analyzer/tests, native Swift typecheck, Android debug APK, iOS release/no-codesign, and Windows release. The preceding gate exposed only a stale source-test anchor after `_resumeDownloadTask` gained `executionToken`; commit `452592e` stabilized that guard without production changes. Task 24 diagnostic workflows are removed immediately after recording this evidence, followed by a clean-head PR CI verification.
 
 - [ ] **Step 5: Repeat real-device acceptance with a fresh IPA**
 
