@@ -1,0 +1,123 @@
+name: iOS Continued Processing Finalize
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-continued-processing-finalize
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Apply proven GREEN patch and strict background owner semantics
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import re
+          from pathlib import Path
+
+          helper_path = Path('.github/workflows/ios-continued-processing-sync-green.yml')
+          helper = helper_path.read_text()
+          match = re.search(r"echo '([A-Za-z0-9+/=]+)'", helper)
+          if not match:
+              raise SystemExit('Unable to locate encoded GREEN patch payload')
+
+          patch_source = base64.b64decode(match.group(1)).decode('utf-8')
+          exec(compile(patch_source, str(helper_path), 'exec'), {'__name__': '__main__'})
+
+          app_delegate = Path('ios/Runner/AppDelegate.swift')
+          text = app_delegate.read_text()
+          old = 'AND (status IS NULL OR status IN (?, ?, ?, ?))'
+          new = 'AND status IN (?, ?, ?, ?)'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Expected exactly one nullable active-state predicate, found {count}')
+          text = text.replace(old, new, 1)
+          if 'status IS NULL' in text:
+              raise SystemExit('Nullable downloader ownership predicate still present')
+          app_delegate.write_text(text)
+
+          regression = Path('test/core/services/ios_background_owner_source_test.dart')
+          regression.write_text("""import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  final source = File('ios/Runner/AppDelegate.swift').readAsStringSync();
+
+  test('native ownership only recognizes active background_downloader states', () {
+    expect(source, contains('activeBackgroundOwner(for taskId: String)'));
+    expect(source, contains('AND status IN (?, ?, ?, ?)'));
+    expect(
+      source,
+      isNot(contains('status IS NULL')),
+      reason:
+          'background_downloader TaskStatus has explicit active states; a missing status must not claim native ownership',
+    );
+  });
+}
+""")
+          PY
+
+      - name: Format changed Dart sources
+        run: |
+          dart format \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/download_continued_processing_start_ack_test.dart \
+            test/core/services/ios_continued_processing_start_source_test.dart \
+            test/core/services/ios_background_owner_source_test.dart
+
+      - name: Verify focused continued-processing behavior
+        run: |
+          flutter pub get
+          flutter test \
+            test/core/services/download_continued_processing_start_ack_test.dart \
+            test/core/services/ios_continued_processing_start_source_test.dart \
+            test/core/services/ios_background_owner_source_test.dart
+
+      - name: Analyze
+        run: dart analyze
+
+      - name: Commit source of truth and remove temporary helpers
+        shell: bash
+        run: |
+          rm -f \
+            .github/workflows/ios-continued-processing-sync-green.yml \
+            .github/workflows/ios-continued-processing-finalize.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            .github/workflows/ios-continued-processing-sync-green.yml \
+            .github/workflows/ios-continued-processing-finalize.yml \
+            ios/Runner/DownloadContinuedProcessingManager.swift \
+            ios/Runner/AppDelegate.swift \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/download_service.dart \
+            test/core/services/ios_background_owner_source_test.dart
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git commit -m 'fix(ios): finalize continued-processing ownership handoff'
+          git push origin HEAD:refactor/background-downloader-authority
