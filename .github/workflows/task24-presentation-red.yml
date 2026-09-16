@@ -1,4 +1,4 @@
-name: Task 24 Repeated Pause RED
+name: Task 24 Repeated Pause GREEN
 
 on:
   push:
@@ -6,19 +6,73 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  red:
+  green:
+    if: "${{ github.event.head_commit.message == 'chore(ci): apply repeated pause fix' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
+      - name: Make settled repeated pause idempotent
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/core/services/download_service.dart')
+          text = path.read_text()
+          old = "\n".join([
+              '    await _serializeQueue(() async {',
+              '      final recordForId = await FileDownloader().database.recordForId(taskId);',
+          ])
+          new = "\n".join([
+              '    await _serializeQueue(() async {',
+              '      final pausePreflightJob = await _jobStore.get(taskId);',
+              '      if (pausePreflightJob?.state == DownloadJobState.pausedByUser) {',
+              '        final pausePreflightOwnership = await _runtimeOwnershipFor(taskId);',
+              '        if (pausePreflightOwnership == DownloadRuntimeOwnership.notOwned) {',
+              "          diagnosticLog.record('pause.idempotentSettled', {",
+              "            'taskId': taskId,",
+              '          });',
+              '          return;',
+              '        }',
+              '      }',
+              '      final recordForId = await FileDownloader().database.recordForId(taskId);',
+          ])
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one pause preflight insertion point, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.47.1
           cache: true
-      - run: flutter pub get
-      - run: flutter test test/core/services/download_repeated_pause_guard_test.dart
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Verify pause idempotence regressions
+        run: |
+          flutter test \
+            test/core/services/download_repeated_pause_guard_test.dart \
+            test/core/services/download_pause_settlement_guard_test.dart \
+            test/core/services/download_replica_pause_ordering_test.dart \
+            test/core/services/download_lifecycle_checkpoint_guard_test.dart \
+            test/core/services/download_repeated_resume_guard_test.dart \
+            test/core/services/download_resume_generation_guard_test.dart \
+            test/core/services/download_command_outcome_test.dart \
+            test/core/services/download_callback_generation_test.dart
+      - name: Verify service analyzer
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart
+      - name: Commit verified fix
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_service.dart
+          git commit -m "fix(downloads): make repeated pause idempotent"
+          git push origin HEAD:refactor/background-downloader-authority
