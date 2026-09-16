@@ -69,7 +69,11 @@ void main() {
         transport,
         contains('final runtimeTasks = await _downloader.allTasks(allGroups: true);'),
       );
-      expect(transport, contains('final runtimeOwner = runtimeTasks.any((task)'));
+      expect(transport, contains('var runtimeOwner = false;'));
+      expect(
+        transport,
+        contains('if (await _runtimeInventoryTaskCanOwnWriter('),
+      );
       expect(transport, contains('downloadInternalParentTaskId(task)'));
       expect(
         transport,
