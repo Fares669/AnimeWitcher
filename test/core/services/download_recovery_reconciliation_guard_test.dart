@@ -74,6 +74,9 @@ void main() {
       contains('return DownloadRuntimeOwnership.unknown;'),
     );
 
+  });
+
+
   test('parallel resume fails closed when runtime inventory query fails', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
