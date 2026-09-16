@@ -4077,6 +4077,16 @@ class DownloadService {
     await _awaitCommandReadiness('pauseDownload');
     diagnosticLog.record('command.pauseDownload', {'taskId': taskId});
     await _serializeQueue(() async {
+      final pausePreflightJob = await _jobStore.get(taskId);
+      if (pausePreflightJob?.state == DownloadJobState.pausedByUser) {
+        final pausePreflightOwnership = await _runtimeOwnershipFor(taskId);
+        if (pausePreflightOwnership == DownloadRuntimeOwnership.notOwned) {
+          diagnosticLog.record('pause.idempotentSettled', {
+            'taskId': taskId,
+          });
+          return;
+        }
+      }
       final recordForId = await FileDownloader().database.recordForId(taskId);
       final tracking = recordForId != null
           ? downloadTrackingUrl(recordForId.task)
