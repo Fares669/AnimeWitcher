@@ -1,0 +1,320 @@
+name: iOS Continued Processing Sync GREEN
+
+on:
+  push:
+    branches:
+      - refactor/background-downloader-authority
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/background-downloader-authority
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+      - name: Apply minimal continued-processing synchronization fix
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+
+          def replace_once(path_str: str, old: str, new: str) -> None:
+              path = Path(path_str)
+              text = path.read_text()
+              if old not in text:
+                  raise SystemExit(f'Expected block not found in {path_str}: {old[:100]!r}')
+              path.write_text(text.replace(old, new, 1))
+
+          manager = 'ios/Runner/DownloadContinuedProcessingManager.swift'
+          replace_once(
+              manager,
+              '  /// Stable key / identifier suffix. Info.plist `download.*` matches.\n  static let sessionKey = "session"',
+              '  /// Logical queue-overlay task id. Each BGContinuedProcessingTask request\n  /// gets a separate unique scheduler identifier below.\n  static let sessionKey = "session"',
+          )
+          replace_once(
+              manager,
+              '  private var didRegisterIdentifier = false',
+              '  private var registeredIdentifiers: Set<String> = []',
+          )
+          replace_once(
+              manager,
+              '''    if !didRegisterIdentifier {
+      let accepted = scheduler.register(
+        forTaskWithIdentifier: sessionId,
+        using: DispatchQueue.main
+      ) { [weak self] task in
+        guard let continuedTask = task as? BGContinuedProcessingTask else {
+          task.setTaskCompleted(success: false)
+          return
+        }
+
+        Task { @MainActor in
+          self?.attach(continuedTask)
+        }
+      }
+
+      guard accepted else {
+        identifier = nil
+        throw DownloadContinuedProcessingError.registrationRejected(sessionId)
+      }
+      didRegisterIdentifier = true
+    }''',
+              '''    if !registeredIdentifiers.contains(sessionId) {
+      let accepted = scheduler.register(
+        forTaskWithIdentifier: sessionId,
+        using: DispatchQueue.main
+      ) { [weak self] task in
+        guard let continuedTask = task as? BGContinuedProcessingTask else {
+          task.setTaskCompleted(success: false)
+          return
+        }
+
+        Task { @MainActor in
+          self?.attach(continuedTask)
+        }
+      }
+
+      guard accepted else {
+        identifier = nil
+        throw DownloadContinuedProcessingError.registrationRejected(sessionId)
+      }
+      registeredIdentifiers.insert(sessionId)
+    }''',
+          )
+          replace_once(
+              manager,
+              '    return "\\(bundleId).download.\\(Self.sessionKey)"',
+              '    return "\\(bundleId).download.\\(Self.sessionKey).\\(UUID().uuidString.lowercased())"',
+          )
+
+          app_delegate = 'ios/Runner/AppDelegate.swift'
+          replace_once(
+              app_delegate,
+              '''          case "update":
+            if !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates() {
+              result(true)
+              return
+            }
+            let progress =
+              (arguments["progress"] as? NSNumber)?.doubleValue ?? 0.0
+            let totalBytes =
+              (arguments["totalBytes"] as? NSNumber)?.int64Value ?? -1
+            let active = manager.update(
+              taskId: taskId,
+              progress: progress,
+              totalBytes: totalBytes,
+              transferredBytes: (arguments["transferredBytes"] as? NSNumber)?.int64Value ?? -1,
+              completedCount: (arguments["completedCount"] as? NSNumber)?.intValue ?? -1,
+              batchTotal: (arguments["batchTotal"] as? NSNumber)?.intValue ?? -1,
+              speedBytesPerSecond: (arguments["speedBytesPerSecond"] as? NSNumber)?.doubleValue ?? -1,
+              displayName: arguments["displayName"] as? String ?? "",
+              currentIndex: (arguments["currentIndex"] as? NSNumber)?.intValue ?? -1
+            )
+            result(active)''',
+              '''          case "update":
+            let forcePresentation = arguments["foregroundHandoff"] as? Bool ?? false
+            if !forcePresentation && !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates() {
+              // Native URLSession progress owns the system presentation while
+              // the scene is backgrounded. Tell Dart the session is alive but
+              // do not pretend this specific Dart sample was applied.
+              result([
+                "accepted": true,
+                "owner": "native",
+              ])
+              return
+            }
+            let progress =
+              (arguments["progress"] as? NSNumber)?.doubleValue ?? 0.0
+            let totalBytes =
+              (arguments["totalBytes"] as? NSNumber)?.int64Value ?? -1
+            let active = manager.update(
+              taskId: taskId,
+              progress: progress,
+              totalBytes: totalBytes,
+              transferredBytes: (arguments["transferredBytes"] as? NSNumber)?.int64Value ?? -1,
+              completedCount: (arguments["completedCount"] as? NSNumber)?.intValue ?? -1,
+              batchTotal: (arguments["batchTotal"] as? NSNumber)?.intValue ?? -1,
+              speedBytesPerSecond: (arguments["speedBytesPerSecond"] as? NSNumber)?.doubleValue ?? -1,
+              displayName: arguments["displayName"] as? String ?? "",
+              currentIndex: (arguments["currentIndex"] as? NSNumber)?.intValue ?? -1
+            )
+            result([
+              "accepted": active,
+              "owner": active ? "dart" : "none",
+            ])''',
+          )
+
+          continued = 'lib/core/services/download_continued_processing_service.dart'
+          replace_once(
+              continued,
+              '''  Future<void> update({
+    required String taskId,
+    required double progress,
+    required int totalBytes,
+    int transferredBytes = 0,
+    int completedCount = 0,
+    int batchTotal = 1,
+    double speedBytesPerSecond = 0,
+    String displayName = '',
+    int currentIndex = 0,
+  }) async {
+    await _queueUpdate(<String, Object>{
+      'taskId': taskId,
+      'progress': progress.clamp(0.0, 1.0).toDouble(),
+      'totalBytes': totalBytes,
+      'transferredBytes': transferredBytes,
+      'completedCount': completedCount,
+      'batchTotal': batchTotal,
+      'speedBytesPerSecond': speedBytesPerSecond,
+      if (displayName.isNotEmpty) 'displayName': displayName,
+      'currentIndex': currentIndex,
+    });
+  }''',
+              '''  Future<void> update({
+    required String taskId,
+    required double progress,
+    required int totalBytes,
+    int transferredBytes = 0,
+    int completedCount = 0,
+    int batchTotal = 1,
+    double speedBytesPerSecond = 0,
+    String displayName = '',
+    int currentIndex = 0,
+    bool foregroundHandoff = false,
+  }) async {
+    final arguments = <String, Object>{
+      'taskId': taskId,
+      'progress': progress.clamp(0.0, 1.0).toDouble(),
+      'totalBytes': totalBytes,
+      'transferredBytes': transferredBytes,
+      'completedCount': completedCount,
+      'batchTotal': batchTotal,
+      'speedBytesPerSecond': speedBytesPerSecond,
+      if (displayName.isNotEmpty) 'displayName': displayName,
+      'currentIndex': currentIndex,
+      'foregroundHandoff': foregroundHandoff,
+    };
+
+    // Foreground reattachment is a lifecycle synchronization point, not a
+    // metric sample. Do not leave it behind the one-second presentation timer:
+    // the scene can become active before another network progress event arrives.
+    if (foregroundHandoff) {
+      _updateTimer?.cancel();
+      _updateTimer = null;
+      _pendingUpdate = null;
+      _lastUpdateAt = DateTime.now();
+      await _sendUpdate(arguments);
+      return;
+    }
+    await _queueUpdate(arguments);
+  }''',
+          )
+          replace_once(
+              continued,
+              '''  Future<void> _sendUpdate(Map<String, Object> arguments) async {
+    final accepted = await _invokeForResult<Object?>('update', arguments);
+    if (accepted is bool && !accepted && !_disposed) {
+      onSessionLost?.call();
+    }
+  }''',
+              '''  Future<void> _sendUpdate(Map<String, Object> arguments) async {
+    final response = await _invokeForResult<Object?>('update', arguments);
+    bool? accepted;
+    if (response is bool) {
+      accepted = response;
+    } else if (response is Map) {
+      final rawAccepted = response['accepted'];
+      if (rawAccepted is bool) accepted = rawAccepted;
+    }
+    if (accepted == false && !_disposed) {
+      onSessionLost?.call();
+    }
+  }''',
+          )
+
+          service = 'lib/core/services/download_service.dart'
+          replace_once(
+              service,
+              '''  Future<void> _syncSessionOverlay({
+    bool completedSuccess = true,
+    String? preferTaskId,''',
+              '''  Future<void> _syncSessionOverlay({
+    bool completedSuccess = true,
+    bool forceDartPresentation = false,
+    String? preferTaskId,''',
+          )
+          replace_once(
+              service,
+              '''        displayName: session.displayName,
+        currentIndex: session.currentIndex,
+      );''',
+              '''        displayName: session.displayName,
+        currentIndex: session.currentIndex,
+        foregroundHandoff: forceDartPresentation,
+      );''',
+          )
+          replace_once(
+              service,
+              '''  Future<void> onAppForegrounded() async {
+    _appInForeground = true;
+    if (!await _awaitLifecycleReadiness('foreground')) return;
+    await _serializeQueue(() async {
+      await _reconcileTransferOwnership();
+      _parallel.releaseNativeBackgroundOffers();
+      await _attachUiToLiveNativeTasks();
+      await _syncQueueToCapUnlocked();
+    });
+    await _syncSessionOverlay();
+  }''',
+              '''  Future<void> onAppForegrounded() async {
+    _appInForeground = true;
+    if (!await _awaitLifecycleReadiness('foreground')) return;
+    await _serializeQueue(() async {
+      await _reconcileTransferOwnership();
+      _parallel.releaseNativeBackgroundOffers();
+      await _attachUiToLiveNativeTasks();
+      await _syncQueueToCapUnlocked();
+    });
+    // Flutter's resumed notification can arrive while UIScene is still
+    // foregroundInactive. Force one immediate presentation handoff so the
+    // system task catches up even if no network sample arrives afterward.
+    await _syncSessionOverlay(forceDartPresentation: true);
+  }''',
+          )
+          PYCODE
+
+      - name: Verify focused RED-to-GREEN contracts
+        run: |
+          flutter pub get
+          flutter test \
+            test/core/services/download_continued_processing_start_ack_test.dart \
+            test/core/services/ios_continued_processing_start_source_test.dart \
+            test/core/services/ios_continued_processing_update_ack_source_test.dart \
+            test/core/services/ios_continued_processing_completion_guard_test.dart \
+            test/core/services/ios_continued_processing_expiration_test.dart \
+            test/core/services/download_native_claim_foreground_test.dart \
+            test/core/services/download_presentation_ownership_test.dart
+          flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Commit GREEN fix and remove helper
+        shell: bash
+        run: |
+          rm -f .github/workflows/ios-continued-processing-sync-green.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ios/Runner/DownloadContinuedProcessingManager.swift \
+            ios/Runner/AppDelegate.swift \
+            lib/core/services/download_continued_processing_service.dart \
+            lib/core/services/download_service.dart \
+            .github/workflows/ios-continued-processing-sync-green.yml
+          git commit -m "fix(ios): resynchronize continued download task"
+          git push origin HEAD:refactor/background-downloader-authority
