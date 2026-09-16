@@ -1620,6 +1620,104 @@ class DownloadService {
     }
   }
 
+  Future<bool> _quarantineProtectedJobsBeforePluginReschedule(
+    List<Task> runtimeTasks,
+  ) async {
+    final jobsById = <String, DownloadJobRecord>{
+      for (final job in await _jobStore.all()) job.taskId: job,
+    };
+    var safeToReschedule = true;
+
+    for (final record in await FileDownloader().database.allRecords()) {
+      final job = jobsById[record.taskId];
+      if (job == null ||
+          (job.state != DownloadJobState.canceled &&
+              job.state != DownloadJobState.waitingForNetwork)) {
+        continue;
+      }
+
+      final hasRuntimeEvidence = runtimeTasks.any(
+        (task) =>
+            task.taskId == record.taskId ||
+            (isInternalDownloaderChunk(task) &&
+                downloadInternalParentTaskId(task) == record.taskId),
+      );
+
+      if (job.state == DownloadJobState.canceled) {
+        _terminalJobIds.add(record.taskId);
+        if (hasRuntimeEvidence) {
+          try {
+            await FileDownloader().cancelTasksWithIds([record.taskId]);
+          } catch (_) {}
+          final ownership = await _waitForCancelOwnershipRelease(record.taskId);
+          if (ownership != DownloadRuntimeOwnership.notOwned) {
+            safeToReschedule = false;
+            diagnosticLog.record('startup.canceledOwnershipUnsettled', {
+              'taskId': record.taskId,
+              'ownership': ownership.name,
+            });
+          }
+        }
+        if (record.status != TaskStatus.canceled) {
+          await FileDownloader().database.updateRecord(
+            TaskRecord(
+              record.task,
+              TaskStatus.canceled,
+              record.progress,
+              record.expectedFileSize,
+            ),
+          );
+        }
+        continue;
+      }
+
+      var ownership = hasRuntimeEvidence
+          ? await _runtimeOwnershipFor(record.taskId)
+          : DownloadRuntimeOwnership.notOwned;
+      if (ownership == DownloadRuntimeOwnership.owned) {
+        var pauseAccepted = false;
+        if (record.task is DownloadTask) {
+          try {
+            pauseAccepted = await FileDownloader().pause(
+              record.task as DownloadTask,
+            );
+          } catch (_) {}
+        }
+        if (pauseAccepted) {
+          ownership = await _waitForCancelOwnershipRelease(record.taskId);
+        }
+      }
+
+      if (ownership != DownloadRuntimeOwnership.notOwned) {
+        safeToReschedule = false;
+        diagnosticLog.record('startup.networkHoldOwnershipUnsettled', {
+          'taskId': record.taskId,
+          'ownership': ownership.name,
+        });
+        continue;
+      }
+
+      // Keep already-terminal package projections terminal. Non-final rows are
+      // parked as paused so rescheduleKilledTasks cannot revive an offline
+      // logical hold before _recoverPersistedDownloads runs.
+      if (!record.status.isFinalState && record.status != TaskStatus.paused) {
+        await FileDownloader().database.updateRecord(
+          TaskRecord(
+            record.task,
+            TaskStatus.paused,
+            record.progress,
+            record.expectedFileSize,
+          ),
+        );
+      }
+    }
+
+    if (!safeToReschedule) {
+      diagnosticLog.record('startup.rescheduleSkippedProtectedOwnership');
+    }
+    return safeToReschedule;
+  }
+
   Future<void> _startPluginExecutor() async {
     // PR #231 stored legacy parents in background_downloader's database as
     // ParallelDownloadTask rows. Quarantine those rows before the plugin
@@ -1643,8 +1741,11 @@ class DownloadService {
       // chunk rows for a legacy parent. Settle only the plugin chunk group;
       // PR #231 animewitcher_parts children are the valid legacy executor and
       // must remain available for manifest recovery.
+      final runtimeTasks = await FileDownloader().allTasks(
+        allGroups: true,
+      );
       final rogueChunkIds = <String>{...quarantine.rogueChunkIds};
-      for (final task in await FileDownloader().allTasks(allGroups: true)) {
+      for (final task in runtimeTasks) {
         final parentId = downloadInternalParentTaskId(task);
         if (task.group == FileDownloader.chunkGroup &&
             parentId != null &&
@@ -1659,9 +1760,13 @@ class DownloadService {
         });
       }
 
+      final safeToReschedule =
+          await _quarantineProtectedJobsBeforePluginReschedule(runtimeTasks);
       // FileDownloader.start normally does this on a delayed 5-second Timer.
-      // Run it synchronously while legacy rows are quarantined.
-      await FileDownloader().rescheduleKilledTasks();
+      // Run it synchronously only after terminal/network-held rows are fenced.
+      if (safeToReschedule) {
+        await FileDownloader().rescheduleKilledTasks();
+      }
       await _nativeTransport.rehydrate(group: kLogicalDownloadGroup);
       for (final parentId in quarantine.parentIds) {
         _nativeTransport.forget(parentId);
@@ -3449,6 +3554,13 @@ class DownloadService {
     String? trackingUrl,
   }) async {
     if (_terminalJobIds.contains(taskId)) return null;
+
+    // A Transfer handle can be rehydrated from the database without a live
+    // native task. Resolve runtime ownership before using the handle as an
+    // attachment point; unknown/paused ownership must not masquerade as live.
+    final ownership = await _runtimeOwnershipFor(taskId);
+    if (ownership != DownloadRuntimeOwnership.owned) return null;
+
     final transfer = _nativeTransport.handleFor(taskId);
     final transferTask = transfer?.task;
     if (transfer != null &&
@@ -3463,7 +3575,12 @@ class DownloadService {
       final downloadTask = task as DownloadTask;
       if (downloadTask.taskId == taskId) return downloadTask;
       if (track.isNotEmpty && downloadTrackingUrl(downloadTask) == track) {
-        return downloadTask;
+        final candidateOwnership = await _runtimeOwnershipFor(
+          downloadTask.taskId,
+        );
+        if (candidateOwnership == DownloadRuntimeOwnership.owned) {
+          return downloadTask;
+        }
       }
     }
     return null;
@@ -3957,6 +4074,41 @@ class DownloadService {
     );
   }
 
+  Future<DownloadAttemptToken?> _tombstoneDuplicateDownload(
+    DownloadTask task,
+  ) async {
+    final existing = await _jobStore.get(task.taskId);
+    if (existing != null) {
+      return _jobStore.tombstoneForDeletion(existing);
+    }
+
+    final trackingUrl = downloadTrackingUrl(task).trim();
+    if (trackingUrl.isEmpty) return null;
+    final storage = _ref.read(storageServiceProvider);
+    final saved = await _savedProgressFor(task);
+    final durableBytes = saved.partialBytes > 0 ? saved.partialBytes : 0;
+    final logicalId = logicalDownloadIdFromMetadata(
+      await storage.getDownloadMetadata(task.taskId),
+    );
+    final seed = DownloadJobRecord(
+      taskId: task.taskId,
+      logicalId: logicalId,
+      trackingUrl: trackingUrl,
+      state: DownloadJobState.canceled,
+      generation: 0,
+      durableBytes: durableBytes,
+      durableByteProvenance: durableBytes > 0
+          ? DownloadDurableByteProvenance.exactDisk
+          : DownloadDurableByteProvenance.none,
+      expectedBytes: saved.totalSize,
+      userPaused: false,
+      queueWaiting: false,
+      updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
+      taskSnapshot: task.toJson(),
+    );
+    return _jobStore.tombstoneForDeletion(seed);
+  }
+
   Future<void> cancelDownload(
     String taskId,
     String trackingUrl, {
@@ -4087,10 +4239,9 @@ class DownloadService {
       }
 
       // The selected owner is responsible for its implementation-detail
-      // chunks. Only cancel any additional *logical* duplicate rows here;
-      // manually canceling FileDownloader.chunkGroup children can race the
-      // plugin parent's own settlement/resume-data handling.
-      final duplicateLogicalIds = <String>[];
+      // chunks. First persist tombstones for every logical duplicate so a
+      // process death cannot resurrect one after the primary delete.
+      final duplicateLogicalTasks = <String, DownloadTask>{};
       for (final task in await FileDownloader().allTasks(allGroups: true)) {
         if (task.taskId == taskId ||
             isInternalDownloaderChunk(task) ||
@@ -4098,24 +4249,65 @@ class DownloadService {
           continue;
         }
         if (isLogicalEpisodeDownloadTask(task)) {
-          duplicateLogicalIds.add(task.taskId);
+          duplicateLogicalTasks[task.taskId] = task as DownloadTask;
         }
       }
-      if (duplicateLogicalIds.isNotEmpty) {
-        await FileDownloader().cancelTasksWithIds(duplicateLogicalIds);
+
+      final duplicateLogicalIds = duplicateLogicalTasks.keys.toList(
+        growable: false,
+      );
+      final canceledLogicalIds = <String>[taskId];
+      for (final duplicateTask in duplicateLogicalTasks.values) {
+        final tombstone = await _tombstoneDuplicateDownload(duplicateTask);
+        if (tombstone == null) {
+          diagnosticLog.record('cancel.duplicateTombstoneFailed', {
+            'taskId': duplicateTask.taskId,
+          });
+          await _persistNativeWaitingSnapshot();
+          if (notifyContinuedProcessing) {
+            await _syncSessionOverlay(completedSuccess: false);
+          }
+          return;
+        }
       }
 
-      final cancelOwnership = await _waitForCancelOwnershipRelease(taskId);
-      if (cancelOwnership != DownloadRuntimeOwnership.notOwned) {
+      if (duplicateLogicalIds.isNotEmpty) {
+        _terminalJobIds.addAll(duplicateLogicalIds);
+        final accepted = await FileDownloader().cancelTasksWithIds(
+          duplicateLogicalIds,
+        );
+        diagnosticLog.record('cancel.duplicateCommandSettlement', {
+          'ids': duplicateLogicalIds,
+          'accepted': accepted,
+        });
+        canceledLogicalIds.addAll(duplicateLogicalIds);
+      }
+
+      final unsettledCancellationIds = <String>[];
+      for (final id in canceledLogicalIds) {
+        final ownership = await _waitForCancelOwnershipRelease(id);
+        if (ownership != DownloadRuntimeOwnership.notOwned) {
+          unsettledCancellationIds.add(id);
+        }
+      }
+      if (unsettledCancellationIds.isNotEmpty) {
         diagnosticLog.record('cancel.ownershipUnsettled', {
           'taskId': taskId,
-          'ownership': cancelOwnership.name,
+          'ids': unsettledCancellationIds,
         });
         await _persistNativeWaitingSnapshot();
         if (notifyContinuedProcessing) {
           await _syncSessionOverlay(completedSuccess: false);
         }
         return;
+      }
+
+      for (final duplicateId in duplicateLogicalIds) {
+        _nativeTransport.forget(duplicateId);
+        await FileDownloader().database.deleteRecordWithId(duplicateId);
+        await _ref
+            .read(storageServiceProvider)
+            .removeDownloadMetadata(duplicateId);
       }
 
       _nativeTransport.forget(taskId);
@@ -5572,8 +5764,23 @@ class DownloadService {
     return (task: updated, refreshed: true, restartRequired: false);
   }
 
-  Future<List<Task>> _liveTransferTasks() =>
-      FileDownloader().allTasks(allGroups: true);
+  Future<List<Task>> _liveTransferTasks() async {
+    final tasks = await FileDownloader().allTasks(allGroups: true);
+    final live = <Task>[];
+    for (final task in tasks) {
+      final record = await FileDownloader().database.recordForId(task.taskId);
+      final transfer = _nativeTransport.handleFor(task.taskId);
+      // FileDownloader.allTasks also returns the package's paused store. A
+      // paused projection is not a live writer and must not enter recovery as
+      // native-owned.
+      if (record?.status == TaskStatus.paused ||
+          transfer?.status == TaskStatus.paused) {
+        continue;
+      }
+      live.add(task);
+    }
+    return live;
+  }
 
   Future<DownloadRuntimeOwnership> _runtimeOwnershipFor(String taskId) async {
     if (_rangeTransfers.isActive(taskId) ||
