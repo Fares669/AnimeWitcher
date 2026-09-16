@@ -201,6 +201,27 @@ void main() {
     );
   });
 
+  test('runtime inventory treats explicit terminal rows as released', () {
+    final source = File(
+      'lib/core/services/background_downloader_transport.dart',
+    ).readAsStringSync();
+    final ownershipStart = source.indexOf(
+      'Future<DownloadRuntimeOwnership> _runtimeInventoryTaskOwnership(',
+    );
+    final ownershipEnd = source.indexOf(
+      "  /// Resolves writer ownership from background_downloader's runtime inventory.",
+      ownershipStart,
+    );
+    expect(ownershipStart, greaterThanOrEqualTo(0));
+    expect(ownershipEnd, greaterThan(ownershipStart));
+    final ownership = source.substring(ownershipStart, ownershipEnd);
+
+    expect(ownership, contains('recordStatus?.isFinalState == true'));
+    expect(ownership, contains('transferStatus?.isFinalState == true'));
+    expect(ownership, contains('projectedStatus?.isFinalState == true'));
+    expect(ownership, contains('return DownloadRuntimeOwnership.notOwned;'));
+  });
+
   test('startup fences canceled and network-held jobs before rescheduling', () {
     final source = File('lib/core/services/download_service.dart')
         .readAsStringSync();
