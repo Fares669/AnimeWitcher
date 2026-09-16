@@ -63,6 +63,9 @@ void main() {
       '_quarantineLegacyParallelParentsBeforePluginStart()',
     );
     final pluginStart = helper.indexOf('FileDownloader().start(');
+    final reschedule = helper.indexOf(
+      'await FileDownloader().rescheduleKilledTasks()',
+    );
     final restore = helper.indexOf(
       '_restoreLegacyParallelParentsAfterPluginStart(',
     );
@@ -75,10 +78,16 @@ void main() {
           'legacy ParallelDownloadTask rows must be identified before background_downloader sees killed work',
     );
     expect(pluginStart, greaterThan(quarantine));
-    expect(helper, contains('doRescheduleKilledTasks: true'));
+    expect(
+      helper,
+      contains('doRescheduleKilledTasks: false'),
+      reason:
+          'FileDownloader.start schedules killed-task recovery on a delayed Timer; startup needs synchronous reconciliation while legacy rows are quarantined',
+    );
+    expect(reschedule, greaterThan(pluginStart));
     expect(
       restore,
-      greaterThan(pluginStart),
+      greaterThan(reschedule),
       reason:
           'the original legacy DB projection can be restored only after plugin rescheduling is complete',
     );
