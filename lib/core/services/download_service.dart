@@ -4251,6 +4251,18 @@ class DownloadService {
 
   Future<void> _resumeUserPausedUnlocked(String taskId) async {
     await _reconcileTransferOwnership();
+    final resumePreflightJob = await _jobStore.get(taskId);
+    if (resumePreflightJob != null &&
+        !downloadJobHasUserPauseIntent(resumePreflightJob.state)) {
+      final resumePreflightOwnership = await _runtimeOwnershipFor(taskId);
+      if (resumePreflightOwnership == DownloadRuntimeOwnership.owned) {
+        diagnosticLog.record('resume.idempotentAttached', {
+          'taskId': taskId,
+          'state': resumePreflightJob.state.name,
+        });
+        return;
+      }
+    }
     DownloadTask? downloadTask = await _liveNativeTaskFor(taskId: taskId);
     if (downloadTask == null) {
       final record = await FileDownloader().database.recordForId(taskId);
