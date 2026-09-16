@@ -158,7 +158,14 @@ class WindowsMpvBuildContractTests(unittest.TestCase):
         helper = WRAPPER_HELPER.read_text(encoding="utf-8")
         self.assertIn('cmake / "custom_steps.cmake"', helper)
         self.assertIn("reset_compare_ref", helper)
-        self.assertIn('MATCHES "^[0-9a-fA-F]{40}$"', helper)
+        self.assertIn('string(LENGTH "${git_tag}" git_tag_length)', helper)
+        self.assertIn(
+            'git_tag_length EQUAL 40 AND "${git_tag}" MATCHES "^[0-9a-fA-F]+$"',
+            helper,
+        )
+        self.assertNotIn('MATCHES "^[0-9a-fA-F]{40}$"', helper)
+        self.assertIn('set(reset "HEAD")', helper)
+        self.assertIn('set(reset_compare_ref "HEAD")', helper)
         self.assertIn("rev-parse ${reset_compare_ref}", helper)
 
 
