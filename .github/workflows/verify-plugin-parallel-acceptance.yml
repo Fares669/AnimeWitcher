@@ -1,9 +1,7 @@
 name: Build Plugin Parallel Acceptance
 
 on:
-  push:
-    branches:
-      - refactor/background-downloader-authority
+  workflow_dispatch:
 
 permissions:
   contents: read
