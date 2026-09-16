@@ -81,14 +81,29 @@ AndroidDownloadExecutionPolicy planAndroidDownloadExecutionPolicy({
   );
 }
 
+/// Compile-time escape hatch used only by a deliberately-built device
+/// acceptance artifact. Ordinary builds do not define this value and therefore
+/// stay fail-closed until the real-device lifecycle matrix is accepted.
+const bool _pluginParallelAcceptanceBuildOverride = bool.fromEnvironment(
+  'ANIMEWITCHER_PLUGIN_PARALLEL_ACCEPTANCE',
+  defaultValue: false,
+);
+
 /// Capability table for fresh plugin-owned parallel downloads.
 ///
-/// Every platform stays fail-closed until its real-device lifecycle matrix is
-/// accepted. Durable PR #231 manifests still win in
+/// The production table remains fail-closed until a platform's real-device
+/// lifecycle matrix is accepted. The compile-time acceptance artifact may
+/// temporarily exercise the plugin executor without changing that production
+/// decision. Durable PR #231 manifests still win in
 /// [selectDownloadExecutionBackend], so an existing legacy session never
-/// changes executor mid-transfer. Enabling a platform here is the final step
-/// after device acceptance, never a substitute for that acceptance.
+/// changes executor mid-transfer.
 bool pluginParallelAcceptedForPlatform(TargetPlatform platform) =>
+    pluginParallelAcceptedForBuild(
+      platform,
+      acceptanceBuildOverride: _pluginParallelAcceptanceBuildOverride,
+    );
+
+bool _pluginParallelAcceptedByCapability(TargetPlatform platform) =>
     switch (platform) {
       TargetPlatform.android ||
       TargetPlatform.fuchsia ||
@@ -106,7 +121,7 @@ bool pluginParallelAcceptedForBuild(
   TargetPlatform platform, {
   required bool acceptanceBuildOverride,
 }) =>
-    acceptanceBuildOverride || pluginParallelAcceptedForPlatform(platform);
+    acceptanceBuildOverride || _pluginParallelAcceptedByCapability(platform);
 
 /// Selects exactly one executor for a logical episode.
 ///
