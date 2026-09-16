@@ -64,7 +64,11 @@ jobs:
           channel: stable
           flutter-version: 3.47.1
           cache: true
-      - run: flutter pub get
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
       - name: Verify focused lifecycle regressions
         run: |
           flutter test \
