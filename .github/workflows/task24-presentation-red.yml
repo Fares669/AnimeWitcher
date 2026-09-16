@@ -1,4 +1,4 @@
-name: Task 24 Resume Generation RED
+name: Task 24 Resume Generation GREEN
 
 on:
   push:
@@ -6,19 +6,90 @@ on:
       - refactor/background-downloader-authority
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  red:
+  green:
+    if: "${{ github.event.head_commit.message == 'chore(ci): apply resume generation fix' }}"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
           ref: refactor/background-downloader-authority
+      - name: Reuse the command resume generation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/core/services/download_service.dart')
+          text = path.read_text()
+
+          old_signature = '  Future<bool> _resumeDownloadTask(DownloadTask task) async {'
+          new_signature = '''  Future<bool> _resumeDownloadTask(
+            DownloadTask task, {
+            DownloadAttemptToken? executionToken,
+          }) async {'''
+          if text.count(old_signature) != 1:
+              raise SystemExit(f'expected one resume helper signature, found {text.count(old_signature)}')
+          text = text.replace(old_signature, new_signature, 1)
+
+          old_generation = '''    final currentJob = await _jobStore.get(task.taskId);
+            if (currentJob != null) {
+              final execution = await _jobStore.beginOperation(
+                task.taskId,
+                state: DownloadJobState.starting,
+              );
+              if (execution == null) return false;
+            }'''
+          new_generation = '''    final currentJob = await _jobStore.get(task.taskId);
+            if (currentJob != null && executionToken == null) {
+              executionToken = await _jobStore.beginOperation(
+                task.taskId,
+                state: DownloadJobState.starting,
+              );
+              if (executionToken == null) return false;
+            }'''
+          if text.count(old_generation) != 1:
+              raise SystemExit(f'expected one resume generation block, found {text.count(old_generation)}')
+          text = text.replace(old_generation, new_generation, 1)
+
+          old_call = '        final started = await _resumeDownloadTask(downloadTask);'
+          new_call = '''        final started = await _resumeDownloadTask(
+          downloadTask,
+          executionToken: resumeOperation,
+        );'''
+          if text.count(old_call) != 1:
+              raise SystemExit(f'expected one user-resume helper call, found {text.count(old_call)}')
+          text = text.replace(old_call, new_call, 1)
+
+          path.write_text(text)
+          PY
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.47.1
           cache: true
-      - run: flutter pub get
-      - run: flutter test test/core/services/download_resume_generation_guard_test.dart
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+      - name: Verify resume generation regressions
+        run: |
+          flutter test \
+            test/core/services/download_resume_generation_guard_test.dart \
+            test/core/services/download_plugin_resume_authority_test.dart \
+            test/core/services/download_command_outcome_test.dart \
+            test/core/services/download_callback_generation_test.dart \
+            test/core/services/download_lifecycle_checkpoint_guard_test.dart \
+            test/core/services/download_pause_settlement_guard_test.dart \
+            test/core/services/download_url_refresh_generation_test.dart
+      - name: Verify service analyzer
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos lib/core/services/download_service.dart
+      - name: Commit verified fix
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/core/services/download_service.dart
+          git commit -m "fix(downloads): reuse resume execution generation"
+          git push origin HEAD:refactor/background-downloader-authority
