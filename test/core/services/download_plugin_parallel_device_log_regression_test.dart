@@ -72,7 +72,7 @@ void main() {
       expect(transport, contains('var runtimeOwner = false;'));
       expect(
         transport,
-        contains('if (await _runtimeInventoryTaskCanOwnWriter('),
+        contains('if (await _runtimeInventoryTaskOwnership('),
       );
       expect(transport, contains('downloadInternalParentTaskId(task)'));
       expect(
