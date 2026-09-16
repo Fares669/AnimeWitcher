@@ -61,6 +61,7 @@ This section is binding for every AI/engineer continuing this branch.
 - Startup recovery waits for the package's native inventory-settlement window before querying/canceling/rescheduling killed tasks, so legacy quarantine cannot race a late native writer.
 - Offline holds keep terminal plugin Transfer/database projections terminal and expose `waitingForNetwork` only as AnimeWitcher's logical/UI projection; reconnect resumes through the package Transfer lifecycle.
 - Plugin-owned transport tasks use the bounded package retry budget `kDownloadTaskRetries = 3`; URL refresh, resource validation, integrity, offline, and user-intent policy remain application-owned.
+- Runtime inventory hardening now treats explicit paused/terminal rows as released, treats statusless or ambiguous rows as `unknown`, lets active runtime evidence override stale persisted pause, and projects runtime status during live attach; live recovery delegates ownership decisions to the transport.
 
 ### Current automated blocker
 
@@ -69,9 +70,9 @@ The previously recorded automated blocker has been resolved.
 - Historical failure: Flutter Checks run **35126994058** on `b957e6c9ba7c1cfabc6462c6c2e099a42c15fa83` had two stale source-contract failures; native logger typecheck, source generation, and analyze were already green.
 - The independent lifecycle audit found four real gaps and they were implemented on this branch: settled startup inventory, runtime-inventory ownership, terminal-safe offline projection, and bounded plugin transport retries.
 - A stale projection-only parent-ownership source test was then updated in commit `94ac956036647050c148f5eac3aea1bfed4f1e7a` to assert the runtime-inventory contract.
-- Current automated head: CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` is green: native logger typecheck PASS, source generation PASS, Flutter analyze PASS, and full Flutter tests PASS (`1569` passed, `1` skipped).
+- Earlier verified automated head: CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` was green: native logger typecheck PASS, source generation PASS, Flutter analyze PASS, and full Flutter tests PASS (`1569` passed, `1` skipped).
 
-**Current state:** Tasks 35–38 are DONE on verified automated head da190bd463fb70fbfe28456b44fcfcdeb6a4fb8c; Tasks 39–41 are newly identified automated hardening items; Task 33 remains the only device-only gate. Task 33 remains a real-device-only acceptance gate; the manual acceptance workflow remains untriggered and no IPA has been built.
+**Current state:** Tasks 35–41 are DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; Task 33 remains the only device-only gate. Task 33 remains a real-device-only acceptance gate; the manual acceptance workflow remains untriggered and no IPA has been built.
 
 ## Original task status (Tasks 1–25)
 
@@ -205,7 +206,7 @@ Ruling: retain the legacy executor and custom Range/iOS paths until the real-dev
 
 ### Task 33 — Real-device acceptance, cleanup, and one final IPA
 
-**Status: BLOCKED / DEVICE ONLY; Tasks 35–38 are DONE for the automatable scope; the physical-device matrix remains open.**
+**Status: BLOCKED / DEVICE ONLY; Tasks 35–41 are DONE for the automatable scope; the physical-device matrix remains open.**
 
 Do not trigger the IPA before this gate.
 
@@ -291,34 +292,38 @@ Evidence: regression test commit `676348e74690befbcd418c060d867eb9bb9a4e51` and 
 
 ### Task 39 — Require runtime ownership before accepting Transfer resume
 
-**Status: PENDING; added after final review.**
+**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run **35155579187**.**
 
 A rehydrated Transfer with an active projected status must not be accepted as a successful resume unless the package runtime inventory proves that the task is still present. This protects the non-parallel fallback path, which can call the transport resume method after live lookup has already failed.
 
-- [ ] Add a regression guard that checks runtime ownership inside the transport resume path before accepting an active Transfer.
-- [ ] Preserve legitimate paused/failed resume by allowing only positively not-owned or package-terminal states to call the package resume lifecycle.
-- [ ] Verify focused ownership/resume coverage and the complete CI pipeline.
+- [x] Add a regression guard that checks runtime ownership inside the transport resume path before accepting an active Transfer.
+- [x] Preserve legitimate paused/failed resume by allowing only positively notOwned or package-terminal states to call the package resume lifecycle.
+- [x] Verify focused ownership/resume coverage and the complete CI pipeline.
 
+Evidence: test/implementation commits `500ea5a2edee33a3d194f8ac9646649050767fb2`, `86fd802f9114b255861810f9eb40378996a32e57`, `67a4f0dc605331c7a740d7765639c2153b7d2557`, `a256f8534a258e674d73737bbd78993edfeca5ef`, and follow-up typed-contract fixes `991e7830d57bf4426f3e4cd7f945652ba4b275e3`, `9469da45d926f5086ce4cc19e26a6f16eadabc9e`, `d728a343016d06756ced22258844ebc1c63aaa1e`, and `faf492a2e3a6bb01edffbc74d4e942df976028a1`; final CI run **35155579187** on **b0f558bce908306e7b0ed845d1a6439250f1efa2** passed.
 ### Task 40 — Discover duplicate logical rows from plugin database persistence
 
-**Status: PENDING; added after final review.**
+**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run **35155579187**.**
 
-Duplicate cancellation currently starts from `allTasks`, but a plugin database row can outlive the runtime inventory. Such a row must still be tombstoned, canceled/settled, and cleaned before primary deletion completes.
+Duplicate cancellation previously started from allTasks, but a plugin database row can outlive the runtime inventory. Such a row must still be tombstoned, canceled/settled, and cleaned before primary deletion completes.
 
-- [ ] Merge package runtime inventory and plugin database records when discovering duplicate logical tasks.
-- [ ] Tombstone every DB-only duplicate before issuing cancellation and waiting for ownership release.
-- [ ] Verify database-only duplicate coverage and the complete CI pipeline.
+- [x] Merge package runtime inventory and plugin database records when discovering duplicate logical tasks.
+- [x] Tombstone every DB-only duplicate before issuing cancellation and waiting for ownership release.
+- [x] Verify database-only duplicate coverage and the complete CI pipeline.
 
+Evidence: test commits `30c4095b9e444b46031a22e367cf0c1c13b9d824`, `a7a43805cf1d1b2f6b9f8b336347de1eefae9a76`, implementation commit `a256f8534a258e674d73737bbd78993edfeca5ef`, and final CI run **35155579187** on **b0f558bce908306e7b0ed845d1a6439250f1efa2**.
 ### Task 41 — Treat ambiguous package inventory as unknown, not live
 
-**Status: PENDING; added after final review.**
+**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run **35155579187**.**
 
-`FileDownloader.allTasks(allGroups: true)` combines native inventory with package retry/paused stores. When no status projection can distinguish a paused/store item from a live writer, the adapter must return `unknown` and fail closed; recovery must not attach it as a live transfer.
+FileDownloader.allTasks(allGroups: true) combines native inventory with package retry/paused stores. The adapter now distinguishes explicit release evidence from ambiguity while retaining single-writer fail-closed behavior.
 
-- [ ] Return `notOwned` only for explicitly paused/settled rows and `owned` only for a non-paused runtime item with an active status projection.
-- [ ] Return `unknown` for matching inventory without enough status evidence, and exclude unproven rows from live-transfer recovery.
-- [ ] Add regression coverage for ambiguous inventory and verify the complete CI pipeline.
+- [x] Return notOwned only for explicitly paused or terminal rows, and owned only for non-paused rows with active status evidence.
+- [x] Return unknown for matching inventory without enough status evidence, and exclude unproven rows from live-transfer recovery.
+- [x] Let active runtime evidence override stale persisted paused projections and project runtime status during live attach.
+- [x] Add regression coverage for ambiguous, settled, stale-paused, and live-attach inventory and verify the complete CI pipeline.
 
+Evidence: test commits `500ea5a2edee33a3d194f8ac9646649050767fb2`, `30c4095b9e444b46031a22e367cf0c1c13b9d824`, `d9fad3f9ddb30b89d7e7422507be64fa1484b5ef`, `037bfc7de96c7e3591e6eaa9f5de8f06c1ca9aff`, `f39e638ac7a9d52f65d2b0a437a4fe58a4fef6ba`, and `3002ea83b1827c0f311f308a724185a676bb8c1c`; implementation commits `86fd802f9114b255861810f9eb40378996a32e57`, `67a4f0dc605331c7a740d7765639c2153b7d2557`, `2fe8033526887241f8fb4f9aaa041864bd2b2a94`, `efefc086b8cefa521dd5a5e0f9773a1efdbc4b1b`, and `b0f558bce908306e7b0ed845d1a6439250f1efa2`; final CI run **35155579187** on **b0f558bce908306e7b0ed845d1a6439250f1efa2** passed.
 ## Verification ledger
 
 - Historical clean full CI before the latest recovery work: run **35103545336** on `ac82f44959606ed2aa60c6fa08f0d24aaec2542f` — generation/analyze/full Flutter tests/native Swift green.
@@ -326,13 +331,14 @@ Duplicate cancellation currently starts from `allTasks`, but a plugin database r
 - Previous regression run: **35126994058** on `b957e6c9ba7c1cfabc6462c6c2e099a42c15fa83` — native typecheck, generation and analyze green; Flutter tests failed on two stale contracts.
 - Intermediate audit-fix run: **35143172041** on `b9bdced314a9b0bc0814e310d889b98cc1fbc2df` — native typecheck and analyze green; Flutter tests exposed one remaining stale projection-only ownership source contract, fixed in `94ac956036647050c148f5eac3aea1bfed4f1e7a`.
 - Verified automated head before final plan bookkeeping: run **35149954380** on `da190bd463fb70fbfe28456b44fcfcdeb6a4fb8c` — status success; native logger typecheck PASS, source generation PASS, Flutter analyze PASS, full Flutter tests PASS (`1577` passed, `1` skipped).
+- Final audit verification: run **35155579187** on `b0f558bce908306e7b0ed845d1a6439250f1efa2` — status success; native logger typecheck PASS, source generation PASS, Flutter analyze PASS, full Flutter tests PASS (`1584` passed, `1` skipped).
 - The current green run includes the Task 26–32 and Task 34 focused coverage: plugin contract, zero-byte source replacement, runtime parent/child ownership, startup settlement, offline terminal projection, bounded retry, relaunch/single-writer, pause/resume, cancel routing, queue, and source-refresh tests.
-- Final hardening commits for Tasks 35–38 are on verified automated head da190bd463fb70fbfe28456b44fcfcdeb6a4fb8c; CI run **35149954380** passed: native typecheck, source generation, analyze, and full Flutter tests (`1577` passed, `1` skipped).
+- Final hardening commits for Tasks 35–41 are on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; CI run **35155579187** passed: native typecheck, source generation, analyze, and full Flutter tests (`1584` passed, `1` skipped).
 - No current run may count as final device acceptance merely because it builds; Task 33 still requires actual iOS device evidence.
 
 ## Handoff: exact next actions
 
-1. Automated Tasks 26–32 and Tasks 34–38 are complete; Tasks 39–41 are pending implementation/verification; Task 33 remains the only physical-device gate.
-2. Task 33 is the only remaining required physical-device gate after Tasks 35–41 are green: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
+1. Automated Tasks 26–32 and Tasks 34–41 are complete; Task 33 remains the only physical-device gate.
+2. Task 33 is the only remaining required physical-device gate: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
 3. Only after real-device acceptance passes may Tasks 14/16/17 cleanup remove the legacy executor, obsolete iOS multipart state, or transport-owned JobStore fields.
 4. Do not merge PR #246 or enable a permanent platform acceptance gate without explicit user approval.
