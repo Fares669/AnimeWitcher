@@ -3633,13 +3633,18 @@ class DownloadService {
       lastKnown: saved.progress,
     );
     final totalSize = saved.totalSize;
+    final runtimeStatus = _nativeTransport.statusFor(attached.taskId);
     final transferring =
+        runtimeStatus == TaskStatus.running ||
+        runtimeStatus == TaskStatus.waitingToRetry ||
         record?.status == TaskStatus.running ||
         record?.status == TaskStatus.waitingToRetry ||
         progressMeansNativeTransfer(progress);
     final status = transferring
         ? TaskStatus.running
-        : (record?.status ?? TaskStatus.enqueued);
+        : (runtimeStatus == TaskStatus.enqueued
+              ? TaskStatus.enqueued
+              : (record?.status ?? TaskStatus.enqueued));
     if (!_userPausedIds.contains(attached.taskId)) {
       await _checkpointLogicalJob(
         attached,
