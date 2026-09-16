@@ -57,7 +57,12 @@ void main() {
       );
       final pluginStart = initialize.indexOf('await _startPluginExecutor();');
       expect(bridge, greaterThanOrEqualTo(0));
-      expect(pluginStart, greaterThan(bridge));
+      expect(
+        pluginStart,
+        greaterThan(bridge),
+        reason:
+            'Transfer updates must be bridged before plugin start/rehydration can emit callbacks',
+      );
 
       final disposeStart = source.indexOf(
         'Future<void> _disposeResources() async {',
