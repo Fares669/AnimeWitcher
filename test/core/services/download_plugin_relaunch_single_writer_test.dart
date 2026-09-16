@@ -102,7 +102,12 @@ void main() {
           'the original legacy DB projection can be restored only after plugin rescheduling and Transfer fencing are complete',
     );
 
-    expect(helper, contains('isInternalDownloaderChunk(task)'));
+    expect(
+      helper,
+      contains('task.group == FileDownloader.chunkGroup'),
+      reason:
+          'rogue cleanup must target only background_downloader generated chunks, never animewitcher_parts legacy writers',
+    );
     expect(helper, contains('downloadInternalParentTaskId(task)'));
 
     final listenerFence = source.indexOf("'startup.legacyPluginUpdateIgnored'");
