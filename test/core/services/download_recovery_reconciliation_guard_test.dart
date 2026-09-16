@@ -126,6 +126,4 @@ void main() {
           'an unavailable runtime inventory must not create a replacement writer',
     );
   });
-
-  });
 }
