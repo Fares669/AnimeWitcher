@@ -771,6 +771,10 @@ enum DownloadNativeWaitingQueue {
       return false
     }
 
+    // background_downloader owns retries for its own ParallelDownloadTask
+    // chunks. The native seam only recreates migration-era legacy range parts.
+    if isPluginDownloadChunk(task) { return false }
+
     let nsError = error as NSError
     guard nsError.domain == NSURLErrorDomain,
           isRetryableBackgroundTransportErrorCode(nsError.code)
@@ -792,7 +796,7 @@ enum DownloadNativeWaitingQueue {
 
     let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
     let hasResumeData = !(resumeData?.isEmpty ?? true)
-    let multipartPart = isDownloadPart(task)
+    let multipartPart = isLegacyDownloadPart(task)
     guard canRecreateBackgroundDownload(
       isMultipartPart: multipartPart,
       receivedBytes: task.countOfBytesReceived,
@@ -864,11 +868,16 @@ enum DownloadNativeWaitingQueue {
     // Keep the slot until Dart's foreground ownership reconciliation.
     if requiresTerminalObservation && terminalSuccess == nil { return }
     rememberDownloadSession(session)
-    // A native part is not an episode, but its URLSession byte/completion
+    // background_downloader's own chunk completion is fully owned by its
+    // native callback/Transfer pipeline. Do not let the migration seam free an
+    // episode slot or promote another logical download when one chunk finishes.
+    if isPluginDownloadChunk(task) { return }
+
+    // A legacy PR #231 part is not an episode, but its URLSession byte/completion
     // evidence belongs to the Dart multipart parent. didFinishDownloadingTo
     // calls us after the plugin moved the temp file, so completion can now be
     // verified against the exact `.part` path by PersistentParallelDownload.
-    if isDownloadPart(task) {
+    if isLegacyDownloadPart(task) {
       postMultipartChunkUpdate(
         task,
         totalWritten: task.countOfBytesReceived,
@@ -1436,7 +1445,7 @@ enum DownloadNativeWaitingQueue {
     totalExpected: Int64,
     completed: Bool
   ) {
-    guard isDownloadPart(task),
+    guard isLegacyDownloadPart(task),
           let childId = taskId(from: task),
           let parentId = parentTaskId(from: task)
     else {
@@ -1751,7 +1760,7 @@ enum DownloadNativeWaitingQueue {
 
       let liveChildIds = Set(tasks.compactMap { task -> String? in
         guard task.state != .completed,
-              isDownloadPart(task),
+              isLegacyDownloadPart(task),
               parentTaskId(from: task) == parentId
         else { return nil }
         return taskId(from: task)
@@ -1972,7 +1981,8 @@ enum DownloadNativeWaitingQueue {
     totalExpected: Int64
   ) {
     if let session { rememberDownloadSession(session) }
-    if isDownloadPart(downloadTask) {
+    if isPluginDownloadChunk(downloadTask) { return }
+    if isLegacyDownloadPart(downloadTask) {
       postMultipartChunkUpdate(
         downloadTask,
         totalWritten: totalWritten,
@@ -2363,10 +2373,21 @@ enum DownloadNativeWaitingQueue {
     return nil
   }
 
-  static func isDownloadPart(_ task: URLSessionTask) -> Bool {
+  private static func downloadTaskGroup(_ task: URLSessionTask) -> String {
     let json = task.taskDescription?.components(separatedBy: "***<<<|>>>***").first ?? ""
-    let group = stringFromTaskJson(json, key: "group")
-    return group == "chunk" || group == "animewitcher_parts"
+    return stringFromTaskJson(json, key: "group")
+  }
+
+  static func isPluginDownloadChunk(_ task: URLSessionTask) -> Bool {
+    return downloadTaskGroup(task) == "chunk"
+  }
+
+  static func isLegacyDownloadPart(_ task: URLSessionTask) -> Bool {
+    return downloadTaskGroup(task) == "animewitcher_parts"
+  }
+
+  static func isDownloadPart(_ task: URLSessionTask) -> Bool {
+    return isPluginDownloadChunk(task) || isLegacyDownloadPart(task)
   }
 
   private static func urlFromTaskJson(_ taskJson: String) -> String {
