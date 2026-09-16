@@ -21,7 +21,7 @@ source = replace_once(
 ''',
     '''  private static func downloadTaskGroup(_ task: URLSessionTask) -> String {
     let json = task.taskDescription?.components(separatedBy: "***<<<|>>>***").first ?? ""
-    return stringFromTaskJson(json, key: "group") ?? ""
+    return stringFromTaskJson(json, key: "group")
   }
 
   static func isPluginDownloadChunk(_ task: URLSessionTask) -> Bool {
