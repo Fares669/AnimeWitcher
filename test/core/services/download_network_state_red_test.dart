@@ -64,6 +64,37 @@ void main() {
   });
 
   group('DM-09 cross-transport ownership', () {
+    test('offline hold does not rewrite the plugin terminal projection', () {
+      final source = File('lib/core/services/download_service.dart')
+          .readAsStringSync();
+      final holdStart = source.indexOf(
+        'Future<void> _holdDownloadForNetwork(DownloadTask task) async {',
+      );
+      final holdEnd = source.indexOf(
+        'Future<void> _resumeNetworkHeldDownloads() async {',
+        holdStart,
+      );
+      expect(holdStart, greaterThanOrEqualTo(0));
+      expect(holdEnd, greaterThan(holdStart));
+      final hold = source.substring(holdStart, holdEnd);
+      expect(hold, contains('DownloadJobState.waitingForNetwork'));
+      expect(hold, contains('downloadJobDisplayStatus('));
+      expect(hold, isNot(contains('database.updateRecord')));
+      expect(hold, isNot(contains('TaskStatus.waitingToRetry')));
+
+      final recoveryStart = source.indexOf(
+        'if (recoveryPlan.action == DownloadRecoveryAction.keepNetworkHeld)',
+      );
+      final recoveryEnd = source.indexOf(
+        'var userPauseSettled',
+        recoveryStart,
+      );
+      expect(recoveryStart, greaterThanOrEqualTo(0));
+      expect(recoveryEnd, greaterThan(recoveryStart));
+      final recovery = source.substring(recoveryStart, recoveryEnd);
+      expect(recovery, contains('downloadJobDisplayStatus('));
+      expect(recovery, isNot(contains('database.updateRecord')));
+    });
     test(
       'service observes connectivity and reconciles held jobs through fencing',
       () {
