@@ -3753,7 +3753,21 @@ class DownloadService {
 
     final didPause = await _pauseTransfer(downloadTask);
     if (didPause) {
-      await _syncSessionOverlay();
+      final checkpointed = await _checkpointLogicalJob(
+        downloadTask,
+        state: DownloadJobState.interrupted,
+        userPaused: false,
+        queueWaiting: false,
+      );
+      if (!checkpointed) {
+        diagnosticLog.record('systemPause.checkpointFailed', {
+          'taskId': taskId,
+        });
+        await _syncSessionOverlay(completedSuccess: false);
+        return;
+      }
+      await _serializeQueue(_syncQueueToCapUnlocked);
+      await _syncSessionOverlay(completedSuccess: false);
       return;
     }
 
