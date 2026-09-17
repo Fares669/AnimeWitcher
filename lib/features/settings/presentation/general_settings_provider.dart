@@ -84,7 +84,7 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
   }
 
   Future<void> setDownloadDiagnosticLog(bool enabled) async {
-    await ref.read(downloadServiceProvider).setDiagnosticLogging(enabled);
+    await ref.read(settingsRepositoryProvider).setDownloadDiagnosticLog(enabled);
     state = state.copyWith(downloadDiagnosticLog: enabled);
   }
 
