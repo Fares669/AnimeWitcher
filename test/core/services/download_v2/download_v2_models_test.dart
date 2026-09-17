@@ -5,6 +5,9 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 void main() {
   LogicalDownloadRecordV2 record({
     DownloadUserIntent intent = DownloadUserIntent.active,
+    int? completedAtMillis,
+    DownloadFailureCategory? failureCategory,
+    String? failureMessage,
   }) {
     final logicalId = logicalDownloadIdFor(
       animeId: 'anilist:21',
@@ -26,6 +29,9 @@ void main() {
         'trackingUrl': '/anime/21/12',
       },
       expectedBytes: 123456,
+      completedAtMillis: completedAtMillis,
+      failureCategory: failureCategory,
+      failureMessage: failureMessage,
       updatedAtMillis: 1234,
     );
   }
@@ -71,6 +77,24 @@ void main() {
     expect(paused.taskId, original.taskId);
     expect(paused.generation, original.generation);
     expect(paused.updatedAtMillis, 5678);
+  });
+
+  test('copyWith can explicitly clear stale completion and failure metadata', () {
+    final terminal = record(
+      completedAtMillis: 9999,
+      failureCategory: DownloadFailureCategory.integrity,
+      failureMessage: 'bad file',
+    );
+
+    final restarted = terminal.copyWith(
+      clearCompletedAtMillis: true,
+      clearFailure: true,
+      updatedAtMillis: 10000,
+    );
+
+    expect(restarted.completedAtMillis, isNull);
+    expect(restarted.failureCategory, isNull);
+    expect(restarted.failureMessage, isNull);
   });
 
   test('transport snapshot final-state classification is explicit', () {
