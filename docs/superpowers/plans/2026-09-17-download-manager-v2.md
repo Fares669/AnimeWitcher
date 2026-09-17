@@ -14,14 +14,14 @@
 
 **Last deep review:** 2026-09-17, PR #247, branch `feat/download-manager-v2`, deep-review base head `4cc87d75d6e89bb69c547e3f82941e91ef9b7ae9`.
 
-**Latest reconciliation:** 2026-09-17, code head `56c67221f7a931f7bb6f5ddee2410c9c1f0fe33d` (23 commits after the deep-review base). The reconciliation inspected the review-fix batch and current exact-head CI. Tasks 10-12 remain open until their unchecked acceptance items below are satisfied.
+**Latest reconciliation:** 2026-09-17, code head `d389ed349b7d2717e1310b62bdbe460c3d0ea7c7`. The review-fix batch now closes the production acceptance items for Tasks 10-12, and exact-head CI evidence is recorded below. Only the real-device gate and its downstream V1-removal/final-readiness work remain.
 
 ### Overall count
 
 - **Trackable task groups:** 16 total (`Task 1` through `Task 15`, plus explicit `Task 12A`).
-- **Complete:** **10 / 16** — Tasks 1-9 plus Task 12A.
-- **Remaining:** **6 / 16** — Tasks 10, 11, 12, 13, 14, 15.
-- **Reopened by deep review:** Tasks 10, 11, and 12. A substantial review-fix batch has landed, but each still has at least one unchecked production acceptance item.
+- **Complete:** **13 / 16** — Tasks 1-12 plus Task 12A.
+- **Remaining:** **3 / 16** — Tasks 13, 14, and 15.
+- **Reopened by deep review:** Tasks 10, 11, and 12 were closed by the follow-up production-path fixes and exact-head verification in this reconciliation.
 - **Device-gated:** Task 13; therefore Task 14 and final merge readiness remain blocked until real iOS + Android evidence exists.
 
 ### Status table
@@ -37,26 +37,26 @@
 | 7. Source refresh | ✅ Complete | 401/403 replacement resolves a fresh source and starts byte zero. |
 | 8. Integrity gate | ✅ Complete | Runtime completion requires final-file verification; relaunch/cleanup regressions found later are being closed under Task 12. |
 | 9. Package parallelism + diagnostics DTO | ✅ Complete | One package parent represents parallel work; child IDs remain opaque. |
-| 10. Legacy migration policy A | 🟡 In progress | Production migration is now wired before package transport and partial legacy playback is blocked. Remaining gap: incomplete legacy rows without a refresh descriptor can still disappear instead of remaining restart-required/visible. |
-| 11. Riverpod + production cutover | 🟡 In progress | Settings, metadata ordering, semantic variant identity, logical-ID progress, Android preflight, and formatter layering were fixed. Remaining blocker: canonical destination ownership/one-writer protection plus final exact-head verification. |
-| 12. Native authority cleanup + regression matrix | 🟡 In progress | Native compatibility hook is observation-only by default; replacement ordering, startup completed-file revalidation, and corrupt-artifact cleanup have regression coverage. Remaining work is full matrix review/exact-head verification and any stale-generation gaps it exposes. |
-| 12A. iOS CI + runtime/native diagnostics | ✅ Complete | Dedicated iOS build log artifact, native typecheck, production V2 log sink, and redaction protections exist. Exact-head iOS/native evidence is current at `56c67221…`. |
+| 10. Legacy migration policy A | ✅ Complete | Production migration preserves incomplete/restart-required rows, keeps startup network-free, and routes explicit restart through safe source reconstruction with malformed-row coverage. |
+| 11. Riverpod + production cutover | ✅ Complete | Cutover/presentation/settings safeguards are in place, including canonical-destination admission so alternate logical IDs cannot write the same artifact concurrently. |
+| 12. Native authority cleanup + regression matrix | ✅ Complete | Native remains observation-only, replacement and integrity fences are covered, stale generations cannot resurrect completion, and the retained regression matrix was re-audited. |
+| 12A. iOS CI + runtime/native diagnostics | ✅ Complete | Dedicated iOS build log artifact, native typecheck, production V2 log sink, and redaction protections exist; exact-head evidence is current at `d389ed3…`. |
 | 13. Physical-device acceptance | ⛔ Device-gated | Must run on real iOS + Android hardware; CI/simulator/mocks do not satisfy it. |
 | 14. Remove V1 | ⛔ Blocked by Task 13 | Delete V1 transport/native ownership only after device acceptance. |
 | 15. Final deep review / merge readiness | 🟡 In progress | Deep review produced concrete blockers; rerun the review after Tasks 10-14 are closed. |
 
-### Latest exact-head verification (`56c67221f7a931f7bb6f5ddee2410c9c1f0fe33d`)
+### Latest exact-head verification (`d389ed349b7d2717e1310b62bdbe460c3d0ea7c7`)
 
-Workflow run: `35257115543` (`Flutter Checks`, run #2335).
+Workflow run: `35268324678` (`Flutter Checks`, run #2347).
 
 - `Analyze`: ✅ success.
-- `Focused V2 tests`: ✅ success.
+- `Focused V2 tests`: ✅ success (`69 tests passed`).
 - `Build iOS V2 and retain log`: ✅ success; artifact upload also succeeded.
 - `Typecheck native download logger`: ✅ success.
-- Full `Test` step: ❌ failure. Do **not** assume it is only the previously documented Anime4K baseline until this exact run's failing test is re-inspected and recorded.
-- Overall workflow conclusion is therefore failure despite the V2-focused/analyzer/iOS/native checks above being green.
+- Full `Test` step: ❌ `1517 tests passed, 1 failed, 1 skipped.` The sole failure is `test/features/player/anime4k_platform_ci_contract_test.dart`, which attempts to read the missing `ANIME4K_PERFORMANCE_PLAN.md` at repository root. This is an unrelated pre-existing Anime4K contract failure, not a Download Manager V2 failure.
+- Overall workflow conclusion is failure only because of that unrelated repository-baseline failure; all V2-focused, analyzer, native, and iOS gates are green.
 
-Previous deep-review baseline (`4cc87d75…`, run `35229854291`) had 1502 passed / 1 failed / 1 skipped with the single known unrelated missing `ANIME4K_PERFORMANCE_PLAN.md` failure. This is historical context only; current exact-head verification must stand on its own.
+This exact-head evidence is the basis for closing Tasks 10-12; Task 13 still requires physical iOS + Android evidence.
 
 ---
 
@@ -89,18 +89,18 @@ Tasks 1-9 are retained as complete unless a new regression specifically invalida
 
 **Deep-review root cause:** `LegacyDownloadMigrationV2` originally existed only in isolation. Production startup did not invoke it, incomplete legacy work disappeared, and legacy playback could accept a partial file.
 
-**Review-fix batch now present:** production migration runs before package transport initialization; migrated rows are patched with canonical `logicalId`; completed legacy migration requires stored completion plus file validity; partial legacy files are rejected by playback; migration does not overwrite a newer V2 record.
+**Review-fix batch now present:** production migration runs before package transport initialization; migrated rows are patched with canonical `logicalId`; completed legacy migration requires stored completion plus file validity; incomplete rows remain visible as paused/restart-required even without a refresh descriptor; explicit restart reconstructs a safe descriptor when the stored provider/source metadata is sufficient; malformed and ambiguous rows fail closed without transport work; migration does not overwrite a newer V2 record.
 
 **Required acceptance:**
 - [x] Add a production migration seam that consumes legacy presentation metadata without importing V1 transport/range/chunk/resume/native ownership state.
 - [x] Completed legacy entries migrate/present only when stored completion and final-file validity are both proven.
-- [ ] Incomplete legacy entries remain visible as paused/restart-required and cause zero automatic network work after upgrade/relaunch. **Current known gap:** an incomplete row with no usable `DownloadUrlRefreshDescriptor` is skipped by migration and can remain invisible.
-- [ ] Explicit resume/restart of every visible incomplete legacy entry creates a fresh V2 generation from byte zero using stable provider/source metadata. Add/retain behavioral coverage for the production path, not only the migration class.
+- [x] Incomplete legacy entries remain visible as paused/restart-required and cause zero automatic network work after upgrade/relaunch, including rows without a usable refresh descriptor.
+- [x] Explicit resume/restart of every visible incomplete legacy entry creates a fresh V2 generation from byte zero using stable provider/source metadata; production-path behavior covers descriptor reconstruction and fails closed when re-selection is required.
 - [x] Legacy partial files are never returned by `DownloadedFiles.resolveFile()` as completed media.
 - [x] Migration is idempotent and never overwrites a newer V2-owned logical record.
-- [ ] Add production-level behavioral tests covering startup presentation + explicit restart, including the no-refresh-descriptor case and malformed legacy rows.
+- [x] Add production-level behavioral tests covering startup presentation + explicit restart, including the no-refresh-descriptor case and malformed legacy rows.
 
-**Next action:** define a restart-required presentation record for incomplete legacy rows that lack a refresh descriptor, keep it visible without auto-network work, and route explicit restart through a safe source-selection/descriptor reconstruction path instead of silently dropping the row.
+**Result:** restart-required presentation, safe descriptor reconstruction, malformed-row handling, and explicit V2 restart are wired and covered. No further automatic implementation is required here; Task 13 is the next gate.
 
 ---
 
@@ -108,21 +108,21 @@ Tasks 1-9 are retained as complete unless a new regression specifically invalida
 
 **Deep-review root causes:** Settings could construct V1; metadata was written after transport start; source/server identity could create unsafe logical variants; progress used tracking URL aliases; Android preflight/offline preparation was missing; progress DTO/formatter layering became duplicated/inverted.
 
-**Review-fix batch now present:** Settings no longer imports/calls `downloadServiceProvider`; the cutover guard includes Settings; presentation metadata is durably written before `DownloadManagerV2.start()` with cleanup on start failure; semantic variant identity no longer contains transient source/server; progress primary key is logical ID; V2-safe Android permission/battery/offline preflight exists; progress DTO/formatting is centralized in core without a `core -> feature` export.
+**Review-fix batch now present:** Settings no longer imports/calls `downloadServiceProvider`; the cutover guard includes Settings; presentation metadata is durably written before `DownloadManagerV2.start()` with cleanup on start failure; semantic variant identity no longer contains transient source/server; progress primary key is logical ID; V2-safe Android permission/battery/offline preflight exists; progress DTO/formatting is centralized in core without a `core -> feature` export; canonical destination admission serializes ownership and rejects alternate logical writers for the same artifact.
 
 **Required acceptance:**
 - [x] Extend the production cutover guard to include Settings and normal production download entry points; no V1 service/provider imports or calls remain reachable from normal V2 UI/settings.
 - [x] Move concurrency and notification configuration to V2/package-safe persistence/configuration without constructing V1.
 - [x] Make presentation metadata crash-safe by durably committing it before a writer can start.
 - [x] Add a regression guard proving metadata persistence precedes `downloadManager.start()` and failed start removes the staged metadata.
-- [ ] Enforce one writer per **canonical destination** across alternate source/server and semantic-variant selections. Logical-ID coalescing alone is insufficient if two valid logical IDs can map to the same file path.
+- [x] Enforce one writer per **canonical destination** across alternate source/server and semantic-variant selections. Logical-ID coalescing is supplemented by destination-level admission/fencing.
 - [x] Define semantic variant identity explicitly (audio/dub-sub + quality) and keep transient server/source selection in the source descriptor.
 - [x] Key V2 presentation/control state primarily by logical identity. Temporary read-only tracking aliases are allowed only when unambiguous and must never become ownership keys.
 - [x] Preserve required Android storage/battery/offline preparation through V2-safe helpers; do not call V1 to get this behavior.
 - [x] Remove progress DTO/formatter duplication and the `core -> feature` transitive export dependency introduced during cutover.
-- [ ] Re-inspect the exact-head full-suite failure, then record focused V2 + analyzer + full-suite status with only explicitly proven unrelated baseline failures tolerated.
+- [x] Re-inspect the exact-head full-suite failure and record focused V2 + analyzer + native typecheck + iOS build/log + full-suite status; only the explicitly proven unrelated Anime4K baseline failure remains.
 
-**Next action:** add a RED manager/launcher regression for two logical requests resolving to the same canonical destination, then implement destination-level admission/fencing so only one non-final writer can own that artifact.
+**Result:** the RED duplicate-canonical-destination regression is green with destination-level admission/fencing. Exact-head CI evidence is recorded above; no further automated cutover work remains.
 
 ---
 
@@ -130,7 +130,7 @@ Tasks 1-9 are retained as complete unless a new regression specifically invalida
 
 **Deep-review root causes:** the iOS compatibility hook could become a second retry/queue authority; replacement generation was published before the obsolete writer was safely stopped; startup trusted `completedAtMillis` without file validation; integrity failure left corrupt output behind.
 
-**Review-fix batch now present:** `DownloadHookInstallation` defaults `transportOwnershipEnabled` to false and repeated installs preserve observation-only ownership; legacy native retry/promotion functions are fenced behind `nativePromotionAvailable`; source guards assert that transport ownership stays disabled for the V2 cutover; `_startFreshGeneration()` cancels a non-final obsolete handle before publishing the replacement; failed obsolete cancel keeps the prior durable generation; completed records are revalidated at startup; invalid artifacts are deleted on startup/runtime integrity failure; focused regression tests cover these review findings.
+**Review-fix batch now present:** `DownloadHookInstallation` defaults `transportOwnershipEnabled` to false and repeated installs preserve observation-only ownership; legacy native retry/promotion functions are fenced behind `nativePromotionAvailable`; source guards assert that transport ownership stays disabled for the V2 cutover; `_startFreshGeneration()` cancels a non-final obsolete handle before publishing the replacement; failed obsolete cancel keeps the prior durable generation; completed records are revalidated at startup; invalid artifacts are deleted on startup/runtime integrity failure; focused regression tests cover these review findings, including stale completion after a generation restart.
 
 **Required acceptance:**
 - [x] Add RED/source guards proving the installed compatibility hook is observation-only after cutover and cannot claim V2 retry/queue/completion ownership.
@@ -139,9 +139,9 @@ Tasks 1-9 are retained as complete unless a new regression specifically invalida
 - [x] Add a regression test for obsolete-cancel failure during replacement.
 - [x] On startup, revalidate logically completed final files; missing/empty/size-invalid files no longer project as completed.
 - [x] Remove invalid final artifacts after integrity failure before clean retry.
-- [ ] Verify stale completion callbacks around generation transitions cannot resurrect completion after restart/source refresh/cancel; add a focused regression if existing coverage does not prove this exact case.
-- [ ] Re-audit the retained regression matrix end to end: start, duplicate start, pause, resume, pause+recreation, active+missing, held/offline projection, 403 refresh, cancel/delete stale callback, five-chunk package parent, multiple episodes, completed legacy preserve, incomplete legacy restart.
-- [ ] Re-inspect the exact-head full-suite failure and record final exact-head analyzer + focused V2 + native typecheck + iOS build/log + full-suite evidence after Task 10/11 remaining fixes land.
+- [x] Verify stale completion callbacks around generation transitions cannot resurrect completion after restart/source refresh/cancel; the focused generation regression proves the durable replacement remains incomplete after an old-generation completion callback.
+- [x] Re-audit the retained regression matrix end to end: start, duplicate start, pause, resume, pause+recreation, active+missing, held/offline projection, 403 refresh, cancel/delete stale callback, five-chunk package parent, multiple episodes, completed legacy preserve, incomplete legacy restart.
+- [x] Re-inspect the exact-head full-suite failure and record final exact-head analyzer + focused V2 + native typecheck + iOS build/log + full-suite evidence after Tasks 10/11 fixes landed.
 
 ---
 
@@ -154,7 +154,7 @@ Feature acceptance retained:
 - disabled/failing logging cannot fail transport actions;
 - diagnostics never serialize raw transport URL/query token/auth header/cookie/provider body/free-form transport exception text.
 
-**Latest interim exact-head evidence:** at `56c67221f7a931f7bb6f5ddee2410c9c1f0fe33d`, run `35257115543` has a successful iOS V2 build/log upload and successful native logger typecheck. Capture one final stable-head evidence block after Tasks 10-12 are fully closed.
+**Latest exact-head evidence:** at `d389ed349b7d2717e1310b62bdbe460c3d0ea7c7`, run `35268324678` has a successful iOS V2 build/log upload and successful native logger typecheck; the focused V2 suite and analyzer also pass. The full-suite red is isolated to the missing Anime4K plan file documented above.
 
 ---
 
