@@ -4,7 +4,7 @@
 
 **Goal:** Replace AnimeWitcher's custom downloader transport/recovery stack with Download Manager V2 using `background_downloader` as the single transport authority.
 
-**Architecture:** AnimeWitcher owns logical identity, user intent, source refresh, destination/presentation metadata, integrity validation, diagnostics, priority/concurrency preferences, and stale-generation fencing. `background_downloader` owns network transfer, transport persistence, pause/resume data, retries, background native execution, and package-managed chunks. V1 remains only as a legacy strangler path until real-device acceptance allows Task 14 to delete it; V1 must never own or retry a V2 task.
+**Architecture:** AnimeWitcher owns logical identity, user intent, source refresh, destination/presentation metadata, integrity validation, diagnostics, priority/concurrency preferences, and stale-generation fencing. `background_downloader` owns network transfer, transport persistence, pause/resume data, retries, background native execution, and package-managed chunks. V1 remains only as a dormant/legacy strangler path until real-device acceptance allows Task 14 to delete it; V1 must never own or retry a V2 task.
 
 **Spec:** `docs/superpowers/specs/2026-09-17-download-manager-v2-design.md`
 
@@ -12,14 +12,16 @@
 
 ## Progress Ledger
 
-**Last deep review:** 2026-09-17, PR #247, branch `feat/download-manager-v2`, reviewed head `4cc87d75d6e89bb69c547e3f82941e91ef9b7ae9`.
+**Last deep review:** 2026-09-17, PR #247, branch `feat/download-manager-v2`, deep-review base head `4cc87d75d6e89bb69c547e3f82941e91ef9b7ae9`.
+
+**Latest reconciliation:** 2026-09-17, code head `56c67221f7a931f7bb6f5ddee2410c9c1f0fe33d` (23 commits after the deep-review base). The reconciliation inspected the review-fix batch and current exact-head CI. Tasks 10-12 remain open until their unchecked acceptance items below are satisfied.
 
 ### Overall count
 
 - **Trackable task groups:** 16 total (`Task 1` through `Task 15`, plus explicit `Task 12A`).
 - **Complete:** **10 / 16** — Tasks 1-9 plus Task 12A.
 - **Remaining:** **6 / 16** — Tasks 10, 11, 12, 13, 14, 15.
-- **Reopened by deep review:** Tasks 10, 11, and 12. Earlier isolated tests/guards were insufficient to prove the production integration.
+- **Reopened by deep review:** Tasks 10, 11, and 12. A substantial review-fix batch has landed, but each still has at least one unchecked production acceptance item.
 - **Device-gated:** Task 13; therefore Task 14 and final merge readiness remain blocked until real iOS + Android evidence exists.
 
 ### Status table
@@ -33,25 +35,28 @@
 | 5. Pause/resume/cancel/delete | ✅ Complete | Core intent ordering and lifecycle commands are implemented. |
 | 6. Startup rehydration | ✅ Complete | Exact-task recovery and active-missing fresh generation are implemented. |
 | 7. Source refresh | ✅ Complete | 401/403 replacement resolves a fresh source and starts byte zero. |
-| 8. Integrity gate | ✅ Complete | Runtime completion requires final-file verification. Additional relaunch/cleanup gaps are tracked under Task 12. |
+| 8. Integrity gate | ✅ Complete | Runtime completion requires final-file verification; relaunch/cleanup regressions found later are being closed under Task 12. |
 | 9. Package parallelism + diagnostics DTO | ✅ Complete | One package parent represents parallel work; child IDs remain opaque. |
-| 10. Legacy migration policy A | 🟡 Reopened | Migration class/tests exist, but incomplete legacy is not wired into the production presentation/startup path and legacy playback can accept an incomplete file. |
-| 11. Riverpod + production cutover | 🟡 Reopened | Main/UI are largely V2, but Settings can still instantiate V1; presentation metadata has a crash window; destination identity can admit two writers. |
-| 12. Native authority cleanup + regression matrix | 🟡 Reopened | iOS legacy hook can still retry/settle V2 full-file tasks; additional startup/integrity/replacement tests are missing. |
-| 12A. iOS CI + runtime/native diagnostics | ✅ Complete | Dedicated iOS build log artifact, native typecheck, production V2 log sink, and redaction protections exist. Re-capture exact-head evidence after Tasks 10-12 stabilize. |
+| 10. Legacy migration policy A | 🟡 In progress | Production migration is now wired before package transport and partial legacy playback is blocked. Remaining gap: incomplete legacy rows without a refresh descriptor can still disappear instead of remaining restart-required/visible. |
+| 11. Riverpod + production cutover | 🟡 In progress | Settings, metadata ordering, semantic variant identity, logical-ID progress, Android preflight, and formatter layering were fixed. Remaining blocker: canonical destination ownership/one-writer protection plus final exact-head verification. |
+| 12. Native authority cleanup + regression matrix | 🟡 In progress | Native compatibility hook is observation-only by default; replacement ordering, startup completed-file revalidation, and corrupt-artifact cleanup have regression coverage. Remaining work is full matrix review/exact-head verification and any stale-generation gaps it exposes. |
+| 12A. iOS CI + runtime/native diagnostics | ✅ Complete | Dedicated iOS build log artifact, native typecheck, production V2 log sink, and redaction protections exist. Exact-head iOS/native evidence is current at `56c67221…`. |
 | 13. Physical-device acceptance | ⛔ Device-gated | Must run on real iOS + Android hardware; CI/simulator/mocks do not satisfy it. |
 | 14. Remove V1 | ⛔ Blocked by Task 13 | Delete V1 transport/native ownership only after device acceptance. |
-| 15. Final deep review / merge readiness | 🟡 In progress | This review reopened concrete blockers. Re-run after Tasks 10-14. |
+| 15. Final deep review / merge readiness | 🟡 In progress | Deep review produced concrete blockers; rerun the review after Tasks 10-14 are closed. |
 
-### Verification baseline before reopened fixes
+### Latest exact-head verification (`56c67221f7a931f7bb6f5ddee2410c9c1f0fe33d`)
 
-- Reviewed head: `4cc87d75d6e89bb69c547e3f82941e91ef9b7ae9`.
-- Workflow run: `35229854291` (`Flutter Checks`, run #2312).
-- Analyzer: success with the existing no-fatal warning/info policy.
-- `Build iOS V2 and retain log`: success.
-- `Typecheck native download logger`: success.
-- Full Flutter test suite: **1502 passed, 1 failed, 1 skipped**. The sole failure is the unrelated missing `ANIME4K_PERFORMANCE_PLAN.md` baseline. New V2 failures must not be hidden behind that baseline.
-- `cancel-in-progress: true` means preserve exact-head evidence before pushing another commit when that evidence is required.
+Workflow run: `35257115543` (`Flutter Checks`, run #2335).
+
+- `Analyze`: ✅ success.
+- `Focused V2 tests`: ✅ success.
+- `Build iOS V2 and retain log`: ✅ success; artifact upload also succeeded.
+- `Typecheck native download logger`: ✅ success.
+- Full `Test` step: ❌ failure. Do **not** assume it is only the previously documented Anime4K baseline until this exact run's failing test is re-inspected and recorded.
+- Overall workflow conclusion is therefore failure despite the V2-focused/analyzer/iOS/native checks above being green.
+
+Previous deep-review baseline (`4cc87d75…`, run `35229854291`) had 1502 passed / 1 failed / 1 skipped with the single known unrelated missing `ANIME4K_PERFORMANCE_PLAN.md` failure. This is historical context only; current exact-head verification must stand on its own.
 
 ---
 
@@ -59,15 +64,15 @@
 
 - `background_downloader` is the **only** transport/retry/pause-resume authority for V2.
 - No V2 production path may instantiate or call `DownloadService`, `PersistentParallelDownload`, `DownloadRangeTransfer`, legacy JobStore ownership, or native retry/promotion logic.
-- V1 may remain temporarily only for pre-cutover legacy work and must explicitly ignore every V2 task.
+- V1 source may remain temporarily only for legacy compatibility/removal staging and must explicitly never own a V2 task.
 - No V2 persistence may contain custom chunk IDs, ranges, resume offsets/bytes, package retry counters, package hold state, or native writer ownership.
 - Migration policy A: completed legacy files remain usable only when completion is proven; incomplete legacy work stays visible but performs zero network work until explicit user resume/restart, then starts V2 from byte zero.
 - Startup attaches only by the current exact package `taskId`, never URL/filename matching.
 - `active + missing/nonrecoverable transfer` creates one fresh generation; paused/canceled/legacy-incomplete never auto-start.
 - Pause intent is durable before transport pause. Cancel/delete fence stale callbacks before cleanup.
-- Every logical/destination artifact has one active writer. Different source/server selections must not create independent writers for the same destination.
+- Every canonical destination artifact has one active writer. Different source/server selections must not create independent writers for the same destination.
 - Package parallel children remain opaque; UI uses parent aggregate progress.
-- Completed state is only valid while the final artifact still passes integrity validation.
+- Completed state is valid only while the final artifact still passes integrity validation.
 - Invalid final artifacts are removed/quarantined before clean retry.
 - Diagnostics are observability only and never own transport. Logs must not contain signed URLs, auth headers/tokens, cookies, provider bodies, or free-form exception dumps.
 - Device-only acceptance is never inferred from CI, simulator, mocks, or unit tests.
@@ -80,64 +85,63 @@ Tasks 1-9 are retained as complete unless a new regression specifically invalida
 
 ---
 
-## Task 10: Legacy Migration Policy A — 🟡 Reopened
+## Task 10: Legacy Migration Policy A — 🟡 In progress
 
-**Root cause found by deep review:** `LegacyDownloadMigrationV2` is implemented and unit-tested but not wired into production startup/presentation. `downloads_provider` only retains verified legacy-complete rows, so incomplete legacy work disappears instead of remaining restart-required/paused. `downloaded_file_provider` also accepts an existing legacy file without first proving stored completion, which can expose a partial file as playable.
+**Deep-review root cause:** `LegacyDownloadMigrationV2` originally existed only in isolation. Production startup did not invoke it, incomplete legacy work disappeared, and legacy playback could accept a partial file.
+
+**Review-fix batch now present:** production migration runs before package transport initialization; migrated rows are patched with canonical `logicalId`; completed legacy migration requires stored completion plus file validity; partial legacy files are rejected by playback; migration does not overwrite a newer V2 record.
 
 **Required acceptance:**
-- [ ] Add a production migration seam that consumes legacy presentation metadata without importing V1 transport/range/chunk/resume/native ownership state.
-- [ ] Completed legacy entries migrate/present only when stored completion and final-file validity are both proven.
-- [ ] Incomplete legacy entries remain visible as paused/restart-required and cause zero automatic network work after upgrade/relaunch.
-- [ ] Explicit resume/restart of an incomplete legacy entry creates a fresh V2 generation from byte zero using stable provider/source metadata.
-- [ ] Legacy partial files are never returned by `DownloadedFiles.resolveFile()` as completed media.
-- [ ] Migration is idempotent and never overwrites a newer V2-owned logical record.
-- [ ] Add production-level tests in addition to the existing isolated migration tests.
+- [x] Add a production migration seam that consumes legacy presentation metadata without importing V1 transport/range/chunk/resume/native ownership state.
+- [x] Completed legacy entries migrate/present only when stored completion and final-file validity are both proven.
+- [ ] Incomplete legacy entries remain visible as paused/restart-required and cause zero automatic network work after upgrade/relaunch. **Current known gap:** an incomplete row with no usable `DownloadUrlRefreshDescriptor` is skipped by migration and can remain invisible.
+- [ ] Explicit resume/restart of every visible incomplete legacy entry creates a fresh V2 generation from byte zero using stable provider/source metadata. Add/retain behavioral coverage for the production path, not only the migration class.
+- [x] Legacy partial files are never returned by `DownloadedFiles.resolveFile()` as completed media.
+- [x] Migration is idempotent and never overwrites a newer V2-owned logical record.
+- [ ] Add production-level behavioral tests covering startup presentation + explicit restart, including the no-refresh-descriptor case and malformed legacy rows.
+
+**Next action:** define a restart-required presentation record for incomplete legacy rows that lack a refresh descriptor, keep it visible without auto-network work, and route explicit restart through a safe source-selection/descriptor reconstruction path instead of silently dropping the row.
 
 ---
 
-## Task 11: Production Cutover / Presentation / Settings — 🟡 Reopened
+## Task 11: Production Cutover / Presentation / Settings — 🟡 In progress
 
-**Root causes found by deep review:**
-- `general_settings_provider.dart` still imports/uses `downloadServiceProvider` for concurrency and notification settings, which can construct V1 after cutover.
-- `DownloadLauncher` starts V2 before presentation metadata is durably saved. Process death in that window leaves a real V2 transfer/record that `downloads_provider` cannot render because it drops records without legacy presentation metadata.
-- `variantKey` includes server/source while the destination filename/path may not; two logical IDs can therefore target the same file concurrently.
-- progress projection is still keyed by tracking URL in places, allowing variants to collide in presentation.
-- Android non-transport preflight behavior from V1 (storage access/battery optimization and offline skip-segment preparation) must be preserved outside V1 or proven obsolete before device acceptance.
+**Deep-review root causes:** Settings could construct V1; metadata was written after transport start; source/server identity could create unsafe logical variants; progress used tracking URL aliases; Android preflight/offline preparation was missing; progress DTO/formatter layering became duplicated/inverted.
+
+**Review-fix batch now present:** Settings no longer imports/calls `downloadServiceProvider`; the cutover guard includes Settings; presentation metadata is durably written before `DownloadManagerV2.start()` with cleanup on start failure; semantic variant identity no longer contains transient source/server; progress primary key is logical ID; V2-safe Android permission/battery/offline preflight exists; progress DTO/formatting is centralized in core without a `core -> feature` export.
 
 **Required acceptance:**
-- [ ] Extend the production cutover guard to include settings and every production download entry point; no V1 service/provider imports or calls remain reachable from normal V2 UI/settings.
-- [ ] Move concurrency and notification configuration to V2/package-safe configuration without constructing V1.
-- [ ] Make presentation metadata crash-safe: a V2 record must contain enough app-owned presentation metadata to rehydrate UI after process death, or equivalent metadata must be durably committed before a writer can start.
-- [ ] Add a regression test for process death between accepted start and legacy presentation-metadata persistence.
-- [ ] Enforce one writer per canonical destination/logical episode across alternate source/server selections.
-- [ ] Define semantic variant identity explicitly (for example quality/dub-sub) and keep transient server/source selection in the source descriptor rather than using it to create unsafe independent destination owners.
-- [ ] Key presentation/control state by logical/task identity rather than tracking URL where collisions are possible.
-- [ ] Preserve required Android storage/battery/offline preparation through V2-safe helpers; do not call V1 to get this behavior.
-- [ ] Remove progress DTO/formatter duplication and the `core -> feature` transitive export dependency introduced during cutover.
-- [ ] Focused V2/cutover tests green, analyzer green, and full suite inspected with only documented unrelated baseline failures.
+- [x] Extend the production cutover guard to include Settings and normal production download entry points; no V1 service/provider imports or calls remain reachable from normal V2 UI/settings.
+- [x] Move concurrency and notification configuration to V2/package-safe persistence/configuration without constructing V1.
+- [x] Make presentation metadata crash-safe by durably committing it before a writer can start.
+- [x] Add a regression guard proving metadata persistence precedes `downloadManager.start()` and failed start removes the staged metadata.
+- [ ] Enforce one writer per **canonical destination** across alternate source/server and semantic-variant selections. Logical-ID coalescing alone is insufficient if two valid logical IDs can map to the same file path.
+- [x] Define semantic variant identity explicitly (audio/dub-sub + quality) and keep transient server/source selection in the source descriptor.
+- [x] Key V2 presentation/control state primarily by logical identity. Temporary read-only tracking aliases are allowed only when unambiguous and must never become ownership keys.
+- [x] Preserve required Android storage/battery/offline preparation through V2-safe helpers; do not call V1 to get this behavior.
+- [x] Remove progress DTO/formatter duplication and the `core -> feature` transitive export dependency introduced during cutover.
+- [ ] Re-inspect the exact-head full-suite failure, then record focused V2 + analyzer + full-suite status with only explicitly proven unrelated baseline failures tolerated.
+
+**Next action:** add a RED manager/launcher regression for two logical requests resolving to the same canonical destination, then implement destination-level admission/fencing so only one non-final writer can own that artifact.
 
 ---
 
-## Task 12: Native Authority Cleanup + Reliability Regression Matrix — 🟡 Reopened
+## Task 12: Native Authority Cleanup + Reliability Regression Matrix — 🟡 In progress
 
-**Root causes found by deep review:**
-- iOS installs the legacy `DownloadNativeWaitingQueue` URLSession hook globally.
-- `retryBackgroundTransferIfNeeded()` can recreate a normal V2 full-file `URLSessionDownloadTask`, becoming a second retry engine and suppressing `background_downloader`'s own completion/failure path.
-- legacy full-file completion handling can still park/promote queue state for V2 tasks.
-- `_startFreshGeneration()` publishes the next durable generation before proving the obsolete writer stopped; failed cancel can leave a durable missing generation while the old writer remains active.
-- startup trusts `completedAtMillis` without revalidating the final artifact.
-- runtime integrity failure records a failure but does not remove/quarantine an invalid final artifact.
+**Deep-review root causes:** the iOS compatibility hook could become a second retry/queue authority; replacement generation was published before the obsolete writer was safely stopped; startup trusted `completedAtMillis` without file validation; integrity failure left corrupt output behind.
+
+**Review-fix batch now present:** `DownloadHookInstallation` defaults `transportOwnershipEnabled` to false and repeated installs preserve observation-only ownership; legacy native retry/promotion functions are fenced behind `nativePromotionAvailable`; source guards assert that transport ownership stays disabled for the V2 cutover; `_startFreshGeneration()` cancels a non-final obsolete handle before publishing the replacement; failed obsolete cancel keeps the prior durable generation; completed records are revalidated at startup; invalid artifacts are deleted on startup/runtime integrity failure; focused regression tests cover these review findings.
 
 **Required acceptance:**
-- [ ] Add RED source/behavior guards proving every `aw_v2_` native task bypasses legacy native retry, queue ownership, promotion, pause/cancel/resume, and completion settlement. Diagnostics/presentation observation may remain.
-- [ ] Preserve legacy hook behavior only for explicitly legacy-owned tasks until Task 14; V2 must pass through to `background_downloader` unchanged.
-- [ ] Prevent replacement generation publication/start until the obsolete non-final writer is safely settled; failed cancel must leave a recoverable, truthful durable state and never create a second writer.
-- [ ] Add a regression test for obsolete-cancel failure during restart/source refresh.
-- [ ] On startup, revalidate every logically completed final file; missing/empty/size-invalid files must not project as completed.
-- [ ] Remove/quarantine invalid final artifacts after integrity failure before clean retry.
-- [ ] Extend tests for completed+missing relaunch, corrupt completion cleanup, and stale completion around generation transition.
-- [ ] Retain the existing matrix: start, duplicate start, pause, resume, pause+recreation, active+missing, held/offline projection, 403 refresh, cancel/delete stale callback, five-chunk package parent, multiple episodes, completed legacy preserve, incomplete legacy restart.
-- [ ] Re-run focused V2 tests, analyzer, native typecheck, and exact-head iOS build/log artifact.
+- [x] Add RED/source guards proving the installed compatibility hook is observation-only after cutover and cannot claim V2 retry/queue/completion ownership.
+- [x] Keep native retry/promotion dormant for V2. Dormant legacy source may remain until Task 14, but `background_downloader` stays the only active V2 transport authority.
+- [x] Prevent replacement generation publication/start until an obsolete non-final writer is safely settled; failed cancel leaves the old durable generation truthful and starts no second writer.
+- [x] Add a regression test for obsolete-cancel failure during replacement.
+- [x] On startup, revalidate logically completed final files; missing/empty/size-invalid files no longer project as completed.
+- [x] Remove invalid final artifacts after integrity failure before clean retry.
+- [ ] Verify stale completion callbacks around generation transitions cannot resurrect completion after restart/source refresh/cancel; add a focused regression if existing coverage does not prove this exact case.
+- [ ] Re-audit the retained regression matrix end to end: start, duplicate start, pause, resume, pause+recreation, active+missing, held/offline projection, 403 refresh, cancel/delete stale callback, five-chunk package parent, multiple episodes, completed legacy preserve, incomplete legacy restart.
+- [ ] Re-inspect the exact-head full-suite failure and record final exact-head analyzer + focused V2 + native typecheck + iOS build/log + full-suite evidence after Task 10/11 remaining fixes land.
 
 ---
 
@@ -150,7 +154,7 @@ Feature acceptance retained:
 - disabled/failing logging cannot fail transport actions;
 - diagnostics never serialize raw transport URL/query token/auth header/cookie/provider body/free-form transport exception text.
 
-**Continuation rule:** after Tasks 10-12 stabilize, replace the stale evidence field with the final exact head + workflow run whose analyzer, iOS build, native logger check, and focused V2 tests were inspected.
+**Latest interim exact-head evidence:** at `56c67221f7a931f7bb6f5ddee2410c9c1f0fe33d`, run `35257115543` has a successful iOS V2 build/log upload and successful native logger typecheck. Capture one final stable-head evidence block after Tasks 10-12 are fully closed.
 
 ---
 
@@ -189,7 +193,7 @@ After Task 13 passes on both platforms:
 ## Task 15: Final Deep Review / Merge Readiness — 🟡 In progress
 
 Do not mark complete until Tasks 10-14 are complete. Final review must compare the exact branch head against the design spec and verify:
-- one transport authority and one writer per destination;
+- one transport authority and one writer per canonical destination;
 - no V1 fallback/reachability;
 - exact-ID lifecycle semantics and generation fencing;
 - migration policy A end-to-end;
@@ -210,4 +214,5 @@ Do not mark complete until Tasks 10-14 are complete. Final review must compare t
 4. Do not idle on CI; work on an independent item while jobs run, but capture exact-head evidence before the next push when needed.
 5. Update this ledger whenever a task genuinely changes state. Never use a passing isolated unit test to claim production integration.
 6. V1 is behavioral reference only. Never restore V1 transport ownership to make V2 pass.
-7. Stop automatic implementation only at the real-device gate if no device evidence is available; report exactly what remains blocked.
+7. Prefer production-behavior tests over source-shape guards when the behavior can be exercised directly; keep source guards only for architectural reachability/ownership constraints that are otherwise difficult to observe.
+8. Stop automatic implementation only at the real-device gate if no device evidence is available; report exactly what remains blocked.
