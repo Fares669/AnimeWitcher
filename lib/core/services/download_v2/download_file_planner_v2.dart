@@ -139,3 +139,9 @@ Future<String> downloadDestinationPathV2(
       await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
   return p.join(dir.path, relativeDirectory, filename);
 }
+
+Future<String> absoluteDownloadDestinationPathV2(String destinationPath) async {
+  if (p.isAbsolute(destinationPath)) return destinationPath;
+  final documents = await getApplicationDocumentsDirectory();
+  return p.join(documents.path, destinationPath);
+}
