@@ -343,11 +343,15 @@ class DownloadLauncher {
                             ? imdbId!
                             : item.url.trim());
                     final episodeKey = resolveUrl.trim();
-                    final variantKey = <String>[
-                      providerId.trim(),
-                      stream.source.trim(),
-                      stream.quality?.trim() ?? '',
-                    ].join('|');
+                    final audioVariant = switch (episodeData?.dubStatus) {
+                      DubStatus.dubbed => 'dub',
+                      DubStatus.subbed => 'sub',
+                      _ => item.isDubbed ? 'dub' : 'default',
+                    };
+                    final variantKey = downloadVariantKeyV2(
+                      audioVariant: audioVariant,
+                      quality: stream.quality,
+                    );
                     final logicalId = logicalDownloadIdFor(
                       animeId: animeId,
                       episodeKey: episodeKey,
@@ -369,41 +373,37 @@ class DownloadLauncher {
                       totalBytes: metadata.size ?? -1,
                       supportsRanges: metadata.supportsRanges,
                     );
-                    final downloadManager = _ref.read(downloadManagerV2Provider);
-                    final snapshot = await downloadManager.start(
-                      DownloadStartRequestV2(
-                        logicalId: logicalId,
-                        animeId: animeId,
-                        episodeKey: episodeKey,
-                        variantKey: variantKey,
-                        destinationPath: destinationPath,
-                        sourceDescriptor: descriptor.toJson(),
-                        expectedBytes: metadata.size,
-                        allowPause: true,
-                        retries: 2,
-                        parallelChunks: parallelChunks,
-                      ),
-                    );
-
                     final absolutePath =
                         await absoluteDownloadDestinationPathV2(destinationPath);
+                    final storage = _ref.read(storageServiceProvider);
+                    await storage.saveDownloadMetadata(
+                      logicalId.value,
+                      item,
+                      episode: episodeData,
+                      trackingUrl: resolveUrl,
+                      filePath: absolutePath,
+                      logicalId: logicalId.value,
+                    );
+
+                    final downloadManager = _ref.read(downloadManagerV2Provider);
                     try {
-                      await _ref
-                          .read(storageServiceProvider)
-                          .saveDownloadMetadata(
-                            snapshot.taskId,
-                            item,
-                            episode: episodeData,
-                            trackingUrl: resolveUrl,
-                            filePath: absolutePath,
-                            logicalId: logicalId.value,
-                          );
-                    } catch (metadataError) {
-                      await downloadManager.cancel(logicalId);
-                      Error.throwWithStackTrace(
-                        metadataError,
-                        StackTrace.current,
+                      await downloadManager.start(
+                        DownloadStartRequestV2(
+                          logicalId: logicalId,
+                          animeId: animeId,
+                          episodeKey: episodeKey,
+                          variantKey: variantKey,
+                          destinationPath: destinationPath,
+                          sourceDescriptor: descriptor.toJson(),
+                          expectedBytes: metadata.size,
+                          allowPause: true,
+                          retries: 2,
+                          parallelChunks: parallelChunks,
+                        ),
                       );
+                    } catch (startError, startStackTrace) {
+                      await storage.removeDownloadMetadata(logicalId.value);
+                      Error.throwWithStackTrace(startError, startStackTrace);
                     }
                   } catch (error) {
                     if (!finalContext.mounted) return;
