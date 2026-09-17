@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_v2/download_file_planner_v2.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
 import '../../../core/storage/storage_service.dart';
@@ -37,6 +38,10 @@ class DownloadedFiles extends _$DownloadedFiles {
       ..sort((a, b) => b.updatedAtMillis.compareTo(a.updatedAtMillis));
 
     for (final record in matching) {
+      // completedAtMillis is a logical claim, not sufficient byte evidence.
+      // Re-check the final artifact through the same V2 integrity authority
+      // before returning it to playback.
+      if (!await manager.hasCompletedDownload(record.logicalId)) continue;
       final path = await absoluteDownloadDestinationPathV2(
         record.destinationPath,
       );
@@ -47,9 +52,9 @@ class DownloadedFiles extends _$DownloadedFiles {
       }
     }
 
-    // Policy-A compatibility: completed legacy files remain playable even
-    // before their presentation metadata is rewritten as a V2 logical record.
-    // This reads only app-owned metadata and never adopts V1 transport state.
+    // Policy-A compatibility: only verified completed legacy files remain
+    // playable. A partial file may exist on disk after pause/crash, but it must
+    // never masquerade as a completed local episode.
     if (resolved == null) {
       final metadata = await ref
           .read(storageServiceProvider)
@@ -58,12 +63,21 @@ class DownloadedFiles extends _$DownloadedFiles {
         return entry['trackingUrl'] == key && entry['filePath'] is String;
       });
       for (final entry in candidates) {
+        final progress = downloadMetadataProgress(entry);
+        if (progress < 1) continue;
         final path = (entry['filePath'] as String).trim();
         if (path.isEmpty) continue;
+        final expectedBytes = downloadMetadataExpectedBytes(entry);
         final file = File(path);
-        if (await file.exists()) {
+        try {
+          if (!await file.exists()) continue;
+          final length = await file.length();
+          if (length <= 0) continue;
+          if (expectedBytes > 0 && length != expectedBytes) continue;
           resolved = file;
           break;
+        } catch (_) {
+          continue;
         }
       }
     }

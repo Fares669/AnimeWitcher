@@ -17,10 +17,12 @@ final class LegacyDownloadPresentationV2 {
     required this.destinationPath,
     required this.sourceDescriptor,
     this.completedAtMillis,
+    this.expectedBytes,
   }) : assert(animeId != ''),
        assert(episodeKey != ''),
        assert(variantKey != ''),
-       assert(destinationPath != '');
+       assert(destinationPath != ''),
+       assert(expectedBytes == null || expectedBytes > 0);
 
   final DownloadLogicalId logicalId;
   final String animeId;
@@ -31,6 +33,10 @@ final class LegacyDownloadPresentationV2 {
 
   /// Non-null only when the legacy logical item already owns a final file.
   final int? completedAtMillis;
+
+  /// Trusted size evidence copied from application presentation metadata only.
+  /// This is never reconstructed from percentages or legacy transport state.
+  final int? expectedBytes;
 
   bool get isCompleted => completedAtMillis != null;
 }
@@ -74,13 +80,16 @@ final class LegacyDownloadMigrationV2 {
         intent: DownloadUserIntent.paused,
         destinationPath: legacy.destinationPath,
         sourceDescriptor: Map<String, Object?>.from(legacy.sourceDescriptor),
+        expectedBytes: legacy.expectedBytes,
         completedAtMillis: legacy.completedAtMillis,
         updatedAtMillis: _nowMillis(),
       );
     });
 
     if (migrated == null) {
-      throw StateError('Legacy migration unexpectedly removed ${legacy.logicalId}');
+      throw StateError(
+        'Legacy migration unexpectedly removed ${legacy.logicalId}',
+      );
     }
     return migrated;
   }

@@ -89,17 +89,19 @@ void main() {
       expect(downloads, isNot(contains('FileDownloader().database')));
     });
 
-    test('production legacy metadata is migrated before V2 presentation', () {
-      final downloads = _read(
-        'lib/features/library/presentation/downloads_provider.dart',
+    test('production legacy metadata migrates before package transport starts', () {
+      final provider = _read(
+        'lib/core/services/download_v2/download_v2_provider.dart',
       );
 
-      expect(
-        downloads,
-        contains("core/services/download_v2/legacy_download_migration_v2.dart"),
-      );
-      expect(downloads, contains('LegacyDownloadMigrationV2('));
-      expect(downloads, contains('_migrateLegacyPresentationMetadata'));
+      expect(provider, contains("import 'legacy_download_migration_v2.dart';"));
+      expect(provider, contains('LegacyDownloadMigrationV2('));
+      expect(provider, contains('_migrateLegacyPresentationMetadata'));
+      expect(provider, contains('_MigrationFirstBackgroundDownloaderGateway'));
+      final migrationCall = provider.indexOf('await _migrate();');
+      final transportInit = provider.indexOf('await _delegate.initialize();');
+      expect(migrationCall, greaterThanOrEqualTo(0));
+      expect(transportInit, greaterThan(migrationCall));
     });
 
     test('legacy playback fallback requires stored logical completion', () {
@@ -109,6 +111,8 @@ void main() {
 
       expect(completed, contains('downloadMetadataProgress(entry)'));
       expect(completed, contains('if (progress < 1) continue;'));
+      expect(completed, contains('downloadMetadataExpectedBytes(entry)'));
+      expect(completed, contains('length != expectedBytes'));
     });
 
     test('production manager receives the explicit integrity verifier provider', () {
