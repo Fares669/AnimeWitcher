@@ -13,8 +13,9 @@ void main() {
   test('late old-generation event is ignored', () async {
     final gateway = _FakeGateway();
     final resolver = StaticSourceResolverV2();
+    final store = InMemoryLogicalDownloadStoreV2();
     final manager = DownloadManagerV2(
-      store: InMemoryLogicalDownloadStoreV2(),
+      store: store,
       gateway: gateway,
       sourceResolver: resolver,
     );
@@ -31,9 +32,12 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     final current = manager.snapshotFor(request.logicalId);
+    final durable = await store.get(request.logicalId);
     expect(current, isNotNull);
     expect(current!.taskId, newTaskId);
     expect(current.taskId, isNot(oldTaskId));
+    expect(durable?.taskId, newTaskId);
+    expect(durable?.completedAtMillis, isNull);
     expect(resolver.calls, 2);
   });
 }
