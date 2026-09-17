@@ -559,7 +559,6 @@ final class DownloadManagerV2 {
     final records = await _store.all();
     for (final record in records) {
       if (record.logicalId == logicalId ||
-          record.completedAtMillis != null ||
           record.intent == DownloadUserIntent.canceled) {
         continue;
       }
