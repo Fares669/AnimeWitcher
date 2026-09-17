@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'background_downloader_gateway.dart';
 import 'download_v2_identity.dart';
@@ -50,7 +54,8 @@ final class DownloadStartRequestV2 {
 ///
 /// Transport remains fully delegated to [BackgroundDownloaderGateway]. This
 /// manager owns logical identity, user intent, duplicate command coalescing,
-/// and the generation fence that rejects stale package callbacks.
+/// lifecycle ordering, and the generation fence that rejects stale package
+/// callbacks.
 final class DownloadManagerV2 {
   DownloadManagerV2({
     required LogicalDownloadStoreV2 store,
@@ -69,6 +74,8 @@ final class DownloadManagerV2 {
       <DownloadLogicalId, DownloadStartRequestV2>{};
   final Map<DownloadLogicalId, String> _currentTaskIds =
       <DownloadLogicalId, String>{};
+  final Map<DownloadLogicalId, DownloadUserIntent> _currentIntents =
+      <DownloadLogicalId, DownloadUserIntent>{};
   final Map<DownloadLogicalId, DownloadTransportSnapshot> _snapshots =
       <DownloadLogicalId, DownloadTransportSnapshot>{};
   final Map<String, DownloadTransportHandle> _handlesByTaskId =
@@ -93,10 +100,12 @@ final class DownloadManagerV2 {
 
       if (currentRecord != null &&
           currentRecord.intent == DownloadUserIntent.active) {
+        _rememberRecord(currentRecord);
         final existing = await _exactHandle(currentRecord.taskId);
         if (existing != null &&
             existing.current.status != DownloadTransportStatus.failed &&
-            existing.current.status != DownloadTransportStatus.canceled) {
+            existing.current.status != DownloadTransportStatus.canceled &&
+            existing.current.status != DownloadTransportStatus.missing) {
           _activateHandle(request.logicalId, existing);
           return existing.current;
         }
@@ -124,6 +133,116 @@ final class DownloadManagerV2 {
         throw StateError('Cannot restart missing logical download $logicalId');
       }
       return _startFreshGeneration(request, currentRecord);
+    });
+  }
+
+  /// Persists paused intent before asking the package to pause.
+  ///
+  /// If package pause is unsupported or non-resumable, the current transport
+  /// is canceled while the durable user intent remains paused. A later resume
+  /// will create a fresh generation.
+  Future<DownloadTransportSnapshot?> pause(DownloadLogicalId logicalId) {
+    return _commands.run(logicalId, () async {
+      await initialize();
+      final record = await _store.get(logicalId);
+      if (record == null) return null;
+
+      final pausedRecord = record.copyWith(
+        intent: DownloadUserIntent.paused,
+        updatedAtMillis: _nowMillis(),
+      );
+      await _store.put(pausedRecord);
+      _rememberRecord(pausedRecord);
+
+      final handle = await _exactHandle(record.taskId);
+      if (handle != null && !handle.current.isFinal) {
+        final paused = await handle.pause();
+        if (!paused) {
+          await handle.cancel();
+        }
+      }
+
+      final base = handle?.current ??
+          _snapshots[logicalId] ??
+          DownloadTransportSnapshot(
+            taskId: record.taskId,
+            status: DownloadTransportStatus.missing,
+            progress: 0,
+            totalBytes: record.expectedBytes,
+          );
+      final projected = _snapshotWithStatus(
+        base,
+        DownloadTransportStatus.paused,
+      );
+      _snapshots[logicalId] = projected;
+      return projected;
+    });
+  }
+
+  /// Resumes the exact current package transfer when possible, otherwise starts
+  /// a fresh generation from byte zero.
+  Future<DownloadTransportSnapshot> resume(DownloadLogicalId logicalId) {
+    return _commands.run(logicalId, () async {
+      await initialize();
+      final record = await _store.get(logicalId);
+      if (record == null) {
+        throw StateError('Cannot resume missing logical download $logicalId');
+      }
+      final request = _requests[logicalId];
+      if (request == null) {
+        throw StateError(
+          'Cannot resume $logicalId before a start request is available',
+        );
+      }
+
+      final activeRecord = record.copyWith(
+        intent: DownloadUserIntent.active,
+        updatedAtMillis: _nowMillis(),
+      );
+      await _store.put(activeRecord);
+      _rememberRecord(activeRecord);
+
+      final handle = await _exactHandle(record.taskId);
+      if (handle != null &&
+          handle.current.status == DownloadTransportStatus.paused) {
+        final resumed = await handle.resume();
+        if (resumed) {
+          _activateHandle(logicalId, handle);
+          return handle.current;
+        }
+      }
+
+      return _startFreshGeneration(request, activeRecord);
+    });
+  }
+
+  /// Cancels the logical download. Cancellation advances the generation fence
+  /// before touching the package transport, so late callbacks cannot resurrect
+  /// the canceled item.
+  Future<void> cancel(DownloadLogicalId logicalId) {
+    return _commands.run(logicalId, () async {
+      await initialize();
+      final record = await _store.get(logicalId);
+      if (record == null) return;
+      await _cancelRecord(record);
+    });
+  }
+
+  /// Deletes the logical item and final artifact. Missing artifacts are treated
+  /// as already deleted.
+  Future<void> delete(DownloadLogicalId logicalId) {
+    return _commands.run(logicalId, () async {
+      await initialize();
+      final record = await _store.get(logicalId);
+      if (record == null) return;
+
+      await _cancelRecord(record);
+      await _deleteDestination(record.destinationPath);
+      await _store.remove(logicalId);
+      _currentTaskIds.remove(logicalId);
+      _currentIntents.remove(logicalId);
+      _snapshots.remove(logicalId);
+      _requests.remove(logicalId);
     });
   }
 
@@ -160,7 +279,7 @@ final class DownloadManagerV2 {
     // after this point, startup recovery sees an active generation with no
     // handle and can safely recreate only this generation.
     await _store.put(nextRecord);
-    _currentTaskIds[request.logicalId] = taskId;
+    _rememberRecord(nextRecord);
     final queued = DownloadTransportSnapshot(
       taskId: taskId,
       status: DownloadTransportStatus.queued,
@@ -192,6 +311,56 @@ final class DownloadManagerV2 {
     );
     _activateHandle(request.logicalId, handle);
     return handle.current;
+  }
+
+  Future<void> _cancelRecord(LogicalDownloadRecordV2 record) async {
+    final logicalId = record.logicalId;
+    final obsoleteTaskId = record.taskId;
+    final handle = await _exactHandle(obsoleteTaskId);
+    final fenceGeneration = record.generation + 1;
+    final fenceTaskId = taskIdForGeneration(logicalId, fenceGeneration);
+    final canceledRecord = record.copyWith(
+      generation: fenceGeneration,
+      taskId: fenceTaskId,
+      intent: DownloadUserIntent.canceled,
+      clearCompletedAtMillis: true,
+      clearFailure: true,
+      updatedAtMillis: _nowMillis(),
+    );
+
+    await _store.put(canceledRecord);
+    _rememberRecord(canceledRecord);
+    _snapshots[logicalId] = DownloadTransportSnapshot(
+      taskId: fenceTaskId,
+      status: DownloadTransportStatus.canceled,
+      progress: 0,
+      totalBytes: record.expectedBytes,
+      transferredBytes: record.expectedBytes == null ? null : 0,
+    );
+
+    if (handle != null && !handle.current.isFinal) {
+      await handle.cancel();
+    }
+    await _gateway.removeTracking(obsoleteTaskId);
+    _handlesByTaskId.remove(obsoleteTaskId);
+  }
+
+  Future<void> _deleteDestination(String destinationPath) async {
+    final File file;
+    if (p.isAbsolute(destinationPath)) {
+      file = File(destinationPath);
+    } else {
+      final documents = await getApplicationDocumentsDirectory();
+      file = File(p.join(documents.path, destinationPath));
+    }
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+
+  void _rememberRecord(LogicalDownloadRecordV2 record) {
+    _currentTaskIds[record.logicalId] = record.taskId;
+    _currentIntents[record.logicalId] = record.intent;
   }
 
   Future<DownloadTransportHandle?> _exactHandle(String taskId) async {
@@ -236,8 +405,31 @@ final class DownloadManagerV2 {
     DownloadTransportSnapshot snapshot,
   ) {
     if (_currentTaskIds[logicalId] != snapshot.taskId) return;
+    if (_currentIntents[logicalId] == DownloadUserIntent.paused &&
+        snapshot.status != DownloadTransportStatus.complete) {
+      _snapshots[logicalId] = _snapshotWithStatus(
+        snapshot,
+        DownloadTransportStatus.paused,
+      );
+      return;
+    }
     _snapshots[logicalId] = snapshot;
   }
+}
+
+DownloadTransportSnapshot _snapshotWithStatus(
+  DownloadTransportSnapshot snapshot,
+  DownloadTransportStatus status,
+) {
+  return DownloadTransportSnapshot(
+    taskId: snapshot.taskId,
+    status: status,
+    progress: snapshot.progress,
+    transferredBytes: snapshot.transferredBytes,
+    totalBytes: snapshot.totalBytes,
+    failureCategory: snapshot.failureCategory,
+    failureMessage: snapshot.failureMessage,
+  );
 }
 
 final class _LogicalCommandQueue {
