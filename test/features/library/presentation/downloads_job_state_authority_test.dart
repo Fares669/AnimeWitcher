@@ -3,43 +3,44 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  group('DM-05 downloads projection authority', () {
-    test('downloads provider projects durable JobState snapshots', () {
+  group('V2 downloads projection authority', () {
+    test('downloads provider projects V2 records and snapshots only', () {
       final source = File(
         'lib/features/library/presentation/downloads_provider.dart',
       ).readAsStringSync();
 
-      expect(source, contains('logicalJobStateForTask'));
-      expect(source, contains('downloadJobDisplayStatus'));
-      expect(source, contains('Pre-JobStore migration fallback'));
+      expect(source, contains('downloadManagerV2Provider'));
+      expect(source, contains('logicalDownloadStoreV2Provider'));
+      expect(source, contains('snapshotFor(record.logicalId)'));
+      expect(source, contains('Timer.periodic'));
 
-      final refresh = source.indexOf('Future<List<DownloadItem>> _refreshList()');
-      final handler = source.indexOf('Future<void> _handleUpdate(', refresh);
-      expect(refresh, greaterThanOrEqualTo(0));
-      expect(handler, greaterThan(refresh));
-      final refreshBody = source.substring(refresh, handler);
-
-      // _refreshList no longer inspects raw FileDownloader records. The service
-      // constructs logical snapshots first, and the provider projects the
-      // durable logical state from that snapshot into the UI row.
-      expect(refreshBody, contains('logicalDownloadSnapshots()'));
-      expect(refreshBody, contains('logicalState: snapshot.logicalState'));
-      expect(refreshBody, isNot(contains('TaskStatus.failed')));
-      expect(refreshBody, isNot(contains('TaskStatus.notFound')));
+      expect(source, isNot(contains('downloadServiceProvider')));
+      expect(source, isNot(contains('logicalDownloadSnapshots()')));
+      expect(source, isNot(contains('logicalJobStateForTask')));
+      expect(source, isNot(contains('downloadJobDisplayStatus')));
+      expect(source, isNot(contains('FileDownloader().database')));
     });
 
-    test('live plugin callbacks are projected through JobState when available', () {
+    test('presentation lifecycle commands route through V2 logical IDs', () {
       final source = File(
         'lib/features/library/presentation/downloads_provider.dart',
       ).readAsStringSync();
-      final handler = source.indexOf('Future<void> _handleUpdate(');
-      final remove = source.indexOf('Future<void> removeDownload(', handler);
-      expect(handler, greaterThanOrEqualTo(0));
-      expect(remove, greaterThan(handler));
-      final body = source.substring(handler, remove);
 
-      expect(body, contains('logicalJobStateForTask'));
-      expect(body, contains('downloadJobDisplayStatus'));
+      final pause = source.indexOf('Future<void> pauseDownload(');
+      final resume = source.indexOf('Future<void> resumeDownload(', pause);
+      expect(pause, greaterThanOrEqualTo(0));
+      expect(resume, greaterThan(pause));
+
+      final commandBody = source.substring(pause);
+      expect(commandBody, contains('downloadManagerV2Provider'));
+      expect(commandBody, contains('.pause(DownloadLogicalId(logical))'));
+      expect(commandBody, contains('.resume(DownloadLogicalId(logical))'));
+
+      final remove = source.indexOf('Future<void> removeDownloads(');
+      expect(remove, greaterThanOrEqualTo(0));
+      final removeBody = source.substring(remove, pause);
+      expect(removeBody, contains('manager.delete(DownloadLogicalId(logical))'));
+      expect(removeBody, isNot(contains('downloadServiceProvider')));
     });
   });
 }
