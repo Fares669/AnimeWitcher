@@ -80,6 +80,28 @@ void main() {
       expect(downloads, isNot(contains('FileDownloader().database')));
     });
 
+    test('production manager receives the explicit integrity verifier provider', () {
+      final provider = _read(
+        'lib/core/services/download_v2/download_v2_provider.dart',
+      );
+
+      expect(
+        provider,
+        contains("import 'download_integrity_verifier_v2.dart';"),
+      );
+      expect(
+        provider,
+        contains('final downloadIntegrityVerifierV2Provider ='),
+      );
+      expect(provider, contains('Provider<DownloadIntegrityVerifierV2>'));
+      expect(
+        provider,
+        contains(
+          'integrityVerifier: ref.read(downloadIntegrityVerifierV2Provider)',
+        ),
+      );
+    });
+
     test('V2 manager exposes logical observation and completed availability', () {
       final manager = _read(
         'lib/core/services/download_v2/download_manager_v2.dart',
