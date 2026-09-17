@@ -648,7 +648,7 @@ class _DownloadItemTile extends ConsumerWidget {
                   borderRadius: BorderRadius.circular(LayoutConstants.radiusSm),
                 ),
                 const SizedBox(height: 4),
-                if (progressData != null && (isWorking || isPaused))
+                if (progressData != null && isWorking)
                   Row(
                     children: [
                       Expanded(

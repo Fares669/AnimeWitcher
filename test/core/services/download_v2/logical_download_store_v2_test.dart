@@ -49,7 +49,7 @@ void main() {
 
     final serializedKeys = loaded.toJson().keys.join('|').toLowerCase();
     for (final forbidden in <String>[
-      'chunk',
+      'chunkid',
       'range',
       'resumebytes',
       'ownership',

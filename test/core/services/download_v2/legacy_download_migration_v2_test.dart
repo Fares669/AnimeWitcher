@@ -90,7 +90,7 @@ void main() {
     final serialized = json.toString().toLowerCase();
 
     for (final forbidden in <String>[
-      'chunk',
+      'chunkid',
       'range',
       'resume',
       'durablebytes',

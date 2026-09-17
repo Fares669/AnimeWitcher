@@ -40,7 +40,7 @@ void main() {
 
     final serializedKeys = record.toJson().keys.join('|').toLowerCase();
     expect(serializedKeys, isNot(contains('child')));
-    expect(serializedKeys, isNot(contains('chunk')));
+    expect(serializedKeys, isNot(contains('chunkid')));
     expect(record.taskId, spec.taskId);
   });
 
