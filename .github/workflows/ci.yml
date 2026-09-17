@@ -39,6 +39,12 @@ jobs:
         # build/test regressions behind a large baseline migration.
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
 
+      - name: Focused V2 tests
+        # Keep the V2 architecture/reliability gate visible independently from
+        # the repository-wide baseline so a known unrelated suite failure can
+        # never hide a new download-manager regression.
+        run: flutter test test/core/services/download_v2
+
       - name: Test
         # A mock Firestore client test exercises the configured REST path. This
         # harmless value satisfies its build-time configuration guard; it is
