@@ -788,7 +788,10 @@ enum DownloadNativeWaitingQueue {
 
     let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
     let hasResumeData = !(resumeData?.isEmpty ?? true)
-    let multipartPart = isDownloadPart(task)
+    let multipartPart = isLegacyMultipartPart(task)
+    if isDownloadPart(task) && !multipartPart {
+      return false
+    }
     guard canRecreateBackgroundDownload(
       isMultipartPart: multipartPart,
       receivedBytes: task.countOfBytesReceived,
@@ -865,6 +868,7 @@ enum DownloadNativeWaitingQueue {
     // calls us after the plugin moved the temp file, so completion can now be
     // verified against the exact `.part` path by PersistentParallelDownload.
     if isDownloadPart(task) {
+      guard isLegacyMultipartPart(task) else { return }
       postMultipartChunkUpdate(
         task,
         totalWritten: task.countOfBytesReceived,
@@ -1426,13 +1430,26 @@ enum DownloadNativeWaitingQueue {
   /// Forward native URLSession byte counts for multipart children while the
   /// body still lives in Apple's temporary file. Dart cannot stat that file,
   /// which is why polling only `0.part`/`1.part` updated in whole-part jumps.
+  private static func ownsLegacyMultipartParent(_ parentId: String) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    let state = loadLocked()
+    return state.multipartPlans.contains { $0.parentTaskId == parentId }
+  }
+
+  private static func isLegacyMultipartPart(_ task: URLSessionTask) -> Bool {
+    guard isDownloadPart(task),
+          let parentId = parentTaskId(from: task)
+    else { return false }
+    return ownsLegacyMultipartParent(parentId)
+  }
   private static func postMultipartChunkUpdate(
     _ task: URLSessionTask,
     totalWritten: Int64,
     totalExpected: Int64,
     completed: Bool
   ) {
-    guard isDownloadPart(task),
+    guard isLegacyMultipartPart(task),
           let childId = taskId(from: task),
           let parentId = parentTaskId(from: task)
     else {
@@ -1479,13 +1496,6 @@ enum DownloadNativeWaitingQueue {
       attemptGeneration: attemptGeneration(fromPluginTask: task)
     )
     return true
-  }
-
-  private static func ownsLegacyMultipartParent(_ parentId: String) -> Bool {
-    lock.lock()
-    defer { lock.unlock() }
-    let state = loadLocked()
-    return state.multipartPlans.contains { $0.parentTaskId == parentId }
   }
 
   private static func parentTaskId(
@@ -1566,6 +1576,7 @@ enum DownloadNativeWaitingQueue {
     completed: Bool,
     attemptGeneration: Int?
   ) {
+    guard ownsLegacyMultipartParent(parentId) else { return }
     if totalWritten > 0 || completed || (normalizedProgress ?? 0) > 0 {
       settleMultipartClaim(childTaskId: childId)
     }
@@ -1737,6 +1748,7 @@ enum DownloadNativeWaitingQueue {
   }
 
   private static func promoteMultipartPlan(_ parentId: String, on session: URLSession) {
+    guard ownsLegacyMultipartParent(parentId) else { return }
     lock.lock()
     if multipartPromotionParents.contains(parentId) {
       lock.unlock()
@@ -1755,7 +1767,7 @@ enum DownloadNativeWaitingQueue {
 
       let liveChildIds = Set(tasks.compactMap { task -> String? in
         guard task.state != .completed,
-              isDownloadPart(task),
+              isLegacyMultipartPart(task),
               parentTaskId(from: task) == parentId
         else { return nil }
         return taskId(from: task)
@@ -1977,6 +1989,7 @@ enum DownloadNativeWaitingQueue {
   ) {
     if let session { rememberDownloadSession(session) }
     if isDownloadPart(downloadTask) {
+      guard isLegacyMultipartPart(downloadTask) else { return }
       postMultipartChunkUpdate(
         downloadTask,
         totalWritten: totalWritten,
