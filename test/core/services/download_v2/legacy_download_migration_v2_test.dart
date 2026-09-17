@@ -79,6 +79,56 @@ void main() {
     expect((await store.get(item.logicalId))?.generation, 2);
   });
 
+  test('restart-required legacy row stays visible until explicit resume', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final migration = LegacyDownloadMigrationV2(
+      store: store,
+      nowMillis: () => 200,
+    );
+    final item = _legacyItem(
+      destinationPath: '/tmp/episode-12-restart.mp4',
+      sourceDescriptor: legacyRestartRequiredSourceDescriptorV2(
+        trackingUrl: '/anime/21/12',
+        providerId: 'provider.example',
+        sourceHint: 'server-a',
+        quality: '1080p',
+      ),
+    );
+
+    final migrated = await migration.migrate(item);
+    expect(migrated.intent, DownloadUserIntent.paused);
+    expect(
+      sourceDescriptorRequiresLegacyRestartV2(migrated.sourceDescriptor),
+      isTrue,
+    );
+
+    final gateway = _MigrationGateway();
+    final resolver = StaticSourceResolverV2(expectedBytes: 100);
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+    );
+
+    await manager.initialize();
+
+    expect(gateway.startedSpecs, isEmpty);
+    expect(resolver.calls, 0);
+    expect(
+      manager.snapshotFor(item.logicalId)?.status,
+      DownloadTransportStatus.paused,
+    );
+
+    await manager.resume(item.logicalId);
+
+    expect(gateway.startedSpecs, hasLength(1));
+    expect(resolver.calls, 1);
+    expect(
+      gateway.startedSpecs.single.taskId,
+      taskIdForGeneration(item.logicalId, 2),
+    );
+  });
+
   test('migration is presentation-only and never serializes legacy transport state', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final migration = LegacyDownloadMigrationV2(store: store, nowMillis: () => 200);
@@ -132,6 +182,7 @@ void main() {
 LegacyDownloadPresentationV2 _legacyItem({
   required String destinationPath,
   int? completedAtMillis,
+  Map<String, Object?>? sourceDescriptor,
 }) {
   final logicalId = logicalDownloadIdFor(
     animeId: 'anilist:21',
@@ -144,11 +195,12 @@ LegacyDownloadPresentationV2 _legacyItem({
     episodeKey: '12',
     variantKey: 'sub:1080p',
     destinationPath: destinationPath,
-    sourceDescriptor: const <String, Object?>{
-      'providerId': 'provider.example',
-      'trackingUrl': '/anime/21/12',
-      'quality': '1080p',
-    },
+    sourceDescriptor: sourceDescriptor ??
+        const <String, Object?>{
+          'providerId': 'provider.example',
+          'trackingUrl': '/anime/21/12',
+          'quality': '1080p',
+        },
     completedAtMillis: completedAtMillis,
   );
 }
