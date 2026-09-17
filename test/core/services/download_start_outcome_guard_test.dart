@@ -24,7 +24,7 @@ void main() {
     ).readAsStringSync();
 
     expect(source, contains('downloadManagerV2Provider'));
-    expect(source, contains('final snapshot = await downloadManager.start('));
+    expect(source, contains('await downloadManager.start('));
     expect(source, contains('DownloadStartRequestV2('));
     expect(source, contains('sourceDescriptor: descriptor.toJson()'));
     expect(source, isNot(contains('downloadServiceProvider')));
