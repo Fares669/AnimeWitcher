@@ -798,7 +798,6 @@ final class DownloadManagerV2 {
 bool _isRecoverable(DownloadTransportSnapshot snapshot) {
   return snapshot.status != DownloadTransportStatus.failed &&
       snapshot.status != DownloadTransportStatus.canceled &&
-      snapshot.status != DownloadTransportStatus.complete &&
       snapshot.status != DownloadTransportStatus.missing;
 }
 
