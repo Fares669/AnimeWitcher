@@ -30,6 +30,7 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
 
+import 'download_start_preflight_v2.dart';
 import 'source_picker.dart';
 part 'download_launcher.g.dart';
 
@@ -303,6 +304,14 @@ class DownloadLauncher {
                         item.episodes?.firstWhereOrNull(
                           (e) => e.url == resolveUrl,
                         );
+                    unawaited(
+                      cacheSkipSegmentsForDownloadV2(
+                        _ref,
+                        item,
+                        episodeData,
+                      ),
+                    );
+                    await requestDownloadPermissionsV2();
                     final extension = _getFileExtension(
                       stream.url,
                       metadata.mimeType,
