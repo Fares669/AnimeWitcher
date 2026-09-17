@@ -202,26 +202,28 @@ void main() {
     );
 
     test(
-      'delete transaction is service-owned and UI has no lifecycle destruction',
+      'V2 delete uses manager ownership and keeps lifecycle work out of the UI',
       () {
-        expect(
-          service,
-          contains('Future<DownloadCommandOutcome> deleteDownloadOutcome('),
-        );
         final removeBody = _methodBody(
           provider,
           'Future<void> removeDownloads(List<DownloadItem> items) async {',
-          'void _setOptimisticStatus(',
+          'Future<void> pauseDownload(',
         );
-        expect(removeBody, contains('.deleteDownloadOutcome('));
+        expect(removeBody, contains('downloadManagerV2Provider'));
+        expect(
+          removeBody,
+          contains('manager.delete(DownloadLogicalId(logical))'),
+        );
+        expect(removeBody, contains('if (item.v2Owned && logical != null'));
         expect(
           removeBody,
           isNot(contains('FileDownloader().database.deleteRecordWithId')),
         );
-        expect(removeBody, isNot(contains('removeDownloadMetadata(')));
+        expect(removeBody, contains('storage.removeDownloadMetadata('));
         expect(removeBody, isNot(contains('.deleteDownloadedFile(')));
         expect(removeBody, isNot(contains('file.delete(recursive: true)')));
       },
+    )
     );
   });
 }

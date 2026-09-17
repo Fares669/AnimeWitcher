@@ -20,54 +20,45 @@ void main() {
     );
   });
 
-  test('DM-03 callers use typed control settlement', () {
+  test('V2 callers use logical control commands', () {
     final provider = File(
       'lib/features/library/presentation/downloads_provider.dart',
     ).readAsStringSync();
     final dialog = File(
       'lib/features/details/presentation/widgets/download_progress_dialog.dart',
     ).readAsStringSync();
-    expect(provider, contains('.pauseDownloadOutcome(taskId)'));
-    expect(provider, contains('.resumeDownloadOutcome(taskId)'));
-    expect(dialog, contains('cancelDownloadOutcome('));
-    expect(dialog, contains('resumeDownloadOutcome(data.taskId)'));
-    expect(dialog, contains('pauseDownloadOutcome(data.taskId)'));
+
+    expect(provider, contains('downloadManagerV2Provider'));
+    expect(provider, contains('.pause(DownloadLogicalId(logical))'));
+    expect(provider, contains('.resume(DownloadLogicalId(logical))'));
+    expect(dialog, contains('downloadManagerV2Provider'));
+    expect(dialog, contains('.cancel(DownloadLogicalId(logical))'));
+    expect(dialog, contains('resumeDownload(data.taskId)'));
+    expect(dialog, contains('pauseDownload(data.taskId)'));
+    expect(dialog, isNot(contains('downloadServiceProvider')));
   });
 
-  test('DM-07 removal delegates destructive cleanup to the service transaction', () {
+  test('V2 removal uses the logical manager and settles the visible row', () {
     final provider = File(
       'lib/features/library/presentation/downloads_provider.dart',
     ).readAsStringSync();
-    final service = File('lib/core/services/download_service.dart')
-        .readAsStringSync();
 
     final start = provider.indexOf('Future<void> removeDownloads(');
-    final end = provider.indexOf('\n  void _setOptimisticStatus(', start);
+    final end = provider.indexOf(
+      '\n  Future<void> pauseDownload(',
+      start,
+    );
     expect(start, greaterThanOrEqualTo(0));
     expect(end, greaterThan(start));
     final body = provider.substring(start, end);
 
-    expect(body, contains('.deleteDownloadOutcome('));
+    expect(body, contains('downloadManagerV2Provider'));
+    expect(body, contains('if (item.v2Owned && logical != null'));
+    expect(body, contains('manager.delete(DownloadLogicalId(logical))'));
     expect(body, contains('_deletingIds.addAll(droppedIds)'));
+    expect(body, contains('storage.removeDownloadMetadata('));
     expect(body, isNot(contains('FileDownloader().database.deleteRecordWithId')));
-    expect(body, isNot(contains('removeDownloadMetadata(')));
-    expect(body, isNot(contains('deleteDownloadedFile(')));
-    expect(body, isNot(contains('.cancelDownload(')));
+    expect(body, isNot(contains('.deleteDownloadOutcome(')));
     expect(body, isNot(contains('.cancelDownloadOutcome(')));
-
-    final deleteStart = service.indexOf(
-      'Future<DownloadCommandOutcome> deleteDownloadOutcome(',
-    );
-    final deleteEnd = service.indexOf(
-      'Future<DownloadCommandOutcome> pauseDownloadOutcome(',
-      deleteStart,
-    );
-    expect(deleteStart, greaterThanOrEqualTo(0));
-    expect(deleteEnd, greaterThan(deleteStart));
-    final deleteBody = service.substring(deleteStart, deleteEnd);
-    expect(deleteBody, contains('cancelDownloadOutcome('));
-    expect(deleteBody, contains('DownloadRuntimeOwnership.notOwned'));
-    expect(deleteBody, contains('deleteDownloadedFile(file)'));
-    expect(deleteBody, contains('DownloadCommandOutcome.settlingOwnership'));
   });
 }

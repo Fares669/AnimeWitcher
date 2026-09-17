@@ -99,7 +99,7 @@ void main() {
   );
 
   test(
-    'startup init failure is explicitly observed while commands can retry',
+    'startup V2 init failure is explicitly observed while commands can retry',
     () {
       final source = File('lib/main.dart').readAsStringSync();
       final callback = methodBody(
@@ -110,7 +110,7 @@ void main() {
       expect(callback, contains('unawaited('));
       expect(
         callback,
-        contains('ref.read(downloadServiceProvider).init().catchError('),
+        contains('ref.read(downloadManagerV2Provider).initialize().catchError('),
       );
     },
   );

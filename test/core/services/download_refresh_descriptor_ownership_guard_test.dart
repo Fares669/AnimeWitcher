@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('DM-31 keeps refresh descriptor lifecycle inside DownloadService', () {
+  test('DM-31 passes the refresh descriptor through V2 start ownership', () {
     final launcher = File(
       'lib/features/details/presentation/download_launcher.dart',
     ).readAsStringSync();
@@ -18,8 +18,10 @@ void main() {
     expect(launcher, isNot(contains('await refreshStore.remove(resolveUrl)')));
     expect(
       launcher,
-      contains('refreshDescriptor: DownloadUrlRefreshDescriptor('),
+      contains('final descriptor = DownloadUrlRefreshDescriptor('),
     );
+    expect(launcher, contains('sourceDescriptor: descriptor.toJson()'));
+    expect(launcher, contains('downloadManagerV2Provider'));
 
     expect(
       service,

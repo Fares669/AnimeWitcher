@@ -58,33 +58,33 @@ void main() {
     );
   });
 
-  test('delete waits for typed ownership settlement before hiding a row', () {
+  test('delete hides a V2 row after manager deletion', () {
     final source = File(
       'lib/features/library/presentation/downloads_provider.dart',
     ).readAsStringSync();
-    final method = source.substring(
-      source.indexOf('Future<void> removeDownloads'),
-    );
+    final methodStart = source.indexOf('Future<void> removeDownloads');
+    expect(methodStart, greaterThanOrEqualTo(0));
+    final method = source.substring(methodStart);
 
-    final typedDelete = method.indexOf('.deleteDownloadOutcome(');
-    final failClosed = method.indexOf('if (!safeToHide)', typedDelete);
+    final v2Delete = method.indexOf(
+      'manager.delete(DownloadLogicalId(logical))',
+    );
     final deletingIds = method.indexOf(
       '_deletingIds.addAll(droppedIds)',
-      failClosed,
+      v2Delete,
     );
     final hiddenState = method.indexOf('state = AsyncData(', deletingIds);
 
-    expect(typedDelete, greaterThanOrEqualTo(0));
-    expect(failClosed, greaterThan(typedDelete));
-    expect(deletingIds, greaterThan(failClosed));
+    expect(v2Delete, greaterThanOrEqualTo(0));
+    expect(deletingIds, greaterThan(v2Delete));
     expect(hiddenState, greaterThan(deletingIds));
+    expect(method, contains('if (item.v2Owned && logical != null'));
+    expect(method, contains('state = AsyncData('));
+    expect(method, contains('storage.removeDownloadMetadata('));
     expect(
       method,
-      contains(
-        'onTimeout: () => DownloadCommandOutcome.settlingOwnership',
-      ),
+      isNot(contains('FileDownloader().database.deleteRecordWithId')),
     );
-    expect(method, contains('state = AsyncData(await _refreshList());'));
     expect(method, isNot(contains('.deleteDownloadedFile(')));
   });
 }

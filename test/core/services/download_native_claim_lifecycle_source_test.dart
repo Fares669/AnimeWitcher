@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('native multipart claim offers are created only for background handoff', () {
+  test('V2 startup does not activate native multipart handoff', () {
     final service = File(
       'lib/core/services/download_service.dart',
     ).readAsStringSync();
@@ -21,6 +21,8 @@ void main() {
       contains('_parallel.releaseNativeBackgroundOffers();'),
       reason: 'unclaimed background offers must return to Dart after foreground reconciliation',
     );
-    expect(mainSource, contains('onAppBackgrounded()'));
+    expect(mainSource, contains('downloadManagerV2Provider'));
+    expect(mainSource, contains('.initialize()'));
+    expect(mainSource, isNot(contains('onAppBackgrounded()')));
   });
 }
