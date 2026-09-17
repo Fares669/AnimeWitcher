@@ -23,6 +23,23 @@ final class DownloadLogicalId {
   String toString() => value;
 }
 
+/// Builds a semantic variant key from user-visible media properties only.
+///
+/// Provider/server/source selection is deliberately excluded: those values are
+/// transport/source-resolution metadata and may change while the same logical
+/// download still owns the same destination. Keeping them out of identity
+/// prevents two server selections from becoming independent writers for one
+/// file.
+String downloadVariantKeyV2({
+  required String audioVariant,
+  String? quality,
+}) {
+  final normalizedAudio = audioVariant.trim().toLowerCase();
+  final audio = normalizedAudio.isEmpty ? 'default' : normalizedAudio;
+  final normalizedQuality = quality?.trim().toLowerCase() ?? '';
+  return normalizedQuality.isEmpty ? audio : '$audio|$normalizedQuality';
+}
+
 /// Builds a compact deterministic ID from stable application identity only.
 DownloadLogicalId logicalDownloadIdFor({
   required String animeId,
