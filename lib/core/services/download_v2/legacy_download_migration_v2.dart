@@ -2,6 +2,42 @@ import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
 import 'logical_download_store_v2.dart';
 
+const String kLegacyRestartRequiredSourceDescriptorV2 =
+    'legacyRestartRequired';
+
+/// Builds the application-owned placeholder used when an incomplete legacy
+/// presentation row has no usable refresh descriptor.
+///
+/// This deliberately contains no transport URL, headers, resume data, ranges,
+/// chunks, retry state, or native/package ownership. Startup can therefore keep
+/// the row visible while doing zero network work. Explicit restart must first
+/// reconstruct a fresh source from the stable provider/tracking metadata.
+Map<String, Object?> legacyRestartRequiredSourceDescriptorV2({
+  required String trackingUrl,
+  required String providerId,
+  String? sourceHint,
+  String? quality,
+}) {
+  final descriptor = <String, Object?>{
+    kLegacyRestartRequiredSourceDescriptorV2: true,
+    'trackingUrl': trackingUrl.trim(),
+    'providerId': providerId.trim(),
+  };
+  final normalizedSource = sourceHint?.trim();
+  if (normalizedSource != null && normalizedSource.isNotEmpty) {
+    descriptor['sourceHint'] = normalizedSource;
+  }
+  final normalizedQuality = quality?.trim();
+  if (normalizedQuality != null && normalizedQuality.isNotEmpty) {
+    descriptor['quality'] = normalizedQuality;
+  }
+  return descriptor;
+}
+
+bool sourceDescriptorRequiresLegacyRestartV2(
+  Map<String, Object?> descriptor,
+) => descriptor[kLegacyRestartRequiredSourceDescriptorV2] == true;
+
 /// Presentation-only legacy input accepted by the V2 migration boundary.
 ///
 /// Deliberately absent: package/native task identity, chunk/range state,
