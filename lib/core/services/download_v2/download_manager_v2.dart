@@ -539,9 +539,17 @@ final class DownloadManagerV2 {
   }
 
   Future<String> _canonicalDestinationPath(String destinationPath) async {
-    final file = await _destinationFile(destinationPath);
-    final normalized = p.normalize(file.absolute.path);
-    return Platform.isWindows ? normalized.toLowerCase() : normalized;
+    // Android/desktop production paths are absolute. iOS intentionally keeps
+    // app-documents-relative paths stable across container relocation; resolve
+    // those against Documents only on iOS. Unit tests on other platforms do
+    // not need a path_provider plugin just to compare relative keys.
+    final normalized = p.normalize(destinationPath);
+    if (!p.isAbsolute(normalized) && !Platform.isIOS) {
+      return 'relative:$normalized';
+    }
+    final file = await _destinationFile(normalized);
+    final canonical = p.normalize(file.absolute.path);
+    return Platform.isWindows ? canonical.toLowerCase() : canonical;
   }
 
   Future<LogicalDownloadRecordV2?> _findDestinationConflict(
