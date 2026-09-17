@@ -5,15 +5,15 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'background_downloader_gateway.dart';
+import 'download_source_resolver_v2.dart';
 import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
 import 'logical_download_store_v2.dart';
 
 /// Application request for one logical episode download.
 ///
-/// The URL/headers are the currently resolved source for this generation.
-/// Task 7 replaces that transient source input with DownloadSourceResolver while
-/// keeping the durable [sourceDescriptor] as the restart authority.
+/// Transport URLs and headers are deliberately absent. Every fresh generation
+/// resolves them from [sourceDescriptor] through [DownloadSourceResolverV2].
 final class DownloadStartRequestV2 {
   const DownloadStartRequestV2({
     required this.logicalId,
@@ -22,8 +22,6 @@ final class DownloadStartRequestV2 {
     required this.variantKey,
     required this.destinationPath,
     required this.sourceDescriptor,
-    required this.url,
-    required this.headers,
     required this.allowPause,
     required this.retries,
     required this.parallelChunks,
@@ -32,7 +30,6 @@ final class DownloadStartRequestV2 {
        assert(episodeKey != ''),
        assert(variantKey != ''),
        assert(destinationPath != ''),
-       assert(url != ''),
        assert(retries >= 0),
        assert(parallelChunks > 0);
 
@@ -42,8 +39,6 @@ final class DownloadStartRequestV2 {
   final String variantKey;
   final String destinationPath;
   final Map<String, Object?> sourceDescriptor;
-  final String url;
-  final Map<String, String> headers;
   final int? expectedBytes;
   final bool allowPause;
   final int retries;
@@ -54,19 +49,22 @@ final class DownloadStartRequestV2 {
 ///
 /// Transport remains fully delegated to [BackgroundDownloaderGateway]. This
 /// manager owns logical identity, user intent, duplicate command coalescing,
-/// lifecycle ordering, and the generation fence that rejects stale package
-/// callbacks.
+/// lifecycle ordering, source renewal, and the generation fence that rejects
+/// stale package callbacks.
 final class DownloadManagerV2 {
   DownloadManagerV2({
     required LogicalDownloadStoreV2 store,
     required BackgroundDownloaderGateway gateway,
+    required DownloadSourceResolverV2 sourceResolver,
     int Function()? nowMillis,
   }) : _store = store,
        _gateway = gateway,
+       _sourceResolver = sourceResolver,
        _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final LogicalDownloadStoreV2 _store;
   final BackgroundDownloaderGateway _gateway;
+  final DownloadSourceResolverV2 _sourceResolver;
   final int Function() _nowMillis;
 
   final _commands = _LogicalCommandQueue();
@@ -180,7 +178,7 @@ final class DownloadManagerV2 {
   }
 
   /// Resumes the exact current package transfer when possible, otherwise starts
-  /// a fresh generation from byte zero.
+  /// a fresh generation from byte zero using a newly resolved source.
   Future<DownloadTransportSnapshot> resume(DownloadLogicalId logicalId) {
     return _commands.run(logicalId, () async {
       await initialize();
@@ -251,14 +249,17 @@ final class DownloadManagerV2 {
 
   Future<DownloadTransportSnapshot> _startFreshGeneration(
     DownloadStartRequestV2 request,
-    LogicalDownloadRecordV2? previous,
-  ) async {
+    LogicalDownloadRecordV2? previous, {
+    bool cancelPreviousEvenIfFinal = false,
+  }) async {
     final previousHandle = previous == null
         ? null
         : await _exactHandle(previous.taskId);
+    final source = await _sourceResolver.resolve(request.sourceDescriptor);
     final generation = (previous?.generation ?? 0) + 1;
     final taskId = taskIdForGeneration(request.logicalId, generation);
     final updatedAtMillis = _nowMillis();
+    final expectedBytes = source.expectedBytes ?? request.expectedBytes;
 
     final nextRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
@@ -271,7 +272,7 @@ final class DownloadManagerV2 {
       intent: DownloadUserIntent.active,
       destinationPath: request.destinationPath,
       sourceDescriptor: Map<String, Object?>.from(request.sourceDescriptor),
-      expectedBytes: request.expectedBytes,
+      expectedBytes: expectedBytes,
       updatedAtMillis: updatedAtMillis,
     );
 
@@ -284,14 +285,15 @@ final class DownloadManagerV2 {
       taskId: taskId,
       status: DownloadTransportStatus.queued,
       progress: 0,
-      totalBytes: request.expectedBytes,
-      transferredBytes: request.expectedBytes == null ? null : 0,
+      totalBytes: expectedBytes,
+      transferredBytes: expectedBytes == null ? null : 0,
     );
     _snapshots[request.logicalId] = queued;
 
-    if (previousHandle != null && !previousHandle.current.isFinal) {
+    if (previousHandle != null &&
+        (cancelPreviousEvenIfFinal || !previousHandle.current.isFinal)) {
       final accepted = await previousHandle.cancel();
-      if (!accepted) {
+      if (!accepted && !cancelPreviousEvenIfFinal) {
         throw StateError(
           'Could not stop obsolete transport ${previousHandle.taskId}',
         );
@@ -301,9 +303,9 @@ final class DownloadManagerV2 {
     final handle = await _gateway.start(
       DownloadTaskSpecV2(
         taskId: taskId,
-        url: request.url,
+        url: source.url,
         destinationPath: request.destinationPath,
-        headers: request.headers,
+        headers: source.headers,
         allowPause: request.allowPause,
         retries: request.retries,
         parallelChunks: request.parallelChunks,
@@ -388,7 +390,12 @@ final class DownloadManagerV2 {
 
     late final StreamSubscription<DownloadTransportSnapshot> subscription;
     subscription = handle.snapshots.listen((snapshot) {
-      _acceptSnapshot(logicalId, snapshot);
+      final accepted = _acceptSnapshot(logicalId, snapshot);
+      if (accepted &&
+          snapshot.status == DownloadTransportStatus.failed &&
+          snapshot.failureCategory == DownloadFailureCategory.sourceExpired) {
+        _scheduleSourceRefresh(logicalId, snapshot.taskId);
+      }
       if (snapshot.isFinal) {
         final registered = _subscriptionsByTaskId[snapshot.taskId];
         if (identical(registered, subscription)) {
@@ -400,20 +407,44 @@ final class DownloadManagerV2 {
     _subscriptionsByTaskId[handle.taskId] = subscription;
   }
 
-  void _acceptSnapshot(
+  bool _acceptSnapshot(
     DownloadLogicalId logicalId,
     DownloadTransportSnapshot snapshot,
   ) {
-    if (_currentTaskIds[logicalId] != snapshot.taskId) return;
+    if (_currentTaskIds[logicalId] != snapshot.taskId) return false;
     if (_currentIntents[logicalId] == DownloadUserIntent.paused &&
         snapshot.status != DownloadTransportStatus.complete) {
       _snapshots[logicalId] = _snapshotWithStatus(
         snapshot,
         DownloadTransportStatus.paused,
       );
-      return;
+      return true;
     }
     _snapshots[logicalId] = snapshot;
+    return true;
+  }
+
+  void _scheduleSourceRefresh(
+    DownloadLogicalId logicalId,
+    String failedTaskId,
+  ) {
+    unawaited(
+      _commands.run(logicalId, () async {
+        final record = await _store.get(logicalId);
+        if (record == null ||
+            record.intent != DownloadUserIntent.active ||
+            record.taskId != failedTaskId) {
+          return;
+        }
+        final request = _requests[logicalId];
+        if (request == null) return;
+        await _startFreshGeneration(
+          request,
+          record,
+          cancelPreviousEvenIfFinal: true,
+        );
+      }),
+    );
   }
 }
 
