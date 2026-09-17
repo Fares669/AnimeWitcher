@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
 import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
 
@@ -74,4 +78,56 @@ final class InMemoryDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
   void record(DownloadDiagnosticEventV2 event) {
     _events.add(event);
   }
+}
+
+/// Append-only JSONL diagnostics for production V2 downloads.
+///
+/// The sink accepts only [DownloadDiagnosticEventV2], so transport URLs,
+/// request headers, signed query parameters and free-form exception text never
+/// cross this serialization boundary. File I/O is serialized and deliberately
+/// isolated from download control: a logging failure can never fail a transfer.
+final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
+  FileDownloadDiagnosticsV2({
+    required Future<Directory> Function() directoryProvider,
+    required bool Function() enabled,
+    int Function()? nowMillis,
+    this.fileName = 'download_v2.jsonl',
+  }) : _directoryProvider = directoryProvider,
+       _enabled = enabled,
+       _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
+
+  final Future<Directory> Function() _directoryProvider;
+  final bool Function() _enabled;
+  final int Function() _nowMillis;
+  final String fileName;
+
+  Future<void> _tail = Future<void>.value();
+
+  @override
+  void record(DownloadDiagnosticEventV2 event) {
+    if (!_enabled()) return;
+    final payload = <String, Object?>{
+      'timestampMillis': _nowMillis(),
+      ...event.toJson(),
+    };
+    _tail = _tail.then<void>((_) async {
+      try {
+        final directory = await _directoryProvider();
+        if (!await directory.exists()) {
+          await directory.create(recursive: true);
+        }
+        final file = File('${directory.path}${Platform.pathSeparator}$fileName');
+        await file.writeAsString(
+          '${jsonEncode(payload)}\n',
+          mode: FileMode.append,
+          flush: true,
+        );
+      } catch (_) {
+        // Diagnostics are observability only and never transport authority.
+      }
+    });
+  }
+
+  /// Testing/support hook for callers that need the append queue settled.
+  Future<void> flush() => _tail;
 }
