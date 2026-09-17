@@ -223,7 +223,6 @@ void main() {
         expect(removeBody, isNot(contains('.deleteDownloadedFile(')));
         expect(removeBody, isNot(contains('file.delete(recursive: true)')));
       },
-    )
     );
   });
 }
