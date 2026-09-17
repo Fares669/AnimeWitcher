@@ -37,15 +37,14 @@ final downloadProgressProvider = Provider<Map<String, DownloadProgressData>>((
       ? ref.read(downloadManagerV2Provider)
       : null;
   final result = <String, DownloadProgressData>{};
+  final trackingOwners = <String, String?>{};
 
   for (final item in downloads) {
     final logicalId = item.logicalId?.trim();
-    final snapshot = logicalId == null || logicalId.isEmpty
-        ? null
-        : manager?.snapshotFor(DownloadLogicalId(logicalId));
+    if (logicalId == null || logicalId.isEmpty) continue;
+    final snapshot = manager?.snapshotFor(DownloadLogicalId(logicalId));
     final progress = (snapshot?.progress ?? item.progress).clamp(0.0, 1.0);
-    final key = item.trackingUrl.trim();
-    if (key.isEmpty) continue;
+    final key = logicalId;
 
     result[key] = DownloadProgressData(
       taskId: item.id,
@@ -55,6 +54,26 @@ final downloadProgressProvider = Provider<Map<String, DownloadProgressData>>((
       totalSize: snapshot?.totalBytes ?? item.totalBytes ?? -1,
       status: item.status,
     );
+
+    // Temporary read-only compatibility for callers that have not yet moved
+    // from tracking URL to logical identity. Never create an alias when two
+    // logical variants share the same tracking URL; that would reintroduce the
+    // collision this provider is intended to eliminate.
+    final trackingAlias = item.trackingUrl.trim();
+    if (trackingAlias.isNotEmpty) {
+      if (!trackingOwners.containsKey(trackingAlias)) {
+        trackingOwners[trackingAlias] = logicalId;
+      } else if (trackingOwners[trackingAlias] != logicalId) {
+        trackingOwners[trackingAlias] = null;
+      }
+    }
+  }
+
+  for (final entry in trackingOwners.entries) {
+    final owner = entry.value;
+    if (owner == null) continue;
+    final data = result[owner];
+    if (data != null) result[entry.key] = data;
   }
 
   return Map<String, DownloadProgressData>.unmodifiable(result);
