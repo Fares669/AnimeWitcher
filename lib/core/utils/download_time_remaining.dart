@@ -2,8 +2,24 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/widgets.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
-import '../../features/library/presentation/download_progress_v2_provider.dart';
-export '../../features/library/presentation/download_progress_v2_provider.dart';
+/// Package-neutral presentation values projected from the V2 parent transfer.
+class DownloadProgressData {
+  const DownloadProgressData({
+    required this.taskId,
+    required this.progress,
+    required this.networkSpeed,
+    required this.timeRemaining,
+    required this.status,
+    this.totalSize = -1,
+  });
+
+  final String taskId;
+  final double progress;
+  final double networkSpeed;
+  final Duration timeRemaining;
+  final int totalSize;
+  final TaskStatus status;
+}
 
 /// Formats [DownloadProgressData.timeRemaining] with Arabic dual/plural units.
 String formatDownloadTimeRemaining(

@@ -1,31 +1,9 @@
-import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
+import '../../../core/utils/download_time_remaining.dart' show DownloadProgressData;
 import 'downloads_provider.dart';
-
-/// Package-neutral presentation data for the downloads library.
-///
-/// Values are projected from the V2 parent snapshot only. No V1 executor,
-/// package database row, or child-chunk state is consulted.
-class DownloadProgressData {
-  const DownloadProgressData({
-    required this.taskId,
-    required this.progress,
-    required this.networkSpeed,
-    required this.timeRemaining,
-    required this.status,
-    this.totalSize = -1,
-  });
-
-  final String taskId;
-  final double progress;
-  final double networkSpeed;
-  final Duration timeRemaining;
-  final int totalSize;
-  final TaskStatus status;
-}
 
 final downloadProgressProvider = Provider<Map<String, DownloadProgressData>>((
   ref,
