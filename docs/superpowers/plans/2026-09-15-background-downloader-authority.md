@@ -42,6 +42,7 @@ This section is binding for every AI/engineer continuing this branch.
 - Zero-byte stale transport state may be replaced only after the old package-owned transfer is settled and ownership is released.
 - Ordinary production/preview builds remain fail-closed for plugin-parallel until the device matrix passes. The compile-time acceptance override is for dedicated acceptance only.
 - iOS legacy URLSession multipart and plugin-owned chunks must never both bridge the same logical progress/update authority.
+- Conversion from a logical `DownloadTask` to a plugin-owned `ParallelDownloadTask` must preserve the complete HTTP request contract, including method, headers, effective URL/query parameters, and request body.
 
 ## Current implementation snapshot
 
@@ -61,18 +62,20 @@ This section is binding for every AI/engineer continuing this branch.
 - Startup recovery waits for the package's native inventory-settlement window before querying/canceling/rescheduling killed tasks, so legacy quarantine cannot race a late native writer.
 - Offline holds keep terminal plugin Transfer/database projections terminal and expose `waitingForNetwork` only as AnimeWitcher's logical/UI projection; reconnect resumes through the package Transfer lifecycle.
 - Plugin-owned transport tasks use the bounded package retry budget `kDownloadTaskRetries = 3`; URL refresh, resource validation, integrity, offline, and user-intent policy remain application-owned.
-- Runtime inventory hardening now treats explicit paused/terminal rows as released, treats statusless or ambiguous rows as `unknown`, lets active runtime evidence override stale persisted pause, and projects runtime status during live attach; live recovery delegates ownership decisions to the transport.
+- Runtime inventory hardening distinguishes native/retry/paused inventory using package/database/Transfer evidence; explicit paused/terminal evidence is released, ambiguity remains `unknown`, and active evidence blocks replacement writers.
 
 ### Current automated blocker
 
-The previously recorded automated blocker has been resolved.
+The previously recorded automated blocker was resolved, but the independent full-branch review reopened one automatable request-contract bug as Task 42.
 
 - Historical failure: Flutter Checks run **35126994058** on `b957e6c9ba7c1cfabc6462c6c2e099a42c15fa83` had two stale source-contract failures; native logger typecheck, source generation, and analyze were already green.
 - The independent lifecycle audit found four real gaps and they were implemented on this branch: settled startup inventory, runtime-inventory ownership, terminal-safe offline projection, and bounded plugin transport retries.
 - A stale projection-only parent-ownership source test was then updated in commit `94ac956036647050c148f5eac3aea1bfed4f1e7a` to assert the runtime-inventory contract.
 - Earlier verified automated head: CI run **35143865770** on `94ac956036647050c148f5eac3aea1bfed4f1e7a` was green: native logger typecheck PASS, source generation PASS, Flutter analyze PASS, and full Flutter tests PASS (`1569` passed, `1` skipped).
+- Independent review on 2026-09-17 verified the exact upstream 9.6.2 implementation before changing ownership logic: `BaseDownloader.allTasks()` includes retry and paused stores and `NativeDownloader.allTasks()` merges those with the native queue. The temporary assumption that every `allTasks` item is a live writer was rejected and the test-only commit was reverted in `faeabc1ae9d62175bcb45873a12a32e68696ea1b`.
+- The same review found a real request-contract loss: `buildAdaptiveDownloadTask()` copies `httpRequestMethod` but omits `template.post` even though `ParallelDownloadTask` supports `super.post`. Task 42 tracks the fix.
 
-**Current state:** Tasks 35–41 are DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; Task 33 remains the only device-only gate. Task 33 remains a real-device-only acceptance gate; the manual acceptance workflow remains untriggered and no IPA has been built.
+**Current state:** Tasks 35–41 remain complete for their verified scope; Task 42 is the current automatable blocker. Task 33 remains the physical-device acceptance gate after Task 42 is green. The manual acceptance workflow remains untriggered and no IPA has been built.
 
 ## Original task status (Tasks 1–25)
 
@@ -190,7 +193,7 @@ Ruling: retain the legacy executor and custom Range/iOS paths until the real-dev
 - [x] Convert the old static plan into this living status/handoff tracker.
 - [x] Add the mandatory update protocol above.
 - [x] Record this session's test-contract fixes, dependency-design alignment, CI evidence, lifecycle audit, post-audit hardening, and remaining device gate before handoff.
-- [x] Record every implementation/verification commit or discovery from this session through Task 41 in the corresponding task/status sections.
+- [x] Record every implementation/verification commit or discovery from this session through Task 42 in the corresponding task/status sections.
 
 ### Task 32 — Restore green automated verification on the current branch
 
@@ -206,7 +209,7 @@ Ruling: retain the legacy executor and custom Range/iOS paths until the real-dev
 
 ### Task 33 — Real-device acceptance, cleanup, and one final IPA
 
-**Status: BLOCKED / DEVICE ONLY; Tasks 35–41 are DONE for the automatable scope; the physical-device matrix remains open.**
+**Status: BLOCKED / DEVICE ONLY; Task 42 must be green before this gate is run.**
 
 Do not trigger the IPA before this gate.
 
@@ -314,16 +317,31 @@ Duplicate cancellation previously started from allTasks, but a plugin database r
 Evidence: test commits `30c4095b9e444b46031a22e367cf0c1c13b9d824`, `a7a43805cf1d1b2f6b9f8b336347de1eefae9a76`, implementation commit `a256f8534a258e674d73737bbd78993edfeca5ef`, and final CI run **35155579187** on **b0f558bce908306e7b0ed845d1a6439250f1efa2**.
 ### Task 41 — Treat ambiguous package inventory as unknown, not live
 
-**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run 35155579187.**
+**Status: DONE on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; rechecked by final CI run 35155579187 and exact upstream 9.6.2 source review on 2026-09-17.**
 
-FileDownloader.allTasks(allGroups: true) combines native inventory with package retry/paused stores. The adapter now distinguishes explicit release evidence from ambiguity while retaining single-writer fail-closed behavior.
+`FileDownloader.allTasks(allGroups: true)` is implemented in 9.6.2 by merging `BaseDownloader.allTasks()` retry/paused storage with the native platform queue. Therefore presence alone is not positive writer proof; the adapter must distinguish explicit release evidence from ambiguity while retaining single-writer fail-closed behavior.
 
-- [x] Return notOwned only for explicitly paused or terminal rows, and owned only for non-paused rows with active status evidence.
+- [x] Return notOwned only for explicitly paused or terminal rows, and owned only for rows with active status evidence.
 - [x] Return unknown for matching inventory without enough status evidence, and exclude unproven rows from live-transfer recovery.
 - [x] Let active runtime evidence override stale persisted paused projections and project runtime status during live attach.
 - [x] Add regression coverage for ambiguous, settled, stale-paused, and live-attach inventory and verify the complete CI pipeline.
+- [x] Recheck the package implementation before changing this rule: `BaseDownloader.allTasks()` includes `getPausedTasks()`, while `NativeDownloader.allTasks()` merges that result with platform `allTasks`; do not simplify inventory presence to unconditional `owned`.
 
 Evidence: test commits `500ea5a2edee33a3d194f8ac9646649050767fb2`, `30c4095b9e444b46031a22e367cf0c1c13b9d824`, `d9fad3f9ddb30b89d7e7422507be64fa1484b5ef`, `037bfc7de96c7e3591e6eaa9f5de8f06c1ca9aff`, `f39e638ac7a9d52f65d2b0a437a4fe58a4fef6ba`, and `3002ea83b1827c0f311f308a724185a676bb8c1c`; implementation commits `86fd802f9114b255861810f9eb40378996a32e57`, `67a4f0dc605331c7a740d7765639c2153b7d2557`, `2fe8033526887241f8fb4f9aaa041864bd2b2a94`, `efefc086b8cefa521dd5a5e0f9773a1efdbc4b1b`, and `b0f558bce908306e7b0ed845d1a6439250f1efa2`; final CI run **35155579187** on **b0f558bce908306e7b0ed845d1a6439250f1efa2** passed.
+
+### Task 42 — Preserve the complete HTTP request contract during plugin-parallel conversion
+
+**Status: IMPLEMENTING; RED coverage added in `73f12710e8e72e06750ef15b5f174b51b3f8ec0f`.**
+
+Independent review against the exact `background_downloader` 9.6.2 constructor contract found that `buildAdaptiveDownloadTask()` copies `template.httpRequestMethod` but omits `template.post`. `ParallelDownloadTask` explicitly supports `super.post`, so converting a POST-backed logical download currently changes the request body to null. That can invalidate signed/body-authenticated sources even though GET downloads remain unaffected.
+
+- [x] Add a behavioral RED test that converts a POST `DownloadTask` and requires both method and body to survive unchanged.
+- [ ] Pass `post: template.post` when constructing `ParallelDownloadTask`.
+- [ ] Recheck every `ParallelDownloadTask` constructor field against the source `DownloadTask` and 9.6.2 constructor to ensure no other request/lifecycle field is dropped.
+- [ ] Run the focused plugin-parallel contract test.
+- [ ] Run Flutter analyze, full Flutter tests, and native logger typecheck on the resulting head.
+- [ ] Record the implementation commit and green CI run here before marking DONE.
+
 ## Verification ledger
 
 - Historical clean full CI before the latest recovery work: run **35103545336** on `ac82f44959606ed2aa60c6fa08f0d24aaec2542f` — generation/analyze/full Flutter tests/native Swift green.
@@ -335,11 +353,14 @@ Evidence: test commits `500ea5a2edee33a3d194f8ac9646649050767fb2`, `30c4095b9e44
 - Tracker-head verification: run **35156377270** on `9157697fba88e0324bd7332936685b2d22f8d70c` — status success; the tracker-only head retained native logger typecheck PASS, source generation PASS, Flutter analyze PASS, and full Flutter tests PASS (`1584` passed, `1` skipped).
 - The current green run includes the Task 26–32 and Task 34 focused coverage: plugin contract, zero-byte source replacement, runtime parent/child ownership, startup settlement, offline terminal projection, bounded retry, relaunch/single-writer, pause/resume, cancel routing, queue, and source-refresh tests.
 - Final hardening commits for Tasks 35–41 are on verified automated head b0f558bce908306e7b0ed845d1a6439250f1efa2; CI run **35155579187** passed: native typecheck, source generation, analyze, and full Flutter tests (`1584` passed, `1` skipped).
+- 2026-09-17 review correction: the temporary `allTasks == active writer` assumption was disproved from exact upstream 9.6.2 source and reverted before production code was changed (`faeabc1ae9d62175bcb45873a12a32e68696ea1b`).
+- Task 42 RED test commit: `73f12710e8e72e06750ef15b5f174b51b3f8ec0f`; green implementation evidence pending.
 - No current run may count as final device acceptance merely because it builds; Task 33 still requires actual iOS device evidence.
 
 ## Handoff: exact next actions
 
-1. Automated Tasks 26–32 and Tasks 34–41 are complete; Task 33 remains the only physical-device gate.
-2. Task 33 is the only remaining required physical-device gate: run the iOS plugin-parallel acceptance workflow and the real-device matrix before changing the production platform gate.
-3. Only after real-device acceptance passes may Tasks 14/16/17 cleanup remove the legacy executor, obsolete iOS multipart state, or transport-owned JobStore fields.
-4. Do not merge PR #246 or enable a permanent platform acceptance gate without explicit user approval.
+1. Complete Task 42 and return the automated branch to green.
+2. Continue the independent changed-file audit; any further verified finding must become Task 43+ before or with implementation.
+3. After every automatable review finding is closed and green, Task 33 is the remaining required physical-device gate: run the iOS plugin-parallel acceptance workflow and real-device matrix before changing the production platform gate.
+4. Only after real-device acceptance passes may Tasks 14/16/17 cleanup remove the legacy executor, obsolete iOS multipart state, or transport-owned JobStore fields.
+5. Do not merge PR #246 or enable a permanent platform acceptance gate without explicit user approval.
