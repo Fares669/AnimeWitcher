@@ -115,6 +115,37 @@ void main() {
       expect(completed, contains('length != expectedBytes'));
     });
 
+    test('presentation metadata is durable before a V2 writer can start', () {
+      final launcher = _read(
+        'lib/features/details/presentation/download_launcher.dart',
+      );
+      final metadataWrite = launcher.indexOf('.saveDownloadMetadata(');
+      final transportStart = launcher.indexOf('downloadManager.start(');
+
+      expect(metadataWrite, greaterThanOrEqualTo(0));
+      expect(transportStart, greaterThan(metadataWrite));
+      expect(launcher, contains('saveDownloadMetadata(\n                            logicalId.value,'));
+      expect(launcher, contains('removeDownloadMetadata(logicalId.value)'));
+    });
+
+    test('logical variant identity is semantic, never server/source identity', () {
+      final launcher = _read(
+        'lib/features/details/presentation/download_launcher.dart',
+      );
+
+      expect(launcher, contains('downloadVariantKeyV2('));
+      expect(launcher, isNot(contains('final variantKey = <String>[')));
+    });
+
+    test('progress projection is keyed by logical identity instead of URL', () {
+      final progress = _read(
+        'lib/features/library/presentation/download_progress_v2_provider.dart',
+      );
+
+      expect(progress, contains('final key = logicalId;'));
+      expect(progress, isNot(contains('final key = item.trackingUrl.trim();')));
+    });
+
     test('production manager receives the explicit integrity verifier provider', () {
       final provider = _read(
         'lib/core/services/download_v2/download_v2_provider.dart',
