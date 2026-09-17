@@ -16,15 +16,15 @@
 
 **Update this section on every continuation that materially changes plan state.** A task is counted complete only after its implementation and required verification are actually complete.
 
-**Last reconciled:** 2026-09-17, PR #247, branch `feat/download-manager-v2`, observed head before this plan-only update: `ddfa56a55cf8c5707b939b5108890039bb200e26`.
+**Last reconciled:** 2026-09-17, PR #247, branch `feat/download-manager-v2`, exact verified head: `994f8dea65326f32c66feb9770948ab03affb10b`.
 
 ### Overall count
 
 - **Trackable task groups:** 16 total (`Task 1` through `Task 15`, plus explicit `Task 12A` for iOS CI + logging/diagnostics).
-- **Complete:** **10 / 16** — Tasks 1-10.
-- **Remaining:** **6 / 16** — Tasks 11, 12, 12A, 13, 14, 15.
-- **Currently in progress:** Task 11 and Task 12A.
-- **Blocked by real devices:** Task 13; therefore Task 14 is also blocked until Task 13 has real-device evidence.
+- **Complete:** **13 / 16** — Tasks 1-12 plus Task 12A.
+- **Remaining:** **3 / 16** — Tasks 13, 14, 15.
+- **Currently in progress:** Task 15 automated final review; physical-device acceptance remains the release gate.
+- **Blocked by real devices:** Task 13; therefore Task 14 and final merge readiness remain blocked until Task 13 has real-device evidence.
 
 ### Status table
 
@@ -40,12 +40,12 @@
 | 8. Integrity gate | ✅ Complete | Logical completion is committed only after final-file verification. |
 | 9. Parallel package parent + diagnostics DTO | ✅ Complete | 5-part mode uses one `ParallelDownloadTask` parent; safe allowlisted diagnostics added. |
 | 10. Legacy migration policy A | ✅ Complete | Completed legacy preserved; incomplete legacy does not import transport state. |
-| 11. Riverpod + production cutover | 🟡 In progress | Finish provider/wiring and production call-site cutover; no V1 fallback. |
-| 12. Native authority cleanup + regression matrix | ⬜ Remaining | Remove independent native transport authority after cutover and complete automated matrix. |
-| 12A. iOS CI + runtime/native diagnostics | 🟡 In progress | CI/build-log plumbing and diagnostic primitives exist; finish production wiring/verification and record exact evidence. |
+| 11. Riverpod + production cutover | ✅ Complete | Explicit store/gateway/source/integrity/diagnostics providers, V2 UI routing, and exact-head guard coverage are green. |
+| 12. Native authority cleanup + regression matrix | ✅ Complete | All native multipart progress/retry/completion/promotion bridges now require legacy-owned `multipartPlans`; V2 package children remain opaque. |
+| 12A. iOS CI + runtime/native diagnostics | ✅ Complete | Production `documents/log` wiring, redaction tests, native logger check, and exact-head iOS build evidence recorded below. |
 | 13. Physical-device acceptance | ⛔ Device-gated | Must be executed on real iOS + Android hardware; CI/mocks cannot satisfy it. |
 | 14. Remove V1 | ⛔ Blocked by Task 13 | Delete V1 transport only after physical-device gate is complete. |
-| 15. Final deep review / merge readiness | ⬜ Remaining | Exact-head analyze/tests/CI + spec review + fix every discrepancy. |
+| 15. Final deep review / merge readiness | 🟡 In progress | Automated cutover review is complete; final readiness remains gated by real-device Task 13 evidence. |
 
 ### Known verification context
 
@@ -198,19 +198,19 @@ Acceptance retained:
 - Create/finish: `test/core/services/download_v2/download_v2_cutover_guard_test.dart`
 
 **Required acceptance:**
-- [ ] Architectural guard scans V2/production cutover sources and rejects `PersistentParallelDownload`, `DownloadRangeTransfer`, or V1 transport imports on the V2 path.
-- [ ] One UI download action invokes one V2 manager path, never V1 + V2 simultaneously.
-- [ ] Production downloads list no longer reconciles `FileDownloader().database` directly; it projects V2 logical records/snapshots.
-- [ ] `download_v2_provider.dart` wires concrete logical store, package gateway, source resolver, integrity verifier, and diagnostics as keep-alive production dependencies.
-- [ ] `download_launcher.dart` keeps existing source-selection/confirmation UX but creates `DownloadStartRequestV2` and calls V2.
-- [ ] `downloads_provider.dart` projects V2 state and routes pause/resume/cancel/delete to V2 logical IDs.
-- [ ] `downloaded_file_provider.dart` resolves both migrated completed legacy files and V2 completed records without reintroducing V1 transport ownership.
-- [ ] V2 initializes once from application/provider lifecycle.
-- [ ] Persisted transport policy survives process recreation: `allowPause`, retry policy, and especially user-selected `parallelChunks` must not silently revert to 1 after restart.
-- [ ] Source resolver adapter may reuse V1 provider/source-selection knowledge, but not V1 transfer state or executor ownership.
-- [ ] Focused V2 tests green.
-- [ ] Analyzer has no V2/cutover errors.
-- [ ] Full-suite result inspected and V2 regressions separated from known unrelated baseline failures.
+- [x] Architectural guard scans V2/production cutover sources and rejects `PersistentParallelDownload`, `DownloadRangeTransfer`, or V1 transport imports on the V2 path.
+- [x] One UI download action invokes one V2 manager path, never V1 + V2 simultaneously.
+- [x] Production downloads list no longer reconciles `FileDownloader().database` directly; it projects V2 logical records/snapshots.
+- [x] `download_v2_provider.dart` wires concrete logical store, package gateway, source resolver, integrity verifier, and diagnostics as keep-alive production dependencies.
+- [x] `download_launcher.dart` keeps existing source-selection/confirmation UX but creates `DownloadStartRequestV2` and calls V2.
+- [x] `downloads_provider.dart` projects V2 state and routes pause/resume/cancel/delete to V2 logical IDs.
+- [x] `downloaded_file_provider.dart` resolves both migrated completed legacy files and V2 completed records without reintroducing V1 transport ownership.
+- [x] V2 initializes once from application/provider lifecycle.
+- [x] Persisted transport policy survives process recreation: `allowPause`, retry policy, and especially user-selected `parallelChunks` must not silently revert to 1 after restart.
+- [x] Source resolver adapter may reuse V1 provider/source-selection knowledge, but not V1 transfer state or executor ownership.
+- [x] Focused V2 tests green.
+- [x] Analyzer has no V2/cutover errors.
+- [x] Full-suite result inspected and V2 regressions separated from known unrelated baseline failures.
 
 **Run:**
 ```bash
@@ -231,17 +231,17 @@ flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 - Modify/create V2 tests.
 
 **Required acceptance:**
-- [ ] Automated matrix covers start, duplicate start, pause, resume, pause + manager recreation, active + missing recovery, offline/held projection, 403 refresh, cancel/delete stale callback, integrity failure, five-chunk parent mapping, multiple episodes, completed legacy preserve, incomplete legacy restart.
-- [ ] Remove independent native transport ownership from the V2 path. Native code may keep OS integration, completion delivery, diagnostics, Live Activity/presentation, and telemetry only.
-- [ ] No native V2 code independently chooses chunk/range ownership, creates a second retry engine, adopts URL matches, or promotes multipart files outside `background_downloader` ownership.
-- [ ] Review `AppDelegate` background-session handling against `background_downloader` requirements and keep only callbacks needed for package/OS lifecycle integration.
-- [ ] Run focused V2 tests, analyzer, native typecheck, and iOS build job.
+- [x] Automated matrix covers start, duplicate start, pause, resume, pause + manager recreation, active + missing recovery, offline/held projection, 403 refresh, cancel/delete stale callback, integrity failure, five-chunk parent mapping, multiple episodes, completed legacy preserve, incomplete legacy restart.
+- [x] Remove independent native transport ownership from the V2 path. Native code may keep OS integration, completion delivery, diagnostics, Live Activity/presentation, and telemetry only.
+- [x] No native V2 code independently chooses chunk/range ownership, creates a second retry engine, adopts URL matches, or promotes multipart files outside `background_downloader` ownership.
+- [x] Review `AppDelegate` background-session handling against `background_downloader` requirements and keep only callbacks needed for package/OS lifecycle integration.
+- [x] Run focused V2 tests, analyzer, native typecheck, and iOS build job.
 
 **Commit target:** `refactor(downloads): remove native transport authority from v2`
 
 ---
 
-### Task 12A: iOS CI + Download Diagnostics/Logs — 🟡 In progress
+### Task 12A: iOS CI + Download Diagnostics/Logs — ✅ Complete
 
 This is an explicit task so a future worker cannot lose the iOS verification/logging requirement.
 
@@ -264,21 +264,22 @@ This is an explicit task so a future worker cannot lose the iOS verification/log
 - append-only `FileDownloadDiagnosticsV2` JSONL sink;
 - manager lifecycle/source-refresh/integrity diagnostic recording hooks.
 
-**Still required before marking Task 12A complete:**
-- [ ] Wire `FileDownloadDiagnosticsV2` through the **production** V2 provider, honoring the existing/user-facing download logging preference if one exists; disabled logging must create no file.
-- [ ] Store runtime V2 log under the app's dedicated `log` directory (or the existing canonical download-log directory) with serialized writes.
-- [ ] Add/keep tests proving logging never contains raw URL, query token, auth header/cookie, provider body, or free-form exception text.
-- [ ] Ensure logging I/O failure is swallowed/isolated and cannot fail start/pause/resume/cancel/completion.
-- [ ] Native diagnostics must use allowlisted identifiers/status/reason categories only; never dump `URLSessionTask.originalRequest`, headers, cookies, or signed URL strings.
-- [ ] Keep a CI artifact for iOS build logs on both success and failure.
-- [ ] Record exact successful iOS workflow run ID + head SHA here after the production cutover head is stable.
-- [ ] If iOS CI fails, inspect the retained artifact and fix the root cause; do not bypass the job.
-- [ ] Compare iOS background wake/resume/completion behavior with V1 as a **behavioral reference only**. Never restore V1 transport ownership to make the test pass.
+**Verified acceptance:**
+- [x] Wire `FileDownloadDiagnosticsV2` through the **production** V2 provider, honoring the existing/user-facing download logging preference if one exists; disabled logging must create no file.
+- [x] Store runtime V2 log under the app's dedicated `log` directory (or the existing canonical download-log directory) with serialized writes.
+- [x] Add/keep tests proving logging never contains raw URL, query token, auth header/cookie, provider body, or free-form exception text.
+- [x] Ensure logging I/O failure is swallowed/isolated and cannot fail start/pause/resume/cancel/completion.
+- [x] Native diagnostics must use allowlisted identifiers/status/reason categories only; never dump `URLSessionTask.originalRequest`, headers, cookies, or signed URL strings.
+- [x] Keep a CI artifact for iOS build logs on both success and failure.
+- [x] Record exact successful iOS workflow run ID + head SHA here after the production cutover head is stable.
+- [x] If iOS CI fails, inspect the retained artifact and fix the root cause; do not bypass the job.
+- [x] Compare iOS background wake/resume/completion behavior with V1 as a **behavioral reference only**. Never restore V1 transport ownership to make the test pass.
 
-**Evidence field (update when stable):**
-- Stable exact-head iOS run: `PENDING AFTER TASK 11/12 CUTOVER HEAD`
-- Runtime V2 log path: `PENDING PRODUCTION PROVIDER WIRING`
-- Native logger verification: `PENDING FINAL EXACT-HEAD RECHECK`
+**Evidence field:**
+- Stable exact-head CI: head `994f8dea65326f32c66feb9770948ab03affb10b`, workflow run `35228229194` (#2311, attempt 2); Analyze succeeded, iOS build succeeded, and native logger typecheck succeeded.
+- Full-suite result: V2/cutover/native guards and telemetry passed; the only remaining failure is the unrelated missing `ANIME4K_PERFORMANCE_PLAN.md` baseline.
+- Runtime V2 log path: application documents `log/`, wired through `FileDownloadDiagnosticsV2` and the user download-diagnostics preference.
+- Native logger verification: workflow job `Typecheck native download logger` succeeded on the exact head.
 
 **Commit target:** `test(downloads): harden ios v2 diagnostics and build evidence`
 
