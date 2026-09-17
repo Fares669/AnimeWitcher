@@ -18,6 +18,9 @@ void main() {
       final downloadsTab = _read(
         'lib/features/library/presentation/widgets/downloads_tab.dart',
       );
+      final progressDialog = _read(
+        'lib/features/details/presentation/widgets/download_progress_dialog.dart',
+      );
       final completed = _read(
         'lib/features/details/presentation/downloaded_file_provider.dart',
       );
@@ -26,6 +29,7 @@ void main() {
       expect(main, contains('downloadManagerV2Provider'));
       expect(launcher, contains('downloadManagerV2Provider'));
       expect(downloads, contains('downloadManagerV2Provider'));
+      expect(progressDialog, contains('downloadManagerV2Provider'));
       expect(completed, contains('downloadManagerV2Provider'));
 
       for (final source in <String>[
@@ -34,6 +38,7 @@ void main() {
         launcher,
         downloads,
         downloadsTab,
+        progressDialog,
         completed,
       ]) {
         expect(source, isNot(contains('persistent_parallel_download.dart')));
@@ -54,6 +59,9 @@ void main() {
       final downloadsTab = _read(
         'lib/features/library/presentation/widgets/downloads_tab.dart',
       );
+      final progressDialog = _read(
+        'lib/features/details/presentation/widgets/download_progress_dialog.dart',
+      );
       final completed = _read(
         'lib/features/details/presentation/downloaded_file_provider.dart',
       );
@@ -65,6 +73,9 @@ void main() {
       expect(downloads, isNot(contains('downloadServiceProvider')));
       expect(downloadsTab, isNot(contains('downloadServiceProvider')));
       expect(downloadsTab, isNot(contains('core/services/download_service.dart')));
+      expect(progressDialog, isNot(contains('downloadServiceProvider')));
+      expect(progressDialog, isNot(contains('core/services/download_service.dart')));
+      expect(progressDialog, isNot(contains('FileDownloader()')));
       expect(completed, isNot(contains('downloadServiceProvider')));
       expect(downloads, isNot(contains('FileDownloader().database')));
     });
