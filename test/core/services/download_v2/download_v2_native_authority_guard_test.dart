@@ -3,36 +3,59 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('legacy iOS URLSession hook never owns V2 package tasks', () {
-    final source = File(
+  test('legacy iOS hook is observation-only after the V2 cutover', () {
+    final compatibility = File(
+      'ios/Runner/DownloadCallbackCompatibility.swift',
+    ).readAsStringSync();
+    final nativeQueue = File(
       'ios/Runner/DownloadNativeWaitingQueue.swift',
     ).readAsStringSync();
-    final compact = source.replaceAll(RegExp(r'\s+'), ' ');
+    final compactCompatibility = compatibility.replaceAll(RegExp(r'\s+'), ' ');
+    final compactQueue = nativeQueue.replaceAll(RegExp(r'\s+'), ' ');
 
+    // Installing compatible delegate observers may remain for diagnostics, but
+    // production V2 must never turn that observation into transport ownership.
     expect(
-      compact,
+      compactCompatibility,
+      contains('private let transportOwnershipEnabled: Bool'),
+    );
+    expect(
+      compactCompatibility,
+      contains('init(transportOwnershipEnabled: Bool = false)'),
+    );
+    expect(
+      compactCompatibility,
+      contains('if isInstalled { return transportOwnershipEnabled }'),
+    );
+    expect(
+      compactCompatibility,
+      contains('return transportOwnershipEnabled'),
+    );
+
+    // Every legacy retry/promotion path remains fenced behind the ownership
+    // result. V1 source stays dormant until the device gate allows Task 14 to
+    // delete it; background_downloader remains the sole V2 transport authority.
+    expect(
+      compactQueue,
       contains(
-        'static func isV2Task(_ task: URLSessionTask) -> Bool { '
-        'taskId(from: task)?.hasPrefix("aw_v2_") == true }',
+        'static var nativePromotionAvailable: Bool { lock.lock() defer { lock.unlock() } return hookInstalled }',
       ),
     );
     expect(
-      compact,
-      contains('guard !isV2Task(task) else { return false }'),
-    );
-    expect(
-      compact,
+      compactQueue,
       contains(
-        'DownloadNativeWaitingQueue.nativePromotionAvailable && '
-        '!DownloadNativeWaitingQueue.isV2Task(task)',
+        'static func retryBackgroundTransferIfNeeded( session: URLSession, task: URLSessionTask, error: Error ) -> Bool { guard nativePromotionAvailable else { return false }',
       ),
     );
     expect(
-      compact,
+      compactQueue,
       contains(
-        'DownloadNativeWaitingQueue.nativePromotionAvailable && '
-        '!DownloadNativeWaitingQueue.isV2Task(downloadTask)',
+        'static func promoteMultipartIfPossible( on suppliedSession: URLSession? = nil, parentId: String? = nil ) { guard nativePromotionAvailable else { return }',
       ),
+    );
+    expect(
+      compactQueue,
+      contains('let ownsCompletion = DownloadNativeWaitingQueue.nativePromotionAvailable'),
     );
   });
 }
