@@ -64,17 +64,26 @@ final class DownloadExecutionCallbacks {
   }
 }
 
-/// Callers serialize installation. A failed preflight changes no IMP and
-/// remains retryable; success cannot wrap its own implementations.
+/// Installs only compatible delegate observation hooks. After the V2 cutover
+/// those hooks must never claim retry/queue/completion ownership from
+/// background_downloader. The dormant legacy source remains until Task 14.
 final class DownloadHookInstallation {
   private(set) var isInstalled = false
+  private let transportOwnershipEnabled: Bool
+
+  init(transportOwnershipEnabled: Bool = false) {
+    self.transportOwnershipEnabled = transportOwnershipEnabled
+  }
 
   func install(version: String?, available: [Bool], apply: () -> Void) -> Bool {
-    if isInstalled { return true }
+    // Repeated AppDelegate wake/install attempts must preserve the same
+    // observation-vs-ownership result; never turn an installed observer into
+    // transport ownership on the second call.
+    if isInstalled { return transportOwnershipEnabled }
     guard version == "9.6.1", available.count == 3,
           available.allSatisfy({ $0 }) else { return false }
     apply()
     isInstalled = true
-    return true
+    return transportOwnershipEnabled
   }
 }
