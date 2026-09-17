@@ -1,13 +1,13 @@
-import 'dart:async';
-
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/services/download_service.dart';
+import '../../../../core/services/download_v2/download_v2_identity.dart';
+import '../../../../core/services/download_v2/download_v2_provider.dart';
 import '../../../../core/utils/download_time_remaining.dart';
 import '../../../../core/utils/file_size_formatter.dart';
-import '../../../library/presentation/widgets/segmented_download_progress.dart';
+import '../../../library/presentation/download_progress_v2_provider.dart';
+import '../../../library/presentation/downloads_provider.dart';
 
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
@@ -37,11 +37,6 @@ class DownloadProgressDialog extends ConsumerStatefulWidget {
 class _DownloadProgressDialogState
     extends ConsumerState<DownloadProgressDialog> {
   bool _dismissRequested = false;
-  String? _downloadTaskId;
-  Task? _downloadTask;
-  bool _taskLookupInFlight = false;
-  bool _initialTaskLookupAttempted = false;
-  bool _transferTaskLookupAttempted = false;
 
   void _dismissOnce() {
     if (_dismissRequested) return;
@@ -52,21 +47,27 @@ class _DownloadProgressDialogState
     });
   }
 
+  DownloadItem? _itemForTask(String taskId) {
+    final items = ref.read(downloadsProvider).value;
+    if (items == null) return null;
+    for (final item in items) {
+      if (item.id == taskId) return item;
+    }
+    return null;
+  }
+
   Future<void> _cancelDownload(DownloadProgressData data) async {
     if (_dismissRequested) return;
+    final item = _itemForTask(data.taskId);
+    final logical = item?.logicalId?.trim();
+    if (logical == null || logical.isEmpty) return;
+
     _dismissRequested = true;
     final navigator = Navigator.of(context);
-    final service = ref.read(downloadServiceProvider);
     try {
-      final outcome = await service.cancelDownloadOutcome(
-        data.taskId,
-        widget.trackingUrl,
-      );
-      if (outcome != DownloadCommandOutcome.terminal &&
-          outcome != DownloadCommandOutcome.alreadyComplete) {
-        if (mounted) setState(() => _dismissRequested = false);
-        return;
-      }
+      await ref
+          .read(downloadManagerV2Provider)
+          .cancel(DownloadLogicalId(logical));
       if (mounted && ModalRoute.of(context)?.isCurrent == true) {
         navigator.pop();
       }
@@ -78,48 +79,13 @@ class _DownloadProgressDialogState
     }
   }
 
-  void _ensureDownloadTask(DownloadProgressData data) {
-    final taskId = data.taskId;
-    if (_downloadTaskId != taskId) {
-      _downloadTaskId = taskId;
-      _downloadTask = null;
-      _taskLookupInFlight = false;
-      _initialTaskLookupAttempted = false;
-      _transferTaskLookupAttempted = false;
+  Future<void> _togglePause(DownloadProgressData data) async {
+    final notifier = ref.read(downloadsProvider.notifier);
+    if (data.status == TaskStatus.paused) {
+      await notifier.resumeDownload(data.taskId);
+    } else {
+      await notifier.pauseDownload(data.taskId);
     }
-
-    final transferStarted =
-        data.progress > 0 ||
-        data.status == TaskStatus.running ||
-        data.status == TaskStatus.paused;
-    final shouldLookup =
-        !_initialTaskLookupAttempted ||
-        (transferStarted &&
-            !_transferTaskLookupAttempted &&
-            _downloadTask is! ParallelDownloadTask);
-    if (!shouldLookup || _taskLookupInFlight) return;
-
-    _taskLookupInFlight = true;
-    if (!_initialTaskLookupAttempted) {
-      _initialTaskLookupAttempted = true;
-    } else if (transferStarted) {
-      _transferTaskLookupAttempted = true;
-    }
-    unawaited(_resolveDownloadTask(taskId));
-  }
-
-  Future<void> _resolveDownloadTask(String taskId) async {
-    Task? task;
-    try {
-      task = await FileDownloader().taskForId(taskId);
-      task ??= (await FileDownloader().database.recordForId(taskId))?.task;
-    } catch (_) {}
-
-    if (!mounted || _downloadTaskId != taskId) return;
-    setState(() {
-      _downloadTask = task;
-      _taskLookupInFlight = false;
-    });
   }
 
   @override
@@ -128,15 +94,13 @@ class _DownloadProgressDialogState
     final data = progressMap[widget.trackingUrl];
 
     if (data == null) {
-      // A cancellation removes the progress entry before its Future
-      // completes. Guarding this route close prevents the dialog rebuild and
-      // the cancel handler from popping both the dialog and the anime page.
+      // A cancellation removes the V2 presentation entry before its Future
+      // completes. Guard the route close so rebuilding cannot pop the page
+      // beneath this dialog.
       _dismissOnce();
       return const SizedBox.shrink();
     }
 
-    _ensureDownloadTask(data);
-    final chunkProgress = ref.watch(downloadChunkProgressProvider)[data.taskId];
     final l10n = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     return Directionality(
@@ -172,22 +136,14 @@ class _DownloadProgressDialogState
                 Row(
                   children: [
                     Expanded(
-                      child: _downloadTask == null
-                          ? LinearProgressIndicator(
-                              value: data.progress,
-                              borderRadius: BorderRadius.circular(4),
-                              minHeight: 8,
-                            )
-                          : SegmentedDownloadProgress(
-                              task: _downloadTask!,
-                              value: data.progress,
-                              chunkProgress: chunkProgress,
-                              backgroundColor: theme.dividerColor.withValues(
-                                alpha: 0.1,
-                              ),
-                              borderRadius: BorderRadius.circular(4),
-                              height: 8,
-                            ),
+                      child: LinearProgressIndicator(
+                        value: data.progress,
+                        borderRadius: BorderRadius.circular(4),
+                        minHeight: 8,
+                        backgroundColor: theme.dividerColor.withValues(
+                          alpha: 0.1,
+                        ),
+                      ),
                     ),
                     const SizedBox(width: 16),
                     Text(
@@ -252,14 +208,7 @@ class _DownloadProgressDialogState
                       ),
                       const SizedBox(width: 8),
                       TextButton(
-                        onPressed: () async {
-                          final service = ref.read(downloadServiceProvider);
-                          if (data.status == TaskStatus.paused) {
-                            await service.resumeDownloadOutcome(data.taskId);
-                          } else {
-                            await service.pauseDownloadOutcome(data.taskId);
-                          }
-                        },
+                        onPressed: () => _togglePause(data),
                         child: Text(
                           data.status == TaskStatus.paused
                               ? l10n.resume
