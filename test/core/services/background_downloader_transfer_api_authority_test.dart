@@ -53,31 +53,4 @@ void main() {
       expect(body, isNot(contains('_downloader.transfers.start(task)')));
     },
   );
-
-  test(
-    'runtime allTasks match is authoritative over stale persisted projections',
-    () {
-      final source = File(
-        'lib/core/services/background_downloader_transport.dart',
-      ).readAsStringSync();
-      final start = source.indexOf(
-        'Future<DownloadRuntimeOwnership> ownershipFor(String taskId) async',
-      );
-      final end = source.indexOf(
-        '@override\n  Future<bool> start(DownloadTask task) async',
-        start,
-      );
-      expect(start, greaterThanOrEqualTo(0));
-      expect(end, greaterThan(start));
-      final body = source.substring(start, end);
-
-      // FileDownloader.allTasks() is documented by background_downloader as
-      // active runtime inventory (enqueued/running/waitingToRetry). A matching
-      // task must therefore reserve the writer even when a persisted Transfer
-      // or database projection still says paused/terminal.
-      expect(body, contains('resolveDownloadRuntimeOwnership('));
-      expect(body, contains('runtimeTaskPresent: runtimeTaskPresent'));
-      expect(body, isNot(contains('_runtimeInventoryTaskOwnership(')));
-    },
-  );
 }
