@@ -5,7 +5,7 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('parallelChunks 5 creates one package parent and persists no child ids', () {
+  test('parallelChunks 5 creates one package parent and persists no child ids', () async {
     const spec = DownloadTaskSpecV2(
       taskId: 'aw_v2_parent_g1',
       url: 'https://cdn.example.invalid/video.mp4?token=secret',
@@ -16,7 +16,7 @@ void main() {
       parallelChunks: 5,
     );
 
-    final task = packageTaskForV2(spec);
+    final task = await packageTaskForV2(spec);
 
     expect(task, isA<ParallelDownloadTask>());
     expect(task.taskId, spec.taskId);
@@ -44,7 +44,7 @@ void main() {
     expect(record.taskId, spec.taskId);
   });
 
-  test('parallelChunks 1 maps to package single download task', () {
+  test('parallelChunks 1 maps to package single download task', () async {
     const spec = DownloadTaskSpecV2(
       taskId: 'aw_v2_parent_g1',
       url: 'https://example.invalid/video.mp4',
@@ -55,7 +55,7 @@ void main() {
       parallelChunks: 1,
     );
 
-    final task = packageTaskForV2(spec);
+    final task = await packageTaskForV2(spec);
 
     expect(task, isA<DownloadTask>());
     expect(task, isNot(isA<ParallelDownloadTask>()));
