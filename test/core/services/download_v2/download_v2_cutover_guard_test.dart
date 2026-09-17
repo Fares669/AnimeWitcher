@@ -102,6 +102,26 @@ void main() {
       );
     });
 
+    test('iOS native multipart bridge is limited to legacy-owned parents', () {
+      final native = _read(
+        'ios/Runner/DownloadNativeWaitingQueue.swift',
+      );
+      final start = native.indexOf(
+        'private static func postSupportedMultipartProgress',
+      );
+      final end = native.indexOf(
+        'private static func parentTaskId(',
+        start,
+      );
+
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = native.substring(start, end);
+      expect(native, contains('private static func ownsLegacyMultipartParent('));
+      expect(native, contains('state.multipartPlans.contains'));
+      expect(body, contains('ownsLegacyMultipartParent(parentId)'));
+    });
+
     test('V2 manager exposes logical observation and completed availability', () {
       final manager = _read(
         'lib/core/services/download_v2/download_manager_v2.dart',
