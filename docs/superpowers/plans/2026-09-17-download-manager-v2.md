@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace AnimeWitcher's custom downloader transport/recovery stack with a small Download Manager V2 that uses `background_downloader` as the sole transport authority while preserving completed legacy downloads and restarting incomplete legacy work cleanly.
+**Goal:** Replace AnimeWitcher's custom downloader transport/recovery stack with Download Manager V2 using `background_downloader` as the sole transport authority.
 
-**Architecture:** Build V2 beside V1 under `lib/core/services/download_v2/`. V2 persists only application-owned logical metadata and user intent; `background_downloader` owns task execution, pause/resume data, retries, persistence, and package-managed parallel chunks. After automated and physical-device acceptance, route production downloads exclusively through V2 and remove V1 transport/range/multipart ownership machinery.
+**Architecture:** Build V2 beside V1 under `lib/core/services/download_v2/`. V2 stores only logical episode metadata, current generation/task ID, user intent, source descriptor, destination, completion/failure metadata. `background_downloader` owns transfer persistence, pause/resume data, retries, native execution, and package-managed chunks. After automated and physical-device acceptance, production call sites switch to V2 and V1 transport code is removed.
 
 **Tech Stack:** Flutter/Dart 3.13, Riverpod 3, Hive, `background_downloader ^9.6.2`, flutter_test.
 
@@ -12,51 +12,46 @@
 
 ## Global Constraints
 
-- `background_downloader` is the only transport authority for V2 downloads.
-- V2 must not import `persistent_parallel_download.dart` or `download_range_transfer.dart`.
-- V2 must not persist chunk IDs, byte ranges, resume offsets, package retry counters, or writer-ownership state.
-- Legacy migration policy A is fixed: completed legacy downloads remain; incomplete legacy downloads restart from byte zero only when the user resumes/restarts them.
-- Signed/provider URL replacement starts a fresh generation from byte zero in the first V2 cutover.
-- Startup attachment uses the exact current package `taskId`, never URL matching.
-- `active + missing/non-recoverable package transfer` starts exactly one fresh generation automatically; `paused`, `canceled`, and legacy-incomplete records never auto-start.
-- User pause intent is persisted before transport pause and survives relaunch.
-- Cancel/delete advance the generation fence before transport cleanup so late callbacks cannot resurrect work.
-- Package-managed `ParallelDownloadTask` may be used; package chunk children remain opaque to AnimeWitcher.
-- V1 remains available only until V2 acceptance; it is never a fallback for a V2-owned download.
-- No iOS/Android device-only behavior is marked complete from mocks or CI alone.
+- `background_downloader` is the only V2 transport authority.
+- No V2 file imports `persistent_parallel_download.dart` or `download_range_transfer.dart`.
+- No V2 persistence contains chunk IDs, range offsets, resume bytes, writer ownership, package retry counters, or package hold state.
+- Migration policy A: completed legacy downloads remain; incomplete legacy downloads do not auto-start and restart from byte zero only after user resume/restart.
+- Signed URL replacement creates a fresh byte-zero generation.
+- Startup matches exact current `taskId`, never URL.
+- `active + missing/nonrecoverable package transfer` creates exactly one fresh generation automatically.
+- `paused`, `canceled`, and legacy-incomplete records never auto-start.
+- Pause intent is persisted before transport pause.
+- Cancel/delete fence the old generation before transport cleanup.
+- Package `ParallelDownloadTask` children remain opaque to AnimeWitcher.
+- V1 is never a fallback for a V2-owned download.
+- Device-only acceptance is not considered complete from CI/mocks.
+
+## Locked File Structure
+
+**Create:**
+- `lib/core/services/download_v2/download_v2_models.dart`
+- `lib/core/services/download_v2/download_v2_identity.dart`
+- `lib/core/services/download_v2/logical_download_store_v2.dart`
+- `lib/core/services/download_v2/background_downloader_gateway.dart`
+- `lib/core/services/download_v2/download_source_resolver_v2.dart`
+- `lib/core/services/download_v2/download_integrity_verifier_v2.dart`
+- `lib/core/services/download_v2/download_manager_v2.dart`
+- `lib/core/services/download_v2/legacy_download_migration_v2.dart`
+- `lib/core/services/download_v2/download_v2_diagnostics.dart`
+- `lib/core/services/download_v2/download_v2_provider.dart`
+
+**Production cutover files:**
+- `lib/main.dart`
+- `lib/features/details/presentation/download_launcher.dart` — new-download entry point and source descriptor creation.
+- `lib/features/library/presentation/downloads_provider.dart` — download list plus pause/resume/cancel/delete projection/actions.
+- `lib/features/details/presentation/downloaded_file_provider.dart` — completed-file lookup.
+- `ios/Runner/AppDelegate.swift` and existing native continued-processing bridge files — remove transport authority from V2 path after cutover.
+
+**Tests:** all new V2 tests live under `test/core/services/download_v2/`.
 
 ---
 
-## File Structure
-
-### New V2 production files
-
-- `lib/core/services/download_v2/download_v2_models.dart` — logical record, intent, UI projection, failure categories, package-neutral transport snapshots.
-- `lib/core/services/download_v2/download_v2_identity.dart` — stable logical IDs and deterministic generation-specific package task IDs.
-- `lib/core/services/download_v2/logical_download_store_v2.dart` — application-owned persistence interface plus Hive backend; no transport-state mirroring.
-- `lib/core/services/download_v2/background_downloader_gateway.dart` — mockable package-neutral gateway interface and concrete `background_downloader` adapter.
-- `lib/core/services/download_v2/download_source_resolver_v2.dart` — adapter around existing provider/source-resolution behavior returning fresh URL + headers.
-- `lib/core/services/download_v2/download_integrity_verifier_v2.dart` — final-file existence/non-empty/expected-size checks.
-- `lib/core/services/download_v2/download_manager_v2.dart` — lifecycle coordinator and generation fence.
-- `lib/core/services/download_v2/legacy_download_migration_v2.dart` — policy A migration only.
-- `lib/core/services/download_v2/download_v2_provider.dart` — Riverpod construction and temporary compatibility surface for UI cutover.
-- `lib/core/services/download_v2/download_v2_diagnostics.dart` — structured V2 diagnostics without signed URL/token logging.
-
-### Existing production files modified during cutover
-
-- `pubspec.yaml` and `pubspec.lock` — require `background_downloader ^9.6.2`.
-- `lib/main.dart` — initialize package tracking once and initialize V2.
-- Existing download UI/provider call sites discovered by code search — switch to V2 compatibility provider only after V2 lifecycle tests are green.
-- `ios/Runner/AppDelegate.swift` and existing continued-processing/native bridge files — presentation-only cleanup after V2 cutover; remove any V2-unneeded transport authority.
-- V1 downloader files under `lib/core/services/` — delete only after device acceptance proves V2.
-
-### New tests
-
-All new V2 tests live in `test/core/services/download_v2/` and avoid native plugin execution unless explicitly marked contract/integration.
-
----
-
-### Task 1: Dependency Baseline, Logical Identity, and Minimal V2 Models
+### Task 1: Dependency + Identity + Domain Model
 
 **Files:**
 - Modify: `pubspec.yaml`
@@ -66,92 +61,40 @@ All new V2 tests live in `test/core/services/download_v2/` and avoid native plug
 - Create: `test/core/services/download_v2/download_v2_identity_test.dart`
 - Create: `test/core/services/download_v2/download_v2_models_test.dart`
 
-**Interfaces:**
-- Produces: `DownloadLogicalId`, `DownloadUserIntent`, `DownloadFailureCategory`, `DownloadTransportStatus`, `DownloadTransportSnapshot`, `LogicalDownloadRecordV2`, `logicalDownloadIdFor(...)`, `taskIdForGeneration(...)`.
+**Produces:** `DownloadLogicalId`, `DownloadUserIntent`, `DownloadFailureCategory`, `DownloadTransportStatus`, `DownloadTransportSnapshot`, `LogicalDownloadRecordV2`, `logicalDownloadIdFor`, `taskIdForGeneration`, `copyWith`, `toJson`, `fromJson`.
 
-- [ ] **Step 1: Write failing identity tests**
-
-```dart
-void main() {
-  test('logical id is stable and task id changes only with generation', () {
-    final logical = logicalDownloadIdFor(
-      animeId: 'anilist:21',
-      episodeKey: '12',
-      variantKey: 'sub:1080p',
-    );
-    expect(logical.value, isNotEmpty);
-    expect(taskIdForGeneration(logical, 1), taskIdForGeneration(logical, 1));
-    expect(taskIdForGeneration(logical, 1), isNot(taskIdForGeneration(logical, 2)));
-  });
-}
-```
-
-- [ ] **Step 2: Run the tests and verify RED**
-
-Run: `flutter test test/core/services/download_v2/download_v2_identity_test.dart test/core/services/download_v2/download_v2_models_test.dart`
-
-Expected: FAIL because V2 files/types do not exist.
-
-- [ ] **Step 3: Upgrade the package floor and implement minimal domain types**
-
-`pubspec.yaml` must contain:
-
-```yaml
-background_downloader: ^9.6.2
-```
-
-Core model shape:
+- [ ] Write RED identity/model tests:
 
 ```dart
-enum DownloadUserIntent { active, paused, canceled }
-enum DownloadFailureCategory { sourceExpired, transport, filesystem, integrity, unknown }
-enum DownloadTransportStatus { queued, running, paused, held, complete, failed, canceled, missing }
+test('task id is deterministic per generation', () {
+  final id = logicalDownloadIdFor(
+    animeId: 'anilist:21',
+    episodeKey: '12',
+    variantKey: 'sub:1080p',
+  );
+  expect(taskIdForGeneration(id, 1), taskIdForGeneration(id, 1));
+  expect(taskIdForGeneration(id, 1), isNot(taskIdForGeneration(id, 2)));
+});
 
-final class DownloadLogicalId {
-  const DownloadLogicalId(this.value);
-  final String value;
-}
-
-final class LogicalDownloadRecordV2 {
-  const LogicalDownloadRecordV2({
-    required this.schemaVersion,
-    required this.logicalId,
-    required this.generation,
-    required this.taskId,
-    required this.intent,
-    required this.animeId,
-    required this.episodeKey,
-    required this.variantKey,
-    required this.destinationPath,
-    required this.sourceDescriptor,
-    required this.updatedAtMillis,
-    this.completedAtMillis,
-    this.failureCategory,
-    this.failureMessage,
-  });
-
-  final int schemaVersion;
-  final DownloadLogicalId logicalId;
-  final int generation;
-  final String taskId;
-  final DownloadUserIntent intent;
-  final String animeId;
-  final String episodeKey;
-  final String variantKey;
-  final String destinationPath;
-  final Map<String, Object?> sourceDescriptor;
-  final int updatedAtMillis;
-  final int? completedAtMillis;
-  final DownloadFailureCategory? failureCategory;
-  final String? failureMessage;
-}
+test('logical record json contains no transport internals', () {
+  final json = fixtureRecord().toJson().keys.join('|').toLowerCase();
+  for (final forbidden in ['chunk', 'range', 'resumebytes', 'ownership', 'holdreason']) {
+    expect(json, isNot(contains(forbidden)));
+  }
+});
 ```
 
-Task IDs must be deterministic, package-safe, and must not contain a signed URL.
+- [ ] Run RED:
 
-- [ ] **Step 4: Run focused tests and analyzer**
+```bash
+flutter test test/core/services/download_v2/download_v2_identity_test.dart test/core/services/download_v2/download_v2_models_test.dart
+```
 
-Run:
+- [ ] Set `background_downloader: ^9.6.2`; implement immutable models and deterministic package-safe task IDs.
+
+Core record fields are exactly: schema version, logical ID, anime ID, episode key, variant key, generation, task ID, intent, destination path, source descriptor, expected bytes if known, completion timestamp, failure category/message, updated timestamp.
+
+- [ ] Run GREEN + analyzer:
 
 ```bash
 flutter pub get
@@ -159,120 +102,63 @@ flutter test test/core/services/download_v2/download_v2_identity_test.dart test/
 flutter analyze lib/core/services/download_v2
 ```
 
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add pubspec.yaml pubspec.lock lib/core/services/download_v2 test/core/services/download_v2
-git commit -m "feat(downloads): establish v2 domain model"
-```
+- [ ] Commit: `feat(downloads): establish v2 domain model`
 
 ---
 
-### Task 2: LogicalDownloadStoreV2 — Application Metadata Only
+### Task 2: LogicalDownloadStoreV2
 
 **Files:**
 - Create: `lib/core/services/download_v2/logical_download_store_v2.dart`
 - Create: `test/core/services/download_v2/logical_download_store_v2_test.dart`
 
-**Interfaces:**
-- Consumes: `LogicalDownloadRecordV2` from Task 1.
-- Produces: `LogicalDownloadStoreV2.get`, `.put`, `.remove`, `.all`, `.mutate`; `HiveLogicalDownloadStoreV2`; `InMemoryLogicalDownloadStoreV2` for tests.
+**Produces:** `LogicalDownloadStoreV2`, `HiveLogicalDownloadStoreV2`, `InMemoryLogicalDownloadStoreV2`.
 
-- [ ] **Step 1: Write failing persistence/serialization tests**
+- [ ] Write RED round-trip and mutation tests:
 
 ```dart
-test('store round-trips logical metadata without transport internals', () async {
-  final store = InMemoryLogicalDownloadStoreV2();
-  final record = fixtureRecord(intent: DownloadUserIntent.paused);
-  await store.put(record);
-  final loaded = await store.get(record.logicalId);
-  expect(loaded?.intent, DownloadUserIntent.paused);
-  expect(loaded?.generation, record.generation);
-  expect(loaded?.taskId, record.taskId);
+test('paused intent survives store recreation', () async {
+  final backend = <String, Object?>{};
+  final first = InMemoryLogicalDownloadStoreV2(backend);
+  await first.put(fixtureRecord(intent: DownloadUserIntent.paused));
+  final second = InMemoryLogicalDownloadStoreV2(backend);
+  expect((await second.all()).single.intent, DownloadUserIntent.paused);
 });
 ```
 
-Also assert serialized JSON has no keys matching `chunk`, `range`, `resumeBytes`, `ownership`, `retryRemaining`, or `holdReason`.
-
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/logical_download_store_v2_test.dart`
-
-Expected: FAIL because the store is absent.
-
-- [ ] **Step 3: Implement a small store with a dedicated Hive box**
-
-```dart
-abstract interface class LogicalDownloadStoreV2 {
-  Future<LogicalDownloadRecordV2?> get(DownloadLogicalId id);
-  Future<List<LogicalDownloadRecordV2>> all();
-  Future<void> put(LogicalDownloadRecordV2 record);
-  Future<void> remove(DownloadLogicalId id);
-  Future<LogicalDownloadRecordV2?> mutate(
-    DownloadLogicalId id,
-    LogicalDownloadRecordV2? Function(LogicalDownloadRecordV2? current) change,
-  );
-}
-
-const String kLogicalDownloadStoreV2Box = 'logical_download_store_v2';
-const int kLogicalDownloadSchemaV2 = 1;
-```
-
-The Hive backend stores `Map<String, Object?>` records keyed by `logicalId.value`. Serialize only fields defined in Task 1.
-
-- [ ] **Step 4: Run focused tests**
-
-Run: `flutter test test/core/services/download_v2/logical_download_store_v2_test.dart`
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add lib/core/services/download_v2/logical_download_store_v2.dart test/core/services/download_v2/logical_download_store_v2_test.dart
-git commit -m "feat(downloads): add v2 logical store"
-```
+- [ ] Run RED: `flutter test test/core/services/download_v2/logical_download_store_v2_test.dart`.
+- [ ] Implement dedicated Hive box `logical_download_store_v2`; key by `logicalId.value`; persist only `LogicalDownloadRecordV2.toJson()`.
+- [ ] Run GREEN.
+- [ ] Commit: `feat(downloads): add v2 logical store`.
 
 ---
 
-### Task 3: Mockable BackgroundDownloaderGateway and 9.6.2 Contract
+### Task 3: BackgroundDownloaderGateway 9.6.2 Contract
 
 **Files:**
 - Create: `lib/core/services/download_v2/background_downloader_gateway.dart`
 - Create: `test/core/services/download_v2/background_downloader_gateway_test.dart`
 - Create: `test/core/services/download_v2/background_downloader_api_contract_test.dart`
 
-**Interfaces:**
-- Consumes: package-neutral transport types from Task 1.
-- Produces: `DownloadTaskSpecV2`, `DownloadTransportHandle`, `BackgroundDownloaderGateway`, `PackageBackgroundDownloaderGateway`.
+**Produces:** `DownloadTaskSpecV2`, `DownloadTransportHandle`, `BackgroundDownloaderGateway`, `PackageBackgroundDownloaderGateway`.
 
-- [ ] **Step 1: Write gateway contract tests before implementation**
+- [ ] Write RED gateway tests proving one parent spec and no exposed chunk IDs.
 
 ```dart
-test('gateway spec never exposes package chunk ids', () {
-  const spec = DownloadTaskSpecV2(
-    taskId: 'aw_v2_x_g1',
-    url: 'https://example.invalid/video.mp4',
-    headers: {'Referer': 'https://example.invalid/'},
-    destinationPath: 'downloads/a.mp4',
-    allowPause: true,
-    retries: 2,
-    parallelChunks: 5,
-  );
-  expect(spec.taskId, 'aw_v2_x_g1');
-  expect(spec.parallelChunks, 5);
-});
+const spec = DownloadTaskSpecV2(
+  taskId: 'aw_v2_x_g1',
+  url: 'https://example.invalid/video.mp4',
+  destinationPath: 'downloads/a.mp4',
+  headers: {},
+  allowPause: true,
+  retries: 2,
+  parallelChunks: 5,
+);
+expect(spec.parallelChunks, 5);
 ```
 
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/background_downloader_gateway_test.dart test/core/services/download_v2/background_downloader_api_contract_test.dart`
-
-Expected: FAIL because the gateway is absent.
-
-- [ ] **Step 3: Implement package-neutral gateway interface**
+- [ ] Run RED.
+- [ ] Implement interface:
 
 ```dart
 abstract interface class BackgroundDownloaderGateway {
@@ -285,400 +171,191 @@ abstract interface class BackgroundDownloaderGateway {
 
 abstract interface class DownloadTransportHandle {
   String get taskId;
-  Stream<DownloadTransportSnapshot> get snapshots;
   DownloadTransportSnapshot get current;
+  Stream<DownloadTransportSnapshot> get snapshots;
   Future<bool> pause();
   Future<bool> resume();
   Future<bool> cancel();
 }
 ```
 
-The concrete adapter must call `FileDownloader().start(autoCleanDatabase: true)` exactly once per process initialization; use `FileDownloader().transfers` for handles. Use package `DownloadTask` for `parallelChunks <= 1` and `ParallelDownloadTask` for `parallelChunks > 1`. Set `allowPause: true`, package retries, updates, priority, and destination fields from the spec. Never expose package child chunk tasks.
+Concrete initialization calls `FileDownloader().start(autoCleanDatabase: true)`. New work uses `FileDownloader().transfers.start`; persisted work is recovered with `rehydrateFromDatabase`/exact task ID attachment. Single transfers use `DownloadTask`; `parallelChunks > 1` uses package `ParallelDownloadTask` only.
 
-- [ ] **Step 4: Add compile-time API contract coverage for 9.6.2**
-
-The contract test must instantiate/reference these public APIs so a package API change breaks CI:
-
-```dart
-final downloader = FileDownloader();
-final Transfers transfers = downloader.transfers;
-expect(transfers, isNotNull);
-expect(FileDownloader().start, isA<Function>());
-expect(transfers.start, isA<Function>());
-expect(transfers.getOrStart, isA<Function>());
-expect(transfers.rehydrateFromDatabase, isA<Function>());
-```
-
-- [ ] **Step 5: Run focused tests/analyzer and commit**
-
-Run:
-
-```bash
-flutter test test/core/services/download_v2/background_downloader_gateway_test.dart test/core/services/download_v2/background_downloader_api_contract_test.dart
-flutter analyze lib/core/services/download_v2
-```
-
-Expected: PASS.
-
-Commit:
-
-```bash
-git add lib/core/services/download_v2/background_downloader_gateway.dart test/core/services/download_v2/background_downloader_gateway_test.dart test/core/services/download_v2/background_downloader_api_contract_test.dart
-git commit -m "feat(downloads): add background downloader v2 gateway"
-```
+- [ ] Contract-test references `Transfers.start`, `getOrStart`, `rehydrateFromDatabase`, and `Transfer.pause/resume/cancel` so incompatible package changes fail compilation.
+- [ ] Run GREEN + analyzer.
+- [ ] Commit: `feat(downloads): add background downloader v2 gateway`.
 
 ---
 
-### Task 4: DownloadManagerV2 Start, Coalescing, and Generation Fence
+### Task 4: Start + Duplicate Coalescing + Generation Fence
 
 **Files:**
 - Create: `lib/core/services/download_v2/download_manager_v2.dart`
 - Create: `test/core/services/download_v2/download_manager_v2_start_test.dart`
 - Create: `test/core/services/download_v2/download_manager_v2_generation_test.dart`
 
-**Interfaces:**
-- Consumes: logical store and gateway.
-- Produces: `DownloadManagerV2.start`, `DownloadManagerV2.observe`, event-generation filtering.
+**Produces:** `DownloadStartRequestV2`, `DownloadManagerV2.start`, `restart`, `snapshotFor`.
 
-- [ ] **Step 1: Write RED tests for duplicate start and stale events**
+- [ ] Write RED tests:
 
 ```dart
-test('two start calls coalesce to one current generation', () async {
-  final fixture = managerFixture();
-  await Future.wait([
-    fixture.manager.start(fixture.request),
-    fixture.manager.start(fixture.request),
-  ]);
-  expect(fixture.gateway.startedSpecs, hasLength(1));
-  expect((await fixture.store.all()).single.generation, 1);
+test('duplicate start creates one writer', () async {
+  final f = managerFixture();
+  await Future.wait([f.manager.start(f.request), f.manager.start(f.request)]);
+  expect(f.gateway.startedSpecs, hasLength(1));
 });
 
-test('old generation callback cannot overwrite replacement generation', () async {
-  final fixture = managerFixture();
-  await fixture.manager.start(fixture.request);
-  await fixture.manager.restart(fixture.request.logicalId);
-  fixture.gateway.emit(taskId: fixture.gateway.startedSpecs.first.taskId, status: DownloadTransportStatus.complete);
-  expect(fixture.manager.snapshotFor(fixture.request.logicalId).status, isNot(DownloadTransportStatus.complete));
+test('late old-generation event is ignored', () async {
+  final f = managerFixture();
+  await f.manager.start(f.request);
+  final old = f.gateway.startedSpecs.single.taskId;
+  await f.manager.restart(f.request.logicalId);
+  f.gateway.emit(old, DownloadTransportStatus.complete);
+  expect(f.manager.snapshotFor(f.request.logicalId).taskId, isNot(old));
 });
 ```
 
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/download_manager_v2_start_test.dart test/core/services/download_v2/download_manager_v2_generation_test.dart`
-
-- [ ] **Step 3: Implement serialized per-logical-ID commands and generation checks**
-
-```dart
-Future<T> _serialize<T>(DownloadLogicalId id, Future<T> Function() body) {
-  final previous = _tails[id.value] ?? Future<void>.value();
-  final completer = Completer<T>();
-  _tails[id.value] = previous.then((_) async {
-    try {
-      completer.complete(await body());
-    } catch (error, stack) {
-      completer.completeError(error, stack);
-    }
-  });
-  return completer.future;
-}
-
-bool _isCurrent(LogicalDownloadRecordV2 record, String taskId) =>
-    record.taskId == taskId && taskId == taskIdForGeneration(record.logicalId, record.generation);
-```
-
-Start must persist the new generation/task ID before accepting package callbacks. A duplicate start on active current work attaches/coalesces; it must not allocate generation 2.
-
-- [ ] **Step 4: Run tests and commit**
-
-```bash
-flutter test test/core/services/download_v2/download_manager_v2_start_test.dart test/core/services/download_v2/download_manager_v2_generation_test.dart
-git add lib/core/services/download_v2/download_manager_v2.dart test/core/services/download_v2/download_manager_v2_start_test.dart test/core/services/download_v2/download_manager_v2_generation_test.dart
-git commit -m "feat(downloads): add v2 start and generation fencing"
-```
+- [ ] Run RED.
+- [ ] Implement a per-logical-ID command tail/lock; persist generation/task ID before binding callbacks; accept events only when event task ID equals current record task ID.
+- [ ] Run GREEN.
+- [ ] Commit: `feat(downloads): add v2 start and generation fencing`.
 
 ---
 
-### Task 5: Pause, Resume, Cancel, and Delete Semantics
+### Task 5: Pause / Resume / Cancel / Delete
 
 **Files:**
 - Modify: `lib/core/services/download_v2/download_manager_v2.dart`
 - Create: `test/core/services/download_v2/download_manager_v2_lifecycle_test.dart`
 
-**Interfaces:**
-- Produces: `pause`, `resume`, `cancel`, `delete` lifecycle methods.
-
-- [ ] **Step 1: Write RED lifecycle tests**
-
-Required cases:
+- [ ] Write RED tests for pause ordering, pause fallback, missing-handle resume, cancel late callback, delete idempotence.
 
 ```dart
-test('pause persists intent before gateway pause', () async {
-  final fixture = managerFixture();
-  await fixture.manager.start(fixture.request);
-  fixture.gateway.onPause = () async {
-    expect((await fixture.store.get(fixture.request.logicalId))?.intent, DownloadUserIntent.paused);
+test('pause intent is durable before package pause', () async {
+  final f = managerFixture();
+  await f.manager.start(f.request);
+  f.gateway.onPause = () async {
+    expect((await f.store.get(f.request.logicalId))?.intent, DownloadUserIntent.paused);
     return true;
   };
-  await fixture.manager.pause(fixture.request.logicalId);
-});
-
-test('resume missing handle creates one fresh generation', () async {
-  final fixture = pausedFixtureWithoutHandle();
-  await fixture.manager.resume(fixture.logicalId);
-  expect(fixture.gateway.startedSpecs.single.taskId, endsWith('_g2'));
-});
-
-test('cancel fences late complete event', () async {
-  final fixture = managerFixture();
-  await fixture.manager.start(fixture.request);
-  final oldTaskId = fixture.gateway.startedSpecs.single.taskId;
-  await fixture.manager.cancel(fixture.request.logicalId);
-  fixture.gateway.emit(taskId: oldTaskId, status: DownloadTransportStatus.complete);
-  expect((await fixture.store.get(fixture.request.logicalId))?.intent, DownloadUserIntent.canceled);
+  await f.manager.pause(f.request.logicalId);
 });
 ```
 
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/download_manager_v2_lifecycle_test.dart`
-
-- [ ] **Step 3: Implement exact ordering rules**
-
-Pause order:
-
-```dart
-record = record.copyWith(intent: DownloadUserIntent.paused, updatedAtMillis: clock());
-await store.put(record);
-final handle = handles[record.taskId] ?? await gateway.attach(record.taskId);
-final paused = handle != null && await handle.pause();
-if (!paused && handle != null) await handle.cancel();
-```
-
-Cancel/delete must advance generation or replace task identity before cancellation cleanup so the old callback is stale immediately. Resume sets active intent only within the serialized accepted command; if no resumable handle exists, it resolves a new source in Task 7 and starts a new generation.
-
-- [ ] **Step 4: Run test and commit**
-
-```bash
-flutter test test/core/services/download_v2/download_manager_v2_lifecycle_test.dart
-git add lib/core/services/download_v2/download_manager_v2.dart test/core/services/download_v2/download_manager_v2_lifecycle_test.dart
-git commit -m "feat(downloads): implement v2 lifecycle commands"
-```
+- [ ] Run RED.
+- [ ] Implement exact semantics:
+  - pause: store paused intent -> package pause; if non-resumable/unsupported, cancel current transport while retaining paused intent.
+  - resume: resumable exact current handle -> `resume`; missing/final handle -> fresh generation.
+  - cancel/delete: fence old generation first -> cancel -> remove tracking/artifacts; late events ignored.
+- [ ] Run GREEN.
+- [ ] Commit: `feat(downloads): implement v2 lifecycle commands`.
 
 ---
 
-### Task 6: Startup Rehydration and Relaunch Recovery
+### Task 6: Startup Rehydration / Relaunch Recovery
 
 **Files:**
 - Modify: `lib/core/services/download_v2/download_manager_v2.dart`
 - Create: `test/core/services/download_v2/download_manager_v2_startup_test.dart`
 
-**Interfaces:**
-- Produces: `DownloadManagerV2.initialize()` and deterministic startup recovery.
-
-- [ ] **Step 1: Write RED startup matrix**
+- [ ] Write RED startup matrix:
 
 ```dart
-final cases = <({DownloadUserIntent intent, bool hasHandle, int starts})>[
-  (intent: DownloadUserIntent.paused, hasHandle: false, starts: 0),
-  (intent: DownloadUserIntent.canceled, hasHandle: false, starts: 0),
-  (intent: DownloadUserIntent.active, hasHandle: true, starts: 0),
-  (intent: DownloadUserIntent.active, hasHandle: false, starts: 1),
-];
+expect(startCount(intent: DownloadUserIntent.paused, hasHandle: false), 0);
+expect(startCount(intent: DownloadUserIntent.canceled, hasHandle: false), 0);
+expect(startCount(intent: DownloadUserIntent.active, hasHandle: true), 0);
+expect(startCount(intent: DownloadUserIntent.active, hasHandle: false), 1);
 ```
 
-Also assert rehydrated handles are bound only by exact `taskId`; same URL with another task ID is ignored.
+Also prove a transfer with the same URL but a different task ID is never adopted.
 
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/download_manager_v2_startup_test.dart`
-
-- [ ] **Step 3: Implement startup algorithm**
-
-```dart
-await gateway.initialize();
-final rehydrated = {for (final h in await gateway.rehydrate()) h.taskId: h};
-for (final record in await store.all()) {
-  final handle = rehydrated[record.taskId];
-  if (record.intent == DownloadUserIntent.paused || record.intent == DownloadUserIntent.canceled) {
-    if (handle != null) _bind(record, handle);
-    continue;
-  }
-  if (handle != null && !handle.current.isFinal) {
-    _bind(record, handle);
-  } else if (record.completedAtMillis == null) {
-    await _startFreshGeneration(record.logicalId, reason: FreshStartReason.missingTransport);
-  }
-}
-```
-
-Use per-logical-ID serialization so concurrent startup and UI commands cannot create two generations.
-
-- [ ] **Step 4: Run tests and commit**
-
-```bash
-flutter test test/core/services/download_v2/download_manager_v2_startup_test.dart
-git add lib/core/services/download_v2/download_manager_v2.dart test/core/services/download_v2/download_manager_v2_startup_test.dart
-git commit -m "feat(downloads): add deterministic v2 startup recovery"
-```
+- [ ] Run RED.
+- [ ] Implement `initialize`: gateway initialize -> rehydrate to map keyed by exact `taskId` -> load V2 records -> bind exact current handles -> apply user intent -> create exactly one fresh generation for active missing/nonrecoverable transport.
+- [ ] Run GREEN.
+- [ ] Commit: `feat(downloads): add deterministic v2 startup recovery`.
 
 ---
 
-### Task 7: Fresh Source Resolution and Signed-URL Failure Recovery
+### Task 7: Fresh Source Resolver + Signed URL Recovery
 
 **Files:**
 - Create: `lib/core/services/download_v2/download_source_resolver_v2.dart`
 - Modify: `lib/core/services/download_v2/download_manager_v2.dart`
-- Create: `test/core/services/download_v2/download_source_resolver_v2_test.dart`
 - Create: `test/core/services/download_v2/download_manager_v2_source_refresh_test.dart`
 
-**Interfaces:**
-- Produces: `ResolvedDownloadSourceV2`, `DownloadSourceResolverV2.resolve`, source-expiry classification.
+**Produces:** `ResolvedDownloadSourceV2`, `DownloadSourceResolverV2`.
 
-- [ ] **Step 1: Write RED tests for fresh source and one-shot refresh**
-
-```dart
-test('403 on current generation resolves once and replaces generation', () async {
-  final fixture = managerFixtureWithResolver(urls: ['https://cdn/old', 'https://cdn/new']);
-  await fixture.manager.start(fixture.request);
-  fixture.gateway.failCurrentHttp(403);
-  await fixture.manager.waitForIdle(fixture.request.logicalId);
-  expect(fixture.resolver.resolveCount, 2);
-  expect(fixture.gateway.startedSpecs, hasLength(2));
-  expect(fixture.gateway.startedSpecs.last.url, 'https://cdn/new');
-  expect(fixture.gateway.startedSpecs.last.taskId, isNot(fixture.gateway.startedSpecs.first.taskId));
-});
-```
-
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/download_source_resolver_v2_test.dart test/core/services/download_v2/download_manager_v2_source_refresh_test.dart`
-
-- [ ] **Step 3: Implement source adapter and failure classifier**
+- [ ] Write RED test: current-generation 403 produces exactly one resolver call for replacement and one new task ID; old generation is canceled/fenced; new generation starts at byte zero.
+- [ ] Run RED.
+- [ ] Implement:
 
 ```dart
 final class ResolvedDownloadSourceV2 {
-  const ResolvedDownloadSourceV2({required this.url, this.headers = const {}, this.expectedBytes});
+  const ResolvedDownloadSourceV2({
+    required this.url,
+    this.headers = const {},
+    this.expectedBytes,
+  });
   final String url;
   final Map<String, String> headers;
   final int? expectedBytes;
 }
 
 abstract interface class DownloadSourceResolverV2 {
-  Future<ResolvedDownloadSourceV2> resolve(Map<String, Object?> sourceDescriptor);
+  Future<ResolvedDownloadSourceV2> resolve(Map<String, Object?> descriptor);
 }
 ```
 
-Only `TaskHttpException` authorization/expiry codes defined by the adapter (at minimum 401/403) trigger source refresh. Fence the old generation, cancel/remove it, resolve once inside the serialized logical command, then start a byte-zero generation. No partial-byte adoption.
+At minimum, package HTTP 401/403 is classified as source-expired. Replacement never copies custom resume bytes or ranges.
 
-- [ ] **Step 4: Run tests and commit**
-
-```bash
-flutter test test/core/services/download_v2/download_source_resolver_v2_test.dart test/core/services/download_v2/download_manager_v2_source_refresh_test.dart
-git add lib/core/services/download_v2/download_source_resolver_v2.dart lib/core/services/download_v2/download_manager_v2.dart test/core/services/download_v2
-git commit -m "feat(downloads): add v2 signed source recovery"
-```
+- [ ] Run GREEN.
+- [ ] Commit: `feat(downloads): add v2 signed source recovery`.
 
 ---
 
-### Task 8: Final-File Integrity Gate
+### Task 8: Final Integrity Gate
 
 **Files:**
 - Create: `lib/core/services/download_v2/download_integrity_verifier_v2.dart`
 - Modify: `lib/core/services/download_v2/download_manager_v2.dart`
-- Create: `test/core/services/download_v2/download_integrity_verifier_v2_test.dart`
 - Create: `test/core/services/download_v2/download_manager_v2_completion_test.dart`
 
-**Interfaces:**
-- Produces: `DownloadIntegrityVerifierV2.verify`, `DownloadIntegrityResult`.
-
-- [ ] **Step 1: Write RED completion tests**
-
-```dart
-test('package complete is not logical complete until verification passes', () async {
-  final fixture = managerFixture(integrity: const FakeIntegrity(valid: false));
-  await fixture.manager.start(fixture.request);
-  fixture.gateway.completeCurrent();
-  await fixture.manager.waitForIdle(fixture.request.logicalId);
-  final record = await fixture.store.get(fixture.request.logicalId);
-  expect(record?.completedAtMillis, isNull);
-  expect(record?.failureCategory, DownloadFailureCategory.integrity);
-});
-```
-
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/download_integrity_verifier_v2_test.dart test/core/services/download_v2/download_manager_v2_completion_test.dart`
-
-- [ ] **Step 3: Implement final-file checks**
+- [ ] Write RED test proving package `complete` does not commit logical completion when file is missing, empty, or mismatched trustworthy expected size.
+- [ ] Run RED.
+- [ ] Implement verifier:
 
 ```dart
-Future<DownloadIntegrityResult> verify({required File file, int? expectedBytes}) async {
+Future<DownloadIntegrityResult> verify(File file, {int? expectedBytes}) async {
   if (!await file.exists()) return const DownloadIntegrityResult.invalid('missing');
-  final length = await file.length();
-  if (length <= 0) return const DownloadIntegrityResult.invalid('empty');
-  if (expectedBytes != null && expectedBytes > 0 && length != expectedBytes) {
-    return DownloadIntegrityResult.invalid('size:$length/$expectedBytes');
+  final bytes = await file.length();
+  if (bytes <= 0) return const DownloadIntegrityResult.invalid('empty');
+  if (expectedBytes != null && expectedBytes > 0 && bytes != expectedBytes) {
+    return DownloadIntegrityResult.invalid('size-mismatch');
   }
-  return DownloadIntegrityResult.valid(length);
+  return DownloadIntegrityResult.valid(bytes);
 }
 ```
 
-Only after valid result may `completedAtMillis` be committed.
+Only a valid result sets `completedAtMillis`.
 
-- [ ] **Step 4: Run and commit**
-
-```bash
-flutter test test/core/services/download_v2/download_integrity_verifier_v2_test.dart test/core/services/download_v2/download_manager_v2_completion_test.dart
-git add lib/core/services/download_v2 test/core/services/download_v2
-git commit -m "feat(downloads): gate v2 completion on integrity"
-```
+- [ ] Run GREEN.
+- [ ] Commit: `feat(downloads): gate v2 completion on integrity`.
 
 ---
 
-### Task 9: Package-Managed Parallelism and Concurrency Mapping
+### Task 9: Package Parallelism + Diagnostics
 
 **Files:**
 - Modify: `lib/core/services/download_v2/background_downloader_gateway.dart`
-- Modify: `lib/core/services/download_v2/download_manager_v2.dart`
+- Create: `lib/core/services/download_v2/download_v2_diagnostics.dart`
 - Create: `test/core/services/download_v2/download_v2_parallel_test.dart`
+- Create: `test/core/services/download_v2/download_v2_diagnostics_test.dart`
 
-**Interfaces:**
-- Consumes: existing user parallel/chunk and concurrent-episode settings.
-- Produces: parent-only package task configuration.
-
-- [ ] **Step 1: Write RED tests for parent-only parallel mapping**
-
-```dart
-test('five chunks becomes one package parallel parent spec', () async {
-  final gateway = RecordingPackageGateway();
-  await gateway.start(const DownloadTaskSpecV2(
-    taskId: 'aw_v2_x_g1',
-    url: 'https://cdn/video',
-    destinationPath: 'downloads/video.mp4',
-    allowPause: true,
-    retries: 2,
-    parallelChunks: 5,
-  ));
-  expect(gateway.parentTasks, hasLength(1));
-  expect(gateway.persistedChildIds, isEmpty);
-});
-```
-
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/download_v2_parallel_test.dart`
-
-- [ ] **Step 3: Map only documented package features**
-
-Use `ParallelDownloadTask` for accepted chunk counts and package configuration/holding queues for concurrent episodes. Do not create Future-chain writer pools or custom chunk progress storage. If package-parallel is disabled by acceptance policy on a platform, construct a regular package `DownloadTask` with the same parent task ID contract.
-
-- [ ] **Step 4: Run and commit**
-
-```bash
-flutter test test/core/services/download_v2/download_v2_parallel_test.dart
-git add lib/core/services/download_v2/background_downloader_gateway.dart lib/core/services/download_v2/download_manager_v2.dart test/core/services/download_v2/download_v2_parallel_test.dart
-git commit -m "feat(downloads): map v2 parallelism to package tasks"
-```
+- [ ] RED: `parallelChunks: 5` creates one package parent request; AnimeWitcher persists no child IDs.
+- [ ] RED: diagnostics never serialize signed URLs/query tokens.
+- [ ] Implement package parent mapping and structured events containing logical ID, generation, package task ID, status/hold category, progress, failure category, source-refresh reason, integrity result.
+- [ ] Run GREEN.
+- [ ] Commit: `feat(downloads): add package parallelism and v2 diagnostics`.
 
 ---
 
@@ -688,128 +365,32 @@ git commit -m "feat(downloads): map v2 parallelism to package tasks"
 - Create: `lib/core/services/download_v2/legacy_download_migration_v2.dart`
 - Create: `test/core/services/download_v2/legacy_download_migration_v2_test.dart`
 
-**Interfaces:**
-- Produces: `LegacyDownloadMigrationV2.scan`, `.restartIncomplete`; `LegacyMigrationResult`.
-
-- [ ] **Step 1: Write RED migration tests**
-
-```dart
-test('completed legacy item is preserved without new network work', () async {
-  final fixture = legacyFixture(completed: true);
-  final result = await fixture.migration.scan();
-  expect(result.completedPreserved, 1);
-  expect(fixture.gateway.startedSpecs, isEmpty);
-});
-
-test('incomplete legacy item imports no transport state and restarts at generation 1 on user resume', () async {
-  final fixture = legacyFixture(completed: false, legacyBytes: 9000000);
-  await fixture.migration.scan();
-  expect(fixture.gateway.startedSpecs, isEmpty);
-  await fixture.migration.restartIncomplete(fixture.logicalId);
-  expect(fixture.gateway.startedSpecs.single.taskId, endsWith('_g1'));
-  expect(fixture.gateway.startedSpecs.single.resumeOffset, isNull);
-});
-```
-
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/legacy_download_migration_v2_test.dart`
-
-- [ ] **Step 3: Implement migration using only legacy presentation/file metadata**
-
-Migration may read existing metadata to identify logical episode and completed path. It must not reconstruct `PersistentParallelDownload`, ranges, child IDs, ownership, or resume offsets. Incomplete rows become restart-required presentation records until explicit user action.
-
-- [ ] **Step 4: Run and commit**
-
-```bash
-flutter test test/core/services/download_v2/legacy_download_migration_v2_test.dart
-git add lib/core/services/download_v2/legacy_download_migration_v2.dart test/core/services/download_v2/legacy_download_migration_v2_test.dart
-git commit -m "feat(downloads): add v2 legacy restart migration"
-```
+- [ ] RED: completed legacy file remains available and causes zero new transfer starts.
+- [ ] RED: incomplete legacy item causes zero network work during migration and one byte-zero V2 generation only after explicit restart/resume.
+- [ ] Implement migration using legacy logical/presentation metadata and final-file path only. Do not import chunk IDs, ranges, resume offsets, native ownership, `PersistentParallelDownload`, or `DownloadRangeTransfer` state.
+- [ ] Run GREEN.
+- [ ] Commit: `feat(downloads): add v2 legacy restart migration`.
 
 ---
 
-### Task 11: Riverpod Compatibility Adapter and Structured Diagnostics
+### Task 11: Riverpod Wiring + Production Cutover Guard
 
 **Files:**
 - Create: `lib/core/services/download_v2/download_v2_provider.dart`
-- Create: `lib/core/services/download_v2/download_v2_diagnostics.dart`
-- Create: `test/core/services/download_v2/download_v2_provider_test.dart`
-- Create: `test/core/services/download_v2/download_v2_diagnostics_test.dart`
-
-**Interfaces:**
-- Produces: keepAlive manager/provider, UI-facing snapshot stream/map, sanitized diagnostics.
-
-- [ ] **Step 1: Write RED provider/log tests**
-
-```dart
-test('diagnostics never include signed url query values', () {
-  final event = DownloadDiagnosticEventV2.sourceRefresh(
-    logicalId: const DownloadLogicalId('x'),
-    generation: 2,
-    taskId: 'aw_v2_x_g2',
-    reason: 'http403',
-  );
-  final json = event.toJson().toString();
-  expect(json, isNot(contains('token=')));
-  expect(json, isNot(contains('https://')));
-});
-```
-
-- [ ] **Step 2: Verify RED**
-
-Run: `flutter test test/core/services/download_v2/download_v2_provider_test.dart test/core/services/download_v2/download_v2_diagnostics_test.dart`
-
-- [ ] **Step 3: Implement provider construction**
-
-Provider wiring must inject concrete Hive store, package gateway, source resolver, integrity verifier, diagnostics, and clock. UI projection comes from manager snapshots; UI must not read package database directly.
-
-- [ ] **Step 4: Run and commit**
-
-```bash
-flutter test test/core/services/download_v2/download_v2_provider_test.dart test/core/services/download_v2/download_v2_diagnostics_test.dart
-git add lib/core/services/download_v2 test/core/services/download_v2
-git commit -m "feat(downloads): expose v2 manager to presentation"
-```
-
----
-
-### Task 12: Controlled Production Cutover Without Dual Writers
-
-**Files:**
 - Modify: `lib/main.dart`
-- Modify: concrete existing download UI/provider call sites found by code search at execution time.
+- Modify: `lib/features/details/presentation/download_launcher.dart`
+- Modify: `lib/features/library/presentation/downloads_provider.dart`
+- Modify: `lib/features/details/presentation/downloaded_file_provider.dart`
 - Create: `test/core/services/download_v2/download_v2_cutover_guard_test.dart`
 
-**Interfaces:**
-- Produces: exactly one manager selected per logical download; all new production starts use V2.
-
-- [ ] **Step 1: Add RED architectural guard tests**
-
-The guard scans V2 imports/source and asserts no forbidden transport dependencies:
-
-```dart
-for (final forbidden in [
-  'persistent_parallel_download.dart',
-  'download_range_transfer.dart',
-  'DownloadRangeTransfer(',
-  'PersistentParallelDownload(',
-]) {
-  expect(v2Source, isNot(contains(forbidden)));
-}
-```
-
-Add a cutover test proving one UI start action invokes exactly one manager path.
-
-- [ ] **Step 2: Verify RED before routing changes**
-
-Run: `flutter test test/core/services/download_v2/download_v2_cutover_guard_test.dart`
-
-- [ ] **Step 3: Switch new downloads to V2**
-
-Initialize package tracking once during app startup, initialize `DownloadManagerV2`, route start/pause/resume/cancel/delete and UI projection through the V2 provider. Legacy completed downloads remain readable. Legacy incomplete resume invokes Task 10 migration restart. Do not allow V1 fallback after a logical item is V2-owned.
-
-- [ ] **Step 4: Run focused and broad automated suites**
+- [ ] RED architectural guard scans V2 sources and fails on `PersistentParallelDownload`, `DownloadRangeTransfer`, or imports of their files.
+- [ ] RED compatibility tests prove one download action invokes one manager and downloads list no longer reads `FileDownloader().database` directly after cutover.
+- [ ] Implement keepAlive provider wiring for concrete store/gateway/source resolver/verifier/diagnostics.
+- [ ] In `download_launcher.dart`, keep source selection/metadata confirmation UI but convert the accepted source into `DownloadStartRequestV2` and call V2.
+- [ ] In `downloads_provider.dart`, project V2 snapshots and send pause/resume/cancel/delete commands to V2 rather than reconciling plugin DB + JobStore itself.
+- [ ] In `downloaded_file_provider.dart`, preserve completed-file lookup across migrated legacy completed items and V2 completed records.
+- [ ] Initialize V2 once from `main.dart`/provider lifecycle.
+- [ ] Run:
 
 ```bash
 flutter test test/core/services/download_v2
@@ -817,158 +398,56 @@ flutter analyze
 flutter test
 ```
 
-Expected: all pass before the cutover task is checked off.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add lib/main.dart lib test/core/services/download_v2
-git commit -m "refactor(downloads): route production downloads through v2"
-```
+- [ ] Commit: `refactor(downloads): route production downloads through v2`.
 
 ---
 
-### Task 13: Native Presentation Cleanup and Automated Regression Matrix
+### Task 12: Native Authority Cleanup + Automated Regression Matrix
 
 **Files:**
-- Modify: `ios/Runner/AppDelegate.swift` only where transport-authority callbacks are now obsolete.
-- Modify: existing native continued-processing bridge files only to remove enqueue/split/retry/resume/cancel authority from V2 path.
-- Create/modify: V2 regression tests under `test/core/services/download_v2/`.
+- Modify: `ios/Runner/AppDelegate.swift`
+- Modify: existing iOS continued-processing/native download bridge files only where they independently enqueue/split/retry/resume/cancel.
+- Modify/create tests under `test/core/services/download_v2/`.
 
-**Interfaces:**
-- Produces: native observers are presentation-only; Dart/package remains transport authority.
-
-- [ ] **Step 1: Add regression tests for the full automated lifecycle matrix**
-
-Required automated cases: start, duplicate start, pause, resume, pause+manager recreation, active+missing transport recovery, network hold projection, source 403 refresh, cancel/delete late callback, integrity failure, five-chunk parent mapping, concurrent episodes, legacy completed preserve, legacy incomplete restart.
-
-- [ ] **Step 2: Remove native authority from V2 path**
-
-Native code may emit presentation telemetry/status but must not independently start, split, retry, resume, or cancel V2 tasks. Remove any V2 hookup that would create a second executor.
-
-- [ ] **Step 3: Run full verification**
-
-```bash
-flutter analyze
-flutter test
-```
-
-Also rely on PR CI for platform build/contract checks.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add ios lib test
-git commit -m "refactor(downloads): remove native transport authority from v2"
-```
+- [ ] Add automated regression cases for: start, duplicate start, pause, resume, pause+manager recreation, active+missing recovery, offline hold projection, 403 refresh, cancel/delete stale callback, integrity failure, 5-chunk parent mapping, multiple episodes, completed legacy preserve, incomplete legacy restart.
+- [ ] Remove native transport authority from V2 path; native code may remain presentation/telemetry only.
+- [ ] Run `flutter analyze` and `flutter test`.
+- [ ] Commit: `refactor(downloads): remove native transport authority from v2`.
 
 ---
 
-### Task 14: Physical-Device Acceptance Gate
+### Task 13: Physical-Device Acceptance Gate
 
-**Files:**
-- Create/modify: `docs/superpowers/plans/2026-09-17-download-manager-v2.md` with recorded evidence under this task.
+**File:**
+- Modify: this plan to record exact evidence.
 
-**Interfaces:**
-- Produces: explicit real-device evidence required before V1 deletion.
-
-- [ ] **Step 1: Run iOS and Android acceptance**
-
-Record exact build/run identifiers and results for:
-
-1. new download complete;
-2. pause -> resume;
-3. pause -> kill -> relaunch stays paused -> resume;
-4. running -> termination/background -> relaunch reattach/recover;
-5. network loss/recovery;
-6. 401/403 fresh-source byte-zero generation;
-7. package parallel at 5 chunks and other user-relevant settings;
-8. multiple concurrent episodes;
-9. cancel during transfer;
-10. delete during/after transfer;
-11. disk-space failure;
-12. integrity failure;
-13. stale callback from replaced generation;
-14. completed legacy playback;
-15. incomplete legacy restart from byte zero.
-
-- [ ] **Step 2: Do not mark this task complete without device evidence**
-
-CI/mocks may support the implementation but cannot satisfy this gate.
-
-- [ ] **Step 3: Commit recorded evidence only after completion**
-
-```bash
-git add docs/superpowers/plans/2026-09-17-download-manager-v2.md
-git commit -m "test(downloads): record v2 device acceptance"
-```
+- [ ] On iOS and Android verify: new complete; pause/resume; pause-kill-relaunch-remains-paused-resume; running termination/relaunch recovery; network loss/recovery; 401/403 fresh byte-zero generation; 5-chunk parallel; multiple episodes; cancel; delete; disk failure; integrity failure; stale old-generation callback; completed legacy playback; incomplete legacy byte-zero restart.
+- [ ] Record exact build/run identifiers and observed results.
+- [ ] Do not check this task from CI/mocks alone.
+- [ ] Commit evidence: `test(downloads): record v2 device acceptance`.
 
 ---
 
-### Task 15: Remove V1 Transport/Ownership Machinery
+### Task 14: Remove V1 Only After Device Gate
 
-**Prerequisite:** Task 14 complete on required physical devices.
+**Prerequisite:** Task 13 complete with real-device evidence.
 
 **Files:**
-- Delete or reduce obsolete V1 files including `lib/core/services/persistent_parallel_download.dart`, `lib/core/services/download_range_transfer.dart`, obsolete V1 ownership/job-state/transport files, and tests that only verify removed architecture.
-- Modify: `lib/core/services/download_service.dart` or remove it if no remaining non-download responsibilities require it.
-- Modify: UI imports/providers to remove temporary compatibility layer pieces no longer needed.
+- Delete obsolete V1 executor files including `lib/core/services/persistent_parallel_download.dart`, `lib/core/services/download_range_transfer.dart`, and transport-only ownership/reconciliation code proven unreachable.
+- Reduce/remove `lib/core/services/download_service.dart` after its remaining non-V1 responsibilities are moved or shown unused.
+- Delete obsolete V1-only tests.
 
-**Interfaces:**
-- Produces: V2 is the only production downloader implementation.
-
-- [ ] **Step 1: Prove V1 is unreachable before deletion**
-
-Use code search plus an architectural test that fails if production imports obsolete V1 executor types.
-
-- [ ] **Step 2: Delete obsolete transport implementation and update imports**
-
-Delete only files proven unreachable; preserve generic utilities still used outside transport. Do not delete legacy completed-download metadata readers until migration/playback no longer needs them.
-
-- [ ] **Step 3: Run complete verification**
-
-```bash
-flutter analyze
-flutter test
-```
-
-PR CI must be green across configured platform checks.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add -A
-git commit -m "refactor(downloads): remove legacy downloader transport"
-```
+- [ ] Add architecture guard proving production no longer references V1 executor types.
+- [ ] Delete only unreachable transport code; retain legacy completed-download metadata reading until no longer required.
+- [ ] Run `flutter analyze` and `flutter test`; require exact PR-head CI green.
+- [ ] Commit: `refactor(downloads): remove legacy downloader transport`.
 
 ---
 
-### Task 16: Final Code Review and Merge Readiness
+### Task 15: Final Review / Merge Readiness
 
-**Files:**
-- Modify this plan only for final checkbox/evidence updates if needed.
-
-- [ ] **Step 1: Compare the finished PR against the design spec section-by-section**
-
-Verify every acceptance criterion in spec section 19 maps to implementation plus evidence.
-
-- [ ] **Step 2: Run final verification from the PR head**
-
-```bash
-flutter analyze
-flutter test
-```
-
-Fetch PR CI for the exact head SHA and inspect any failure rather than relying on older runs.
-
-- [ ] **Step 3: Deep review the final diff**
-
-Check especially: duplicate writers, pause persistence ordering, generation fencing, startup auto-recovery, signed URL loops, final integrity, legacy policy A, and forbidden V1 fallback.
-
-- [ ] **Step 4: Fix every discovered regression and rerun verification**
-
-No task is complete merely because a previous commit was green.
-
-- [ ] **Step 5: Mark PR ready only when all non-device and device gates are actually satisfied**
-
-Do not merge automatically unless explicitly requested.
+- [ ] Compare final diff against every acceptance criterion in the design spec.
+- [ ] Re-check duplicate writers, pause ordering, generation fence, relaunch, 403 loop prevention, integrity gate, migration policy A, and absence of V1 fallback.
+- [ ] Run `flutter analyze` + `flutter test` from exact head SHA and inspect PR CI for that same SHA.
+- [ ] Fix every discovered issue and rerun checks.
+- [ ] Mark PR ready only when automated and physical-device gates are actually satisfied. Do not merge unless explicitly requested.
