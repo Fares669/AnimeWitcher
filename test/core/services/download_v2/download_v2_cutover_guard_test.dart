@@ -24,6 +24,9 @@ void main() {
       final completed = _read(
         'lib/features/details/presentation/downloaded_file_provider.dart',
       );
+      final settings = _read(
+        'lib/features/settings/presentation/general_settings_provider.dart',
+      );
 
       expect(provider, contains('downloadManagerV2Provider'));
       expect(main, contains('downloadManagerV2Provider'));
@@ -40,6 +43,7 @@ void main() {
         downloadsTab,
         progressDialog,
         completed,
+        settings,
       ]) {
         expect(source, isNot(contains('persistent_parallel_download.dart')));
         expect(source, isNot(contains('download_range_transfer.dart')));
@@ -65,6 +69,9 @@ void main() {
       final completed = _read(
         'lib/features/details/presentation/downloaded_file_provider.dart',
       );
+      final settings = _read(
+        'lib/features/settings/presentation/general_settings_provider.dart',
+      );
 
       expect(main, isNot(contains("core/services/download_service.dart")));
       expect(main, isNot(contains('downloadServiceProvider')));
@@ -77,6 +84,8 @@ void main() {
       expect(progressDialog, isNot(contains('core/services/download_service.dart')));
       expect(progressDialog, isNot(contains('FileDownloader()')));
       expect(completed, isNot(contains('downloadServiceProvider')));
+      expect(settings, isNot(contains('downloadServiceProvider')));
+      expect(settings, isNot(contains('core/services/download_service.dart')));
       expect(downloads, isNot(contains('FileDownloader().database')));
     });
 
