@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/services/download_v2/download_file_planner_v2.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
 import '../../../core/storage/storage_service.dart';
 
@@ -18,7 +19,10 @@ class DownloadedFiles extends _$DownloadedFiles {
   @override
   Map<String, File?> build() => const <String, File?>{};
 
-  Future<void> checkFile(MultimediaItem item, {Episode? episode}) async {
+  Future<File?> resolveFile(
+    MultimediaItem item, {
+    Episode? episode,
+  }) async {
     final key = episode?.url ?? item.url;
     final manager = ref.read(downloadManagerV2Provider);
     final records = await manager.records.first;
@@ -33,7 +37,10 @@ class DownloadedFiles extends _$DownloadedFiles {
       ..sort((a, b) => b.updatedAtMillis.compareTo(a.updatedAtMillis));
 
     for (final record in matching) {
-      final file = File(record.destinationPath);
+      final path = await absoluteDownloadDestinationPathV2(
+        record.destinationPath,
+      );
+      final file = File(path);
       if (await file.exists()) {
         resolved = file;
         break;
@@ -61,6 +68,12 @@ class DownloadedFiles extends _$DownloadedFiles {
       }
     }
 
+    return resolved;
+  }
+
+  Future<void> checkFile(MultimediaItem item, {Episode? episode}) async {
+    final key = episode?.url ?? item.url;
+    final resolved = await resolveFile(item, episode: episode);
     state = {...state, key: resolved};
   }
 
