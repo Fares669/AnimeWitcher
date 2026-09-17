@@ -240,7 +240,10 @@ final class _PackageDownloadTransportHandle
 
     return DownloadTransportSnapshot(
       taskId: taskId,
-      status: _transportStatus(transfer.status, transfer.holdReason),
+      status: transportStatusFromPackage(
+        transfer.status,
+        transfer.holdReason,
+      ),
       progress: progress,
       transferredBytes: transferredBytes,
       totalBytes: totalBytes,
@@ -258,7 +261,11 @@ final class _PackageDownloadTransportHandle
   }
 }
 
-DownloadTransportStatus _transportStatus(
+/// Normalizes package status into the package-neutral V2 state model.
+///
+/// Kept public so the adapter contract can be regression-tested directly;
+/// application code should consume [DownloadTransportSnapshot] instead.
+DownloadTransportStatus transportStatusFromPackage(
   TaskStatus status,
   TransferHoldReason holdReason,
 ) {
@@ -270,7 +277,7 @@ DownloadTransportStatus _transportStatus(
     TaskStatus.enqueued => DownloadTransportStatus.queued,
     TaskStatus.running => DownloadTransportStatus.running,
     TaskStatus.complete => DownloadTransportStatus.complete,
-    TaskStatus.notFound => DownloadTransportStatus.failed,
+    TaskStatus.notFound => DownloadTransportStatus.missing,
     TaskStatus.failed => DownloadTransportStatus.failed,
     TaskStatus.canceled => DownloadTransportStatus.canceled,
     TaskStatus.waitingToRetry => DownloadTransportStatus.held,
@@ -282,7 +289,7 @@ DownloadFailureCategory? _failureCategory(
   TaskStatus status,
   TaskException? exception,
 ) {
-  if (status != TaskStatus.failed && status != TaskStatus.notFound) {
+  if (status != TaskStatus.failed) {
     return null;
   }
 
