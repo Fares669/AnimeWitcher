@@ -1,7 +1,4 @@
 import 'package:background_downloader/background_downloader.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import 'downloads_provider.dart';
 
 /// Ephemeral presentation metrics for one V2 parent transfer.
 ///
@@ -24,29 +21,3 @@ final class DownloadProgressData {
   final int totalSize;
   final TaskStatus status;
 }
-
-/// Projects the V2 logical download list into the keyed shape used by the
-/// existing download cards. The source of truth remains DownloadManagerV2.
-final downloadProgressProvider = Provider<Map<String, DownloadProgressData>>((
-  ref,
-) {
-  final downloads = ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
-  return <String, DownloadProgressData>{
-    for (final item in downloads)
-      if (item.trackingUrl.isNotEmpty)
-        item.trackingUrl: DownloadProgressData(
-          taskId: item.id,
-          progress: item.progress,
-          networkSpeed: item.networkSpeedMBps,
-          timeRemaining: item.timeRemaining,
-          totalSize: item.totalBytes ?? -1,
-          status: item.status,
-        ),
-  };
-});
-
-/// V2 deliberately does not expose package-managed child chunk identities.
-/// SegmentedDownloadProgress already renders parent aggregate progress, so the
-/// compatibility map stays empty rather than rebuilding a second chunk model.
-final downloadChunkProgressProvider =
-    Provider<Map<String, Map<String, double>>>((ref) => const {});
