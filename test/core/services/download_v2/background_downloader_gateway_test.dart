@@ -1,5 +1,6 @@
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -53,6 +54,16 @@ void main() {
     expect(handle.taskId, snapshot.taskId);
     expect(handle.current, same(snapshot));
     expect(handle.current.progress, 0.25);
+  });
+
+  test('package notFound maps to missing transport instead of failure', () {
+    expect(
+      transportStatusFromPackage(
+        TaskStatus.notFound,
+        TransferHoldReason.none,
+      ),
+      DownloadTransportStatus.missing,
+    );
   });
 }
 
