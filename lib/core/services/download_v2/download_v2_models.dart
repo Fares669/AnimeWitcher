@@ -25,7 +25,9 @@ enum DownloadTransportStatus {
 
 /// Package-neutral view of one parent transfer.
 ///
-/// No package-managed chunk identity is exposed here.
+/// No package-managed chunk identity is exposed here. Throughput and ETA are
+/// ephemeral presentation metrics copied from the package's parent progress
+/// update; they are never persisted as transport state.
 final class DownloadTransportSnapshot {
   const DownloadTransportSnapshot({
     required this.taskId,
@@ -33,6 +35,8 @@ final class DownloadTransportSnapshot {
     required this.progress,
     this.transferredBytes,
     this.totalBytes,
+    this.networkSpeedMBps = -1,
+    this.timeRemaining = Duration.zero,
     this.failureCategory,
     this.failureMessage,
   }) : assert(progress >= 0 && progress <= 1);
@@ -42,6 +46,8 @@ final class DownloadTransportSnapshot {
   final double progress;
   final int? transferredBytes;
   final int? totalBytes;
+  final double networkSpeedMBps;
+  final Duration timeRemaining;
   final DownloadFailureCategory? failureCategory;
   final String? failureMessage;
 
