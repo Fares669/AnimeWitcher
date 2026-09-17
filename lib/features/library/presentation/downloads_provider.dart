@@ -50,29 +50,6 @@ class DownloadItem {
            (task is ParallelDownloadTask ? task.chunks : 1);
 
   String get id => task.taskId;
-
-  DownloadItem copyWith({
-    TaskStatus? status,
-    double? progress,
-    int? transferredBytes,
-    int? totalBytes,
-  }) {
-    return DownloadItem(
-      task: task,
-      status: status ?? this.status,
-      progress: progress ?? this.progress,
-      item: item,
-      episode: episode,
-      logicalId: logicalId,
-      timestamp: timestamp,
-      trackingUrl: trackingUrl,
-      destinationPath: destinationPath,
-      parallelChunks: parallelChunks,
-      transferredBytes: transferredBytes ?? this.transferredBytes,
-      totalBytes: totalBytes ?? this.totalBytes,
-      v2Owned: v2Owned,
-    );
-  }
 }
 
 bool downloadsPointAtSameTarget(DownloadItem a, DownloadItem b) {
@@ -270,12 +247,12 @@ DownloadItem? downloadItemFromTaskMetadata({
 
 @Riverpod(keepAlive: true)
 class DownloadsNotifier extends _$DownloadsNotifier {
-  static const Duration _snapshotUiInterval = Duration(milliseconds: 500);
+  static const Duration _refreshInterval = Duration(seconds: 1);
 
   final Set<String> _deletingIds = <String>{};
   List<LogicalDownloadRecordV2> _records = const <LogicalDownloadRecordV2>[];
   StreamSubscription<List<LogicalDownloadRecordV2>>? _recordsSubscription;
-  Timer? _snapshotTimer;
+  Timer? _refreshTimer;
 
   @override
   Future<List<DownloadItem>> build() async {
@@ -285,18 +262,22 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     _records = await ref.read(logicalDownloadStoreV2Provider).all();
     _recordsSubscription = manager.records.listen((records) {
       _records = records;
-      unawaited(_refreshList());
+      unawaited(_refreshState());
     });
-    _snapshotTimer = Timer.periodic(_snapshotUiInterval, (_) {
-      _sampleSnapshots();
+    _refreshTimer = Timer.periodic(_refreshInterval, (_) {
+      unawaited(_refreshState());
     });
 
     ref.onDispose(() {
       unawaited(_recordsSubscription?.cancel());
-      _snapshotTimer?.cancel();
+      _refreshTimer?.cancel();
     });
 
     return _refreshList();
+  }
+
+  Future<void> _refreshState() async {
+    state = AsyncData(await _refreshList());
   }
 
   Future<List<DownloadItem>> _refreshList() async {
@@ -385,52 +366,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     return _orderDownloads(collapseDuplicateDownloads(items).visible);
   }
 
-  void _sampleSnapshots() {
-    final current = state.value;
-    if (current == null || current.isEmpty) return;
-    final manager = ref.read(downloadManagerV2Provider);
-    var changed = false;
-    final next = <DownloadItem>[];
-
-    for (final item in current) {
-      final logical = item.logicalId?.trim();
-      if (!item.v2Owned || logical == null || logical.isEmpty) {
-        next.add(item);
-        continue;
-      }
-      final record = _records.where(
-        (candidate) => candidate.logicalId.value == logical,
-      ).firstOrNull;
-      if (record == null) {
-        next.add(item);
-        continue;
-      }
-      final snapshot = manager.snapshotFor(record.logicalId);
-      final status = _taskStatusFor(record, snapshot);
-      final progress = _progressFor(record, snapshot);
-      final transferred = snapshot?.transferredBytes;
-      final total = snapshot?.totalBytes ?? record.expectedBytes;
-      if (status != item.status ||
-          (progress - item.progress).abs() >= 0.001 ||
-          transferred != item.transferredBytes ||
-          total != item.totalBytes) {
-        changed = true;
-        next.add(
-          item.copyWith(
-            status: status,
-            progress: progress,
-            transferredBytes: transferred,
-            totalBytes: total,
-          ),
-        );
-      } else {
-        next.add(item);
-      }
-    }
-
-    if (changed) state = AsyncData(_orderDownloads(next));
-  }
-
   List<DownloadItem> _orderDownloads(List<DownloadItem> items) {
     final active = <DownloadItem>[];
     final completed = <DownloadItem>[];
@@ -475,6 +410,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       trackingUrl: trackingUrl,
       parallelChunks: 1,
     );
+    final bytes = await file.length();
     return DownloadItem(
       task: task,
       status: TaskStatus.complete,
@@ -485,8 +421,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       timestamp: (metadata['timestamp'] as int?) ?? 0,
       trackingUrl: trackingUrl,
       destinationPath: rawPath,
-      transferredBytes: await file.length(),
-      totalBytes: await file.length(),
+      transferredBytes: bytes,
+      totalBytes: bytes,
       v2Owned: false,
     );
   }
@@ -547,7 +483,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
     await ref.read(downloadManagerV2Provider).pause(DownloadLogicalId(logical));
-    _sampleSnapshots();
+    await _refreshState();
   }
 
   Future<void> resumeDownload(String taskId) async {
@@ -555,7 +491,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
     await ref.read(downloadManagerV2Provider).resume(DownloadLogicalId(logical));
-    _sampleSnapshots();
+    await _refreshState();
   }
 }
 
