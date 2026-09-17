@@ -108,10 +108,9 @@ void main() {
         '  @override\n  void dispose()',
       );
       expect(callback, contains('unawaited('));
-      expect(
-        callback,
-        contains('ref.read(downloadManagerV2Provider).initialize().catchError('),
-      );
+      expect(callback, contains('downloadManagerV2Provider'));
+      expect(callback, contains('.initialize()'));
+      expect(callback, contains('.catchError((Object error)'));
     },
   );
 }
