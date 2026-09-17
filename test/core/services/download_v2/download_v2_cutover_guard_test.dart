@@ -124,7 +124,10 @@ void main() {
 
       expect(metadataWrite, greaterThanOrEqualTo(0));
       expect(transportStart, greaterThan(metadataWrite));
-      expect(launcher, contains('saveDownloadMetadata(\n                            logicalId.value,'));
+      expect(
+        launcher.substring(metadataWrite, transportStart),
+        contains('logicalId.value'),
+      );
       expect(launcher, contains('removeDownloadMetadata(logicalId.value)'));
     });
 
