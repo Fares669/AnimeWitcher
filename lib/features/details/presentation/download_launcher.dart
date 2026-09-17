@@ -336,10 +336,12 @@ class DownloadLauncher {
                       episode: episodeData,
                       filename: filename,
                     );
+                    final imdbId = item.imdbId?.trim();
                     final animeId =
                         item.tmdbId?.toString() ??
-                        item.imdbId?.trim() ??
-                        item.url.trim();
+                        (imdbId?.isNotEmpty == true
+                            ? imdbId!
+                            : item.url.trim());
                     final episodeKey = resolveUrl.trim();
                     final variantKey = <String>[
                       providerId.trim(),
@@ -367,35 +369,42 @@ class DownloadLauncher {
                       totalBytes: metadata.size ?? -1,
                       supportsRanges: metadata.supportsRanges,
                     );
-                    final snapshot = await _ref
-                        .read(downloadManagerV2Provider)
-                        .start(
-                          DownloadStartRequestV2(
-                            logicalId: logicalId,
-                            animeId: animeId,
-                            episodeKey: episodeKey,
-                            variantKey: variantKey,
-                            destinationPath: destinationPath,
-                            sourceDescriptor: descriptor.toJson(),
-                            expectedBytes: metadata.size,
-                            allowPause: true,
-                            retries: 2,
-                            parallelChunks: parallelChunks,
-                          ),
-                        );
+                    final downloadManager = _ref.read(downloadManagerV2Provider);
+                    final snapshot = await downloadManager.start(
+                      DownloadStartRequestV2(
+                        logicalId: logicalId,
+                        animeId: animeId,
+                        episodeKey: episodeKey,
+                        variantKey: variantKey,
+                        destinationPath: destinationPath,
+                        sourceDescriptor: descriptor.toJson(),
+                        expectedBytes: metadata.size,
+                        allowPause: true,
+                        retries: 2,
+                        parallelChunks: parallelChunks,
+                      ),
+                    );
 
                     final absolutePath =
                         await absoluteDownloadDestinationPathV2(destinationPath);
-                    await _ref
-                        .read(storageServiceProvider)
-                        .saveDownloadMetadata(
-                          snapshot.taskId,
-                          item,
-                          episode: episodeData,
-                          trackingUrl: resolveUrl,
-                          filePath: absolutePath,
-                          logicalId: logicalId.value,
-                        );
+                    try {
+                      await _ref
+                          .read(storageServiceProvider)
+                          .saveDownloadMetadata(
+                            snapshot.taskId,
+                            item,
+                            episode: episodeData,
+                            trackingUrl: resolveUrl,
+                            filePath: absolutePath,
+                            logicalId: logicalId.value,
+                          );
+                    } catch (metadataError) {
+                      await downloadManager.cancel(logicalId);
+                      Error.throwWithStackTrace(
+                        metadataError,
+                        StackTrace.current,
+                      );
+                    }
                   } catch (error) {
                     if (!finalContext.mounted) return;
                     _ref
