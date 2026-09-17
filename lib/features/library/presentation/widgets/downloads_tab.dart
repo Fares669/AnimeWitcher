@@ -16,6 +16,7 @@ import 'completed_download_episode_card.dart';
 import '../../../../core/utils/layout_constants.dart';
 import '../../../details/presentation/downloaded_file_provider.dart';
 import '../../../details/presentation/playback_launcher.dart';
+import '../download_progress_v2_provider.dart';
 import '../downloads_provider.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../core/services/notification_service.dart';
@@ -169,10 +170,13 @@ class _ActiveDownloadsList extends StatelessWidget {
         separatorBuilder: (context, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
           final download = items[index];
+          final logicalId = download.logicalId?.trim();
           final trackingUrl = download.task.metaData.isNotEmpty
               ? download.task.metaData
               : download.task.url;
-          final progressData = activeProgress[trackingUrl];
+          final progressData = logicalId?.isNotEmpty == true
+              ? activeProgress[logicalId]
+              : activeProgress[trackingUrl];
           final double displayProgress =
               progressData?.progress ?? download.progress;
           final TaskStatus displayStatus =
