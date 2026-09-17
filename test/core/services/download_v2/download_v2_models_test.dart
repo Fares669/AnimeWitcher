@@ -8,6 +8,9 @@ void main() {
     int? completedAtMillis,
     DownloadFailureCategory? failureCategory,
     String? failureMessage,
+    bool allowPause = true,
+    int retries = 2,
+    int parallelChunks = 1,
   }) {
     final logicalId = logicalDownloadIdFor(
       animeId: 'anilist:21',
@@ -32,12 +35,20 @@ void main() {
       completedAtMillis: completedAtMillis,
       failureCategory: failureCategory,
       failureMessage: failureMessage,
+      allowPause: allowPause,
+      retries: retries,
+      parallelChunks: parallelChunks,
       updatedAtMillis: 1234,
     );
   }
 
   test('logical record round-trips application-owned metadata', () {
-    final original = record(intent: DownloadUserIntent.paused);
+    final original = record(
+      intent: DownloadUserIntent.paused,
+      allowPause: false,
+      retries: 4,
+      parallelChunks: 5,
+    );
     final decoded = LogicalDownloadRecordV2.fromJson(original.toJson());
 
     expect(decoded, isNotNull);
@@ -48,25 +59,42 @@ void main() {
     expect(decoded.destinationPath, original.destinationPath);
     expect(decoded.sourceDescriptor, original.sourceDescriptor);
     expect(decoded.expectedBytes, 123456);
+    expect(decoded.allowPause, isFalse);
+    expect(decoded.retries, 4);
+    expect(decoded.parallelChunks, 5);
+  });
+
+  test('legacy V2 record defaults missing application policy safely', () {
+    final json = record().toJson()
+      ..remove('allowPause')
+      ..remove('retries')
+      ..remove('parallelChunks');
+
+    final decoded = LogicalDownloadRecordV2.fromJson(json);
+
+    expect(decoded, isNotNull);
+    expect(decoded!.allowPause, isTrue);
+    expect(decoded.retries, 2);
+    expect(decoded.parallelChunks, 1);
   });
 
   test('serialized logical record contains no transport internals', () {
     final keys = record().toJson().keys.join('|').toLowerCase();
 
     for (final forbidden in <String>[
-      'chunk',
       'range',
       'resumebytes',
       'ownership',
       'retryremaining',
       'holdreason',
+      'childtask',
     ]) {
       expect(keys, isNot(contains(forbidden)));
     }
   });
 
   test('copyWith changes user intent without changing generation identity', () {
-    final original = record();
+    final original = record(parallelChunks: 5);
     final paused = original.copyWith(
       intent: DownloadUserIntent.paused,
       updatedAtMillis: 5678,
@@ -76,6 +104,7 @@ void main() {
     expect(paused.logicalId, original.logicalId);
     expect(paused.taskId, original.taskId);
     expect(paused.generation, original.generation);
+    expect(paused.parallelChunks, 5);
     expect(paused.updatedAtMillis, 5678);
   });
 

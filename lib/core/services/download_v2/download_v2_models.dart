@@ -57,7 +57,9 @@ final class DownloadTransportSnapshot {
 ///
 /// Transport resume data, ranges, child chunks, package retry counters, and
 /// writer ownership are intentionally absent. `background_downloader` owns
-/// those details.
+/// those details. The three policy fields below are application preferences,
+/// not transport resume state; persisting them prevents process recreation from
+/// silently changing a 5-part request back to a single transfer.
 final class LogicalDownloadRecordV2 {
   const LogicalDownloadRecordV2({
     required this.schemaVersion,
@@ -75,7 +77,11 @@ final class LogicalDownloadRecordV2 {
     this.completedAtMillis,
     this.failureCategory,
     this.failureMessage,
-  });
+    this.allowPause = true,
+    this.retries = 2,
+    this.parallelChunks = 1,
+  }) : assert(retries >= 0),
+       assert(parallelChunks > 0);
 
   final int schemaVersion;
   final DownloadLogicalId logicalId;
@@ -91,6 +97,9 @@ final class LogicalDownloadRecordV2 {
   final int? completedAtMillis;
   final DownloadFailureCategory? failureCategory;
   final String? failureMessage;
+  final bool allowPause;
+  final int retries;
+  final int parallelChunks;
   final int updatedAtMillis;
 
   LogicalDownloadRecordV2 copyWith({
@@ -110,6 +119,9 @@ final class LogicalDownloadRecordV2 {
     DownloadFailureCategory? failureCategory,
     String? failureMessage,
     bool clearFailure = false,
+    bool? allowPause,
+    int? retries,
+    int? parallelChunks,
     int? updatedAtMillis,
   }) {
     return LogicalDownloadRecordV2(
@@ -131,6 +143,9 @@ final class LogicalDownloadRecordV2 {
           ? null
           : failureCategory ?? this.failureCategory,
       failureMessage: clearFailure ? null : failureMessage ?? this.failureMessage,
+      allowPause: allowPause ?? this.allowPause,
+      retries: retries ?? this.retries,
+      parallelChunks: parallelChunks ?? this.parallelChunks,
       updatedAtMillis: updatedAtMillis ?? this.updatedAtMillis,
     );
   }
@@ -150,6 +165,9 @@ final class LogicalDownloadRecordV2 {
     if (completedAtMillis != null) 'completedAtMillis': completedAtMillis,
     if (failureCategory != null) 'failureCategory': failureCategory!.name,
     if (failureMessage != null) 'failureMessage': failureMessage,
+    'allowPause': allowPause,
+    'retries': retries,
+    'parallelChunks': parallelChunks,
     'updatedAtMillis': updatedAtMillis,
   };
 
@@ -168,6 +186,8 @@ final class LogicalDownloadRecordV2 {
     final destinationPath = _asString(map['destinationPath']);
     final updatedAtMillis = _asInt(map['updatedAtMillis']);
     final rawSource = map['sourceDescriptor'];
+    final retries = _asInt(map['retries']) ?? 2;
+    final parallelChunks = _asInt(map['parallelChunks']) ?? 1;
 
     if (schemaVersion == null ||
         logicalId == null ||
@@ -180,6 +200,8 @@ final class LogicalDownloadRecordV2 {
         intent == null ||
         destinationPath == null ||
         updatedAtMillis == null ||
+        retries < 0 ||
+        parallelChunks <= 0 ||
         rawSource is! Map) {
       return null;
     }
@@ -202,6 +224,9 @@ final class LogicalDownloadRecordV2 {
         map['failureCategory'],
       ),
       failureMessage: _asString(map['failureMessage']),
+      allowPause: map['allowPause'] is bool ? map['allowPause']! as bool : true,
+      retries: retries,
+      parallelChunks: parallelChunks,
       updatedAtMillis: updatedAtMillis,
     );
   }
