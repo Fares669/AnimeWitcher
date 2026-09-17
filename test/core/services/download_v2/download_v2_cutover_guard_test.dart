@@ -89,6 +89,28 @@ void main() {
       expect(downloads, isNot(contains('FileDownloader().database')));
     });
 
+    test('production legacy metadata is migrated before V2 presentation', () {
+      final downloads = _read(
+        'lib/features/library/presentation/downloads_provider.dart',
+      );
+
+      expect(
+        downloads,
+        contains("core/services/download_v2/legacy_download_migration_v2.dart"),
+      );
+      expect(downloads, contains('LegacyDownloadMigrationV2('));
+      expect(downloads, contains('_migrateLegacyPresentationMetadata'));
+    });
+
+    test('legacy playback fallback requires stored logical completion', () {
+      final completed = _read(
+        'lib/features/details/presentation/downloaded_file_provider.dart',
+      );
+
+      expect(completed, contains('downloadMetadataProgress(entry)'));
+      expect(completed, contains('if (progress < 1) continue;'));
+    });
+
     test('production manager receives the explicit integrity verifier provider', () {
       final provider = _read(
         'lib/core/services/download_v2/download_v2_provider.dart',
