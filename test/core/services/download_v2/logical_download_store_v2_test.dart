@@ -60,6 +60,21 @@ void main() {
     }
   });
 
+  test('paused intent survives store recreation', () async {
+    final backend = <String, Object?>{};
+    final first = InMemoryLogicalDownloadStoreV2(backend);
+    final record = fixtureRecord(intent: DownloadUserIntent.paused);
+
+    await first.put(record);
+
+    final second = InMemoryLogicalDownloadStoreV2(backend);
+    final restored = await second.get(record.logicalId);
+    expect(restored, isNotNull);
+    expect(restored!.intent, DownloadUserIntent.paused);
+    expect(restored.taskId, record.taskId);
+    expect(restored.generation, record.generation);
+  });
+
   test('mutate updates one logical record without changing its identity', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final record = fixtureRecord();
@@ -92,7 +107,7 @@ void main() {
     expect(await store.all(), isEmpty);
   });
 
-  test('all returns logical records without sharing mutable storage maps', () async {
+  test('all returns every logical record', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final first = fixtureRecord();
     final secondLogicalId = logicalDownloadIdFor(
