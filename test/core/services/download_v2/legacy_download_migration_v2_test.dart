@@ -129,6 +129,36 @@ void main() {
     );
   });
 
+  test('malformed legacy presentation stays paused without auto-start', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final migration = LegacyDownloadMigrationV2(store: store, nowMillis: () => 200);
+    final item = _legacyItem(
+      destinationPath: '/tmp/episode-12-malformed.mp4',
+      sourceDescriptor: const <String, Object?>{},
+    );
+
+    final migrated = await migration.migrate(item);
+    expect(migrated.intent, DownloadUserIntent.paused);
+    expect(migrated.sourceDescriptor, isEmpty);
+
+    final gateway = _MigrationGateway();
+    final resolver = StaticSourceResolverV2(expectedBytes: 100);
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+    );
+
+    await manager.initialize();
+
+    expect(gateway.startedSpecs, isEmpty);
+    expect(resolver.calls, 0);
+    expect(
+      manager.snapshotFor(item.logicalId)?.status,
+      DownloadTransportStatus.paused,
+    );
+  });
+
   test('migration is presentation-only and never serializes legacy transport state', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final migration = LegacyDownloadMigrationV2(store: store, nowMillis: () => 200);
