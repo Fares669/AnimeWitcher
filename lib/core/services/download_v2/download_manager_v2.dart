@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'background_downloader_gateway.dart';
 import 'download_integrity_verifier_v2.dart';
 import 'download_source_resolver_v2.dart';
+import 'download_v2_diagnostics.dart';
 import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
 import 'logical_download_store_v2.dart';
@@ -58,18 +59,21 @@ final class DownloadManagerV2 {
     required BackgroundDownloaderGateway gateway,
     required DownloadSourceResolverV2 sourceResolver,
     DownloadIntegrityVerifierV2? integrityVerifier,
+    DownloadDiagnosticsV2? diagnostics,
     int Function()? nowMillis,
   }) : _store = store,
        _gateway = gateway,
        _sourceResolver = sourceResolver,
        _integrityVerifier =
            integrityVerifier ?? const DownloadIntegrityVerifierV2(),
+       _diagnostics = diagnostics ?? const NoopDownloadDiagnosticsV2(),
        _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final LogicalDownloadStoreV2 _store;
   final BackgroundDownloaderGateway _gateway;
   final DownloadSourceResolverV2 _sourceResolver;
   final DownloadIntegrityVerifierV2 _integrityVerifier;
+  final DownloadDiagnosticsV2 _diagnostics;
   final int Function() _nowMillis;
 
   final _commands = _LogicalCommandQueue();
@@ -77,6 +81,8 @@ final class DownloadManagerV2 {
       <DownloadLogicalId, DownloadStartRequestV2>{};
   final Map<DownloadLogicalId, String> _currentTaskIds =
       <DownloadLogicalId, String>{};
+  final Map<DownloadLogicalId, int> _currentGenerations =
+      <DownloadLogicalId, int>{};
   final Map<DownloadLogicalId, DownloadUserIntent> _currentIntents =
       <DownloadLogicalId, DownloadUserIntent>{};
   final Map<DownloadLogicalId, DownloadTransportSnapshot> _snapshots =
@@ -86,8 +92,18 @@ final class DownloadManagerV2 {
   final Map<String, StreamSubscription<DownloadTransportSnapshot>>
   _subscriptionsByTaskId =
       <String, StreamSubscription<DownloadTransportSnapshot>>{};
+  final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
+      StreamController<List<LogicalDownloadRecordV2>>.broadcast();
 
   Future<void>? _initialization;
+
+  /// Application-owned logical records for presentation. This never exposes
+  /// package child transfers, URLs, headers or FileDownloader database rows.
+  Stream<List<LogicalDownloadRecordV2>> get records async* {
+    await initialize();
+    yield List<LogicalDownloadRecordV2>.unmodifiable(await _store.all());
+    yield* _recordChanges.stream;
+  }
 
   Future<void> initialize() {
     return _initialization ??= _initialize();
@@ -106,13 +122,15 @@ final class DownloadManagerV2 {
       _rememberRecord(record);
 
       if (record.completedAtMillis != null) {
-        _snapshots[record.logicalId] = DownloadTransportSnapshot(
+        final snapshot = DownloadTransportSnapshot(
           taskId: record.taskId,
           status: DownloadTransportStatus.complete,
           progress: 1,
           transferredBytes: record.expectedBytes,
           totalBytes: record.expectedBytes,
         );
+        _snapshots[record.logicalId] = snapshot;
+        _recordDiagnostic(record.logicalId, snapshot);
         continue;
       }
 
@@ -131,7 +149,7 @@ final class DownloadManagerV2 {
             }
             _activateHandle(record.logicalId, exactHandle);
           }
-          _snapshots[record.logicalId] = _snapshotWithStatus(
+          final projected = _snapshotWithStatus(
             exactHandle?.current ??
                 DownloadTransportSnapshot(
                   taskId: record.taskId,
@@ -141,6 +159,8 @@ final class DownloadManagerV2 {
                 ),
             DownloadTransportStatus.paused,
           );
+          _snapshots[record.logicalId] = projected;
+          _recordDiagnostic(record.logicalId, projected);
 
         case DownloadUserIntent.canceled:
           if (exactHandle != null) {
@@ -150,13 +170,15 @@ final class DownloadManagerV2 {
             await _gateway.removeTracking(record.taskId);
             _handlesByTaskId.remove(record.taskId);
           }
-          _snapshots[record.logicalId] = DownloadTransportSnapshot(
+          final projected = DownloadTransportSnapshot(
             taskId: record.taskId,
             status: DownloadTransportStatus.canceled,
             progress: 0,
             totalBytes: record.expectedBytes,
             transferredBytes: record.expectedBytes == null ? null : 0,
           );
+          _snapshots[record.logicalId] = projected;
+          _recordDiagnostic(record.logicalId, projected);
 
         case DownloadUserIntent.active:
           final request = _requests.putIfAbsent(
@@ -175,6 +197,7 @@ final class DownloadManagerV2 {
           }
       }
     }
+    await _publishRecords();
   }
 
   /// Starts a logical download, coalescing concurrent duplicate starts into
@@ -200,9 +223,6 @@ final class DownloadManagerV2 {
   }
 
   /// Replaces the current transport with a new generation for this logical ID.
-  ///
-  /// The new generation is durably fenced before the obsolete transfer is
-  /// canceled, so every late callback from the old task ID is ignored.
   Future<DownloadTransportSnapshot> restart(DownloadLogicalId logicalId) {
     return _commands.run(logicalId, () async {
       await initialize();
@@ -221,10 +241,6 @@ final class DownloadManagerV2 {
   }
 
   /// Persists paused intent before asking the package to pause.
-  ///
-  /// If package pause is unsupported or non-resumable, the current transport
-  /// is canceled while the durable user intent remains paused. A later resume
-  /// will create a fresh generation.
   Future<DownloadTransportSnapshot?> pause(DownloadLogicalId logicalId) {
     return _commands.run(logicalId, () async {
       await initialize();
@@ -237,13 +253,12 @@ final class DownloadManagerV2 {
       );
       await _store.put(pausedRecord);
       _rememberRecord(pausedRecord);
+      await _publishRecords();
 
       final handle = await _exactHandle(record.taskId);
       if (handle != null && !handle.current.isFinal) {
         final paused = await handle.pause();
-        if (!paused) {
-          await handle.cancel();
-        }
+        if (!paused) await handle.cancel();
       }
 
       final base = handle?.current ??
@@ -259,6 +274,7 @@ final class DownloadManagerV2 {
         DownloadTransportStatus.paused,
       );
       _snapshots[logicalId] = projected;
+      _recordDiagnostic(logicalId, projected);
       return projected;
     });
   }
@@ -283,6 +299,7 @@ final class DownloadManagerV2 {
       );
       await _store.put(activeRecord);
       _rememberRecord(activeRecord);
+      await _publishRecords();
 
       final handle = await _exactHandle(record.taskId);
       if (handle != null &&
@@ -298,9 +315,7 @@ final class DownloadManagerV2 {
     });
   }
 
-  /// Cancels the logical download. Cancellation advances the generation fence
-  /// before touching the package transport, so late callbacks cannot resurrect
-  /// the canceled item.
+  /// Cancels the logical download.
   Future<void> cancel(DownloadLogicalId logicalId) {
     return _commands.run(logicalId, () async {
       await initialize();
@@ -322,14 +337,30 @@ final class DownloadManagerV2 {
       await _deleteDestination(record.destinationPath);
       await _store.remove(logicalId);
       _currentTaskIds.remove(logicalId);
+      _currentGenerations.remove(logicalId);
       _currentIntents.remove(logicalId);
       _snapshots.remove(logicalId);
       _requests.remove(logicalId);
+      await _publishRecords();
     });
   }
 
   DownloadTransportSnapshot? snapshotFor(DownloadLogicalId logicalId) =>
       _snapshots[logicalId];
+
+  /// Returns true only when V2 has a logically completed record and its final
+  /// artifact still passes the stable final-file integrity check.
+  Future<bool> hasCompletedDownload(DownloadLogicalId logicalId) async {
+    await initialize();
+    final record = await _store.get(logicalId);
+    if (record?.completedAtMillis == null) return false;
+    final file = await _destinationFile(record!.destinationPath);
+    final result = await _integrityVerifier.verify(
+      file,
+      expectedBytes: record.expectedBytes,
+    );
+    return result.isValid;
+  }
 
   Future<DownloadTransportSnapshot> _startFreshGeneration(
     DownloadStartRequestV2 request,
@@ -341,9 +372,7 @@ final class DownloadManagerV2 {
     final obsoleteHandle = previous == null
         ? null
         : previousHandle ??
-              (lookUpPreviousHandle
-                  ? await _exactHandle(previous.taskId)
-                  : null);
+              (lookUpPreviousHandle ? await _exactHandle(previous.taskId) : null);
     final source = await _sourceResolver.resolve(request.sourceDescriptor);
     final generation = (previous?.generation ?? 0) + 1;
     final taskId = taskIdForGeneration(request.logicalId, generation);
@@ -362,14 +391,15 @@ final class DownloadManagerV2 {
       destinationPath: request.destinationPath,
       sourceDescriptor: Map<String, Object?>.from(request.sourceDescriptor),
       expectedBytes: expectedBytes,
+      allowPause: request.allowPause,
+      retries: request.retries,
+      parallelChunks: request.parallelChunks,
       updatedAtMillis: updatedAtMillis,
     );
 
-    // Persist/fence before touching the obsolete writer. If the process dies
-    // after this point, startup recovery sees an active generation with no
-    // handle and can safely recreate only this generation.
     await _store.put(nextRecord);
     _rememberRecord(nextRecord);
+    await _publishRecords();
     final queued = DownloadTransportSnapshot(
       taskId: taskId,
       status: DownloadTransportStatus.queued,
@@ -378,6 +408,7 @@ final class DownloadManagerV2 {
       transferredBytes: expectedBytes == null ? null : 0,
     );
     _snapshots[request.logicalId] = queued;
+    _recordDiagnostic(request.logicalId, queued);
 
     if (obsoleteHandle != null &&
         (cancelPreviousEvenIfFinal || !obsoleteHandle.current.isFinal)) {
@@ -421,13 +452,16 @@ final class DownloadManagerV2 {
 
     await _store.put(canceledRecord);
     _rememberRecord(canceledRecord);
-    _snapshots[logicalId] = DownloadTransportSnapshot(
+    await _publishRecords();
+    final snapshot = DownloadTransportSnapshot(
       taskId: fenceTaskId,
       status: DownloadTransportStatus.canceled,
       progress: 0,
       totalBytes: record.expectedBytes,
       transferredBytes: record.expectedBytes == null ? null : 0,
     );
+    _snapshots[logicalId] = snapshot;
+    _recordDiagnostic(logicalId, snapshot);
 
     if (handle != null && !handle.current.isFinal) {
       await handle.cancel();
@@ -437,18 +471,14 @@ final class DownloadManagerV2 {
   }
 
   Future<File> _destinationFile(String destinationPath) async {
-    if (p.isAbsolute(destinationPath)) {
-      return File(destinationPath);
-    }
+    if (p.isAbsolute(destinationPath)) return File(destinationPath);
     final documents = await getApplicationDocumentsDirectory();
     return File(p.join(documents.path, destinationPath));
   }
 
   Future<void> _deleteDestination(String destinationPath) async {
     final file = await _destinationFile(destinationPath);
-    if (await file.exists()) {
-      await file.delete();
-    }
+    if (await file.exists()) await file.delete();
   }
 
   DownloadStartRequestV2 _requestFromRecord(LogicalDownloadRecordV2 record) {
@@ -460,14 +490,15 @@ final class DownloadManagerV2 {
       destinationPath: record.destinationPath,
       sourceDescriptor: Map<String, Object?>.from(record.sourceDescriptor),
       expectedBytes: record.expectedBytes,
-      allowPause: true,
-      retries: 2,
-      parallelChunks: 1,
+      allowPause: record.allowPause,
+      retries: record.retries,
+      parallelChunks: record.parallelChunks,
     );
   }
 
   void _rememberRecord(LogicalDownloadRecordV2 record) {
     _currentTaskIds[record.logicalId] = record.taskId;
+    _currentGenerations[record.logicalId] = record.generation;
     _currentIntents[record.logicalId] = record.intent;
   }
 
@@ -475,9 +506,7 @@ final class DownloadManagerV2 {
     final cached = _handlesByTaskId[taskId];
     if (cached != null) return cached;
     final attached = await _gateway.attach(taskId);
-    if (attached != null) {
-      _handlesByTaskId[taskId] = attached;
-    }
+    if (attached != null) _handlesByTaskId[taskId] = attached;
     return attached;
   }
 
@@ -490,9 +519,7 @@ final class DownloadManagerV2 {
     _consumeSnapshot(logicalId, handle.current);
 
     final oldSubscription = _subscriptionsByTaskId.remove(handle.taskId);
-    if (oldSubscription != null) {
-      unawaited(oldSubscription.cancel());
-    }
+    if (oldSubscription != null) unawaited(oldSubscription.cancel());
 
     late final StreamSubscription<DownloadTransportSnapshot> subscription;
     subscription = handle.snapshots.listen((snapshot) {
@@ -523,6 +550,11 @@ final class DownloadManagerV2 {
     if (accepted &&
         snapshot.status == DownloadTransportStatus.failed &&
         snapshot.failureCategory == DownloadFailureCategory.sourceExpired) {
+      _recordDiagnostic(
+        logicalId,
+        snapshot,
+        sourceRefreshReason: DownloadV2SourceRefreshReason.authorizationExpired,
+      );
       _scheduleSourceRefresh(logicalId, snapshot.taskId);
     }
   }
@@ -532,14 +564,11 @@ final class DownloadManagerV2 {
     DownloadTransportSnapshot snapshot,
   ) {
     if (_currentTaskIds[logicalId] != snapshot.taskId) return false;
-    if (_currentIntents[logicalId] == DownloadUserIntent.paused) {
-      _snapshots[logicalId] = _snapshotWithStatus(
-        snapshot,
-        DownloadTransportStatus.paused,
-      );
-      return true;
-    }
-    _snapshots[logicalId] = snapshot;
+    final projected = _currentIntents[logicalId] == DownloadUserIntent.paused
+        ? _snapshotWithStatus(snapshot, DownloadTransportStatus.paused)
+        : snapshot;
+    _snapshots[logicalId] = projected;
+    _recordDiagnostic(logicalId, projected);
     return true;
   }
 
@@ -557,13 +586,19 @@ final class DownloadManagerV2 {
         }
 
         if (record.completedAtMillis != null) {
-          _snapshots[logicalId] = DownloadTransportSnapshot(
+          final snapshot = DownloadTransportSnapshot(
             taskId: record.taskId,
             status: DownloadTransportStatus.complete,
             progress: 1,
             transferredBytes:
                 completedSnapshot.transferredBytes ?? record.expectedBytes,
             totalBytes: record.expectedBytes ?? completedSnapshot.totalBytes,
+          );
+          _snapshots[logicalId] = snapshot;
+          _recordDiagnostic(
+            logicalId,
+            snapshot,
+            integrityResult: DownloadV2IntegrityResult.valid,
           );
           return;
         }
@@ -597,6 +632,7 @@ final class DownloadManagerV2 {
             updatedAtMillis: now,
           );
         });
+        await _publishRecords();
 
         if (updated == null ||
             updated.taskId != completedSnapshot.taskId ||
@@ -607,17 +643,23 @@ final class DownloadManagerV2 {
         _rememberRecord(updated);
         if (result.isValid) {
           final bytes = result.bytes!;
-          _snapshots[logicalId] = DownloadTransportSnapshot(
+          final snapshot = DownloadTransportSnapshot(
             taskId: completedSnapshot.taskId,
             status: DownloadTransportStatus.complete,
             progress: 1,
             transferredBytes: bytes,
             totalBytes: updated.expectedBytes ?? bytes,
           );
+          _snapshots[logicalId] = snapshot;
+          _recordDiagnostic(
+            logicalId,
+            snapshot,
+            integrityResult: DownloadV2IntegrityResult.valid,
+          );
           return;
         }
 
-        _snapshots[logicalId] = DownloadTransportSnapshot(
+        final snapshot = DownloadTransportSnapshot(
           taskId: completedSnapshot.taskId,
           status: DownloadTransportStatus.failed,
           progress: completedSnapshot.progress,
@@ -625,6 +667,12 @@ final class DownloadManagerV2 {
           totalBytes: updated.expectedBytes ?? completedSnapshot.totalBytes,
           failureCategory: DownloadFailureCategory.integrity,
           failureMessage: result.reason,
+        );
+        _snapshots[logicalId] = snapshot;
+        _recordDiagnostic(
+          logicalId,
+          snapshot,
+          integrityResult: _diagnosticIntegrityResult(result.reason),
         );
       }),
     );
@@ -653,6 +701,57 @@ final class DownloadManagerV2 {
         );
       }),
     );
+  }
+
+  void _recordDiagnostic(
+    DownloadLogicalId logicalId,
+    DownloadTransportSnapshot snapshot, {
+    DownloadV2SourceRefreshReason? sourceRefreshReason,
+    DownloadV2IntegrityResult? integrityResult,
+  }) {
+    final generation = _currentGenerations[logicalId];
+    if (generation == null || generation <= 0) return;
+    _diagnostics.record(
+      DownloadDiagnosticEventV2(
+        logicalId: logicalId,
+        generation: generation,
+        taskId: snapshot.taskId,
+        status: snapshot.status,
+        progress: snapshot.progress,
+        failureCategory: snapshot.failureCategory,
+        holdCategory: snapshot.status == DownloadTransportStatus.held
+            ? DownloadV2HoldCategory.packageHeld
+            : null,
+        sourceRefreshReason: sourceRefreshReason,
+        integrityResult: integrityResult,
+      ),
+    );
+  }
+
+  DownloadV2IntegrityResult _diagnosticIntegrityResult(String? reason) {
+    return switch (reason) {
+      'missing' => DownloadV2IntegrityResult.missing,
+      'empty' => DownloadV2IntegrityResult.empty,
+      'size-mismatch' => DownloadV2IntegrityResult.sizeMismatch,
+      _ => DownloadV2IntegrityResult.invalid,
+    };
+  }
+
+  Future<void> _publishRecords() async {
+    if (_recordChanges.isClosed) return;
+    final records = await _store.all();
+    records.sort((a, b) => a.updatedAtMillis.compareTo(b.updatedAtMillis));
+    if (!_recordChanges.isClosed) {
+      _recordChanges.add(List<LogicalDownloadRecordV2>.unmodifiable(records));
+    }
+  }
+
+  Future<void> dispose() async {
+    for (final subscription in _subscriptionsByTaskId.values) {
+      await subscription.cancel();
+    }
+    _subscriptionsByTaskId.clear();
+    await _recordChanges.close();
   }
 }
 
@@ -690,9 +789,7 @@ final class _LogicalCommandQueue {
     );
     _tails[id] = barrier;
     return result.whenComplete(() {
-      if (identical(_tails[id], barrier)) {
-        _tails.remove(id);
-      }
+      if (identical(_tails[id], barrier)) _tails.remove(id);
     });
   }
 }
