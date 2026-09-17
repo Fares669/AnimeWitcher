@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/multimedia_item.dart';
+import '../../extensions/base_provider.dart';
 import '../../extensions/extension_manager.dart';
 import '../../storage/settings_repository.dart';
 import '../../storage/storage_service.dart';
@@ -49,6 +50,7 @@ final downloadSourceResolverV2Provider = Provider<DownloadSourceResolverV2>((
   final extensions = ref.read(extensionManagerProvider.notifier);
   return _ProviderDownloadSourceResolverV2(
     DownloadUrlRefresher(providerForId: extensions.getProvider),
+    extensions.getProvider,
   );
 });
 
@@ -131,18 +133,15 @@ Future<void> _migrateLegacyPresentationMetadata(Ref ref) async {
             expectedBytes: expectedBytes,
           );
 
-      // Current V1 downloads persist a stable provider/source refresh
-      // descriptor. Incomplete rows without one cannot be safely restarted by
-      // V2 without guessing a server, so they remain legacy presentation data.
       final refreshDescriptor = await refreshStore.get(trackingUrl);
-      if (!finalFileValid && refreshDescriptor == null) continue;
-
+      final qualityHint = refreshDescriptor?.quality ??
+          _legacyStringHint(metadata, const <String>['quality']);
       final animeId = _legacyAnimeId(item);
       if (animeId.isEmpty) continue;
       final variantKey = _legacySemanticVariantKey(
         item: item,
         episode: episode,
-        quality: refreshDescriptor?.quality,
+        quality: qualityHint,
       );
       final logicalId = logicalDownloadIdFor(
         animeId: animeId,
@@ -156,6 +155,30 @@ Future<void> _migrateLegacyPresentationMetadata(Ref ref) async {
                 : DateTime.now().millisecondsSinceEpoch)
           : null;
 
+      final Map<String, Object?> sourceDescriptor;
+      if (refreshDescriptor != null) {
+        sourceDescriptor = _applicationOwnedSourceDescriptor(refreshDescriptor);
+      } else if (finalFileValid) {
+        sourceDescriptor = <String, Object?>{
+          'trackingUrl': trackingUrl,
+          'legacyCompleted': true,
+        };
+      } else {
+        // Policy A keeps incomplete presentation rows visible even when an old
+        // build never persisted refresh state. The placeholder is deliberately
+        // transport-free; explicit resume reconstructs a fresh provider source
+        // and starts a new package generation from byte zero.
+        sourceDescriptor = legacyRestartRequiredSourceDescriptorV2(
+          trackingUrl: trackingUrl,
+          providerId: item.provider?.trim() ?? '',
+          sourceHint: _legacyStringHint(
+            metadata,
+            const <String>['source', 'server', 'serverName'],
+          ) ?? episode?.serverName,
+          quality: qualityHint,
+        );
+      }
+
       final migrated = await migration.migrate(
         LegacyDownloadPresentationV2(
           logicalId: logicalId,
@@ -163,12 +186,7 @@ Future<void> _migrateLegacyPresentationMetadata(Ref ref) async {
           episodeKey: trackingUrl,
           variantKey: variantKey,
           destinationPath: destinationPath,
-          sourceDescriptor: refreshDescriptor == null
-              ? <String, Object?>{
-                  'trackingUrl': trackingUrl,
-                  'legacyCompleted': true,
-                }
-              : _applicationOwnedSourceDescriptor(refreshDescriptor),
+          sourceDescriptor: sourceDescriptor,
           completedAtMillis: completedAtMillis,
           expectedBytes: expectedBytes > 0 ? expectedBytes : null,
         ),
@@ -204,6 +222,24 @@ String _legacyAnimeId(MultimediaItem item) {
   final imdbId = item.imdbId?.trim();
   if (imdbId != null && imdbId.isNotEmpty) return imdbId;
   return item.url.trim();
+}
+
+String? _legacyStringHint(
+  Map<String, dynamic> metadata,
+  List<String> keys,
+) {
+  for (final key in keys) {
+    final value = metadata[key]?.toString().trim() ?? '';
+    if (value.isNotEmpty) return value;
+  }
+  final snapshot = metadata['taskSnapshot'];
+  if (snapshot is Map) {
+    for (final key in keys) {
+      final value = snapshot[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+  }
+  return null;
 }
 
 String _legacySemanticVariantKey({
@@ -313,14 +349,22 @@ final class _MigrationFirstBackgroundDownloaderGateway
 
 final class _ProviderDownloadSourceResolverV2
     implements DownloadSourceResolverV2 {
-  const _ProviderDownloadSourceResolverV2(this._refresher);
+  const _ProviderDownloadSourceResolverV2(
+    this._refresher,
+    this._providerForId,
+  );
 
   final DownloadUrlRefresher _refresher;
+  final AnimeWitcherProvider? Function(String providerId) _providerForId;
 
   @override
   Future<ResolvedDownloadSourceV2> resolve(
     Map<String, Object?> descriptor,
   ) async {
+    if (sourceDescriptorRequiresLegacyRestartV2(descriptor)) {
+      return _resolveLegacyRestartSource(descriptor);
+    }
+
     final refreshDescriptor = DownloadUrlRefreshDescriptor.fromJson(descriptor);
     if (refreshDescriptor == null) {
       throw StateError('Invalid V2 download source descriptor');
@@ -341,4 +385,116 @@ final class _ProviderDownloadSourceResolverV2
       headers: Map<String, String>.from(refreshed.headers),
     );
   }
+
+  Future<ResolvedDownloadSourceV2> _resolveLegacyRestartSource(
+    Map<String, Object?> descriptor,
+  ) async {
+    final trackingUrl = descriptor['trackingUrl']?.toString().trim() ?? '';
+    final providerId = descriptor['providerId']?.toString().trim() ?? '';
+    final sourceHint = descriptor['sourceHint']?.toString().trim() ?? '';
+    final quality = descriptor['quality']?.toString().trim() ?? '';
+    if (trackingUrl.isEmpty || providerId.isEmpty) {
+      throw StateError(
+        'Legacy download needs a provider/source re-selection before restart',
+      );
+    }
+
+    final provider = _providerForId(providerId);
+    if (provider == null) {
+      throw StateError('Legacy download provider is no longer available');
+    }
+    provider.prepareForNetworkRetry();
+
+    List<StreamResult> sources;
+    try {
+      sources = await provider.loadStreamSources(trackingUrl);
+    } catch (_) {
+      throw StateError('Unable to reload legacy download sources');
+    }
+    final selected = _pickLegacyRestartCandidate(
+      sources,
+      sourceHint: sourceHint,
+      quality: quality,
+    );
+    if (selected == null) {
+      throw StateError(
+        'Legacy download needs source re-selection before restart',
+      );
+    }
+
+    StreamResult resolved = selected;
+    if (selected.requiresResolution) {
+      List<StreamResult> resolvedStreams;
+      try {
+        resolvedStreams = await provider.loadStreams(selected.url);
+      } catch (_) {
+        throw StateError('Unable to resolve the selected legacy source');
+      }
+      resolved = _pickLegacyRestartCandidate(
+            resolvedStreams,
+            sourceHint: sourceHint.isEmpty ? selected.source : sourceHint,
+            quality: quality,
+            requirePlayable: true,
+          ) ??
+          (resolvedStreams.length == 1 &&
+                  !resolvedStreams.single.requiresResolution
+              ? resolvedStreams.single
+              : throw StateError(
+                  'Legacy download needs source re-selection before restart',
+                ));
+    }
+
+    final url = resolved.url.trim();
+    if (url.isEmpty || resolved.requiresResolution) {
+      throw StateError('Unable to resolve a fresh legacy download source');
+    }
+    return ResolvedDownloadSourceV2(
+      url: url,
+      headers: Map<String, String>.from(resolved.headers ?? const {}),
+    );
+  }
+}
+
+StreamResult? _pickLegacyRestartCandidate(
+  List<StreamResult> streams, {
+  required String sourceHint,
+  required String quality,
+  bool requirePlayable = false,
+}) {
+  var candidates = streams.where((stream) {
+    if (requirePlayable && stream.requiresResolution) return false;
+    if (sourceHint.isEmpty) return true;
+    return stream.source.trim().toLowerCase() == sourceHint.toLowerCase();
+  }).toList(growable: false);
+  if (candidates.isEmpty) return null;
+
+  if (quality.isNotEmpty) {
+    final qualityMatches = candidates
+        .where(
+          (stream) =>
+              stream.quality?.trim().toLowerCase() == quality.toLowerCase(),
+        )
+        .toList(growable: false);
+    if (qualityMatches.length == 1) return qualityMatches.single;
+    if (qualityMatches.isNotEmpty) candidates = qualityMatches;
+  }
+
+  if (candidates.length == 1) return candidates.single;
+
+  // With no historical source hint, only auto-reconstruct when the provider
+  // exposes one semantic source label. Choosing among different labels would
+  // guess the user's previous server/source selection.
+  if (sourceHint.isEmpty) {
+    final labels = candidates
+        .map((stream) => stream.source.trim().toLowerCase())
+        .where((value) => value.isNotEmpty)
+        .toSet();
+    if (labels.length != 1) return null;
+  }
+
+  final playable = candidates
+      .where((stream) => !stream.requiresResolution)
+      .toList(growable: false);
+  if (playable.length == 1) return playable.single;
+  return null;
 }
