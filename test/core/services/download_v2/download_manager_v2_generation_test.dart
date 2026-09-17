@@ -7,12 +7,16 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'download_v2_test_support.dart';
+
 void main() {
   test('late old-generation event is ignored', () async {
     final gateway = _FakeGateway();
+    final resolver = StaticSourceResolverV2();
     final manager = DownloadManagerV2(
       store: InMemoryLogicalDownloadStoreV2(),
       gateway: gateway,
+      sourceResolver: resolver,
     );
     final request = _request();
 
@@ -30,6 +34,7 @@ void main() {
     expect(current, isNotNull);
     expect(current!.taskId, newTaskId);
     expect(current.taskId, isNot(oldTaskId));
+    expect(resolver.calls, 2);
   });
 }
 
@@ -49,8 +54,6 @@ DownloadStartRequestV2 _request() {
       'providerId': 'provider.example',
       'trackingUrl': '/anime/21/12',
     },
-    url: 'https://example.invalid/video.mp4',
-    headers: const <String, String>{},
     expectedBytes: 123456,
     allowPause: true,
     retries: 2,
@@ -80,7 +83,8 @@ final class _FakeGateway implements BackgroundDownloaderGateway {
   }
 
   @override
-  Future<DownloadTransportHandle?> attach(String taskId) async => _handles[taskId];
+  Future<DownloadTransportHandle?> attach(String taskId) async =>
+      _handles[taskId];
 
   @override
   Future<List<DownloadTransportHandle>> rehydrate() async =>
