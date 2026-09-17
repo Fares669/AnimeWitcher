@@ -160,6 +160,13 @@ int downloadTaskPartCount(Task task) {
   return 1;
 }
 
+/// background_downloader 9.6.2 creates ParallelDownloadTask children as plain
+/// GET DownloadTasks and does not propagate the parent's HTTP method or body.
+/// Keep non-GET/body-backed sources on one logical plugin transfer so the
+/// executor never changes the provider's request contract while splitting it.
+bool supportsPluginParallelRequest(DownloadTask task) =>
+    task.httpRequestMethod.toUpperCase() == 'GET' && task.post == null;
+
 /// Convert a not-yet-started logical episode placeholder to the real transfer
 /// task. Keep the same taskId so Hive metadata, UI rows and queue ordering stay
 /// attached to one episode, never to individual chunks.
@@ -168,7 +175,11 @@ DownloadTask buildAdaptiveDownloadTask({
   required int parts,
 }) {
   final count = parts.clamp(kDownloadPartsMin, kDownloadPartsMax).toInt();
-  if (count <= 1 || template is ParallelDownloadTask) return template;
+  if (count <= 1 ||
+      template is ParallelDownloadTask ||
+      !supportsPluginParallelRequest(template)) {
+    return template;
+  }
   return ParallelDownloadTask(
     taskId: template.taskId,
     // Request.url already includes any urlQueryParameters supplied when the
