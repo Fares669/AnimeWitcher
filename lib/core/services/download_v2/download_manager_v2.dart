@@ -76,7 +76,8 @@ final class DownloadManagerV2 {
   final DownloadDiagnosticsV2 _diagnostics;
   final int Function() _nowMillis;
 
-  final _commands = _LogicalCommandQueue();
+  final _commands = _KeyedCommandQueue<DownloadLogicalId>();
+  final _destinationCommands = _KeyedCommandQueue<String>();
   final Map<DownloadLogicalId, DownloadStartRequestV2> _requests =
       <DownloadLogicalId, DownloadStartRequestV2>{};
   final Map<DownloadLogicalId, String> _currentTaskIds =
@@ -405,6 +406,36 @@ final class DownloadManagerV2 {
     DownloadTransportHandle? previousHandle,
     bool lookUpPreviousHandle = true,
   }) async {
+    final destinationKey = await _canonicalDestinationPath(
+      request.destinationPath,
+    );
+    return _destinationCommands.run(destinationKey, () async {
+      final conflict = await _findDestinationConflict(
+        destinationKey,
+        request.logicalId,
+      );
+      if (conflict != null) {
+        throw StateError(
+          'Canonical destination is already owned by ${conflict.logicalId}',
+        );
+      }
+      return _startFreshGenerationUnsafe(
+        request,
+        previous,
+        cancelPreviousEvenIfFinal: cancelPreviousEvenIfFinal,
+        previousHandle: previousHandle,
+        lookUpPreviousHandle: lookUpPreviousHandle,
+      );
+    });
+  }
+
+  Future<DownloadTransportSnapshot> _startFreshGenerationUnsafe(
+    DownloadStartRequestV2 request,
+    LogicalDownloadRecordV2? previous, {
+    bool cancelPreviousEvenIfFinal = false,
+    DownloadTransportHandle? previousHandle,
+    bool lookUpPreviousHandle = true,
+  }) async {
     final obsoleteHandle = previous == null
         ? null
         : previousHandle ??
@@ -505,6 +536,31 @@ final class DownloadManagerV2 {
     }
     await _gateway.removeTracking(obsoleteTaskId);
     _handlesByTaskId.remove(obsoleteTaskId);
+  }
+
+  Future<String> _canonicalDestinationPath(String destinationPath) async {
+    final file = await _destinationFile(destinationPath);
+    final normalized = p.normalize(file.absolute.path);
+    return Platform.isWindows ? normalized.toLowerCase() : normalized;
+  }
+
+  Future<LogicalDownloadRecordV2?> _findDestinationConflict(
+    String canonicalDestination,
+    DownloadLogicalId logicalId,
+  ) async {
+    final records = await _store.all();
+    for (final record in records) {
+      if (record.logicalId == logicalId ||
+          record.completedAtMillis != null ||
+          record.intent == DownloadUserIntent.canceled) {
+        continue;
+      }
+      if (await _canonicalDestinationPath(record.destinationPath) ==
+          canonicalDestination) {
+        return record;
+      }
+    }
+    return null;
   }
 
   Future<File> _destinationFile(String destinationPath) async {
@@ -816,11 +872,10 @@ DownloadTransportSnapshot _snapshotWithStatus(
   );
 }
 
-final class _LogicalCommandQueue {
-  final Map<DownloadLogicalId, Future<void>> _tails =
-      <DownloadLogicalId, Future<void>>{};
+final class _KeyedCommandQueue<K> {
+  final Map<K, Future<void>> _tails = <K, Future<void>>{};
 
-  Future<T> run<T>(DownloadLogicalId id, Future<T> Function() action) {
+  Future<T> run<T>(K id, Future<T> Function() action) {
     final previous = _tails[id] ?? Future<void>.value();
     final result = previous.catchError((Object _) {}).then((_) => action());
     final barrier = result.then<void>(
