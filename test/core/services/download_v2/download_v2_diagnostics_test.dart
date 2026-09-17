@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:animewitcher/core/services/download_v2/download_v2_diagnostics.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
@@ -60,5 +61,54 @@ void main() {
     diagnostics.record(event);
 
     expect(diagnostics.events, <DownloadDiagnosticEventV2>[event]);
+  });
+
+  test('file diagnostics appends JSONL and honors the logging switch', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-v2-log-');
+    addTearDown(() => directory.delete(recursive: true));
+    var enabled = true;
+    final diagnostics = FileDownloadDiagnosticsV2(
+      directoryProvider: () async => directory,
+      enabled: () => enabled,
+      nowMillis: () => 42,
+    );
+
+    diagnostics.record(
+      const DownloadDiagnosticEventV2(
+        logicalId: DownloadLogicalId('logical-episode'),
+        generation: 3,
+        taskId: 'aw_v2_parent_g3',
+        status: DownloadTransportStatus.running,
+        progress: 0.75,
+      ),
+    );
+    await diagnostics.flush();
+
+    final file = File(
+      '${directory.path}${Platform.pathSeparator}download_v2.jsonl',
+    );
+    final firstLines = await file.readAsLines();
+    expect(firstLines, hasLength(1));
+    final first = jsonDecode(firstLines.single) as Map<String, dynamic>;
+    expect(first['timestampMillis'], 42);
+    expect(first['logicalId'], 'logical-episode');
+    expect(first['taskId'], 'aw_v2_parent_g3');
+    expect(first.keys, isNot(contains('url')));
+    expect(first.keys, isNot(contains('headers')));
+    expect(first.keys, isNot(contains('failureMessage')));
+
+    enabled = false;
+    diagnostics.record(
+      const DownloadDiagnosticEventV2(
+        logicalId: DownloadLogicalId('logical-episode'),
+        generation: 3,
+        taskId: 'aw_v2_parent_g3',
+        status: DownloadTransportStatus.complete,
+        progress: 1,
+      ),
+    );
+    await diagnostics.flush();
+
+    expect(await file.readAsLines(), hasLength(1));
   });
 }
