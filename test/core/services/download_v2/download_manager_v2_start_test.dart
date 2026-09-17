@@ -7,12 +7,21 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'download_v2_test_support.dart';
+
 void main() {
   test('duplicate start creates one writer', () async {
     final gateway = _FakeGateway();
+    final resolver = StaticSourceResolverV2(
+      headers: const <String, String>{
+        'referer': 'https://example.invalid/',
+      },
+      expectedBytes: 123456,
+    );
     final manager = DownloadManagerV2(
       store: InMemoryLogicalDownloadStoreV2(),
       gateway: gateway,
+      sourceResolver: resolver,
     );
     final request = _request();
 
@@ -22,7 +31,11 @@ void main() {
     ]);
 
     expect(gateway.startedSpecs, hasLength(1));
-    expect(gateway.startedSpecs.single.taskId, taskIdForGeneration(request.logicalId, 1));
+    expect(
+      gateway.startedSpecs.single.taskId,
+      taskIdForGeneration(request.logicalId, 1),
+    );
+    expect(resolver.calls, 1);
   });
 }
 
@@ -42,8 +55,6 @@ DownloadStartRequestV2 _request() {
       'providerId': 'provider.example',
       'trackingUrl': '/anime/21/12',
     },
-    url: 'https://example.invalid/video.mp4',
-    headers: const <String, String>{'referer': 'https://example.invalid/'},
     expectedBytes: 123456,
     allowPause: true,
     retries: 2,
@@ -74,7 +85,8 @@ final class _FakeGateway implements BackgroundDownloaderGateway {
   }
 
   @override
-  Future<DownloadTransportHandle?> attach(String taskId) async => _handles[taskId];
+  Future<DownloadTransportHandle?> attach(String taskId) async =>
+      _handles[taskId];
 
   @override
   Future<List<DownloadTransportHandle>> rehydrate() async =>
