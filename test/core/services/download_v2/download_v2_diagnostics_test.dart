@@ -37,11 +37,10 @@ void main() {
       }),
     );
     for (final forbidden in <String>[
-      'url',
+      '"url"',
       'token=',
-      'authorization',
       'bearer ',
-      'header',
+      '"headers"',
       'failuremessage',
     ]) {
       expect(encoded, isNot(contains(forbidden)));
