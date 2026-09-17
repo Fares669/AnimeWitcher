@@ -1,8 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../extensions/extension_manager.dart';
+import '../../storage/settings_repository.dart';
 import '../download_url_refresh.dart';
 import 'background_downloader_gateway.dart';
 import 'download_manager_v2.dart';
@@ -35,11 +39,19 @@ final downloadSourceResolverV2Provider = Provider<DownloadSourceResolverV2>((
   );
 });
 
-/// Diagnostics are injectable independently from transport. Task 12A replaces
-/// this no-op production default with the user-configured safe file sink after
-/// the canonical download-log preference/path is wired.
+/// Safe append-only V2 diagnostics. The user-facing download diagnostic switch
+/// remains the authority for whether anything is written at all. The sink only
+/// accepts the allowlisted V2 event DTO and writes inside the dedicated `log`
+/// directory, so signed URLs/headers/provider payloads never reach this file.
 final downloadDiagnosticsV2Provider = Provider<DownloadDiagnosticsV2>((ref) {
-  return const NoopDownloadDiagnosticsV2();
+  final settings = ref.read(settingsRepositoryProvider);
+  return FileDownloadDiagnosticsV2(
+    enabled: settings.getDownloadDiagnosticLog,
+    directoryProvider: () async {
+      final documents = await getApplicationDocumentsDirectory();
+      return Directory(p.join(documents.path, 'log'));
+    },
+  );
 });
 
 /// Keep-alive production coordinator. Reading this provider and calling
