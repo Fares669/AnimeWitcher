@@ -32,6 +32,37 @@ void main() {
     );
   });
 
+  test('rejects a second logical writer for the same canonical destination', () async {
+    final f = _fixture();
+    final conflicting = DownloadStartRequestV2(
+      logicalId: logicalDownloadIdFor(
+        animeId: 'anilist:22',
+        episodeKey: '13',
+        variantKey: 'sub:1080p',
+      ),
+      animeId: 'anilist:22',
+      episodeKey: '13',
+      variantKey: 'sub:1080p',
+      destinationPath: f.request.destinationPath,
+      sourceDescriptor: const <String, Object?>{
+        'providerId': 'provider.example',
+      },
+      allowPause: true,
+      retries: 2,
+      parallelChunks: 1,
+    );
+
+    await f.manager.start(f.request);
+
+    await expectLater(
+      f.manager.start(conflicting),
+      throwsStateError,
+    );
+
+    expect(f.gateway.startedSpecs, hasLength(1));
+    expect(f.resolver.calls, 1);
+  });
+
   test('non-resumable pause cancels transport but retains paused intent', () async {
     final f = _fixture();
     await f.manager.start(f.request);
