@@ -56,7 +56,7 @@ void main() {
     expect((task as ParallelDownloadTask).chunks, 8);
   });
 
-  test('plugin parallel preserves POST request body and method', () {
+  test('non-GET request with a body never becomes plugin parallel', () {
     final template = DownloadTask(
       taskId: 'episode-post',
       url: 'https://example.test/video',
@@ -69,9 +69,27 @@ void main() {
 
     final task = buildPluginTransportTask(template: template, connections: 4);
 
-    expect(task, isA<ParallelDownloadTask>());
-    expect(task.httpRequestMethod, template.httpRequestMethod);
+    expect(task, same(template));
+    expect(task, isNot(isA<ParallelDownloadTask>()));
+    expect(task.httpRequestMethod, 'POST');
     expect(task.post, template.post);
+  });
+
+  test('non-GET request without a body never becomes plugin parallel', () {
+    final template = DownloadTask(
+      taskId: 'episode-method',
+      url: 'https://example.test/video',
+      filename: 'episode-method.mp4',
+      group: kLogicalDownloadGroup,
+      httpRequestMethod: 'PUT',
+      allowPause: true,
+    );
+
+    final task = buildPluginTransportTask(template: template, connections: 4);
+
+    expect(task, same(template));
+    expect(task, isNot(isA<ParallelDownloadTask>()));
+    expect(task.httpRequestMethod, 'PUT');
   });
 
   test('plugin owns chunk identity and failed resume cancels the parent', () async {
@@ -87,6 +105,18 @@ void main() {
       chunkSource,
       contains('await FileDownloader().cancelTaskWithId(task.taskId)'),
     );
+  });
+
+  test('plugin parallel chunk contract is GET-only in 9.6.2', () async {
+    final chunkSource = await _packageSource(pluginRoot, 'lib/src/chunk.dart');
+    final taskStart = chunkSource.indexOf('task = DownloadTask(');
+    final taskEnd = chunkSource.indexOf(') {', taskStart);
+    expect(taskStart, greaterThanOrEqualTo(0));
+    expect(taskEnd, greaterThan(taskStart));
+    final childBuilder = chunkSource.substring(taskStart, taskEnd);
+
+    expect(childBuilder, isNot(contains('httpRequestMethod:')));
+    expect(childBuilder, isNot(contains('post:')));
   });
 
   test('iOS pause cancel and retry settle all chunks through the parent', () async {
