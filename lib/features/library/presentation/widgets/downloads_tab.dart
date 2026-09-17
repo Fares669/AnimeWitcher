@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -10,12 +9,12 @@ import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:animewitcher/core/utils/episode_order.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
-import '../../../../core/services/download_service.dart';
 import '../../../../core/services/download_concurrency.dart';
 import '../../../../core/services/download_parallel.dart';
 import 'segmented_download_progress.dart';
 import 'completed_download_episode_card.dart';
 import '../../../../core/utils/layout_constants.dart';
+import '../../../details/presentation/downloaded_file_provider.dart';
 import '../../../details/presentation/playback_launcher.dart';
 import '../downloads_provider.dart';
 import '../../../../l10n/generated/app_localizations.dart';
@@ -391,12 +390,9 @@ class _GroupedDownloadTile extends ConsumerWidget {
     DownloadItem item,
     AppLocalizations l10n,
   ) async {
-    final downloadService = ref.read(downloadServiceProvider);
-    File? file = await downloadService.getDownloadedFileForTask(item.task);
-    file ??= await downloadService.getDownloadedFile(
-      item.item,
-      episode: item.episode,
-    );
+    final file = await ref
+        .read(downloadedFilesProvider.notifier)
+        .resolveFile(item.item, episode: item.episode);
 
     if (file == null || !await file.exists()) {
       if (context.mounted) {
@@ -787,12 +783,9 @@ class _DownloadItemTile extends ConsumerWidget {
     WidgetRef ref,
     AppLocalizations l10n,
   ) async {
-    final downloadService = ref.read(downloadServiceProvider);
-    File? file = await downloadService.getDownloadedFileForTask(item.task);
-    file ??= await downloadService.getDownloadedFile(
-      item.item,
-      episode: item.episode,
-    );
+    final file = await ref
+        .read(downloadedFilesProvider.notifier)
+        .resolveFile(item.item, episode: item.episode);
 
     if (file == null || !await file.exists()) {
       if (context.mounted) {
