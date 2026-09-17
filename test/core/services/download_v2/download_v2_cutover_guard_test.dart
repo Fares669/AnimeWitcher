@@ -118,7 +118,14 @@ void main() {
       expect(end, greaterThan(start));
       final body = native.substring(start, end);
       expect(native, contains('private static func ownsLegacyMultipartParent('));
+      expect(native, contains('private static func isLegacyMultipartPart('));
       expect(native, contains('state.multipartPlans.contains'));
+      expect(native, contains('let multipartPart = isLegacyMultipartPart(task)'));
+      expect(native, contains('guard isLegacyMultipartPart(task) else { return }'));
+      expect(
+        native,
+        contains('guard isLegacyMultipartPart(downloadTask) else { return }'),
+      );
       expect(body, contains('ownsLegacyMultipartParent(parentId)'));
     });
 
