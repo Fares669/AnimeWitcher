@@ -8,6 +8,8 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'download_v2_test_support.dart';
+
 void main() {
   test('pause intent is durable before package pause', () async {
     final f = _fixture();
@@ -56,6 +58,7 @@ void main() {
 
     expect(f.gateway.startedSpecs, hasLength(2));
     expect(f.gateway.startedSpecs.last.taskId, isNot(firstTaskId));
+    expect(f.resolver.calls, 2);
     expect(
       (await f.store.get(f.request.logicalId))?.intent,
       DownloadUserIntent.active,
@@ -76,13 +79,21 @@ void main() {
     f.gateway.emit(oldTaskId, DownloadTransportStatus.complete);
     await Future<void>.delayed(Duration.zero);
 
-    expect(f.manager.snapshotFor(f.request.logicalId)?.taskId, canceledRecord.taskId);
-    expect(f.manager.snapshotFor(f.request.logicalId)?.status, DownloadTransportStatus.canceled);
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.taskId,
+      canceledRecord.taskId,
+    );
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.status,
+      DownloadTransportStatus.canceled,
+    );
   });
 
   test('delete is idempotent when destination is already missing', () async {
     final temp = await Directory.systemTemp.createTemp('animewitcher-v2-delete-');
-    addTearDown(() => temp.delete(recursive: true));
+    addTearDown(() async {
+      if (await temp.exists()) await temp.delete(recursive: true);
+    });
     final destination = File('${temp.path}${Platform.pathSeparator}episode.mp4');
     await destination.writeAsBytes(<int>[1, 2, 3]);
     final f = _fixture(destinationPath: destination.path);
@@ -99,6 +110,7 @@ void main() {
 _Fixture _fixture({String destinationPath = 'downloads/anime/episode-12.mp4'}) {
   final store = InMemoryLogicalDownloadStoreV2();
   final gateway = _FakeGateway();
+  final resolver = StaticSourceResolverV2();
   final logicalId = logicalDownloadIdFor(
     animeId: 'anilist:21',
     episodeKey: '12',
@@ -110,9 +122,9 @@ _Fixture _fixture({String destinationPath = 'downloads/anime/episode-12.mp4'}) {
     episodeKey: '12',
     variantKey: 'sub:1080p',
     destinationPath: destinationPath,
-    sourceDescriptor: const <String, Object?>{'providerId': 'provider.example'},
-    url: 'https://example.invalid/video.mp4',
-    headers: const <String, String>{},
+    sourceDescriptor: const <String, Object?>{
+      'providerId': 'provider.example',
+    },
     allowPause: true,
     retries: 2,
     parallelChunks: 1,
@@ -120,8 +132,13 @@ _Fixture _fixture({String destinationPath = 'downloads/anime/episode-12.mp4'}) {
   return _Fixture(
     store: store,
     gateway: gateway,
+    resolver: resolver,
     request: request,
-    manager: DownloadManagerV2(store: store, gateway: gateway),
+    manager: DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+    ),
   );
 }
 
@@ -129,12 +146,14 @@ final class _Fixture {
   const _Fixture({
     required this.store,
     required this.gateway,
+    required this.resolver,
     required this.request,
     required this.manager,
   });
 
   final InMemoryLogicalDownloadStoreV2 store;
   final _FakeGateway gateway;
+  final StaticSourceResolverV2 resolver;
   final DownloadStartRequestV2 request;
   final DownloadManagerV2 manager;
 }
@@ -162,7 +181,8 @@ final class _FakeGateway implements BackgroundDownloaderGateway {
   }
 
   @override
-  Future<DownloadTransportHandle?> attach(String taskId) async => _handles[taskId];
+  Future<DownloadTransportHandle?> attach(String taskId) async =>
+      _handles[taskId];
 
   @override
   Future<List<DownloadTransportHandle>> rehydrate() async =>
