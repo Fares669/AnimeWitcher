@@ -122,15 +122,51 @@ final class DownloadManagerV2 {
       _rememberRecord(record);
 
       if (record.completedAtMillis != null) {
-        final snapshot = DownloadTransportSnapshot(
-          taskId: record.taskId,
-          status: DownloadTransportStatus.complete,
-          progress: 1,
-          transferredBytes: record.expectedBytes,
-          totalBytes: record.expectedBytes,
+        final file = await _destinationFile(record.destinationPath);
+        final result = await _integrityVerifier.verify(
+          file,
+          expectedBytes: record.expectedBytes,
         );
-        _snapshots[record.logicalId] = snapshot;
-        _recordDiagnostic(record.logicalId, snapshot);
+        if (result.isValid) {
+          final snapshot = DownloadTransportSnapshot(
+            taskId: record.taskId,
+            status: DownloadTransportStatus.complete,
+            progress: 1,
+            transferredBytes: result.bytes ?? record.expectedBytes,
+            totalBytes: record.expectedBytes ?? result.bytes,
+          );
+          _snapshots[record.logicalId] = snapshot;
+          _recordDiagnostic(
+            record.logicalId,
+            snapshot,
+            integrityResult: DownloadV2IntegrityResult.valid,
+          );
+          continue;
+        }
+
+        await _deleteDestination(record.destinationPath);
+        final invalidRecord = record.copyWith(
+          clearCompletedAtMillis: true,
+          failureCategory: DownloadFailureCategory.integrity,
+          failureMessage: result.reason,
+          updatedAtMillis: _nowMillis(),
+        );
+        await _store.put(invalidRecord);
+        _rememberRecord(invalidRecord);
+        final snapshot = DownloadTransportSnapshot(
+          taskId: invalidRecord.taskId,
+          status: DownloadTransportStatus.failed,
+          progress: 0,
+          totalBytes: invalidRecord.expectedBytes,
+          failureCategory: DownloadFailureCategory.integrity,
+          failureMessage: result.reason,
+        );
+        _snapshots[invalidRecord.logicalId] = snapshot;
+        _recordDiagnostic(
+          invalidRecord.logicalId,
+          snapshot,
+          integrityResult: _diagnosticIntegrityResult(result.reason),
+        );
         continue;
       }
 
@@ -373,6 +409,17 @@ final class DownloadManagerV2 {
         ? null
         : previousHandle ??
               (lookUpPreviousHandle ? await _exactHandle(previous.taskId) : null);
+
+    if (obsoleteHandle != null &&
+        (cancelPreviousEvenIfFinal || !obsoleteHandle.current.isFinal)) {
+      final accepted = await obsoleteHandle.cancel();
+      if (!accepted && !cancelPreviousEvenIfFinal) {
+        throw StateError(
+          'Could not stop obsolete transport ${obsoleteHandle.taskId}',
+        );
+      }
+    }
+
     final source = await _sourceResolver.resolve(request.sourceDescriptor);
     final generation = (previous?.generation ?? 0) + 1;
     final taskId = taskIdForGeneration(request.logicalId, generation);
@@ -409,16 +456,6 @@ final class DownloadManagerV2 {
     );
     _snapshots[request.logicalId] = queued;
     _recordDiagnostic(request.logicalId, queued);
-
-    if (obsoleteHandle != null &&
-        (cancelPreviousEvenIfFinal || !obsoleteHandle.current.isFinal)) {
-      final accepted = await obsoleteHandle.cancel();
-      if (!accepted && !cancelPreviousEvenIfFinal) {
-        throw StateError(
-          'Could not stop obsolete transport ${obsoleteHandle.taskId}',
-        );
-      }
-    }
 
     final handle = await _gateway.start(
       DownloadTaskSpecV2(
@@ -608,6 +645,9 @@ final class DownloadManagerV2 {
           file,
           expectedBytes: record.expectedBytes,
         );
+        if (!result.isValid) {
+          await _deleteDestination(record.destinationPath);
+        }
         final now = _nowMillis();
 
         final updated = await _store.mutate(logicalId, (current) {
@@ -758,6 +798,7 @@ final class DownloadManagerV2 {
 bool _isRecoverable(DownloadTransportSnapshot snapshot) {
   return snapshot.status != DownloadTransportStatus.failed &&
       snapshot.status != DownloadTransportStatus.canceled &&
+      snapshot.status != DownloadTransportStatus.complete &&
       snapshot.status != DownloadTransportStatus.missing;
 }
 
