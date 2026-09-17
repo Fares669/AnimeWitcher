@@ -1460,7 +1460,8 @@ enum DownloadNativeWaitingQueue {
     progress: Double
   ) -> Bool {
     guard task.group == "chunk" || task.group == "animewitcher_parts",
-          let parentId = parentTaskId(fromPluginTask: task)
+          let parentId = parentTaskId(fromPluginTask: task),
+          ownsLegacyMultipartParent(parentId)
     else { return false }
 
     let expected = expectedMultipartBytes(forPluginTask: task, parentId: parentId)
@@ -1478,6 +1479,13 @@ enum DownloadNativeWaitingQueue {
       attemptGeneration: attemptGeneration(fromPluginTask: task)
     )
     return true
+  }
+
+  private static func ownsLegacyMultipartParent(_ parentId: String) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    let state = loadLocked()
+    return state.multipartPlans.contains { $0.parentTaskId == parentId }
   }
 
   private static func parentTaskId(
