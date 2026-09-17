@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'background_downloader_gateway.dart';
+import 'download_integrity_verifier_v2.dart';
 import 'download_source_resolver_v2.dart';
 import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
@@ -49,22 +50,26 @@ final class DownloadStartRequestV2 {
 ///
 /// Transport remains fully delegated to [BackgroundDownloaderGateway]. This
 /// manager owns logical identity, user intent, duplicate command coalescing,
-/// lifecycle ordering, source renewal, startup recovery, and the generation
-/// fence that rejects stale package callbacks.
+/// lifecycle ordering, source renewal, startup recovery, integrity validation,
+/// and the generation fence that rejects stale package callbacks.
 final class DownloadManagerV2 {
   DownloadManagerV2({
     required LogicalDownloadStoreV2 store,
     required BackgroundDownloaderGateway gateway,
     required DownloadSourceResolverV2 sourceResolver,
+    DownloadIntegrityVerifierV2? integrityVerifier,
     int Function()? nowMillis,
   }) : _store = store,
        _gateway = gateway,
        _sourceResolver = sourceResolver,
+       _integrityVerifier =
+           integrityVerifier ?? const DownloadIntegrityVerifierV2(),
        _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final LogicalDownloadStoreV2 _store;
   final BackgroundDownloaderGateway _gateway;
   final DownloadSourceResolverV2 _sourceResolver;
+  final DownloadIntegrityVerifierV2 _integrityVerifier;
   final int Function() _nowMillis;
 
   final _commands = _LogicalCommandQueue();
@@ -431,14 +436,16 @@ final class DownloadManagerV2 {
     _handlesByTaskId.remove(obsoleteTaskId);
   }
 
-  Future<void> _deleteDestination(String destinationPath) async {
-    final File file;
+  Future<File> _destinationFile(String destinationPath) async {
     if (p.isAbsolute(destinationPath)) {
-      file = File(destinationPath);
-    } else {
-      final documents = await getApplicationDocumentsDirectory();
-      file = File(p.join(documents.path, destinationPath));
+      return File(destinationPath);
     }
+    final documents = await getApplicationDocumentsDirectory();
+    return File(p.join(documents.path, destinationPath));
+  }
+
+  Future<void> _deleteDestination(String destinationPath) async {
+    final file = await _destinationFile(destinationPath);
     if (await file.exists()) {
       await file.delete();
     }
@@ -480,7 +487,7 @@ final class DownloadManagerV2 {
   ) {
     _handlesByTaskId[handle.taskId] = handle;
     _currentTaskIds[logicalId] = handle.taskId;
-    _acceptSnapshot(logicalId, handle.current);
+    _consumeSnapshot(logicalId, handle.current);
 
     final oldSubscription = _subscriptionsByTaskId.remove(handle.taskId);
     if (oldSubscription != null) {
@@ -489,12 +496,7 @@ final class DownloadManagerV2 {
 
     late final StreamSubscription<DownloadTransportSnapshot> subscription;
     subscription = handle.snapshots.listen((snapshot) {
-      final accepted = _acceptSnapshot(logicalId, snapshot);
-      if (accepted &&
-          snapshot.status == DownloadTransportStatus.failed &&
-          snapshot.failureCategory == DownloadFailureCategory.sourceExpired) {
-        _scheduleSourceRefresh(logicalId, snapshot.taskId);
-      }
+      _consumeSnapshot(logicalId, snapshot);
       if (snapshot.isFinal) {
         final registered = _subscriptionsByTaskId[snapshot.taskId];
         if (identical(registered, subscription)) {
@@ -506,13 +508,31 @@ final class DownloadManagerV2 {
     _subscriptionsByTaskId[handle.taskId] = subscription;
   }
 
+  void _consumeSnapshot(
+    DownloadLogicalId logicalId,
+    DownloadTransportSnapshot snapshot,
+  ) {
+    if (_currentTaskIds[logicalId] != snapshot.taskId) return;
+
+    if (snapshot.status == DownloadTransportStatus.complete) {
+      _scheduleCompletionVerification(logicalId, snapshot);
+      return;
+    }
+
+    final accepted = _acceptSnapshot(logicalId, snapshot);
+    if (accepted &&
+        snapshot.status == DownloadTransportStatus.failed &&
+        snapshot.failureCategory == DownloadFailureCategory.sourceExpired) {
+      _scheduleSourceRefresh(logicalId, snapshot.taskId);
+    }
+  }
+
   bool _acceptSnapshot(
     DownloadLogicalId logicalId,
     DownloadTransportSnapshot snapshot,
   ) {
     if (_currentTaskIds[logicalId] != snapshot.taskId) return false;
-    if (_currentIntents[logicalId] == DownloadUserIntent.paused &&
-        snapshot.status != DownloadTransportStatus.complete) {
+    if (_currentIntents[logicalId] == DownloadUserIntent.paused) {
       _snapshots[logicalId] = _snapshotWithStatus(
         snapshot,
         DownloadTransportStatus.paused,
@@ -521,6 +541,93 @@ final class DownloadManagerV2 {
     }
     _snapshots[logicalId] = snapshot;
     return true;
+  }
+
+  void _scheduleCompletionVerification(
+    DownloadLogicalId logicalId,
+    DownloadTransportSnapshot completedSnapshot,
+  ) {
+    unawaited(
+      _commands.run(logicalId, () async {
+        final record = await _store.get(logicalId);
+        if (record == null ||
+            record.intent == DownloadUserIntent.canceled ||
+            record.taskId != completedSnapshot.taskId) {
+          return;
+        }
+
+        if (record.completedAtMillis != null) {
+          _snapshots[logicalId] = DownloadTransportSnapshot(
+            taskId: record.taskId,
+            status: DownloadTransportStatus.complete,
+            progress: 1,
+            transferredBytes:
+                completedSnapshot.transferredBytes ?? record.expectedBytes,
+            totalBytes: record.expectedBytes ?? completedSnapshot.totalBytes,
+          );
+          return;
+        }
+
+        final file = await _destinationFile(record.destinationPath);
+        final result = await _integrityVerifier.verify(
+          file,
+          expectedBytes: record.expectedBytes,
+        );
+        final now = _nowMillis();
+
+        final updated = await _store.mutate(logicalId, (current) {
+          if (current == null ||
+              current.intent == DownloadUserIntent.canceled ||
+              current.taskId != completedSnapshot.taskId) {
+            return current;
+          }
+
+          if (result.isValid) {
+            return current.copyWith(
+              completedAtMillis: now,
+              clearFailure: true,
+              updatedAtMillis: now,
+            );
+          }
+
+          return current.copyWith(
+            clearCompletedAtMillis: true,
+            failureCategory: DownloadFailureCategory.integrity,
+            failureMessage: result.reason,
+            updatedAtMillis: now,
+          );
+        });
+
+        if (updated == null ||
+            updated.taskId != completedSnapshot.taskId ||
+            _currentTaskIds[logicalId] != completedSnapshot.taskId) {
+          return;
+        }
+
+        _rememberRecord(updated);
+        if (result.isValid) {
+          final bytes = result.bytes!;
+          _snapshots[logicalId] = DownloadTransportSnapshot(
+            taskId: completedSnapshot.taskId,
+            status: DownloadTransportStatus.complete,
+            progress: 1,
+            transferredBytes: bytes,
+            totalBytes: updated.expectedBytes ?? bytes,
+          );
+          return;
+        }
+
+        _snapshots[logicalId] = DownloadTransportSnapshot(
+          taskId: completedSnapshot.taskId,
+          status: DownloadTransportStatus.failed,
+          progress: completedSnapshot.progress,
+          transferredBytes: completedSnapshot.transferredBytes,
+          totalBytes: updated.expectedBytes ?? completedSnapshot.totalBytes,
+          failureCategory: DownloadFailureCategory.integrity,
+          failureMessage: result.reason,
+        );
+      }),
+    );
   }
 
   void _scheduleSourceRefresh(
