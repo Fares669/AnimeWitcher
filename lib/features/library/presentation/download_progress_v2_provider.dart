@@ -31,14 +31,18 @@ final downloadProgressProvider = Provider<Map<String, DownloadProgressData>>((
   ref,
 ) {
   final downloads = ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
-  final manager = ref.read(downloadManagerV2Provider);
+  final manager = downloads.any(
+    (item) => item.logicalId?.trim().isNotEmpty == true,
+  )
+      ? ref.read(downloadManagerV2Provider)
+      : null;
   final result = <String, DownloadProgressData>{};
 
   for (final item in downloads) {
     final logicalId = item.logicalId?.trim();
     final snapshot = logicalId == null || logicalId.isEmpty
         ? null
-        : manager.snapshotFor(DownloadLogicalId(logicalId));
+        : manager?.snapshotFor(DownloadLogicalId(logicalId));
     final progress = (snapshot?.progress ?? item.progress).clamp(0.0, 1.0);
     final key = item.trackingUrl.trim();
     if (key.isEmpty) continue;
