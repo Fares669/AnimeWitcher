@@ -2,7 +2,8 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/widgets.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
-import '../services/download_service.dart';
+import '../../features/library/presentation/download_progress_v2_provider.dart';
+export '../../features/library/presentation/download_progress_v2_provider.dart';
 
 /// Formats [DownloadProgressData.timeRemaining] with Arabic dual/plural units.
 String formatDownloadTimeRemaining(
