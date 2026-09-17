@@ -83,7 +83,7 @@ final class PackageBackgroundDownloaderGateway
   @override
   Future<DownloadTransportHandle> start(DownloadTaskSpecV2 spec) async {
     await initialize();
-    final task = await _packageTaskFor(spec);
+    final task = await packageTaskForV2(spec);
     final transfer = await _downloader.transfers.start(task);
     return _handleFor(transfer);
   }
@@ -133,7 +133,12 @@ final class PackageBackgroundDownloaderGateway
   }
 }
 
-Future<DownloadTask> _packageTaskFor(DownloadTaskSpecV2 spec) async {
+/// Maps one AnimeWitcher parent transfer spec to exactly one package task.
+///
+/// When [DownloadTaskSpecV2.parallelChunks] is greater than one the returned
+/// object is a single [ParallelDownloadTask] parent. Package-created child
+/// transfers stay opaque and are never exposed or persisted by V2.
+Future<DownloadTask> packageTaskForV2(DownloadTaskSpecV2 spec) async {
   final (baseDirectory, directory, filename) = await _destinationFor(
     spec.destinationPath,
   );
