@@ -106,8 +106,10 @@ final class LogicalDownloadRecordV2 {
     Map<String, Object?>? sourceDescriptor,
     int? expectedBytes,
     int? completedAtMillis,
+    bool clearCompletedAtMillis = false,
     DownloadFailureCategory? failureCategory,
     String? failureMessage,
+    bool clearFailure = false,
     int? updatedAtMillis,
   }) {
     return LogicalDownloadRecordV2(
@@ -122,9 +124,13 @@ final class LogicalDownloadRecordV2 {
       destinationPath: destinationPath ?? this.destinationPath,
       sourceDescriptor: sourceDescriptor ?? this.sourceDescriptor,
       expectedBytes: expectedBytes ?? this.expectedBytes,
-      completedAtMillis: completedAtMillis ?? this.completedAtMillis,
-      failureCategory: failureCategory ?? this.failureCategory,
-      failureMessage: failureMessage ?? this.failureMessage,
+      completedAtMillis: clearCompletedAtMillis
+          ? null
+          : completedAtMillis ?? this.completedAtMillis,
+      failureCategory: clearFailure
+          ? null
+          : failureCategory ?? this.failureCategory,
+      failureMessage: clearFailure ? null : failureMessage ?? this.failureMessage,
       updatedAtMillis: updatedAtMillis ?? this.updatedAtMillis,
     );
   }
