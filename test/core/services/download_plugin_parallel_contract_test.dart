@@ -56,6 +56,24 @@ void main() {
     expect((task as ParallelDownloadTask).chunks, 8);
   });
 
+  test('plugin parallel preserves POST request body and method', () {
+    final template = DownloadTask(
+      taskId: 'episode-post',
+      url: 'https://example.test/video',
+      filename: 'episode-post.mp4',
+      group: kLogicalDownloadGroup,
+      httpRequestMethod: 'POST',
+      post: '{"token":"signed-body"}',
+      allowPause: true,
+    );
+
+    final task = buildPluginTransportTask(template: template, connections: 4);
+
+    expect(task, isA<ParallelDownloadTask>());
+    expect(task.httpRequestMethod, template.httpRequestMethod);
+    expect(task.post, template.post);
+  });
+
   test('plugin owns chunk identity and failed resume cancels the parent', () async {
     final chunkSource = await _packageSource(pluginRoot, 'lib/src/chunk.dart');
 
