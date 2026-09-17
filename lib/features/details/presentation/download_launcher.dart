@@ -11,9 +11,16 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/base_provider.dart';
-import '../../../core/services/download_service.dart';
-import '../../../core/services/download_url_refresh.dart';
+import '../../../core/network/dio_client_provider.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/services/download_parallel.dart';
+import '../../../core/services/download_url_refresh.dart';
+import '../../../core/services/download_v2/download_file_planner_v2.dart';
+import '../../../core/services/download_v2/download_manager_v2.dart';
+import '../../../core/services/download_v2/download_v2_identity.dart';
+import '../../../core/services/download_v2/download_v2_provider.dart';
+import '../../../core/storage/settings_repository.dart';
+import '../../../core/storage/storage_service.dart';
 import '../../../shared/widgets/loading_dialog.dart';
 import '../../../shared/widgets/custom_widgets.dart';
 import '../../../shared/widgets/loading_indicator.dart';
@@ -72,8 +79,6 @@ class DownloadLauncher {
     bool dialogDismissed = false;
 
     try {
-      // Same server sheet as opening an episode: sources load inside the
-      // picker instead of a separate "جارٍ الحل" dialog.
       final selected = await showStreamSourcePicker(
         context,
         const <StreamResult>[],
@@ -107,9 +112,6 @@ class DownloadLauncher {
         if (resolved.isEmpty) {
           throw Exception('تعذر استخراج رابط صالح من هذا المصدر.');
         }
-        // Carry the opaque selected source into the resolved stream when the
-        // provider did not already set refreshUrl. This lets downloads mint a
-        // fresh signed CDN URL after a long pause without opening the picker.
         stream = resolved.first.refreshUrl?.trim().isNotEmpty == true
             ? resolved.first
             : resolved.first.copyWith(refreshUrl: selected.url);
@@ -154,17 +156,13 @@ class DownloadLauncher {
     Episode? episode,
   }) async {
     final l10n = AppLocalizations.of(context)!;
-    final downloadService = _ref.read(downloadServiceProvider);
-
-    // 1. Show verification dialog
-    // Use root navigator context if current context is unmounted
     final navContext = rootNavigatorKey.currentContext ?? context;
 
     bool isCanceled = false;
     unawaited(
       showDialog<void>(
         context: navContext,
-        barrierDismissible: false, // Block UI interaction
+        barrierDismissible: false,
         builder: (ctx) {
           return PopScope(
             canPop: false,
@@ -199,15 +197,17 @@ class DownloadLauncher {
       ),
     );
 
-    final metadata = await downloadService
-        .getMetadata(stream.url, headers: stream.headers)
-        .timeout(const Duration(seconds: 15), onTimeout: () => null);
+    final metadata = await probeDownloadSourceV2(
+      _ref.read(dioClientProvider),
+      stream.url,
+      headers: stream.headers,
+    ).timeout(const Duration(seconds: 15), onTimeout: () => null);
 
     if (!navContext.mounted) return;
     if (!isCanceled) {
       Navigator.of(navContext, rootNavigator: true).pop();
     } else {
-      return; // Canceled, don't proceed
+      return;
     }
 
     final finalContext = rootNavigatorKey.currentContext ?? navContext;
@@ -226,7 +226,6 @@ class DownloadLauncher {
       return;
     }
 
-    // 2. Show Confirmation Dialog
     if (finalContext.mounted) {
       unawaited(
         showDialog<void>(
@@ -298,105 +297,110 @@ class DownloadLauncher {
               ElevatedButton(
                 onPressed: () async {
                   Navigator.pop(ctx);
-
-                  // Prefer the episode from the card (has isFinal/serverName).
-                  // Fall back to item.episodes when launching without one.
-                  final episodeData =
-                      episode ??
-                      item.episodes?.firstWhereOrNull(
-                        (e) => e.url == resolveUrl,
+                  try {
+                    final episodeData =
+                        episode ??
+                        item.episodes?.firstWhereOrNull(
+                          (e) => e.url == resolveUrl,
+                        );
+                    final extension = _getFileExtension(
+                      stream.url,
+                      metadata.mimeType,
+                    );
+                    final String filename;
+                    if (episodeData != null &&
+                        usesEpisodeDownloadFileName(
+                          episode: episodeData.episode,
+                          title: episodeData.name,
+                          serverName: episodeData.serverName,
+                        )) {
+                      final episodeLabel = sanitizeDownloadFileName(
+                        formatEpisodeFileName(
+                          episode: episodeData.episode,
+                          title: episodeData.name,
+                          quality: stream.quality,
+                          isFinal: episodeData.isFinal,
+                          serverName: episodeData.serverName,
+                        ),
                       );
-                  final saveDir = await downloadService.getDownloadPath(
-                    item,
-                    episode: episodeData,
-                  );
+                      filename = '$episodeLabel$extension';
+                    } else {
+                      final sanitizedTitle = sanitizeDownloadFileName(
+                        item.title.replaceAll(RegExp(r'[^\w\s-]'), '').trim(),
+                      );
+                      filename = '$sanitizedTitle$extension';
+                    }
 
-                  final extension = _getFileExtension(
-                    stream.url,
-                    metadata.mimeType,
-                  );
-                  String filename;
-                  if (episodeData != null &&
-                      usesEpisodeDownloadFileName(
-                        episode: episodeData.episode,
-                        title: episodeData.name,
-                        serverName: episodeData.serverName,
-                      )) {
-                    final episodeLabel = sanitizeDownloadFileName(
-                      formatEpisodeFileName(
-                        episode: episodeData.episode,
-                        title: episodeData.name,
-                        quality: stream.quality,
-                        isFinal: episodeData.isFinal,
-                        serverName: episodeData.serverName,
-                      ),
+                    final destinationPath = await downloadDestinationPathV2(
+                      item,
+                      episode: episodeData,
+                      filename: filename,
                     );
-                    filename = '$episodeLabel$extension';
-                  } else {
-                    final sanitizedTitle = sanitizeDownloadFileName(
-                      item.title.replaceAll(RegExp(r'[^\w\s-]'), '').trim(),
+                    final animeId =
+                        item.tmdbId?.toString() ??
+                        item.imdbId?.trim() ??
+                        item.url.trim();
+                    final episodeKey = resolveUrl.trim();
+                    final variantKey = <String>[
+                      providerId.trim(),
+                      stream.source.trim(),
+                      stream.quality?.trim() ?? '',
+                    ].join('|');
+                    final logicalId = logicalDownloadIdFor(
+                      animeId: animeId,
+                      episodeKey: episodeKey,
+                      variantKey: variantKey,
                     );
-                    filename = "$sanitizedTitle$extension";
-                  }
-
-                  if (kDebugMode) {
-                    debugPrint(
-                      '[DownloadLauncher] Final Path: $saveDir/$filename',
-                    );
-                  }
-
-                  final outcome = await downloadService.startDownloadOutcome(
-                    url: stream.url,
-                    filename: filename,
-                    directory: saveDir,
-                    item: item,
-                    episode: episodeData,
-                    trackingUrl: resolveUrl,
-                    headers: stream.headers,
-                    totalBytes: metadata.size ?? -1,
-                    refreshDescriptor: DownloadUrlRefreshDescriptor(
+                    final descriptor = DownloadUrlRefreshDescriptor(
                       trackingUrl: resolveUrl,
                       providerId: providerId,
                       source: stream.source,
                       quality: stream.quality,
                       refreshUrl: stream.refreshUrl,
                       updatedAtMillis: DateTime.now().millisecondsSinceEpoch,
-                      generation: 0,
-                    ),
-                  );
-                  final accepted = switch (outcome) {
-                    DownloadCommandOutcome.running ||
-                    DownloadCommandOutcome.attached ||
-                    DownloadCommandOutcome.queued ||
-                    DownloadCommandOutcome.alreadyComplete => true,
-                    _ => false,
-                  };
+                    );
+                    final preference = _ref
+                        .read(settingsRepositoryProvider)
+                        .getDownloadParallelParts();
+                    final parallelChunks = selectAdaptiveDownloadParts(
+                      preference: preference,
+                      totalBytes: metadata.size ?? -1,
+                      supportsRanges: metadata.supportsRanges,
+                    );
+                    final snapshot = await _ref
+                        .read(downloadManagerV2Provider)
+                        .start(
+                          DownloadStartRequestV2(
+                            logicalId: logicalId,
+                            animeId: animeId,
+                            episodeKey: episodeKey,
+                            variantKey: variantKey,
+                            destinationPath: destinationPath,
+                            sourceDescriptor: descriptor.toJson(),
+                            expectedBytes: metadata.size,
+                            allowPause: true,
+                            retries: 2,
+                            parallelChunks: parallelChunks,
+                          ),
+                        );
 
-                  if (!accepted && finalContext.mounted) {
-                    final message = switch (outcome) {
-                      DownloadCommandOutcome.serviceUnavailable => appText(
-                        finalContext,
-                        english: 'The download service is not ready yet. Please try again.',
-                        arabic: 'خدمة التنزيل غير جاهزة بعد. حاول مرة أخرى.',
-                      ),
-                      DownloadCommandOutcome.restartRequired => appText(
-                        finalContext,
-                        english: 'The download needs the app to restart before it can continue.',
-                        arabic: 'يحتاج التنزيل إلى إعادة تشغيل التطبيق قبل المتابعة.',
-                      ),
-                      DownloadCommandOutcome.settlingOwnership => appText(
-                        finalContext,
-                        english: 'The previous download worker is still stopping. Please retry shortly.',
-                        arabic: 'ما زال عامل التنزيل السابق يتوقف. حاول مرة أخرى بعد قليل.',
-                      ),
-                      _ => appText(
-                        finalContext,
-                        english: 'Failed to start download. Please retry or select another source.',
-                        arabic:
-                            'فشل بدء التنزيل. حاول مجددًا أو اختر مصدرًا آخر.',
-                      ),
-                    };
-                    _ref.read(notificationServiceProvider).showError(message);
+                    final absolutePath =
+                        await absoluteDownloadDestinationPathV2(destinationPath);
+                    await _ref
+                        .read(storageServiceProvider)
+                        .saveDownloadMetadata(
+                          snapshot.taskId,
+                          item,
+                          episode: episodeData,
+                          trackingUrl: resolveUrl,
+                          filePath: absolutePath,
+                          logicalId: logicalId.value,
+                        );
+                  } catch (error) {
+                    if (!finalContext.mounted) return;
+                    _ref
+                        .read(notificationServiceProvider)
+                        .showError(_friendlyErrorMessage(l10n, error));
                   }
                 },
                 child: Text(l10n.downloadNow),
@@ -435,7 +439,7 @@ class DownloadLauncher {
                 item,
                 episodeUrl: resolveUrl,
                 episode: episode,
-              ); // Go back to source picker
+              );
             },
             child: Text(l10n.selectAnotherSource),
           ),
@@ -460,6 +464,6 @@ class DownloadLauncher {
       if (path.endsWith('.avi')) return '.avi';
     }
 
-    return '.mp4'; // Default
+    return '.mp4';
   }
 }
