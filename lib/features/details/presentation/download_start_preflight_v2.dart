@@ -2,8 +2,8 @@ import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:riverpod/riverpod.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/storage/settings_repository.dart';
