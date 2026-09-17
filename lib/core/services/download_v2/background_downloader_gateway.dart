@@ -202,6 +202,8 @@ final class _PackageDownloadTransportHandle
   late final StreamSubscription<TaskUpdate> _updatesSubscription;
   late final void Function() _holdReasonListener;
   int? _totalBytes;
+  double _networkSpeedMBps = -1;
+  Duration _timeRemaining = Duration.zero;
   bool _disposed = false;
 
   @override
@@ -223,8 +225,14 @@ final class _PackageDownloadTransportHandle
   Future<bool> cancel() => transfer.cancel();
 
   void _onUpdate(TaskUpdate update) {
-    if (update is TaskProgressUpdate && update.expectedFileSize > 0) {
-      _totalBytes = update.expectedFileSize;
+    if (update is TaskProgressUpdate) {
+      if (update.expectedFileSize > 0) {
+        _totalBytes = update.expectedFileSize;
+      }
+      _networkSpeedMBps = update.hasNetworkSpeed ? update.networkSpeed : -1;
+      _timeRemaining = update.hasTimeRemaining
+          ? update.timeRemaining
+          : Duration.zero;
     }
     _emitCurrent();
   }
@@ -252,6 +260,8 @@ final class _PackageDownloadTransportHandle
       progress: progress,
       transferredBytes: transferredBytes,
       totalBytes: totalBytes,
+      networkSpeedMBps: _networkSpeedMBps,
+      timeRemaining: _timeRemaining,
       failureCategory: _failureCategory(transfer.status, exception),
       failureMessage: exception?.toString(),
     );
