@@ -10,6 +10,7 @@ import '../../storage/settings_repository.dart';
 import '../download_url_refresh.dart';
 import 'background_downloader_gateway.dart';
 import 'download_manager_v2.dart';
+import 'download_integrity_verifier_v2.dart';
 import 'download_source_resolver_v2.dart';
 import 'download_v2_diagnostics.dart';
 import 'logical_download_store_v2.dart';
@@ -54,6 +55,11 @@ final downloadDiagnosticsV2Provider = Provider<DownloadDiagnosticsV2>((ref) {
   );
 });
 
+final downloadIntegrityVerifierV2Provider =
+    Provider<DownloadIntegrityVerifierV2>(
+  (_) => const DownloadIntegrityVerifierV2(),
+);
+
 /// Keep-alive production coordinator. Reading this provider and calling
 /// [DownloadManagerV2.initialize] is the single application startup hook for
 /// V2; individual screens do not create their own managers or gateways.
@@ -62,6 +68,7 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
     store: ref.read(logicalDownloadStoreV2Provider),
     gateway: ref.read(backgroundDownloaderGatewayV2Provider),
     sourceResolver: ref.read(downloadSourceResolverV2Provider),
+    integrityVerifier: ref.read(downloadIntegrityVerifierV2Provider),
     diagnostics: ref.read(downloadDiagnosticsV2Provider),
   );
   ref.onDispose(() {
