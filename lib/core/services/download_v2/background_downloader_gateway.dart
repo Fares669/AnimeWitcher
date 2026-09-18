@@ -113,12 +113,15 @@ final class PackageBackgroundDownloaderGateway
   PackageBackgroundDownloaderGateway({
     FileDownloader? downloader,
     DownloadNotificationPrefs Function()? notificationPreferences,
+    Future<void> Function()? initializePackage,
   }) : _downloader = downloader ?? FileDownloader(),
        _notificationPreferences =
-           notificationPreferences ?? (() => const DownloadNotificationPrefs());
+           notificationPreferences ?? (() => const DownloadNotificationPrefs()),
+       _initializePackage = initializePackage;
 
   final FileDownloader _downloader;
   final DownloadNotificationPrefs Function() _notificationPreferences;
+  final Future<void> Function()? _initializePackage;
   final Map<String, _PackageDownloadTransportHandle> _handles =
       <String, _PackageDownloadTransportHandle>{};
 
@@ -126,7 +129,19 @@ final class PackageBackgroundDownloaderGateway
 
   @override
   Future<void> initialize() {
-    return _initialization ??= _initializeOnce();
+    final existing = _initialization;
+    if (existing != null) return existing;
+
+    final attempt = _initializePackage?.call() ?? _initializeOnce();
+    _initialization = attempt;
+    unawaited(
+      attempt.catchError((Object _, StackTrace __) {
+        if (identical(_initialization, attempt)) {
+          _initialization = null;
+        }
+      }),
+    );
+    return attempt;
   }
 
   Future<void> _initializeOnce() async {
