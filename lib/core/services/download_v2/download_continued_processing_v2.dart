@@ -18,6 +18,80 @@ abstract interface class DownloadPresentationObserverV2 {
   Future<void> dispose();
 }
 
+/// Aggregates read-only iOS child throughput for one V2 parallel parent.
+///
+/// Missing/zero samples do not erase the last stable child speed. Final child
+/// status removes that child from the aggregate.
+final class NativeParallelSpeedAccumulatorV2 {
+  final Map<String, Map<String, double>> _childrenByParent =
+      <String, Map<String, double>>{};
+
+  double? update({
+    required String parentTaskId,
+    required String childTaskId,
+    double? speedBytesPerSecond,
+    required bool completed,
+  }) {
+    if (!parentTaskId.startsWith('aw_v2_') || childTaskId.isEmpty) return null;
+
+    final children = _childrenByParent.putIfAbsent(
+      parentTaskId,
+      () => <String, double>{},
+    );
+    if (completed) {
+      children.remove(childTaskId);
+    } else if (speedBytesPerSecond != null &&
+        speedBytesPerSecond.isFinite &&
+        speedBytesPerSecond > 0) {
+      children[childTaskId] = speedBytesPerSecond;
+    }
+
+    if (children.isEmpty) {
+      _childrenByParent.remove(parentTaskId);
+      return completed ? 0 : null;
+    }
+    return children.values.fold<double>(0, (sum, speed) => sum + speed);
+  }
+}
+
+DownloadContinuedProcessingService _newV2ContinuedProcessingService(
+  void Function({
+    required String taskId,
+    required double bytesPerSecond,
+  })? onNativeNetworkSpeed,
+) {
+  final speeds = NativeParallelSpeedAccumulatorV2();
+  return DownloadContinuedProcessingService(
+    // V2 system UI is observation-only. A native overlay callback must not
+    // become a second cancel/transport control path.
+    onSystemCancel: (_) async {},
+    onChunkUpdate:
+        ({
+          required parentTaskId,
+          required chunkTaskId,
+          progress,
+          statusOrdinal,
+          writtenBytes,
+          expectedBytes,
+          attemptGeneration,
+          speedBytesPerSecond,
+          required completed,
+        }) {
+          final aggregate = speeds.update(
+            parentTaskId: parentTaskId,
+            childTaskId: chunkTaskId,
+            speedBytesPerSecond: speedBytesPerSecond,
+            completed: completed,
+          );
+          if (aggregate == null || aggregate <= 0) return;
+          onNativeNetworkSpeed?.call(
+            taskId: parentTaskId,
+            bytesPerSecond: aggregate,
+          );
+        },
+  );
+}
+
 /// Bridges V2 parent-transfer progress into iOS 26 Continued Processing.
 ///
 /// The native system task is deliberately an overlay only. Its callback cannot
@@ -26,13 +100,12 @@ final class IosDownloadContinuedProcessingObserverV2
     implements DownloadPresentationObserverV2 {
   IosDownloadContinuedProcessingObserverV2({
     DownloadContinuedProcessingService? service,
+    void Function({
+      required String taskId,
+      required double bytesPerSecond,
+    })? onNativeNetworkSpeed,
   }) : _service =
-           service ??
-           DownloadContinuedProcessingService(
-             // V2 system UI is observation-only. A native overlay callback
-             // must not become a second cancel/transport control path.
-             onSystemCancel: (_) async {},
-           );
+           service ?? _newV2ContinuedProcessingService(onNativeNetworkSpeed);
 
   final DownloadContinuedProcessingService _service;
   final Map<String, _ContinuedEntryV2> _outstanding =
