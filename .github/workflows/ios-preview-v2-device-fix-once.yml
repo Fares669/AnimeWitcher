@@ -1,4 +1,4 @@
-name: iOS Preview V2 Device Fix One Shot
+name: iOS Preview V2 Speed Fix One Shot
 
 on:
   push:
@@ -61,11 +61,11 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R build/ios/iphoneos/Runner.app Payload/
-          zip -qry animewitcher-ios-v2-device-fix-preview.ipa Payload
+          zip -qry animewitcher-ios-v2-speed-fix-preview.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ipa-download-manager-v2-device-fix
-          path: animewitcher-ios-v2-device-fix-preview.ipa
+          name: ios-ipa-download-manager-v2-speed-fix
+          path: animewitcher-ios-v2-speed-fix-preview.ipa
           retention-days: 7
