@@ -380,42 +380,81 @@ final class DownloadManagerV2 {
         () => _requestFromRecord(record),
       );
 
+      if (record.awaitingAdmission &&
+          record.intent == DownloadUserIntent.active) {
+        final queued =
+            _snapshots[logicalId] ??
+            DownloadTransportSnapshot(
+              taskId: record.taskId,
+              status: DownloadTransportStatus.queued,
+              progress: 0,
+              totalBytes: record.expectedBytes,
+              transferredBytes: record.expectedBytes == null ? null : 0,
+            );
+        _snapshots[logicalId] = queued;
+        _recordDiagnostic(logicalId, queued);
+        _scheduleAdmissionPromotion();
+        return queued;
+      }
+
       final handle = await _exactHandle(record.taskId);
       if (handle != null &&
           handle.current.status == DownloadTransportStatus.paused) {
         final destinationKey = await _canonicalDestinationPath(
           request.destinationPath,
         );
-        return _destinationCommands.run(destinationKey, () async {
-          final conflict = await _findDestinationConflict(
-            destinationKey,
-            logicalId,
-          );
-          if (conflict != null) {
-            throw StateError(
-              'Canonical destination is already owned by ${conflict.logicalId}',
+        return _destinationCommands.run(destinationKey, () {
+          return _admissionCommands.run('episodes', () async {
+            final conflict = await _findDestinationConflict(
+              destinationKey,
+              logicalId,
             );
-          }
+            if (conflict != null) {
+              throw StateError(
+                'Canonical destination is already owned by ${conflict.logicalId}',
+              );
+            }
 
-          final resumed = await handle.resume();
-          if (resumed) {
-            final activeRecord = record.copyWith(
-              intent: DownloadUserIntent.active,
-              updatedAtMillis: _nowMillis(),
+            if (!await _hasAdmissionSlot(excluding: logicalId)) {
+              final waitingRecord = record.copyWith(
+                intent: DownloadUserIntent.active,
+                awaitingAdmission: true,
+                updatedAtMillis: _nowMillis(),
+              );
+              await _store.put(waitingRecord);
+              _rememberRecord(waitingRecord);
+              await _publishRecords();
+              final queued = _snapshotWithStatus(
+                handle.current,
+                DownloadTransportStatus.queued,
+              );
+              _snapshots[logicalId] = queued;
+              _recordDiagnostic(logicalId, queued);
+              return queued;
+            }
+
+            final resumed = await handle.resume();
+            if (resumed) {
+              final activeRecord = record.copyWith(
+                intent: DownloadUserIntent.active,
+                awaitingAdmission: false,
+                clearFailure: true,
+                updatedAtMillis: _nowMillis(),
+              );
+              await _store.put(activeRecord);
+              _rememberRecord(activeRecord);
+              await _publishRecords();
+              _activateHandle(logicalId, handle);
+              return handle.current;
+            }
+
+            return _startFreshGenerationUnsafe(
+              request,
+              record,
+              previousHandle: handle,
+              lookUpPreviousHandle: false,
             );
-            await _store.put(activeRecord);
-            _rememberRecord(activeRecord);
-            await _publishRecords();
-            _activateHandle(logicalId, handle);
-            return handle.current;
-          }
-
-          return _startFreshGenerationUnsafe(
-            request,
-            record,
-            previousHandle: handle,
-            lookUpPreviousHandle: false,
-          );
+          });
         });
       }
 
@@ -447,6 +486,7 @@ final class DownloadManagerV2 {
       _currentTaskIds.remove(logicalId);
       _currentGenerations.remove(logicalId);
       _currentIntents.remove(logicalId);
+      _recordsByLogicalId.remove(logicalId);
       _snapshots.remove(logicalId);
       _requests.remove(logicalId);
       await _publishRecords();
@@ -899,6 +939,7 @@ final class DownloadManagerV2 {
       generation: fenceGeneration,
       taskId: fenceTaskId,
       intent: DownloadUserIntent.canceled,
+      awaitingAdmission: false,
       clearCompletedAtMillis: true,
       clearFailure: true,
       updatedAtMillis: _nowMillis(),
@@ -922,6 +963,7 @@ final class DownloadManagerV2 {
     }
     await _gateway.removeTracking(obsoleteTaskId);
     _handlesByTaskId.remove(obsoleteTaskId);
+    _scheduleAdmissionPromotion();
   }
 
   Future<String> _canonicalDestinationPath(String destinationPath) async {
