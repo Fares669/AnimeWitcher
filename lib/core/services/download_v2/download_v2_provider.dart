@@ -13,6 +13,7 @@ import '../../storage/storage_service.dart';
 import '../download_concurrency.dart';
 import '../download_url_refresh.dart';
 import 'background_downloader_gateway.dart';
+import 'download_continued_processing_v2.dart';
 import 'download_manager_v2.dart';
 import 'download_integrity_verifier_v2.dart';
 import 'download_source_resolver_v2.dart';
@@ -88,6 +89,9 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
     sourceResolver: ref.read(downloadSourceResolverV2Provider),
     integrityVerifier: ref.read(downloadIntegrityVerifierV2Provider),
     diagnostics: ref.read(downloadDiagnosticsV2Provider),
+    presentationObservers: <DownloadPresentationObserverV2>[
+      IosDownloadContinuedProcessingObserverV2(),
+    ],
   );
   ref.onDispose(() {
     unawaited(manager.dispose());
