@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
@@ -289,6 +290,70 @@ Future<(BaseDirectory, String, String)> _destinationFor(String path) async {
   );
 }
 
+/// Waits until background_downloader has durably stored the parent and every
+/// child resume payload for one paused ParallelDownloadTask.
+///
+/// background_downloader 9.6.2 publishes paused callbacks before its async
+/// PersistentStorage writes are necessarily visible. Calling its parallel
+/// resume path during that window can make one child return false, which causes
+/// the package to cancel the parent. This probe only reads package-owned state;
+/// AnimeWitcher never copies or mutates resume/range data.
+Future<bool> waitForPackageParallelResumeDataV2({
+  required DownloadTask task,
+  required Future<ResumeData?> Function(String taskId) retrieveResumeData,
+  int maxAttempts = 100,
+  Duration pollInterval = const Duration(milliseconds: 50),
+  Future<void> Function(Duration duration)? delay,
+}) async {
+  if (task is! ParallelDownloadTask) return true;
+  if (maxAttempts <= 0) return false;
+
+  final wait =
+      delay ?? ((duration) => Future<void>.delayed(duration));
+  for (var attempt = 0; attempt < maxAttempts; attempt++) {
+    final parentResumeData = await retrieveResumeData(task.taskId);
+    if (parentResumeData != null) {
+      final childTaskIds = _parallelChildTaskIds(
+        parentResumeData.data,
+      );
+      if (childTaskIds.isNotEmpty) {
+        final childResumeData = await Future.wait(
+          childTaskIds.map(retrieveResumeData),
+        );
+        if (childResumeData.every((resumeData) => resumeData != null)) {
+          return true;
+        }
+      }
+    }
+
+    if (attempt + 1 < maxAttempts) {
+      await wait(pollInterval);
+    }
+  }
+  return false;
+}
+
+List<String> _parallelChildTaskIds(String resumeData) {
+  try {
+    final decoded = jsonDecode(resumeData);
+    if (decoded is! List) return const <String>[];
+
+    final ids = <String>{};
+    for (final entry in decoded) {
+      if (entry is! Map) continue;
+      final task = entry['task'];
+      if (task is! Map) continue;
+      final taskId = task['taskId'];
+      if (taskId is String && taskId.isNotEmpty) {
+        ids.add(taskId);
+      }
+    }
+    return ids.toList(growable: false);
+  } catch (_) {
+    return const <String>[];
+  }
+}
+
 final class _PackageDownloadTransportHandle
     implements DownloadTransportHandle {
   _PackageDownloadTransportHandle(this.transfer, this._downloader) {
@@ -320,12 +385,26 @@ final class _PackageDownloadTransportHandle
   Future<bool> pause() => transfer.pause();
 
   @override
-  Future<bool> resume() {
+  Future<bool> resume() async {
     final task = transfer.task;
-    if (task is! DownloadTask) return Future<bool>.value(false);
+    if (task is! DownloadTask) return false;
+
     // Transfer.resume() intentionally falls back to enqueueing from byte zero
     // when resume data is unavailable. Explicit V2 Resume must never do that:
     // use the package's lower-level resume-only path for the exact task.
+    if (task is ParallelDownloadTask) {
+      final ready = await waitForPackageParallelResumeDataV2(
+        task: task,
+        // background_downloader 9.6.2 has no public awaitable signal for
+        // "all parallel child resume-data writes are durable". Keep this
+        // read-only probe confined to the adapter and remove it when upstream
+        // exposes/awaits that lifecycle point.
+        // ignore: invalid_use_of_visible_for_testing_member
+        retrieveResumeData:
+            _downloader.database.storage.retrieveResumeData,
+      );
+      if (!ready) return false;
+    }
     return _downloader.resume(task);
   }
 
