@@ -37,7 +37,7 @@ void main() {
 
     final v2Bridge = source.substring(start, end);
     expect(v2Bridge, contains('if !isAppInForeground()'));
-    expect(v2Bridge, contains('upsertSessionOverlay('));
+    expect(v2Bridge, contains('DownloadContinuedProcessingManager.shared.update('));
     expect(
       v2Bridge,
       isNot(contains('promoteMultipart')),
