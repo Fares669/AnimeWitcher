@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:background_downloader/background_downloader.dart' as bd;
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,6 +16,16 @@ import '../../skip/data/skip_segment_cache.dart';
 /// to perform before starting a real file transfer. This helper deliberately
 /// owns no queue, task, retry, resume, or transport state.
 Future<void> requestDownloadPermissionsV2() async {
+  if (Platform.isIOS || Platform.isAndroid) {
+    final downloader = bd.FileDownloader();
+    final status = await downloader.permissions.status(
+      bd.PermissionType.notifications,
+    );
+    if (status != bd.PermissionStatus.granted) {
+      await downloader.permissions.request(bd.PermissionType.notifications);
+    }
+  }
+
   if (!Platform.isAndroid) return;
 
   final batteryStatus = await Permission.ignoreBatteryOptimizations.status;
