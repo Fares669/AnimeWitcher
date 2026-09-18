@@ -68,7 +68,6 @@ final class NativeParallelPauseReadinessV2 {
       return Future<bool>.value(true);
     }
     if ((_pausedChildrenByParent[taskId]?.length ?? 0) >= expectedChildren) {
-      _pausedChildrenByParent.remove(taskId);
       return Future<bool>.value(true);
     }
 
@@ -90,9 +89,6 @@ final class NativeParallelPauseReadinessV2 {
     });
     return waiter.completer.future.then((ready) {
       waiter.timer?.cancel();
-      if (ready) {
-        _pausedChildrenByParent.remove(taskId);
-      }
       return ready;
     });
   }
