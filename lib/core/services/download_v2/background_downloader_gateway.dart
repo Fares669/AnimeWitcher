@@ -67,11 +67,13 @@ abstract interface class DownloadTransportHandle {
 /// only normalizes the package's parent transfer into V2's package-neutral
 /// snapshot contract.
 const String kDownloadV2PackageGroup = 'downloads_v2';
+const String kDownloadV2SilentPackageGroup = 'downloads_v2_silent';
 
 Future<void> configurePackageNotificationsV2(
   FileDownloader downloader,
   DownloadNotificationPrefs prefs,
 ) async {
+  if (prefs.noneEnabled) return;
   const title = '{displayName}';
   downloader.configureNotificationForGroup(
     kDownloadV2PackageGroup,
@@ -151,6 +153,9 @@ final class PackageBackgroundDownloaderGateway
     final task = await packageTaskForV2(
       spec,
       userInitiated: prefs.running,
+      group: prefs.noneEnabled
+          ? kDownloadV2SilentPackageGroup
+          : kDownloadV2PackageGroup,
     );
     final transfer = await _downloader.transfers.start(task);
     return _handleFor(transfer);
@@ -209,6 +214,7 @@ final class PackageBackgroundDownloaderGateway
 Future<DownloadTask> packageTaskForV2(
   DownloadTaskSpecV2 spec, {
   bool userInitiated = true,
+  String group = kDownloadV2PackageGroup,
 }) async {
   final (baseDirectory, directory, filename) = await _destinationFor(
     spec.destinationPath,
@@ -227,7 +233,7 @@ Future<DownloadTask> packageTaskForV2(
       chunks: spec.parallelChunks,
       directory: directory,
       baseDirectory: baseDirectory,
-      group: kDownloadV2PackageGroup,
+      group: group,
       displayName: filename,
       transferHints: transferHints,
       updates: Updates.statusAndProgress,
