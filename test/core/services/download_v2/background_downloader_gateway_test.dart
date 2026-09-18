@@ -167,13 +167,20 @@ void main() {
   });
 
   test('gateway initialization retries after one package start failure', () async {
-    final downloader = _FailOnceFileDownloader();
-    final gateway = PackageBackgroundDownloaderGateway(downloader: downloader);
+    var startCalls = 0;
+    final gateway = PackageBackgroundDownloaderGateway(
+      initializePackage: () async {
+        startCalls++;
+        if (startCalls == 1) {
+          throw StateError('transient package start failure');
+        }
+      },
+    );
 
     await expectLater(gateway.initialize(), throwsStateError);
     await gateway.initialize();
 
-    expect(downloader.startCalls, 2);
+    expect(startCalls, 2);
   });
 
   test('package notFound maps to missing transport instead of failure', () {
@@ -210,22 +217,3 @@ final class _FakeDownloadTransportHandle implements DownloadTransportHandle {
 }
 
 
-final class _FailOnceFileDownloader extends FileDownloader {
-  int startCalls = 0;
-
-  @override
-  Future<void> start({bool autoCleanDatabase = true}) async {
-    startCalls++;
-    if (startCalls == 1) {
-      throw StateError('transient package start failure');
-    }
-  }
-
-  @override
-  Future<void> configure({
-    Iterable<(String, dynamic)> globalConfig = const [],
-    Iterable<(String, dynamic)> androidConfig = const [],
-    Iterable<(String, dynamic)> iOSConfig = const [],
-    Iterable<(String, dynamic)> desktopConfig = const [],
-  }) async {}
-}
