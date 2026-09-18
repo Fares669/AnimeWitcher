@@ -11,6 +11,7 @@ void main() {
     bool allowPause = true,
     int retries = 2,
     int parallelChunks = 1,
+    bool awaitingAdmission = false,
   }) {
     final logicalId = logicalDownloadIdFor(
       animeId: 'anilist:21',
@@ -38,6 +39,7 @@ void main() {
       allowPause: allowPause,
       retries: retries,
       parallelChunks: parallelChunks,
+      awaitingAdmission: awaitingAdmission,
       updatedAtMillis: 1234,
     );
   }
@@ -48,6 +50,7 @@ void main() {
       allowPause: false,
       retries: 4,
       parallelChunks: 5,
+      awaitingAdmission: true,
     );
     final decoded = LogicalDownloadRecordV2.fromJson(original.toJson());
 
@@ -62,13 +65,15 @@ void main() {
     expect(decoded.allowPause, isFalse);
     expect(decoded.retries, 4);
     expect(decoded.parallelChunks, 5);
+    expect(decoded.awaitingAdmission, isTrue);
   });
 
   test('legacy V2 record defaults missing application policy safely', () {
     final json = record().toJson()
       ..remove('allowPause')
       ..remove('retries')
-      ..remove('parallelChunks');
+      ..remove('parallelChunks')
+      ..remove('awaitingAdmission');
 
     final decoded = LogicalDownloadRecordV2.fromJson(json);
 
@@ -76,6 +81,7 @@ void main() {
     expect(decoded!.allowPause, isTrue);
     expect(decoded.retries, 2);
     expect(decoded.parallelChunks, 1);
+    expect(decoded.awaitingAdmission, isFalse);
   });
 
   test('serialized logical record contains no transport internals', () {
