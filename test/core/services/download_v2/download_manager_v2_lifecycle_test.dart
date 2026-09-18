@@ -54,6 +54,34 @@ void main() {
     expect(observer.events.last.$2.status, DownloadTransportStatus.running);
   });
 
+  test('pause waits for package paused state before allowing exact resume', () async {
+    final f = _fixture();
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(taskId)!;
+    handle.onPause = () async => true;
+
+    var pauseCompleted = false;
+    final pauseFuture = f.manager.pause(f.request.logicalId).whenComplete(() {
+      pauseCompleted = true;
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(pauseCompleted, isFalse);
+    expect(handle.pauseCalls, 1);
+
+    f.gateway.emit(taskId, DownloadTransportStatus.paused);
+    final paused = await pauseFuture;
+    expect(paused?.status, DownloadTransportStatus.paused);
+
+    final resumed = await f.manager.resume(f.request.logicalId);
+
+    expect(resumed.taskId, taskId);
+    expect(handle.resumeCalls, 1);
+    expect(f.gateway.startedSpecs, hasLength(1));
+    expect((await f.store.get(f.request.logicalId))?.generation, 1);
+  });
+
   test('pause intent is durable before package pause', () async {
     final f = _fixture();
     await f.manager.start(f.request);
