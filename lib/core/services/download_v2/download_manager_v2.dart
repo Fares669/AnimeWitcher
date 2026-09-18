@@ -703,30 +703,36 @@ final class DownloadManagerV2 {
 
       var promoted = false;
       for (final candidate in waiting) {
-        final didPromote = await _commands.run(candidate.logicalId, () {
-          return _admissionCommands.run('episodes', () async {
-            final current = await _store.get(candidate.logicalId);
-            if (current == null ||
-                current.intent != DownloadUserIntent.active ||
-                !current.awaitingAdmission ||
-                !await _hasAdmissionSlot(excluding: current.logicalId)) {
-              return false;
-            }
+        final didPromote = await _commands.run(candidate.logicalId, () async {
+          final current = await _store.get(candidate.logicalId);
+          if (current == null ||
+              current.intent != DownloadUserIntent.active ||
+              !current.awaitingAdmission) {
+            return false;
+          }
+          final destinationKey = await _canonicalDestinationPath(
+            current.destinationPath,
+          );
+          return _destinationCommands.run(destinationKey, () {
+            return _admissionCommands.run('episodes', () async {
+              final latest = await _store.get(candidate.logicalId);
+              if (latest == null ||
+                  latest.intent != DownloadUserIntent.active ||
+                  !latest.awaitingAdmission ||
+                  !await _hasAdmissionSlot(excluding: latest.logicalId)) {
+                return false;
+              }
 
-            final destinationKey = await _canonicalDestinationPath(
-              current.destinationPath,
-            );
-            return _destinationCommands.run(destinationKey, () async {
               final conflict = await _findDestinationConflict(
                 destinationKey,
-                current.logicalId,
+                latest.logicalId,
               );
               if (conflict != null) return false;
               try {
-                await _promoteQueuedAdmissionUnsafe(current);
+                await _promoteQueuedAdmissionUnsafe(latest);
                 return true;
               } catch (_) {
-                final failedRecord = current.copyWith(
+                final failedRecord = latest.copyWith(
                   awaitingAdmission: false,
                   failureCategory: DownloadFailureCategory.unknown,
                   failureMessage: 'admission start failed',
