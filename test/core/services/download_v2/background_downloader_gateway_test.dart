@@ -89,6 +89,38 @@ void main() {
     expect(snapshot.networkSpeedMBps, 12.5);
     expect(snapshot.timeRemaining, const Duration(seconds: 24));
   });
+  test('parallel parent ignores burst-derived package speed and ETA', () {
+    final task = ParallelDownloadTask(
+      taskId: 'aw_v2_parallel_speed_g1',
+      url: 'https://example.invalid/video.mp4',
+      filename: 'video.mp4',
+      chunks: 16,
+      updates: Updates.statusAndProgress,
+      allowPause: true,
+    );
+    final transfer = Transfer(task);
+    transfer.updateStatus(TaskStatusUpdate(task, TaskStatus.running));
+    transfer.updateProgress(
+      TaskProgressUpdate(
+        task,
+        0.62,
+        1200000000,
+        212.9,
+        const Duration(seconds: 2),
+      ),
+    );
+
+    final snapshot = packageTransportSnapshotForV2(
+      transfer,
+      totalBytes: 1200000000,
+    );
+
+    expect(snapshot.status, DownloadTransportStatus.running);
+    expect(snapshot.progress, 0.62);
+    expect(snapshot.networkSpeedMBps, -1);
+    expect(snapshot.timeRemaining, Duration.zero);
+  });
+
   test('parallel parent progress promotes stale enqueued status to running', () {
     final task = ParallelDownloadTask(
       taskId: 'aw_v2_parallel_progress_g1',
