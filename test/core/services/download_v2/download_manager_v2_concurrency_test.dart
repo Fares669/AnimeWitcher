@@ -99,6 +99,51 @@ void main() {
   });
 
 
+  test('queued resume failure preserves paused generation without fresh start', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _ConcurrencyGateway();
+    final resolver = _Resolver();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+      maxConcurrentDownloads: () => 1,
+    );
+    addTearDown(manager.dispose);
+
+    final first = _request(episode: '1', chunks: 4);
+    final second = _request(episode: '2', chunks: 4);
+
+    await manager.start(first);
+    final firstTaskId = gateway.startedSpecs.single.taskId;
+    final firstHandle = gateway.handleFor(firstTaskId)!;
+
+    final pauseFuture = manager.pause(first.logicalId);
+    await Future<void>.delayed(Duration.zero);
+    gateway.emit(firstTaskId, DownloadTransportStatus.paused);
+    await pauseFuture;
+
+    await manager.start(second);
+    final secondTaskId = gateway.startedSpecs.last.taskId;
+    firstHandle.onResume = () async => false;
+
+    final queued = await manager.resume(first.logicalId);
+    expect(queued.status, DownloadTransportStatus.queued);
+
+    gateway.emit(secondTaskId, DownloadTransportStatus.failed);
+    await firstHandle.waitForResume();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(firstHandle.resumeCalls, 1);
+    expect(gateway.startedSpecs, hasLength(2));
+    expect((await store.get(first.logicalId))?.generation, 1);
+    expect((await store.get(first.logicalId))?.taskId, firstTaskId);
+    expect(
+      (await store.get(first.logicalId))?.intent,
+      DownloadUserIntent.paused,
+    );
+  });
+
   test('paused queued episode resumes with the same reserved generation', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final gateway = _ConcurrencyGateway();
@@ -243,6 +288,7 @@ final class _ConcurrencyHandle implements DownloadTransportHandle {
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
   final Completer<void> _resumeSignal = Completer<void>();
+  Future<bool> Function()? onResume;
   int resumeCalls = 0;
 
   @override
@@ -261,7 +307,7 @@ final class _ConcurrencyHandle implements DownloadTransportHandle {
   Future<bool> resume() async {
     resumeCalls++;
     if (!_resumeSignal.isCompleted) _resumeSignal.complete();
-    return true;
+    return onResume?.call() ?? true;
   }
 
   @override
