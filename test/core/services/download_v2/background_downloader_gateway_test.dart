@@ -139,6 +139,33 @@ void main() {
     expect(config.canceled, isNull);
     expect(config.error, isNotNull);
   });
+  test('all-off notifications use a silent non-UIDT package group', () async {
+    final downloader = FileDownloader();
+    await configurePackageNotificationsV2(
+      downloader,
+      DownloadNotificationPrefs.disabled,
+    );
+    final task = await packageTaskForV2(
+      const DownloadTaskSpecV2(
+        taskId: 'aw_v2_silent_g1',
+        url: 'https://example.invalid/video.mp4',
+        destinationPath: 'downloads/video.mp4',
+        headers: <String, String>{},
+        allowPause: true,
+        retries: 2,
+        parallelChunks: 1,
+      ),
+      userInitiated: false,
+      group: kDownloadV2SilentPackageGroup,
+    );
+
+    expect(task.group, kDownloadV2SilentPackageGroup);
+    expect(task.transferHints, contains(TransferHint.largeFile));
+    expect(task.transferHints, isNot(contains(TransferHint.userInitiated)));
+    expect(task.priority, isNot(0));
+    expect(downloader.notificationConfigForTask(task), isNull);
+  });
+
   test('package notFound maps to missing transport instead of failure', () {
     expect(
       transportStatusFromPackage(
