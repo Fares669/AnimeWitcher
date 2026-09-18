@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:path/path.dart' as p;
 
+import '../download_concurrency.dart';
 import 'download_v2_models.dart';
 
 /// Package-neutral description of one V2 parent transfer.
@@ -64,12 +66,57 @@ abstract interface class DownloadTransportHandle {
 /// The package remains the only transport/persistence authority. This class
 /// only normalizes the package's parent transfer into V2's package-neutral
 /// snapshot contract.
+const String kDownloadV2PackageGroup = 'downloads_v2';
+
+Future<void> configurePackageNotificationsV2(
+  FileDownloader downloader,
+  DownloadNotificationPrefs prefs,
+) async {
+  const title = '{displayName}';
+  downloader.configureNotificationForGroup(
+    kDownloadV2PackageGroup,
+    running: downloadNotificationIfEnabled(
+      enabled: prefs.running,
+      title: title,
+      body: Platform.isIOS
+          ? kDownloadRunningNotificationBodyIos
+          : kDownloadRunningNotificationBodyAndroid,
+    ),
+    complete: downloadNotificationIfEnabled(
+      enabled: prefs.complete,
+      title: title,
+      body: kDownloadCompleteNotificationBody,
+    ),
+    error: downloadNotificationIfEnabled(
+      enabled: prefs.error,
+      title: title,
+      body: kDownloadParkedNotificationBody,
+    ),
+    paused: downloadNotificationIfEnabled(
+      enabled: prefs.paused,
+      title: title,
+      body: kDownloadParkedNotificationBody,
+    ),
+    canceled: downloadNotificationIfEnabled(
+      enabled: prefs.canceled,
+      title: title,
+      body: kDownloadCanceledNotificationBody,
+    ),
+    progressBar: !Platform.isIOS && prefs.running,
+  );
+}
+
 final class PackageBackgroundDownloaderGateway
     implements BackgroundDownloaderGateway {
-  PackageBackgroundDownloaderGateway({FileDownloader? downloader})
-    : _downloader = downloader ?? FileDownloader();
+  PackageBackgroundDownloaderGateway({
+    FileDownloader? downloader,
+    DownloadNotificationPrefs Function()? notificationPreferences,
+  }) : _downloader = downloader ?? FileDownloader(),
+       _notificationPreferences =
+           notificationPreferences ?? (() => const DownloadNotificationPrefs());
 
   final FileDownloader _downloader;
+  final DownloadNotificationPrefs Function() _notificationPreferences;
   final Map<String, _PackageDownloadTransportHandle> _handles =
       <String, _PackageDownloadTransportHandle>{};
 
@@ -77,13 +124,34 @@ final class PackageBackgroundDownloaderGateway
 
   @override
   Future<void> initialize() {
-    return _initialization ??= _downloader.start(autoCleanDatabase: true);
+    return _initialization ??= _initializeOnce();
+  }
+
+  Future<void> _initializeOnce() async {
+    await _downloader.configure(
+      globalConfig: const <(String, dynamic)>[
+        (Config.holdingQueue, false),
+      ],
+      iOSConfig: const <(String, dynamic)>[
+        (Config.excludeFromCloudBackup, Config.always),
+      ],
+    );
+    await configurePackageNotificationsV2(
+      _downloader,
+      _notificationPreferences(),
+    );
+    await _downloader.start(autoCleanDatabase: true);
   }
 
   @override
   Future<DownloadTransportHandle> start(DownloadTaskSpecV2 spec) async {
     await initialize();
-    final task = await packageTaskForV2(spec);
+    final prefs = _notificationPreferences();
+    await configurePackageNotificationsV2(_downloader, prefs);
+    final task = await packageTaskForV2(
+      spec,
+      userInitiated: prefs.running,
+    );
     final transfer = await _downloader.transfers.start(task);
     return _handleFor(transfer);
   }
@@ -138,10 +206,17 @@ final class PackageBackgroundDownloaderGateway
 /// When [DownloadTaskSpecV2.parallelChunks] is greater than one the returned
 /// object is a single [ParallelDownloadTask] parent. Package-created child
 /// transfers stay opaque and are never exposed or persisted by V2.
-Future<DownloadTask> packageTaskForV2(DownloadTaskSpecV2 spec) async {
+Future<DownloadTask> packageTaskForV2(
+  DownloadTaskSpecV2 spec, {
+  bool userInitiated = true,
+}) async {
   final (baseDirectory, directory, filename) = await _destinationFor(
     spec.destinationPath,
   );
+  final transferHints = <TransferHint>{
+    TransferHint.largeFile,
+    if (userInitiated) TransferHint.userInitiated,
+  };
 
   if (spec.parallelChunks > 1) {
     return ParallelDownloadTask(
@@ -152,6 +227,9 @@ Future<DownloadTask> packageTaskForV2(DownloadTaskSpecV2 spec) async {
       chunks: spec.parallelChunks,
       directory: directory,
       baseDirectory: baseDirectory,
+      group: kDownloadV2PackageGroup,
+      displayName: filename,
+      transferHints: transferHints,
       updates: Updates.statusAndProgress,
       retries: spec.retries,
       allowPause: spec.allowPause,
@@ -165,6 +243,9 @@ Future<DownloadTask> packageTaskForV2(DownloadTaskSpecV2 spec) async {
     headers: spec.headers,
     directory: directory,
     baseDirectory: baseDirectory,
+    group: kDownloadV2PackageGroup,
+    displayName: filename,
+    transferHints: transferHints,
     updates: Updates.statusAndProgress,
     retries: spec.retries,
     allowPause: spec.allowPause,
