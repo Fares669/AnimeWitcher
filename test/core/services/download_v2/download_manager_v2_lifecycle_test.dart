@@ -361,7 +361,7 @@ void main() {
     );
   });
 
-  test('resume fallback waits for obsolete transport to settle before replacement', () async {
+  test('failed exact resume keeps paused generation without replacement', () async {
     final f = _fixture();
     await f.manager.start(f.request);
     final firstTaskId = f.gateway.startedSpecs.single.taskId;
@@ -370,23 +370,21 @@ void main() {
     await f.manager.pause(f.request.logicalId);
     f.gateway.emit(firstTaskId, DownloadTransportStatus.paused);
     handle.onResume = () async => false;
-    handle.onCancel = () async => true;
 
-    final resumeFuture = f.manager.resume(f.request.logicalId);
-    await Future<void>.delayed(Duration.zero);
+    await expectLater(
+      f.manager.resume(f.request.logicalId),
+      throwsStateError,
+    );
 
-    expect(handle.cancelCalls, 1);
+    expect(handle.resumeCalls, 1);
+    expect(handle.cancelCalls, 0);
     expect(f.gateway.startedSpecs, hasLength(1));
     expect((await f.store.get(f.request.logicalId))?.generation, 1);
-    expect((await f.store.get(f.request.logicalId))?.intent, DownloadUserIntent.paused);
-
-    f.gateway.emit(firstTaskId, DownloadTransportStatus.canceled);
-    await resumeFuture;
-
-    expect(f.gateway.startedSpecs, hasLength(2));
-    expect(f.gateway.startedSpecs.last.taskId, isNot(firstTaskId));
-    expect((await f.store.get(f.request.logicalId))?.generation, 2);
-    expect((await f.store.get(f.request.logicalId))?.intent, DownloadUserIntent.active);
+    expect((await f.store.get(f.request.logicalId))?.taskId, firstTaskId);
+    expect(
+      (await f.store.get(f.request.logicalId))?.intent,
+      DownloadUserIntent.paused,
+    );
   });
   test('pause fallback waits for cancellation settlement', () async {
     final f = _fixture();
