@@ -947,7 +947,7 @@ final class DownloadManagerV2 {
     try {
       final accepted = await handle.pause();
       if (!accepted) {
-        await _settleObsoleteHandle(handle, cancelEvenIfFinal: false);
+        await handle.cancel();
         return handle.current;
       }
 
@@ -959,7 +959,7 @@ final class DownloadManagerV2 {
       try {
         return await settled.future.timeout(const Duration(seconds: 10));
       } on TimeoutException {
-        await _settleObsoleteHandle(handle, cancelEvenIfFinal: false);
+        await handle.cancel();
         return handle.current;
       }
     } finally {
