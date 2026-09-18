@@ -18,9 +18,9 @@
 
 ### Overall count
 
-- **Trackable task groups:** 16 total (`Task 1` through `Task 15`, plus explicit `Task 12A`).
-- **Complete:** **13 / 16** — Tasks 1-12 plus Task 12A.
-- **Remaining:** **3 / 16** — Tasks 13, 14, and 15.
+- **Trackable task groups:** 17 total (`Task 1` through `Task 15`, plus explicit `Task 12A` and `Task 12B`).
+- **Complete:** **11 / 17** — Tasks 1-4, 6-10, 12, and 12A.
+- **Remaining:** **6 / 17** — reopened Tasks 5 and 11, new Task 12B, and Tasks 13-15.
 - **Reopened by deep review:** Tasks 10, 11, and 12 were closed by the follow-up production-path fixes and exact-head verification in this reconciliation.
 - **Device-gated:** Task 13; therefore Task 14 and final merge readiness remain blocked until real iOS + Android evidence exists.
 
@@ -32,15 +32,16 @@
 | 2. Logical store | ✅ Complete | Dedicated V2 application-owned persistence exists. |
 | 3. `background_downloader` gateway | ✅ Complete | Transfer API is the V2 package boundary; exact task identity is used. |
 | 4. Start/coalescing/generation fence | ✅ Complete | Duplicate same-logical start and stale callbacks are covered. |
-| 5. Pause/resume/cancel/delete | ✅ Complete | Core intent ordering and lifecycle commands are implemented. |
+| 5. Pause/resume/cancel/delete | 🟡 Reopened | Real-iOS evidence shows pause → resume can replace the paused generation with a fresh generation that stays queued at 0%; fixed behavior must be proven before device acceptance. |
 | 6. Startup rehydration | ✅ Complete | Exact-task recovery and active-missing fresh generation are implemented. |
 | 7. Source refresh | ✅ Complete | 401/403 replacement resolves a fresh source and starts byte zero. |
 | 8. Integrity gate | ✅ Complete | Runtime completion requires final-file verification; relaunch/cleanup regressions found later are being closed under Task 12. |
 | 9. Package parallelism + diagnostics DTO | ✅ Complete | One package parent represents parallel work; child IDs remain opaque. |
 | 10. Legacy migration policy A | ✅ Complete | Production migration preserves incomplete/restart-required rows, keeps startup network-free, and routes explicit restart through safe source reconstruction with malformed-row coverage. |
-| 11. Riverpod + production cutover | ✅ Complete | Cutover/presentation/settings safeguards are in place, including canonical-destination admission so alternate logical IDs cannot write the same artifact concurrently. |
+| 11. Riverpod + production cutover | 🟡 Reopened | Device/review comparison found concurrency and notification settings are persisted but not fully applied by the V2 runtime/package gateway. |
 | 12. Native authority cleanup + regression matrix | ✅ Complete | Native remains observation-only, replacement and integrity fences are covered, stale generations cannot resurrect completion, and the retained regression matrix was re-audited. |
 | 12A. iOS CI + runtime/native diagnostics | ✅ Complete | Dedicated iOS build log artifact, native typecheck, production V2 log sink, and redaction protections exist; exact-head evidence is current at `d389ed3…`. |
+| 12B. Device-preflight regressions + platform parity | 🟡 In progress | Real iOS log exposed resume-to-zero/queued stall and missing speed/iOS continued-processing presentation; SkyStream comparison also exposed runtime concurrency/notification/platform configuration gaps. |
 | 13. Physical-device acceptance | ⛔ Device-gated | Must run on real iOS + Android hardware; CI/simulator/mocks do not satisfy it. |
 | 14. Remove V1 | ⛔ Blocked by Task 13 | Delete V1 transport/native ownership only after device acceptance. |
 | 15. Final deep review / merge readiness | 🟡 In progress | Deep review produced concrete blockers; rerun the review after Tasks 10-14 are closed. |
@@ -155,6 +156,34 @@ Feature acceptance retained:
 - diagnostics never serialize raw transport URL/query token/auth header/cookie/provider body/free-form transport exception text.
 
 **Latest exact-head evidence:** at `d389ed349b7d2717e1310b62bdbe460c3d0ea7c7`, run `35268324678` has a successful iOS V2 build/log upload and successful native logger typecheck; the focused V2 suite and analyzer also pass. The full-suite red is isolated to the missing Anime4K plan file documented above.
+---
+
+## Task 12B: Device-Preflight Regressions + Platform Parity — 🟡 In progress
+
+**Trigger:** first real-iOS V2 run on 2026-09-18 plus comparison against SkyStream's current downloader integration.
+
+**Observed device evidence (`download_v2.jsonl` supplied from the real iOS run):**
+- Generation 1 started normally and progressed to `0.0227567795` (~2.28%) before explicit pause.
+- The first explicit resume did **not** continue generation 1. It created generation 2 at byte zero; generation 2 remained `queued` and never emitted `running` before being paused ~13 seconds later.
+- Subsequent generations 3-7 repeatedly remained at 0% in queued/paused/canceled states, confirming a real replacement/resume transport stall rather than a presentation-only issue.
+- The V2 diagnostic schema currently omits throughput/ETA, so the screenshot's persistent “calculating” speed cannot be root-caused from the existing JSONL alone.
+- The iOS 26 continued-processing/Dynamic-Island code still exists natively, but normal V2 production flow no longer drives the Dart continued-processing bridge; it must remain observation-only and never regain retry/queue transport ownership.
+
+**Required acceptance — device bugs:**
+- [ ] RED regression: a paused package transfer whose direct package resume cannot recover must not publish/start a replacement until the obsolete transfer is demonstrably settled; replacement then reaches a runnable package state rather than remaining a zero-progress queued zombie.
+- [ ] Resume success keeps the exact generation/task and preserves package resume bytes; fallback-to-fresh-generation starts from byte zero only when package resume is unavailable.
+- [ ] V2 snapshots expose package throughput + ETA reliably on iOS/parallel parent transfers; add credential-safe diagnostic fields for transferred/total bytes, speed, and ETA so the next device log can prove the signal path.
+- [ ] A real iOS Preview shows non-placeholder speed once package progress contains throughput and pause → resume continues or cleanly restarts without a permanent 0% queue stall.
+
+**Required acceptance — parity items requested from the SkyStream comparison:**
+- [ ] **1. Runtime concurrency:** the persisted 1-10 episode limit is actually enforced by V2 without counting package-managed parallel children as independent episodes and without a holding-queue/chunk deadlock.
+- [ ] **2. Package/platform configuration:** V2 applies notification preferences at runtime, configures appropriate Android long-download behavior using supported `background_downloader 9.6.2` facilities, and restores iOS download-file cloud-backup exclusion. Do not reintroduce a second transport scheduler.
+- [ ] **3. iOS 26 Continued Processing:** reconnect V2 progress/session presentation to the native continued-processing bridge as **observation/UI only**. Expiration/cancellation of the system overlay must not pause, retry, promote, or cancel the package-owned URLSession transfer.
+- [ ] **4. Notification permission timing:** request download notification permission on the first real download/action that needs it rather than unconditionally at app launch; older/no-notification flows continue without transport failure.
+- [ ] Add focused automated guards for all four parity items and rerun analyzer + focused V2 + iOS build/native typecheck before returning to Task 13.
+
+**Scope rule:** keep `background_downloader` as the single transport/pause-resume/retry authority. Reuse Transfer API/notifiers/configuration instead of reviving V1 Range, JobStore, native promotion, or custom chunk state.
+
 
 ---
 
