@@ -13,7 +13,9 @@ void main() {
     final appDelegate = File('ios/Runner/AppDelegate.swift').readAsStringSync();
 
     expect(launcher, contains('cacheSkipSegmentsForDownloadV2('));
-    expect(launcher, contains('await requestDownloadPermissionsV2();'));
+    expect(launcher, contains('requestNotifications: !notificationPrefs.noneEnabled'));
+    expect(helper, contains('bool requestNotifications = true'));
+    expect(helper, contains('if (requestNotifications &&'));
     expect(helper, contains('Permission.ignoreBatteryOptimizations'));
     expect(helper, contains('Permission.manageExternalStorage'));
     expect(helper, contains('Permission.storage.request()'));
