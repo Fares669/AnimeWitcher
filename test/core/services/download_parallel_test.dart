@@ -69,14 +69,14 @@ void main() {
       );
     });
 
-    test('iOS caps package parallel downloads to upstream-tested two chunks', () {
+    test('iOS preserves selected width after all-child resume barrier', () {
       expect(
         effectiveDownloadPartsForPlatform(selectedParts: 16, isIOS: true),
-        2,
+        16,
       );
       expect(
-        effectiveDownloadPartsForPlatform(selectedParts: 2, isIOS: true),
-        2,
+        effectiveDownloadPartsForPlatform(selectedParts: 8, isIOS: true),
+        8,
       );
       expect(
         effectiveDownloadPartsForPlatform(selectedParts: 1, isIOS: true),
