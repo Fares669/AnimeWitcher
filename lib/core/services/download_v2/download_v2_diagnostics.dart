@@ -23,6 +23,10 @@ final class DownloadDiagnosticEventV2 {
     required this.taskId,
     required this.status,
     required this.progress,
+    this.transferredBytes,
+    this.totalBytes,
+    this.networkSpeedMBps,
+    this.timeRemainingSeconds,
     this.failureCategory,
     this.holdCategory,
     this.sourceRefreshReason,
@@ -36,6 +40,10 @@ final class DownloadDiagnosticEventV2 {
   final String taskId;
   final DownloadTransportStatus status;
   final double progress;
+  final int? transferredBytes;
+  final int? totalBytes;
+  final double? networkSpeedMBps;
+  final int? timeRemainingSeconds;
   final DownloadFailureCategory? failureCategory;
   final DownloadV2HoldCategory? holdCategory;
   final DownloadV2SourceRefreshReason? sourceRefreshReason;
@@ -47,6 +55,12 @@ final class DownloadDiagnosticEventV2 {
     'taskId': taskId,
     'status': status.name,
     'progress': progress,
+    if (transferredBytes != null) 'transferredBytes': transferredBytes,
+    if (totalBytes != null) 'totalBytes': totalBytes,
+    if (networkSpeedMBps != null && networkSpeedMBps! >= 0)
+      'networkSpeedMBps': networkSpeedMBps,
+    if (timeRemainingSeconds != null && timeRemainingSeconds! > 0)
+      'timeRemainingSeconds': timeRemainingSeconds,
     if (failureCategory != null) 'failureCategory': failureCategory!.name,
     if (holdCategory != null) 'holdCategory': holdCategory!.name,
     if (sourceRefreshReason != null)
