@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
@@ -244,6 +246,89 @@ void main() {
     await gateway.initialize();
 
     expect(startCalls, 2);
+  });
+
+  test('parallel resume waits until every package child has resume data', () async {
+    final parent = ParallelDownloadTask(
+      taskId: 'aw_v2_parallel_resume_g1',
+      url: 'https://example.invalid/video.mp4',
+      filename: 'video.mp4',
+      chunks: 2,
+      allowPause: true,
+    );
+    final child1 = DownloadTask(
+      taskId: 'child-1',
+      url: 'https://example.invalid/video.mp4',
+      filename: 'part-1',
+      allowPause: true,
+    );
+    final child2 = DownloadTask(
+      taskId: 'child-2',
+      url: 'https://example.invalid/video.mp4',
+      filename: 'part-2',
+      allowPause: true,
+    );
+    final parentData = ResumeData(
+      parent,
+      jsonEncode(<Object?>[
+        <String, Object?>{
+          'task': <String, Object?>{'taskId': child1.taskId},
+        },
+        <String, Object?>{
+          'task': <String, Object?>{'taskId': child2.taskId},
+        },
+      ]),
+    );
+    var child2Lookups = 0;
+
+    final ready = await waitForPackageParallelResumeDataV2(
+      task: parent,
+      retrieveResumeData: (taskId) async {
+        if (taskId == parent.taskId) return parentData;
+        if (taskId == child1.taskId) return ResumeData(child1, 'ready');
+        if (taskId == child2.taskId) {
+          child2Lookups++;
+          return child2Lookups >= 3 ? ResumeData(child2, 'ready') : null;
+        }
+        return null;
+      },
+      maxAttempts: 4,
+      delay: (_) async {},
+    );
+
+    expect(ready, isTrue);
+    expect(child2Lookups, 3);
+  });
+
+  test('parallel resume stays paused when package child resume data never settles', () async {
+    final parent = ParallelDownloadTask(
+      taskId: 'aw_v2_parallel_resume_timeout_g1',
+      url: 'https://example.invalid/video.mp4',
+      filename: 'video.mp4',
+      chunks: 2,
+      allowPause: true,
+    );
+    final parentData = ResumeData(
+      parent,
+      jsonEncode(<Object?>[
+        <String, Object?>{
+          'task': <String, Object?>{'taskId': 'child-1'},
+        },
+        <String, Object?>{
+          'task': <String, Object?>{'taskId': 'child-2'},
+        },
+      ]),
+    );
+
+    final ready = await waitForPackageParallelResumeDataV2(
+      task: parent,
+      retrieveResumeData: (taskId) async =>
+          taskId == parent.taskId ? parentData : null,
+      maxAttempts: 2,
+      delay: (_) async {},
+    );
+
+    expect(ready, isFalse);
   });
 
   test('package notFound maps to missing transport instead of failure', () {
