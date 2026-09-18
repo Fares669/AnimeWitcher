@@ -1,4 +1,5 @@
 import 'package:animewitcher/core/services/download_continued_processing_service.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
@@ -79,6 +80,38 @@ void main() {
       ),
       isNull,
     );
+  });
+
+  test('parallel resume readiness waits for every child to pause', () async {
+    final readiness = NativeParallelPauseReadinessV2();
+    var completed = false;
+
+    final readyFuture = readiness
+        .waitUntilReady(
+          taskId: 'aw_v2_parent_g1',
+          expectedChildren: 2,
+          timeout: const Duration(seconds: 1),
+        )
+        .whenComplete(() {
+          completed = true;
+        });
+
+    readiness.observe(
+      parentTaskId: 'aw_v2_parent_g1',
+      childTaskId: 'child-1',
+      statusOrdinal: TaskStatus.paused.index,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(completed, isFalse);
+
+    readiness.observe(
+      parentTaskId: 'aw_v2_parent_g1',
+      childTaskId: 'child-2',
+      statusOrdinal: TaskStatus.paused.index,
+    );
+
+    expect(await readyFuture, isTrue);
+    expect(completed, isTrue);
   });
 
   test('V2 drives iOS continued processing as presentation only', () async {
