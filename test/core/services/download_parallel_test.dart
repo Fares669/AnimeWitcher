@@ -69,6 +69,25 @@ void main() {
       );
     });
 
+    test('iOS caps package parallel downloads to upstream-tested two chunks', () {
+      expect(
+        effectiveDownloadPartsForPlatform(selectedParts: 16, isIOS: true),
+        2,
+      );
+      expect(
+        effectiveDownloadPartsForPlatform(selectedParts: 2, isIOS: true),
+        2,
+      );
+      expect(
+        effectiveDownloadPartsForPlatform(selectedParts: 1, isIOS: true),
+        1,
+      );
+      expect(
+        effectiveDownloadPartsForPlatform(selectedParts: 16, isIOS: false),
+        16,
+      );
+    });
+
     test('large ranges keep spare tail work without adding connections', () {
       const mib = 1024 * 1024;
       expect(
