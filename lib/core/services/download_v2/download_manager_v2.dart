@@ -279,6 +279,23 @@ final class DownloadManagerV2 {
       if (currentRecord != null &&
           currentRecord.intent == DownloadUserIntent.active) {
         _rememberRecord(currentRecord);
+        if (currentRecord.awaitingAdmission) {
+          final queued =
+              _snapshots[request.logicalId] ??
+              DownloadTransportSnapshot(
+                taskId: currentRecord.taskId,
+                status: DownloadTransportStatus.queued,
+                progress: 0,
+                totalBytes: currentRecord.expectedBytes,
+                transferredBytes:
+                    currentRecord.expectedBytes == null ? null : 0,
+              );
+          _snapshots[request.logicalId] = queued;
+          _recordDiagnostic(request.logicalId, queued);
+          _scheduleAdmissionPromotion();
+          return queued;
+        }
+
         final existing = await _exactHandle(currentRecord.taskId);
         if (existing != null && _isRecoverable(existing.current)) {
           _activateHandle(request.logicalId, existing);
@@ -317,6 +334,7 @@ final class DownloadManagerV2 {
 
       final pausedRecord = record.copyWith(
         intent: DownloadUserIntent.paused,
+        awaitingAdmission: false,
         updatedAtMillis: _nowMillis(),
       );
       await _store.put(pausedRecord);
@@ -343,6 +361,7 @@ final class DownloadManagerV2 {
       );
       _snapshots[logicalId] = projected;
       _recordDiagnostic(logicalId, projected);
+      _scheduleAdmissionPromotion();
       return projected;
     });
   }
