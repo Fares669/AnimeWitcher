@@ -1866,6 +1866,74 @@ enum DownloadNativeWaitingQueue {
   #if canImport(background_downloader)
   /// Only the synchronous status emitted by the original delegate invocation
   /// may classify that execution. Out-of-band/delayed statuses are discarded.
+  /// Read-only throughput bridge for background_downloader's V2 parallel
+  /// child tasks. It never starts, pauses, resumes, retries, or owns transport.
+  @discardableResult
+  private static func postV2ParallelChunkMetric(
+    task: background_downloader.Task,
+    progress: Double?,
+    completed: Bool
+  ) -> Bool {
+    guard task.group == "chunk",
+          let parentId = parentTaskId(fromPluginTask: task),
+          parentId.hasPrefix("aw_v2_")
+    else { return false }
+
+    let expected = task.headers.first(where: {
+      $0.key.caseInsensitiveCompare("Range") == .orderedSame
+    }).flatMap { expectedBytesFromRangeHeader($0.value) } ?? -1
+    let normalized = progress.map { min(max($0, 0), 1) }
+    let written: Int64
+    if expected > 0, let normalized {
+      written = Int64((Double(expected) * normalized).rounded(.down))
+    } else {
+      written = -1
+    }
+
+    let now = CFAbsoluteTimeGetCurrent()
+    lock.lock()
+    let speed: Double
+    if completed {
+      chunkSpeedWindows[task.taskId] = nil
+      speed = 0
+    } else if written >= 0 {
+      speed = rollingSpeedLocked(
+        windows: &chunkSpeedWindows,
+        taskId: task.taskId,
+        totalWritten: written,
+        now: now
+      )
+    } else {
+      speed = 0
+    }
+    lock.unlock()
+
+    var values: [String: Any] = [
+      "parentTaskId": parentId,
+      "chunkTaskId": task.taskId,
+      "completed": completed,
+    ]
+    if let normalized {
+      values["progress"] = normalized
+    }
+    if written >= 0 {
+      values["writtenBytes"] = written
+    }
+    if expected > 0 {
+      values["expectedBytes"] = expected
+    }
+    if speed > 0, speed.isFinite {
+      values["speedBytesPerSecond"] = speed
+    }
+
+    NotificationCenter.default.post(
+      name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
+      object: nil,
+      userInfo: values
+    )
+    return true
+  }
+
   private static func handleSupportedPluginStatus(
     task: background_downloader.Task,
     statusUpdate: background_downloader.TaskStatusUpdate
@@ -1873,6 +1941,11 @@ enum DownloadNativeWaitingQueue {
     guard !task.taskId.isEmpty else { return }
     switch statusUpdate.taskStatus {
     case .complete, .notFound, .failed, .canceled, .paused:
+      _ = postV2ParallelChunkMetric(
+        task: task,
+        progress: statusUpdate.taskStatus == .complete ? 1 : nil,
+        completed: true
+      )
       terminalObservation.record(
         taskId: task.taskId,
         succeeded: statusUpdate.taskStatus == .complete
@@ -1891,10 +1964,22 @@ enum DownloadNativeWaitingQueue {
     task: background_downloader.Task,
     progress: Double
   ) {
-    guard nativePromotionAvailable, progress.isFinite, progress >= 0 else { return }
+    guard progress.isFinite, progress >= 0 else { return }
     let normalized = min(max(progress, 0), 1)
     let id = task.taskId
     guard !id.isEmpty else { return }
+
+    // Observation is independent from legacy native promotion capability.
+    // V2 child metrics leave background_downloader as the sole transport owner.
+    if postV2ParallelChunkMetric(
+      task: task,
+      progress: normalized,
+      completed: false
+    ) {
+      return
+    }
+
+    guard nativePromotionAvailable else { return }
     noteBackgroundRetryProgress(taskId: id)
     if postSupportedMultipartProgress(task: task, progress: normalized) {
       return
