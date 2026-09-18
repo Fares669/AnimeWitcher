@@ -479,12 +479,10 @@ final class DownloadManagerV2 {
 
     if (obsoleteHandle != null &&
         (cancelPreviousEvenIfFinal || !obsoleteHandle.current.isFinal)) {
-      final accepted = await obsoleteHandle.cancel();
-      if (!accepted && !cancelPreviousEvenIfFinal) {
-        throw StateError(
-          'Could not stop obsolete transport ${obsoleteHandle.taskId}',
-        );
-      }
+      await _settleObsoleteHandle(
+        obsoleteHandle,
+        cancelEvenIfFinal: cancelPreviousEvenIfFinal,
+      );
     }
 
     final source = await _sourceResolver.resolve(request.sourceDescriptor);
@@ -537,6 +535,45 @@ final class DownloadManagerV2 {
     );
     _activateHandle(request.logicalId, handle);
     return handle.current;
+  }
+
+  Future<void> _settleObsoleteHandle(
+    DownloadTransportHandle handle, {
+    required bool cancelEvenIfFinal,
+  }) async {
+    if (handle.current.isFinal) {
+      if (cancelEvenIfFinal) {
+        await handle.cancel();
+      }
+      return;
+    }
+
+    final settled = Completer<void>();
+    final subscription = handle.snapshots.listen((snapshot) {
+      if (snapshot.isFinal && !settled.isCompleted) {
+        settled.complete();
+      }
+    });
+
+    try {
+      final accepted = await handle.cancel();
+      if (!accepted) {
+        throw StateError(
+          'Could not stop obsolete transport ${handle.taskId}',
+        );
+      }
+      if (handle.current.isFinal) return;
+
+      try {
+        await settled.future.timeout(const Duration(seconds: 10));
+      } on TimeoutException {
+        throw StateError(
+          'Obsolete transport ${handle.taskId} did not settle after cancel',
+        );
+      }
+    } finally {
+      await subscription.cancel();
+    }
   }
 
   Future<void> _cancelRecord(LogicalDownloadRecordV2 record) async {
@@ -910,6 +947,8 @@ DownloadTransportSnapshot _snapshotWithStatus(
     progress: snapshot.progress,
     transferredBytes: snapshot.transferredBytes,
     totalBytes: snapshot.totalBytes,
+    networkSpeedMBps: snapshot.networkSpeedMBps,
+    timeRemaining: snapshot.timeRemaining,
     failureCategory: snapshot.failureCategory,
     failureMessage: snapshot.failureMessage,
   );
