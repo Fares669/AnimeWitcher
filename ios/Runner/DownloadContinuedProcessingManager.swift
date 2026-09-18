@@ -228,6 +228,59 @@ final class DownloadContinuedProcessingManager {
     return activeTask != nil || identifier != nil
   }
 
+  /// Native background URLSession observation may keep the existing iOS
+  /// continued-processing overlay fresh while Dart is suspended. It may only
+  /// update the episode that Dart already selected; it cannot switch tasks.
+  func updateFromNativeIfCurrent(
+    taskId: String,
+    progress: Double? = nil,
+    totalBytesHint: Int64 = -1,
+    transferredBytes: Int64 = -1,
+    speedBytesPerSecond: Double = -1
+  ) -> Bool {
+    guard taskId == currentEpisodeTaskId,
+          let current = snapshot
+    else { return false }
+
+    let totalBytes = current.totalBytes > 0
+      ? current.totalBytes
+      : totalBytesHint
+
+    var nextProgress = progress.map { min(max($0, 0), 1) }
+      ?? current.progress
+    nextProgress = max(current.progress, nextProgress)
+
+    var nextTransferred = transferredBytes >= 0
+      ? transferredBytes
+      : current.transferredBytes
+    let currentTransferred = max(current.transferredBytes, 0)
+
+    if totalBytes > 0 {
+      let progressBytes = overlayTransferredBytes(
+        progress: nextProgress,
+        totalBytes: totalBytes
+      )
+      nextTransferred = min(
+        max(max(nextTransferred, currentTransferred), progressBytes),
+        totalBytes
+      )
+      nextProgress = max(
+        nextProgress,
+        Double(nextTransferred) / Double(totalBytes)
+      )
+    } else {
+      nextTransferred = max(nextTransferred, currentTransferred)
+    }
+
+    return update(
+      taskId: taskId,
+      progress: nextProgress,
+      totalBytes: totalBytes,
+      transferredBytes: nextTransferred,
+      speedBytesPerSecond: speedBytesPerSecond
+    )
+  }
+
   func finish(taskId: String, success: Bool, status: String, endSession: Bool = false) {
     // Hard rule: never complete the system task for a single episode while
     // the batch still has running or waiting files. Callers must pass
