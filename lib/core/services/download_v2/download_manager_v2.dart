@@ -239,7 +239,36 @@ final class DownloadManagerV2 {
             record.logicalId,
             () => _requestFromRecord(record),
           );
-          if (exactHandle != null && _isRecoverable(exactHandle.current)) {
+          if (record.awaitingAdmission) {
+            if (exactHandle != null &&
+                _isRecoverable(exactHandle.current) &&
+                exactHandle.current.status != DownloadTransportStatus.paused &&
+                exactHandle.current.status != DownloadTransportStatus.missing) {
+              final admitted = record.copyWith(
+                awaitingAdmission: false,
+                updatedAtMillis: _nowMillis(),
+              );
+              await _store.put(admitted);
+              _rememberRecord(admitted);
+              _activateHandle(admitted.logicalId, exactHandle);
+            } else {
+              final queued = _snapshotWithStatus(
+                exactHandle?.current ??
+                    DownloadTransportSnapshot(
+                      taskId: record.taskId,
+                      status: DownloadTransportStatus.queued,
+                      progress: 0,
+                      totalBytes: record.expectedBytes,
+                      transferredBytes:
+                          record.expectedBytes == null ? null : 0,
+                    ),
+                DownloadTransportStatus.queued,
+              );
+              _snapshots[record.logicalId] = queued;
+              _recordDiagnostic(record.logicalId, queued);
+            }
+          } else if (exactHandle != null &&
+              _isRecoverable(exactHandle.current)) {
             _activateHandle(record.logicalId, exactHandle);
           } else {
             await _startFreshGeneration(
@@ -266,6 +295,7 @@ final class DownloadManagerV2 {
       }
     }
     await _publishRecords();
+    _scheduleAdmissionPromotion();
   }
 
   /// Starts a logical download, coalescing concurrent duplicate starts into
@@ -1072,12 +1102,14 @@ final class DownloadManagerV2 {
 
     if (snapshot.status == DownloadTransportStatus.complete) {
       _scheduleCompletionVerification(logicalId, snapshot);
+      _scheduleAdmissionPromotion();
       return;
     }
 
     final accepted = _acceptSnapshot(logicalId, snapshot);
-    if (accepted &&
-        snapshot.status == DownloadTransportStatus.failed &&
+    if (!accepted) return;
+
+    if (snapshot.status == DownloadTransportStatus.failed &&
         snapshot.failureCategory == DownloadFailureCategory.sourceExpired) {
       _recordDiagnostic(
         logicalId,
@@ -1085,6 +1117,11 @@ final class DownloadManagerV2 {
         sourceRefreshReason: DownloadV2SourceRefreshReason.authorizationExpired,
       );
       _scheduleSourceRefresh(logicalId, snapshot.taskId);
+      return;
+    }
+
+    if (snapshot.isFinal) {
+      _scheduleAdmissionPromotion();
     }
   }
 
