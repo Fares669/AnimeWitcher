@@ -894,6 +894,14 @@ final class DownloadManagerV2 {
         taskId: snapshot.taskId,
         status: snapshot.status,
         progress: snapshot.progress,
+        transferredBytes: snapshot.transferredBytes,
+        totalBytes: snapshot.totalBytes,
+        networkSpeedMBps: snapshot.networkSpeedMBps >= 0
+            ? snapshot.networkSpeedMBps
+            : null,
+        timeRemainingSeconds: snapshot.timeRemaining > Duration.zero
+            ? snapshot.timeRemaining.inSeconds
+            : null,
         failureCategory: snapshot.failureCategory,
         holdCategory: snapshot.status == DownloadTransportStatus.held
             ? DownloadV2HoldCategory.packageHeld
