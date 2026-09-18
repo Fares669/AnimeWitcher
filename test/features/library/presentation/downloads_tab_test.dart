@@ -171,6 +171,9 @@ void main() {
       notifications.toasts.single.message,
       contains('source re-selection required'),
     );
+
+    notifications.clearToasts();
+    await tester.pump();
   });
 
   testWidgets('delete uses the task file path, not reconstructed labels', (
