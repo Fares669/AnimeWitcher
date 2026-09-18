@@ -18,7 +18,8 @@ void main() {
     expect(helper, contains('Permission.manageExternalStorage'));
     expect(helper, contains('Permission.storage.request()'));
     expect(helper, contains('PermissionType.notifications'));
-    expect(helper, contains('FileDownloader().permissions.request'));
+    expect(helper, contains('.permissions.request('));
+    expect(helper, contains('bd.PermissionType.notifications'));
     expect(
       appDelegate,
       isNot(contains('UNUserNotificationCenter.current().requestAuthorization')),
