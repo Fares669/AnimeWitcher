@@ -170,19 +170,27 @@ Feature acceptance retained:
 - The iOS 26 continued-processing/Dynamic-Island code still exists natively, but normal V2 production flow no longer drives the Dart continued-processing bridge; it must remain observation-only and never regain retry/queue transport ownership.
 
 **Required acceptance — device bugs:**
-- [ ] RED regression: a paused package transfer whose direct package resume cannot recover must not publish/start a replacement until the obsolete transfer is demonstrably settled; replacement then reaches a runnable package state rather than remaining a zero-progress queued zombie.
-- [ ] Resume success keeps the exact generation/task and preserves package resume bytes; fallback-to-fresh-generation starts from byte zero only when package resume is unavailable.
-- [ ] V2 snapshots expose package throughput + ETA reliably on iOS/parallel parent transfers; add credential-safe diagnostic fields for transferred/total bytes, speed, and ETA so the next device log can prove the signal path.
+- [x] RED regression: a paused package transfer whose direct package resume cannot recover must not publish/start a replacement until the obsolete transfer is demonstrably settled; replacement then reaches a runnable package state rather than remaining a zero-progress queued zombie.
+- [x] Resume success keeps the exact generation/task and preserves package resume bytes; fallback-to-fresh-generation starts from byte zero only when package resume is unavailable.
+- [x] V2 snapshots expose package throughput + ETA reliably on iOS/parallel parent transfers; add credential-safe diagnostic fields for transferred/total bytes, speed, and ETA so the next device log can prove the signal path.
 - [ ] A real iOS Preview shows non-placeholder speed once package progress contains throughput and pause → resume continues or cleanly restarts without a permanent 0% queue stall.
 
 **Required acceptance — parity items requested from the SkyStream comparison:**
-- [ ] **1. Runtime concurrency:** the persisted 1-10 episode limit is actually enforced by V2 without counting package-managed parallel children as independent episodes and without a holding-queue/chunk deadlock.
-- [ ] **2. Package/platform configuration:** V2 applies notification preferences at runtime, configures appropriate Android long-download behavior using supported `background_downloader 9.6.2` facilities, and restores iOS download-file cloud-backup exclusion. Do not reintroduce a second transport scheduler.
-- [ ] **3. iOS 26 Continued Processing:** reconnect V2 progress/session presentation to the native continued-processing bridge as **observation/UI only**. Expiration/cancellation of the system overlay must not pause, retry, promote, or cancel the package-owned URLSession transfer.
-- [ ] **4. Notification permission timing:** request download notification permission on the first real download/action that needs it rather than unconditionally at app launch; older/no-notification flows continue without transport failure.
-- [ ] Add focused automated guards for all four parity items and rerun analyzer + focused V2 + iOS build/native typecheck before returning to Task 13.
+- [x] **1. Runtime concurrency:** the persisted 1-10 episode limit is actually enforced by V2 without counting package-managed parallel children as independent episodes and without a holding-queue/chunk deadlock.
+- [x] **2. Package/platform configuration:** V2 applies notification preferences at runtime, configures appropriate Android long-download behavior using supported `background_downloader 9.6.2` facilities, and restores iOS download-file cloud-backup exclusion. Do not reintroduce a second transport scheduler.
+- [x] **3. iOS 26 Continued Processing:** reconnect V2 progress/session presentation to the native continued-processing bridge as **observation/UI only**. Expiration/cancellation of the system overlay must not pause, retry, promote, or cancel the package-owned URLSession transfer.
+- [x] **4. Notification permission timing:** request download notification permission on the first real download/action that needs it rather than unconditionally at app launch; older/no-notification flows continue without transport failure.
+- [x] Add focused automated guards for all four parity items and rerun analyzer + focused V2 + iOS build/native typecheck before returning to Task 13.
 
 **Scope rule:** keep `background_downloader` as the single transport/pause-resume/retry authority. Reuse Transfer API/notifiers/configuration instead of reviving V1 Range, JobStore, native promotion, or custom chunk state.
+
+**Latest exact-head programmable evidence (2026-09-18):**
+- implementation head `58a5d59d191dbbc78d628c4367632bcb9b30494b`, Flutter Checks run `35321208192`: analyzer ✅, focused Download Manager V2 **90/90** ✅, iOS no-codesign build/log ✅, native logger typecheck ✅;
+- repository-wide suite: **1539 passed / 1 failed / 1 skipped**; the only failure is the pre-existing Anime4K contract test attempting to open missing root `ANIME4K_PERFORMANCE_PLAN.md`, unrelated to Download Manager V2;
+- one-shot iOS Preview run `35322629062` at app-code-equivalent head `4ea3abba97973fd43c208eccbd97be63440bcf08` built and uploaded `ios-ipa-download-manager-v2` successfully;
+- automated acceptance now covers resume fallback settlement, exact-generation resume, package speed/ETA projection, 1-10 logical episode admission, package/platform configuration, observation-only iOS 26 continued processing, first-use notification permission, queued pause/resume generation stability, pause fallback settlement, and cancel/delete writer settlement.
+- the remaining unchecked Task 12B item is intentionally device-only: install the Preview on real iOS hardware and verify non-placeholder speed plus pause → resume/fresh-restart behavior from a new device log.
+
 
 
 ---
