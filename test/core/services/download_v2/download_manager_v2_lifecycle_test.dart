@@ -82,7 +82,7 @@ void main() {
   });
 
   test('parallel parent progress does not erase native speed', () async {
-    final f = _fixture();
+    final f = _fixture(parallelChunks: 4);
     await f.manager.start(f.request);
     final taskId = f.gateway.startedSpecs.single.taskId;
     final handle = f.gateway.handleFor(taskId)!;
@@ -457,7 +457,10 @@ void main() {
   });
 }
 
-_Fixture _fixture({String destinationPath = 'downloads/anime/episode-12.mp4'}) {
+_Fixture _fixture({
+  String destinationPath = 'downloads/anime/episode-12.mp4',
+  int parallelChunks = 1,
+}) {
   final store = InMemoryLogicalDownloadStoreV2();
   final gateway = _FakeGateway();
   final resolver = StaticSourceResolverV2();
@@ -477,7 +480,7 @@ _Fixture _fixture({String destinationPath = 'downloads/anime/episode-12.mp4'}) {
     },
     allowPause: true,
     retries: 2,
-    parallelChunks: 1,
+    parallelChunks: parallelChunks,
   );
   return _Fixture(
     store: store,
