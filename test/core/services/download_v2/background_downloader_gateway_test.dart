@@ -56,6 +56,38 @@ void main() {
     expect(handle.current.progress, 0.25);
   });
 
+  test('package snapshot reads Transfer speed and ETA notifiers', () {
+    final task = DownloadTask(
+      taskId: 'aw_v2_metrics_g1',
+      url: 'https://example.invalid/video.mp4',
+      filename: 'video.mp4',
+      updates: Updates.statusAndProgress,
+      allowPause: true,
+    );
+    final transfer = Transfer(task);
+    transfer.updateStatus(TaskStatusUpdate(task, TaskStatus.running));
+    transfer.updateProgress(
+      TaskProgressUpdate(
+        task,
+        0.25,
+        400,
+        12.5,
+        const Duration(seconds: 24),
+      ),
+    );
+
+    final snapshot = packageTransportSnapshotForV2(
+      transfer,
+      totalBytes: 400,
+    );
+
+    expect(snapshot.status, DownloadTransportStatus.running);
+    expect(snapshot.progress, 0.25);
+    expect(snapshot.transferredBytes, 100);
+    expect(snapshot.totalBytes, 400);
+    expect(snapshot.networkSpeedMBps, 12.5);
+    expect(snapshot.timeRemaining, const Duration(seconds: 24));
+  });
   test('package notFound maps to missing transport instead of failure', () {
     expect(
       transportStatusFromPackage(
