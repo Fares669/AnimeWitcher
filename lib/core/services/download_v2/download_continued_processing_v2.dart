@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:background_downloader/background_downloader.dart';
 import 'package:path/path.dart' as p;
 
 import '../download_continued_processing_service.dart';
@@ -16,6 +17,113 @@ abstract interface class DownloadPresentationObserverV2 {
   );
 
   Future<void> dispose();
+}
+
+/// Transient observation-only barrier for package-managed parallel pauses.
+///
+/// background_downloader can publish the parent paused state before every child
+/// has finished persisting its own resume data. V2 never stores child ranges or
+/// resume bytes; it only waits for the package's child status callbacks.
+final class NativeParallelPauseReadinessV2 {
+  final Map<String, Set<String>> _pausedChildrenByParent =
+      <String, Set<String>>{};
+  final Map<String, List<_ParallelPauseWaiterV2>> _waitersByParent =
+      <String, List<_ParallelPauseWaiterV2>>{};
+
+  void observe({
+    required String parentTaskId,
+    required String childTaskId,
+    int? statusOrdinal,
+  }) {
+    if (!parentTaskId.startsWith('aw_v2_') ||
+        childTaskId.isEmpty ||
+        statusOrdinal == null ||
+        statusOrdinal < 0 ||
+        statusOrdinal >= TaskStatus.values.length) {
+      return;
+    }
+
+    final status = TaskStatus.values[statusOrdinal];
+    final pausedChildren = _pausedChildrenByParent.putIfAbsent(
+      parentTaskId,
+      () => <String>{},
+    );
+    if (status == TaskStatus.paused) {
+      pausedChildren.add(childTaskId);
+    } else {
+      pausedChildren.remove(childTaskId);
+      if (pausedChildren.isEmpty) {
+        _pausedChildrenByParent.remove(parentTaskId);
+      }
+    }
+    _completeReadyWaiters(parentTaskId);
+  }
+
+  Future<bool> waitUntilReady({
+    required String taskId,
+    required int expectedChildren,
+    Duration timeout = const Duration(seconds: 5),
+  }) {
+    if (!taskId.startsWith('aw_v2_') || expectedChildren <= 1) {
+      return Future<bool>.value(true);
+    }
+    if ((_pausedChildrenByParent[taskId]?.length ?? 0) >= expectedChildren) {
+      _pausedChildrenByParent.remove(taskId);
+      return Future<bool>.value(true);
+    }
+
+    final waiter = _ParallelPauseWaiterV2(expectedChildren);
+    final waiters = _waitersByParent.putIfAbsent(
+      taskId,
+      () => <_ParallelPauseWaiterV2>[],
+    );
+    waiters.add(waiter);
+    waiter.timer = Timer(timeout, () {
+      final current = _waitersByParent[taskId];
+      current?.remove(waiter);
+      if (current?.isEmpty ?? false) {
+        _waitersByParent.remove(taskId);
+      }
+      if (!waiter.completer.isCompleted) {
+        waiter.completer.complete(false);
+      }
+    });
+    return waiter.completer.future.then((ready) {
+      waiter.timer?.cancel();
+      if (ready) {
+        _pausedChildrenByParent.remove(taskId);
+      }
+      return ready;
+    });
+  }
+
+  void _completeReadyWaiters(String parentTaskId) {
+    final pausedCount = _pausedChildrenByParent[parentTaskId]?.length ?? 0;
+    final waiters = _waitersByParent[parentTaskId];
+    if (waiters == null || waiters.isEmpty) return;
+
+    final ready = waiters
+        .where((waiter) => pausedCount >= waiter.expectedChildren)
+        .toList(growable: false);
+    for (final waiter in ready) {
+      waiters.remove(waiter);
+      waiter.timer?.cancel();
+      if (!waiter.completer.isCompleted) {
+        waiter.completer.complete(true);
+      }
+    }
+    if (waiters.isEmpty) {
+      _waitersByParent.remove(parentTaskId);
+    }
+  }
+}
+
+final class _ParallelPauseWaiterV2 {
+  _ParallelPauseWaiterV2(this.expectedChildren);
+
+  final int expectedChildren;
+  final Completer<bool> completer = Completer<bool>();
+  Timer? timer;
 }
 
 /// Aggregates read-only iOS child throughput for one V2 parallel parent.
@@ -65,6 +173,7 @@ DownloadContinuedProcessingService _newV2ContinuedProcessingService(
     required String taskId,
     required double bytesPerSecond,
   })? onNativeNetworkSpeed,
+  NativeParallelPauseReadinessV2? pauseReadiness,
 ) {
   final speeds = NativeParallelSpeedAccumulatorV2();
   return DownloadContinuedProcessingService(
@@ -83,6 +192,11 @@ DownloadContinuedProcessingService _newV2ContinuedProcessingService(
           speedBytesPerSecond,
           required completed,
         }) {
+          pauseReadiness?.observe(
+            parentTaskId: parentTaskId,
+            childTaskId: chunkTaskId,
+            statusOrdinal: statusOrdinal,
+          );
           final aggregate = speeds.update(
             parentTaskId: parentTaskId,
             childTaskId: chunkTaskId,
@@ -110,8 +224,13 @@ final class IosDownloadContinuedProcessingObserverV2
       required String taskId,
       required double bytesPerSecond,
     })? onNativeNetworkSpeed,
+    NativeParallelPauseReadinessV2? pauseReadiness,
   }) : _service =
-           service ?? _newV2ContinuedProcessingService(onNativeNetworkSpeed);
+           service ??
+           _newV2ContinuedProcessingService(
+             onNativeNetworkSpeed,
+             pauseReadiness,
+           );
 
   final DownloadContinuedProcessingService _service;
   final Map<String, _ContinuedEntryV2> _outstanding =
