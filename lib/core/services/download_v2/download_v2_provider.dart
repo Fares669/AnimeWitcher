@@ -92,6 +92,8 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
     presentationObservers: <DownloadPresentationObserverV2>[
       IosDownloadContinuedProcessingObserverV2(),
     ],
+    maxConcurrentDownloads: () =>
+        ref.read(settingsRepositoryProvider).getDownloadConcurrency(),
   );
   ref.onDispose(() {
     unawaited(manager.dispose());
