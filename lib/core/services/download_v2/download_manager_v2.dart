@@ -64,6 +64,7 @@ final class DownloadManagerV2 {
     DownloadDiagnosticsV2? diagnostics,
     Iterable<DownloadPresentationObserverV2> presentationObservers =
         const <DownloadPresentationObserverV2>[],
+    NativeParallelPauseReadinessV2? parallelPauseReadiness,
     int Function()? maxConcurrentDownloads,
     int Function()? nowMillis,
   }) : _store = store,
@@ -76,6 +77,7 @@ final class DownloadManagerV2 {
            List<DownloadPresentationObserverV2>.unmodifiable(
              presentationObservers,
            ),
+       _parallelPauseReadiness = parallelPauseReadiness,
        _maxConcurrentDownloads =
            maxConcurrentDownloads ?? (() => kDownloadConcurrencyMax),
        _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
@@ -86,6 +88,7 @@ final class DownloadManagerV2 {
   final DownloadIntegrityVerifierV2 _integrityVerifier;
   final DownloadDiagnosticsV2 _diagnostics;
   final List<DownloadPresentationObserverV2> _presentationObservers;
+  final NativeParallelPauseReadinessV2? _parallelPauseReadiness;
   final int Function() _maxConcurrentDownloads;
   final int Function() _nowMillis;
 
@@ -540,6 +543,20 @@ final class DownloadManagerV2 {
               return queued;
             }
 
+            final readiness = _parallelPauseReadiness;
+            if (record.parallelChunks > 1 && readiness != null) {
+              final ready = await readiness.waitUntilReady(
+                taskId: record.taskId,
+                expectedChildren: record.parallelChunks,
+              );
+              if (!ready) {
+                throw StateError(
+                  'Download parts are still finishing pause; '
+                  'existing progress was kept paused',
+                );
+              }
+            }
+
             final resumed = await handle.resume();
             if (resumed) {
               final activeRecord = record.copyWith(
@@ -565,6 +582,15 @@ final class DownloadManagerV2 {
             );
           });
         });
+      }
+
+      if (record.intent == DownloadUserIntent.paused &&
+          handle != null &&
+          handle.current.status != DownloadTransportStatus.missing) {
+        throw StateError(
+          'Download cannot resume safely without restarting; '
+          'existing progress was kept paused',
+        );
       }
 
       return _startFreshGeneration(request, record);
