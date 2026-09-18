@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
+import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
@@ -11,6 +12,48 @@ import 'package:flutter_test/flutter_test.dart';
 import 'download_v2_test_support.dart';
 
 void main() {
+  test('accepted V2 snapshots are forwarded to presentation observers', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _FakeGateway();
+    final resolver = StaticSourceResolverV2();
+    final observer = _RecordingPresentationObserver();
+    final logicalId = logicalDownloadIdFor(
+      animeId: 'anilist:21',
+      episodeKey: '12',
+      variantKey: 'sub:1080p',
+    );
+    final request = DownloadStartRequestV2(
+      logicalId: logicalId,
+      animeId: 'anilist:21',
+      episodeKey: '12',
+      variantKey: 'sub:1080p',
+      destinationPath: 'downloads/anime/episode-12.mp4',
+      sourceDescriptor: const <String, Object?>{
+        'providerId': 'provider.example',
+      },
+      allowPause: true,
+      retries: 2,
+      parallelChunks: 1,
+    );
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+      presentationObservers: <DownloadPresentationObserverV2>[observer],
+    );
+    addTearDown(manager.dispose);
+
+    await manager.start(request);
+    final taskId = gateway.startedSpecs.single.taskId;
+    gateway.emit(taskId, DownloadTransportStatus.running);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(observer.events, isNotEmpty);
+    expect(observer.events.last.$1.logicalId, logicalId);
+    expect(observer.events.last.$2.taskId, taskId);
+    expect(observer.events.last.$2.status, DownloadTransportStatus.running);
+  });
+
   test('pause intent is durable before package pause', () async {
     final f = _fixture();
     await f.manager.start(f.request);
@@ -418,4 +461,22 @@ final class _FakeHandle implements DownloadTransportHandle {
     );
     _controller.add(_current);
   }
+}
+
+
+final class _RecordingPresentationObserver
+    implements DownloadPresentationObserverV2 {
+  final List<(LogicalDownloadRecordV2, DownloadTransportSnapshot)> events =
+      <(LogicalDownloadRecordV2, DownloadTransportSnapshot)>[];
+
+  @override
+  Future<void> observe(
+    LogicalDownloadRecordV2 record,
+    DownloadTransportSnapshot snapshot,
+  ) async {
+    events.add((record, snapshot));
+  }
+
+  @override
+  Future<void> dispose() async {}
 }
