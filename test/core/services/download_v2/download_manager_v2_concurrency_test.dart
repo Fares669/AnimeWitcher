@@ -52,6 +52,52 @@ void main() {
     expect(gateway.startedSpecs.last.taskId, queuedRecord.taskId);
     expect((await store.get(second.logicalId))?.awaitingAdmission, isFalse);
   });
+
+  test('resume waits for an episode slot and keeps the exact paused handle', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _ConcurrencyGateway();
+    final resolver = _Resolver();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+      maxConcurrentDownloads: () => 1,
+    );
+    addTearDown(manager.dispose);
+
+    final first = _request(episode: '1', chunks: 4);
+    final second = _request(episode: '2', chunks: 4);
+
+    await manager.start(first);
+    final firstTaskId = gateway.startedSpecs.single.taskId;
+    final firstHandle = gateway.handleFor(firstTaskId)!;
+
+    final pauseFuture = manager.pause(first.logicalId);
+    await Future<void>.delayed(Duration.zero);
+    gateway.emit(firstTaskId, DownloadTransportStatus.paused);
+    await pauseFuture;
+
+    await manager.start(second);
+    final secondTaskId = gateway.startedSpecs.last.taskId;
+    expect(gateway.startedSpecs, hasLength(2));
+
+    final queuedResume = await manager.resume(first.logicalId);
+    expect(queuedResume.status, DownloadTransportStatus.queued);
+    expect(firstHandle.resumeCalls, 0);
+    expect((await store.get(first.logicalId))?.taskId, firstTaskId);
+    expect((await store.get(first.logicalId))?.generation, 1);
+    expect((await store.get(first.logicalId))?.awaitingAdmission, isTrue);
+
+    gateway.emit(secondTaskId, DownloadTransportStatus.failed);
+    await firstHandle.waitForResume();
+
+    expect(firstHandle.resumeCalls, 1);
+    expect(gateway.startedSpecs, hasLength(2));
+    expect((await store.get(first.logicalId))?.taskId, firstTaskId);
+    expect((await store.get(first.logicalId))?.generation, 1);
+    expect((await store.get(first.logicalId))?.awaitingAdmission, isFalse);
+  });
+
 }
 
 DownloadStartRequestV2 _request({
@@ -135,6 +181,8 @@ final class _ConcurrencyGateway implements BackgroundDownloaderGateway {
   @override
   Future<void> removeTracking(String taskId) async {}
 
+  _ConcurrencyHandle? handleFor(String taskId) => _handles[taskId];
+
   void emit(String taskId, DownloadTransportStatus status) {
     _handles[taskId]?.emit(status);
   }
@@ -154,6 +202,8 @@ final class _ConcurrencyHandle implements DownloadTransportHandle {
   DownloadTransportSnapshot _current;
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
+  final Completer<void> _resumeSignal = Completer<void>();
+  int resumeCalls = 0;
 
   @override
   String get taskId => _current.taskId;
@@ -168,10 +218,17 @@ final class _ConcurrencyHandle implements DownloadTransportHandle {
   Future<bool> pause() async => true;
 
   @override
-  Future<bool> resume() async => true;
+  Future<bool> resume() async {
+    resumeCalls++;
+    if (!_resumeSignal.isCompleted) _resumeSignal.complete();
+    return true;
+  }
 
   @override
   Future<bool> cancel() async => true;
+
+  Future<void> waitForResume() =>
+      _resumeSignal.future.timeout(const Duration(seconds: 2));
 
   void emit(DownloadTransportStatus status) {
     _current = DownloadTransportSnapshot(
