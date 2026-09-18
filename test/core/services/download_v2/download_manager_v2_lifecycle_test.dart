@@ -611,6 +611,10 @@ final class _FakeGateway implements BackgroundDownloaderGateway {
   void emit(String taskId, DownloadTransportStatus status) {
     _handles[taskId]?.emit(status);
   }
+
+  void emitSnapshot(String taskId, DownloadTransportSnapshot snapshot) {
+    _handles[taskId]?.emitSnapshot(snapshot);
+  }
 }
 
 final class _FakeHandle implements DownloadTransportHandle {
