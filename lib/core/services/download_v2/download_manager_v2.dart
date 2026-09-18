@@ -555,11 +555,13 @@ final class DownloadManagerV2 {
               return handle.current;
             }
 
-            return _startFreshGenerationUnsafe(
-              request,
-              record,
-              previousHandle: handle,
-              lookUpPreviousHandle: false,
+            // A failed explicit resume must never silently destroy
+            // partial progress by creating a fresh generation from byte zero.
+            // Keep the exact paused generation so a later retry can use any
+            // resume data that becomes available.
+            throw StateError(
+              'Download could not resume without restarting; '
+              'the existing progress was kept paused',
             );
           });
         });
