@@ -330,25 +330,46 @@ final class DownloadManagerV2 {
         () => _requestFromRecord(record),
       );
 
-      final activeRecord = record.copyWith(
-        intent: DownloadUserIntent.active,
-        updatedAtMillis: _nowMillis(),
-      );
-      await _store.put(activeRecord);
-      _rememberRecord(activeRecord);
-      await _publishRecords();
-
       final handle = await _exactHandle(record.taskId);
       if (handle != null &&
           handle.current.status == DownloadTransportStatus.paused) {
-        final resumed = await handle.resume();
-        if (resumed) {
-          _activateHandle(logicalId, handle);
-          return handle.current;
-        }
+        final destinationKey = await _canonicalDestinationPath(
+          request.destinationPath,
+        );
+        return _destinationCommands.run(destinationKey, () async {
+          final conflict = await _findDestinationConflict(
+            destinationKey,
+            logicalId,
+          );
+          if (conflict != null) {
+            throw StateError(
+              'Canonical destination is already owned by ${conflict.logicalId}',
+            );
+          }
+
+          final resumed = await handle.resume();
+          if (resumed) {
+            final activeRecord = record.copyWith(
+              intent: DownloadUserIntent.active,
+              updatedAtMillis: _nowMillis(),
+            );
+            await _store.put(activeRecord);
+            _rememberRecord(activeRecord);
+            await _publishRecords();
+            _activateHandle(logicalId, handle);
+            return handle.current;
+          }
+
+          return _startFreshGenerationUnsafe(
+            request,
+            record,
+            previousHandle: handle,
+            lookUpPreviousHandle: false,
+          );
+        });
       }
 
-      return _startFreshGeneration(request, activeRecord);
+      return _startFreshGeneration(request, record);
     });
   }
 
