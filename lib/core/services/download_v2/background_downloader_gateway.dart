@@ -202,8 +202,6 @@ final class _PackageDownloadTransportHandle
   late final StreamSubscription<TaskUpdate> _updatesSubscription;
   late final void Function() _holdReasonListener;
   int? _totalBytes;
-  double _networkSpeedMBps = -1;
-  Duration _timeRemaining = Duration.zero;
   bool _disposed = false;
 
   @override
@@ -229,10 +227,6 @@ final class _PackageDownloadTransportHandle
       if (update.expectedFileSize > 0) {
         _totalBytes = update.expectedFileSize;
       }
-      _networkSpeedMBps = update.hasNetworkSpeed ? update.networkSpeed : -1;
-      _timeRemaining = update.hasTimeRemaining
-          ? update.timeRemaining
-          : Duration.zero;
     }
     _emitCurrent();
   }
@@ -242,30 +236,8 @@ final class _PackageDownloadTransportHandle
     _snapshots.add(_snapshot());
   }
 
-  DownloadTransportSnapshot _snapshot() {
-    final progress = transfer.progress ??
-        (transfer.status == TaskStatus.complete ? 1.0 : 0.0);
-    final totalBytes = _totalBytes;
-    final transferredBytes = totalBytes == null
-        ? null
-        : (totalBytes * progress).round();
-    final exception = transfer.exception;
-
-    return DownloadTransportSnapshot(
-      taskId: taskId,
-      status: transportStatusFromPackage(
-        transfer.status,
-        transfer.holdReason,
-      ),
-      progress: progress,
-      transferredBytes: transferredBytes,
-      totalBytes: totalBytes,
-      networkSpeedMBps: _networkSpeedMBps,
-      timeRemaining: _timeRemaining,
-      failureCategory: _failureCategory(transfer.status, exception),
-      failureMessage: exception?.toString(),
-    );
-  }
+  DownloadTransportSnapshot _snapshot() =>
+      packageTransportSnapshotForV2(transfer, totalBytes: _totalBytes);
 
   void dispose() {
     if (_disposed) return;
@@ -274,6 +246,36 @@ final class _PackageDownloadTransportHandle
     unawaited(_updatesSubscription.cancel());
     unawaited(_snapshots.close());
   }
+}
+
+/// Projects one package Transfer into V2 without maintaining a second metric
+/// cache. The Transfer notifiers are updated before its progress stream emits,
+/// so reading them here preserves the package's current speed/ETA on iOS and
+/// package-managed parallel parents.
+DownloadTransportSnapshot packageTransportSnapshotForV2(
+  Transfer transfer, {
+  int? totalBytes,
+}) {
+  final progress =
+      transfer.progress ?? (transfer.status == TaskStatus.complete ? 1.0 : 0.0);
+  final transferredBytes =
+      totalBytes == null ? null : (totalBytes * progress).round();
+  final exception = transfer.exception;
+
+  return DownloadTransportSnapshot(
+    taskId: transfer.taskId,
+    status: transportStatusFromPackage(
+      transfer.status,
+      transfer.holdReason,
+    ),
+    progress: progress,
+    transferredBytes: transferredBytes,
+    totalBytes: totalBytes,
+    networkSpeedMBps: transfer.networkSpeed,
+    timeRemaining: transfer.timeRemainingNotifier.value,
+    failureCategory: _failureCategory(transfer.status, exception),
+    failureMessage: exception?.toString(),
+  );
 }
 
 /// Normalizes package status into the package-neutral V2 state model.
