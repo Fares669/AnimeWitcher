@@ -1322,9 +1322,48 @@ final class DownloadManagerV2 {
     DownloadTransportSnapshot snapshot,
   ) {
     if (_currentTaskIds[logicalId] != snapshot.taskId) return false;
+
+    var accepted = snapshot;
+    final record = _recordsByLogicalId[logicalId];
+    final current = _snapshots[logicalId];
+    if (record != null &&
+        record.parallelChunks > 1 &&
+        snapshot.networkSpeedMBps < 0 &&
+        current != null &&
+        current.taskId == snapshot.taskId &&
+        current.networkSpeedMBps >= 0) {
+      final totalBytes = snapshot.totalBytes ?? current.totalBytes;
+      final transferredBytes =
+          snapshot.transferredBytes ??
+          (totalBytes == null ? null : (totalBytes * snapshot.progress).round());
+      final speedBytesPerSecond = current.networkSpeedMBps * 1000000;
+      final remainingBytes =
+          totalBytes != null &&
+              transferredBytes != null &&
+              totalBytes > transferredBytes
+          ? totalBytes - transferredBytes
+          : 0;
+      accepted = DownloadTransportSnapshot(
+        taskId: snapshot.taskId,
+        status: snapshot.status,
+        progress: snapshot.progress,
+        transferredBytes: transferredBytes,
+        totalBytes: totalBytes,
+        networkSpeedMBps: current.networkSpeedMBps,
+        timeRemaining: speedBytesPerSecond > 0 && remainingBytes > 0
+            ? Duration(
+                milliseconds:
+                    ((remainingBytes / speedBytesPerSecond) * 1000).round(),
+              )
+            : Duration.zero,
+        failureCategory: snapshot.failureCategory,
+        failureMessage: snapshot.failureMessage,
+      );
+    }
+
     final projected = _currentIntents[logicalId] == DownloadUserIntent.paused
-        ? _snapshotWithStatus(snapshot, DownloadTransportStatus.paused)
-        : snapshot;
+        ? _snapshotWithStatus(accepted, DownloadTransportStatus.paused)
+        : accepted;
     _snapshots[logicalId] = projected;
     _recordDiagnostic(logicalId, projected);
     return true;
