@@ -701,9 +701,9 @@ class _DownloadItemTile extends ConsumerWidget {
                   if (isPaused)
                     IconButton(
                       icon: const Icon(Icons.play_arrow_rounded),
-                      onPressed: () => ref
-                          .read(downloadsProvider.notifier)
-                          .resumeDownload(item.task.taskId),
+                      onPressed: () {
+                        unawaited(_resumeDownload(context, ref));
+                      },
                       visualDensity: VisualDensity.compact,
                     ),
                   if (isDone)
@@ -753,6 +753,26 @@ class _DownloadItemTile extends ConsumerWidget {
         child: tile,
       ),
     );
+  }
+
+  Future<void> _resumeDownload(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    try {
+      await ref
+          .read(downloadsProvider.notifier)
+          .resumeDownload(item.task.taskId);
+    } catch (error) {
+      if (!context.mounted) return;
+      var message = error.toString().trim();
+      const stateErrorPrefix = 'Bad state: ';
+      if (message.startsWith(stateErrorPrefix)) {
+        message = message.substring(stateErrorPrefix.length).trim();
+      }
+      if (message.isEmpty) message = 'Unable to resume download';
+      ref.read(notificationServiceProvider).showError(message);
+    }
   }
 
   String _downloadedSizeText() {
