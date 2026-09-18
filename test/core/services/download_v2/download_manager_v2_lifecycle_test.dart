@@ -69,6 +69,15 @@ void main() {
       4.5,
     );
 
+    f.manager.observeNativeNetworkSpeed(
+      taskId: taskId,
+      bytesPerSecond: 0,
+    );
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.networkSpeedMBps,
+      0,
+    );
+
     await f.manager.cancel(f.request.logicalId);
     f.manager.observeNativeNetworkSpeed(
       taskId: taskId,
