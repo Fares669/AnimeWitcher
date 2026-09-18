@@ -175,6 +175,32 @@ void main() {
     );
   });
 
+  test('resume fallback waits for obsolete transport to settle before replacement', () async {
+    final f = _fixture();
+    await f.manager.start(f.request);
+    final firstTaskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(firstTaskId)!;
+
+    await f.manager.pause(f.request.logicalId);
+    f.gateway.emit(firstTaskId, DownloadTransportStatus.paused);
+    handle.onResume = () async => false;
+
+    final resumeFuture = f.manager.resume(f.request.logicalId);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(handle.cancelCalls, 1);
+    expect(f.gateway.startedSpecs, hasLength(1));
+    expect((await f.store.get(f.request.logicalId))?.generation, 1);
+    expect((await f.store.get(f.request.logicalId))?.intent, DownloadUserIntent.paused);
+
+    f.gateway.emit(firstTaskId, DownloadTransportStatus.canceled);
+    await resumeFuture;
+
+    expect(f.gateway.startedSpecs, hasLength(2));
+    expect(f.gateway.startedSpecs.last.taskId, isNot(firstTaskId));
+    expect((await f.store.get(f.request.logicalId))?.generation, 2);
+    expect((await f.store.get(f.request.logicalId))?.intent, DownloadUserIntent.active);
+  });
   test('non-resumable pause cancels transport but retains paused intent', () async {
     final f = _fixture();
     await f.manager.start(f.request);
