@@ -86,6 +86,7 @@ final class LogicalDownloadRecordV2 {
     this.allowPause = true,
     this.retries = 2,
     this.parallelChunks = 1,
+    this.awaitingAdmission = false,
   }) : assert(retries >= 0),
        assert(parallelChunks > 0);
 
@@ -106,6 +107,11 @@ final class LogicalDownloadRecordV2 {
   final bool allowPause;
   final int retries;
   final int parallelChunks;
+
+  /// App-owned logical admission state. True means this episode is waiting
+  /// for one of the user-configured episode slots and has not been handed to
+  /// background_downloader yet. Package child/chunk state is never persisted.
+  final bool awaitingAdmission;
   final int updatedAtMillis;
 
   LogicalDownloadRecordV2 copyWith({
@@ -128,6 +134,7 @@ final class LogicalDownloadRecordV2 {
     bool? allowPause,
     int? retries,
     int? parallelChunks,
+    bool? awaitingAdmission,
     int? updatedAtMillis,
   }) {
     return LogicalDownloadRecordV2(
@@ -152,6 +159,7 @@ final class LogicalDownloadRecordV2 {
       allowPause: allowPause ?? this.allowPause,
       retries: retries ?? this.retries,
       parallelChunks: parallelChunks ?? this.parallelChunks,
+      awaitingAdmission: awaitingAdmission ?? this.awaitingAdmission,
       updatedAtMillis: updatedAtMillis ?? this.updatedAtMillis,
     );
   }
@@ -174,6 +182,7 @@ final class LogicalDownloadRecordV2 {
     'allowPause': allowPause,
     'retries': retries,
     'parallelChunks': parallelChunks,
+    'awaitingAdmission': awaitingAdmission,
     'updatedAtMillis': updatedAtMillis,
   };
 
@@ -233,6 +242,10 @@ final class LogicalDownloadRecordV2 {
       allowPause: map['allowPause'] is bool ? map['allowPause']! as bool : true,
       retries: retries,
       parallelChunks: parallelChunks,
+      awaitingAdmission:
+          map['awaitingAdmission'] is bool
+              ? map['awaitingAdmission']! as bool
+              : false,
       updatedAtMillis: updatedAtMillis,
     );
   }
