@@ -140,6 +140,65 @@ void main() {
     );
   });
 
+  test('startup keeps one canonical writer when duplicate active handles rehydrate', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _StartupGateway();
+    final resolver = StaticSourceResolverV2(expectedBytes: 100);
+    const destination = 'downloads/anime/shared-episode.mp4';
+
+    LogicalDownloadRecordV2 record({
+      required int anime,
+      required int episode,
+      required int updatedAtMillis,
+    }) {
+      final logicalId = logicalDownloadIdFor(
+        animeId: 'anilist:$anime',
+        episodeKey: '$episode',
+        variantKey: 'sub:1080p',
+      );
+      return LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2,
+        logicalId: logicalId,
+        animeId: 'anilist:$anime',
+        episodeKey: '$episode',
+        variantKey: 'sub:1080p',
+        generation: 1,
+        taskId: taskIdForGeneration(logicalId, 1),
+        intent: DownloadUserIntent.active,
+        destinationPath: destination,
+        sourceDescriptor: const <String, Object?>{
+          'providerId': 'provider.example',
+        },
+        expectedBytes: 100,
+        updatedAtMillis: updatedAtMillis,
+      );
+    }
+
+    final first = record(anime: 21, episode: 12, updatedAtMillis: 1);
+    final second = record(anime: 22, episode: 13, updatedAtMillis: 2);
+    await store.put(first);
+    await store.put(second);
+    gateway.addRehydrated(first.taskId, DownloadTransportStatus.running);
+    gateway.addRehydrated(second.taskId, DownloadTransportStatus.running);
+
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+    );
+    addTearDown(manager.dispose);
+
+    await manager.initialize();
+
+    expect(manager.snapshotFor(first.logicalId)?.status, DownloadTransportStatus.running);
+    expect(manager.snapshotFor(second.logicalId)?.status, DownloadTransportStatus.paused);
+    expect((await store.get(first.logicalId))?.intent, DownloadUserIntent.active);
+    expect((await store.get(second.logicalId))?.intent, DownloadUserIntent.paused);
+    expect(gateway.handleFor(first.taskId)?.pauseCalls, 0);
+    expect(gateway.handleFor(second.taskId)?.pauseCalls, 1);
+    expect(gateway.startedSpecs, isEmpty);
+  });
+
   test('startup never adopts a different task id even when transport looks related', () async {
     final f = await _startupFixture(
       intent: DownloadUserIntent.active,
@@ -233,6 +292,8 @@ final class _StartupGateway implements BackgroundDownloaderGateway {
   final List<String> attachCalls = <String>[];
   final Map<String, _StartupHandle> _rehydrated = <String, _StartupHandle>{};
 
+  _StartupHandle? handleFor(String taskId) => _rehydrated[taskId];
+
   void addRehydrated(String taskId, DownloadTransportStatus status) {
     _rehydrated[taskId] = _StartupHandle(
       DownloadTransportSnapshot(taskId: taskId, status: status, progress: 0.5),
@@ -278,6 +339,7 @@ final class _StartupHandle implements DownloadTransportHandle {
   DownloadTransportSnapshot _current;
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
+  int pauseCalls = 0;
 
   @override
   String get taskId => _current.taskId;
@@ -290,6 +352,7 @@ final class _StartupHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> pause() async {
+    pauseCalls++;
     _current = DownloadTransportSnapshot(
       taskId: taskId,
       status: DownloadTransportStatus.paused,
