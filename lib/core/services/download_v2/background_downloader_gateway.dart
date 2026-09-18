@@ -363,13 +363,27 @@ DownloadTransportSnapshot packageTransportSnapshotForV2(
   final transferredBytes =
       totalBytes == null ? null : (totalBytes * progress).round();
   final exception = transfer.exception;
+  final packageStatus = transfer.status;
+  var projectedStatus = transportStatusFromPackage(
+    packageStatus,
+    transfer.holdReason,
+  );
+
+  // On iOS, background_downloader 9.6.2 can keep a ParallelDownloadTask
+  // parent enqueued while multiple child chunks are already transferring.
+  // A real parent progress update is authoritative evidence that transport is
+  // active. Promote presentation only; user-paused state is still fenced by
+  // DownloadManagerV2 and raw package pause/resume semantics stay untouched.
+  if (packageStatus == TaskStatus.enqueued &&
+      progress > 0 &&
+      progress < 1 &&
+      transfer.holdReason == TransferHoldReason.none) {
+    projectedStatus = DownloadTransportStatus.running;
+  }
 
   return DownloadTransportSnapshot(
     taskId: transfer.taskId,
-    status: transportStatusFromPackage(
-      transfer.status,
-      transfer.holdReason,
-    ),
+    status: projectedStatus,
     progress: progress,
     transferredBytes: transferredBytes,
     totalBytes: totalBytes,
