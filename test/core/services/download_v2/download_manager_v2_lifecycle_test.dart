@@ -169,6 +169,44 @@ void main() {
     expect(manager.snapshotFor(logicalId)?.timeRemaining, Duration.zero);
   });
 
+  test('parallel resume waits for every child pause observation', () async {
+    final readiness = NativeParallelPauseReadinessV2();
+    final f = _fixture(
+      parallelChunks: 2,
+      pauseReadiness: readiness,
+    );
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(taskId)!;
+
+    await f.manager.pause(f.request.logicalId);
+    f.gateway.emit(taskId, DownloadTransportStatus.paused);
+
+    final resumeFuture = f.manager.resume(f.request.logicalId);
+    await Future<void>.delayed(Duration.zero);
+    expect(handle.resumeCalls, 0);
+
+    readiness.observe(
+      parentTaskId: taskId,
+      childTaskId: 'child-1',
+      statusOrdinal: TaskStatus.paused.index,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(handle.resumeCalls, 0);
+
+    readiness.observe(
+      parentTaskId: taskId,
+      childTaskId: 'child-2',
+      statusOrdinal: TaskStatus.paused.index,
+    );
+    await resumeFuture;
+
+    expect(handle.resumeCalls, 1);
+    expect(f.gateway.startedSpecs, hasLength(1));
+    expect((await f.store.get(f.request.logicalId))?.generation, 1);
+    expect((await f.store.get(f.request.logicalId))?.taskId, taskId);
+  });
+
   test('pause waits for package paused state before allowing exact resume', () async {
     final f = _fixture();
     await f.manager.start(f.request);
@@ -545,6 +583,7 @@ void main() {
 _Fixture _fixture({
   String destinationPath = 'downloads/anime/episode-12.mp4',
   int parallelChunks = 1,
+  NativeParallelPauseReadinessV2? pauseReadiness,
 }) {
   final store = InMemoryLogicalDownloadStoreV2();
   final gateway = _FakeGateway();
@@ -576,6 +615,7 @@ _Fixture _fixture({
       store: store,
       gateway: gateway,
       sourceResolver: resolver,
+      parallelPauseReadiness: pauseReadiness,
     ),
   );
 }
