@@ -123,7 +123,19 @@ final class DownloadManagerV2 {
   }
 
   Future<void> initialize() {
-    return _initialization ??= _initialize();
+    final existing = _initialization;
+    if (existing != null) return existing;
+
+    final attempt = _initialize();
+    _initialization = attempt;
+    unawaited(
+      attempt.catchError((Object _, StackTrace __) {
+        if (identical(_initialization, attempt)) {
+          _initialization = null;
+        }
+      }),
+    );
+    return attempt;
   }
 
   Future<void> _initialize() async {
