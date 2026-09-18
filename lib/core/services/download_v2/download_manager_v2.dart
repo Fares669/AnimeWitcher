@@ -372,12 +372,13 @@ final class DownloadManagerV2 {
       await _publishRecords();
 
       final handle = await _exactHandle(record.taskId);
+      DownloadTransportSnapshot? settledPause;
       if (handle != null && !handle.current.isFinal) {
-        final paused = await handle.pause();
-        if (!paused) await handle.cancel();
+        settledPause = await _pauseHandleAndSettle(handle);
       }
 
-      final base = handle?.current ??
+      final base = settledPause ??
+          handle?.current ??
           _snapshots[logicalId] ??
           DownloadTransportSnapshot(
             taskId: record.taskId,
@@ -924,6 +925,46 @@ final class DownloadManagerV2 {
     );
     _activateHandle(request.logicalId, handle);
     return handle.current;
+  }
+
+  Future<DownloadTransportSnapshot> _pauseHandleAndSettle(
+    DownloadTransportHandle handle,
+  ) async {
+    if (handle.current.status == DownloadTransportStatus.paused ||
+        handle.current.isFinal) {
+      return handle.current;
+    }
+
+    final settled = Completer<DownloadTransportSnapshot>();
+    final subscription = handle.snapshots.listen((snapshot) {
+      if ((snapshot.status == DownloadTransportStatus.paused ||
+              snapshot.isFinal) &&
+          !settled.isCompleted) {
+        settled.complete(snapshot);
+      }
+    });
+
+    try {
+      final accepted = await handle.pause();
+      if (!accepted) {
+        await _settleObsoleteHandle(handle, cancelEvenIfFinal: false);
+        return handle.current;
+      }
+
+      final current = handle.current;
+      if (current.status == DownloadTransportStatus.paused || current.isFinal) {
+        return current;
+      }
+
+      try {
+        return await settled.future.timeout(const Duration(seconds: 10));
+      } on TimeoutException {
+        await _settleObsoleteHandle(handle, cancelEvenIfFinal: false);
+        return handle.current;
+      }
+    } finally {
+      await subscription.cancel();
+    }
   }
 
   Future<void> _settleObsoleteHandle(
