@@ -84,7 +84,11 @@ final downloadIntegrityVerifierV2Provider =
 /// V2; individual screens do not create their own managers or gateways.
 final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
   late final DownloadManagerV2 manager;
+  final pauseReadiness = Platform.isIOS
+      ? NativeParallelPauseReadinessV2()
+      : null;
   final continuedProcessing = IosDownloadContinuedProcessingObserverV2(
+    pauseReadiness: pauseReadiness,
     onNativeNetworkSpeed:
         ({
           required String taskId,
@@ -105,6 +109,7 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
     presentationObservers: <DownloadPresentationObserverV2>[
       continuedProcessing,
     ],
+    parallelPauseReadiness: pauseReadiness,
     maxConcurrentDownloads: () =>
         ref.read(settingsRepositoryProvider).getDownloadConcurrency(),
   );
