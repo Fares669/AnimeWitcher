@@ -432,15 +432,38 @@ final class DownloadManagerV2 {
         awaitingAdmission: record.awaitingAdmission,
         updatedAtMillis: _nowMillis(),
       );
+      // Persist user intent before touching transport so a crash during
+      // pause cannot relaunch this download automatically. Keep the in-memory
+      // projection active until every package-owned child has actually paused.
       await _store.put(pausedRecord);
-      _rememberRecord(pausedRecord);
-      await _publishRecords();
 
       final handle = await _exactHandle(record.taskId);
       DownloadTransportSnapshot? settledPause;
       if (handle != null && !handle.current.isFinal) {
         settledPause = await _pauseHandleAndSettle(handle);
       }
+
+      final packagePause =
+          settledPause ?? handle?.current ?? _snapshots[logicalId];
+      final readiness = _parallelPauseReadiness;
+      if (record.parallelChunks > 1 &&
+          readiness != null &&
+          packagePause?.status == DownloadTransportStatus.paused) {
+        final ready = await readiness.waitUntilReady(
+          taskId: record.taskId,
+          expectedChildren: record.parallelChunks,
+          timeout: const Duration(seconds: 15),
+        );
+        if (!ready) {
+          throw StateError(
+            'Download parts did not finish pausing; '
+            'the download was not exposed as safely paused',
+          );
+        }
+      }
+
+      _rememberRecord(pausedRecord);
+      await _publishRecords();
 
       final base = settledPause ??
           handle?.current ??
