@@ -50,13 +50,25 @@ void main() {
       10_000_000,
     );
 
+    // An explicit zero is different: native emits it only after the child has
+    // produced no bytes for the stale window, so remove that child speed.
     expect(
       speeds.update(
         parentTaskId: 'aw_v2_dl_x_g1',
         childTaskId: 'child-1',
-        completed: true,
+        speedBytesPerSecond: 0,
+        completed: false,
       ),
       6_000_000,
+    );
+
+    expect(
+      speeds.update(
+        parentTaskId: 'aw_v2_dl_x_g1',
+        childTaskId: 'child-2',
+        completed: true,
+      ),
+      0,
     );
     expect(
       speeds.update(
