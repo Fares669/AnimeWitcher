@@ -62,4 +62,30 @@ void main() {
       reason: 'Late native child callbacks must not switch the system overlay.',
     );
   });
+
+
+  test('iOS V2 parent progress bypasses legacy promotion gate for overlay only', () {
+    final source = File(
+      'ios/Runner/DownloadNativeWaitingQueue.swift',
+    ).readAsStringSync();
+    final start = source.indexOf(
+      'private static func handleSupportedPluginProgress',
+    );
+    final end = source.indexOf(
+      '#endif',
+      start,
+    );
+    expect(start, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(start));
+
+    final handler = source.substring(start, end);
+    final v2Overlay = handler.indexOf('id.hasPrefix("aw_v2_")');
+    final legacyGate = handler.indexOf('guard nativePromotionAvailable else { return }');
+    expect(v2Overlay, greaterThanOrEqualTo(0));
+    expect(legacyGate, greaterThan(v2Overlay));
+    expect(
+      handler.substring(v2Overlay, legacyGate),
+      contains('updateFromNativeIfCurrent('),
+    );
+  });
 }
