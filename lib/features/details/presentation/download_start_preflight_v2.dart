@@ -15,8 +15,10 @@ import '../../skip/data/skip_segment_cache.dart';
 /// Preserves the non-transport Android setup that the legacy downloader used
 /// to perform before starting a real file transfer. This helper deliberately
 /// owns no queue, task, retry, resume, or transport state.
-Future<void> requestDownloadPermissionsV2() async {
-  if (Platform.isIOS || Platform.isAndroid) {
+Future<void> requestDownloadPermissionsV2({
+  bool requestNotifications = true,
+}) async {
+  if (requestNotifications && (Platform.isIOS || Platform.isAndroid)) {
     final downloader = bd.FileDownloader();
     final status = await downloader.permissions.status(
       bd.PermissionType.notifications,
