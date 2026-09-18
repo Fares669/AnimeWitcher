@@ -386,6 +386,31 @@ void main() {
       DownloadUserIntent.paused,
     );
   });
+  test('canceled exact handle after resume failure cannot restart generation', () async {
+    final f = _fixture();
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(taskId)!;
+
+    await f.manager.pause(f.request.logicalId);
+    f.gateway.emit(taskId, DownloadTransportStatus.paused);
+    handle.onResume = () async => false;
+
+    await expectLater(f.manager.resume(f.request.logicalId), throwsStateError);
+    f.gateway.emit(taskId, DownloadTransportStatus.canceled);
+    await Future<void>.delayed(Duration.zero);
+
+    await expectLater(f.manager.resume(f.request.logicalId), throwsStateError);
+
+    expect(f.gateway.startedSpecs, hasLength(1));
+    expect((await f.store.get(f.request.logicalId))?.generation, 1);
+    expect((await f.store.get(f.request.logicalId))?.taskId, taskId);
+    expect(
+      (await f.store.get(f.request.logicalId))?.intent,
+      DownloadUserIntent.paused,
+    );
+  });
+
   test('pause fallback waits for cancellation settlement', () async {
     final f = _fixture();
     await f.manager.start(f.request);
