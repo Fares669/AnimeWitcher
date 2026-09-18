@@ -279,9 +279,10 @@ final class DownloadManagerV2 {
 
         case DownloadUserIntent.canceled:
           if (exactHandle != null) {
-            if (!exactHandle.current.isFinal) {
-              await exactHandle.cancel();
-            }
+            await _settleObsoleteHandle(
+              exactHandle,
+              cancelEvenIfFinal: false,
+            );
             await _gateway.removeTracking(record.taskId);
             _handlesByTaskId.remove(record.taskId);
           }
@@ -1113,8 +1114,11 @@ final class DownloadManagerV2 {
     _snapshots[logicalId] = snapshot;
     _recordDiagnostic(logicalId, snapshot);
 
-    if (handle != null && !handle.current.isFinal) {
-      await handle.cancel();
+    if (handle != null) {
+      await _settleObsoleteHandle(
+        handle,
+        cancelEvenIfFinal: false,
+      );
     }
     await _gateway.removeTracking(obsoleteTaskId);
     _handlesByTaskId.remove(obsoleteTaskId);
