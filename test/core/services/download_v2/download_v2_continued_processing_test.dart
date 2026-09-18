@@ -16,6 +16,59 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
+  test('parallel native speed sums live child windows without zero spikes', () {
+    final speeds = NativeParallelSpeedAccumulatorV2();
+
+    expect(
+      speeds.update(
+        parentTaskId: 'aw_v2_dl_x_g1',
+        childTaskId: 'child-1',
+        speedBytesPerSecond: 4_000_000,
+        completed: false,
+      ),
+      4_000_000,
+    );
+    expect(
+      speeds.update(
+        parentTaskId: 'aw_v2_dl_x_g1',
+        childTaskId: 'child-2',
+        speedBytesPerSecond: 6_000_000,
+        completed: false,
+      ),
+      10_000_000,
+    );
+
+    // A throttled callback without a stable speed sample must not turn a live
+    // transfer into a fake 0 MB/s reading.
+    expect(
+      speeds.update(
+        parentTaskId: 'aw_v2_dl_x_g1',
+        childTaskId: 'child-2',
+        speedBytesPerSecond: null,
+        completed: false,
+      ),
+      10_000_000,
+    );
+
+    expect(
+      speeds.update(
+        parentTaskId: 'aw_v2_dl_x_g1',
+        childTaskId: 'child-1',
+        completed: true,
+      ),
+      6_000_000,
+    );
+    expect(
+      speeds.update(
+        parentTaskId: 'legacy-parent',
+        childTaskId: 'child',
+        speedBytesPerSecond: 99_000_000,
+        completed: false,
+      ),
+      isNull,
+    );
+  });
+
   test('V2 drives iOS continued processing as presentation only', () async {
     final calls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
