@@ -311,7 +311,12 @@ class DownloadLauncher {
                         episodeData,
                       ),
                     );
-                    await requestDownloadPermissionsV2();
+                    final notificationPrefs = _ref
+                        .read(settingsRepositoryProvider)
+                        .getDownloadNotificationPrefs();
+                    await requestDownloadPermissionsV2(
+                      requestNotifications: !notificationPrefs.noneEnabled,
+                    );
                     final extension = _getFileExtension(
                       stream.url,
                       metadata.mimeType,
