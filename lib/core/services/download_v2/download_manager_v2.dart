@@ -613,7 +613,7 @@ final class DownloadManagerV2 {
   }) {
     if (taskId.isEmpty ||
         !bytesPerSecond.isFinite ||
-        bytesPerSecond <= 0) {
+        bytesPerSecond < 0) {
       return;
     }
 
@@ -650,8 +650,9 @@ final class DownloadManagerV2 {
     final projected = DownloadTransportSnapshot(
       taskId: current.taskId,
       status:
-          current.status == DownloadTransportStatus.queued ||
-              current.status == DownloadTransportStatus.held
+          bytesPerSecond > 0 &&
+              (current.status == DownloadTransportStatus.queued ||
+                  current.status == DownloadTransportStatus.held)
           ? DownloadTransportStatus.running
           : current.status,
       progress: current.progress,
