@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'background_downloader_gateway.dart';
+import 'download_continued_processing_v2.dart';
 import 'download_integrity_verifier_v2.dart';
 import 'download_source_resolver_v2.dart';
 import 'download_v2_diagnostics.dart';
@@ -60,6 +61,8 @@ final class DownloadManagerV2 {
     required DownloadSourceResolverV2 sourceResolver,
     DownloadIntegrityVerifierV2? integrityVerifier,
     DownloadDiagnosticsV2? diagnostics,
+    Iterable<DownloadPresentationObserverV2> presentationObservers =
+        const <DownloadPresentationObserverV2>[],
     int Function()? nowMillis,
   }) : _store = store,
        _gateway = gateway,
@@ -67,6 +70,10 @@ final class DownloadManagerV2 {
        _integrityVerifier =
            integrityVerifier ?? const DownloadIntegrityVerifierV2(),
        _diagnostics = diagnostics ?? const NoopDownloadDiagnosticsV2(),
+       _presentationObservers =
+           List<DownloadPresentationObserverV2>.unmodifiable(
+             presentationObservers,
+           ),
        _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final LogicalDownloadStoreV2 _store;
@@ -74,6 +81,7 @@ final class DownloadManagerV2 {
   final DownloadSourceResolverV2 _sourceResolver;
   final DownloadIntegrityVerifierV2 _integrityVerifier;
   final DownloadDiagnosticsV2 _diagnostics;
+  final List<DownloadPresentationObserverV2> _presentationObservers;
   final int Function() _nowMillis;
 
   final _commands = _KeyedCommandQueue<DownloadLogicalId>();
@@ -86,6 +94,8 @@ final class DownloadManagerV2 {
       <DownloadLogicalId, int>{};
   final Map<DownloadLogicalId, DownloadUserIntent> _currentIntents =
       <DownloadLogicalId, DownloadUserIntent>{};
+  final Map<DownloadLogicalId, LogicalDownloadRecordV2> _recordsByLogicalId =
+      <DownloadLogicalId, LogicalDownloadRecordV2>{};
   final Map<DownloadLogicalId, DownloadTransportSnapshot> _snapshots =
       <DownloadLogicalId, DownloadTransportSnapshot>{};
   final Map<String, DownloadTransportHandle> _handlesByTaskId =
@@ -670,6 +680,7 @@ final class DownloadManagerV2 {
   }
 
   void _rememberRecord(LogicalDownloadRecordV2 record) {
+    _recordsByLogicalId[record.logicalId] = record;
     _currentTaskIds[record.logicalId] = record.taskId;
     _currentGenerations[record.logicalId] = record.generation;
     _currentIntents[record.logicalId] = record.intent;
@@ -910,6 +921,24 @@ final class DownloadManagerV2 {
         integrityResult: integrityResult,
       ),
     );
+    final record = _recordsByLogicalId[logicalId];
+    if (record != null && record.taskId == snapshot.taskId) {
+      for (final observer in _presentationObservers) {
+        unawaited(_observePresentation(observer, record, snapshot));
+      }
+    }
+  }
+
+  Future<void> _observePresentation(
+    DownloadPresentationObserverV2 observer,
+    LogicalDownloadRecordV2 record,
+    DownloadTransportSnapshot snapshot,
+  ) async {
+    try {
+      await observer.observe(record, snapshot);
+    } catch (_) {
+      // Presentation must never become a transport/lifecycle failure source.
+    }
   }
 
   DownloadV2IntegrityResult _diagnosticIntegrityResult(String? reason) {
@@ -935,6 +964,10 @@ final class DownloadManagerV2 {
       await subscription.cancel();
     }
     _subscriptionsByTaskId.clear();
+    for (final observer in _presentationObservers) {
+      await observer.dispose();
+    }
+    _recordsByLogicalId.clear();
     await _recordChanges.close();
   }
 }
