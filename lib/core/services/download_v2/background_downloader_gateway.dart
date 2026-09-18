@@ -249,7 +249,7 @@ Future<DownloadTask> packageTaskForV2(
     headers: spec.headers,
     directory: directory,
     baseDirectory: baseDirectory,
-    group: kDownloadV2PackageGroup,
+    group: group,
     displayName: filename,
     transferHints: transferHints,
     updates: Updates.statusAndProgress,
