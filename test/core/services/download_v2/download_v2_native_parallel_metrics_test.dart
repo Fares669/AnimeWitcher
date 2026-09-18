@@ -37,13 +37,29 @@ void main() {
 
     final v2Bridge = source.substring(start, end);
     expect(v2Bridge, contains('if !isAppInForeground()'));
-    expect(v2Bridge, contains('DownloadContinuedProcessingManager.shared.update('));
+    expect(
+      v2Bridge,
+      contains('DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent('),
+    );
     expect(
       v2Bridge,
       isNot(contains('promoteMultipart')),
       reason:
           'Background overlay refresh is presentation-only; V2 native code '
           'must not gain transport ownership.',
+    );
+  });
+
+
+  test('native overlay refresh rejects stale V2 generations', () {
+    final source = File(
+      'ios/Runner/DownloadContinuedProcessingManager.swift',
+    ).readAsStringSync();
+    expect(source, contains('func updateFromNativeIfCurrent('));
+    expect(
+      source,
+      contains('guard taskId == currentEpisodeTaskId'),
+      reason: 'Late native child callbacks must not switch the system overlay.',
     );
   });
 }
