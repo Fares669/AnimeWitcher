@@ -83,14 +83,27 @@ final downloadIntegrityVerifierV2Provider =
 /// [DownloadManagerV2.initialize] is the single application startup hook for
 /// V2; individual screens do not create their own managers or gateways.
 final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
-  final manager = DownloadManagerV2(
+  late final DownloadManagerV2 manager;
+  final continuedProcessing = IosDownloadContinuedProcessingObserverV2(
+    onNativeNetworkSpeed:
+        ({
+          required String taskId,
+          required double bytesPerSecond,
+        }) {
+          manager.observeNativeNetworkSpeed(
+            taskId: taskId,
+            bytesPerSecond: bytesPerSecond,
+          );
+        },
+  );
+  manager = DownloadManagerV2(
     store: ref.read(logicalDownloadStoreV2Provider),
     gateway: ref.read(backgroundDownloaderGatewayV2Provider),
     sourceResolver: ref.read(downloadSourceResolverV2Provider),
     integrityVerifier: ref.read(downloadIntegrityVerifierV2Provider),
     diagnostics: ref.read(downloadDiagnosticsV2Provider),
     presentationObservers: <DownloadPresentationObserverV2>[
-      IosDownloadContinuedProcessingObserverV2(),
+      continuedProcessing,
     ],
     maxConcurrentDownloads: () =>
         ref.read(settingsRepositoryProvider).getDownloadConcurrency(),
