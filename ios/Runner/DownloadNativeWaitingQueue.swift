@@ -352,6 +352,8 @@ enum DownloadNativeWaitingQueue {
   static let terminalObservation = DownloadTerminalObservation()
   private static var multipartChildSamples: [String: [String: RunningSample]] = [:]
   private static var lastMultipartOverlayTimes: [String: CFAbsoluteTime] = [:]
+  private static var v2ParallelChildSamples: [String: [String: RunningSample]] = [:]
+  private static var lastV2ParallelOverlayTimes: [String: CFAbsoluteTime] = [:]
   private static var latestDownloadSession: URLSession?
   private static var multipartPromotionParents = Set<String>()
   private static let chunkBridgeInterval: CFTimeInterval = 1.0
@@ -1892,6 +1894,12 @@ enum DownloadNativeWaitingQueue {
     }
 
     let now = CFAbsoluteTimeGetCurrent()
+    let appIsBackground = !isAppInForeground()
+    var aggregateWritten: Int64 = 0
+    var aggregateExpected: Int64 = 0
+    var aggregateSpeed = 0.0
+    var shouldUpdateNativeOverlay = false
+
     lock.lock()
     let speed: Double
     if completed {
@@ -1906,6 +1914,50 @@ enum DownloadNativeWaitingQueue {
       )
     } else {
       speed = 0
+    }
+
+    var children = v2ParallelChildSamples[parentId] ?? [:]
+    var sample = children[task.taskId] ?? RunningSample(
+      written: 0,
+      expected: expected > 0 ? expected : -1,
+      speed: 0,
+      displayName: ""
+    )
+    if written >= 0 {
+      // Native resume can restart a child's local counter. System-overlay
+      // presentation stays monotonic while background_downloader owns the
+      // actual resume decision and bytes.
+      sample.written = max(sample.written, written)
+    }
+    if expected > 0 {
+      sample.expected = max(sample.expected, expected)
+    }
+    if let normalized, normalized >= 0.999_999, sample.expected > 0 {
+      sample.written = sample.expected
+    }
+    if completed {
+      sample.speed = 0
+    } else if speed > 0, speed.isFinite {
+      sample.speed = speed
+    }
+    children[task.taskId] = sample
+    v2ParallelChildSamples[parentId] = children
+
+    aggregateWritten = children.values.reduce(Int64(0)) {
+      $0 + max($1.written, 0)
+    }
+    aggregateExpected = children.values.reduce(Int64(0)) {
+      $0 + ($1.expected > 0 ? $1.expected : 0)
+    }
+    aggregateSpeed = children.values.reduce(0.0) {
+      $0 + ($1.speed.isFinite && $1.speed > 0 ? $1.speed : 0)
+    }
+    let lastOverlay = lastV2ParallelOverlayTimes[parentId] ?? 0
+    shouldUpdateNativeOverlay = appIsBackground
+      && ((normalized ?? 0) >= 0.999_999
+        || now - lastOverlay >= chunkBridgeInterval)
+    if shouldUpdateNativeOverlay {
+      lastV2ParallelOverlayTimes[parentId] = now
     }
     lock.unlock()
 
@@ -1936,12 +1988,36 @@ enum DownloadNativeWaitingQueue {
       userInfo: values
     )
 
+    // Dart owns foreground presentation. During iOS background URLSession
+    // wake-ups the Flutter isolate can be suspended, so update the already
+    // created system overlay directly from the supported native callback.
+    if !isAppInForeground() && shouldUpdateNativeOverlay {
+      let aggregateProgress: Double? = aggregateExpected > 0
+        ? min(max(Double(aggregateWritten) / Double(aggregateExpected), 0), 1)
+        : nil
+      runOnMainActor {
+        if #available(iOS 26.0, *) {
+          _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
+            taskId: parentId,
+            progress: aggregateProgress,
+            totalBytesHint: aggregateExpected,
+            transferredBytes: aggregateWritten,
+            speedBytesPerSecond: aggregateSpeed
+          )
+        }
+      }
+    }
+
     if !completed, written >= 0 {
       let observedAt = now
       let childId = task.taskId
       DispatchQueue.global(qos: .utility).asyncAfter(
         deadline: .now() + speedStaleInterval
       ) {
+        var staleAggregateWritten: Int64 = 0
+        var staleAggregateExpected: Int64 = 0
+        var staleAggregateSpeed = 0.0
+
         lock.lock()
         guard let last = chunkSpeedWindows[childId]?.last,
               last.time <= observedAt + 0.000_001,
@@ -1951,6 +2027,21 @@ enum DownloadNativeWaitingQueue {
           return
         }
         chunkSpeedWindows[childId] = nil
+        if var children = v2ParallelChildSamples[parentId],
+           var sample = children[childId] {
+          sample.speed = 0
+          children[childId] = sample
+          v2ParallelChildSamples[parentId] = children
+          staleAggregateWritten = children.values.reduce(Int64(0)) {
+            $0 + max($1.written, 0)
+          }
+          staleAggregateExpected = children.values.reduce(Int64(0)) {
+            $0 + ($1.expected > 0 ? $1.expected : 0)
+          }
+          staleAggregateSpeed = children.values.reduce(0.0) {
+            $0 + ($1.speed.isFinite && $1.speed > 0 ? $1.speed : 0)
+          }
+        }
         lock.unlock()
 
         // Unlike a missing speed field, explicit zero means this child has
@@ -1965,6 +2056,29 @@ enum DownloadNativeWaitingQueue {
             "speedBytesPerSecond": 0.0,
           ]
         )
+
+        if !isAppInForeground() {
+          let staleProgress: Double? = staleAggregateExpected > 0
+            ? min(
+                max(
+                  Double(staleAggregateWritten) / Double(staleAggregateExpected),
+                  0
+                ),
+                1
+              )
+            : nil
+          runOnMainActor {
+            if #available(iOS 26.0, *) {
+              _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
+                taskId: parentId,
+                progress: staleProgress,
+                totalBytesHint: staleAggregateExpected,
+                transferredBytes: staleAggregateWritten,
+                speedBytesPerSecond: staleAggregateSpeed
+              )
+            }
+          }
+        }
       }
     }
     return true
@@ -2034,6 +2148,23 @@ enum DownloadNativeWaitingQueue {
       progress: normalized,
       completed: false
     ) {
+      return
+    }
+
+    // V2 parent progress is observation-only and must not depend on the
+    // retired native transport-promotion capability. This keeps the iOS 26
+    // system task fresh while Dart is suspended, including single-part files.
+    if id.hasPrefix("aw_v2_") {
+      if !isAppInForeground() {
+        runOnMainActor {
+          if #available(iOS 26.0, *) {
+            _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
+              taskId: id,
+              progress: normalized
+            )
+          }
+        }
+      }
       return
     }
 
