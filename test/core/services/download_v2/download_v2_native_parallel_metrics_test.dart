@@ -20,4 +20,30 @@ void main() {
       reason: 'V2 native callbacks are metrics only, never transport ownership.',
     );
   });
+
+  test('iOS V2 native child progress keeps system overlay live in background', () {
+    final source = File(
+      'ios/Runner/DownloadNativeWaitingQueue.swift',
+    ).readAsStringSync();
+    final start = source.indexOf(
+      'private static func postV2ParallelChunkMetric',
+    );
+    final end = source.indexOf(
+      'private static func handleSupportedPluginStatus',
+      start,
+    );
+    expect(start, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(start));
+
+    final v2Bridge = source.substring(start, end);
+    expect(v2Bridge, contains('if !isAppInForeground()'));
+    expect(v2Bridge, contains('upsertSessionOverlay('));
+    expect(
+      v2Bridge,
+      isNot(contains('promoteMultipart')),
+      reason:
+          'Background overlay refresh is presentation-only; V2 native code '
+          'must not gain transport ownership.',
+    );
+  });
 }
