@@ -24,6 +24,33 @@ void main() {
     );
   });
 
+  test('startup waits for paused transport settlement before completing', () async {
+    final f = await _startupFixture(
+      intent: DownloadUserIntent.paused,
+      hasExactHandle: true,
+    );
+    final handle = f.gateway.handleFor(f.record.taskId)!;
+    handle.onPause = () async => true;
+
+    var initialized = false;
+    final initializeFuture = f.manager.initialize().whenComplete(() {
+      initialized = true;
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(handle.pauseCalls, 1);
+    expect(initialized, isFalse);
+
+    handle.emitStatus(DownloadTransportStatus.paused);
+    await initializeFuture;
+
+    expect(initialized, isTrue);
+    expect(
+      f.manager.snapshotFor(f.logicalId)?.status,
+      DownloadTransportStatus.paused,
+    );
+  });
+
   test('startup never recreates canceled intent', () async {
     final f = await _startupFixture(intent: DownloadUserIntent.canceled);
 
@@ -339,6 +366,7 @@ final class _StartupHandle implements DownloadTransportHandle {
   DownloadTransportSnapshot _current;
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
+  Future<bool> Function()? onPause;
   int pauseCalls = 0;
 
   @override
@@ -353,12 +381,19 @@ final class _StartupHandle implements DownloadTransportHandle {
   @override
   Future<bool> pause() async {
     pauseCalls++;
+    final override = onPause;
+    if (override != null) return override();
+    emitStatus(DownloadTransportStatus.paused);
+    return true;
+  }
+
+  void emitStatus(DownloadTransportStatus status) {
     _current = DownloadTransportSnapshot(
       taskId: taskId,
-      status: DownloadTransportStatus.paused,
+      status: status,
       progress: _current.progress,
     );
-    return true;
+    _controller.add(_current);
   }
 
   @override
