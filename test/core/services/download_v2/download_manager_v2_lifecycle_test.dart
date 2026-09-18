@@ -81,6 +81,32 @@ void main() {
     );
   });
 
+  test('parallel parent progress does not erase native speed', () async {
+    final f = _fixture();
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(taskId)!;
+
+    f.manager.observeNativeNetworkSpeed(
+      taskId: taskId,
+      bytesPerSecond: 4_500_000,
+    );
+    handle.emitSnapshot(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: 0.5,
+        transferredBytes: 50,
+        totalBytes: 100,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final snapshot = f.manager.snapshotFor(f.request.logicalId);
+    expect(snapshot?.progress, 0.5);
+    expect(snapshot?.networkSpeedMBps, 4.5);
+  });
+
   test('pause waits for package paused state before allowing exact resume', () async {
     final f = _fixture();
     await f.manager.start(f.request);
@@ -572,11 +598,17 @@ final class _FakeHandle implements DownloadTransportHandle {
   }
 
   void emit(DownloadTransportStatus status) {
-    _current = DownloadTransportSnapshot(
-      taskId: taskId,
-      status: status,
-      progress: status == DownloadTransportStatus.complete ? 1 : 0.5,
+    emitSnapshot(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: status,
+        progress: status == DownloadTransportStatus.complete ? 1 : 0.5,
+      ),
     );
+  }
+
+  void emitSnapshot(DownloadTransportSnapshot snapshot) {
+    _current = snapshot;
     _controller.add(_current);
   }
 }
