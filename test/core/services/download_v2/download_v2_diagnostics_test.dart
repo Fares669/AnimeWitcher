@@ -14,6 +14,10 @@ void main() {
       taskId: 'aw_v2_parent_g2',
       status: DownloadTransportStatus.failed,
       progress: 0.5,
+      transferredBytes: 50,
+      totalBytes: 100,
+      networkSpeedMBps: 3.25,
+      timeRemainingSeconds: 15,
       failureCategory: DownloadFailureCategory.sourceExpired,
       holdCategory: DownloadV2HoldCategory.packageHeld,
       sourceRefreshReason: DownloadV2SourceRefreshReason.authorizationExpired,
@@ -31,12 +35,21 @@ void main() {
         'taskId',
         'status',
         'progress',
+        'transferredBytes',
+        'totalBytes',
+        'networkSpeedMBps',
+        'timeRemainingSeconds',
         'failureCategory',
         'holdCategory',
         'sourceRefreshReason',
         'integrityResult',
       }),
     );
+    expect(json['transferredBytes'], 50);
+    expect(json['totalBytes'], 100);
+    expect(json['networkSpeedMBps'], 3.25);
+    expect(json['timeRemainingSeconds'], 15);
+
     for (final forbidden in <String>[
       '"url"',
       'token=',
