@@ -63,6 +63,94 @@ void main() {
     expect(f.resolver.calls, 1);
   });
 
+  test('resume refuses duplicate paused owners of one canonical destination', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _FakeGateway();
+    final resolver = StaticSourceResolverV2();
+    const destination = 'downloads/anime/shared-episode.mp4';
+
+    final firstId = logicalDownloadIdFor(
+      animeId: 'anilist:21',
+      episodeKey: '12',
+      variantKey: 'sub:1080p',
+    );
+    final secondId = logicalDownloadIdFor(
+      animeId: 'anilist:22',
+      episodeKey: '13',
+      variantKey: 'sub:1080p',
+    );
+    final firstTaskId = taskIdForGeneration(firstId, 1);
+    final secondTaskId = taskIdForGeneration(secondId, 1);
+
+    for (final record in <LogicalDownloadRecordV2>[
+      LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2,
+        logicalId: firstId,
+        animeId: 'anilist:21',
+        episodeKey: '12',
+        variantKey: 'sub:1080p',
+        generation: 1,
+        taskId: firstTaskId,
+        intent: DownloadUserIntent.paused,
+        destinationPath: destination,
+        sourceDescriptor: const <String, Object?>{
+          'providerId': 'provider.example',
+        },
+        allowPause: true,
+        retries: 2,
+        parallelChunks: 1,
+        updatedAtMillis: 1,
+      ),
+      LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2,
+        logicalId: secondId,
+        animeId: 'anilist:22',
+        episodeKey: '13',
+        variantKey: 'sub:1080p',
+        generation: 1,
+        taskId: secondTaskId,
+        intent: DownloadUserIntent.paused,
+        destinationPath: destination,
+        sourceDescriptor: const <String, Object?>{
+          'providerId': 'provider.example',
+        },
+        allowPause: true,
+        retries: 2,
+        parallelChunks: 1,
+        updatedAtMillis: 2,
+      ),
+    ]) {
+      await store.put(record);
+      await gateway.start(
+        DownloadTaskSpecV2(
+          taskId: record.taskId,
+          url: 'https://example.invalid/video.mp4',
+          destinationPath: destination,
+          headers: const <String, String>{},
+          allowPause: true,
+          retries: 2,
+          parallelChunks: 1,
+        ),
+      );
+      gateway.emit(record.taskId, DownloadTransportStatus.paused);
+    }
+
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+    );
+    addTearDown(manager.dispose);
+    await manager.initialize();
+
+    await expectLater(manager.resume(firstId), throwsStateError);
+
+    expect(gateway.handleFor(firstTaskId)!.resumeCalls, 0);
+    expect(gateway.handleFor(secondTaskId)!.resumeCalls, 0);
+    expect((await store.get(firstId))?.intent, DownloadUserIntent.paused);
+    expect((await store.get(secondId))?.intent, DownloadUserIntent.paused);
+  });
+
   test('non-resumable pause cancels transport but retains paused intent', () async {
     final f = _fixture();
     await f.manager.start(f.request);
