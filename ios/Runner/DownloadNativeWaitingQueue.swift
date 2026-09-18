@@ -1931,6 +1931,38 @@ enum DownloadNativeWaitingQueue {
       object: nil,
       userInfo: values
     )
+
+    if !completed, written >= 0 {
+      let observedAt = now
+      let childId = task.taskId
+      DispatchQueue.global(qos: .utility).asyncAfter(
+        deadline: .now() + speedStaleInterval
+      ) {
+        lock.lock()
+        guard let last = chunkSpeedWindows[childId]?.last,
+              last.time <= observedAt + 0.000_001,
+              CFAbsoluteTimeGetCurrent() - last.time >= speedStaleInterval
+        else {
+          lock.unlock()
+          return
+        }
+        chunkSpeedWindows[childId] = nil
+        lock.unlock()
+
+        // Unlike a missing speed field, explicit zero means this child has
+        // produced no bytes for the stale interval.
+        NotificationCenter.default.post(
+          name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
+          object: nil,
+          userInfo: [
+            "parentTaskId": parentId,
+            "chunkTaskId": childId,
+            "completed": false,
+            "speedBytesPerSecond": 0.0,
+          ]
+        )
+      }
+    }
     return true
   }
 
