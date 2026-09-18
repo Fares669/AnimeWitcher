@@ -122,7 +122,8 @@ final class DownloadManagerV2 {
     for (final record in records) {
       _rememberRecord(record);
 
-      if (record.completedAtMillis != null) {
+      try {
+        if (record.completedAtMillis != null) {
         final file = await _destinationFile(record.destinationPath);
         final result = await _integrityVerifier.verify(
           file,
@@ -232,6 +233,20 @@ final class DownloadManagerV2 {
               lookUpPreviousHandle: false,
             );
           }
+        }
+      } catch (_) {
+        final current = await _store.get(record.logicalId) ?? record;
+        _rememberRecord(current);
+        final failed = DownloadTransportSnapshot(
+          taskId: current.taskId,
+          status: DownloadTransportStatus.failed,
+          progress: _snapshots[current.logicalId]?.progress ?? 0,
+          totalBytes: current.expectedBytes,
+          failureCategory: DownloadFailureCategory.unknown,
+          failureMessage: 'startup recovery failed',
+        );
+        _snapshots[current.logicalId] = failed;
+        _recordDiagnostic(current.logicalId, failed);
       }
     }
     await _publishRecords();
