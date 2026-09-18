@@ -169,6 +169,14 @@ Feature acceptance retained:
 - The V2 diagnostic schema currently omits throughput/ETA, so the screenshot's persistent “calculating” speed cannot be root-caused from the existing JSONL alone.
 - The iOS 26 continued-processing/Dynamic-Island code still exists natively, but normal V2 production flow no longer drives the Dart continued-processing bridge; it must remain observation-only and never regain retry/queue transport ownership.
 
+
+**Second real-iOS Preview evidence (2026-09-18, `download_v2(1).jsonl` + episode-list screenshot):**
+- The system download UI now receives real throughput/byte values (for example the screenshot shows `59KB/s • 474KB/62MB`), so the Transfer metric plumbing itself is active.
+- The episode card still displayed the legacy download icon during an active V2 download. Root cause: `EpisodeCard` still watched V1 `activeDownloadsProvider/downloadProgressProvider`; V2 never publishes into those maps. Fixed by routing the card to V2 `downloadsProvider` + logical progress projection (`c6c9557`).
+- One parallel transfer (`dl_c67de3d81c442edc8ab36af314ac8663`) stayed projected `queued` at 0 for ~52 seconds, then immediately after Pause emitted already-accumulated progress from ~0% to 31.2%, 43.7%, 50.2%, and 56.5%. This proves at least part of the apparent “starts after pause” behavior is stale parent presentation, not a second app transport start.
+- Upstream `background_downloader 9.6.2` iOS `ParallelDownloader.parentTaskStatus()` reports parent `running` only when exactly one chunk is running. With multiple active chunks the parent can remain `enqueued` while bytes move. V2 now projects an `enqueued` parent with real 0<progress<1 as `running` without changing raw pause/resume state or package ownership (`c3ef64f`).
+- RED coverage proved the stale-parent bug (`Expected running / Actual queued`) before the projection fix, and a separate architectural guard proved the episode card was still bound to V1 state.
+
 **Required acceptance — device bugs:**
 - [x] RED regression: a paused package transfer whose direct package resume cannot recover must not publish/start a replacement until the obsolete transfer is demonstrably settled; replacement then reaches a runnable package state rather than remaining a zero-progress queued zombie.
 - [x] Resume success keeps the exact generation/task and preserves package resume bytes; fallback-to-fresh-generation starts from byte zero only when package resume is unavailable.
