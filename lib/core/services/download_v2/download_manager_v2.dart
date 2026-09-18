@@ -112,6 +112,8 @@ final class DownloadManagerV2 {
   final Map<String, StreamSubscription<DownloadTransportSnapshot>>
   _subscriptionsByTaskId =
       <String, StreamSubscription<DownloadTransportSnapshot>>{};
+  final Set<DownloadLogicalId> _parallelPausePending =
+      <DownloadLogicalId>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
       StreamController<List<LogicalDownloadRecordV2>>.broadcast();
 
@@ -439,27 +441,35 @@ final class DownloadManagerV2 {
 
       final handle = await _exactHandle(record.taskId);
       DownloadTransportSnapshot? settledPause;
-      if (handle != null && !handle.current.isFinal) {
-        settledPause = await _pauseHandleAndSettle(handle);
-      }
-
-      final packagePause =
-          settledPause ?? handle?.current ?? _snapshots[logicalId];
       final readiness = _parallelPauseReadiness;
-      if (record.parallelChunks > 1 &&
-          readiness != null &&
-          packagePause?.status == DownloadTransportStatus.paused) {
-        final ready = await readiness.waitUntilReady(
-          taskId: record.taskId,
-          expectedChildren: record.parallelChunks,
-          timeout: const Duration(seconds: 15),
-        );
-        if (!ready) {
-          throw StateError(
-            'Download parts did not finish pausing; '
-            'the download was not exposed as safely paused',
-          );
+      final waitsForParallelChildren =
+          record.parallelChunks > 1 && readiness != null;
+      if (waitsForParallelChildren) {
+        _parallelPausePending.add(logicalId);
+      }
+      try {
+        if (handle != null && !handle.current.isFinal) {
+          settledPause = await _pauseHandleAndSettle(handle);
         }
+
+        final packagePause =
+            settledPause ?? handle?.current ?? _snapshots[logicalId];
+        if (waitsForParallelChildren &&
+            packagePause?.status == DownloadTransportStatus.paused) {
+          final ready = await readiness.waitUntilReady(
+            taskId: record.taskId,
+            expectedChildren: record.parallelChunks,
+            timeout: const Duration(seconds: 15),
+          );
+          if (!ready) {
+            throw StateError(
+              'Download parts did not finish pausing; '
+              'the download was not exposed as safely paused',
+            );
+          }
+        }
+      } finally {
+        _parallelPausePending.remove(logicalId);
       }
 
       _rememberRecord(pausedRecord);
@@ -1402,6 +1412,10 @@ final class DownloadManagerV2 {
     DownloadTransportSnapshot snapshot,
   ) {
     if (_currentTaskIds[logicalId] != snapshot.taskId) return false;
+    if (_parallelPausePending.contains(logicalId) &&
+        snapshot.status == DownloadTransportStatus.paused) {
+      return false;
+    }
 
     var accepted = snapshot;
     final record = _recordsByLogicalId[logicalId];
