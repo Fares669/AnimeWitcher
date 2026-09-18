@@ -243,16 +243,17 @@ final class DownloadManagerV2 {
             record.logicalId,
             () => _requestFromRecord(record),
           );
+          DownloadTransportSnapshot? settledPause;
           if (exactHandle != null) {
             if (!exactHandle.current.isFinal &&
                 exactHandle.current.status != DownloadTransportStatus.paused) {
-              final paused = await exactHandle.pause();
-              if (!paused) await exactHandle.cancel();
+              settledPause = await _pauseHandleAndSettle(exactHandle);
             }
             _activateHandle(record.logicalId, exactHandle);
           }
           final projected = _snapshotWithStatus(
-            exactHandle?.current ??
+            settledPause ??
+                exactHandle?.current ??
                 DownloadTransportSnapshot(
                   taskId: record.taskId,
                   status: DownloadTransportStatus.missing,
