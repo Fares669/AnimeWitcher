@@ -148,6 +148,15 @@ void main() {
 
     await manager.start(request);
     final taskId = gateway.startedSpecs.single.taskId;
+    gateway.handleFor(taskId)!.emitSnapshot(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: 0.5,
+        transferredBytes: 500,
+        totalBytes: 1000,
+      ),
+    );
 
     expect(
       () => manager.observeNativeNetworkSpeed(
