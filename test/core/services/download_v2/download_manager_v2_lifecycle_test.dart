@@ -255,6 +255,7 @@ void main() {
     await f.manager.pause(f.request.logicalId);
     f.gateway.emit(firstTaskId, DownloadTransportStatus.paused);
     handle.onResume = () async => false;
+    handle.onCancel = () async => true;
 
     final resumeFuture = f.manager.resume(f.request.logicalId);
     await Future<void>.delayed(Duration.zero);
