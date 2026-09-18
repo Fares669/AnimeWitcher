@@ -41,14 +41,20 @@ final class NativeParallelSpeedAccumulatorV2 {
     if (completed) {
       children.remove(childTaskId);
     } else if (speedBytesPerSecond != null &&
-        speedBytesPerSecond.isFinite &&
-        speedBytesPerSecond > 0) {
-      children[childTaskId] = speedBytesPerSecond;
+        speedBytesPerSecond.isFinite) {
+      if (speedBytesPerSecond > 0) {
+        children[childTaskId] = speedBytesPerSecond;
+      } else if (speedBytesPerSecond == 0) {
+        // Native emits an explicit zero only after this child has produced no
+        // bytes for the stale window. Missing/null samples are different and
+        // intentionally keep the previous stable value.
+        children.remove(childTaskId);
+      }
     }
 
     if (children.isEmpty) {
       _childrenByParent.remove(parentTaskId);
-      return completed ? 0 : null;
+      return completed || speedBytesPerSecond == 0 ? 0 : null;
     }
     return children.values.fold<double>(0, (sum, speed) => sum + speed);
   }
@@ -83,7 +89,7 @@ DownloadContinuedProcessingService _newV2ContinuedProcessingService(
             speedBytesPerSecond: speedBytesPerSecond,
             completed: completed,
           );
-          if (aggregate == null || aggregate <= 0) return;
+          if (aggregate == null) return;
           onNativeNetworkSpeed?.call(
             taskId: parentTaskId,
             bytesPerSecond: aggregate,
