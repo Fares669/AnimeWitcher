@@ -17,10 +17,10 @@ void main() {
     );
     expect(
       source,
-      contains('_downloader.resume(transfer.task)'),
+      contains('_downloader.resume(task)'),
       reason:
-          'V2 exact resume must use the package lower-level resume path used '
-          'by SkyStream and background_downloader parallel resume tests.',
+          'V2 exact resume must use the package lower-level resume-only path '
+          'used by SkyStream and background_downloader parallel resume tests.',
     );
   });
 }
