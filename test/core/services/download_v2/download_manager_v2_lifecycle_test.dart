@@ -219,7 +219,7 @@ void main() {
     );
   });
 
-  test('parallel resume waits for every child pause observation', () async {
+  test('parallel resume reuses confirmed child pause observations', () async {
     final readiness = NativeParallelPauseReadinessV2();
     final f = _fixture(
       parallelChunks: 2,
@@ -229,10 +229,7 @@ void main() {
     final taskId = f.gateway.startedSpecs.single.taskId;
     final handle = f.gateway.handleFor(taskId)!;
 
-    await f.manager.pause(f.request.logicalId);
-    f.gateway.emit(taskId, DownloadTransportStatus.paused);
-
-    final resumeFuture = f.manager.resume(f.request.logicalId);
+    final pauseFuture = f.manager.pause(f.request.logicalId);
     await Future<void>.delayed(Duration.zero);
     expect(handle.resumeCalls, 0);
 
@@ -241,15 +238,14 @@ void main() {
       childTaskId: 'child-1',
       statusOrdinal: TaskStatus.paused.index,
     );
-    await Future<void>.delayed(Duration.zero);
-    expect(handle.resumeCalls, 0);
-
     readiness.observe(
       parentTaskId: taskId,
       childTaskId: 'child-2',
       statusOrdinal: TaskStatus.paused.index,
     );
-    await resumeFuture;
+    await pauseFuture;
+
+    await f.manager.resume(f.request.logicalId);
 
     expect(handle.resumeCalls, 1);
     expect(f.gateway.startedSpecs, hasLength(1));
