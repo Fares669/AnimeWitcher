@@ -134,11 +134,25 @@ final class DownloadManagerV2 {
     };
     _handlesByTaskId.addAll(byTaskId);
 
-    final records = await _store.all();
+    final records = await _store.all()
+      ..sort((a, b) => a.updatedAtMillis.compareTo(b.updatedAtMillis));
+    final startupDestinationOwners = <String, DownloadLogicalId>{};
     for (final record in records) {
       _rememberRecord(record);
 
       try {
+        var duplicateStartupDestination = false;
+        if (record.intent != DownloadUserIntent.canceled) {
+          final destinationKey = await _canonicalDestinationPath(
+            record.destinationPath,
+          );
+          final owner = startupDestinationOwners[destinationKey];
+          if (owner == null) {
+            startupDestinationOwners[destinationKey] = record.logicalId;
+          } else if (owner != record.logicalId) {
+            duplicateStartupDestination = true;
+          }
+        }
         if (record.completedAtMillis != null) {
         final file = await _destinationFile(record.destinationPath);
         final result = await _integrityVerifier.verify(
@@ -189,6 +203,40 @@ final class DownloadManagerV2 {
       }
 
       final exactHandle = byTaskId[record.taskId];
+      if (duplicateStartupDestination &&
+          record.intent == DownloadUserIntent.active) {
+        final pausedRecord = record.copyWith(
+          intent: DownloadUserIntent.paused,
+          awaitingAdmission: false,
+          updatedAtMillis: _nowMillis(),
+        );
+        await _store.put(pausedRecord);
+        _rememberRecord(pausedRecord);
+        _requests.putIfAbsent(
+          pausedRecord.logicalId,
+          () => _requestFromRecord(pausedRecord),
+        );
+
+        DownloadTransportSnapshot? settled;
+        if (exactHandle != null && !exactHandle.current.isFinal) {
+          settled = await _pauseHandleAndSettle(exactHandle);
+        }
+        final projected = _snapshotWithStatus(
+          settled ??
+              exactHandle?.current ??
+              DownloadTransportSnapshot(
+                taskId: pausedRecord.taskId,
+                status: DownloadTransportStatus.missing,
+                progress: 0,
+                totalBytes: pausedRecord.expectedBytes,
+              ),
+          DownloadTransportStatus.paused,
+        );
+        _snapshots[pausedRecord.logicalId] = projected;
+        _recordDiagnostic(pausedRecord.logicalId, projected);
+        continue;
+      }
+
       switch (record.intent) {
         case DownloadUserIntent.paused:
           _requests.putIfAbsent(
