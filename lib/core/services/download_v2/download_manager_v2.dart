@@ -1032,8 +1032,9 @@ final class DownloadManagerV2 {
     DownloadTransportHandle handle, {
     required bool cancelEvenIfFinal,
   }) async {
-    if (handle.current.isFinal) {
-      if (cancelEvenIfFinal) {
+    if (handle.current.isFinal ||
+        handle.current.status == DownloadTransportStatus.missing) {
+      if (cancelEvenIfFinal && handle.current.isFinal) {
         await handle.cancel();
       }
       return;
@@ -1041,7 +1042,9 @@ final class DownloadManagerV2 {
 
     final settled = Completer<void>();
     final subscription = handle.snapshots.listen((snapshot) {
-      if (snapshot.isFinal && !settled.isCompleted) {
+      if ((snapshot.isFinal ||
+              snapshot.status == DownloadTransportStatus.missing) &&
+          !settled.isCompleted) {
         settled.complete();
       }
     });
