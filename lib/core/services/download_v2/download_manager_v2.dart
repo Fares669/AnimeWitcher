@@ -461,24 +461,302 @@ final class DownloadManagerV2 {
     final destinationKey = await _canonicalDestinationPath(
       request.destinationPath,
     );
-    return _destinationCommands.run(destinationKey, () async {
-      final conflict = await _findDestinationConflict(
-        destinationKey,
-        request.logicalId,
-      );
-      if (conflict != null) {
-        throw StateError(
-          'Canonical destination is already owned by ${conflict.logicalId}',
+    return _destinationCommands.run(destinationKey, () {
+      return _admissionCommands.run('episodes', () async {
+        final conflict = await _findDestinationConflict(
+          destinationKey,
+          request.logicalId,
         );
-      }
-      return _startFreshGenerationUnsafe(
-        request,
-        previous,
-        cancelPreviousEvenIfFinal: cancelPreviousEvenIfFinal,
-        previousHandle: previousHandle,
-        lookUpPreviousHandle: lookUpPreviousHandle,
-      );
+        if (conflict != null) {
+          throw StateError(
+            'Canonical destination is already owned by ${conflict.logicalId}',
+          );
+        }
+
+        if (!await _hasAdmissionSlot(excluding: request.logicalId)) {
+          return _queueFreshGenerationUnsafe(
+            request,
+            previous,
+            cancelPreviousEvenIfFinal: cancelPreviousEvenIfFinal,
+            previousHandle: previousHandle,
+            lookUpPreviousHandle: lookUpPreviousHandle,
+          );
+        }
+
+        return _startFreshGenerationUnsafe(
+          request,
+          previous,
+          cancelPreviousEvenIfFinal: cancelPreviousEvenIfFinal,
+          previousHandle: previousHandle,
+          lookUpPreviousHandle: lookUpPreviousHandle,
+        );
+      });
     });
+  }
+
+  Future<DownloadTransportSnapshot> _queueFreshGenerationUnsafe(
+    DownloadStartRequestV2 request,
+    LogicalDownloadRecordV2? previous, {
+    bool cancelPreviousEvenIfFinal = false,
+    DownloadTransportHandle? previousHandle,
+    bool lookUpPreviousHandle = true,
+  }) async {
+    if (previous != null &&
+        previous.intent == DownloadUserIntent.active &&
+        previous.awaitingAdmission) {
+      _rememberRecord(previous);
+      final existing =
+          _snapshots[request.logicalId] ??
+          DownloadTransportSnapshot(
+            taskId: previous.taskId,
+            status: DownloadTransportStatus.queued,
+            progress: 0,
+            totalBytes: previous.expectedBytes,
+            transferredBytes: previous.expectedBytes == null ? null : 0,
+          );
+      _snapshots[request.logicalId] = existing;
+      _recordDiagnostic(request.logicalId, existing);
+      return existing;
+    }
+
+    final obsoleteHandle = previous == null
+        ? null
+        : previousHandle ??
+              (lookUpPreviousHandle ? await _exactHandle(previous.taskId) : null);
+    if (obsoleteHandle != null &&
+        (cancelPreviousEvenIfFinal || !obsoleteHandle.current.isFinal)) {
+      await _settleObsoleteHandle(
+        obsoleteHandle,
+        cancelEvenIfFinal: cancelPreviousEvenIfFinal,
+      );
+    }
+
+    final generation = (previous?.generation ?? 0) + 1;
+    final taskId = taskIdForGeneration(request.logicalId, generation);
+    final queuedRecord = LogicalDownloadRecordV2(
+      schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: request.logicalId,
+      animeId: request.animeId,
+      episodeKey: request.episodeKey,
+      variantKey: request.variantKey,
+      generation: generation,
+      taskId: taskId,
+      intent: DownloadUserIntent.active,
+      destinationPath: request.destinationPath,
+      sourceDescriptor: Map<String, Object?>.from(request.sourceDescriptor),
+      expectedBytes: request.expectedBytes,
+      allowPause: request.allowPause,
+      retries: request.retries,
+      parallelChunks: request.parallelChunks,
+      awaitingAdmission: true,
+      updatedAtMillis: _nowMillis(),
+    );
+    await _store.put(queuedRecord);
+    _rememberRecord(queuedRecord);
+    await _publishRecords();
+
+    final queued = DownloadTransportSnapshot(
+      taskId: taskId,
+      status: DownloadTransportStatus.queued,
+      progress: 0,
+      totalBytes: request.expectedBytes,
+      transferredBytes: request.expectedBytes == null ? null : 0,
+    );
+    _snapshots[request.logicalId] = queued;
+    _recordDiagnostic(request.logicalId, queued);
+    return queued;
+  }
+
+  Future<bool> _hasAdmissionSlot({DownloadLogicalId? excluding}) async {
+    final limit = clampDownloadConcurrency(_maxConcurrentDownloads());
+    var occupied = 0;
+    for (final record in await _store.all()) {
+      if (record.logicalId == excluding ||
+          record.intent != DownloadUserIntent.active ||
+          record.awaitingAdmission ||
+          record.completedAtMillis != null) {
+        continue;
+      }
+
+      final snapshot = _snapshots[record.logicalId];
+      final reservesSlot = snapshot == null ||
+          snapshot.status == DownloadTransportStatus.queued ||
+          snapshot.status == DownloadTransportStatus.running ||
+          snapshot.status == DownloadTransportStatus.held ||
+          snapshot.status == DownloadTransportStatus.paused;
+      if (!reservesSlot) continue;
+      occupied++;
+      if (occupied >= limit) return false;
+    }
+    return true;
+  }
+
+  void _scheduleAdmissionPromotion() {
+    unawaited(_promoteAdmissions());
+  }
+
+  Future<void> reconcileAdmission() async {
+    await initialize();
+    await _promoteAdmissions();
+  }
+
+  Future<void> _promoteAdmissions() async {
+    while (true) {
+      final waiting = (await _store.all())
+          .where(
+            (record) =>
+                record.intent == DownloadUserIntent.active &&
+                record.awaitingAdmission,
+          )
+          .toList()
+        ..sort((a, b) => a.updatedAtMillis.compareTo(b.updatedAtMillis));
+      if (waiting.isEmpty) return;
+
+      var promoted = false;
+      for (final candidate in waiting) {
+        final didPromote = await _commands.run(candidate.logicalId, () {
+          return _admissionCommands.run('episodes', () async {
+            final current = await _store.get(candidate.logicalId);
+            if (current == null ||
+                current.intent != DownloadUserIntent.active ||
+                !current.awaitingAdmission ||
+                !await _hasAdmissionSlot(excluding: current.logicalId)) {
+              return false;
+            }
+
+            final destinationKey = await _canonicalDestinationPath(
+              current.destinationPath,
+            );
+            return _destinationCommands.run(destinationKey, () async {
+              final conflict = await _findDestinationConflict(
+                destinationKey,
+                current.logicalId,
+              );
+              if (conflict != null) return false;
+              try {
+                await _promoteQueuedAdmissionUnsafe(current);
+                return true;
+              } catch (_) {
+                final failedRecord = current.copyWith(
+                  awaitingAdmission: false,
+                  failureCategory: DownloadFailureCategory.unknown,
+                  failureMessage: 'admission start failed',
+                  updatedAtMillis: _nowMillis(),
+                );
+                await _store.put(failedRecord);
+                _rememberRecord(failedRecord);
+                final failed = DownloadTransportSnapshot(
+                  taskId: failedRecord.taskId,
+                  status: DownloadTransportStatus.failed,
+                  progress: 0,
+                  totalBytes: failedRecord.expectedBytes,
+                  failureCategory: DownloadFailureCategory.unknown,
+                  failureMessage: 'admission start failed',
+                );
+                _snapshots[failedRecord.logicalId] = failed;
+                _recordDiagnostic(failedRecord.logicalId, failed);
+                await _publishRecords();
+                return true;
+              }
+            });
+          });
+        });
+        if (didPromote) {
+          promoted = true;
+          break;
+        }
+      }
+      if (!promoted) return;
+    }
+  }
+
+  Future<void> _promoteQueuedAdmissionUnsafe(
+    LogicalDownloadRecordV2 record,
+  ) async {
+    final request = _requests.putIfAbsent(
+      record.logicalId,
+      () => _requestFromRecord(record),
+    );
+    final existing = await _exactHandle(record.taskId);
+    if (existing != null) {
+      if (existing.current.status == DownloadTransportStatus.paused) {
+        final resumed = await existing.resume();
+        if (resumed) {
+          final admitted = record.copyWith(
+            awaitingAdmission: false,
+            clearFailure: true,
+            updatedAtMillis: _nowMillis(),
+          );
+          await _store.put(admitted);
+          _rememberRecord(admitted);
+          await _publishRecords();
+          _activateHandle(record.logicalId, existing);
+          return;
+        }
+        await _startFreshGenerationUnsafe(
+          request,
+          record,
+          previousHandle: existing,
+          lookUpPreviousHandle: false,
+        );
+        return;
+      }
+
+      if (!existing.current.isFinal &&
+          existing.current.status != DownloadTransportStatus.missing) {
+        final admitted = record.copyWith(
+          awaitingAdmission: false,
+          updatedAtMillis: _nowMillis(),
+        );
+        await _store.put(admitted);
+        _rememberRecord(admitted);
+        await _publishRecords();
+        _activateHandle(record.logicalId, existing);
+        return;
+      }
+
+      await _startFreshGenerationUnsafe(
+        request,
+        record,
+        previousHandle: existing,
+        lookUpPreviousHandle: false,
+      );
+      return;
+    }
+
+    final source = await _sourceResolver.resolve(request.sourceDescriptor);
+    final admitted = record.copyWith(
+      awaitingAdmission: false,
+      expectedBytes: source.expectedBytes ?? record.expectedBytes,
+      clearFailure: true,
+      updatedAtMillis: _nowMillis(),
+    );
+    await _store.put(admitted);
+    _rememberRecord(admitted);
+    await _publishRecords();
+
+    final queued = DownloadTransportSnapshot(
+      taskId: admitted.taskId,
+      status: DownloadTransportStatus.queued,
+      progress: 0,
+      totalBytes: admitted.expectedBytes,
+      transferredBytes: admitted.expectedBytes == null ? null : 0,
+    );
+    _snapshots[admitted.logicalId] = queued;
+    _recordDiagnostic(admitted.logicalId, queued);
+
+    final handle = await _gateway.start(
+      DownloadTaskSpecV2(
+        taskId: admitted.taskId,
+        url: source.url,
+        destinationPath: admitted.destinationPath,
+        headers: source.headers,
+        allowPause: admitted.allowPause,
+        retries: admitted.retries,
+        parallelChunks: admitted.parallelChunks,
+      ),
+    );
+    _activateHandle(admitted.logicalId, handle);
   }
 
   Future<DownloadTransportSnapshot> _startFreshGenerationUnsafe(
