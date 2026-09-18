@@ -603,6 +603,69 @@ final class DownloadManagerV2 {
   DownloadTransportSnapshot? snapshotFor(DownloadLogicalId logicalId) =>
       _snapshots[logicalId];
 
+  /// Applies read-only native throughput telemetry to the current generation.
+  ///
+  /// This never changes transport ownership. A child URLSession callback is
+  /// accepted only while its parent task ID is the current active V2 writer.
+  void observeNativeNetworkSpeed({
+    required String taskId,
+    required double bytesPerSecond,
+  }) {
+    if (taskId.isEmpty ||
+        !bytesPerSecond.isFinite ||
+        bytesPerSecond <= 0) {
+      return;
+    }
+
+    DownloadLogicalId? logicalId;
+    for (final entry in _currentTaskIds.entries) {
+      if (entry.value == taskId) {
+        logicalId = entry.key;
+        break;
+      }
+    }
+    if (logicalId == null ||
+        _currentIntents[logicalId] != DownloadUserIntent.active) {
+      return;
+    }
+
+    final current = _snapshots[logicalId];
+    if (current == null || current.taskId != taskId || current.isFinal) return;
+
+    final speedMBps = bytesPerSecond / 1000000.0;
+    final totalBytes = current.totalBytes;
+    final transferredBytes = current.transferredBytes ??
+        (totalBytes == null ? null : (totalBytes * current.progress).round());
+    final remainingBytes =
+        totalBytes != null && transferredBytes != null && totalBytes > transferredBytes
+        ? totalBytes - transferredBytes
+        : 0;
+    final timeRemaining = remainingBytes > 0
+        ? Duration(
+            milliseconds:
+                ((remainingBytes / bytesPerSecond) * 1000).round(),
+          )
+        : Duration.zero;
+
+    final projected = DownloadTransportSnapshot(
+      taskId: current.taskId,
+      status:
+          current.status == DownloadTransportStatus.queued ||
+              current.status == DownloadTransportStatus.held
+          ? DownloadTransportStatus.running
+          : current.status,
+      progress: current.progress,
+      transferredBytes: transferredBytes,
+      totalBytes: totalBytes,
+      networkSpeedMBps: speedMBps,
+      timeRemaining: timeRemaining,
+      failureCategory: current.failureCategory,
+      failureMessage: current.failureMessage,
+    );
+    _snapshots[logicalId] = projected;
+    _recordDiagnostic(logicalId, projected);
+  }
+
   /// Returns true only when V2 has a logically completed record and its final
   /// artifact still passes the stable final-file integrity check.
   Future<bool> hasCompletedDownload(DownloadLogicalId logicalId) async {
