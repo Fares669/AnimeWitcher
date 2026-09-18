@@ -54,6 +54,33 @@ void main() {
     expect(observer.events.last.$2.status, DownloadTransportStatus.running);
   });
 
+  test('native observed speed updates only the current V2 generation', () async {
+    final f = _fixture();
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+
+    f.manager.observeNativeNetworkSpeed(
+      taskId: taskId,
+      bytesPerSecond: 4_500_000,
+    );
+
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.networkSpeedMBps,
+      4.5,
+    );
+
+    await f.manager.cancel(f.request.logicalId);
+    f.manager.observeNativeNetworkSpeed(
+      taskId: taskId,
+      bytesPerSecond: 99_000_000,
+    );
+
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.networkSpeedMBps,
+      isNot(99.0),
+    );
+  });
+
   test('pause waits for package paused state before allowing exact resume', () async {
     final f = _fixture();
     await f.manager.start(f.request);
