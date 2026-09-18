@@ -127,7 +127,10 @@ final class _FakeHandle implements DownloadTransportHandle {
   Future<bool> resume() async => true;
 
   @override
-  Future<bool> cancel() async => true;
+  Future<bool> cancel() async {
+    emit(DownloadTransportStatus.canceled);
+    return true;
+  }
 
   void emit(DownloadTransportStatus status) {
     _current = DownloadTransportSnapshot(
