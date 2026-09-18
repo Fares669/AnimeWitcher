@@ -1,8 +1,10 @@
+import 'package:background_downloader/background_downloader.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/navigation/taskbar_destination.dart';
 import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_parallel.dart';
+import '../../../core/services/download_v2/background_downloader_gateway.dart';
 import '../../../core/storage/settings_repository.dart';
 
 part 'general_settings_provider.g.dart';
@@ -158,6 +160,7 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
     await ref
         .read(settingsRepositoryProvider)
         .setDownloadNotificationPrefs(prefs);
+    await configurePackageNotificationsV2(FileDownloader(), prefs);
     state = state.copyWith(downloadNotifications: prefs);
   }
 }
