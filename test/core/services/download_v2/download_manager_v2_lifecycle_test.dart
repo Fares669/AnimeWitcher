@@ -116,6 +116,50 @@ void main() {
     expect(snapshot?.networkSpeedMBps, 4.5);
   });
 
+  test('zero native speed clears ETA without dividing by zero', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _FakeGateway();
+    final resolver = StaticSourceResolverV2();
+    final logicalId = logicalDownloadIdFor(
+      animeId: 'anilist:21',
+      episodeKey: '12',
+      variantKey: 'sub:1080p',
+    );
+    final request = DownloadStartRequestV2(
+      logicalId: logicalId,
+      animeId: 'anilist:21',
+      episodeKey: '12',
+      variantKey: 'sub:1080p',
+      destinationPath: 'downloads/anime/episode-12.mp4',
+      sourceDescriptor: const <String, Object?>{
+        'providerId': 'provider.example',
+      },
+      expectedBytes: 1000,
+      allowPause: true,
+      retries: 2,
+      parallelChunks: 16,
+    );
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+    );
+    addTearDown(manager.dispose);
+
+    await manager.start(request);
+    final taskId = gateway.startedSpecs.single.taskId;
+
+    expect(
+      () => manager.observeNativeNetworkSpeed(
+        taskId: taskId,
+        bytesPerSecond: 0,
+      ),
+      returnsNormally,
+    );
+    expect(manager.snapshotFor(logicalId)?.networkSpeedMBps, 0);
+    expect(manager.snapshotFor(logicalId)?.timeRemaining, Duration.zero);
+  });
+
   test('pause waits for package paused state before allowing exact resume', () async {
     final f = _fixture();
     await f.manager.start(f.request);
