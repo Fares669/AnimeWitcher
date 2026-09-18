@@ -381,14 +381,22 @@ DownloadTransportSnapshot packageTransportSnapshotForV2(
     projectedStatus = DownloadTransportStatus.running;
   }
 
+  final parallelParent = transfer.task is ParallelDownloadTask;
+
   return DownloadTransportSnapshot(
     taskId: transfer.taskId,
     status: projectedStatus,
     progress: progress,
     transferredBytes: transferredBytes,
     totalBytes: totalBytes,
-    networkSpeedMBps: transfer.networkSpeed,
-    timeRemaining: transfer.timeRemainingNotifier.value,
+    // background_downloader derives ParallelDownloadTask parent speed from
+    // aggregate child-progress jumps. Those callbacks can arrive in bursts and
+    // report impossible transient rates (for example 200+ MB/s) followed by 0.
+    // V2 uses read-only native child throughput for parallel presentation.
+    networkSpeedMBps: parallelParent ? -1 : transfer.networkSpeed,
+    timeRemaining: parallelParent
+        ? Duration.zero
+        : transfer.timeRemainingNotifier.value,
     failureCategory: _failureCategory(transfer.status, exception),
     failureMessage: exception?.toString(),
   );
