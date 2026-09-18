@@ -640,7 +640,7 @@ final class DownloadManagerV2 {
         totalBytes != null && transferredBytes != null && totalBytes > transferredBytes
         ? totalBytes - transferredBytes
         : 0;
-    final timeRemaining = remainingBytes > 0
+    final timeRemaining = remainingBytes > 0 && bytesPerSecond > 0
         ? Duration(
             milliseconds:
                 ((remainingBytes / bytesPerSecond) * 1000).round(),
