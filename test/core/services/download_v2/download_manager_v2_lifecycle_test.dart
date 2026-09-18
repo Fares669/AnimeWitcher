@@ -151,6 +151,30 @@ void main() {
     expect((await store.get(secondId))?.intent, DownloadUserIntent.paused);
   });
 
+  test('resumable paused handle becomes durably active without replacement', () async {
+    final f = _fixture();
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(taskId)!;
+
+    await f.manager.pause(f.request.logicalId);
+    f.gateway.emit(taskId, DownloadTransportStatus.paused);
+
+    await f.manager.resume(f.request.logicalId);
+
+    expect(handle.resumeCalls, 1);
+    expect(f.gateway.startedSpecs, hasLength(1));
+    expect(f.resolver.calls, 1);
+    expect(
+      (await f.store.get(f.request.logicalId))?.intent,
+      DownloadUserIntent.active,
+    );
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.taskId,
+      taskId,
+    );
+  });
+
   test('non-resumable pause cancels transport but retains paused intent', () async {
     final f = _fixture();
     await f.manager.start(f.request);
