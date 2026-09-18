@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
+import 'package:animewitcher/core/services/download_v2/download_source_resolver_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
@@ -62,6 +63,81 @@ void main() {
     expect(f.resolver.calls, 1);
     expect(f.gateway.startedSpecs.single.taskId, isNot(f.record.taskId));
     expect((await f.store.get(f.logicalId))?.generation, 2);
+  });
+
+  test('startup isolates one broken active record and recovers the rest', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _StartupGateway();
+    final resolver = _SelectiveStartupResolver();
+
+    LogicalDownloadRecordV2 record({
+      required int anime,
+      required int episode,
+      required String providerId,
+    }) {
+      final logicalId = logicalDownloadIdFor(
+        animeId: 'anilist:$anime',
+        episodeKey: '$episode',
+        variantKey: 'sub:1080p',
+      );
+      return LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2,
+        logicalId: logicalId,
+        animeId: 'anilist:$anime',
+        episodeKey: '$episode',
+        variantKey: 'sub:1080p',
+        generation: 1,
+        taskId: taskIdForGeneration(logicalId, 1),
+        intent: DownloadUserIntent.active,
+        destinationPath: 'downloads/anime/episode-$episode.mp4',
+        sourceDescriptor: <String, Object?>{
+          'providerId': providerId,
+          'trackingUrl': '/anime/$anime/$episode',
+        },
+        expectedBytes: 100,
+        updatedAtMillis: episode,
+      );
+    }
+
+    final broken = record(
+      anime: 21,
+      episode: 12,
+      providerId: 'provider.broken',
+    );
+    final healthy = record(
+      anime: 22,
+      episode: 13,
+      providerId: 'provider.healthy',
+    );
+    await store.put(broken);
+    await store.put(healthy);
+
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+    );
+    addTearDown(manager.dispose);
+
+    await manager.initialize();
+
+    expect(resolver.calls, 2);
+    expect(
+      gateway.startedSpecs.map((spec) => spec.destinationPath),
+      contains(healthy.destinationPath),
+    );
+    expect(
+      gateway.startedSpecs.map((spec) => spec.destinationPath),
+      isNot(contains(broken.destinationPath)),
+    );
+    expect(
+      manager.snapshotFor(broken.logicalId)?.status,
+      DownloadTransportStatus.failed,
+    );
+    expect(
+      manager.snapshotFor(healthy.logicalId)?.status,
+      DownloadTransportStatus.running,
+    );
   });
 
   test('startup never adopts a different task id even when transport looks related', () async {
@@ -227,4 +303,23 @@ final class _StartupHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> cancel() async => true;
+}
+
+final class _SelectiveStartupResolver implements DownloadSourceResolverV2 {
+  int calls = 0;
+
+  @override
+  Future<ResolvedDownloadSourceV2> resolve(
+    Map<String, Object?> descriptor,
+  ) async {
+    calls++;
+    if (descriptor['providerId'] == 'provider.broken') {
+      throw StateError('broken startup source');
+    }
+    return const ResolvedDownloadSourceV2(
+      url: 'https://example.invalid/video.mp4',
+      headers: <String, String>{},
+      expectedBytes: 100,
+    );
+  }
 }
