@@ -944,6 +944,18 @@ final class DownloadManagerV2 {
     final existing = await _exactHandle(record.taskId);
     if (existing != null) {
       if (existing.current.status == DownloadTransportStatus.paused) {
+        final readiness = _parallelPauseReadiness;
+        if (record.parallelChunks > 1 && readiness != null) {
+          final ready = await readiness.waitUntilReady(
+            taskId: record.taskId,
+            expectedChildren: record.parallelChunks,
+          );
+          if (!ready) {
+            await _preservePausedResumeFailure(record, existing);
+            return;
+          }
+        }
+
         final resumed = await existing.resume();
         if (resumed) {
           final admitted = record.copyWith(
@@ -957,12 +969,8 @@ final class DownloadManagerV2 {
           _activateHandle(record.logicalId, existing);
           return;
         }
-        await _startFreshGenerationUnsafe(
-          request,
-          record,
-          previousHandle: existing,
-          lookUpPreviousHandle: false,
-        );
+
+        await _preservePausedResumeFailure(record, existing);
         return;
       }
 
@@ -1021,6 +1029,26 @@ final class DownloadManagerV2 {
       ),
     );
     _activateHandle(admitted.logicalId, handle);
+  }
+
+  Future<void> _preservePausedResumeFailure(
+    LogicalDownloadRecordV2 record,
+    DownloadTransportHandle handle,
+  ) async {
+    final pausedRecord = record.copyWith(
+      intent: DownloadUserIntent.paused,
+      awaitingAdmission: false,
+      updatedAtMillis: _nowMillis(),
+    );
+    await _store.put(pausedRecord);
+    _rememberRecord(pausedRecord);
+    final paused = _snapshotWithStatus(
+      handle.current,
+      DownloadTransportStatus.paused,
+    );
+    _snapshots[record.logicalId] = paused;
+    _recordDiagnostic(record.logicalId, paused);
+    await _publishRecords();
   }
 
   Future<DownloadTransportSnapshot> _startFreshGenerationUnsafe(
