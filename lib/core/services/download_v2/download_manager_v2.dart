@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../download_concurrency.dart';
 import 'background_downloader_gateway.dart';
 import 'download_continued_processing_v2.dart';
 import 'download_integrity_verifier_v2.dart';
@@ -63,6 +64,7 @@ final class DownloadManagerV2 {
     DownloadDiagnosticsV2? diagnostics,
     Iterable<DownloadPresentationObserverV2> presentationObservers =
         const <DownloadPresentationObserverV2>[],
+    int Function()? maxConcurrentDownloads,
     int Function()? nowMillis,
   }) : _store = store,
        _gateway = gateway,
@@ -74,6 +76,8 @@ final class DownloadManagerV2 {
            List<DownloadPresentationObserverV2>.unmodifiable(
              presentationObservers,
            ),
+       _maxConcurrentDownloads =
+           maxConcurrentDownloads ?? (() => kDownloadConcurrencyMax),
        _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final LogicalDownloadStoreV2 _store;
@@ -82,10 +86,12 @@ final class DownloadManagerV2 {
   final DownloadIntegrityVerifierV2 _integrityVerifier;
   final DownloadDiagnosticsV2 _diagnostics;
   final List<DownloadPresentationObserverV2> _presentationObservers;
+  final int Function() _maxConcurrentDownloads;
   final int Function() _nowMillis;
 
   final _commands = _KeyedCommandQueue<DownloadLogicalId>();
   final _destinationCommands = _KeyedCommandQueue<String>();
+  final _admissionCommands = _KeyedCommandQueue<String>();
   final Map<DownloadLogicalId, DownloadStartRequestV2> _requests =
       <DownloadLogicalId, DownloadStartRequestV2>{};
   final Map<DownloadLogicalId, String> _currentTaskIds =
