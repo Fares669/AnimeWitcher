@@ -334,6 +334,34 @@ void main() {
     );
   });
 
+  test('cancel waits for obsolete writer settlement before releasing tracking', () async {
+    final f = _fixture();
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(taskId)!;
+    handle.onCancel = () async => true;
+
+    var completed = false;
+    final cancelFuture = f.manager.cancel(f.request.logicalId).whenComplete(() {
+      completed = true;
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(handle.cancelCalls, 1);
+    expect(completed, isFalse);
+    expect(f.gateway.removedTracking, isNot(contains(taskId)));
+
+    f.gateway.emit(taskId, DownloadTransportStatus.canceled);
+    await cancelFuture;
+
+    expect(completed, isTrue);
+    expect(f.gateway.removedTracking, contains(taskId));
+    expect(
+      (await f.store.get(f.request.logicalId))?.intent,
+      DownloadUserIntent.canceled,
+    );
+  });
+
   test('cancel fences old generation before late callback', () async {
     final f = _fixture();
     await f.manager.start(f.request);
