@@ -425,7 +425,7 @@ final class DownloadManagerV2 {
 
       final pausedRecord = record.copyWith(
         intent: DownloadUserIntent.paused,
-        awaitingAdmission: false,
+        awaitingAdmission: record.awaitingAdmission,
         updatedAtMillis: _nowMillis(),
       );
       await _store.put(pausedRecord);
@@ -472,21 +472,35 @@ final class DownloadManagerV2 {
         () => _requestFromRecord(record),
       );
 
-      if (record.awaitingAdmission &&
-          record.intent == DownloadUserIntent.active) {
+      if (record.awaitingAdmission) {
+        final activeRecord = record.intent == DownloadUserIntent.active
+            ? record
+            : record.copyWith(
+                intent: DownloadUserIntent.active,
+                updatedAtMillis: _nowMillis(),
+              );
+        if (!identical(activeRecord, record)) {
+          await _store.put(activeRecord);
+          _rememberRecord(activeRecord);
+          await _publishRecords();
+        }
         final queued =
             _snapshots[logicalId] ??
             DownloadTransportSnapshot(
-              taskId: record.taskId,
+              taskId: activeRecord.taskId,
               status: DownloadTransportStatus.queued,
               progress: 0,
-              totalBytes: record.expectedBytes,
-              transferredBytes: record.expectedBytes == null ? null : 0,
+              totalBytes: activeRecord.expectedBytes,
+              transferredBytes: activeRecord.expectedBytes == null ? null : 0,
             );
-        _snapshots[logicalId] = queued;
-        _recordDiagnostic(logicalId, queued);
+        final projected = _snapshotWithStatus(
+          queued,
+          DownloadTransportStatus.queued,
+        );
+        _snapshots[logicalId] = projected;
+        _recordDiagnostic(logicalId, projected);
         _scheduleAdmissionPromotion();
-        return queued;
+        return projected;
       }
 
       final handle = await _exactHandle(record.taskId);
