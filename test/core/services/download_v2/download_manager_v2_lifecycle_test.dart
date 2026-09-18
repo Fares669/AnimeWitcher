@@ -170,6 +170,55 @@ void main() {
     expect(manager.snapshotFor(logicalId)?.timeRemaining, Duration.zero);
   });
 
+  test('parallel pause waits for every child pause observation', () async {
+    final readiness = NativeParallelPauseReadinessV2();
+    final f = _fixture(
+      parallelChunks: 2,
+      pauseReadiness: readiness,
+    );
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+
+    var completed = false;
+    final pauseFuture = f.manager.pause(f.request.logicalId).whenComplete(() {
+      completed = true;
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      (await f.store.get(f.request.logicalId))?.intent,
+      DownloadUserIntent.paused,
+      reason: 'pause intent must be durable before native pause settles',
+    );
+    expect(completed, isFalse);
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.status,
+      DownloadTransportStatus.running,
+    );
+
+    readiness.observe(
+      parentTaskId: taskId,
+      childTaskId: 'child-1',
+      statusOrdinal: TaskStatus.paused.index,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(completed, isFalse);
+
+    readiness.observe(
+      parentTaskId: taskId,
+      childTaskId: 'child-2',
+      statusOrdinal: TaskStatus.paused.index,
+    );
+    final paused = await pauseFuture;
+
+    expect(completed, isTrue);
+    expect(paused?.status, DownloadTransportStatus.paused);
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.status,
+      DownloadTransportStatus.paused,
+    );
+  });
+
   test('parallel resume waits for every child pause observation', () async {
     final readiness = NativeParallelPauseReadinessV2();
     final f = _fixture(
