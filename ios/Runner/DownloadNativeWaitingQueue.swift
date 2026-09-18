@@ -1872,7 +1872,8 @@ enum DownloadNativeWaitingQueue {
   private static func postV2ParallelChunkMetric(
     task: background_downloader.Task,
     progress: Double?,
-    completed: Bool
+    completed: Bool,
+    statusOrdinal: Int? = nil
   ) -> Bool {
     guard task.group == "chunk",
           let parentId = parentTaskId(fromPluginTask: task),
@@ -1915,6 +1916,9 @@ enum DownloadNativeWaitingQueue {
     ]
     if let normalized {
       values["progress"] = normalized
+    }
+    if let statusOrdinal {
+      values["status"] = statusOrdinal
     }
     if written >= 0 {
       values["writtenBytes"] = written
@@ -1971,16 +1975,38 @@ enum DownloadNativeWaitingQueue {
     statusUpdate: background_downloader.TaskStatusUpdate
   ) {
     guard !task.taskId.isEmpty else { return }
-    switch statusUpdate.taskStatus {
+
+    let status = statusUpdate.taskStatus
+    let inactiveForSpeed: Bool
+    switch status {
     case .complete, .notFound, .failed, .canceled, .paused:
-      _ = postV2ParallelChunkMetric(
-        task: task,
-        progress: statusUpdate.taskStatus == .complete ? 1 : nil,
-        completed: true
-      )
+      inactiveForSpeed = true
+    default:
+      inactiveForSpeed = false
+    }
+
+    // V2 uses child status only as observation. In particular, every paused
+    // child must be observed before Dart attempts a parallel resume.
+    if postV2ParallelChunkMetric(
+      task: task,
+      progress: status == .complete ? 1 : nil,
+      completed: inactiveForSpeed,
+      statusOrdinal: status.rawValue
+    ) {
+      if inactiveForSpeed {
+        terminalObservation.record(
+          taskId: task.taskId,
+          succeeded: status == .complete
+        )
+      }
+      return
+    }
+
+    switch status {
+    case .complete, .notFound, .failed, .canceled, .paused:
       terminalObservation.record(
         taskId: task.taskId,
-        succeeded: statusUpdate.taskStatus == .complete
+        succeeded: status == .complete
       )
     default:
       break
