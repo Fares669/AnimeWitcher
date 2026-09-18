@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
+import 'package:animewitcher/core/services/download_v2/download_source_resolver_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/legacy_download_migration_v2.dart';
@@ -126,6 +127,63 @@ void main() {
     expect(
       gateway.startedSpecs.single.taskId,
       taskIdForGeneration(item.logicalId, 2),
+    );
+  });
+
+  test('failed explicit legacy restart stays paused across relaunch', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final migration = LegacyDownloadMigrationV2(
+      store: store,
+      nowMillis: () => 200,
+    );
+    final item = _legacyItem(
+      destinationPath: '/tmp/episode-12-restart-failure.mp4',
+      sourceDescriptor: legacyRestartRequiredSourceDescriptorV2(
+        trackingUrl: '/anime/21/12',
+        providerId: 'provider.example',
+      ),
+    );
+    await migration.migrate(item);
+
+    final firstGateway = _MigrationGateway();
+    final firstResolver = _ThrowingSourceResolver();
+    final firstManager = DownloadManagerV2(
+      store: store,
+      gateway: firstGateway,
+      sourceResolver: firstResolver,
+    );
+
+    await firstManager.initialize();
+    await expectLater(
+      firstManager.resume(item.logicalId),
+      throwsStateError,
+    );
+
+    expect(firstResolver.calls, 1);
+    expect(firstGateway.startedSpecs, isEmpty);
+    expect(
+      (await store.get(item.logicalId))?.intent,
+      DownloadUserIntent.paused,
+    );
+
+    await firstManager.dispose();
+
+    final relaunchGateway = _MigrationGateway();
+    final relaunchResolver = _ThrowingSourceResolver();
+    final relaunchedManager = DownloadManagerV2(
+      store: store,
+      gateway: relaunchGateway,
+      sourceResolver: relaunchResolver,
+    );
+    addTearDown(relaunchedManager.dispose);
+
+    await relaunchedManager.initialize();
+
+    expect(relaunchResolver.calls, 0);
+    expect(relaunchGateway.startedSpecs, isEmpty);
+    expect(
+      relaunchedManager.snapshotFor(item.logicalId)?.status,
+      DownloadTransportStatus.paused,
     );
   });
 
@@ -293,4 +351,16 @@ final class _MigrationHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> cancel() async => true;
+}
+
+final class _ThrowingSourceResolver implements DownloadSourceResolverV2 {
+  int calls = 0;
+
+  @override
+  Future<ResolvedDownloadSourceV2> resolve(
+    Map<String, Object?> descriptor,
+  ) async {
+    calls++;
+    throw StateError('source re-selection required');
+  }
 }
