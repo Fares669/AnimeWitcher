@@ -36,7 +36,11 @@ final logicalDownloadStoreV2Provider = Provider<LogicalDownloadStoreV2>((ref) {
 final backgroundDownloaderGatewayV2Provider =
     Provider<BackgroundDownloaderGateway>((ref) {
       return _MigrationFirstBackgroundDownloaderGateway(
-        delegate: PackageBackgroundDownloaderGateway(),
+        delegate: PackageBackgroundDownloaderGateway(
+          notificationPreferences: () => ref
+              .read(settingsRepositoryProvider)
+              .getDownloadNotificationPrefs(),
+        ),
         migrate: () => _migrateLegacyPresentationMetadata(ref),
       );
     });
