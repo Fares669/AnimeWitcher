@@ -392,7 +392,7 @@ final class _PackageDownloadTransportHandle
     // Transfer.resume() intentionally falls back to enqueueing from byte zero
     // when resume data is unavailable. Explicit V2 Resume must never do that:
     // use the package's lower-level resume-only path for the exact task.
-    if (task is ParallelDownloadTask) {
+    if (Platform.isIOS && task is ParallelDownloadTask) {
       final ready = await waitForPackageParallelResumeDataV2(
         task: task,
         // background_downloader 9.6.2 has no public awaitable signal for
