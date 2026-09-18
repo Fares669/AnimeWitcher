@@ -10,6 +10,24 @@ const int kDownloadPartsAuto = 0;
 const int kDownloadPartsMin = 1;
 const int kDownloadPartsMax = 16;
 const int kDownloadGlobalConnectionBudget = 16;
+const int kDownloadPartsIosMax = 2;
+
+/// background_downloader's own iOS ParallelDownloadTask pause/resume
+/// integration coverage uses two chunks. Higher child counts are paused
+/// sequentially after the parent already reports paused, which can leave
+/// children transferring and without stable resumeData for a long time.
+int effectiveDownloadPartsForPlatform({
+  required int selectedParts,
+  required bool isIOS,
+}) {
+  final normalized = selectedParts
+      .clamp(kDownloadPartsMin, kDownloadPartsMax)
+      .toInt();
+  return isIOS
+      ? normalized.clamp(kDownloadPartsMin, kDownloadPartsIosMax).toInt()
+      : normalized;
+}
+
 
 /// Gopeed lets an idle connection steal half of a slow connection's remaining
 /// range. Native URLSession/background_downloader children cannot safely change
