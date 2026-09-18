@@ -177,6 +177,14 @@ Feature acceptance retained:
 - Upstream `background_downloader 9.6.2` iOS `ParallelDownloader.parentTaskStatus()` reports parent `running` only when exactly one chunk is running. With multiple active chunks the parent can remain `enqueued` while bytes move. V2 now projects an `enqueued` parent with real 0<progress<1 as `running` without changing raw pause/resume state or package ownership (`c3ef64f`).
 - RED coverage proved the stale-parent bug (`Expected running / Actual queued`) before the projection fix, and a separate architectural guard proved the episode card was still bound to V1 state.
 
+**Third real-iOS Preview evidence + throughput correction (2026-09-18, device screenshots showing 48.7/172.40/212.9 MB/s):**
+- The displayed rates were physically implausible for the tested connection and could collapse to 0 shortly afterward. Root cause is upstream parent aggregation: `background_downloader` computes instantaneous throughput from byte delta / time delta, while a `ParallelDownloadTask` parent can receive several child-progress catches in a burst. The burst makes already-downloaded child bytes look as if they arrived within a tiny parent interval.
+- V2 no longer trusts package parent speed/ETA for a parallel parent. Single-part transfers keep package metrics unchanged.
+- On iOS, V2 now consumes the supported native `BDPlugin.onNativeTaskProgressChange` callback as **read-only telemetry** for package-owned child tasks. Each child uses the existing rolling byte window (4 s window, >=0.75 s sample span), live child speeds are summed for the parent, missing samples retain the last stable value, and an explicit 0 is emitted only after the 3 s stale window.
+- Native speed is accepted only when its parent `taskId` is the current active V2 generation; stale callbacks after cancel/restart cannot update a newer writer.
+- RED coverage also exposed a zero-speed edge case: the stale-window `0 B/s` callback could divide remaining bytes by zero while deriving ETA and throw `Unsupported operation: Infinity or NaN toInt`. `73d5632` fixes this by clearing ETA to unknown/zero-duration when throughput is zero.
+- The failing iOS Preview was unrelated to Download Manager transport: the preview job called `scripts/prepare_media_kit_ios_headers.sh`, whose old mpv pin no longer matches the current `media_kit_video` target. The normal iOS V2 build already succeeded without that obsolete preparation step. The Preview workflow was aligned with the working build path, and release Preview run `35334035220` then built and uploaded the IPA successfully.
+
 **Required acceptance — device bugs:**
 - [x] RED regression: a paused package transfer whose direct package resume cannot recover must not publish/start a replacement until the obsolete transfer is demonstrably settled; replacement then reaches a runnable package state rather than remaining a zero-progress queued zombie.
 - [x] Resume success keeps the exact generation/task and preserves package resume bytes; fallback-to-fresh-generation starts from byte zero only when package resume is unavailable.
@@ -193,11 +201,11 @@ Feature acceptance retained:
 **Scope rule:** keep `background_downloader` as the single transport/pause-resume/retry authority. Reuse Transfer API/notifiers/configuration instead of reviving V1 Range, JobStore, native promotion, or custom chunk state.
 
 **Latest exact-head programmable evidence (2026-09-18):**
-- implementation head `58a5d59d191dbbc78d628c4367632bcb9b30494b`, Flutter Checks run `35321208192`: analyzer ✅, focused Download Manager V2 **90/90** ✅, iOS no-codesign build/log ✅, native logger typecheck ✅;
-- repository-wide suite: **1539 passed / 1 failed / 1 skipped**; the only failure is the pre-existing Anime4K contract test attempting to open missing root `ANIME4K_PERFORMANCE_PLAN.md`, unrelated to Download Manager V2;
-- one-shot iOS Preview run `35322629062` at app-code-equivalent head `4ea3abba97973fd43c208eccbd97be63440bcf08` built and uploaded `ios-ipa-download-manager-v2` successfully;
-- automated acceptance now covers resume fallback settlement, exact-generation resume, package speed/ETA projection, 1-10 logical episode admission, package/platform configuration, observation-only iOS 26 continued processing, first-use notification permission, queued pause/resume generation stability, pause fallback settlement, and cancel/delete writer settlement.
-- the remaining unchecked Task 12B item is intentionally device-only: install the Preview on real iOS hardware and verify non-placeholder speed plus pause → resume/fresh-restart behavior from a new device log.
+- app-code-equivalent head `e3f7cc25aa802f2121300c3440e4efcae8fe2472` (implementation through `73d5632836ef6e7c44294ec18e2b38f9d5d68dab`), Flutter Checks run `35334038350`: analyzer ✅, focused Download Manager V2 **97/97** ✅, iOS no-codesign build/log ✅, native logger typecheck ✅;
+- repository-wide suite: **1547 passed / 1 failed / 1 skipped**; the only failure remains the pre-existing Anime4K contract test attempting to open missing root `ANIME4K_PERFORMANCE_PLAN.md`, unrelated to Download Manager V2;
+- iOS release Preview run `35334035220` built and uploaded `ios-ipa-download-manager-v2-speed-fix` successfully after removing the obsolete media_kit header-preparation step from the Preview path;
+- automated coverage now additionally proves parallel parent burst-derived speed/ETA is rejected, native child speed aggregation does not introduce transient zero spikes, native metrics are fenced to the current generation, and explicit zero throughput cannot divide ETA by zero;
+- the remaining unchecked Task 12B item is intentionally device-only: install this new Preview on real iOS hardware and verify realistic/stable speed plus pause → resume/fresh-restart behavior without a permanent 0% queue stall.
 
 
 
