@@ -466,7 +466,10 @@ final class _FakeHandle implements DownloadTransportHandle {
   @override
   Future<bool> pause() async {
     pauseCalls++;
-    return onPause?.call() ?? true;
+    final override = onPause;
+    if (override != null) return override();
+    emit(DownloadTransportStatus.paused);
+    return true;
   }
 
   @override
@@ -478,7 +481,10 @@ final class _FakeHandle implements DownloadTransportHandle {
   @override
   Future<bool> cancel() async {
     cancelCalls++;
-    return onCancel?.call() ?? true;
+    final override = onCancel;
+    if (override != null) return override();
+    emit(DownloadTransportStatus.canceled);
+    return true;
   }
 
   void emit(DownloadTransportStatus status) {
