@@ -1,3 +1,4 @@
+import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:background_downloader/background_downloader.dart';
@@ -87,6 +88,56 @@ void main() {
     expect(snapshot.totalBytes, 400);
     expect(snapshot.networkSpeedMBps, 12.5);
     expect(snapshot.timeRemaining, const Duration(seconds: 24));
+  });
+  test('V2 package task carries long user-initiated transfer hints', () async {
+    const spec = DownloadTaskSpecV2(
+      taskId: 'aw_v2_hints_g1',
+      url: 'https://example.invalid/video.mp4',
+      destinationPath: 'downloads/video.mp4',
+      headers: <String, String>{},
+      allowPause: true,
+      retries: 2,
+      parallelChunks: 4,
+    );
+
+    final task = await packageTaskForV2(spec);
+
+    expect(task.group, kDownloadV2PackageGroup);
+    expect(task.displayName, 'video.mp4');
+    expect(task.transferHints, contains(TransferHint.largeFile));
+    expect(task.transferHints, contains(TransferHint.userInitiated));
+    expect(task.priority, 0);
+  });
+
+  test('V2 notification preferences configure the package group', () async {
+    final downloader = FileDownloader();
+    const prefs = DownloadNotificationPrefs(
+      running: false,
+      complete: true,
+      paused: true,
+      canceled: false,
+      error: true,
+    );
+    await configurePackageNotificationsV2(downloader, prefs);
+    final task = await packageTaskForV2(
+      const DownloadTaskSpecV2(
+        taskId: 'aw_v2_notifications_g1',
+        url: 'https://example.invalid/video.mp4',
+        destinationPath: 'downloads/video.mp4',
+        headers: <String, String>{},
+        allowPause: true,
+        retries: 2,
+        parallelChunks: 1,
+      ),
+    );
+
+    final config = downloader.notificationConfigForTask(task);
+    expect(config, isNotNull);
+    expect(config!.running, isNull);
+    expect(config.complete, isNotNull);
+    expect(config.paused, isNotNull);
+    expect(config.canceled, isNull);
+    expect(config.error, isNotNull);
   });
   test('package notFound maps to missing transport instead of failure', () {
     expect(
