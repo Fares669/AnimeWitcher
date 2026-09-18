@@ -11,6 +11,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'download_v2_test_support.dart';
 
 void main() {
+  test('startup initialization can retry after one gateway failure', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _StartupGateway()..initializeFailuresRemaining = 1;
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: StaticSourceResolverV2(),
+    );
+    addTearDown(manager.dispose);
+
+    await expectLater(manager.initialize(), throwsStateError);
+    await manager.initialize();
+
+    expect(gateway.initializeCalls, 2);
+    expect(await store.all(), isEmpty);
+  });
+
   test('startup never restarts paused intent without a handle', () async {
     final f = await _startupFixture(intent: DownloadUserIntent.paused);
 
@@ -316,6 +333,8 @@ final class _StartupFixture {
 
 final class _StartupGateway implements BackgroundDownloaderGateway {
   final List<DownloadTaskSpecV2> startedSpecs = <DownloadTaskSpecV2>[];
+  int initializeFailuresRemaining = 0;
+  int initializeCalls = 0;
   final List<String> attachCalls = <String>[];
   final Map<String, _StartupHandle> _rehydrated = <String, _StartupHandle>{};
 
@@ -328,7 +347,13 @@ final class _StartupGateway implements BackgroundDownloaderGateway {
   }
 
   @override
-  Future<void> initialize() async {}
+  Future<void> initialize() async {
+    initializeCalls++;
+    if (initializeFailuresRemaining > 0) {
+      initializeFailuresRemaining--;
+      throw StateError('transient gateway initialization failure');
+    }
+  }
 
   @override
   Future<DownloadTransportHandle> start(DownloadTaskSpecV2 spec) async {
