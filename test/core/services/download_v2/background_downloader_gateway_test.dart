@@ -89,6 +89,37 @@ void main() {
     expect(snapshot.networkSpeedMBps, 12.5);
     expect(snapshot.timeRemaining, const Duration(seconds: 24));
   });
+  test('parallel parent progress promotes stale enqueued status to running', () {
+    final task = ParallelDownloadTask(
+      taskId: 'aw_v2_parallel_progress_g1',
+      url: 'https://example.invalid/video.mp4',
+      filename: 'video.mp4',
+      chunks: 4,
+      updates: Updates.statusAndProgress,
+      allowPause: true,
+    );
+    final transfer = Transfer(task);
+    transfer.updateStatus(TaskStatusUpdate(task, TaskStatus.enqueued));
+    transfer.updateProgress(
+      TaskProgressUpdate(
+        task,
+        0.25,
+        400,
+        3.0,
+        const Duration(seconds: 30),
+      ),
+    );
+
+    final snapshot = packageTransportSnapshotForV2(
+      transfer,
+      totalBytes: 400,
+    );
+
+    expect(snapshot.status, DownloadTransportStatus.running);
+    expect(snapshot.progress, 0.25);
+    expect(snapshot.transferredBytes, 100);
+  });
+
   test('V2 package task carries long user-initiated transfer hints', () async {
     const spec = DownloadTaskSpecV2(
       taskId: 'aw_v2_hints_g1',
