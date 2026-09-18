@@ -215,7 +215,7 @@ final class PackageBackgroundDownloaderGateway
       return existing;
     }
     existing?.dispose();
-    final handle = _PackageDownloadTransportHandle(transfer);
+    final handle = _PackageDownloadTransportHandle(transfer, _downloader);
     _handles[transfer.taskId] = handle;
     return handle;
   }
@@ -291,13 +291,14 @@ Future<(BaseDirectory, String, String)> _destinationFor(String path) async {
 
 final class _PackageDownloadTransportHandle
     implements DownloadTransportHandle {
-  _PackageDownloadTransportHandle(this.transfer) {
+  _PackageDownloadTransportHandle(this.transfer, this._downloader) {
     _updatesSubscription = transfer.updates.listen(_onUpdate);
     _holdReasonListener = _emitCurrent;
     transfer.holdReasonNotifier.addListener(_holdReasonListener);
   }
 
   final Transfer transfer;
+  final FileDownloader _downloader;
   final StreamController<DownloadTransportSnapshot> _snapshots =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
 
@@ -319,7 +320,14 @@ final class _PackageDownloadTransportHandle
   Future<bool> pause() => transfer.pause();
 
   @override
-  Future<bool> resume() => transfer.resume();
+  Future<bool> resume() {
+    final task = transfer.task;
+    if (task is! DownloadTask) return Future<bool>.value(false);
+    // Transfer.resume() intentionally falls back to enqueueing from byte zero
+    // when resume data is unavailable. Explicit V2 Resume must never do that:
+    // use the package's lower-level resume-only path for the exact task.
+    return _downloader.resume(task);
+  }
 
   @override
   Future<bool> cancel() => transfer.cancel();
