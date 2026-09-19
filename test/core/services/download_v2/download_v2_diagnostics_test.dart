@@ -112,6 +112,69 @@ void main() {
     expect(diagnostics.lastError, isNull);
   });
 
+  test('file diagnostics correlates snapshot and transport records in one session', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-v2-correlated-log-');
+    addTearDown(() => directory.delete(recursive: true));
+    var now = 1000;
+    final diagnostics = FileDownloadDiagnosticsV2(
+      directoryProvider: () async => directory,
+      enabled: () => true,
+      nowMillis: () => now,
+      sessionId: 'session-test',
+    );
+
+    diagnostics.record(
+      const DownloadDiagnosticEventV2(
+        logicalId: DownloadLogicalId('logical-episode'),
+        generation: 1,
+        taskId: 'aw_v2_dl_x_g1',
+        status: DownloadTransportStatus.running,
+        progress: 0.25,
+        transferredBytes: 25,
+        totalBytes: 100,
+      ),
+    );
+    now = 1250;
+    diagnostics.recordTransport('parallel.heartbeat', <String, Object?>{
+      'taskId': 'aw_v2_dl_x_g1',
+      'childTaskId': 'aw_v2_dl_x_g1.part.0',
+      'liveBytes': 30,
+      'durableBytes': 20,
+      'diskBytes': 20,
+      'nativeWrittenBytes': 30,
+      'checkpointSequence': 4,
+      'activeConnections': 1,
+      'configuredConnections': 1,
+      'lastByteAgeMs': 50,
+      'lastCheckpointAgeMs': 250,
+      'nativeLive': true,
+      'packagePaused': false,
+      'resumeDataPresent': true,
+      'reason': 'nativeProgress',
+    });
+    await diagnostics.flush();
+
+    final file = File(
+      '${directory.path}${Platform.pathSeparator}download_v2.jsonl',
+    );
+    final rows = (await file.readAsLines())
+        .map((line) => jsonDecode(line) as Map<String, dynamic>)
+        .toList(growable: false);
+
+    expect(rows, hasLength(2));
+    expect(rows.map((row) => row['sessionId']).toSet(), <Object?>{'session-test'});
+    expect(rows.map((row) => row['sequence']).toList(), <Object?>[1, 2]);
+    expect(rows.first['recordType'], 'snapshot');
+    expect(rows.last['recordType'], 'transport');
+    expect(rows.last['event'], 'parallel.heartbeat');
+    expect(rows.last['liveBytes'], 30);
+    expect(rows.last['durableBytes'], 20);
+    expect(rows.last['nativeWrittenBytes'], 30);
+    expect(rows.last['reason'], 'nativeProgress');
+    expect(rows.last.keys, isNot(contains('url')));
+    expect(rows.last.keys, isNot(contains('headers')));
+  });
+
   test('file diagnostics appends JSONL and honors the logging switch', () async {
     final directory = await Directory.systemTemp.createTemp('aw-v2-log-');
     addTearDown(() => directory.delete(recursive: true));
