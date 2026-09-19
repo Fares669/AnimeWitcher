@@ -93,10 +93,6 @@ void main() {
       expect(section, contains('void _emitAggregateProgress('));
       expect(section, contains('_writeParentRecord('));
     });
-
-            ,
-    );
-
     test(
       'multipart manifests persist generation, byte and resource identity',
       () {
@@ -150,10 +146,6 @@ void main() {
           .readAsStringSync();
       expect(swift, contains('speedBytesPerSecond >= 0'));
     });
-
-    ,
-    );
-
     test(
       'continued-processing metric updates are coalesced to one per second',
       () {
@@ -169,16 +161,6 @@ void main() {
         expect(source, contains('_cancelPendingUpdate();'));
       },
     );
-
-    ,
-    );
-
-    ,
-    );
-
-    ,
-    );
-
     test('pause intent fences a queued multipart slow-start pump', () {
       final source = File('lib/core/services/persistent_parallel_download.dart')
           .readAsStringSync();
