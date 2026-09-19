@@ -229,6 +229,40 @@ final class PackageBackgroundDownloaderGateway
     _ensureDurableParallelCoordinator();
   }
 
+  /// Generation-fenced zero-byte Range candidates that iOS may start on the
+  /// package's already-running background URLSession after Flutter is suspended.
+  ///
+  /// Creating this checkpoint is not transport ownership. Callers must release
+  /// the transient Dart-side offers after the native snapshot is acknowledged so
+  /// the foreground scheduler can continue normally. Native promotion rechecks
+  /// the real URLSession before creating a child and Dart adopts it only when its
+  /// attemptGeneration still matches.
+  List<Map<String, Object>> nativeBackgroundPlansV2() {
+    if (!_isIOS()) return const <Map<String, Object>>[];
+    final coordinator = _durableParallel;
+    if (coordinator == null) return const <Map<String, Object>>[];
+
+    return <Map<String, Object>>[
+      for (final plan in coordinator.nativeBackgroundPlans())
+        <String, Object>{
+          'parentTaskId': plan.parentTaskId,
+          'maxConcurrent': plan.maxConcurrent,
+          'waiters': <Map<String, Object>>[
+            for (final candidate in plan.candidates)
+              _nativeBackgroundWaiterPayloadV2(candidate),
+          ],
+        },
+    ];
+  }
+
+  /// Native plan export reserves candidates transiently so Dart cannot race the
+  /// handoff while the MethodChannel snapshot is in flight. Once persistence is
+  /// acknowledged (or fails), foreground Dart may schedule them again. The
+  /// native queue independently filters children that already exist in URLSession.
+  void releaseNativeBackgroundOffersV2() {
+    _durableParallel?.releaseNativeBackgroundOffers();
+  }
+
   @override
   Future<DownloadTransportHandle> start(DownloadTaskSpecV2 spec) async {
     await initialize();
@@ -852,6 +886,28 @@ Future<DownloadRangeCapabilityV2> _probeRangeCapabilityV2(
   } finally {
     client.close(force: true);
   }
+}
+
+Map<String, Object> _nativeBackgroundWaiterPayloadV2(
+  NativeParallelBackgroundCandidate candidate,
+) {
+  final task = candidate.task;
+  final range = _diagnosticRangeBoundsV2(task);
+  return <String, Object>{
+    'taskId': task.taskId,
+    'taskJson': jsonEncode(task.toJson()),
+    'displayName': task.displayName,
+    'url': task.url,
+    'headers': Map<String, String>.from(task.headers),
+    'filename': task.filename,
+    'directory': task.directory,
+    'group': task.group,
+    'progress': 0.0,
+    if (range != null) 'expectedBytes': range.$2 - range.$1 + 1,
+    'generation': candidate.generation,
+    'claimId': candidate.claimId,
+    'claimLeaseMillis': candidate.claimLease.inMilliseconds,
+  };
 }
 
 (int, int)? _diagnosticRangeBoundsV2(DownloadTask task) {
