@@ -36,15 +36,20 @@ final logicalDownloadStoreV2Provider = Provider<LogicalDownloadStoreV2>((ref) {
 /// Before background_downloader is allowed to rehydrate or start transport,
 /// the production gateway runs the one-way Policy-A presentation migration.
 /// Migration itself never reads legacy executor/database state.
+final packageBackgroundDownloaderGatewayV2Provider =
+    Provider<PackageBackgroundDownloaderGateway>((ref) {
+      return PackageBackgroundDownloaderGateway(
+        notificationPreferences: () => ref
+            .read(settingsRepositoryProvider)
+            .getDownloadNotificationPrefs(),
+        diagnostics: ref.read(downloadDiagnosticsV2Provider),
+      );
+    });
+
 final backgroundDownloaderGatewayV2Provider =
     Provider<BackgroundDownloaderGateway>((ref) {
       return _MigrationFirstBackgroundDownloaderGateway(
-        delegate: PackageBackgroundDownloaderGateway(
-          notificationPreferences: () => ref
-              .read(settingsRepositoryProvider)
-              .getDownloadNotificationPrefs(),
-          diagnostics: ref.read(downloadDiagnosticsV2Provider),
-        ),
+        delegate: ref.read(packageBackgroundDownloaderGatewayV2Provider),
         migrate: () => _migrateLegacyPresentationMetadata(ref),
       );
     });
@@ -121,8 +126,13 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
   final pauseReadiness = Platform.isIOS
       ? NativeParallelPauseReadinessV2()
       : null;
+  final packageGateway = ref.read(
+    packageBackgroundDownloaderGatewayV2Provider,
+  );
   final continuedProcessing = IosDownloadContinuedProcessingObserverV2(
     pauseReadiness: pauseReadiness,
+    nativeBackgroundPlans: packageGateway.nativeBackgroundPlansV2,
+    releaseNativeBackgroundOffers: packageGateway.releaseNativeBackgroundOffersV2,
     onNativeNetworkSpeed:
         ({
           required String taskId,
