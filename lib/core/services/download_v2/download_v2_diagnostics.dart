@@ -136,7 +136,11 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
     int Function()? nowMillis,
     String? sessionId,
     this.fileName = 'download_v2.jsonl',
-  }) : _directoryProvider = directoryProvider,
+    this.maxBytes = 5 * 1024 * 1024,
+    this.maxFiles = 3,
+  }) : assert(maxBytes > 0),
+       assert(maxFiles > 0),
+       _directoryProvider = directoryProvider,
        _enabled = enabled,
        _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch),
        _sessionId =
@@ -147,6 +151,8 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
   final int Function() _nowMillis;
   final String _sessionId;
   final String fileName;
+  final int maxBytes;
+  final int maxFiles;
 
   Future<void> _tail = Future<void>.value();
   Object? _lastError;
@@ -208,9 +214,15 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
         final file = File(
           '${logDirectory.path}${Platform.pathSeparator}$fileName',
         );
+        final encoded = '${jsonEncode(payload)}\n';
+        await _rotateIfNeeded(
+          logDirectory,
+          file,
+          utf8.encode(encoded).length,
+        );
         final event = body['event'];
         await file.writeAsString(
-          '${jsonEncode(payload)}\n',
+          encoded,
           mode: FileMode.append,
           flush:
               event != 'parallel.heartbeat' &&
@@ -222,6 +234,38 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
         // Diagnostics are observability only and never transport authority.
       }
     });
+  }
+
+  Future<void> _rotateIfNeeded(
+    Directory directory,
+    File active,
+    int incomingBytes,
+  ) async {
+    if (!await active.exists()) return;
+    final length = await active.length();
+    if (length == 0 || length + incomingBytes <= maxBytes) return;
+
+    for (var index = maxFiles - 1; index >= 1; index--) {
+      final target = _rotatedLogFile(directory, index);
+      if (index == maxFiles - 1 && await target.exists()) {
+        await target.delete();
+      }
+      final source = index == 1
+          ? active
+          : _rotatedLogFile(directory, index - 1);
+      if (!await source.exists()) continue;
+      await source.rename(target.path);
+    }
+  }
+
+  File _rotatedLogFile(Directory directory, int index) {
+    final dot = fileName.lastIndexOf('.');
+    final rotatedName = dot > 0
+        ? '${fileName.substring(0, dot)}.$index${fileName.substring(dot)}'
+        : '$fileName.$index';
+    return File(
+      '${directory.path}${Platform.pathSeparator}$rotatedName',
+    );
   }
 
   /// Testing/support hook for callers that need the append queue settled.
