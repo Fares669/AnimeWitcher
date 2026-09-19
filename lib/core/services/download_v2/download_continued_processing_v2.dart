@@ -281,11 +281,8 @@ final class IosDownloadContinuedProcessingObserverV2
         _outstanding.remove(logicalId);
     }
 
-    final running = _outstanding.values
-        .where(
-          (candidate) =>
-              candidate.snapshot.status == DownloadTransportStatus.running,
-        )
+    final presentableActive = _outstanding.values
+        .where(_isPackageOwnedActive)
         .toList(growable: false);
 
     if (snapshot.status == DownloadTransportStatus.complete && _sessionActive) {
@@ -313,10 +310,10 @@ final class IosDownloadContinuedProcessingObserverV2
       );
     }
 
-    if (running.isNotEmpty) {
-      final current = snapshot.status == DownloadTransportStatus.running
+    if (presentableActive.isNotEmpty) {
+      final current = _isPackageOwnedActive(entry)
           ? entry
-          : running.first;
+          : presentableActive.first;
       final currentSnapshot = current.snapshot;
       final currentRecord = current.record;
       final batchTotal = _sessionMembers.isEmpty ? 1 : _sessionMembers.length;
@@ -374,6 +371,16 @@ final class IosDownloadContinuedProcessingObserverV2
       await _service.stop(taskId: snapshot.taskId, endSession: true);
     }
     _resetSession();
+  }
+
+  bool _isPackageOwnedActive(_ContinuedEntryV2 entry) {
+    if (entry.record.awaitingAdmission) return false;
+    return switch (entry.snapshot.status) {
+      DownloadTransportStatus.queued ||
+      DownloadTransportStatus.running ||
+      DownloadTransportStatus.held => true,
+      _ => false,
+    };
   }
 
   String _displayName(LogicalDownloadRecordV2 record) {
