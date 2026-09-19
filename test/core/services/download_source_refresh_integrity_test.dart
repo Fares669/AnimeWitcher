@@ -104,7 +104,4 @@ void main() {
       expect(downloadInternalSourceValidationRequired(task), isTrue);
     },
   );
-
-  ,
-  );
 }
