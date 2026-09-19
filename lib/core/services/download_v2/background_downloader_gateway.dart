@@ -348,8 +348,12 @@ final class PackageBackgroundDownloaderGateway
     }
     await Future.wait<void>([
       _downloader.database.deleteRecordsWithIds(childIds),
-      ...childIds.map(_downloader.removeResumeData),
-      ...childIds.map(_downloader.removePausedTask),
+      // background_downloader 9.6.2 does not expose resume/paused cleanup on
+      // FileDownloader. Keep the storage escape hatch confined to this adapter.
+      // ignore: invalid_use_of_visible_for_testing_member
+      ...childIds.map(_downloader.database.storage.removeResumeData),
+      // ignore: invalid_use_of_visible_for_testing_member
+      ...childIds.map(_downloader.database.storage.removePausedTask),
     ]);
   }
 
