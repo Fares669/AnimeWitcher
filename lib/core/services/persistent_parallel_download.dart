@@ -491,10 +491,14 @@ class PersistentParallelDownload {
     return session == null ? null : _activeConnectionsForSession(session);
   }
 
-  /// The recoverable aggregate for a restored/live multipart parent.
-  /// Bytes that exist only in URLSession's temporary file are deliberately
-  /// excluded until the immutable Range becomes durable.
+  /// Byte-credible live aggregate for presentation/telemetry.
+  /// This may include bytes still owned by a native temporary file.
   double? progressFor(String id) => _sessions[id]?.progress;
+
+  /// Recoverable aggregate proven by completed/visible immutable Range bytes.
+  /// V2 uses this value across pause/relaunch boundaries so native temp bytes
+  /// can never appear as resumable progress.
+  double? durableProgressFor(String id) => _sessions[id]?.durableProgress;
 
   /// Exact recoverable bytes proven by the current multipart manifest/disk.
   int? durableBytesFor(String id) => _sessions[id]?.creditedBytes;
@@ -3583,7 +3587,13 @@ class _ParallelSession {
   int get size => parts.fold(0, (sum, part) => sum + part.size);
   int get creditedBytes =>
       parts.fold<int>(0, (sum, part) => sum + part.durableBytes);
-  double get progress => size <= 0 ? 0 : creditedBytes / size;
+  double get progress =>
+      parts.fold<double>(
+        0,
+        (sum, part) => sum + part.size * part.credibleProgress,
+      ) /
+      size;
+  double get durableProgress => size <= 0 ? 0 : creditedBytes / size;
   Future<void> get idle async {
     await _pending;
     await parentRecordWrite;
