@@ -12,6 +12,7 @@ import 'download_source_resolver_v2.dart';
 import 'download_v2_diagnostics.dart';
 import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
+import 'legacy_download_migration_v2.dart';
 import 'logical_download_store_v2.dart';
 
 /// Application request for one logical episode download.
@@ -628,6 +629,18 @@ final class DownloadManagerV2 {
       }
 
       if (record.intent == DownloadUserIntent.paused) {
+        // Policy-A legacy migration is the one intentional exception to exact
+        // resume. It has no package transfer to resume by design, so the first
+        // explicit user Resume starts a clean V2 generation from byte zero.
+        // Strip the migration marker before persisting that generation; once
+        // V2 owns transport, a later missing paused handle must never silently
+        // become another byte-zero restart.
+        if (sourceDescriptorRequiresLegacyRestartV2(record.sourceDescriptor)) {
+          final restartRequest = _withoutLegacyRestartMarker(request);
+          _requests[logicalId] = restartRequest;
+          return _startFreshGeneration(restartRequest, record);
+        }
+
         throw StateError(
           'Download cannot resume safely without its exact paused transfer; '
           'existing progress was kept paused',
@@ -1338,6 +1351,25 @@ final class DownloadManagerV2 {
   Future<void> _deleteDestination(String destinationPath) async {
     final file = await _destinationFile(destinationPath);
     if (await file.exists()) await file.delete();
+  }
+
+  DownloadStartRequestV2 _withoutLegacyRestartMarker(
+    DownloadStartRequestV2 request,
+  ) {
+    final descriptor = Map<String, Object?>.from(request.sourceDescriptor)
+      ..remove(kLegacyRestartRequiredSourceDescriptorV2);
+    return DownloadStartRequestV2(
+      logicalId: request.logicalId,
+      animeId: request.animeId,
+      episodeKey: request.episodeKey,
+      variantKey: request.variantKey,
+      destinationPath: request.destinationPath,
+      sourceDescriptor: descriptor,
+      expectedBytes: request.expectedBytes,
+      allowPause: request.allowPause,
+      retries: request.retries,
+      parallelChunks: request.parallelChunks,
+    );
   }
 
   DownloadStartRequestV2 _requestFromRecord(LogicalDownloadRecordV2 record) {
