@@ -3,6 +3,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/navigation/taskbar_destination.dart';
 import '../../../core/services/download_concurrency.dart';
+import '../../../core/services/download_continued_processing_service.dart';
 import '../../../core/services/download_parallel.dart';
 import '../../../core/services/download_v2/background_downloader_gateway.dart';
 import '../../../core/storage/settings_repository.dart';
@@ -86,6 +87,7 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
 
   Future<void> setDownloadDiagnosticLog(bool enabled) async {
     await ref.read(settingsRepositoryProvider).setDownloadDiagnosticLog(enabled);
+    await configureNativeDownloadDiagnosticLog(enabled);
     state = state.copyWith(downloadDiagnosticLog: enabled);
   }
 
