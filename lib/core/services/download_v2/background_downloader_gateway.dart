@@ -699,6 +699,16 @@ Future<DownloadRangeCapabilityV2> _probeRangeCapabilityV2(
   }
 }
 
+DownloadTransportStatus durableParallelProgressStatusV2({
+  required double progress,
+  required bool parentActive,
+}) {
+  if (progress >= 1) return DownloadTransportStatus.complete;
+  return parentActive
+      ? DownloadTransportStatus.running
+      : DownloadTransportStatus.paused;
+}
+
 DownloadTransportSnapshot durableParallelInitialSnapshotV2({
   required String taskId,
   required DownloadTransportStatus initialStatus,
@@ -788,9 +798,10 @@ final class _DurableParallelDownloadTransportHandle
       _emit(
         DownloadTransportSnapshot(
           taskId: taskId,
-          status: progress >= 1
-              ? DownloadTransportStatus.complete
-              : DownloadTransportStatus.running,
+          status: durableParallelProgressStatusV2(
+            progress: progress,
+            parentActive: coordinator.isActive(taskId),
+          ),
           progress: progress,
           transferredBytes: total > 0 ? (total * progress).round() : null,
           totalBytes: total > 0 ? total : null,
