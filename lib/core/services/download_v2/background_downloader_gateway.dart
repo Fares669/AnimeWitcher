@@ -967,9 +967,9 @@ final class _SelfSettlingPackageDownloadTransportHandle
     extends _PackageDownloadTransportHandle
     implements SelfSettlingParallelDownloadTransportHandleV2 {
   _SelfSettlingPackageDownloadTransportHandle(
-    super.transfer,
-    super.downloader,
-  );
+    Transfer transfer,
+    FileDownloader downloader,
+  ) : super(transfer, downloader);
 }
 
 /// Projects one package Transfer into V2 without maintaining a second metric
