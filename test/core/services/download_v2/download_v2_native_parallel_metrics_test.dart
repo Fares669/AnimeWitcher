@@ -36,6 +36,16 @@ void main() {
     expect(end, greaterThan(start));
 
     final v2Bridge = source.substring(start, end);
+    expect(
+      v2Bridge,
+      contains(
+        'task.group == "chunk" || task.group == "animewitcher_parts"',
+      ),
+      reason:
+          'V2 durable iOS range children use animewitcher_parts, while the '
+          'older package ParallelDownloadTask children use chunk. Both are '
+          'read-only child telemetry for the same V2 parent overlay.',
+    );
     expect(v2Bridge, contains('if !isAppInForeground()'));
     expect(
       v2Bridge,
