@@ -226,7 +226,7 @@ void main() {
   );
 
   test(
-    'native iOS temp bytes never advance durable parent progress',
+    'native iOS temp bytes never advance durable recovery progress',
     () async {
       expect(await coordinator.start(parent, 100), isTrue);
       expect(starts.length, 1);
@@ -244,10 +244,15 @@ void main() {
       expect(parentRecord.status, TaskStatus.running);
       expect(
         parentRecord.progress,
+        closeTo(.1, .001),
+        reason: 'live telemetry may still show URLSession temp bytes',
+      );
+      expect(
+        coordinator.durableProgressFor(parent.taskId),
         0,
         reason:
-            'URLSession temp bytes disappear when iOS kills the task and '
-            'must not be persisted as resumable parent progress',
+            'V2 recovery must ignore bytes that exist only in URLSession temp '
+            'storage because iOS may discard them on process termination',
       );
       expect(coordinator.durableBytesFor(parent.taskId), 0);
       expect(statuses, contains(TaskStatus.running));
