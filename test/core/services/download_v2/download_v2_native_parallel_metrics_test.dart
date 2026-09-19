@@ -55,6 +55,23 @@ void main() {
           'Dividing aggregate bytes by only observed child ranges caused the '
           '31/62/93% background jumps seen on the physical iOS log.',
     );
+    expect(
+      v2Bridge,
+      isNot(contains('totalBytesHint: aggregateExpected')),
+      reason: 'Observed child ranges are not the full parent byte length.',
+    );
+    expect(
+      v2Bridge,
+      isNot(contains('totalBytesHint: staleAggregateExpected')),
+      reason: 'A stale child sample cannot become the parent total either.',
+    );
+    expect(
+      RegExp(r'totalBytesHint: -1').allMatches(v2Bridge).length,
+      greaterThanOrEqualTo(2),
+      reason:
+          'Both live and stale child telemetry must defer to an already-known '
+          'full parent size instead of inventing one.',
+    );
     expect(v2Bridge, contains('progress: nil'));
     expect(
       v2Bridge,
