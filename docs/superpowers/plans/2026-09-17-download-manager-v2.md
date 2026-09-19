@@ -2,9 +2,9 @@
 
 > **For agentic workers:** this file is the source of truth for continuation. Before changing code, inspect the current PR head and CI, then continue from the first incomplete acceptance item. Use TDD/systematic debugging for every regression found by review. Do not mark a task complete from isolated unit coverage when the production path is not wired.
 
-**Goal:** Replace AnimeWitcher's custom downloader transport/recovery stack with Download Manager V2 using `background_downloader` as the single transport authority.
+**Goal:** Replace AnimeWitcher's competing downloader ownership/recovery stack with Download Manager V2 using `background_downloader` as the network/native execution authority, with the approved iOS durable immutable-range coordinator behind the V2 gateway.
 
-**Architecture:** AnimeWitcher owns logical identity, user intent, source refresh, destination/presentation metadata, integrity validation, diagnostics, priority/concurrency preferences, and stale-generation fencing. `background_downloader` owns network transfer, transport persistence, pause/resume data, retries, background native execution, and package-managed chunks. V1 remains only as a dormant/legacy strangler path until real-device acceptance allows Task 14 to delete it; V1 must never own or retry a V2 task.
+**Architecture:** AnimeWitcher owns logical identity, user intent, source refresh, destination/presentation metadata, integrity validation, diagnostics, priority/concurrency preferences, and stale-generation fencing. `background_downloader` owns every actual network/native writer and per-task resume/retry execution. On iOS only, the V2 gateway may reuse `PersistentParallelDownload` for immutable range split/checkpoint/assembly when Range support is proven; each child remains a package `DownloadTask`. V1 `DownloadService`, JobStore ownership, `DownloadRangeTransfer`, and native promotion/retry remain outside V2. V1 remains only as dormant legacy/removal staging until Task 14.
 
 **Spec:** `docs/superpowers/specs/2026-09-17-download-manager-v2-design.md`
 
