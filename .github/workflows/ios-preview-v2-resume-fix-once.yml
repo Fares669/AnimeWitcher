@@ -1,5 +1,5 @@
-# Triggered after the 2026-09-19 Live Task background-byte delta fix.
-name: iOS Preview V2 Lossless Resume One Shot
+# Triggered after the 2026-09-19 durable resume/process-recreation fixes.
+name: iOS Preview V2 Durable Resume One Shot
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   ios-preview:
-    name: iOS Preview Lossless Resume (Unsigned)
+    name: iOS Preview Durable Resume (Unsigned)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -60,12 +60,12 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R build/ios/iphoneos/Runner.app Payload/
-          zip -qry animewitcher-ios-v2-live-task-background-bytes.ipa Payload
+          zip -qry animewitcher-ios-v2-durable-resume.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ipa-download-manager-v2-live-task-background-bytes
-          path: animewitcher-ios-v2-live-task-background-bytes.ipa
+          name: ios-ipa-download-manager-v2-durable-resume
+          path: animewitcher-ios-v2-durable-resume.ipa
           retention-days: 7
           if-no-files-found: error
