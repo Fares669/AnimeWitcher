@@ -142,7 +142,7 @@ void main() {
         selectDownloadWorkUnitCount(connections: 16, totalBytes: 16 * mib),
         32,
       );
-      expect(kDownloadWorkUnitsMax, 32);
+      expect(kDownloadWorkUnitsMax, 512);
     });
 
     test('tail work never creates tiny extra ranges', () {
@@ -153,7 +153,10 @@ void main() {
       );
       expect(
         selectDownloadWorkUnitCount(connections: 1, totalBytes: 2 * 1024 * mib),
-        1,
+        512,
+        reason:
+            'one native writer still needs bounded durable checkpoints; '
+            'connection count and checkpoint count are separate concerns',
       );
     });
 
