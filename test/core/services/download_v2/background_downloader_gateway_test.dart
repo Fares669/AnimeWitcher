@@ -208,6 +208,21 @@ void main() {
     );
   });
 
+  test('durable snapshot reports configured and live connection width', () {
+    final snapshot = durableParallelInitialSnapshotV2(
+      taskId: 'aw_v2_width_g1',
+      initialStatus: DownloadTransportStatus.running,
+      totalBytes: 100,
+      restoredProgress: .25,
+      durableBytes: 25,
+      configuredConnections: 16,
+      activeConnections: 4,
+    );
+
+    expect(snapshot.configuredConnections, 16);
+    expect(snapshot.activeConnections, 4);
+  });
+
   test('durable range drain keeps parent paused while bytes still settle', () {
     expect(
       durableParallelProgressStatusV2(progress: 0.5, parentActive: false),

@@ -18,6 +18,8 @@ void main() {
       totalBytes: 100,
       networkSpeedMBps: 3.25,
       timeRemainingSeconds: 15,
+      configuredConnections: 16,
+      activeConnections: 8,
       failureCategory: DownloadFailureCategory.sourceExpired,
       holdCategory: DownloadV2HoldCategory.packageHeld,
       sourceRefreshReason: DownloadV2SourceRefreshReason.authorizationExpired,
@@ -39,6 +41,8 @@ void main() {
         'totalBytes',
         'networkSpeedMBps',
         'timeRemainingSeconds',
+        'configuredConnections',
+        'activeConnections',
         'failureCategory',
         'holdCategory',
         'sourceRefreshReason',
@@ -49,6 +53,8 @@ void main() {
     expect(json['totalBytes'], 100);
     expect(json['networkSpeedMBps'], 3.25);
     expect(json['timeRemainingSeconds'], 15);
+    expect(json['configuredConnections'], 16);
+    expect(json['activeConnections'], 8);
 
     for (final forbidden in <String>[
       '"url"',
