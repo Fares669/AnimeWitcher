@@ -115,6 +115,8 @@ final class DownloadManagerV2 {
       <String, StreamSubscription<DownloadTransportSnapshot>>{};
   final Set<DownloadLogicalId> _parallelPausePending =
       <DownloadLogicalId>{};
+  final Map<DownloadLogicalId, int> _lastPositiveSpeedAtMillis =
+      <DownloadLogicalId, int>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
       StreamController<List<LogicalDownloadRecordV2>>.broadcast();
 
@@ -124,8 +126,22 @@ final class DownloadManagerV2 {
   /// package child transfers, URLs, headers or FileDownloader database rows.
   Stream<List<LogicalDownloadRecordV2>> get records async* {
     await initialize();
-    yield List<LogicalDownloadRecordV2>.unmodifiable(await _store.all());
-    yield* _recordChanges.stream;
+
+    // Subscribe before reading the initial snapshot. A start can persist and
+    // publish while Hive is being read; a broadcast event emitted in that gap
+    // would otherwise be lost until process recreation.
+    final buffered = StreamController<List<LogicalDownloadRecordV2>>();
+    final subscription = _recordChanges.stream.listen(
+      buffered.add,
+      onError: buffered.addError,
+    );
+    try {
+      yield List<LogicalDownloadRecordV2>.unmodifiable(await _store.all());
+      yield* buffered.stream;
+    } finally {
+      await subscription.cancel();
+      await buffered.close();
+    }
   }
 
   Future<void> initialize() {
@@ -734,6 +750,7 @@ final class DownloadManagerV2 {
       _currentIntents.remove(logicalId);
       _recordsByLogicalId.remove(logicalId);
       _snapshots.remove(logicalId);
+      _lastPositiveSpeedAtMillis.remove(logicalId);
       _requests.remove(logicalId);
       await _publishRecords();
     });
@@ -772,6 +789,9 @@ final class DownloadManagerV2 {
     if (current == null || current.taskId != taskId || current.isFinal) return;
 
     final speedMBps = bytesPerSecond / 1000000.0;
+    if (bytesPerSecond > 0) {
+      _lastPositiveSpeedAtMillis[logicalId] = _nowMillis();
+    }
     final totalBytes = current.totalBytes;
     final transferredBytes = _presentationTransferredBytes(
       transferredBytes: current.transferredBytes,
@@ -1524,9 +1544,17 @@ final class DownloadManagerV2 {
     var accepted = snapshot;
     final record = _recordsByLogicalId[logicalId];
     final current = _snapshots[logicalId];
+    final lastPositiveSpeedAt = _lastPositiveSpeedAtMillis[logicalId];
+    final freshZeroHandoff =
+        snapshot.networkSpeedMBps == 0 &&
+        snapshot.status == DownloadTransportStatus.running &&
+        current != null &&
+        current.networkSpeedMBps > 0 &&
+        lastPositiveSpeedAt != null &&
+        _nowMillis() - lastPositiveSpeedAt < 3000;
     if (record != null &&
         record.parallelChunks > 1 &&
-        snapshot.networkSpeedMBps < 0 &&
+        (snapshot.networkSpeedMBps < 0 || freshZeroHandoff) &&
         current != null &&
         current.taskId == snapshot.taskId &&
         current.networkSpeedMBps >= 0) {
@@ -1571,6 +1599,9 @@ final class DownloadManagerV2 {
     // "fake paused" state that explicit Resume correctly refuses to trust.
     final projected = accepted;
     _snapshots[logicalId] = projected;
+    if (projected.networkSpeedMBps > 0) {
+      _lastPositiveSpeedAtMillis[logicalId] = _nowMillis();
+    }
     _recordDiagnostic(logicalId, projected);
     return true;
   }
@@ -1789,6 +1820,7 @@ final class DownloadManagerV2 {
       await observer.dispose();
     }
     _recordsByLogicalId.clear();
+    _lastPositiveSpeedAtMillis.clear();
     await _recordChanges.close();
   }
 }
