@@ -116,6 +116,28 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
   final String fileName;
 
   Future<void> _tail = Future<void>.value();
+  Object? _lastError;
+
+  Object? get lastError => _lastError;
+
+  Future<Directory> directory() async {
+    final directory = await _directoryProvider();
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+    return directory;
+  }
+
+  Future<List<File>> listFiles() async {
+    final logDirectory = await directory();
+    final files = await logDirectory
+        .list()
+        .where((entry) => entry is File)
+        .cast<File>()
+        .toList();
+    files.sort((a, b) => b.path.compareTo(a.path));
+    return files;
+  }
 
   @override
   void record(DownloadDiagnosticEventV2 event) {
@@ -126,17 +148,18 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
     };
     _tail = _tail.then<void>((_) async {
       try {
-        final directory = await _directoryProvider();
-        if (!await directory.exists()) {
-          await directory.create(recursive: true);
-        }
-        final file = File('${directory.path}${Platform.pathSeparator}$fileName');
+        final logDirectory = await directory();
+        final file = File(
+          '${logDirectory.path}${Platform.pathSeparator}$fileName',
+        );
         await file.writeAsString(
           '${jsonEncode(payload)}\n',
           mode: FileMode.append,
           flush: true,
         );
-      } catch (_) {
+        _lastError = null;
+      } catch (error) {
+        _lastError = error;
         // Diagnostics are observability only and never transport authority.
       }
     });
