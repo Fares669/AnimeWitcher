@@ -90,10 +90,28 @@ void main() {
       bytesPerSecond: 5 * 1000 * 1000,
     );
 
-    final snapshot = manager.snapshotFor(id);
+    var snapshot = manager.snapshotFor(id);
     expect(snapshot?.networkSpeedMBps, 5);
     expect(snapshot?.configuredConnections, 16);
     expect(snapshot?.activeConnections, 4);
+
+    handle.emit(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: .5,
+        transferredBytes: 50,
+        totalBytes: 100,
+        configuredConnections: 16,
+        activeConnections: 8,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    snapshot = manager.snapshotFor(id);
+    expect(snapshot?.networkSpeedMBps, 5);
+    expect(snapshot?.configuredConnections, 16);
+    expect(snapshot?.activeConnections, 8);
   });
 
   test('startup recreation preserves five-part application policy', () async {
@@ -192,9 +210,14 @@ final class _Handle implements DownloadTransportHandle {
 
   @override
   final String taskId;
-  final DownloadTransportSnapshot _current;
+  DownloadTransportSnapshot _current;
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast();
+
+  void emit(DownloadTransportSnapshot snapshot) {
+    _current = snapshot;
+    _controller.add(snapshot);
+  }
 
   @override
   DownloadTransportSnapshot get current => _current;
