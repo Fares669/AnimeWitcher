@@ -870,14 +870,16 @@ enum DownloadNativeWaitingQueue {
     // calls us after the plugin moved the temp file, so completion can now be
     // verified against the exact `.part` path by PersistentParallelDownload.
     if isDownloadPart(task) {
-      guard isLegacyMultipartPart(task) else { return }
+      guard isObservableMultipartPart(task) else { return }
       postMultipartChunkUpdate(
         task,
         totalWritten: task.countOfBytesReceived,
         totalExpected: task.countOfBytesExpectedToReceive,
         completed: terminalSuccess ?? (error == nil)
       )
-      promoteMultipartIfPossible(on: session, parentId: parentTaskId(from: task))
+      if isLegacyMultipartPart(task) {
+        promoteMultipartIfPossible(on: session, parentId: parentTaskId(from: task))
+      }
       return
     }
     let httpFailed = (task.response as? HTTPURLResponse).map {
@@ -1445,13 +1447,33 @@ enum DownloadNativeWaitingQueue {
     else { return false }
     return ownsLegacyMultipartParent(parentId)
   }
+
+  /// Observation-only recognition for V2's durable immutable range children.
+  /// Native retry/promotion remains fenced to isLegacyMultipartPart.
+  private static func isV2DurableMultipartPart(_ task: URLSessionTask) -> Bool {
+    guard isDownloadPart(task),
+          let parentId = parentTaskId(from: task)
+    else { return false }
+    let json = task.taskDescription?
+      .components(separatedBy: "***<<<|>>>***").first ?? ""
+    let group = stringFromTaskJson(json, key: "group")
+    return group == "animewitcher_parts" && parentId.hasPrefix("aw_v2_")
+  }
+
+  private static func isObservableMultipartParent(_ parentId: String) -> Bool {
+    ownsLegacyMultipartParent(parentId) || parentId.hasPrefix("aw_v2_")
+  }
+
+  private static func isObservableMultipartPart(_ task: URLSessionTask) -> Bool {
+    isLegacyMultipartPart(task) || isV2DurableMultipartPart(task)
+  }
   private static func postMultipartChunkUpdate(
     _ task: URLSessionTask,
     totalWritten: Int64,
     totalExpected: Int64,
     completed: Bool
   ) {
-    guard isLegacyMultipartPart(task),
+    guard isObservableMultipartPart(task),
           let childId = taskId(from: task),
           let parentId = parentTaskId(from: task)
     else {
@@ -1480,7 +1502,7 @@ enum DownloadNativeWaitingQueue {
   ) -> Bool {
     guard task.group == "chunk" || task.group == "animewitcher_parts",
           let parentId = parentTaskId(fromPluginTask: task),
-          ownsLegacyMultipartParent(parentId)
+          isObservableMultipartParent(parentId)
     else { return false }
 
     let expected = expectedMultipartBytes(forPluginTask: task, parentId: parentId)
@@ -1578,7 +1600,7 @@ enum DownloadNativeWaitingQueue {
     completed: Bool,
     attemptGeneration: Int?
   ) {
-    guard ownsLegacyMultipartParent(parentId) else { return }
+    guard isObservableMultipartParent(parentId) else { return }
     if totalWritten > 0 || completed || (normalizedProgress ?? 0) > 0 {
       settleMultipartClaim(childTaskId: childId)
     }
@@ -2249,7 +2271,7 @@ enum DownloadNativeWaitingQueue {
   ) {
     if let session { rememberDownloadSession(session) }
     if isDownloadPart(downloadTask) {
-      guard isLegacyMultipartPart(downloadTask) else { return }
+      guard isObservableMultipartPart(downloadTask) else { return }
       postMultipartChunkUpdate(
         downloadTask,
         totalWritten: totalWritten,
