@@ -1,11 +1,8 @@
-import 'dart:async';
-
 import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_continued_processing_service.dart';
 import 'package:animewitcher/core/services/download_job_state.dart';
 import 'package:animewitcher/core/services/download_job_store.dart';
 import 'package:animewitcher/core/services/download_parallel.dart';
-import 'package:animewitcher/core/services/download_service.dart';
 import 'package:animewitcher/core/services/download_transport.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -272,29 +269,7 @@ void main() {
     );
   });
 
-  test('DM-18 matrix joins teardown and fences the old native handler lease', () async {
-    final barrier = DownloadServiceTeardownBarrier();
-    final releaseTeardown = Completer<void>();
-    var oldTeardownFinished = false;
-    var replacementStarted = false;
-
-    final oldTeardown = barrier.run(() async {
-      await releaseTeardown.future;
-      oldTeardownFinished = true;
-    });
-    final replacement = barrier.wait().then((_) {
-      replacementStarted = true;
-    });
-    await Future<void>.delayed(Duration.zero);
-    expect(replacementStarted, isFalse);
-    expect(oldTeardownFinished, isFalse);
-
-    releaseTeardown.complete();
-    await oldTeardown;
-    await replacement;
-    expect(oldTeardownFinished, isTrue);
-    expect(replacementStarted, isTrue);
-
+  test('DM-18 matrix fences the old native handler lease', () {
     final oldLease = DownloadGlobalHandlerLease.acquire();
     final currentLease = DownloadGlobalHandlerLease.acquire();
     expect(oldLease.releaseIfCurrent(), isFalse);

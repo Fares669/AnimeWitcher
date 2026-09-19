@@ -12,7 +12,7 @@ import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
-import 'package:animewitcher/core/services/download_service.dart';
+import 'package:animewitcher/core/utils/download_time_remaining.dart' show DownloadProgressData;
 import 'package:animewitcher/core/utils/localized_text.dart';
 import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
@@ -20,6 +20,8 @@ import 'package:animewitcher/core/utils/image_fallbacks.dart';
 import 'package:animewitcher/core/utils/layout_constants.dart';
 import 'package:animewitcher/core/utils/responsive_breakpoints.dart';
 import '../../../../shared/widgets/thumbnail_error_placeholder.dart';
+import '../../../library/presentation/download_progress_v2_provider.dart';
+import '../../../library/presentation/downloads_provider.dart';
 import '../../../library/presentation/history_provider.dart';
 import '../details_controller.dart';
 import '../download_launcher.dart';
@@ -148,8 +150,19 @@ class EpisodeCard extends HookConsumerWidget {
       }
     }
 
-    final activeDownloads = ref.watch(activeDownloadsProvider);
-    final isDownloading = activeDownloads.contains(episode.url);
+    final downloads =
+        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
+    final episodeTrackingUrl = episode.url.trim();
+    final activeDownload = downloads.firstWhereOrNull((item) {
+      final matchesEpisode =
+          item.trackingUrl.trim() == episodeTrackingUrl ||
+          (item.episode?.url.trim() ?? '') == episodeTrackingUrl;
+      if (!matchesEpisode) return false;
+      return item.status != TaskStatus.complete &&
+          item.status != TaskStatus.canceled;
+    });
+    final isDownloading = activeDownload != null;
+
     final detailsState = ref.watch(detailsControllerProvider(parentItem.url));
     final details = detailsState.item;
     final selectionKey = episodeSelectionKey(episode);
@@ -157,8 +170,13 @@ class EpisodeCard extends HookConsumerWidget {
     final isSelected = detailsState.selectedEpisodeKeys.contains(selectionKey);
 
     final progressMap = ref.watch(downloadProgressProvider);
-    final downloadProgressData = progressMap[episode.url];
-    final downloadProgress = downloadProgressData?.progress ?? 0.0;
+    final logicalId = activeDownload?.logicalId?.trim();
+    final downloadProgressData =
+        logicalId != null && logicalId.isNotEmpty
+        ? progressMap[logicalId]
+        : null;
+    final downloadProgress =
+        downloadProgressData?.progress ?? activeDownload?.progress ?? 0.0;
 
     final downloadedFile = ref.watch(downloadedFilesProvider)[episode.url];
 

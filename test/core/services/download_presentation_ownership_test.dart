@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('downloads presentation never owns lifecycle persistence or cleanup', () {
+  test('downloads presentation never writes executor lifecycle state directly', () {
     final source = File(
       'lib/features/library/presentation/downloads_provider.dart',
     ).readAsStringSync();
@@ -20,44 +20,45 @@ void main() {
     );
     expect(
       source,
-      isNot(contains('storage.removeDownloadMetadata(')),
-      reason: 'presentation must not delete lifecycle metadata',
-    );
-    expect(
-      source,
       isNot(contains('deleteDownloadedEpisodeArtwork(')),
       reason: 'presentation should submit commands and project snapshots only',
     );
+    expect(
+      source,
+      contains('downloadManagerV2Provider'),
+      reason: 'presentation lifecycle commands must use the V2 manager',
+    );
   });
 
-  test('downloads presentation reads service-owned logical snapshots only', () {
+  test('downloads presentation projects manager and store logical snapshots', () {
     final presentation = File(
       'lib/features/library/presentation/downloads_provider.dart',
-    ).readAsStringSync();
-    final service = File(
-      'lib/core/services/download_service.dart',
     ).readAsStringSync();
 
     expect(
       presentation,
       isNot(contains('FileDownloader().database.allRecords(')),
-      reason: 'raw executor inventory belongs behind DownloadService',
+      reason: 'raw executor inventory belongs behind the V2 gateway',
     );
     expect(
       presentation,
-      isNot(contains('storageServiceProvider')),
-      reason: 'presentation must not merge lifecycle metadata itself',
+      contains('logicalDownloadStoreV2Provider'),
+      reason: 'list refresh must load logical records from the V2 store',
     );
     expect(
       presentation,
-      contains('logicalDownloadSnapshots('),
-      reason: 'list refresh must consume a service-owned logical snapshot',
+      contains('getAllDownloadMetadata()'),
+      reason: 'presentation may join app-owned display metadata to logical rows',
     );
     expect(
       presentation,
-      contains('logicalDownloadSnapshotForTask('),
-      reason: 'new task projection must also use the service snapshot seam',
+      contains('manager.snapshotFor(record.logicalId)'),
+      reason: 'transport snapshots must come from the V2 manager',
     );
-    expect(service, contains('Future<List<DownloadLogicalSnapshot>>'));
+    expect(
+      presentation,
+      contains('logicalId: record.logicalId.value'),
+      reason: 'rows must retain the logical V2 identity',
+    );
   });
 }

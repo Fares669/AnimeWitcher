@@ -18,7 +18,7 @@ import '../../../../core/logger/app_logger.dart';
 
 import 'package:animewitcher/core/account/account_providers.dart';
 
-import '../../../../core/services/download_service.dart';
+import '../../details/presentation/downloaded_file_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/extensions/extension_manager.dart';
@@ -3479,11 +3479,9 @@ class PlayerController extends Notifier<PlayerState> {
     if (nextEpisode.url != this.nextEpisode?.url) selectedSource = null;
 
     // Smart Next Episode: downloaded files bypass network source selection.
-    final downloadService = ref.read(downloadServiceProvider);
-    final localFile = await downloadService.getDownloadedFile(
-      _item,
-      episode: nextEpisode,
-    );
+    final localFile = await ref
+        .read(downloadedFilesProvider.notifier)
+        .resolveFile(_item, episode: nextEpisode);
 
     final bool isLocal = localFile != null;
     final bool useDirectSelectedSource =
@@ -3557,11 +3555,9 @@ class PlayerController extends Notifier<PlayerState> {
 
     saveProgress();
 
-    final downloadService = ref.read(downloadServiceProvider);
-    final localFile = await downloadService.getDownloadedFile(
-      _item,
-      episode: episode,
-    );
+    final localFile = await ref
+        .read(downloadedFilesProvider.notifier)
+        .resolveFile(_item, episode: episode);
 
     final bool isLocal = localFile != null;
     final bool useDirectSelectedSource =

@@ -104,28 +104,4 @@ void main() {
       expect(downloadInternalSourceValidationRequired(task), isTrue);
     },
   );
-
-  test(
-    'DownloadService delegates logical merge policy to DownloadJobStore',
-    () {
-      final service = File('lib/core/services/download_service.dart')
-          .readAsStringSync();
-      final start = service.indexOf('Future<bool> _checkpointLogicalJob(');
-      final end = service.indexOf(
-        'Future<void> _recoverPersistedDownloads',
-        start,
-      );
-      expect(start, greaterThanOrEqualTo(0));
-      expect(end, greaterThan(start));
-      final section = service.substring(start, end);
-      expect(section, contains('_jobStore.checkpoint('));
-      expect(section, isNot(contains('DownloadJobRecord(')));
-
-      final parallel = File(
-        'lib/core/services/persistent_parallel_download.dart',
-      ).readAsStringSync();
-      expect(parallel, contains('verifyPartSource'));
-      expect(parallel, contains('sourceValidationRequired'));
-    },
-  );
 }

@@ -25,6 +25,7 @@ void main() {
     Duration diskProgressPollInterval = const Duration(seconds: 1),
     bool preserveNativeParts = false,
     void Function(String parentTaskId)? onPausedDrainSettled,
+    void Function(String event, Map<String, Object?> fields)? diagnosticEvent,
   }) => PersistentParallelDownload(
     startPart: (task, progress, size) async {
       starts.add(task);
@@ -48,6 +49,7 @@ void main() {
     livePartIds: () async => liveIds,
     shouldDrainPartOnPause: preserveNativeParts ? (_) => true : null,
     onPausedDrainSettled: onPausedDrainSettled,
+    diagnosticEvent: diagnosticEvent,
     recoveryDelay: const Duration(milliseconds: 10),
     diskProgressPollInterval: diskProgressPollInterval,
   );
@@ -141,6 +143,30 @@ void main() {
       reason: 'restore must not create a writer when no manifest exists',
     );
   });
+  test('one connection checkpoints a large file into bounded ranges', () async {
+    const mib = 1024 * 1024;
+    parent = ParallelDownloadTask(
+      taskId: 'episode-single',
+      url: 'https://example.com/video-single',
+      filename: 'video-single.mp4',
+      directory: directory.path,
+      baseDirectory: BaseDirectory.root,
+      chunks: 1,
+      allowPause: true,
+    );
+
+    expect(await coordinator.start(parent, 64 * mib), isTrue);
+    expect(starts, hasLength(1));
+    expect(
+      starts.single.headers['Range'],
+      'bytes=0-1048575',
+      reason:
+          'a one-connection iOS download still needs small immutable '
+          'checkpoints so Pause and process recreation never depend on '
+          'URLSession resumeData for one giant file',
+    );
+  });
+
   test('five parts cover each byte once', () async {
     expect(await coordinator.start(parent, 23), isTrue);
     await expandFreshTo(5);
@@ -202,7 +228,7 @@ void main() {
   );
 
   test(
-    'native iOS byte bridge advances parent before final part file exists',
+    'native iOS temp bytes never advance durable recovery progress',
     () async {
       expect(await coordinator.start(parent, 100), isTrue);
       expect(starts.length, 1);
@@ -218,11 +244,98 @@ void main() {
 
       final parentRecord = records[parent.taskId]!;
       expect(parentRecord.status, TaskStatus.running);
-      expect(parentRecord.progress, closeTo(.1, .001));
+      expect(
+        parentRecord.progress,
+        closeTo(.1, .001),
+        reason: 'live telemetry may still show URLSession temp bytes',
+      );
+      expect(
+        coordinator.durableProgressFor(parent.taskId),
+        0,
+        reason:
+            'V2 recovery must ignore bytes that exist only in URLSession temp '
+            'storage because iOS may discard them on process termination',
+      );
+      expect(coordinator.durableBytesFor(parent.taskId), 0);
       expect(statuses, contains(TaskStatus.running));
       await waitUntil(() => starts.length >= 3);
     },
   );
+
+  test('aggregate diagnostic heartbeat separates live and durable bytes', () async {
+    final diagnosticEvents = <({String event, Map<String, Object?> fields})>[];
+    await coordinator.dispose();
+    coordinator = create(
+      diagnosticEvent: (event, fields) {
+        diagnosticEvents.add((event: event, fields: Map<String, Object?>.from(fields)));
+      },
+    );
+
+    expect(await coordinator.start(parent, 100), isTrue);
+    final first = starts.single;
+    await coordinator.handleNativeChunkUpdate(
+      parentTaskId: parent.taskId,
+      chunkTaskId: first.taskId,
+      writtenBytes: 10,
+      expectedBytes: 20,
+      speedBytesPerSecond: 500000,
+    );
+
+    await waitUntil(
+      () => diagnosticEvents.any((entry) => entry.event == 'parallel.heartbeat'),
+    );
+    final heartbeat = diagnosticEvents.lastWhere(
+      (entry) => entry.event == 'parallel.heartbeat',
+    ).fields;
+    expect(heartbeat['taskId'], parent.taskId);
+    expect(heartbeat['liveBytes'], 10);
+    expect(heartbeat['durableBytes'], 0);
+    expect(heartbeat['nativeWrittenBytes'], 10);
+    expect(heartbeat['configuredConnections'], parent.chunks);
+    expect(heartbeat['activeConnections'], greaterThanOrEqualTo(1));
+    expect(heartbeat['checkpointSequence'], greaterThanOrEqualTo(1));
+  });
+
+  test('package progress heartbeat does not invent native byte evidence', () async {
+    final diagnosticEvents = <({String event, Map<String, Object?> fields})>[];
+    await coordinator.dispose();
+    coordinator = create(
+      diagnosticEvent: (event, fields) {
+        diagnosticEvents.add(
+          (event: event, fields: Map<String, Object?>.from(fields)),
+        );
+      },
+    );
+
+    expect(await coordinator.start(parent, 100), isTrue);
+    final first = starts.single;
+    coordinator.handleUpdate(
+      TaskProgressUpdate(
+        first,
+        .5,
+        20,
+        0.5,
+        const Duration(seconds: 1),
+      ),
+    );
+
+    await waitUntil(
+      () => diagnosticEvents.any((entry) => entry.event == 'parallel.heartbeat'),
+    );
+    final heartbeat = diagnosticEvents.lastWhere(
+      (entry) => entry.event == 'parallel.heartbeat',
+    ).fields;
+
+    expect(heartbeat['liveBytes'], 10);
+    expect(
+      heartbeat.containsKey('nativeWrittenBytes'),
+      isFalse,
+      reason:
+          'package/Dart progress is live byte evidence but must not be mislabeled '
+          'as native URLSession bridge bytes',
+    );
+    expect(heartbeat['lastByteAgeMs'], isNotNull);
+  });
 
   test('native iOS completion bridge adopts the exact moved part', () async {
     expect(await coordinator.start(parent, 100), isTrue);

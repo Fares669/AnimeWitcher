@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:collection/collection.dart';
+import 'package:background_downloader/background_downloader.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/episode_label.dart';
 import '../../../core/account/account_providers.dart';
@@ -13,7 +14,7 @@ import '../../../core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
 import '../../library/presentation/history_provider.dart';
 import 'playback_launcher.dart';
-import '../../../core/services/download_service.dart';
+import '../../library/presentation/downloads_provider.dart';
 import '../../../core/providers/anime_data_source_settings_provider.dart';
 import '../../../core/providers/episode_sort_provider.dart';
 import '../../../core/services/anizip_service.dart';
@@ -145,12 +146,32 @@ class DetailsController extends _$DetailsController {
 
   @override
   DetailsState build(String itemUrl) {
-    ref.listen(activeDownloadsProvider, (prev, next) {
+    ref.listen(downloadsProvider, (prev, next) {
       final details = state.details.asData?.value;
       if (details == null) return;
 
-      final previousSet = prev ?? <String>{};
-      final finishingUrls = previousSet.difference(next);
+      Set<String> activeTrackingUrls(List<DownloadItem> items) {
+        final result = <String>{};
+        for (final item in items) {
+          if (item.status == TaskStatus.complete ||
+              item.status == TaskStatus.canceled) {
+            continue;
+          }
+          final trackingUrl = item.trackingUrl.trim();
+          if (trackingUrl.isNotEmpty) result.add(trackingUrl);
+          final episodeUrl = item.episode?.url.trim() ?? '';
+          if (episodeUrl.isNotEmpty) result.add(episodeUrl);
+        }
+        return result;
+      }
+
+      final previousSet = activeTrackingUrls(
+        prev?.value ?? const <DownloadItem>[],
+      );
+      final currentSet = activeTrackingUrls(
+        next.value ?? const <DownloadItem>[],
+      );
+      final finishingUrls = previousSet.difference(currentSet);
 
       if (finishingUrls.isNotEmpty) {
         if (kDebugMode) {
@@ -1190,10 +1211,9 @@ class DetailsController extends _$DetailsController {
       return true;
     }
     final episode = specificEpisode ?? state.targetEpisode;
-    final file = await ref.read(downloadServiceProvider).getDownloadedFile(
-      details,
-      episode: episode,
-    );
+    final file = await ref
+        .read(downloadedFilesProvider.notifier)
+        .resolveFile(details, episode: episode);
     return file != null;
   }
 

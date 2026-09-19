@@ -1,9 +1,11 @@
+import 'package:background_downloader/background_downloader.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/navigation/taskbar_destination.dart';
 import '../../../core/services/download_concurrency.dart';
+import '../../../core/services/download_continued_processing_service.dart';
 import '../../../core/services/download_parallel.dart';
-import '../../../core/services/download_service.dart';
+import '../../../core/services/download_v2/background_downloader_gateway.dart';
 import '../../../core/storage/settings_repository.dart';
 
 part 'general_settings_provider.g.dart';
@@ -84,7 +86,8 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
   }
 
   Future<void> setDownloadDiagnosticLog(bool enabled) async {
-    await ref.read(downloadServiceProvider).setDiagnosticLogging(enabled);
+    await ref.read(settingsRepositoryProvider).setDownloadDiagnosticLog(enabled);
+    await configureNativeDownloadDiagnosticLog(enabled);
     state = state.copyWith(downloadDiagnosticLog: enabled);
   }
 
@@ -134,14 +137,15 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
     state = state.copyWith(alwaysOnTop: enabled);
   }
 
-  /// Writes the 1–10 cap and reconfigures the live downloader immediately.
+  /// Persists the logical episode cap without constructing the legacy
+  /// downloader. Download Manager V2 owns applying this preference to V2
+  /// admission; the package remains the transport authority for admitted work.
   Future<void> setDownloadConcurrency(int value) async {
+    final normalized = clampDownloadConcurrency(value);
     await ref
-        .read(downloadServiceProvider)
-        .applyQueueSettings(maxConcurrent: value);
-    state = state.copyWith(
-      downloadConcurrency: clampDownloadConcurrency(value),
-    );
+        .read(settingsRepositoryProvider)
+        .setDownloadConcurrency(normalized);
+    state = state.copyWith(downloadConcurrency: normalized);
   }
 
   Future<void> setDownloadParallelParts(int value) async {
@@ -155,7 +159,10 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
   Future<void> setDownloadNotificationPrefs(
     DownloadNotificationPrefs prefs,
   ) async {
-    await ref.read(downloadServiceProvider).applyNotificationSettings(prefs);
+    await ref
+        .read(settingsRepositoryProvider)
+        .setDownloadNotificationPrefs(prefs);
+    await configurePackageNotificationsV2(FileDownloader(), prefs);
     state = state.copyWith(downloadNotifications: prefs);
   }
 }

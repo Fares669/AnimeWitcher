@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
-import 'package:animewitcher/core/services/download_service.dart';
 import 'package:animewitcher/core/utils/download_cleanup.dart';
 import 'package:animewitcher/shared/widgets/custom_widgets.dart';
 import '../../../library/presentation/downloads_provider.dart';
@@ -56,7 +55,7 @@ class DownloadManagementDialog extends HookConsumerWidget {
     final matchingItems = downloads
         .where(
           (d) =>
-              downloadTrackingUrl(d.task) == tracking ||
+              d.trackingUrl.trim() == tracking ||
               (d.episode?.url.trim() ?? '') == tracking,
         )
         .toList();
@@ -160,7 +159,7 @@ class DownloadManagementDialog extends HookConsumerWidget {
       if (matchingItems.isNotEmpty) {
         await ref.read(downloadsProvider.notifier).removeDownloads(matchingItems);
       } else {
-        await ref.read(downloadServiceProvider).deleteDownloadedFile(file);
+        await deleteDownloadedVideo(file);
       }
 
       ref

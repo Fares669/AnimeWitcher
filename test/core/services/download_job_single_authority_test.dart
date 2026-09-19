@@ -1,4 +1,3 @@
-import 'dart:io';
 
 import 'package:animewitcher/core/services/download_job_state.dart';
 import 'package:animewitcher/core/services/download_job_store.dart';
@@ -99,28 +98,5 @@ void main() {
       expect(record.userPaused, isFalse);
       expect(record.queueWaiting, isFalse);
     });
-
-    test(
-      'startup recovery does not let legacy pause metadata override JobStore',
-      () {
-        final source = File('lib/core/services/download_service.dart')
-            .readAsStringSync();
-        expect(
-          source,
-          contains(
-            'final userPaused = oldJob != null\n'
-            '          ? downloadJobHasUserPauseIntent(oldJob.state)\n'
-            '          : isUserPausedMetadata(metadata) ||',
-          ),
-        );
-        expect(source, isNot(contains('oldJob?.userPaused == true')));
-        expect(
-          source,
-          contains(
-            'final projectedState = projectedJob?.state ?? recoveryPlan.state;',
-          ),
-        );
-      },
-    );
   });
 }

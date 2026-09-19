@@ -11,14 +11,26 @@ const int kDownloadPartsMin = 1;
 const int kDownloadPartsMax = 16;
 const int kDownloadGlobalConnectionBudget = 16;
 
+/// Preserve the selected legacy width. Download Manager V2 applies its own
+/// package/platform safety policy at the gateway boundary instead of mutating
+/// the user's stored preference.
+int effectiveDownloadPartsForPlatform({
+  required int selectedParts,
+  required bool isIOS,
+}) {
+  return selectedParts.clamp(kDownloadPartsMin, kDownloadPartsMax).toInt();
+}
+
+
 /// Gopeed lets an idle connection steal half of a slow connection's remaining
 /// range. Native URLSession/background_downloader children cannot safely change
-/// their Range header after launch, so AnimeWitcher uses a conservative work
-/// queue instead: large transfers are pre-split into at most twice as many
-/// immutable work units while no more than [kDownloadPartsMax] are active.
-/// Finished connections can then pick up queued tail work without touching an
-/// in-flight native request.
-const int kDownloadWorkUnitsMax = kDownloadPartsMax * 2;
+/// their Range header after launch, so AnimeWitcher uses immutable checkpoint
+/// ranges instead. Connection count stays capped at [kDownloadPartsMax], while
+/// large files may have many queued checkpoints. This makes a completed Range a
+/// small durable recovery unit instead of making one native task own tens or
+/// hundreds of megabytes that iOS may discard on process termination.
+const int kDownloadWorkUnitsMax = 512;
+const int kDownloadCheckpointTargetBytes = 1024 * 1024;
 const int kDownloadTailBalanceMinUnitBytes = 512 * 1024;
 
 const List<int> kDownloadPartChoices = <int>[
@@ -90,6 +102,41 @@ int selectAdaptiveDownloadParts({
   return 16;
 }
 
+/// Selects the width handed to Download Manager V2.
+///
+/// On iOS the V2 gateway performs its own exact byte-range probe before it
+/// starts the durable ranged transport. Therefore preliminary metadata must not
+/// collapse an explicit manual width (for example 16) to one connection. Auto
+/// may likewise request a size-based candidate so the gateway gets a chance to
+/// prove Range support. Non-iOS keeps the existing conservative preflight.
+int selectV2DownloadParts({
+  required int preference,
+  required int totalBytes,
+  required bool metadataSupportsRanges,
+  required bool isIOS,
+}) {
+  if (!isIOS) {
+    return selectAdaptiveDownloadParts(
+      preference: preference,
+      totalBytes: totalBytes,
+      supportsRanges: metadataSupportsRanges,
+    );
+  }
+
+  final normalized = normalizeDownloadPartPreference(preference);
+  if (normalized > 0) {
+    return normalized.clamp(kDownloadPartsMin, kDownloadPartsMax).toInt();
+  }
+
+  return selectAdaptiveDownloadParts(
+    preference: kDownloadPartsAuto,
+    totalBytes: totalBytes,
+    // This is only a probe-worthy candidate. The iOS V2 gateway still proves
+    // Range support before opening more than one native writer.
+    supportsRanges: true,
+  );
+}
+
 /// Number of immutable byte ranges kept in the tail work queue.
 ///
 /// This never raises the active connection ceiling. It only creates spare work
@@ -104,11 +151,26 @@ int selectDownloadWorkUnitCount({
   final active = connections
       .clamp(kDownloadPartsMin, kDownloadPartsMax)
       .toInt();
-  if (active <= 1 || totalBytes <= 0) return active;
+  if (totalBytes <= 0) return active;
 
-  final desired = (active * 2).clamp(active, kDownloadWorkUnitsMax).toInt();
+  final tailTarget = (active * 2)
+      .clamp(active, kDownloadWorkUnitsMax)
+      .toInt();
+  final checkpointTarget =
+      ((totalBytes + kDownloadCheckpointTargetBytes - 1) ~/
+              kDownloadCheckpointTargetBytes)
+          .clamp(active, kDownloadWorkUnitsMax)
+          .toInt();
+  final desired = tailTarget > checkpointTarget
+      ? tailTarget
+      : checkpointTarget;
+
+  // Never create sub-512 KiB work solely for checkpointing. Very small files
+  // may still have smaller ranges when the user explicitly requests more
+  // simultaneous connections than this size bound can provide.
   final sizeBound = totalBytes ~/ kDownloadTailBalanceMinUnitBytes;
-  return sizeBound.clamp(active, desired).toInt();
+  if (sizeBound < active) return active;
+  return sizeBound < desired ? sizeBound : desired;
 }
 
 const String kLogicalDownloadGroup = 'downloads';

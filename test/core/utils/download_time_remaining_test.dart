@@ -1,8 +1,8 @@
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:animewitcher/core/services/download_service.dart';
 import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/l10n/generated/app_localizations_ar.dart';
 
@@ -48,12 +48,6 @@ void main() {
       formatDownloadSpeed(_data(networkSpeed: 1.5), l10n),
       '1.50 MB/s',
     );
-  });
-
-  test('DownloadProgressData.speedString is Arabic', () {
-    expect(_data().speedString, 'جارٍ الحساب…');
-    expect(_data(status: TaskStatus.paused).speedString, 'متوقف');
-    expect(_data(progress: 1, networkSpeed: 2).speedString, 'اكتمل');
   });
 
   testWidgets('formatDownloadTimeRemaining uses Arabic units', (tester) async {

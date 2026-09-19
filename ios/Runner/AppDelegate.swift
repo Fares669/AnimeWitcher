@@ -25,12 +25,9 @@ import UserNotifications
       print("[AppDelegate] Audio session error: \(error)")
     }
     if #available(iOS 10.0, *) {
+      // Keep foreground presentation configured, but ask for permission only
+      // when the user starts a real download.
       UNUserNotificationCenter.current().delegate = self
-      UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
-        if granted {
-          print("[AppDelegate] Notification permission granted")
-        }
-      }
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)

@@ -57,6 +57,50 @@ void main() {
       }
     });
 
+    test('iOS V2 preserves manual width when metadata Range support is inconclusive', () {
+      const mib = 1024 * 1024;
+      expect(
+        selectV2DownloadParts(
+          preference: 16,
+          totalBytes: 392 * mib,
+          metadataSupportsRanges: false,
+          isIOS: true,
+        ),
+        16,
+      );
+      expect(
+        selectV2DownloadParts(
+          preference: 16,
+          totalBytes: 392 * mib,
+          metadataSupportsRanges: false,
+          isIOS: false,
+        ),
+        1,
+      );
+    });
+
+    test('iOS V2 Auto may request a probe-worthy width before Range is proven', () {
+      const mib = 1024 * 1024;
+      expect(
+        selectV2DownloadParts(
+          preference: 0,
+          totalBytes: 392 * mib,
+          metadataSupportsRanges: false,
+          isIOS: true,
+        ),
+        4,
+      );
+      expect(
+        selectV2DownloadParts(
+          preference: 0,
+          totalBytes: 99 * mib,
+          metadataSupportsRanges: false,
+          isIOS: true,
+        ),
+        1,
+      );
+    });
+
     test('manual preference can request the full sixteen', () {
       const mib = 1024 * 1024;
       expect(
@@ -65,6 +109,25 @@ void main() {
           totalBytes: 2 * 1024 * mib,
           supportsRanges: true,
         ),
+        16,
+      );
+    });
+
+    test('legacy preference helper preserves the selected width', () {
+      expect(
+        effectiveDownloadPartsForPlatform(selectedParts: 16, isIOS: true),
+        16,
+      );
+      expect(
+        effectiveDownloadPartsForPlatform(selectedParts: 8, isIOS: true),
+        8,
+      );
+      expect(
+        effectiveDownloadPartsForPlatform(selectedParts: 1, isIOS: true),
+        1,
+      );
+      expect(
+        effectiveDownloadPartsForPlatform(selectedParts: 16, isIOS: false),
         16,
       );
     });
@@ -79,7 +142,7 @@ void main() {
         selectDownloadWorkUnitCount(connections: 16, totalBytes: 16 * mib),
         32,
       );
-      expect(kDownloadWorkUnitsMax, 32);
+      expect(kDownloadWorkUnitsMax, 512);
     });
 
     test('tail work never creates tiny extra ranges', () {
@@ -90,7 +153,10 @@ void main() {
       );
       expect(
         selectDownloadWorkUnitCount(connections: 1, totalBytes: 2 * 1024 * mib),
-        1,
+        512,
+        reason:
+            'one native writer still needs bounded durable checkpoints; '
+            'connection count and checkpoint count are separate concerns',
       );
     });
 

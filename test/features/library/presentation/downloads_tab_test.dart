@@ -4,7 +4,9 @@ import 'dart:ui' as ui;
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
-import 'package:animewitcher/core/services/download_service.dart';
+import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
+import 'package:animewitcher/core/services/notification_service.dart';
 import 'package:animewitcher/core/utils/download_cleanup.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:animewitcher/features/library/presentation/widgets/downloads_tab.dart';
@@ -73,12 +75,19 @@ DownloadItem _item({
 }
 
 class _StubDownloadsNotifier extends DownloadsNotifier {
-  _StubDownloadsNotifier(this._items);
+  _StubDownloadsNotifier(this._items, {this.resumeError});
 
   final List<DownloadItem> _items;
+  final Object? resumeError;
 
   @override
   Future<List<DownloadItem>> build() async => _items;
+
+  @override
+  Future<void> resumeDownload(String taskId) async {
+    final error = resumeError;
+    if (error != null) throw error;
+  }
 }
 
 class _StubEpisodeSortAscendingNotifier extends EpisodeSortAscendingNotifier {
@@ -94,6 +103,8 @@ Widget _downloadsApp(
   List<DownloadItem> items, {
   TextDirection? shellDirection,
   bool episodeSortAscending = true,
+  Object? resumeError,
+  NotificationService? notificationService,
 }) {
   Widget home = const Scaffold(
     body: RepaintBoundary(
@@ -106,7 +117,11 @@ Widget _downloadsApp(
   }
   return ProviderScope(
     overrides: [
-      downloadsProvider.overrideWith(() => _StubDownloadsNotifier(items)),
+      downloadsProvider.overrideWith(
+        () => _StubDownloadsNotifier(items, resumeError: resumeError),
+      ),
+      if (notificationService != null)
+        notificationServiceProvider.overrideWithValue(notificationService),
       episodeSortAscendingProvider.overrideWith(
         () => _StubEpisodeSortAscendingNotifier(episodeSortAscending),
       ),
@@ -122,6 +137,45 @@ Widget _downloadsApp(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('resume failure is caught and surfaced as an error toast', (
+    tester,
+  ) async {
+    final notifications = NotificationService();
+    addTearDown(() {
+      notifications.clearToasts();
+      notifications.dispose();
+    });
+
+    await tester.pumpWidget(
+      _downloadsApp(
+        <DownloadItem>[
+          _item(
+            taskId: 'paused-v2',
+            timestamp: 1,
+            status: TaskStatus.paused,
+          ),
+        ],
+        resumeError: StateError('source re-selection required'),
+        notificationService: notifications,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(notifications.toasts, hasLength(1));
+    expect(notifications.toasts.single.type, ToastType.error);
+    expect(
+      notifications.toasts.single.message,
+      contains('source re-selection required'),
+    );
+
+    notifications.clearToasts();
+    await tester.pump();
+  });
 
   testWidgets('delete uses the task file path, not reconstructed labels', (
     tester,

@@ -116,7 +116,16 @@ class DownloadTelemetryEstimator {
     if (speed <= 0) speed = _medianReportedSpeed(state.reportedSpeedSamples);
 
     final lastByteAt = state.lastByteAt;
-    if (lastByteAt != null && timestamp.difference(lastByteAt) >= staleAfter) {
+    final lastReportedSpeedAt = state.reportedSpeedSamples.isEmpty
+        ? null
+        : state.reportedSpeedSamples.last.at;
+    final hasFreshByte = lastByteAt != null &&
+        timestamp.difference(lastByteAt) < staleAfter;
+    final hasFreshReportedSpeed = lastReportedSpeedAt != null &&
+        timestamp.difference(lastReportedSpeedAt) < staleAfter;
+    if (!hasFreshByte &&
+        !hasFreshReportedSpeed &&
+        (lastByteAt != null || lastReportedSpeedAt != null)) {
       speed = 0;
     }
 

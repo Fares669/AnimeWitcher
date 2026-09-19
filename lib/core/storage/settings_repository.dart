@@ -55,6 +55,9 @@ class SettingsRepository {
   Future<void> setDownloadConcurrency(int value) =>
       _storageService.setDownloadConcurrency(value);
 
+  Future<void> setDownloadDiagnosticLog(bool enabled) =>
+      _storageService.setDownloadDiagnosticLog(enabled);
+
   bool getDownloadDiagnosticLog() => _storageService.getDownloadDiagnosticLog();
 
   int getDownloadConcurrency() => _storageService.getDownloadConcurrency();
@@ -94,8 +97,7 @@ class SettingsRepository {
   Future<void> setHighQualityPostersEnabled(bool enabled) =>
       _storageService.setHighQualityPostersEnabled(enabled);
 
-  bool isHighQualityPostersEnabled() =>
-      _storageService.isHighQualityPostersEnabled();
+  bool isHighQualityPostersEnabled() => _storageService.isHighQualityPostersEnabled();
 
   Future<void> setCustomBaseUrl(String packageName, String? url) =>
       _storageService.setCustomBaseUrl(packageName, url);

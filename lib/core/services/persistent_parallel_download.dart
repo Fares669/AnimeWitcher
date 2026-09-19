@@ -398,6 +398,7 @@ class NativeParallelBackgroundPlan {
 class PersistentParallelDownload {
   PersistentParallelDownload({
     this.diagnosticLog,
+    this.diagnosticEvent,
     required this.startPart,
     required this.pausePart,
     required this.cancelParts,
@@ -424,6 +425,8 @@ class PersistentParallelDownload {
   });
 
   final DownloadDiagnosticLog? diagnosticLog;
+  final void Function(String event, Map<String, Object?> fields)?
+  diagnosticEvent;
   final Future<bool> Function(DownloadTask task, double progress, int size)
   startPart;
   final Future<void> Function(DownloadTask task) pausePart;
@@ -484,9 +487,43 @@ class PersistentParallelDownload {
     return session != null && _activeConnectionsForSession(session) > 0;
   }
 
-  /// The byte-credible aggregate for a restored/live multipart parent.
-  /// Native 0.999 completion sentinels are intentionally excluded.
+  /// Number of native writers currently reserved/owned by one parent session.
+  /// This is transient telemetry only and is never persisted as resume state.
+  int? activeConnectionCountFor(String id) {
+    final session = _sessions[id];
+    return session == null ? null : _activeConnectionsForSession(session);
+  }
+
+  void _recordDiagnostic(String event, [Map<String, Object?> fields = const {}]) {
+    diagnosticLog?.record(event, fields);
+    diagnosticEvent?.call(event, fields);
+  }
+
+  void _recordSessionAnomaly(
+    _ParallelSession session,
+    String anomaly,
+    Map<String, Object?> fields,
+  ) {
+    if (!session.activeDiagnosticAnomalies.add(anomaly)) return;
+    _recordDiagnostic('parallel.anomaly', <String, Object?>{
+      'taskId': session.task.taskId,
+      'anomaly': anomaly,
+      ...fields,
+    });
+  }
+
+  void _clearSessionAnomaly(_ParallelSession session, String anomaly) {
+    session.activeDiagnosticAnomalies.remove(anomaly);
+  }
+
+  /// Byte-credible live aggregate for presentation/telemetry.
+  /// This may include bytes still owned by a native temporary file.
   double? progressFor(String id) => _sessions[id]?.progress;
+
+  /// Recoverable aggregate proven by completed/visible immutable Range bytes.
+  /// V2 uses this value across pause/relaunch boundaries so native temp bytes
+  /// can never appear as resumable progress.
+  double? durableProgressFor(String id) => _sessions[id]?.durableProgress;
 
   /// Exact recoverable bytes proven by the current multipart manifest/disk.
   int? durableBytesFor(String id) => _sessions[id]?.creditedBytes;
@@ -595,6 +632,12 @@ class PersistentParallelDownload {
     part.tailWatchProgress = -1;
     part.lastNativeBridgeBytes = durableBytes;
     part.lastNativeBridgeAt = null;
+    _recordDiagnostic('parallel.diskManifestMismatch', {
+      'taskId': session.task.taskId,
+      'childTaskId': childTaskId,
+      'durableBytes': durableBytes,
+      'reason': 'undurableProgressReset',
+    });
     onPartProgress(session.task.taskId, childTaskId, repaired);
     if (session.active) _scheduleAggregateProgress(session);
     return true;
@@ -1362,7 +1405,7 @@ class PersistentParallelDownload {
             return;
           }
 
-          diagnosticLog?.record('parallel.restoredOwnerReleased', {
+          _recordDiagnostic('parallel.restoredOwnerReleased', {
             'taskId': session.task.taskId,
             'childTaskId': part.task.taskId,
             'attemptGeneration': attemptGeneration,
@@ -1454,7 +1497,7 @@ class PersistentParallelDownload {
             return;
           }
 
-          diagnosticLog?.record('parallel.pendingStartLeaseExpired', {
+          _recordDiagnostic('parallel.pendingStartLeaseExpired', {
             'taskId': session.task.taskId,
             'childTaskId': part.task.taskId,
             'attemptGeneration': attemptGeneration,
@@ -1590,7 +1633,7 @@ class PersistentParallelDownload {
           final shouldRecover =
               shouldRecoverFailedStart?.call(part.task.taskId) ?? true;
           if (!shouldRecover) {
-            diagnosticLog?.record('parallel.childStartParked', {
+            _recordDiagnostic('parallel.childStartParked', {
               'taskId': part.task.taskId,
               'parentTaskId': session.task.taskId,
             });
@@ -1701,7 +1744,7 @@ class PersistentParallelDownload {
 
   void _notifyPausedDrainSettled(_ParallelSession session) {
     if (session.active || _activeConnectionsForSession(session) > 0) return;
-    diagnosticLog?.record('parallel.pauseDrainSettled', {
+    _recordDiagnostic('parallel.pauseDrainSettled', {
       'taskId': session.task.taskId,
     });
     onPausedDrainSettled?.call(session.task.taskId);
@@ -2105,7 +2148,7 @@ class PersistentParallelDownload {
     session.parentRecordWrite = operation.then<void>(
       (_) {},
       onError: (Object error, StackTrace stackTrace) {
-        diagnosticLog?.record('parallel.parentRecordPersistFailed', {
+        _recordDiagnostic('parallel.parentRecordPersistFailed', {
           'taskId': session.task.taskId,
           'errorType': error.runtimeType.toString(),
         });
@@ -2203,6 +2246,127 @@ class PersistentParallelDownload {
         );
       }
     }
+
+    DateTime? latestNativeAt;
+    var nativeWrittenBytes = 0;
+    var hasNativeByteEvidence = false;
+    for (final part in session.parts) {
+      final at = part.lastNativeBridgeAt;
+      if (at != null && (latestNativeAt == null || at.isAfter(latestNativeAt))) {
+        latestNativeAt = at;
+      }
+      if (at != null && part.lastNativeBridgeBytes >= 0) {
+        hasNativeByteEvidence = true;
+        nativeWrittenBytes +=
+            part.lastNativeBridgeBytes.clamp(0, part.size).toInt();
+      }
+    }
+    int? ageMs(DateTime? at) => at == null
+        ? null
+        : timestamp.difference(at).inMilliseconds.clamp(0, 1 << 30).toInt();
+    final activeConnections = _activeConnectionsForSession(session);
+    final liveBytes = observedBytes;
+    final durableBytes = session.creditedBytes;
+
+    if (liveBytes > session.lastDiagnosticLiveBytes) {
+      session.lastDiagnosticAdvanceAt = timestamp;
+    }
+    final lastNativeAgeMs = ageMs(latestNativeAt);
+    final stalledForMs = ageMs(session.lastDiagnosticAdvanceAt);
+
+    _recordDiagnostic('parallel.heartbeat', {
+      'taskId': task.taskId,
+      'liveBytes': liveBytes,
+      'durableBytes': durableBytes,
+      'diskBytes': session.lastDiskObservedBytes >= 0
+          ? session.lastDiskObservedBytes
+          : durableBytes,
+      if (hasNativeByteEvidence) 'nativeWrittenBytes': nativeWrittenBytes,
+      'totalBytes': expectedBytes,
+      'checkpointSequence': session.checkpointSequence,
+      'configuredConnections': task.chunks,
+      'activeConnections': activeConnections,
+      'lastByteAgeMs': stalledForMs,
+      'lastNativeCallbackAgeMs': lastNativeAgeMs,
+      'lastCheckpointAgeMs': ageMs(session.lastCheckpointAt),
+      'lastStatusAgeMs': ageMs(session.lastStatusAt),
+      'parentActive': session.active,
+      'pauseRequested': session.pauseRequested,
+      'speedMBps': speed,
+      'diskObservedSpeedMBps': session.diskObservedSpeed,
+    });
+
+    final progressRegressed =
+        session.lastDiagnosticLiveBytes >= 0 &&
+        liveBytes < session.lastDiagnosticLiveBytes;
+    if (progressRegressed) {
+      _recordSessionAnomaly(session, 'progressRegression', {
+        'liveBytes': liveBytes,
+        'durableBytes': durableBytes,
+      });
+    } else {
+      _clearSessionAnomaly(session, 'progressRegression');
+    }
+
+    final durableRegressed =
+        session.lastDiagnosticDurableBytes >= 0 &&
+        durableBytes < session.lastDiagnosticDurableBytes;
+    if (durableRegressed) {
+      _recordSessionAnomaly(session, 'durableBytesRegression', {
+        'liveBytes': liveBytes,
+        'durableBytes': durableBytes,
+      });
+    } else {
+      _clearSessionAnomaly(session, 'durableBytesRegression');
+    }
+
+    if (activeConnections > task.chunks) {
+      _recordSessionAnomaly(session, 'activeConnectionMismatch', {
+        'configuredConnections': task.chunks,
+        'activeConnections': activeConnections,
+      });
+    } else {
+      _clearSessionAnomaly(session, 'activeConnectionMismatch');
+    }
+
+    if (activeConnections > 0 &&
+        stalledForMs != null &&
+        stalledForMs >= 10000) {
+      _recordSessionAnomaly(session, 'progressStalled', {
+        'liveBytes': liveBytes,
+        'durableBytes': durableBytes,
+        'lastByteAgeMs': stalledForMs,
+        'activeConnections': activeConnections,
+      });
+    } else {
+      _clearSessionAnomaly(session, 'progressStalled');
+    }
+
+    if (activeConnections > 0 &&
+        lastNativeAgeMs != null &&
+        lastNativeAgeMs >= 5000) {
+      _recordSessionAnomaly(session, 'callbackGap', {
+        'lastNativeCallbackAgeMs': lastNativeAgeMs,
+        'activeConnections': activeConnections,
+      });
+    } else {
+      _clearSessionAnomaly(session, 'callbackGap');
+    }
+
+    if (activeConnections > 0 &&
+        speed <= 0 &&
+        lastNativeAgeMs != null &&
+        lastNativeAgeMs >= 3000) {
+      _recordSessionAnomaly(session, 'speedZeroWhileActive', {
+        'lastNativeCallbackAgeMs': lastNativeAgeMs,
+        'activeConnections': activeConnections,
+      });
+    } else {
+      _clearSessionAnomaly(session, 'speedZeroWhileActive');
+    }
+
+    session.lastDiagnosticLiveBytes = liveBytes;
+    session.lastDiagnosticDurableBytes = durableBytes;
 
     onUpdate(
       TaskProgressUpdate(task, progress, expectedBytes, speed, timeRemaining),
@@ -2495,13 +2659,33 @@ class PersistentParallelDownload {
           if (callbackAttempt != null &&
               part.attemptGeneration > 0 &&
               callbackAttempt != part.attemptGeneration) {
-            diagnosticLog?.record('parallel.staleChildCallback', {
+            _recordDiagnostic('parallel.staleChildCallback', {
               'taskId': session.task.taskId,
               'childTaskId': part.task.taskId,
               'callbackAttempt': callbackAttempt,
               'currentAttempt': part.attemptGeneration,
             });
             return;
+          }
+          if (update is TaskStatusUpdate) {
+            _recordDiagnostic('parallel.childState', {
+              'taskId': session.task.taskId,
+              'childTaskId': part.task.taskId,
+              'status': update.status.name,
+              'rangeStart': part.from,
+              'rangeEnd': part.to,
+              'attemptGeneration': part.attemptGeneration,
+              'durableBytes': part.durableBytes,
+              if (part.lastNativeBridgeBytes >= 0)
+                'nativeWrittenBytes': part.lastNativeBridgeBytes,
+              'progress': part.credibleProgress,
+              'launched': part.launched,
+              'nativeLive': part.launched,
+              'slotReserved': _activeConnectionIds.contains(part.task.taskId),
+              'completed': part.complete,
+              'configuredConnections': session.task.chunks,
+              'activeConnections': _activeConnectionsForSession(session),
+            });
           }
           // Completion is durable; a late running/progress/retry callback must
           // never reserve its connection again or park the remaining parts.
@@ -2925,7 +3109,7 @@ class PersistentParallelDownload {
     }
 
     if (drainIds.isNotEmpty) {
-      diagnosticLog?.record('parallel.pauseDrain', {
+      _recordDiagnostic('parallel.pauseDrain', {
         'taskId': session.task.taskId,
         'count': drainIds.length,
       });
@@ -3043,7 +3227,7 @@ class PersistentParallelDownload {
 
     await _persist(session);
     await _status(session, TaskStatus.paused);
-    diagnosticLog?.record('parallel.pauseCommitted', {
+    _recordDiagnostic('parallel.pauseCommitted', {
       'taskId': session.task.taskId,
       'draining': retainedDrainCount,
     });
@@ -3085,11 +3269,23 @@ class PersistentParallelDownload {
   }
 
   Future<void> _status(_ParallelSession session, TaskStatus status) async {
-    diagnosticLog?.record('parallel.status', {
+    session.lastStatusAt = DateTime.now();
+    final previousStatus = session.lastDiagnosticStatus;
+    final reason = status == TaskStatus.complete
+        ? 'allPartsComplete'
+        : status == TaskStatus.paused && session.pauseRequested
+        ? 'pauseRequested'
+        : status == TaskStatus.running
+        ? 'coordinatorActive'
+        : 'coordinator';
+    _recordDiagnostic('parallel.status', {
       'taskId': session.task.taskId,
       'status': status.name,
+      if (previousStatus != null) 'previousStatus': previousStatus,
+      'reason': reason,
       'progress': session.progress,
     });
+    session.lastDiagnosticStatus = status.name;
     if (status == TaskStatus.running) {
       session.parentRunningReported = true;
     } else if (status == TaskStatus.enqueued || status == TaskStatus.paused) {
@@ -3141,6 +3337,18 @@ class PersistentParallelDownload {
       try {
         if (await temp.exists()) await temp.delete();
       } catch (_) {}
+    }
+    session.lastCheckpointAt = DateTime.now();
+    final durableBytes = session.creditedBytes;
+    if (durableBytes != session.lastDiagnosticCheckpointBytes) {
+      session.lastDiagnosticCheckpointBytes = durableBytes;
+      _recordDiagnostic('parallel.checkpoint', {
+        'taskId': session.task.taskId,
+        'checkpointSequence': session.checkpointSequence,
+        'durableBytes': durableBytes,
+        'totalBytes': session.size,
+        'manifestPartCount': session.parts.length,
+      });
     }
   }
 
@@ -3217,7 +3425,7 @@ class PersistentParallelDownload {
     _DownloadPart part, {
     required String reason,
   }) async {
-    diagnosticLog?.record('parallel.rangeRejected', {
+    _recordDiagnostic('parallel.rangeRejected', {
       'taskId': session.task.taskId,
       'childTaskId': part.task.taskId,
       'reason': reason,
@@ -3389,7 +3597,17 @@ class PersistentParallelDownload {
       final reserve = assemblyStorageReserveBytes < 0
           ? 0
           : assemblyStorageReserveBytes;
-      return free >= remainingBytes + reserve;
+      final enough = free >= remainingBytes + reserve;
+      if (!enough) {
+        _recordDiagnostic('assembly.insufficientStorage', {
+          'taskId': session.task.taskId,
+          'freeBytes': free,
+          'totalBytes': session.size,
+          'durableBytes': session.creditedBytes,
+          'reason': 'preflight',
+        });
+      }
+      return enough;
     } catch (_) {
       return true;
     }
@@ -3425,7 +3643,7 @@ class PersistentParallelDownload {
     File staging, {
     FileSystemException? error,
   }) async {
-    diagnosticLog?.record('assembly.insufficientStorage', {
+    _recordDiagnostic('assembly.insufficientStorage', {
       'taskId': session.task.taskId,
       'total': session.size,
       if (error?.osError?.errorCode != null)
@@ -3444,7 +3662,7 @@ class PersistentParallelDownload {
   }
 
   Future<void> _assemble(_ParallelSession session) async {
-    diagnosticLog?.record('assembly.begin', {
+    _recordDiagnostic('assembly.begin', {
       'taskId': session.task.taskId,
       'total': session.size,
       'count': session.parts.length,
@@ -3567,6 +3785,14 @@ class _ParallelSession {
   int lastDiskObservedBytes = -1;
   DateTime? lastDiskObservedAt;
   double diskObservedSpeed = 0;
+  DateTime? lastCheckpointAt;
+  DateTime? lastStatusAt;
+  String? lastDiagnosticStatus;
+  DateTime? lastDiagnosticAdvanceAt;
+  int lastDiagnosticLiveBytes = -1;
+  int lastDiagnosticDurableBytes = -1;
+  int lastDiagnosticCheckpointBytes = -1;
+  final Set<String> activeDiagnosticAnomalies = <String>{};
   bool parentRunningReported = false;
   DateTime? lastHostProfileSampleAt;
   Future<void> _pending = Future<void>.value();
@@ -3581,6 +3807,7 @@ class _ParallelSession {
         (sum, part) => sum + part.size * part.credibleProgress,
       ) /
       size;
+  double get durableProgress => size <= 0 ? 0 : creditedBytes / size;
   Future<void> get idle async {
     await _pending;
     await parentRecordWrite;
@@ -3613,6 +3840,8 @@ class _ParallelSession {
 
   void resetRamp() {
     cancelPartRetries();
+    activeDiagnosticAnomalies.clear();
+    lastDiagnosticAdvanceAt = DateTime.now();
     connectionCeiling = kDownloadPartsMin;
     lastHealthyConnections = 0;
     slowStartComplete = false;

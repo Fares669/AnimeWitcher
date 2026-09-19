@@ -26,7 +26,7 @@ import 'core/utils/factory_reset.dart';
 import 'core/utils/localized_text.dart';
 import 'core/providers/update_provider.dart';
 import 'core/widgets/update_dialog.dart';
-import 'core/services/download_service.dart';
+import 'core/services/download_v2/download_v2_provider.dart';
 import 'core/services/notification_service.dart';
 import 'core/widgets/m3_toast_overlay.dart';
 
@@ -287,13 +287,16 @@ class _MyAppState extends ConsumerState<MyApp>
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(
-        ref.read(downloadServiceProvider).init().catchError((Object error) {
-          if (kDebugMode) {
-            debugPrint(
-              '[DownloadService] Startup initialization deferred: $error',
-            );
-          }
-        }),
+        ref
+            .read(downloadManagerV2Provider)
+            .initialize()
+            .catchError((Object error) {
+              if (kDebugMode) {
+                debugPrint(
+                  '[DownloadManagerV2] Startup initialization deferred: $error',
+                );
+              }
+            }),
       );
       _checkAppUpdates();
       _maybeShowWelcomeDialog();
@@ -312,12 +315,6 @@ class _MyAppState extends ConsumerState<MyApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      unawaited(ref.read(downloadServiceProvider).onAppForegrounded());
-    } else if (state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.paused) {
-      unawaited(ref.read(downloadServiceProvider).onAppBackgrounded());
-    }
     if (state != AppLifecycleState.resumed) return;
     final account = ref
         .read(animeWitcherAccountControllerProvider)
@@ -746,7 +743,7 @@ class LaunchErrorApp extends StatelessWidget {
                         if (context.mounted) await AppUtils.restartApp(context);
                       },
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 16),
                     OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white,

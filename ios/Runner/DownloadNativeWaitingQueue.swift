@@ -352,6 +352,8 @@ enum DownloadNativeWaitingQueue {
   static let terminalObservation = DownloadTerminalObservation()
   private static var multipartChildSamples: [String: [String: RunningSample]] = [:]
   private static var lastMultipartOverlayTimes: [String: CFAbsoluteTime] = [:]
+  private static var v2ParallelChildSamples: [String: [String: RunningSample]] = [:]
+  private static var lastV2ParallelOverlayTimes: [String: CFAbsoluteTime] = [:]
   private static var latestDownloadSession: URLSession?
   private static var multipartPromotionParents = Set<String>()
   private static let chunkBridgeInterval: CFTimeInterval = 1.0
@@ -788,7 +790,10 @@ enum DownloadNativeWaitingQueue {
 
     let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
     let hasResumeData = !(resumeData?.isEmpty ?? true)
-    let multipartPart = isDownloadPart(task)
+    let multipartPart = isLegacyMultipartPart(task)
+    if isDownloadPart(task) && !multipartPart {
+      return false
+    }
     guard canRecreateBackgroundDownload(
       isMultipartPart: multipartPart,
       receivedBytes: task.countOfBytesReceived,
@@ -865,13 +870,16 @@ enum DownloadNativeWaitingQueue {
     // calls us after the plugin moved the temp file, so completion can now be
     // verified against the exact `.part` path by PersistentParallelDownload.
     if isDownloadPart(task) {
+      guard isObservableMultipartPart(task) else { return }
       postMultipartChunkUpdate(
         task,
         totalWritten: task.countOfBytesReceived,
         totalExpected: task.countOfBytesExpectedToReceive,
         completed: terminalSuccess ?? (error == nil)
       )
-      promoteMultipartIfPossible(on: session, parentId: parentTaskId(from: task))
+      if isPromotableMultipartPart(task) {
+        promoteMultipartIfPossible(on: session, parentId: parentTaskId(from: task))
+      }
       return
     }
     let httpFailed = (task.response as? HTTPURLResponse).map {
@@ -1426,13 +1434,55 @@ enum DownloadNativeWaitingQueue {
   /// Forward native URLSession byte counts for multipart children while the
   /// body still lives in Apple's temporary file. Dart cannot stat that file,
   /// which is why polling only `0.part`/`1.part` updated in whole-part jumps.
+  /// A persisted multipart plan is explicit permission to refill a finished
+  /// URLSession slot while Dart is suspended. It does not grant the legacy
+  /// native retry path ownership over V2 transport failures.
+  private static func ownsPromotableMultipartParent(_ parentId: String) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    let state = loadLocked()
+    return state.multipartPlans.contains { $0.parentTaskId == parentId }
+  }
+
+  /// Recognition for V2's durable immutable range children.
+  private static func isV2DurableMultipartPart(_ task: URLSessionTask) -> Bool {
+    guard isDownloadPart(task),
+          let parentId = parentTaskId(from: task)
+    else { return false }
+    let json = task.taskDescription?
+      .components(separatedBy: "***<<<|>>>***").first ?? ""
+    let group = stringFromTaskJson(json, key: "group")
+    return group == "animewitcher_parts" && parentId.hasPrefix("aw_v2_")
+  }
+
+  /// A Range can be promoted only when Dart persisted a generation-fenced
+  /// plan for its parent. V2 children are intentionally excluded from the
+  /// legacy retry owner: transient failures return to the V2 coordinator.
+  private static func isPromotableMultipartPart(_ task: URLSessionTask) -> Bool {
+    guard isDownloadPart(task),
+          let parentId = parentTaskId(from: task)
+    else { return false }
+    return ownsPromotableMultipartParent(parentId)
+  }
+
+  private static func isLegacyMultipartPart(_ task: URLSessionTask) -> Bool {
+    return isPromotableMultipartPart(task) && !isV2DurableMultipartPart(task)
+  }
+
+  private static func isObservableMultipartParent(_ parentId: String) -> Bool {
+    ownsPromotableMultipartParent(parentId) || parentId.hasPrefix("aw_v2_")
+  }
+
+  private static func isObservableMultipartPart(_ task: URLSessionTask) -> Bool {
+    isPromotableMultipartPart(task) || isV2DurableMultipartPart(task)
+  }
   private static func postMultipartChunkUpdate(
     _ task: URLSessionTask,
     totalWritten: Int64,
     totalExpected: Int64,
     completed: Bool
   ) {
-    guard isDownloadPart(task),
+    guard isObservableMultipartPart(task),
           let childId = taskId(from: task),
           let parentId = parentTaskId(from: task)
     else {
@@ -1460,7 +1510,8 @@ enum DownloadNativeWaitingQueue {
     progress: Double
   ) -> Bool {
     guard task.group == "chunk" || task.group == "animewitcher_parts",
-          let parentId = parentTaskId(fromPluginTask: task)
+          let parentId = parentTaskId(fromPluginTask: task),
+          isObservableMultipartParent(parentId)
     else { return false }
 
     let expected = expectedMultipartBytes(forPluginTask: task, parentId: parentId)
@@ -1558,6 +1609,7 @@ enum DownloadNativeWaitingQueue {
     completed: Bool,
     attemptGeneration: Int?
   ) {
+    guard isObservableMultipartParent(parentId) else { return }
     if totalWritten > 0 || completed || (normalizedProgress ?? 0) > 0 {
       settleMultipartClaim(childTaskId: childId)
     }
@@ -1729,6 +1781,7 @@ enum DownloadNativeWaitingQueue {
   }
 
   private static func promoteMultipartPlan(_ parentId: String, on session: URLSession) {
+    guard ownsPromotableMultipartParent(parentId) else { return }
     lock.lock()
     if multipartPromotionParents.contains(parentId) {
       lock.unlock()
@@ -1747,7 +1800,7 @@ enum DownloadNativeWaitingQueue {
 
       let liveChildIds = Set(tasks.compactMap { task -> String? in
         guard task.state != .completed,
-              isDownloadPart(task),
+              isPromotableMultipartPart(task),
               parentTaskId(from: task) == parentId
         else { return nil }
         return taskId(from: task)
@@ -1846,16 +1899,245 @@ enum DownloadNativeWaitingQueue {
   #if canImport(background_downloader)
   /// Only the synchronous status emitted by the original delegate invocation
   /// may classify that execution. Out-of-band/delayed statuses are discarded.
+  /// Read-only throughput bridge for background_downloader's V2 parallel
+  /// child tasks. It never starts, pauses, resumes, retries, or owns transport.
+  @discardableResult
+  private static func postV2ParallelChunkMetric(
+    task: background_downloader.Task,
+    progress: Double?,
+    completed: Bool,
+    statusOrdinal: Int? = nil
+  ) -> Bool {
+    guard task.group == "chunk" || task.group == "animewitcher_parts",
+          let parentId = parentTaskId(fromPluginTask: task),
+          parentId.hasPrefix("aw_v2_")
+    else { return false }
+
+    let expected = task.headers.first(where: {
+      $0.key.caseInsensitiveCompare("Range") == .orderedSame
+    }).flatMap { expectedBytesFromRangeHeader($0.value) } ?? -1
+    let normalized = progress.map { min(max($0, 0), 1) }
+    let written: Int64
+    if expected > 0, let normalized {
+      written = Int64((Double(expected) * normalized).rounded(.down))
+    } else {
+      written = -1
+    }
+
+    let now = CFAbsoluteTimeGetCurrent()
+    let appIsBackground = !isAppInForeground()
+    var aggregateWritten: Int64 = 0
+    var aggregateSpeed = 0.0
+    var shouldUpdateNativeOverlay = false
+
+    lock.lock()
+    let speed: Double
+    if completed {
+      chunkSpeedWindows[task.taskId] = nil
+      speed = 0
+    } else if written >= 0 {
+      speed = rollingSpeedLocked(
+        windows: &chunkSpeedWindows,
+        taskId: task.taskId,
+        totalWritten: written,
+        now: now
+      )
+    } else {
+      speed = 0
+    }
+
+    var children = v2ParallelChildSamples[parentId] ?? [:]
+    var sample = children[task.taskId] ?? RunningSample(
+      written: 0,
+      expected: expected > 0 ? expected : -1,
+      speed: 0,
+      displayName: ""
+    )
+    if written >= 0 {
+      // Native resume can restart a child's local counter. System-overlay
+      // presentation stays monotonic while background_downloader owns the
+      // actual resume decision and bytes.
+      sample.written = max(sample.written, written)
+    }
+    if expected > 0 {
+      sample.expected = max(sample.expected, expected)
+    }
+    if let normalized, normalized >= 0.999_999, sample.expected > 0 {
+      sample.written = sample.expected
+    }
+    if completed {
+      sample.speed = 0
+    } else if speed > 0, speed.isFinite {
+      sample.speed = speed
+    }
+    children[task.taskId] = sample
+    v2ParallelChildSamples[parentId] = children
+
+    aggregateWritten = children.values.reduce(Int64(0)) {
+      $0 + max($1.written, 0)
+    }
+    aggregateSpeed = children.values.reduce(0.0) {
+      $0 + ($1.speed.isFinite && $1.speed > 0 ? $1.speed : 0)
+    }
+    let lastOverlay = lastV2ParallelOverlayTimes[parentId] ?? 0
+    shouldUpdateNativeOverlay = appIsBackground
+      && ((normalized ?? 0) >= 0.999_999
+        || now - lastOverlay >= chunkBridgeInterval)
+    if shouldUpdateNativeOverlay {
+      lastV2ParallelOverlayTimes[parentId] = now
+    }
+    lock.unlock()
+
+    var values: [String: Any] = [
+      "parentTaskId": parentId,
+      "chunkTaskId": task.taskId,
+      "completed": completed,
+    ]
+    if let normalized {
+      values["progress"] = normalized
+    }
+    if let statusOrdinal {
+      values["status"] = statusOrdinal
+    }
+    if written >= 0 {
+      values["writtenBytes"] = written
+    }
+    if expected > 0 {
+      values["expectedBytes"] = expected
+    }
+    if speed > 0, speed.isFinite {
+      values["speedBytesPerSecond"] = speed
+    }
+
+    NotificationCenter.default.post(
+      name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
+      object: nil,
+      userInfo: values
+    )
+
+    // Dart owns foreground presentation. During iOS background URLSession
+    // wake-ups the Flutter isolate can be suspended, so update the already
+    // created system overlay directly from the supported native callback.
+    if !isAppInForeground() && shouldUpdateNativeOverlay {
+      // Child samples cover only ranges observed so far. They are safe byte
+      // and throughput telemetry, but never proof of the full parent length.
+      // Passing their subtotal as totalBytesHint recreated the 31/62/93% jumps
+      // whenever the system overlay did not already know the real parent size.
+      // Let the manager use its existing full size when available; otherwise
+      // keep progress unchanged until package parent progress arrives.
+      runOnMainActor {
+        if #available(iOS 26.0, *) {
+          _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
+            taskId: parentId,
+            progress: nil,
+            totalBytesHint: -1,
+            transferredBytes: aggregateWritten,
+            speedBytesPerSecond: aggregateSpeed
+          )
+        }
+      }
+    }
+
+    if !completed, written >= 0 {
+      let observedAt = now
+      let childId = task.taskId
+      DispatchQueue.global(qos: .utility).asyncAfter(
+        deadline: .now() + speedStaleInterval
+      ) {
+        var staleAggregateWritten: Int64 = 0
+        var staleAggregateSpeed = 0.0
+
+        lock.lock()
+        guard let last = chunkSpeedWindows[childId]?.last,
+              last.time <= observedAt + 0.000_001,
+              CFAbsoluteTimeGetCurrent() - last.time >= speedStaleInterval
+        else {
+          lock.unlock()
+          return
+        }
+        chunkSpeedWindows[childId] = nil
+        if var children = v2ParallelChildSamples[parentId],
+           var sample = children[childId] {
+          sample.speed = 0
+          children[childId] = sample
+          v2ParallelChildSamples[parentId] = children
+          staleAggregateWritten = children.values.reduce(Int64(0)) {
+            $0 + max($1.written, 0)
+          }
+          staleAggregateSpeed = children.values.reduce(0.0) {
+            $0 + ($1.speed.isFinite && $1.speed > 0 ? $1.speed : 0)
+          }
+        }
+        lock.unlock()
+
+        // Unlike a missing speed field, explicit zero means this child has
+        // produced no bytes for the stale interval.
+        NotificationCenter.default.post(
+          name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
+          object: nil,
+          userInfo: [
+            "parentTaskId": parentId,
+            "chunkTaskId": childId,
+            "completed": false,
+            "speedBytesPerSecond": 0.0,
+          ]
+        )
+
+        if !isAppInForeground() {
+          runOnMainActor {
+            if #available(iOS 26.0, *) {
+              _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
+                taskId: parentId,
+                progress: nil,
+                totalBytesHint: -1,
+                transferredBytes: staleAggregateWritten,
+                speedBytesPerSecond: staleAggregateSpeed
+              )
+            }
+          }
+        }
+      }
+    }
+    return true
+  }
+
   private static func handleSupportedPluginStatus(
     task: background_downloader.Task,
     statusUpdate: background_downloader.TaskStatusUpdate
   ) {
     guard !task.taskId.isEmpty else { return }
-    switch statusUpdate.taskStatus {
+
+    let status = statusUpdate.taskStatus
+    let inactiveForSpeed: Bool
+    switch status {
+    case .complete, .notFound, .failed, .canceled, .paused:
+      inactiveForSpeed = true
+    default:
+      inactiveForSpeed = false
+    }
+
+    // V2 uses child status only as observation. In particular, every paused
+    // child must be observed before Dart attempts a parallel resume.
+    if postV2ParallelChunkMetric(
+      task: task,
+      progress: status == .complete ? 1 : nil,
+      completed: inactiveForSpeed,
+      statusOrdinal: status.rawValue
+    ) {
+      if inactiveForSpeed {
+        terminalObservation.record(
+          taskId: task.taskId,
+          succeeded: status == .complete
+        )
+      }
+      return
+    }
+
+    switch status {
     case .complete, .notFound, .failed, .canceled, .paused:
       terminalObservation.record(
         taskId: task.taskId,
-        succeeded: statusUpdate.taskStatus == .complete
+        succeeded: status == .complete
       )
     default:
       break
@@ -1871,10 +2153,39 @@ enum DownloadNativeWaitingQueue {
     task: background_downloader.Task,
     progress: Double
   ) {
-    guard nativePromotionAvailable, progress.isFinite, progress >= 0 else { return }
+    guard progress.isFinite, progress >= 0 else { return }
     let normalized = min(max(progress, 0), 1)
     let id = task.taskId
     guard !id.isEmpty else { return }
+
+    // Observation is independent from legacy native promotion capability.
+    // V2 child metrics leave background_downloader as the sole transport owner.
+    if postV2ParallelChunkMetric(
+      task: task,
+      progress: normalized,
+      completed: false
+    ) {
+      return
+    }
+
+    // V2 parent progress is observation-only and must not depend on the
+    // retired native transport-promotion capability. This keeps the iOS 26
+    // system task fresh while Dart is suspended, including single-part files.
+    if id.hasPrefix("aw_v2_") {
+      if !isAppInForeground() {
+        runOnMainActor {
+          if #available(iOS 26.0, *) {
+            _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
+              taskId: id,
+              progress: normalized
+            )
+          }
+        }
+      }
+      return
+    }
+
+    guard nativePromotionAvailable else { return }
     noteBackgroundRetryProgress(taskId: id)
     if postSupportedMultipartProgress(task: task, progress: normalized) {
       return
@@ -1969,6 +2280,7 @@ enum DownloadNativeWaitingQueue {
   ) {
     if let session { rememberDownloadSession(session) }
     if isDownloadPart(downloadTask) {
+      guard isObservableMultipartPart(downloadTask) else { return }
       postMultipartChunkUpdate(
         downloadTask,
         totalWritten: totalWritten,
