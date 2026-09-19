@@ -222,15 +222,32 @@ final class PackageBackgroundDownloaderGateway
   }
 }
 
+/// Returns the package-managed parallel width V2 may safely use.
+///
+/// background_downloader 9.6.2's iOS ParallelDownloadTask resume path resumes
+/// every serialized child and cancels the parent when any child cannot resume.
+/// A child that completed before pause legitimately has no resume payload, so
+/// that path cannot guarantee a lossless explicit resume. Keep iOS on one
+/// package-owned DownloadTask until upstream can resume completed+paused child
+/// sets without making application code own package chunk state.
+int effectivePackageParallelChunksV2(
+  int requestedChunks, {
+  bool? isIOS,
+}) {
+  assert(requestedChunks > 0);
+  return (isIOS ?? Platform.isIOS) ? 1 : requestedChunks;
+}
+
 /// Maps one AnimeWitcher parent transfer spec to exactly one package task.
 ///
-/// When [DownloadTaskSpecV2.parallelChunks] is greater than one the returned
-/// object is a single [ParallelDownloadTask] parent. Package-created child
-/// transfers stay opaque and are never exposed or persisted by V2.
+/// On platforms where package parallel resume is lossless, a request greater
+/// than one maps to a single [ParallelDownloadTask] parent. iOS currently maps
+/// to a regular [DownloadTask]; package-created child state remains opaque.
 Future<DownloadTask> packageTaskForV2(
   DownloadTaskSpecV2 spec, {
   bool userInitiated = true,
   String group = kDownloadV2PackageGroup,
+  bool? isIOS,
 }) async {
   final (baseDirectory, directory, filename) = await _destinationFor(
     spec.destinationPath,
@@ -239,14 +256,18 @@ Future<DownloadTask> packageTaskForV2(
     TransferHint.largeFile,
     if (userInitiated) TransferHint.userInitiated,
   };
+  final parallelChunks = effectivePackageParallelChunksV2(
+    spec.parallelChunks,
+    isIOS: isIOS,
+  );
 
-  if (spec.parallelChunks > 1) {
+  if (parallelChunks > 1) {
     return ParallelDownloadTask(
       taskId: spec.taskId,
       url: spec.url,
       filename: filename,
       headers: spec.headers,
-      chunks: spec.parallelChunks,
+      chunks: parallelChunks,
       directory: directory,
       baseDirectory: baseDirectory,
       group: group,
