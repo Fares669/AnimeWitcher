@@ -44,6 +44,27 @@ void main() {
     expect(record.taskId, spec.taskId);
   });
 
+  test('iOS collapses package parallel request to one resumable task', () async {
+    const spec = DownloadTaskSpecV2(
+      taskId: 'aw_v2_ios_parent_g1',
+      url: 'https://example.invalid/video.mp4',
+      destinationPath: 'downloads/episode-ios.mp4',
+      headers: <String, String>{},
+      allowPause: true,
+      retries: 2,
+      parallelChunks: 16,
+    );
+
+    expect(effectivePackageParallelChunksV2(16, isIOS: true), 1);
+    expect(effectivePackageParallelChunksV2(16, isIOS: false), 16);
+
+    final task = await packageTaskForV2(spec, isIOS: true);
+
+    expect(task, isA<DownloadTask>());
+    expect(task, isNot(isA<ParallelDownloadTask>()));
+    expect(task.taskId, spec.taskId);
+  });
+
   test('parallelChunks 1 maps to package single download task', () async {
     const spec = DownloadTaskSpecV2(
       taskId: 'aw_v2_parent_g1',
