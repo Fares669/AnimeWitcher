@@ -57,6 +57,7 @@ class DownloadDiagnosticLog {
       'parentTaskId',
       'childTaskId',
       'status',
+      'previousStatus',
       'progress',
       'bytes',
       'liveBytes',
@@ -104,6 +105,7 @@ class DownloadDiagnosticLog {
       'timeoutMs',
       'draining',
       'osError',
+      'freeBytes',
     };
     final data = <String, Object?>{};
     for (final entry in fields.entries) {
