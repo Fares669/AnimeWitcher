@@ -1,4 +1,4 @@
-# One-shot preview for the 2026-09-19 V2 deep diagnostics build.
+# One-shot preview for the 2026-09-19 V2 post-V1-removal and presentation-race fixes.
 name: iOS Preview V2 Deep Diagnostics One Shot
 
 on:
