@@ -52,6 +52,13 @@ void main() {
       }
     });
 
+    test('legacy DownloadService V1 manager source is removed', () {
+      expect(
+        File('lib/core/services/download_service.dart').existsSync(),
+        isFalse,
+      );
+    });
+
     test('all feature-layer production code is sealed from V1 transport', () {
       final featureFiles = Directory('lib/features')
           .listSync(recursive: true)
