@@ -484,6 +484,13 @@ class PersistentParallelDownload {
     return session != null && _activeConnectionsForSession(session) > 0;
   }
 
+  /// Number of native writers currently reserved/owned by one parent session.
+  /// This is transient telemetry only and is never persisted as resume state.
+  int? activeConnectionCountFor(String id) {
+    final session = _sessions[id];
+    return session == null ? null : _activeConnectionsForSession(session);
+  }
+
   /// The byte-credible aggregate for a restored/live multipart parent.
   /// Native 0.999 completion sentinels are intentionally excluded.
   double? progressFor(String id) => _sessions[id]?.progress;

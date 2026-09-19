@@ -723,6 +723,8 @@ DownloadTransportSnapshot durableParallelInitialSnapshotV2({
   required int totalBytes,
   required double? restoredProgress,
   required int? durableBytes,
+  int? configuredConnections,
+  int? activeConnections,
 }) {
   final knownTotal = totalBytes > 0 ? totalBytes : null;
   final complete = initialStatus == DownloadTransportStatus.complete;
@@ -735,6 +737,8 @@ DownloadTransportSnapshot durableParallelInitialSnapshotV2({
     progress: progress,
     transferredBytes: complete ? knownTotal : durableBytes,
     totalBytes: knownTotal,
+    configuredConnections: configuredConnections,
+    activeConnections: activeConnections,
   );
 }
 
@@ -753,6 +757,9 @@ final class _DurableParallelDownloadTransportHandle
          totalBytes: totalBytes,
          restoredProgress: coordinator.progressFor(parent.taskId),
          durableBytes: coordinator.durableBytesFor(parent.taskId),
+         configuredConnections: parent.chunks,
+         activeConnections:
+             coordinator.activeConnectionCountFor(parent.taskId) ?? 0,
        );
 
   final ParallelDownloadTask parent;
@@ -790,6 +797,9 @@ final class _DurableParallelDownloadTransportHandle
           progress: _current.progress,
           transferredBytes: _current.transferredBytes,
           totalBytes: _current.totalBytes,
+          configuredConnections: parent.chunks,
+          activeConnections:
+              coordinator.activeConnectionCountFor(taskId) ?? 0,
         ),
       );
     }
@@ -813,6 +823,9 @@ final class _DurableParallelDownloadTransportHandle
           progress: progress,
           transferredBytes: total > 0 ? (total * progress).round() : null,
           totalBytes: total > 0 ? total : null,
+          configuredConnections: parent.chunks,
+          activeConnections:
+              coordinator.activeConnectionCountFor(taskId) ?? 0,
           networkSpeedMBps: update.networkSpeed,
           timeRemaining: update.timeRemaining,
         ),
@@ -832,6 +845,9 @@ final class _DurableParallelDownloadTransportHandle
           transferredBytes:
               coordinator.durableBytesFor(taskId) ?? _current.transferredBytes,
           totalBytes: _current.totalBytes,
+          configuredConnections: parent.chunks,
+          activeConnections:
+              coordinator.activeConnectionCountFor(taskId) ?? 0,
           failureCategory: _failureCategory(update.status, update.exception),
           failureMessage: update.exception?.toString(),
         ),
@@ -848,6 +864,8 @@ final class _DurableParallelDownloadTransportHandle
         transferredBytes:
             coordinator.durableBytesFor(taskId) ?? _current.transferredBytes,
         totalBytes: _current.totalBytes,
+        configuredConnections: parent.chunks,
+        activeConnections: coordinator.activeConnectionCountFor(taskId) ?? 0,
         failureCategory: DownloadFailureCategory.sourceExpired,
         failureMessage: 'Download source expired',
       ),
@@ -862,6 +880,8 @@ final class _DurableParallelDownloadTransportHandle
         progress: _current.progress,
         transferredBytes: _current.transferredBytes,
         totalBytes: _current.totalBytes,
+        configuredConnections: parent.chunks,
+        activeConnections: coordinator.activeConnectionCountFor(taskId) ?? 0,
         failureCategory: DownloadFailureCategory.transport,
         failureMessage: message,
       ),
@@ -1004,6 +1024,12 @@ DownloadTransportSnapshot packageTransportSnapshotForV2(
   }
 
   final parallelParent = transfer.task is ParallelDownloadTask;
+  final configuredConnections = parallelParent
+      ? (transfer.task as ParallelDownloadTask).chunks
+      : 1;
+  final activeConnections = parallelParent
+      ? null
+      : (projectedStatus == DownloadTransportStatus.running ? 1 : 0);
 
   return DownloadTransportSnapshot(
     taskId: transfer.taskId,
@@ -1019,6 +1045,8 @@ DownloadTransportSnapshot packageTransportSnapshotForV2(
     timeRemaining: parallelParent
         ? Duration.zero
         : transfer.timeRemainingNotifier.value,
+    configuredConnections: configuredConnections,
+    activeConnections: activeConnections,
     failureCategory: _failureCategory(transfer.status, exception),
     failureMessage: exception?.toString(),
   );

@@ -37,9 +37,13 @@ final class DownloadTransportSnapshot {
     this.totalBytes,
     this.networkSpeedMBps = -1,
     this.timeRemaining = Duration.zero,
+    this.configuredConnections,
+    this.activeConnections,
     this.failureCategory,
     this.failureMessage,
-  }) : assert(progress >= 0 && progress <= 1);
+  }) : assert(progress >= 0 && progress <= 1),
+       assert(configuredConnections == null || configuredConnections > 0),
+       assert(activeConnections == null || activeConnections >= 0);
 
   final String taskId;
   final DownloadTransportStatus status;
@@ -48,6 +52,10 @@ final class DownloadTransportSnapshot {
   final int? totalBytes;
   final double networkSpeedMBps;
   final Duration timeRemaining;
+  /// Requested connection ceiling for this parent transfer when known.
+  final int? configuredConnections;
+  /// Currently owned native/range writers for this parent when observable.
+  final int? activeConnections;
   final DownloadFailureCategory? failureCategory;
   final String? failureMessage;
 

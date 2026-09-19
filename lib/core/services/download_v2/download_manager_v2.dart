@@ -1720,6 +1720,8 @@ final class DownloadManagerV2 {
         timeRemainingSeconds: snapshot.timeRemaining > Duration.zero
             ? snapshot.timeRemaining.inSeconds
             : null,
+        configuredConnections: snapshot.configuredConnections,
+        activeConnections: snapshot.activeConnections,
         failureCategory: snapshot.failureCategory,
         holdCategory: snapshot.status == DownloadTransportStatus.held
             ? DownloadV2HoldCategory.packageHeld
@@ -1797,6 +1799,8 @@ DownloadTransportSnapshot _snapshotWithStatus(
     totalBytes: snapshot.totalBytes,
     networkSpeedMBps: snapshot.networkSpeedMBps,
     timeRemaining: snapshot.timeRemaining,
+    configuredConnections: snapshot.configuredConnections,
+    activeConnections: snapshot.activeConnections,
     failureCategory: snapshot.failureCategory,
     failureMessage: snapshot.failureMessage,
   );

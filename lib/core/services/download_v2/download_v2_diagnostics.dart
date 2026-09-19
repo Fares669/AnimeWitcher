@@ -27,6 +27,8 @@ final class DownloadDiagnosticEventV2 {
     this.totalBytes,
     this.networkSpeedMBps,
     this.timeRemainingSeconds,
+    this.configuredConnections,
+    this.activeConnections,
     this.failureCategory,
     this.holdCategory,
     this.sourceRefreshReason,
@@ -44,6 +46,8 @@ final class DownloadDiagnosticEventV2 {
   final int? totalBytes;
   final double? networkSpeedMBps;
   final int? timeRemainingSeconds;
+  final int? configuredConnections;
+  final int? activeConnections;
   final DownloadFailureCategory? failureCategory;
   final DownloadV2HoldCategory? holdCategory;
   final DownloadV2SourceRefreshReason? sourceRefreshReason;
@@ -61,6 +65,10 @@ final class DownloadDiagnosticEventV2 {
       'networkSpeedMBps': networkSpeedMBps,
     if (timeRemainingSeconds != null && timeRemainingSeconds! > 0)
       'timeRemainingSeconds': timeRemainingSeconds,
+    if (configuredConnections != null && configuredConnections! > 0)
+      'configuredConnections': configuredConnections,
+    if (activeConnections != null && activeConnections! >= 0)
+      'activeConnections': activeConnections,
     if (failureCategory != null) 'failureCategory': failureCategory!.name,
     if (holdCategory != null) 'holdCategory': holdCategory!.name,
     if (sourceRefreshReason != null)
