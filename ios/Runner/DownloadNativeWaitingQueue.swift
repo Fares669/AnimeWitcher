@@ -1899,7 +1899,7 @@ enum DownloadNativeWaitingQueue {
     completed: Bool,
     statusOrdinal: Int? = nil
   ) -> Bool {
-    guard task.group == "chunk",
+    guard task.group == "chunk" || task.group == "animewitcher_parts",
           let parentId = parentTaskId(fromPluginTask: task),
           parentId.hasPrefix("aw_v2_")
     else { return false }
