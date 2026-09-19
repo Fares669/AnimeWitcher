@@ -175,6 +175,45 @@ void main() {
     expect(rows.last.keys, isNot(contains('headers')));
   });
 
+  test('file diagnostics rotates bounded JSONL files', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-v2-rotate-log-');
+    addTearDown(() => directory.delete(recursive: true));
+    var now = 0;
+    final diagnostics = FileDownloadDiagnosticsV2(
+      directoryProvider: () async => directory,
+      enabled: () => true,
+      nowMillis: () => now++,
+      sessionId: 'rotate-test',
+      maxBytes: 320,
+      maxFiles: 2,
+    );
+
+    for (var i = 0; i < 12; i++) {
+      diagnostics.recordTransport('parallel.heartbeat', <String, Object?>{
+        'taskId': 'aw_v2_rotate_g1',
+        'liveBytes': i * 1000,
+        'durableBytes': i * 800,
+        'totalBytes': 100000,
+        'activeConnections': 16,
+        'configuredConnections': 16,
+      });
+    }
+    await diagnostics.flush();
+
+    final files = (await diagnostics.listFiles())
+        .where((file) => file.path.contains('download_v2'))
+        .toList(growable: false);
+    expect(files.length, lessThanOrEqualTo(2));
+    expect(files.any((file) => file.path.endsWith('download_v2.jsonl')), isTrue);
+    expect(files.any((file) => file.path.endsWith('download_v2.1.jsonl')), isTrue);
+
+    for (final file in files) {
+      for (final line in await file.readAsLines()) {
+        expect(() => jsonDecode(line), returnsNormally);
+      }
+    }
+  });
+
   test('file diagnostics appends JSONL and honors the logging switch', () async {
     final directory = await Directory.systemTemp.createTemp('aw-v2-log-');
     addTearDown(() => directory.delete(recursive: true));
