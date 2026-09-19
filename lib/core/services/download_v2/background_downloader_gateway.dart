@@ -766,7 +766,7 @@ final class _DurableParallelDownloadTransportHandle
          taskId: parent.taskId,
          initialStatus: initialStatus,
          totalBytes: totalBytes,
-         restoredProgress: coordinator.progressFor(parent.taskId),
+         restoredProgress: coordinator.durableProgressFor(parent.taskId),
          durableBytes: coordinator.durableBytesFor(parent.taskId),
          configuredConnections: parent.chunks,
          activeConnections:
@@ -820,7 +820,10 @@ final class _DurableParallelDownloadTransportHandle
   void accept(TaskUpdate update) {
     if (_disposed || update.task.taskId != taskId) return;
     if (update is TaskProgressUpdate) {
-      final progress = update.progress.clamp(0.0, 1.0).toDouble();
+      final progress = (coordinator.durableProgressFor(taskId) ?? 0)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      final durableBytes = coordinator.durableBytesFor(taskId);
       final total = update.expectedFileSize > 0
           ? update.expectedFileSize
           : totalBytes;
@@ -832,7 +835,8 @@ final class _DurableParallelDownloadTransportHandle
             parentActive: coordinator.isActive(taskId),
           ),
           progress: progress,
-          transferredBytes: total > 0 ? (total * progress).round() : null,
+          transferredBytes:
+              durableBytes ?? (total > 0 ? (total * progress).round() : null),
           totalBytes: total > 0 ? total : null,
           configuredConnections: parent.chunks,
           activeConnections:
