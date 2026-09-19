@@ -23,8 +23,22 @@ class DownloadedFiles extends _$DownloadedFiles {
   Future<File?> resolveFile(
     MultimediaItem item, {
     Episode? episode,
-  }) async {
-    final key = episode?.url ?? item.url;
+  }) {
+    return _resolveFileForKey(episode?.url ?? item.url);
+  }
+
+  Future<File?> resolveFileForTrackingUrl(
+    String trackingUrl, {
+    required MultimediaItem item,
+    Episode? episode,
+  }) {
+    final key = trackingUrl.trim();
+    return _resolveFileForKey(
+      key.isNotEmpty ? key : (episode?.url ?? item.url),
+    );
+  }
+
+  Future<File?> _resolveFileForKey(String key) async {
     final manager = ref.read(downloadManagerV2Provider);
     final records = await manager.records.first;
 
