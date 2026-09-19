@@ -141,6 +141,30 @@ void main() {
       reason: 'restore must not create a writer when no manifest exists',
     );
   });
+  test('one connection checkpoints a large file into bounded ranges', () async {
+    const mib = 1024 * 1024;
+    parent = ParallelDownloadTask(
+      taskId: 'episode-single',
+      url: 'https://example.com/video-single',
+      filename: 'video-single.mp4',
+      directory: directory.path,
+      baseDirectory: BaseDirectory.root,
+      chunks: 1,
+      allowPause: true,
+    );
+
+    expect(await coordinator.start(parent, 64 * mib), isTrue);
+    expect(starts, hasLength(1));
+    expect(
+      starts.single.headers['Range'],
+      'bytes=0-1048575',
+      reason:
+          'a one-connection iOS download still needs small immutable '
+          'checkpoints so Pause and process recreation never depend on '
+          'URLSession resumeData for one giant file',
+    );
+  });
+
   test('five parts cover each byte once', () async {
     expect(await coordinator.start(parent, 23), isTrue);
     await expandFreshTo(5);
@@ -202,7 +226,7 @@ void main() {
   );
 
   test(
-    'native iOS byte bridge advances parent before final part file exists',
+    'native iOS temp bytes never advance durable parent progress',
     () async {
       expect(await coordinator.start(parent, 100), isTrue);
       expect(starts.length, 1);
@@ -218,7 +242,14 @@ void main() {
 
       final parentRecord = records[parent.taskId]!;
       expect(parentRecord.status, TaskStatus.running);
-      expect(parentRecord.progress, closeTo(.1, .001));
+      expect(
+        parentRecord.progress,
+        0,
+        reason:
+            'URLSession temp bytes disappear when iOS kills the task and '
+            'must not be persisted as resumable parent progress',
+      );
+      expect(coordinator.durableBytesFor(parent.taskId), 0);
       expect(statuses, contains(TaskStatus.running));
       await waitUntil(() => starts.length >= 3);
     },
