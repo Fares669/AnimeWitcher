@@ -83,6 +83,25 @@ const String kDownloadV2PackageGroup = 'downloads_v2';
 const String kDownloadV2SilentPackageGroup = 'downloads_v2_silent';
 const String kDownloadV2DurableParallelGroup = 'downloads_v2_ranges';
 
+/// Selects package child records owned by one durable V2 range parent.
+///
+/// Child transport state is private to the gateway and must be removed once a
+/// parent is terminal so background_downloader does not rehydrate stale
+/// part transfers on later launches.
+List<String> durableChildTaskIdsForParentV2(
+  Iterable<TaskRecord> records,
+  String parentTaskId,
+) {
+  final ids = <String>[
+    for (final record in records)
+      if (record.task.group == kPersistentDownloadChunkGroup &&
+          downloadInternalParentTaskId(record.task) == parentTaskId)
+        record.taskId,
+  ];
+  ids.sort();
+  return ids;
+}
+
 Future<void> configurePackageNotificationsV2(
   FileDownloader downloader,
   DownloadNotificationPrefs prefs,
@@ -311,9 +330,27 @@ final class PackageBackgroundDownloaderGateway
     if (durable != null) {
       durable.dispose();
     }
+    await _cleanupDurableChildTracking(taskId);
     _downloader.transfers.remove(taskId);
     _handles.remove(taskId)?.dispose();
     await _downloader.database.deleteRecordWithId(taskId);
+  }
+
+  Future<void> _cleanupDurableChildTracking(String parentTaskId) async {
+    final records = await _downloader.database.allRecords(
+      group: kPersistentDownloadChunkGroup,
+    );
+    final childIds = durableChildTaskIdsForParentV2(records, parentTaskId);
+    if (childIds.isEmpty) return;
+
+    for (final taskId in childIds) {
+      _downloader.transfers.remove(taskId);
+    }
+    await Future.wait<void>([
+      _downloader.database.deleteRecordsWithIds(childIds),
+      ...childIds.map(_downloader.removeResumeData),
+      ...childIds.map(_downloader.removePausedTask),
+    ]);
   }
 
   bool _isDurableInternalTask(Task task) =>
@@ -353,6 +390,14 @@ final class PackageBackgroundDownloaderGateway
       shouldDrainPartOnPause: (_) => _isIOS(),
       onUpdate: (update) {
         _durableHandles[update.task.taskId]?.accept(update);
+        if (update is TaskStatusUpdate &&
+            update.status == TaskStatus.complete) {
+          unawaited(
+            _cleanupDurableChildTracking(update.task.taskId).catchError(
+              (Object _, StackTrace __) {},
+            ),
+          );
+        }
       },
       onPartProgress: (_, _, _) {},
       onSourceRefreshNeeded: (parentTaskId) {
