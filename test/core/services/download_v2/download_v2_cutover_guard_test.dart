@@ -220,31 +220,61 @@ void main() {
       );
     });
 
-    test('iOS native multipart bridge is limited to legacy-owned parents', () {
-      final native = _read(
-        'ios/Runner/DownloadNativeWaitingQueue.swift',
-      );
-      final start = native.indexOf(
-        'private static func postSupportedMultipartProgress',
-      );
-      final end = native.indexOf(
-        'private static func parentTaskId(',
-        start,
+    test(
+      'iOS native multipart transport ownership stays legacy-only while V2 durable ranges are observable',
+      () {
+        final native = _read(
+          'ios/Runner/DownloadNativeWaitingQueue.swift',
+        );
+
+        expect(native, contains('private static func ownsLegacyMultipartParent('));
+        expect(native, contains('private static func isLegacyMultipartPart('));
+        expect(native, contains('private static func isV2DurableMultipartPart('));
+        expect(native, contains('private static func isObservableMultipartPart('));
+        expect(native, contains('state.multipartPlans.contains'));
+
+        // Native retry/promotion remains fenced to the dormant legacy path.
+        expect(native, contains('let multipartPart = isLegacyMultipartPart(task)'));
+        expect(native, contains('guard nativePromotionAvailable else { return }'));
+
+        // Progress/completion telemetry for V2 durable children must still reach
+        // Dart/native Continued Processing while the app is backgrounded.
+        expect(
+          native,
+          contains('guard isObservableMultipartPart(task) else { return }'),
+        );
+        expect(
+          native,
+          contains(
+            'guard isObservableMultipartPart(downloadTask) else { return }',
+          ),
+        );
+        expect(
+          native,
+          contains(
+            'guard isObservableMultipartParent(parentId) else { return }',
+          ),
+        );
+      },
+    );
+
+    test('iOS durable parallel pause stops package child writers', () {
+      final gateway = _read(
+        'lib/core/services/download_v2/background_downloader_gateway.dart',
       );
 
-      expect(start, greaterThanOrEqualTo(0));
-      expect(end, greaterThan(start));
-      final body = native.substring(start, end);
-      expect(native, contains('private static func ownsLegacyMultipartParent('));
-      expect(native, contains('private static func isLegacyMultipartPart('));
-      expect(native, contains('state.multipartPlans.contains'));
-      expect(native, contains('let multipartPart = isLegacyMultipartPart(task)'));
-      expect(native, contains('guard isLegacyMultipartPart(task) else { return }'));
       expect(
-        native,
-        contains('guard isLegacyMultipartPart(downloadTask) else { return }'),
+        gateway,
+        contains('Future<bool> pause() => coordinator.pause(parent);'),
+        reason:
+            'durable iOS range children are independent DownloadTasks, so pause '
+            'must pause those exact writers instead of letting the entire active '
+            'window keep draining after the UI reports paused.',
       );
-      expect(body, contains('ownsLegacyMultipartParent(parentId)'));
+      expect(
+        gateway,
+        isNot(contains('preserveLiveParts: Platform.isIOS')),
+      );
     });
 
     test('V2 manager exposes logical observation and completed availability', () {
