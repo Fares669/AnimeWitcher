@@ -63,16 +63,21 @@ final downloadSourceResolverV2Provider = Provider<DownloadSourceResolverV2>((
 /// remains the authority for whether anything is written at all. The sink only
 /// accepts the allowlisted V2 event DTO and writes inside the dedicated `log`
 /// directory, so signed URLs/headers/provider payloads never reach this file.
-final downloadDiagnosticsV2Provider = Provider<DownloadDiagnosticsV2>((ref) {
-  final settings = ref.read(settingsRepositoryProvider);
-  return FileDownloadDiagnosticsV2(
-    enabled: settings.getDownloadDiagnosticLog,
-    directoryProvider: () async {
-      final documents = await getApplicationDocumentsDirectory();
-      return Directory(p.join(documents.path, 'log'));
-    },
-  );
-});
+final downloadDiagnosticsFileV2Provider =
+    Provider<FileDownloadDiagnosticsV2>((ref) {
+      final settings = ref.read(settingsRepositoryProvider);
+      return FileDownloadDiagnosticsV2(
+        enabled: settings.getDownloadDiagnosticLog,
+        directoryProvider: () async {
+          final documents = await getApplicationDocumentsDirectory();
+          return Directory(p.join(documents.path, 'log'));
+        },
+      );
+    });
+
+final downloadDiagnosticsV2Provider = Provider<DownloadDiagnosticsV2>(
+  (ref) => ref.watch(downloadDiagnosticsFileV2Provider),
+);
 
 final downloadIntegrityVerifierV2Provider =
     Provider<DownloadIntegrityVerifierV2>(
