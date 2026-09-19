@@ -398,6 +398,7 @@ class NativeParallelBackgroundPlan {
 class PersistentParallelDownload {
   PersistentParallelDownload({
     this.diagnosticLog,
+    this.diagnosticEvent,
     required this.startPart,
     required this.pausePart,
     required this.cancelParts,
@@ -424,6 +425,8 @@ class PersistentParallelDownload {
   });
 
   final DownloadDiagnosticLog? diagnosticLog;
+  final void Function(String event, Map<String, Object?> fields)?
+  diagnosticEvent;
   final Future<bool> Function(DownloadTask task, double progress, int size)
   startPart;
   final Future<void> Function(DownloadTask task) pausePart;
@@ -489,6 +492,11 @@ class PersistentParallelDownload {
   int? activeConnectionCountFor(String id) {
     final session = _sessions[id];
     return session == null ? null : _activeConnectionsForSession(session);
+  }
+
+  void _recordDiagnostic(String event, [Map<String, Object?> fields = const {}]) {
+    _recordDiagnostic(event, fields);
+    diagnosticEvent?.call(event, fields);
   }
 
   /// Byte-credible live aggregate for presentation/telemetry.
@@ -607,6 +615,12 @@ class PersistentParallelDownload {
     part.tailWatchProgress = -1;
     part.lastNativeBridgeBytes = durableBytes;
     part.lastNativeBridgeAt = null;
+    _recordDiagnostic('parallel.diskManifestMismatch', {
+      'taskId': session.task.taskId,
+      'childTaskId': childTaskId,
+      'durableBytes': durableBytes,
+      'reason': 'undurableProgressReset',
+    });
     onPartProgress(session.task.taskId, childTaskId, repaired);
     if (session.active) _scheduleAggregateProgress(session);
     return true;
@@ -1374,7 +1388,7 @@ class PersistentParallelDownload {
             return;
           }
 
-          diagnosticLog?.record('parallel.restoredOwnerReleased', {
+          _recordDiagnostic('parallel.restoredOwnerReleased', {
             'taskId': session.task.taskId,
             'childTaskId': part.task.taskId,
             'attemptGeneration': attemptGeneration,
@@ -1466,7 +1480,7 @@ class PersistentParallelDownload {
             return;
           }
 
-          diagnosticLog?.record('parallel.pendingStartLeaseExpired', {
+          _recordDiagnostic('parallel.pendingStartLeaseExpired', {
             'taskId': session.task.taskId,
             'childTaskId': part.task.taskId,
             'attemptGeneration': attemptGeneration,
@@ -1602,7 +1616,7 @@ class PersistentParallelDownload {
           final shouldRecover =
               shouldRecoverFailedStart?.call(part.task.taskId) ?? true;
           if (!shouldRecover) {
-            diagnosticLog?.record('parallel.childStartParked', {
+            _recordDiagnostic('parallel.childStartParked', {
               'taskId': part.task.taskId,
               'parentTaskId': session.task.taskId,
             });
@@ -1713,7 +1727,7 @@ class PersistentParallelDownload {
 
   void _notifyPausedDrainSettled(_ParallelSession session) {
     if (session.active || _activeConnectionsForSession(session) > 0) return;
-    diagnosticLog?.record('parallel.pauseDrainSettled', {
+    _recordDiagnostic('parallel.pauseDrainSettled', {
       'taskId': session.task.taskId,
     });
     onPausedDrainSettled?.call(session.task.taskId);
@@ -2117,7 +2131,7 @@ class PersistentParallelDownload {
     session.parentRecordWrite = operation.then<void>(
       (_) {},
       onError: (Object error, StackTrace stackTrace) {
-        diagnosticLog?.record('parallel.parentRecordPersistFailed', {
+        _recordDiagnostic('parallel.parentRecordPersistFailed', {
           'taskId': session.task.taskId,
           'errorType': error.runtimeType.toString(),
         });
@@ -2215,6 +2229,110 @@ class PersistentParallelDownload {
         );
       }
     }
+
+    DateTime? latestNativeAt;
+    for (final part in session.parts) {
+      final at = part.lastNativeBridgeAt;
+      if (at != null && (latestNativeAt == null || at.isAfter(latestNativeAt))) {
+        latestNativeAt = at;
+      }
+    }
+    int? ageMs(DateTime? at) =>
+        at == null ? null : timestamp.difference(at).inMilliseconds.clamp(0, 1 << 30);
+    final activeConnections = _activeConnectionsForSession(session);
+    final liveBytes = observedBytes;
+    final durableBytes = session.creditedBytes;
+    final lastNativeAgeMs = ageMs(latestNativeAt);
+    final lastCheckpointAgeMs = ageMs(session.lastCheckpointAt);
+    final lastStatusAgeMs = ageMs(session.lastStatusAt);
+
+    _recordDiagnostic('parallel.heartbeat', {
+      'taskId': task.taskId,
+      'liveBytes': liveBytes,
+      'durableBytes': durableBytes,
+      'diskBytes': session.lastDiskObservedBytes >= 0
+          ? session.lastDiskObservedBytes
+          : durableBytes,
+      'nativeWrittenBytes': liveBytes,
+      'totalBytes': expectedBytes,
+      'checkpointSequence': session.checkpointSequence,
+      'configuredConnections': task.chunks,
+      'activeConnections': activeConnections,
+      'lastByteAgeMs': ageMs(latestNativeAt ?? session.lastDiskObservedAt),
+      'lastNativeCallbackAgeMs': lastNativeAgeMs,
+      'lastCheckpointAgeMs': lastCheckpointAgeMs,
+      'lastStatusAgeMs': lastStatusAgeMs,
+      'parentActive': session.active,
+      'pauseRequested': session.pauseRequested,
+      'speedMBps': speed,
+      'diskObservedSpeedMBps': session.diskObservedSpeed,
+    });
+
+    if (session.lastDiagnosticLiveBytes >= 0 &&
+        liveBytes < session.lastDiagnosticLiveBytes) {
+      _recordDiagnostic('parallel.anomaly', {
+        'taskId': task.taskId,
+        'anomaly': 'progressRegression',
+        'liveBytes': liveBytes,
+        'durableBytes': durableBytes,
+      });
+    }
+    if (session.lastDiagnosticDurableBytes >= 0 &&
+        durableBytes < session.lastDiagnosticDurableBytes) {
+      _recordDiagnostic('parallel.anomaly', {
+        'taskId': task.taskId,
+        'anomaly': 'durableBytesRegression',
+        'liveBytes': liveBytes,
+        'durableBytes': durableBytes,
+      });
+    }
+    if (activeConnections > task.chunks) {
+      _recordDiagnostic('parallel.anomaly', {
+        'taskId': task.taskId,
+        'anomaly': 'activeConnectionMismatch',
+        'configuredConnections': task.chunks,
+        'activeConnections': activeConnections,
+      });
+    }
+    if (liveBytes > session.lastDiagnosticLiveBytes) {
+      session.lastDiagnosticAdvanceAt = timestamp;
+    }
+    final stalledForMs = ageMs(session.lastDiagnosticAdvanceAt);
+    if (activeConnections > 0 &&
+        stalledForMs != null &&
+        stalledForMs >= 10000) {
+      _recordDiagnostic('parallel.anomaly', {
+        'taskId': task.taskId,
+        'anomaly': 'progressStalled',
+        'liveBytes': liveBytes,
+        'durableBytes': durableBytes,
+        'lastByteAgeMs': stalledForMs,
+        'activeConnections': activeConnections,
+      });
+    }
+    if (activeConnections > 0 &&
+        lastNativeAgeMs != null &&
+        lastNativeAgeMs >= 5000) {
+      _recordDiagnostic('parallel.anomaly', {
+        'taskId': task.taskId,
+        'anomaly': 'callbackGap',
+        'lastNativeCallbackAgeMs': lastNativeAgeMs,
+        'activeConnections': activeConnections,
+      });
+    }
+    if (activeConnections > 0 &&
+        speed <= 0 &&
+        lastNativeAgeMs != null &&
+        lastNativeAgeMs >= 3000) {
+      _recordDiagnostic('parallel.anomaly', {
+        'taskId': task.taskId,
+        'anomaly': 'speedZeroWhileActive',
+        'lastNativeCallbackAgeMs': lastNativeAgeMs,
+        'activeConnections': activeConnections,
+      });
+    }
+    session.lastDiagnosticLiveBytes = liveBytes;
+    session.lastDiagnosticDurableBytes = durableBytes;
 
     onUpdate(
       TaskProgressUpdate(task, progress, expectedBytes, speed, timeRemaining),
@@ -2507,7 +2625,7 @@ class PersistentParallelDownload {
           if (callbackAttempt != null &&
               part.attemptGeneration > 0 &&
               callbackAttempt != part.attemptGeneration) {
-            diagnosticLog?.record('parallel.staleChildCallback', {
+            _recordDiagnostic('parallel.staleChildCallback', {
               'taskId': session.task.taskId,
               'childTaskId': part.task.taskId,
               'callbackAttempt': callbackAttempt,
@@ -2937,7 +3055,7 @@ class PersistentParallelDownload {
     }
 
     if (drainIds.isNotEmpty) {
-      diagnosticLog?.record('parallel.pauseDrain', {
+      _recordDiagnostic('parallel.pauseDrain', {
         'taskId': session.task.taskId,
         'count': drainIds.length,
       });
@@ -3055,7 +3173,7 @@ class PersistentParallelDownload {
 
     await _persist(session);
     await _status(session, TaskStatus.paused);
-    diagnosticLog?.record('parallel.pauseCommitted', {
+    _recordDiagnostic('parallel.pauseCommitted', {
       'taskId': session.task.taskId,
       'draining': retainedDrainCount,
     });
@@ -3097,7 +3215,8 @@ class PersistentParallelDownload {
   }
 
   Future<void> _status(_ParallelSession session, TaskStatus status) async {
-    diagnosticLog?.record('parallel.status', {
+    session.lastStatusAt = DateTime.now();
+    _recordDiagnostic('parallel.status', {
       'taskId': session.task.taskId,
       'status': status.name,
       'progress': session.progress,
@@ -3154,6 +3273,14 @@ class PersistentParallelDownload {
         if (await temp.exists()) await temp.delete();
       } catch (_) {}
     }
+    session.lastCheckpointAt = DateTime.now();
+    _recordDiagnostic('parallel.checkpoint', {
+      'taskId': session.task.taskId,
+      'checkpointSequence': session.checkpointSequence,
+      'durableBytes': session.creditedBytes,
+      'totalBytes': session.size,
+      'manifestPartCount': session.parts.length,
+    });
   }
 
   Future<bool> _adoptCompletedTarget(_ParallelSession session) async {
@@ -3229,7 +3356,7 @@ class PersistentParallelDownload {
     _DownloadPart part, {
     required String reason,
   }) async {
-    diagnosticLog?.record('parallel.rangeRejected', {
+    _recordDiagnostic('parallel.rangeRejected', {
       'taskId': session.task.taskId,
       'childTaskId': part.task.taskId,
       'reason': reason,
@@ -3437,7 +3564,7 @@ class PersistentParallelDownload {
     File staging, {
     FileSystemException? error,
   }) async {
-    diagnosticLog?.record('assembly.insufficientStorage', {
+    _recordDiagnostic('assembly.insufficientStorage', {
       'taskId': session.task.taskId,
       'total': session.size,
       if (error?.osError?.errorCode != null)
@@ -3456,7 +3583,7 @@ class PersistentParallelDownload {
   }
 
   Future<void> _assemble(_ParallelSession session) async {
-    diagnosticLog?.record('assembly.begin', {
+    _recordDiagnostic('assembly.begin', {
       'taskId': session.task.taskId,
       'total': session.size,
       'count': session.parts.length,
@@ -3579,6 +3706,11 @@ class _ParallelSession {
   int lastDiskObservedBytes = -1;
   DateTime? lastDiskObservedAt;
   double diskObservedSpeed = 0;
+  DateTime? lastCheckpointAt;
+  DateTime? lastStatusAt;
+  DateTime? lastDiagnosticAdvanceAt;
+  int lastDiagnosticLiveBytes = -1;
+  int lastDiagnosticDurableBytes = -1;
   bool parentRunningReported = false;
   DateTime? lastHostProfileSampleAt;
   Future<void> _pending = Future<void>.value();
