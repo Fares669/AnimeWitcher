@@ -224,7 +224,7 @@ final class PackageBackgroundDownloaderGateway
 
 /// Returns the package-managed parallel width V2 may safely use.
 ///
-/// background_downloader 9.6.1 (the pinned version) resumes iOS
+/// background_downloader 9.6.2 (the pinned version) resumes iOS
 /// ParallelDownloadTask children all at once and cancels the parent when any child cannot resume.
 /// A child that completed before pause legitimately has no resume payload, so
 /// that path cannot guarantee a lossless explicit resume. Keep iOS on one
