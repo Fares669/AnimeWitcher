@@ -10,22 +10,15 @@ const int kDownloadPartsAuto = 0;
 const int kDownloadPartsMin = 1;
 const int kDownloadPartsMax = 16;
 const int kDownloadGlobalConnectionBudget = 16;
-const int kDownloadPartsIosMax = 2;
 
-/// background_downloader's own iOS ParallelDownloadTask pause/resume
-/// integration coverage uses two chunks. Higher child counts are paused
-/// sequentially after the parent already reports paused, which can leave
-/// children transferring and without stable resumeData for a long time.
+/// Preserve the selected legacy width. Download Manager V2 applies its own
+/// package/platform safety policy at the gateway boundary instead of mutating
+/// the user's stored preference.
 int effectiveDownloadPartsForPlatform({
   required int selectedParts,
   required bool isIOS,
 }) {
-  final normalized = selectedParts
-      .clamp(kDownloadPartsMin, kDownloadPartsMax)
-      .toInt();
-  return isIOS
-      ? normalized.clamp(kDownloadPartsMin, kDownloadPartsIosMax).toInt()
-      : normalized;
+  return selectedParts.clamp(kDownloadPartsMin, kDownloadPartsMax).toInt();
 }
 
 
