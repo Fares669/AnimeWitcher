@@ -495,8 +495,25 @@ class PersistentParallelDownload {
   }
 
   void _recordDiagnostic(String event, [Map<String, Object?> fields = const {}]) {
-    _recordDiagnostic(event, fields);
+    diagnosticLog?.record(event, fields);
     diagnosticEvent?.call(event, fields);
+  }
+
+  void _recordSessionAnomaly(
+    _ParallelSession session,
+    String anomaly,
+    Map<String, Object?> fields,
+  ) {
+    if (!session.activeDiagnosticAnomalies.add(anomaly)) return;
+    _recordDiagnostic('parallel.anomaly', <String, Object?>{
+      'taskId': session.task.taskId,
+      'anomaly': anomaly,
+      ...fields,
+    });
+  }
+
+  void _clearSessionAnomaly(_ParallelSession session, String anomaly) {
+    session.activeDiagnosticAnomalies.remove(anomaly);
   }
 
   /// Byte-credible live aggregate for presentation/telemetry.
@@ -2231,10 +2248,15 @@ class PersistentParallelDownload {
     }
 
     DateTime? latestNativeAt;
+    var nativeWrittenBytes = 0;
     for (final part in session.parts) {
       final at = part.lastNativeBridgeAt;
       if (at != null && (latestNativeAt == null || at.isAfter(latestNativeAt))) {
         latestNativeAt = at;
+      }
+      if (part.lastNativeBridgeBytes > 0) {
+        nativeWrittenBytes +=
+            part.lastNativeBridgeBytes.clamp(0, part.size).toInt();
       }
     }
     int? ageMs(DateTime? at) => at == null
@@ -2243,9 +2265,12 @@ class PersistentParallelDownload {
     final activeConnections = _activeConnectionsForSession(session);
     final liveBytes = observedBytes;
     final durableBytes = session.creditedBytes;
+
+    if (liveBytes > session.lastDiagnosticLiveBytes) {
+      session.lastDiagnosticAdvanceAt = timestamp;
+    }
     final lastNativeAgeMs = ageMs(latestNativeAt);
-    final lastCheckpointAgeMs = ageMs(session.lastCheckpointAt);
-    final lastStatusAgeMs = ageMs(session.lastStatusAt);
+    final stalledForMs = ageMs(session.lastDiagnosticAdvanceAt);
 
     _recordDiagnostic('parallel.heartbeat', {
       'taskId': task.taskId,
@@ -2254,84 +2279,90 @@ class PersistentParallelDownload {
       'diskBytes': session.lastDiskObservedBytes >= 0
           ? session.lastDiskObservedBytes
           : durableBytes,
-      'nativeWrittenBytes': liveBytes,
+      'nativeWrittenBytes': nativeWrittenBytes,
       'totalBytes': expectedBytes,
       'checkpointSequence': session.checkpointSequence,
       'configuredConnections': task.chunks,
       'activeConnections': activeConnections,
-      'lastByteAgeMs': ageMs(latestNativeAt ?? session.lastDiskObservedAt),
+      'lastByteAgeMs': stalledForMs,
       'lastNativeCallbackAgeMs': lastNativeAgeMs,
-      'lastCheckpointAgeMs': lastCheckpointAgeMs,
-      'lastStatusAgeMs': lastStatusAgeMs,
+      'lastCheckpointAgeMs': ageMs(session.lastCheckpointAt),
+      'lastStatusAgeMs': ageMs(session.lastStatusAt),
       'parentActive': session.active,
       'pauseRequested': session.pauseRequested,
       'speedMBps': speed,
       'diskObservedSpeedMBps': session.diskObservedSpeed,
     });
 
-    if (session.lastDiagnosticLiveBytes >= 0 &&
-        liveBytes < session.lastDiagnosticLiveBytes) {
-      _recordDiagnostic('parallel.anomaly', {
-        'taskId': task.taskId,
-        'anomaly': 'progressRegression',
+    final progressRegressed =
+        session.lastDiagnosticLiveBytes >= 0 &&
+        liveBytes < session.lastDiagnosticLiveBytes;
+    if (progressRegressed) {
+      _recordSessionAnomaly(session, 'progressRegression', {
         'liveBytes': liveBytes,
         'durableBytes': durableBytes,
       });
+    } else {
+      _clearSessionAnomaly(session, 'progressRegression');
     }
-    if (session.lastDiagnosticDurableBytes >= 0 &&
-        durableBytes < session.lastDiagnosticDurableBytes) {
-      _recordDiagnostic('parallel.anomaly', {
-        'taskId': task.taskId,
-        'anomaly': 'durableBytesRegression',
+
+    final durableRegressed =
+        session.lastDiagnosticDurableBytes >= 0 &&
+        durableBytes < session.lastDiagnosticDurableBytes;
+    if (durableRegressed) {
+      _recordSessionAnomaly(session, 'durableBytesRegression', {
         'liveBytes': liveBytes,
         'durableBytes': durableBytes,
       });
+    } else {
+      _clearSessionAnomaly(session, 'durableBytesRegression');
     }
+
     if (activeConnections > task.chunks) {
-      _recordDiagnostic('parallel.anomaly', {
-        'taskId': task.taskId,
-        'anomaly': 'activeConnectionMismatch',
+      _recordSessionAnomaly(session, 'activeConnectionMismatch', {
         'configuredConnections': task.chunks,
         'activeConnections': activeConnections,
       });
+    } else {
+      _clearSessionAnomaly(session, 'activeConnectionMismatch');
     }
-    if (liveBytes > session.lastDiagnosticLiveBytes) {
-      session.lastDiagnosticAdvanceAt = timestamp;
-    }
-    final stalledForMs = ageMs(session.lastDiagnosticAdvanceAt);
+
     if (activeConnections > 0 &&
         stalledForMs != null &&
         stalledForMs >= 10000) {
-      _recordDiagnostic('parallel.anomaly', {
-        'taskId': task.taskId,
-        'anomaly': 'progressStalled',
+      _recordSessionAnomaly(session, 'progressStalled', {
         'liveBytes': liveBytes,
         'durableBytes': durableBytes,
         'lastByteAgeMs': stalledForMs,
         'activeConnections': activeConnections,
       });
+    } else {
+      _clearSessionAnomaly(session, 'progressStalled');
     }
+
     if (activeConnections > 0 &&
         lastNativeAgeMs != null &&
         lastNativeAgeMs >= 5000) {
-      _recordDiagnostic('parallel.anomaly', {
-        'taskId': task.taskId,
-        'anomaly': 'callbackGap',
+      _recordSessionAnomaly(session, 'callbackGap', {
         'lastNativeCallbackAgeMs': lastNativeAgeMs,
         'activeConnections': activeConnections,
       });
+    } else {
+      _clearSessionAnomaly(session, 'callbackGap');
     }
+
     if (activeConnections > 0 &&
         speed <= 0 &&
         lastNativeAgeMs != null &&
         lastNativeAgeMs >= 3000) {
-      _recordDiagnostic('parallel.anomaly', {
-        'taskId': task.taskId,
-        'anomaly': 'speedZeroWhileActive',
+      _recordSessionAnomaly(session, 'speedZeroWhileActive', {
         'lastNativeCallbackAgeMs': lastNativeAgeMs,
         'activeConnections': activeConnections,
       });
+    } else {
+      _clearSessionAnomaly(session, 'speedZeroWhileActive');
     }
+
     session.lastDiagnosticLiveBytes = liveBytes;
     session.lastDiagnosticDurableBytes = durableBytes;
 
@@ -3748,6 +3779,7 @@ class _ParallelSession {
   DateTime? lastDiagnosticAdvanceAt;
   int lastDiagnosticLiveBytes = -1;
   int lastDiagnosticDurableBytes = -1;
+  final Set<String> activeDiagnosticAnomalies = <String>{};
   bool parentRunningReported = false;
   DateTime? lastHostProfileSampleAt;
   Future<void> _pending = Future<void>.value();
