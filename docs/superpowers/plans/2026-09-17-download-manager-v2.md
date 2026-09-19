@@ -63,10 +63,10 @@ This exact-head evidence is the basis for closing Tasks 10-12; Task 13 still req
 
 ## Global Constraints
 
-- `background_downloader` is the **only** transport/retry/pause-resume authority for V2.
-- No V2 production path may instantiate or call `DownloadService`, `PersistentParallelDownload`, `DownloadRangeTransfer`, legacy JobStore ownership, or native retry/promotion logic.
-- V1 source may remain temporarily only for legacy compatibility/removal staging and must explicitly never own a V2 task.
-- No V2 persistence may contain custom chunk IDs, ranges, resume offsets/bytes, package retry counters, package hold state, or native writer ownership.
+- `background_downloader` is the **only network/native execution authority** for V2; every actual writer is a package `DownloadTask`/URLSession or accepted package-managed parallel task.
+- No V2 production path may instantiate/call `DownloadService`, `DownloadRangeTransfer`, legacy JobStore ownership, or native retry/promotion logic. The sole approved exception is `PersistentParallelDownload` behind `BackgroundDownloaderGateway` for iOS durable immutable-range split/checkpoint/assembly.
+- V1 source may remain temporarily only for legacy compatibility/removal staging and must explicitly never own or retry a V2 logical task.
+- `LogicalDownloadStoreV2` may not contain custom child IDs, ranges, resume offsets/bytes, package retry counters, package hold state, or native writer ownership. The iOS range manifest is transport-private gateway state.
 - Migration policy A: completed legacy files remain usable only when completion is proven; incomplete legacy work stays visible but performs zero network work until explicit user resume/restart, then starts V2 from byte zero.
 - Startup attaches only by the current exact package `taskId`, never URL/filename matching.
 - `active + missing/nonrecoverable transfer` creates one fresh generation; paused/canceled/legacy-incomplete never auto-start.
@@ -294,3 +294,4 @@ Do not mark complete until Tasks 10-14 are complete. Final review must compare t
 6. V1 is behavioral reference only. Never restore V1 transport ownership to make V2 pass.
 7. Prefer production-behavior tests over source-shape guards when the behavior can be exercised directly; keep source guards only for architectural reachability/ownership constraints that are otherwise difficult to observe.
 8. Stop automatic implementation only at the real-device gate if no device evidence is available; report exactly what remains blocked.
+
