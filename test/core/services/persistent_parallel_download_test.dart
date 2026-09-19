@@ -25,6 +25,7 @@ void main() {
     Duration diskProgressPollInterval = const Duration(seconds: 1),
     bool preserveNativeParts = false,
     void Function(String parentTaskId)? onPausedDrainSettled,
+    void Function(String event, Map<String, Object?> fields)? diagnosticEvent,
   }) => PersistentParallelDownload(
     startPart: (task, progress, size) async {
       starts.add(task);
@@ -48,6 +49,7 @@ void main() {
     livePartIds: () async => liveIds,
     shouldDrainPartOnPause: preserveNativeParts ? (_) => true : null,
     onPausedDrainSettled: onPausedDrainSettled,
+    diagnosticEvent: diagnosticEvent,
     recoveryDelay: const Duration(milliseconds: 10),
     diskProgressPollInterval: diskProgressPollInterval,
   );
@@ -259,6 +261,40 @@ void main() {
       await waitUntil(() => starts.length >= 3);
     },
   );
+
+  test('aggregate diagnostic heartbeat separates live and durable bytes', () async {
+    final diagnosticEvents = <({String event, Map<String, Object?> fields})>[];
+    await coordinator.dispose();
+    coordinator = create(
+      diagnosticEvent: (event, fields) {
+        diagnosticEvents.add((event: event, fields: Map<String, Object?>.from(fields)));
+      },
+    );
+
+    expect(await coordinator.start(parent, 100), isTrue);
+    final first = starts.single;
+    await coordinator.handleNativeChunkUpdate(
+      parentTaskId: parent.taskId,
+      chunkTaskId: first.taskId,
+      writtenBytes: 10,
+      expectedBytes: 20,
+      speedBytesPerSecond: 500000,
+    );
+
+    await waitUntil(
+      () => diagnosticEvents.any((entry) => entry.event == 'parallel.heartbeat'),
+    );
+    final heartbeat = diagnosticEvents.lastWhere(
+      (entry) => entry.event == 'parallel.heartbeat',
+    ).fields;
+    expect(heartbeat['taskId'], parent.taskId);
+    expect(heartbeat['liveBytes'], 10);
+    expect(heartbeat['durableBytes'], 0);
+    expect(heartbeat['nativeWrittenBytes'], 10);
+    expect(heartbeat['configuredConnections'], parent.chunks);
+    expect(heartbeat['activeConnections'], greaterThanOrEqualTo(1));
+    expect(heartbeat['checkpointSequence'], greaterThanOrEqualTo(1));
+  });
 
   test('native iOS completion bridge adopts the exact moved part', () async {
     expect(await coordinator.start(parent, 100), isTrue);
