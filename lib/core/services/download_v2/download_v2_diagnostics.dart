@@ -208,10 +208,13 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
         final file = File(
           '${logDirectory.path}${Platform.pathSeparator}$fileName',
         );
+        final event = body['event'];
         await file.writeAsString(
           '${jsonEncode(payload)}\n',
           mode: FileMode.append,
-          flush: true,
+          flush:
+              event != 'parallel.heartbeat' &&
+              event != 'parallel.checkpoint',
         );
         _lastError = null;
       } catch (error) {
