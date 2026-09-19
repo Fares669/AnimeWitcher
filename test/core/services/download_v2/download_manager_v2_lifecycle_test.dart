@@ -253,6 +253,45 @@ void main() {
     expect((await f.store.get(f.request.logicalId))?.taskId, taskId);
   });
 
+  test('paused projection keeps progress-derived presentation bytes', () async {
+    final f = _fixture(parallelChunks: 16);
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(taskId)!;
+    handle.emitSnapshot(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: 0.25,
+        transferredBytes: 0,
+        totalBytes: 100,
+      ),
+    );
+    handle.onPause = () async {
+      handle.emitSnapshot(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.paused,
+          progress: 0.25,
+          transferredBytes: 0,
+          totalBytes: 100,
+        ),
+      );
+      return true;
+    };
+
+    final paused = await f.manager.pause(f.request.logicalId);
+
+    expect(paused?.progress, 0.25);
+    expect(
+      paused?.transferredBytes,
+      25,
+      reason:
+          'pause/status projection must not publish 25% progress with zero '
+          'presentation bytes',
+    );
+  });
+
   test('pause waits for package paused state before allowing exact resume', () async {
     final f = _fixture();
     await f.manager.start(f.request);
