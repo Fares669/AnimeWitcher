@@ -76,6 +76,36 @@ void main() {
     expect(diagnostics.events, <DownloadDiagnosticEventV2>[event]);
   });
 
+  test('file diagnostics exposes support directory and files without V1', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-v2-support-log-');
+    addTearDown(() => directory.delete(recursive: true));
+    final diagnostics = FileDownloadDiagnosticsV2(
+      directoryProvider: () async => directory,
+      enabled: () => true,
+      nowMillis: () => 7,
+    );
+
+    expect(await diagnostics.directory(), directory);
+    expect(await diagnostics.listFiles(), isEmpty);
+    expect(diagnostics.lastError, isNull);
+
+    diagnostics.record(
+      const DownloadDiagnosticEventV2(
+        logicalId: DownloadLogicalId('support-episode'),
+        generation: 1,
+        taskId: 'aw_v2_support_g1',
+        status: DownloadTransportStatus.running,
+        progress: 0.1,
+      ),
+    );
+    await diagnostics.flush();
+
+    final files = await diagnostics.listFiles();
+    expect(files, hasLength(1));
+    expect(files.single.path, endsWith('download_v2.jsonl'));
+    expect(diagnostics.lastError, isNull);
+  });
+
   test('file diagnostics appends JSONL and honors the logging switch', () async {
     final directory = await Directory.systemTemp.createTemp('aw-v2-log-');
     addTearDown(() => directory.delete(recursive: true));
