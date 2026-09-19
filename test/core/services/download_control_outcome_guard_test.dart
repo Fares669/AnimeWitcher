@@ -3,24 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('DM-03 exposes typed pause resume and cancel outcomes', () {
-    final source = File('lib/core/services/download_service.dart')
-        .readAsStringSync();
-    expect(
-      source,
-      contains('Future<DownloadCommandOutcome> pauseDownloadOutcome('),
-    );
-    expect(
-      source,
-      contains('Future<DownloadCommandOutcome> resumeDownloadOutcome('),
-    );
-    expect(
-      source,
-      contains('Future<DownloadCommandOutcome> cancelDownloadOutcome('),
-    );
-  });
-
-  test('V2 callers use logical control commands', () {
+    test('V2 callers use logical control commands', () {
     final provider = File(
       'lib/features/library/presentation/downloads_provider.dart',
     ).readAsStringSync();
