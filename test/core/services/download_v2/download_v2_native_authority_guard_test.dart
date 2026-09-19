@@ -3,6 +3,39 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('V2 native refill does not inherit the legacy retry owner', () {
+    final nativeQueue = File(
+      'ios/Runner/DownloadNativeWaitingQueue.swift',
+    ).readAsStringSync();
+    final compact = nativeQueue.replaceAll(RegExp(r'\s+'), ' ');
+
+    expect(
+      compact,
+      contains('private static func isPromotableMultipartPart('),
+      reason:
+          'Persisted generation-fenced plans may refill URLSession slots for '
+          'V2, but that is distinct from legacy native retry ownership.',
+    );
+    expect(
+      compact,
+      contains(
+        'return isPromotableMultipartPart(task) && !isV2DurableMultipartPart(task)',
+      ),
+      reason:
+          'V2 transient failures must return to the V2 coordinator rather than '
+          'being recreated by the legacy retry path.',
+    );
+    expect(
+      compact,
+      contains(
+        'if isPromotableMultipartPart(task) { promoteMultipartIfPossible(',
+      ),
+      reason:
+          'A finished or failed background Range must free its slot and let '
+          'the native persisted plan start the next immutable Range.',
+    );
+  });
+
   test('legacy iOS hook is observation-only after the V2 cutover', () {
     final compatibility = File(
       'ios/Runner/DownloadCallbackCompatibility.swift',
