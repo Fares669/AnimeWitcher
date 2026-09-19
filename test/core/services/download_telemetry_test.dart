@@ -85,6 +85,34 @@ void main() {
       expect(reading.speedBytesPerSecond, 600000);
     });
 
+    test('fresh native speed survives sparse byte callbacks', () {
+      final estimator = DownloadTelemetryEstimator();
+      final start = DateTime(2026, 1, 1, 12);
+
+      estimator.observe(
+        taskId: 'sparse',
+        transferredBytes: 1_000_000,
+        expectedBytes: 10_000_000,
+        fallbackSpeedBytesPerSecond: 100_000,
+        now: start,
+      );
+      final reading = estimator.observe(
+        taskId: 'sparse',
+        transferredBytes: 1_000_000,
+        expectedBytes: 10_000_000,
+        fallbackSpeedBytesPerSecond: 120_000,
+        now: start.add(const Duration(seconds: 4)),
+      );
+
+      expect(
+        reading.speedBytesPerSecond,
+        greaterThan(0),
+        reason:
+            'fresh native throughput must not be zeroed only because byte '
+            'progress callbacks are sparse across one immutable Range',
+      );
+    });
+
     test('speed becomes zero after no bytes for stale timeout', () {
       final estimator = DownloadTelemetryEstimator();
       final start = DateTime(2026, 1, 1, 12);
