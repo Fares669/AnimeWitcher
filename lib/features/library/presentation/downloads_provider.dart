@@ -281,6 +281,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   }
 
   Future<void> _refreshState() async {
+    // The timer is the safety net for presentation. Re-read durable V2 truth
+    // instead of repeatedly projecting a cached list if a stream notification
+    // was missed during a lifecycle/subscription race.
+    _records = await ref.read(logicalDownloadStoreV2Provider).all();
     state = AsyncData(await _refreshList());
   }
 
