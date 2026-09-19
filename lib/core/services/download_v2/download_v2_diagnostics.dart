@@ -79,6 +79,12 @@ final class DownloadDiagnosticEventV2 {
 
 abstract interface class DownloadDiagnosticsV2 {
   void record(DownloadDiagnosticEventV2 event);
+
+  /// Records transport/coordinator facts that have no application logical ID
+  /// yet (startup inventory, child ownership, recovery, checkpoint health).
+  /// Implementations must keep a strict field allowlist: no URLs, headers or
+  /// free-form exception/message text may cross this boundary.
+  void recordTransport(String event, Map<String, Object?> fields);
 }
 
 final class NoopDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
@@ -86,19 +92,34 @@ final class NoopDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
 
   @override
   void record(DownloadDiagnosticEventV2 event) {}
+
+  @override
+  void recordTransport(String event, Map<String, Object?> fields) {}
 }
 
 /// Deterministic sink used by V2 regression tests and debug projections.
 final class InMemoryDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
   final List<DownloadDiagnosticEventV2> _events =
       <DownloadDiagnosticEventV2>[];
+  final List<Map<String, Object?>> _transportEvents =
+      <Map<String, Object?>>[];
 
   List<DownloadDiagnosticEventV2> get events =>
       List<DownloadDiagnosticEventV2>.unmodifiable(_events);
+  List<Map<String, Object?>> get transportEvents =>
+      List<Map<String, Object?>>.unmodifiable(_transportEvents);
 
   @override
   void record(DownloadDiagnosticEventV2 event) {
     _events.add(event);
+  }
+
+  @override
+  void recordTransport(String event, Map<String, Object?> fields) {
+    _transportEvents.add(<String, Object?>{
+      'event': event,
+      ..._sanitizeTransportFields(fields),
+    });
   }
 }
 
@@ -113,18 +134,24 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
     required Future<Directory> Function() directoryProvider,
     required bool Function() enabled,
     int Function()? nowMillis,
+    String? sessionId,
     this.fileName = 'download_v2.jsonl',
   }) : _directoryProvider = directoryProvider,
        _enabled = enabled,
-       _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch);
+       _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch),
+       _sessionId =
+           sessionId ?? '${DateTime.now().microsecondsSinceEpoch}-$pid';
 
   final Future<Directory> Function() _directoryProvider;
   final bool Function() _enabled;
   final int Function() _nowMillis;
+  final String _sessionId;
   final String fileName;
 
   Future<void> _tail = Future<void>.value();
   Object? _lastError;
+  int _sequence = 0;
+  final Stopwatch _elapsed = Stopwatch()..start();
 
   Object? get lastError => _lastError;
 
@@ -149,10 +176,31 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
 
   @override
   void record(DownloadDiagnosticEventV2 event) {
+    _enqueue(<String, Object?>{
+      'recordType': 'snapshot',
+      'event': 'snapshot',
+      ...event.toJson(),
+    });
+  }
+
+  @override
+  void recordTransport(String event, Map<String, Object?> fields) {
+    if (!_safeDiagnosticToken(event)) return;
+    _enqueue(<String, Object?>{
+      'recordType': 'transport',
+      'event': event,
+      ..._sanitizeTransportFields(fields),
+    });
+  }
+
+  void _enqueue(Map<String, Object?> body) {
     if (!_enabled()) return;
     final payload = <String, Object?>{
       'timestampMillis': _nowMillis(),
-      ...event.toJson(),
+      'sessionId': _sessionId,
+      'sequence': ++_sequence,
+      'elapsedMs': _elapsed.elapsedMilliseconds,
+      ...body,
     };
     _tail = _tail.then<void>((_) async {
       try {
@@ -176,3 +224,72 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
   /// Testing/support hook for callers that need the append queue settled.
   Future<void> flush() => _tail;
 }
+
+const Set<String> _transportFieldAllowlist = <String>{
+  'taskId',
+  'parentTaskId',
+  'childTaskId',
+  'status',
+  'previousStatus',
+  'reason',
+  'anomaly',
+  'networkType',
+  'errorType',
+  'liveBytes',
+  'durableBytes',
+  'diskBytes',
+  'nativeWrittenBytes',
+  'totalBytes',
+  'rangeStart',
+  'rangeEnd',
+  'attemptGeneration',
+  'checkpointSequence',
+  'configuredConnections',
+  'activeConnections',
+  'recordCount',
+  'nativeTaskCount',
+  'pausedTaskCount',
+  'resumeDataCount',
+  'manifestPartCount',
+  'lastByteAgeMs',
+  'lastNativeCallbackAgeMs',
+  'lastCheckpointAgeMs',
+  'lastStatusAgeMs',
+  'freeBytes',
+  'httpStatus',
+  'count',
+  'progress',
+  'speedMBps',
+  'diskObservedSpeedMBps',
+  'launched',
+  'nativeLive',
+  'packagePaused',
+  'resumeDataPresent',
+  'slotReserved',
+  'completed',
+  'result',
+  'parentActive',
+  'pauseRequested',
+};
+
+Map<String, Object?> _sanitizeTransportFields(Map<String, Object?> fields) {
+  final result = <String, Object?>{};
+  for (final entry in fields.entries) {
+    if (!_transportFieldAllowlist.contains(entry.key)) continue;
+    final value = entry.value;
+    if (value is num) {
+      if (value.isFinite) result[entry.key] = value;
+    } else if (value is bool || value == null) {
+      result[entry.key] = value;
+    } else if (value is String && _safeDiagnosticToken(value)) {
+      result[entry.key] = value;
+    }
+  }
+  return result;
+}
+
+bool _safeDiagnosticToken(String value) =>
+    value.isNotEmpty &&
+    value.length <= 160 &&
+    RegExp(r'^[a-zA-Z0-9_.:+-]+).hasMatch(value) &&
+    !value.contains('://');
