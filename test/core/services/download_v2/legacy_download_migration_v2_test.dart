@@ -83,10 +83,10 @@ void main() {
       sourceDescriptorRequiresLegacyRestartV2(
         restarted?.sourceDescriptor ?? const <String, Object?>{},
       ),
-      isFalse,
+      isTrue,
       reason:
-          'Once V2 owns transport, losing a paused package handle must not '
-          'silently authorize another byte-zero restart.',
+          'The production resolver still needs legacy reconstruction metadata '
+          'for future source refresh; generation > 1 is the one-shot fence.',
     );
   });
 
@@ -114,7 +114,7 @@ void main() {
     );
 
     final gateway = _MigrationGateway();
-    final resolver = StaticSourceResolverV2(expectedBytes: 100);
+    final resolver = _LegacyMarkerResolver();
     final manager = DownloadManagerV2(
       store: store,
       gateway: gateway,
@@ -134,6 +134,7 @@ void main() {
 
     expect(gateway.startedSpecs, hasLength(1));
     expect(resolver.calls, 1);
+    expect(resolver.sawLegacyRestartMarker, isTrue);
     expect(
       gateway.startedSpecs.single.taskId,
       taskIdForGeneration(item.logicalId, 2),
@@ -361,6 +362,27 @@ final class _MigrationHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> cancel() async => true;
+}
+
+final class _LegacyMarkerResolver implements DownloadSourceResolverV2 {
+  int calls = 0;
+  bool sawLegacyRestartMarker = false;
+
+  @override
+  Future<ResolvedDownloadSourceV2> resolve(
+    Map<String, Object?> descriptor,
+  ) async {
+    calls++;
+    sawLegacyRestartMarker =
+        sourceDescriptorRequiresLegacyRestartV2(descriptor);
+    if (!sawLegacyRestartMarker) {
+      throw StateError('legacy restart marker was stripped before resolution');
+    }
+    return const ResolvedDownloadSourceV2(
+      url: 'https://example.invalid/legacy-restarted.mp4',
+      expectedBytes: 100,
+    );
+  }
 }
 
 final class _ThrowingSourceResolver implements DownloadSourceResolverV2 {
