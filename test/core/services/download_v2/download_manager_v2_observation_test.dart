@@ -69,7 +69,8 @@ void main() {
       initial: DownloadTransportSnapshot(
         taskId: taskId,
         status: DownloadTransportStatus.running,
-        progress: .25,
+        progress: .50,
+        // Durable checkpoint may lag behind in-flight parent progress.
         transferredBytes: 25,
         totalBytes: 100,
         configuredConnections: 16,
@@ -92,6 +93,13 @@ void main() {
 
     var snapshot = manager.snapshotFor(id);
     expect(snapshot?.networkSpeedMBps, 5);
+    expect(
+      snapshot?.transferredBytes,
+      50,
+      reason:
+          'presentation bytes must not regress to an older durable checkpoint '
+          'while parent progress already proves more bytes transferred',
+    );
     expect(snapshot?.configuredConnections, 16);
     expect(snapshot?.activeConnections, 4);
 
