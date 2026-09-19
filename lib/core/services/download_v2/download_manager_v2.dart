@@ -1817,7 +1817,11 @@ DownloadTransportSnapshot _snapshotWithStatus(
     taskId: snapshot.taskId,
     status: status,
     progress: snapshot.progress,
-    transferredBytes: snapshot.transferredBytes,
+    transferredBytes: _presentationTransferredBytes(
+      transferredBytes: snapshot.transferredBytes,
+      totalBytes: snapshot.totalBytes,
+      progress: snapshot.progress,
+    ),
     totalBytes: snapshot.totalBytes,
     networkSpeedMBps: snapshot.networkSpeedMBps,
     timeRemaining: snapshot.timeRemaining,
