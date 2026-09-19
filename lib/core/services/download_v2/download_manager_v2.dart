@@ -448,13 +448,13 @@ final class DownloadManagerV2 {
       if (waitsForParallelChildren) {
         _parallelPausePending.add(logicalId);
       }
+      DownloadTransportSnapshot? packagePause;
       try {
         if (handle != null && !handle.current.isFinal) {
           settledPause = await _pauseHandleAndSettle(handle);
         }
 
-        final packagePause =
-            settledPause ?? handle?.current ?? _snapshots[logicalId];
+        packagePause = settledPause ?? handle?.current ?? _snapshots[logicalId];
         if (waitsForParallelChildren &&
             packagePause?.status == DownloadTransportStatus.paused) {
           final ready = await readiness.waitUntilReady(
@@ -476,7 +476,8 @@ final class DownloadManagerV2 {
       _rememberRecord(pausedRecord);
       await _publishRecords();
 
-      final base = settledPause ??
+      final base = packagePause ??
+          settledPause ??
           handle?.current ??
           _snapshots[logicalId] ??
           DownloadTransportSnapshot(
@@ -485,6 +486,18 @@ final class DownloadManagerV2 {
             progress: 0,
             totalBytes: record.expectedBytes,
           );
+
+      if (!record.awaitingAdmission &&
+          base.status != DownloadTransportStatus.paused) {
+        _snapshots[logicalId] = base;
+        _recordDiagnostic(logicalId, base);
+        _scheduleAdmissionPromotion();
+        if (base.status == DownloadTransportStatus.complete) return base;
+        throw StateError(
+          'Download did not pause safely; existing progress was preserved',
+        );
+      }
+
       final projected = _snapshotWithStatus(
         base,
         DownloadTransportStatus.paused,
@@ -1212,7 +1225,10 @@ final class DownloadManagerV2 {
     try {
       final accepted = await handle.pause();
       if (!accepted) {
-        await _settleObsoleteHandle(handle, cancelEvenIfFinal: false);
+        // On iOS a failed pause can mean URLSession could not produce resume
+        // data. Canceling here destroys the exact writer and makes a later
+        // Resume impossible. Keep transport truth untouched and let pause()
+        // surface the failure instead of fabricating a paused state.
         return handle.current;
       }
 
@@ -1224,7 +1240,8 @@ final class DownloadManagerV2 {
       try {
         return await settled.future.timeout(const Duration(seconds: 10));
       } on TimeoutException {
-        await _settleObsoleteHandle(handle, cancelEvenIfFinal: false);
+        // Command acceptance is not proof of a durable paused transfer.
+        // Never turn a pause timeout into a destructive cancel.
         return handle.current;
       }
     } finally {
