@@ -258,22 +258,22 @@ void main() {
       },
     );
 
-    test('iOS durable parallel pause stops package child writers', () {
+    test('iOS durable parallel pause drains only already-launched immutable ranges', () {
       final gateway = _read(
         'lib/core/services/download_v2/background_downloader_gateway.dart',
       );
 
       expect(
         gateway,
-        contains('Future<bool> pause() => coordinator.pause(parent);'),
-        reason:
-            'durable iOS range children are independent DownloadTasks, so pause '
-            'must pause those exact writers instead of letting the entire active '
-            'window keep draining after the UI reports paused.',
+        contains('shouldDrainPartOnPause: (_) => _isIOS()'),
       );
       expect(
         gateway,
-        isNot(contains('preserveLiveParts: Platform.isIOS')),
+        contains('preserveLiveParts: Platform.isIOS'),
+        reason:
+            'The durable iOS coordinator must stop scheduling new ranges while '
+            'allowing only the already-launched immutable range tasks to finish. '
+            'This avoids destructive native pause/resume-data failures.',
       );
     });
 

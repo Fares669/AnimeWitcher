@@ -350,6 +350,7 @@ final class PackageBackgroundDownloaderGateway
         for (final task in await _downloader.allTasks(allGroups: true))
           task.taskId,
       },
+      shouldDrainPartOnPause: (_) => _isIOS(),
       onUpdate: (update) {
         _durableHandles[update.task.taskId]?.accept(update);
       },
@@ -688,7 +689,8 @@ final class _DurableParallelDownloadTransportHandle
   Stream<DownloadTransportSnapshot> get snapshots => _snapshots.stream;
 
   @override
-  Future<bool> pause() => coordinator.pause(parent);
+  Future<bool> pause() =>
+      coordinator.pause(parent, preserveLiveParts: Platform.isIOS);
 
   @override
   Future<bool> resume() => coordinator.start(parent, totalBytes);
