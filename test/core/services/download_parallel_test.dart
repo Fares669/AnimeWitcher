@@ -69,14 +69,14 @@ void main() {
       );
     });
 
-    test('iOS preserves selected width after all-child resume barrier', () {
+    test('legacy iOS helper keeps its two-connection safety cap', () {
       expect(
         effectiveDownloadPartsForPlatform(selectedParts: 16, isIOS: true),
-        16,
+        2,
       );
       expect(
         effectiveDownloadPartsForPlatform(selectedParts: 8, isIOS: true),
-        8,
+        2,
       );
       expect(
         effectiveDownloadPartsForPlatform(selectedParts: 1, isIOS: true),
