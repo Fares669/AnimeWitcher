@@ -68,9 +68,7 @@ final downloadDiagnosticsFileV2Provider =
     Provider<FileDownloadDiagnosticsV2>((ref) {
       final settings = ref.read(settingsRepositoryProvider);
       unawaited(
-        configureNativeDownloadDiagnosticLog(
-          settings.getDownloadDiagnosticLog(),
-        ),
+        configureNativeDownloadDiagnosticLog(settings.getDownloadDiagnosticLog()),
       );
       return FileDownloadDiagnosticsV2(
         enabled: settings.getDownloadDiagnosticLog,
