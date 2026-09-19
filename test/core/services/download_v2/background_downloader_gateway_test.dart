@@ -173,6 +173,41 @@ void main() {
     expect((task as ParallelDownloadTask).chunks, 16);
   });
 
+  test('durable child cleanup selects only the exact V2 parent records', () {
+    DownloadTask child(String id, String parent) => DownloadTask(
+      taskId: id,
+      url: 'https://example.invalid/video.mp4',
+      filename: '$id.part',
+      group: 'animewitcher_parts',
+      metaData: '{"parentTaskId":"$parent"}',
+    );
+
+    final records = <TaskRecord>[
+      TaskRecord(child('aw_v2_parent_g1.part.0', 'aw_v2_parent_g1'), TaskStatus.complete, 1, 10),
+      TaskRecord(child('aw_v2_parent_g1.part.1', 'aw_v2_parent_g1'), TaskStatus.paused, .5, 10),
+      TaskRecord(child('aw_v2_other_g1.part.0', 'aw_v2_other_g1'), TaskStatus.complete, 1, 10),
+      TaskRecord(
+        DownloadTask(
+          taskId: 'aw_v2_parent_g1',
+          url: 'https://example.invalid/video.mp4',
+          filename: 'video.mp4',
+          group: kDownloadV2DurableParallelGroup,
+        ),
+        TaskStatus.complete,
+        1,
+        20,
+      ),
+    ];
+
+    expect(
+      durableChildTaskIdsForParentV2(records, 'aw_v2_parent_g1'),
+      <String>[
+        'aw_v2_parent_g1.part.0',
+        'aw_v2_parent_g1.part.1',
+      ],
+    );
+  });
+
   test('V2 package task carries long user-initiated transfer hints', () async {
     const spec = DownloadTaskSpecV2(
       taskId: 'aw_v2_hints_g1',
