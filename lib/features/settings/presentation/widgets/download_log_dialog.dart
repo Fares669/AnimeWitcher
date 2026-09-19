@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/services/download_service.dart';
+import '../../../../core/services/download_v2/download_v2_provider.dart';
 import '../general_settings_provider.dart';
 
 class DownloadLogDialog extends ConsumerStatefulWidget {
@@ -40,7 +40,7 @@ class _DownloadLogDialogState extends ConsumerState<DownloadLogDialog> {
   @override
   Widget build(BuildContext context) {
     final enabled = ref.watch(generalSettingsProvider).downloadDiagnosticLog;
-    final log = ref.read(downloadServiceProvider).diagnosticLog;
+    final log = ref.read(downloadDiagnosticsFileV2Provider);
     return AlertDialog(
       title: Text(text('سجل التنزيلات (Log)', 'Download log')),
       content: SizedBox(
@@ -64,8 +64,8 @@ class _DownloadLogDialogState extends ConsumerState<DownloadLogDialog> {
               ),
               Text(
                 text(
-                  'فعّل السجل ثم أعد حدوث المشكلة. تُحفظ الحالات والتقدّم والأخطاء أولًا بأول في مجلد log، دون الروابط أو بيانات الدخول. تُحتفظ بآخر 5 ملفات لكل مصدر (4 MB للملف). إيقاف التتبع لا يحذف الملفات.',
-                  'Enable logging, then reproduce the issue. Status, progress and errors are flushed to the log folder without URLs or credentials. Keeps 5 files per source (4 MB each). Disabling preserves existing files.',
+                  'فعّل السجل ثم أعد حدوث المشكلة. تُحفظ أحداث مدير التنزيل V2 أولًا بأول في مجلد log بصيغة JSONL، دون الروابط أو بيانات الدخول. إيقاف التتبع لا يحذف الملفات الموجودة.',
+                  'Enable logging, then reproduce the issue. Download Manager V2 events are flushed to the log folder as JSONL without URLs or credentials. Disabling logging preserves existing files.',
                 ),
               ),
               if (_error != null || log.lastError != null)
