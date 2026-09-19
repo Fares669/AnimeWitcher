@@ -140,7 +140,11 @@ final class DownloadManagerV2 {
       yield* buffered.stream;
     } finally {
       await subscription.cancel();
-      await buffered.close();
+      // A single-subscription controller's close future does not complete until
+      // a listener has observed done. records.first can cancel immediately
+      // after the initial yield, before yield* ever listens to this buffer.
+      // Closing is still required, but awaiting it here would deadlock cancel.
+      unawaited(buffered.close());
     }
   }
 
