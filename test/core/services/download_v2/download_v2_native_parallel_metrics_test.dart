@@ -41,6 +41,15 @@ void main() {
       v2Bridge,
       contains('DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent('),
     );
+    expect(v2Bridge, contains('progress: nil'));
+    expect(
+      v2Bridge,
+      isNot(
+        contains('Double(aggregateWritten) / Double(aggregateExpected)'),
+      ),
+      reason:
+          'Observed children are not necessarily the full parent denominator.',
+    );
     expect(
       v2Bridge,
       isNot(contains('promoteMultipart')),
@@ -61,6 +70,8 @@ void main() {
       contains('guard taskId == currentEpisodeTaskId'),
       reason: 'Late native child callbacks must not switch the system overlay.',
     );
+    expect(source, contains('hasAuthoritativeByteCoverage'));
+    expect(source, contains('totalBytesHint >= current.totalBytes'));
   });
 
 
