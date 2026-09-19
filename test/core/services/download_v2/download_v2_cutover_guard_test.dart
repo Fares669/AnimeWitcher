@@ -52,6 +52,16 @@ void main() {
       }
     });
 
+    test('download log UI cannot instantiate V1 transport', () {
+      final logDialog = _read(
+        'lib/features/settings/presentation/widgets/download_log_dialog.dart',
+      );
+
+      expect(logDialog, isNot(contains('download_service.dart')));
+      expect(logDialog, isNot(contains('downloadServiceProvider')));
+      expect(logDialog, contains('downloadDiagnosticsFileV2Provider'));
+    });
+
     test('production entry points no longer execute lifecycle through V1', () {
       final main = _read('lib/main.dart');
       final launcher = _read(
