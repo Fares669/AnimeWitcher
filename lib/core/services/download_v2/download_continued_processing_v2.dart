@@ -160,7 +160,9 @@ final class NativeParallelSpeedAccumulatorV2 {
 
     if (children.isEmpty) {
       _childrenByParent.remove(parentTaskId);
-      return completed || speedBytesPerSecond == 0 ? 0 : null;
+      // Completing the last immutable Range is a handoff to the next Range,
+      // not evidence that the logical parent network speed became zero.
+      return !completed && speedBytesPerSecond == 0 ? 0 : null;
     }
     return children.values.fold<double>(0, (sum, speed) => sum + speed);
   }
