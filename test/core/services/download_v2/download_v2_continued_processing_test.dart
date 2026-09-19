@@ -69,7 +69,30 @@ void main() {
         childTaskId: 'child-2',
         completed: true,
       ),
+      isNull,
+      reason:
+          'finishing the last immutable range is a handoff, not proof that '
+          'the parent network speed became zero',
+    );
+
+    expect(
+      speeds.update(
+        parentTaskId: 'aw_v2_dl_y_g1',
+        childTaskId: 'child',
+        speedBytesPerSecond: 1_000_000,
+        completed: false,
+      ),
+      1_000_000,
+    );
+    expect(
+      speeds.update(
+        parentTaskId: 'aw_v2_dl_y_g1',
+        childTaskId: 'child',
+        speedBytesPerSecond: 0,
+        completed: false,
+      ),
       0,
+      reason: 'an explicit stale zero from a still-owned child remains real',
     );
     expect(
       speeds.update(
