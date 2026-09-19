@@ -1,3 +1,4 @@
+# Triggered after the 2026-09-19 durable-range connection telemetry fixes.
 name: iOS Preview V2 Lossless Resume One Shot
 
 on:

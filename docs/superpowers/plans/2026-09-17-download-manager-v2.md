@@ -234,7 +234,12 @@ Feature acceptance retained:
 
 **2026-09-19 automated connection-width fix batch:** implementation through `4e758589693af6c8c67650c63f80029b5e457e82` fixes the pre-gateway iOS width collapse, adds active/configured connection diagnostics, and hardens the exact Range probe parser. Focused regression coverage now includes manual 16 with inconclusive metadata, Auto probe-worthy width, connection telemetry serialization, and RFC-valid Content-Range variants. Physical-device proof remains required for the unchecked item below.
 
-**Latest exact-head programmable evidence (2026-09-18):**
+**Latest exact-head programmable evidence (2026-09-19):**
+- app-code head `98318ef0fc1e3805ef7a5ae0ddfb76cf7ec8200c`, Flutter Checks run `35440945776`: analyzer ✅, focused Download Manager V2 tests ✅, repository suite **1581 passed / 1 skipped** ✅, iOS no-codesign build/log ✅, native logger typecheck ✅;
+- the connection-width diagnostics regression was proven RED first (`configuredConnections` became null after native speed projection), then fixed so native throughput overlays and subsequent package progress preserve both `configuredConnections` and `activeConnections`;
+- the remaining unchecked acceptance item is still physical-device-only: install the current iOS Preview, select 16 connections, verify `configuredConnections: 16`, observe `activeConnections` ramp above 1 when the origin permits it, then verify pause → resume continues from durable progress without a permanent 0% stall.
+
+**Previous exact-head programmable evidence (2026-09-18):**
 - app-code-equivalent head `e3f7cc25aa802f2121300c3440e4efcae8fe2472` (implementation through `73d5632836ef6e7c44294ec18e2b38f9d5d68dab`), Flutter Checks run `35334038350`: analyzer ✅, focused Download Manager V2 **97/97** ✅, iOS no-codesign build/log ✅, native logger typecheck ✅;
 - repository-wide suite: **1547 passed / 1 failed / 1 skipped**; the only failure remains the pre-existing Anime4K contract test attempting to open missing root `ANIME4K_PERFORMANCE_PLAN.md`, unrelated to Download Manager V2;
 - iOS release Preview run `35334035220` built and uploaded `ios-ipa-download-manager-v2-speed-fix` successfully after removing the obsolete media_kit header-preparation step from the Preview path;
