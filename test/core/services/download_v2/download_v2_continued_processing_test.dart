@@ -240,13 +240,20 @@ void main() {
     }
   });
 
-  test('V2 drives iOS continued processing as presentation only', () async {
+  test('V2 checkpoints native range refill before Flutter can suspend', () async {
     final calls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
           if (call.method == 'start') {
             return 'com.animewitcher.app.download.session';
+          }
+          if (call.method == 'persistNativeQueue') {
+            final args = Map<Object?, Object?>.from(call.arguments as Map);
+            return <String, Object>{
+              'acceptedVersion': args['snapshotVersion']! as int,
+              'nativePromotionAvailable': true,
+            };
           }
           return true;
         });
@@ -255,7 +262,30 @@ void main() {
       onSystemCancel: (_) async {},
       forceAvailableForTesting: true,
     );
-    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    final observer = IosDownloadContinuedProcessingObserverV2(
+      service: service,
+      nativeBackgroundPlans: () => <Map<String, Object>>[
+        <String, Object>{
+          'parentTaskId': 'aw_v2_episode_11_g1',
+          'maxConcurrent': 1,
+          'waiters': <Map<String, Object>>[
+            <String, Object>{
+              'taskId': 'aw_v2_episode_11_g1.part.8',
+              'taskJson': '{"taskId":"aw_v2_episode_11_g1.part.8"}',
+              'url': 'https://example.invalid/video.mp4',
+              'filename': '8.part',
+              'headers': <String, String>{'Range': 'bytes=800-899'},
+              'directory': 'downloads/.parts',
+              'httpRequestMethod': 'GET',
+              'group': 'animewitcher_parts',
+              'generation': 1,
+              'claimId': 'claim-8',
+              'claimLeaseMillis': 900000,
+            },
+          ],
+        },
+      ],
+    );
     final record = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
       logicalId: const DownloadLogicalId('episode-11'),
@@ -292,8 +322,22 @@ void main() {
       expect(args['transferredBytes'], 100);
       expect(args['totalBytes'], 400);
       expect(args['speedBytesPerSecond'], 2500000.0);
-      expect(calls.map((call) => call.method), isNot(contains('persistNativeQueue')));
-      expect(calls.map((call) => call.method), isNot(contains('persistWaitingQueue')));
+
+      final checkpoint = calls.singleWhere(
+        (call) => call.method == 'persistNativeQueue',
+      );
+      final checkpointArgs = Map<Object?, Object?>.from(
+        checkpoint.arguments as Map,
+      );
+      expect(checkpointArgs['transferringTaskIds'], <String>[
+        'aw_v2_episode_11_g1',
+      ]);
+      final plans = checkpointArgs['multipartPlans']! as List;
+      expect(plans, hasLength(1));
+      final plan = Map<Object?, Object?>.from(plans.single as Map);
+      expect(plan['parentTaskId'], 'aw_v2_episode_11_g1');
+      expect(plan['maxConcurrent'], 1);
+      expect((plan['waiters']! as List), hasLength(1));
 
       await observer.observe(
         record,
@@ -309,6 +353,15 @@ void main() {
       final stop = calls.lastWhere((call) => call.method == 'stop');
       final stopArgs = Map<String, Object?>.from(stop.arguments as Map);
       expect(stopArgs['endSession'], isTrue);
+      final checkpoints = calls
+          .where((call) => call.method == 'persistNativeQueue')
+          .toList(growable: false);
+      expect(checkpoints, hasLength(2));
+      final cleared = Map<Object?, Object?>.from(
+        checkpoints.last.arguments as Map,
+      );
+      expect(cleared['multipartPlans'], isEmpty);
+      expect(cleared['pausedTaskIds'], <String>['aw_v2_episode_11_g1']);
     } finally {
       await observer.dispose();
     }
