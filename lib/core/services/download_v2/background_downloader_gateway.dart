@@ -6,6 +6,8 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:path/path.dart' as p;
 
 import '../download_concurrency.dart';
+import '../download_parallel.dart';
+import '../persistent_parallel_download.dart';
 import 'download_v2_models.dart';
 
 /// Package-neutral description of one V2 parent transfer.
@@ -21,6 +23,7 @@ final class DownloadTaskSpecV2 {
     required this.allowPause,
     required this.retries,
     required this.parallelChunks,
+    this.expectedBytes,
   }) : assert(taskId != ''),
        assert(url != ''),
        assert(destinationPath != ''),
@@ -34,6 +37,7 @@ final class DownloadTaskSpecV2 {
   final bool allowPause;
   final int retries;
   final int parallelChunks;
+  final int? expectedBytes;
 }
 
 abstract interface class BackgroundDownloaderGateway {
@@ -69,6 +73,7 @@ abstract interface class DownloadTransportHandle {
 /// snapshot contract.
 const String kDownloadV2PackageGroup = 'downloads_v2';
 const String kDownloadV2SilentPackageGroup = 'downloads_v2_silent';
+const String kDownloadV2DurableParallelGroup = 'downloads_v2_ranges';
 
 Future<void> configurePackageNotificationsV2(
   FileDownloader downloader,
@@ -115,16 +120,28 @@ final class PackageBackgroundDownloaderGateway
     FileDownloader? downloader,
     DownloadNotificationPrefs Function()? notificationPreferences,
     Future<void> Function()? initializePackage,
+    bool Function()? isIOS,
+    Future<DownloadRangeCapabilityV2> Function(DownloadTaskSpecV2 spec)?
+    rangeCapabilityProbe,
   }) : _downloader = downloader ?? FileDownloader(),
        _notificationPreferences =
            notificationPreferences ?? (() => const DownloadNotificationPrefs()),
-       _initializePackage = initializePackage;
+       _initializePackage = initializePackage,
+       _isIOS = isIOS ?? (() => Platform.isIOS),
+       _rangeCapabilityProbe = rangeCapabilityProbe;
 
   final FileDownloader _downloader;
   final DownloadNotificationPrefs Function() _notificationPreferences;
   final Future<void> Function()? _initializePackage;
+  final bool Function() _isIOS;
+  final Future<DownloadRangeCapabilityV2> Function(DownloadTaskSpecV2 spec)?
+  _rangeCapabilityProbe;
   final Map<String, _PackageDownloadTransportHandle> _handles =
       <String, _PackageDownloadTransportHandle>{};
+  final Map<String, _DurableParallelDownloadTransportHandle> _durableHandles =
+      <String, _DurableParallelDownloadTransportHandle>{};
+  PersistentParallelDownload? _durableParallel;
+  StreamSubscription<TaskUpdate>? _durableUpdatesSubscription;
 
   Future<void>? _initialization;
 
@@ -159,6 +176,7 @@ final class PackageBackgroundDownloaderGateway
       _notificationPreferences(),
     );
     await _downloader.start(autoCleanDatabase: true);
+    _ensureDurableParallelCoordinator();
   }
 
   @override
@@ -166,6 +184,42 @@ final class PackageBackgroundDownloaderGateway
     await initialize();
     final prefs = _notificationPreferences();
     await configurePackageNotificationsV2(_downloader, prefs);
+
+    if (_isIOS() && spec.parallelChunks > 1) {
+      final capability = await (_rangeCapabilityProbe?.call(spec) ??
+          _probeRangeCapabilityV2(spec));
+      if (capability.supportsRanges && capability.totalBytes > 0) {
+        final parent = await packageTaskForV2(
+          spec,
+          userInitiated: prefs.running,
+          group: kDownloadV2DurableParallelGroup,
+          isIOS: false,
+        );
+        if (parent is ParallelDownloadTask) {
+          final handle = await _durableHandleFor(
+            parent,
+            capability.totalBytes,
+            initialStatus: DownloadTransportStatus.queued,
+            restoreOnly: false,
+          );
+          return handle;
+        }
+      }
+
+      // Parallel byte ranges are safe only after proving Range support and a
+      // trustworthy total size. Fall back to one normal package task otherwise.
+      spec = DownloadTaskSpecV2(
+        taskId: spec.taskId,
+        url: spec.url,
+        destinationPath: spec.destinationPath,
+        headers: spec.headers,
+        allowPause: spec.allowPause,
+        retries: spec.retries,
+        parallelChunks: 1,
+        expectedBytes: spec.expectedBytes,
+      );
+    }
+
     final task = await packageTaskForV2(
       spec,
       userInitiated: prefs.running,
@@ -181,14 +235,36 @@ final class PackageBackgroundDownloaderGateway
   Future<DownloadTransportHandle?> attach(String taskId) async {
     await initialize();
 
+    final durable = _durableHandles[taskId];
+    if (durable != null) return durable;
+
+    final record = await _downloader.database.recordForId(taskId);
+    if (record != null &&
+        record.task is ParallelDownloadTask &&
+        record.task.group == kDownloadV2DurableParallelGroup) {
+      final parent = record.task as ParallelDownloadTask;
+      return _durableHandleFor(
+        parent,
+        record.expectedFileSize,
+        initialStatus: _snapshotStatusFromRecord(record),
+        restoreOnly: true,
+      );
+    }
+
     final tracked = _downloader.transfers.forId(taskId);
-    if (tracked != null) return _handleFor(tracked);
+    if (tracked != null &&
+        !_isDurableInternalTask(tracked.task)) {
+      return _handleFor(tracked);
+    }
 
     // Rehydrate package persistence first, then select only by the exact
     // current task ID. Never attach by URL/filename heuristics.
     final rehydrated = await _downloader.transfers.rehydrateFromDatabase();
     for (final transfer in rehydrated) {
-      if (transfer.taskId == taskId) return _handleFor(transfer);
+      if (transfer.taskId == taskId &&
+          !_isDurableInternalTask(transfer.task)) {
+        return _handleFor(transfer);
+      }
     }
     return null;
   }
@@ -196,18 +272,175 @@ final class PackageBackgroundDownloaderGateway
   @override
   Future<List<DownloadTransportHandle>> rehydrate() async {
     await initialize();
+    final result = <DownloadTransportHandle>[];
+
+    for (final record in await _downloader.database.allRecords()) {
+      if (record.task is ParallelDownloadTask &&
+          record.task.group == kDownloadV2DurableParallelGroup) {
+        result.add(
+          await _durableHandleFor(
+            record.task as ParallelDownloadTask,
+            record.expectedFileSize,
+            initialStatus: _snapshotStatusFromRecord(record),
+            restoreOnly: true,
+          ),
+        );
+      }
+    }
+
     final transfers = await _downloader.transfers.rehydrateFromDatabase();
-    return List<DownloadTransportHandle>.unmodifiable(
-      transfers.map(_handleFor),
-    );
+    for (final transfer in transfers) {
+      if (_isDurableInternalTask(transfer.task)) continue;
+      result.add(_handleFor(transfer));
+    }
+    return List<DownloadTransportHandle>.unmodifiable(result);
   }
 
   @override
   Future<void> removeTracking(String taskId) async {
     await initialize();
+    final durable = _durableHandles.remove(taskId);
+    if (durable != null) {
+      durable.dispose();
+    }
     _downloader.transfers.remove(taskId);
     _handles.remove(taskId)?.dispose();
     await _downloader.database.deleteRecordWithId(taskId);
+  }
+
+  bool _isDurableInternalTask(Task task) =>
+      task.group == kDownloadV2DurableParallelGroup ||
+      task.group == kPersistentDownloadChunkGroup;
+
+  DownloadTransportStatus _snapshotStatusFromRecord(TaskRecord record) {
+    final status = transportStatusFromPackage(
+      record.status,
+      TransferHoldReason.none,
+    );
+    return status == DownloadTransportStatus.missing
+        ? DownloadTransportStatus.paused
+        : status;
+  }
+
+  PersistentParallelDownload _ensureDurableParallelCoordinator() {
+    final existing = _durableParallel;
+    if (existing != null) return existing;
+
+    final coordinator = PersistentParallelDownload(
+      startPart: _startDurablePart,
+      pausePart: (task) async {
+        if (!await _downloader.pause(task)) {
+          throw StateError('Native range did not pause safely');
+        }
+      },
+      cancelParts: (ids) async {
+        await _downloader.cancelTasksWithIds(ids);
+      },
+      saveRecord: _saveDurableRecord,
+      recordForId: _downloader.database.recordForId,
+      livePartIds: () async => {
+        for (final task in await _downloader.allTasks(allGroups: true))
+          task.taskId,
+      },
+      shouldDrainPartOnPause: (_) => _isIOS(),
+      onUpdate: (update) {
+        _durableHandles[update.task.taskId]?.accept(update);
+      },
+      onPartProgress: (_, _, _) {},
+      onSourceRefreshNeeded: (parentTaskId) {
+        _durableHandles[parentTaskId]?.sourceExpired();
+      },
+    );
+    _durableParallel = coordinator;
+    _durableUpdatesSubscription ??= _downloader.updates.listen((update) {
+      coordinator.handleUpdate(update);
+    });
+    return coordinator;
+  }
+
+  Future<bool> _startDurablePart(
+    DownloadTask task,
+    double progress,
+    int size,
+  ) async {
+    final live = await _downloader.allTasks(allGroups: true);
+    if (live.any((candidate) => candidate.taskId == task.taskId)) return true;
+
+    try {
+      if (await _downloader.taskCanResume(task) &&
+          await _downloader.resume(task)) {
+        return true;
+      }
+    } catch (_) {
+      // Resume data is an optimization for one immutable range, never durable
+      // authority for the logical episode.
+    }
+
+    if (progress > 0) {
+      _ensureDurableParallelCoordinator().resetUndurablePartProgress(
+        task.taskId,
+        durableBytes: 0,
+      );
+      await _downloader.database.updateRecord(
+        TaskRecord(task, TaskStatus.paused, 0, size),
+      );
+    }
+    return _downloader.enqueue(task);
+  }
+
+  Future<void> _saveDurableRecord(TaskRecord record) async {
+    if (record.task.group == kDownloadV2DurableParallelGroup) {
+      // Keep the custom parent out of background_downloader's killed-task
+      // rescheduler. The V2 logical record decides whether this exact manifest
+      // resumes after recreation; child URLSession tasks remain package-owned.
+      final safeStatus = switch (record.status) {
+        TaskStatus.complete => TaskStatus.complete,
+        TaskStatus.canceled => TaskStatus.canceled,
+        _ => TaskStatus.paused,
+      };
+      await _downloader.database.updateRecord(
+        TaskRecord(
+          record.task,
+          safeStatus,
+          record.progress,
+          record.expectedFileSize,
+        ),
+      );
+      return;
+    }
+    await _downloader.database.updateRecord(record);
+  }
+
+  Future<_DurableParallelDownloadTransportHandle> _durableHandleFor(
+    ParallelDownloadTask parent,
+    int totalBytes, {
+    required DownloadTransportStatus initialStatus,
+    required bool restoreOnly,
+  }) async {
+    final existing = _durableHandles[parent.taskId];
+    if (existing != null) return existing;
+
+    final coordinator = _ensureDurableParallelCoordinator();
+    final restored = await coordinator.restore(parent);
+    final handle = _DurableParallelDownloadTransportHandle(
+      parent: parent,
+      totalBytes: totalBytes,
+      coordinator: coordinator,
+      initialStatus: restored
+          ? initialStatus
+          : (restoreOnly
+                ? DownloadTransportStatus.missing
+                : DownloadTransportStatus.queued),
+    );
+    _durableHandles[parent.taskId] = handle;
+
+    if (!restoreOnly) {
+      final started = await coordinator.start(parent, totalBytes);
+      if (!started) {
+        handle.fail('Unable to start durable parallel transfer');
+      }
+    }
+    return handle;
   }
 
   _PackageDownloadTransportHandle _handleFor(Transfer transfer) {
@@ -222,27 +455,22 @@ final class PackageBackgroundDownloaderGateway
   }
 }
 
-/// Returns the package-managed parallel width V2 may safely use.
-///
-/// background_downloader 9.6.2 (the pinned version) resumes iOS
-/// ParallelDownloadTask children all at once and cancels the parent when any child cannot resume.
-/// A child that completed before pause legitimately has no resume payload, so
-/// that path cannot guarantee a lossless explicit resume. Keep iOS on one
-/// package-owned DownloadTask until upstream can resume completed+paused child
-/// sets without making application code own package chunk state.
+/// Returns the requested parent width. On iOS the gateway routes widths greater
+/// than one through AnimeWitcher's durable immutable-range coordinator instead
+/// of background_downloader's ParallelDownloadTask resume implementation.
 int effectivePackageParallelChunksV2(
   int requestedChunks, {
   bool? isIOS,
 }) {
   assert(requestedChunks > 0);
-  return (isIOS ?? Platform.isIOS) ? 1 : requestedChunks;
+  return requestedChunks;
 }
 
 /// Maps one AnimeWitcher parent transfer spec to exactly one package task.
 ///
-/// On platforms where package parallel resume is lossless, a request greater
-/// than one maps to a single [ParallelDownloadTask] parent. iOS currently maps
-/// to a regular [DownloadTask]; package-created child state remains opaque.
+/// A request greater than one maps to one [ParallelDownloadTask] descriptor.
+/// The production gateway may execute that descriptor through durable immutable
+/// ranges on iOS while preserving the same parent task identity.
 Future<DownloadTask> packageTaskForV2(
   DownloadTaskSpecV2 spec, {
   bool userInitiated = true,
@@ -372,6 +600,189 @@ List<String> _parallelChildTaskIds(String resumeData) {
     return ids.toList(growable: false);
   } catch (_) {
     return const <String>[];
+  }
+}
+
+typedef DownloadRangeCapabilityV2 = ({
+  int totalBytes,
+  bool supportsRanges,
+});
+
+Future<DownloadRangeCapabilityV2> _probeRangeCapabilityV2(
+  DownloadTaskSpecV2 spec,
+) async {
+  final client = HttpClient()..autoUncompress = false;
+  try {
+    final request = await client
+        .getUrl(Uri.parse(spec.url))
+        .timeout(const Duration(seconds: 10));
+    for (final entry in spec.headers.entries) {
+      request.headers.set(entry.key, entry.value);
+    }
+    request.headers.set(HttpHeaders.rangeHeader, 'bytes=0-0');
+    request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+    final response = await request.close().timeout(const Duration(seconds: 10));
+    final contentRange = response.headers.value(HttpHeaders.contentRangeHeader);
+    final match = RegExp(r'^bytes\s+0-0/(\d+)$').firstMatch(
+      contentRange?.trim() ?? '',
+    );
+    final total = match == null ? null : int.tryParse(match[1]!);
+    final subscription = response.listen((_) {});
+    await subscription.cancel();
+    return (
+      totalBytes: total ?? spec.expectedBytes ?? -1,
+      supportsRanges:
+          response.statusCode == HttpStatus.partialContent &&
+          total != null &&
+          total > 0,
+    );
+  } catch (_) {
+    return (
+      totalBytes: spec.expectedBytes ?? -1,
+      supportsRanges: false,
+    );
+  } finally {
+    client.close(force: true);
+  }
+}
+
+final class _DurableParallelDownloadTransportHandle
+    implements DownloadTransportHandle {
+  _DurableParallelDownloadTransportHandle({
+    required this.parent,
+    required this.totalBytes,
+    required this.coordinator,
+    required DownloadTransportStatus initialStatus,
+  }) : _current = DownloadTransportSnapshot(
+         taskId: parent.taskId,
+         status: initialStatus,
+         progress: coordinator.progressFor(parent.taskId) ?? 0,
+         transferredBytes: coordinator.durableBytesFor(parent.taskId),
+         totalBytes: totalBytes > 0 ? totalBytes : null,
+       );
+
+  final ParallelDownloadTask parent;
+  final int totalBytes;
+  final PersistentParallelDownload coordinator;
+  final StreamController<DownloadTransportSnapshot> _snapshots =
+      StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
+  DownloadTransportSnapshot _current;
+  bool _disposed = false;
+
+  @override
+  String get taskId => parent.taskId;
+
+  @override
+  DownloadTransportSnapshot get current => _current;
+
+  @override
+  Stream<DownloadTransportSnapshot> get snapshots => _snapshots.stream;
+
+  @override
+  Future<bool> pause() =>
+      coordinator.pause(parent, preserveLiveParts: Platform.isIOS);
+
+  @override
+  Future<bool> resume() => coordinator.start(parent, totalBytes);
+
+  @override
+  Future<bool> cancel() async {
+    await coordinator.cancel(parent);
+    if (_current.status != DownloadTransportStatus.canceled) {
+      _emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.canceled,
+          progress: _current.progress,
+          transferredBytes: _current.transferredBytes,
+          totalBytes: _current.totalBytes,
+        ),
+      );
+    }
+    return true;
+  }
+
+  void accept(TaskUpdate update) {
+    if (_disposed || update.task.taskId != taskId) return;
+    if (update is TaskProgressUpdate) {
+      final progress = update.progress.clamp(0.0, 1.0).toDouble();
+      final total = update.expectedFileSize > 0
+          ? update.expectedFileSize
+          : totalBytes;
+      _emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: progress >= 1
+              ? DownloadTransportStatus.complete
+              : DownloadTransportStatus.running,
+          progress: progress,
+          transferredBytes: total > 0 ? (total * progress).round() : null,
+          totalBytes: total > 0 ? total : null,
+          networkSpeedMBps: update.networkSpeed,
+          timeRemaining: update.timeRemaining,
+        ),
+      );
+      return;
+    }
+    if (update is TaskStatusUpdate) {
+      final status = transportStatusFromPackage(
+        update.status,
+        TransferHoldReason.none,
+      );
+      _emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: status,
+          progress: _current.progress,
+          transferredBytes:
+              coordinator.durableBytesFor(taskId) ?? _current.transferredBytes,
+          totalBytes: _current.totalBytes,
+          failureCategory: _failureCategory(update.status, update.exception),
+          failureMessage: update.exception?.toString(),
+        ),
+      );
+    }
+  }
+
+  void sourceExpired() {
+    _emit(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.failed,
+        progress: _current.progress,
+        transferredBytes:
+            coordinator.durableBytesFor(taskId) ?? _current.transferredBytes,
+        totalBytes: _current.totalBytes,
+        failureCategory: DownloadFailureCategory.sourceExpired,
+        failureMessage: 'Download source expired',
+      ),
+    );
+  }
+
+  void fail(String message) {
+    _emit(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.failed,
+        progress: _current.progress,
+        transferredBytes: _current.transferredBytes,
+        totalBytes: _current.totalBytes,
+        failureCategory: DownloadFailureCategory.transport,
+        failureMessage: message,
+      ),
+    );
+  }
+
+  void _emit(DownloadTransportSnapshot snapshot) {
+    if (_disposed || _snapshots.isClosed) return;
+    _current = snapshot;
+    _snapshots.add(snapshot);
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    unawaited(_snapshots.close());
   }
 }
 
