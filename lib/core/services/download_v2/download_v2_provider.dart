@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -42,6 +43,7 @@ final backgroundDownloaderGatewayV2Provider =
           notificationPreferences: () => ref
               .read(settingsRepositoryProvider)
               .getDownloadNotificationPrefs(),
+          diagnostics: diagnostics,
         ),
         migrate: () => _migrateLegacyPresentationMetadata(ref),
       );
@@ -93,6 +95,25 @@ final downloadIntegrityVerifierV2Provider =
 /// V2; individual screens do not create their own managers or gateways.
 final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
   late final DownloadManagerV2 manager;
+  final diagnostics = ref.read(downloadDiagnosticsV2Provider);
+  final connectivity = Connectivity();
+
+  void recordNetworkPath(List<ConnectivityResult> results) {
+    final names = results.map((result) => result.name).toSet().toList()..sort();
+    diagnostics.recordTransport('network.path', <String, Object?>{
+      'networkType': names.isEmpty ? 'none' : names.join('+'),
+    });
+  }
+
+  unawaited(
+    connectivity.checkConnectivity().then(recordNetworkPath).catchError(
+      (Object _, StackTrace __) {},
+    ),
+  );
+  final networkSubscription = connectivity.onConnectivityChanged.listen(
+    recordNetworkPath,
+    onError: (Object _, StackTrace __) {},
+  );
   final pauseReadiness = Platform.isIOS
       ? NativeParallelPauseReadinessV2()
       : null;
@@ -123,6 +144,7 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
         ref.read(settingsRepositoryProvider).getDownloadConcurrency(),
   );
   ref.onDispose(() {
+    unawaited(networkSubscription.cancel());
     unawaited(manager.dispose());
   });
   return manager;
