@@ -3331,13 +3331,17 @@ class PersistentParallelDownload {
       } catch (_) {}
     }
     session.lastCheckpointAt = DateTime.now();
-    _recordDiagnostic('parallel.checkpoint', {
-      'taskId': session.task.taskId,
-      'checkpointSequence': session.checkpointSequence,
-      'durableBytes': session.creditedBytes,
-      'totalBytes': session.size,
-      'manifestPartCount': session.parts.length,
-    });
+    final durableBytes = session.creditedBytes;
+    if (durableBytes != session.lastDiagnosticCheckpointBytes) {
+      session.lastDiagnosticCheckpointBytes = durableBytes;
+      _recordDiagnostic('parallel.checkpoint', {
+        'taskId': session.task.taskId,
+        'checkpointSequence': session.checkpointSequence,
+        'durableBytes': durableBytes,
+        'totalBytes': session.size,
+        'manifestPartCount': session.parts.length,
+      });
+    }
   }
 
   Future<bool> _adoptCompletedTarget(_ParallelSession session) async {
@@ -3779,6 +3783,7 @@ class _ParallelSession {
   DateTime? lastDiagnosticAdvanceAt;
   int lastDiagnosticLiveBytes = -1;
   int lastDiagnosticDurableBytes = -1;
+  int lastDiagnosticCheckpointBytes = -1;
   final Set<String> activeDiagnosticAnomalies = <String>{};
   bool parentRunningReported = false;
   DateTime? lastHostProfileSampleAt;
