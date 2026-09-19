@@ -205,18 +205,24 @@ This fence replaces the legacy ownership/tombstone graph without attempting to d
 
 ## 8. Parallel download rule
 
-Preserve the existing user-visible parallel/chunk preference by mapping it to `ParallelDownloadTask` where package/platform acceptance passes.
+Preserve the existing user-visible parallel/chunk preference by mapping it to `ParallelDownloadTask` only where package/platform acceptance passes.
+
+Current acceptance result:
+
+- Android/other accepted package platforms may use package-managed `ParallelDownloadTask`.
+- New iOS generations use one regular package `DownloadTask`. Real-device investigation of `background_downloader 9.6.2` showed that iOS parallel parent pause may be published before every child has durable resume data, so exact lossless Resume cannot be guaranteed for the package parent.
+- Existing Preview-era iOS parallel generations are never silently replaced or adopted through V1; they remain fenced by their exact task/generation and require explicit Restart if exact resume is unavailable.
 
 Rules:
 
-- AnimeWitcher creates the parent task only.
+- AnimeWitcher creates the package parent task only.
 - Package-created child chunks are never persisted by AnimeWitcher.
 - AnimeWitcher never assembles chunks manually.
-- No custom Range writer may run alongside a package parallel task.
-- UI uses parent/package aggregate progress.
+- No custom Range writer may run alongside a package task.
+- UI uses package parent progress; native child callbacks, where retained for old iOS parallel generations, are read-only telemetry only.
 - If package parallel mode fails acceptance on a platform, fallback is a package-managed single `DownloadTask`, never V1.
 
-Existing visible parallel settings are preserved when within package-supported behavior; changes to visible limits require explicit tests.
+Existing visible parallel settings are preserved as user preference even when a platform safely collapses the transport width; transport safety policy belongs at the gateway boundary.
 
 ## 9. Lifecycle semantics
 
@@ -362,9 +368,9 @@ Package Transfer hold/offline state is the primary transport signal. Connectivit
 
 ### iOS
 
-`background_downloader`/URLSession owns transport. V2 removes custom native multipart scheduling and chunk ownership bridges from the transport path.
+`background_downloader`/URLSession owns transport. New V2 generations use a regular package `DownloadTask` so pause publishes only after URLSession has produced resume data. V2 does not use package parallel transport for new iOS generations because the accepted package version cannot guarantee lossless parent resume across all child states.
 
-Native status/progress observation may remain for presentation features such as Live Activities while Dart is suspended, but observers must never independently enqueue, split, retry, resume, or cancel transport.
+Custom native multipart scheduling and chunk ownership bridges are outside the V2 transport path. Native status/progress observation may remain for presentation features such as iOS 26 Continued Processing while Dart is suspended, including telemetry for transitional old parallel generations, but observers must never independently enqueue, split, retry, resume, or cancel V2 transport.
 
 ### Android
 
