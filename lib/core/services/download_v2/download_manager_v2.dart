@@ -457,7 +457,9 @@ final class DownloadManagerV2 {
       DownloadTransportSnapshot? settledPause;
       final readiness = _parallelPauseReadiness;
       final waitsForParallelChildren =
-          record.parallelChunks > 1 && readiness != null;
+          record.parallelChunks > 1 &&
+          readiness != null &&
+          handle is! SelfSettlingParallelDownloadTransportHandleV2;
       if (waitsForParallelChildren) {
         _parallelPausePending.add(logicalId);
       }
@@ -573,11 +575,13 @@ final class DownloadManagerV2 {
       final handle = await _exactHandle(record.taskId);
       if (handle != null &&
           handle.current.status == DownloadTransportStatus.paused) {
-        if (Platform.isIOS && record.parallelChunks > 1) {
+        if (Platform.isIOS &&
+            record.parallelChunks > 1 &&
+            handle is! SelfSettlingParallelDownloadTransportHandleV2) {
           throw StateError(
-            'This older iOS parallel download cannot be resumed safely. '
-            'Existing progress was kept paused; restart it once to move to '
-            'the reliable iOS transport.',
+            'This older iOS package-parallel download cannot be resumed safely. '
+            'Existing progress was kept paused; restart it once to migrate to '
+            'the durable ranged transport.',
           );
         }
         final destinationKey = await _canonicalDestinationPath(
@@ -614,7 +618,9 @@ final class DownloadManagerV2 {
             }
 
             final readiness = _parallelPauseReadiness;
-            if (record.parallelChunks > 1 && readiness != null) {
+            if (record.parallelChunks > 1 &&
+                readiness != null &&
+                handle is! SelfSettlingParallelDownloadTransportHandleV2) {
               final ready = await readiness.waitUntilReady(
                 taskId: record.taskId,
                 expectedChildren: record.parallelChunks,
@@ -1031,12 +1037,16 @@ final class DownloadManagerV2 {
     final existing = await _exactHandle(record.taskId);
     if (existing != null) {
       if (existing.current.status == DownloadTransportStatus.paused) {
-        if (Platform.isIOS && record.parallelChunks > 1) {
+        if (Platform.isIOS &&
+            record.parallelChunks > 1 &&
+            existing is! SelfSettlingParallelDownloadTransportHandleV2) {
           await _preservePausedResumeFailure(record, existing);
           return;
         }
         final readiness = _parallelPauseReadiness;
-        if (record.parallelChunks > 1 && readiness != null) {
+        if (record.parallelChunks > 1 &&
+            readiness != null &&
+            existing is! SelfSettlingParallelDownloadTransportHandleV2) {
           final ready = await readiness.waitUntilReady(
             taskId: record.taskId,
             expectedChildren: record.parallelChunks,
