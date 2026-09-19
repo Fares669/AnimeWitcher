@@ -223,6 +223,59 @@ void main() {
     expect(snapshot.activeConnections, 4);
   });
 
+  test('live durable-parent snapshot publishes live bytes every progress tick', () {
+    final snapshot = durableParallelLiveSnapshotV2(
+      taskId: 'aw_v2_live_g1',
+      liveProgress: .25,
+      totalBytes: 400,
+      durableBytes: 25,
+      parentActive: true,
+      configuredConnections: 1,
+      activeConnections: 1,
+      networkSpeedMBps: 2,
+      timeRemaining: const Duration(seconds: 3),
+    );
+
+    expect(snapshot.status, DownloadTransportStatus.running);
+    expect(snapshot.progress, .25);
+    expect(
+      snapshot.transferredBytes,
+      100,
+      reason:
+          'active presentation must follow live URLSession progress instead of '
+          'waiting for the next immutable checkpoint',
+    );
+    expect(snapshot.networkSpeedMBps, 2);
+  });
+
+  test('durable native ownership excludes package-paused children', () {
+    DownloadTask child(String id) => DownloadTask(
+      taskId: id,
+      url: 'https://example.invalid/video.mp4',
+      filename: '$id.part',
+      group: 'animewitcher_parts',
+    );
+    final running = child('running-child');
+    final paused = child('paused-child');
+    final unrelated = DownloadTask(
+      taskId: 'unrelated',
+      url: 'https://example.invalid/other.mp4',
+      filename: 'other.mp4',
+      group: 'downloads',
+    );
+
+    expect(
+      activeDurablePartTaskIdsV2(
+        packageTasks: <Task>[running, paused, unrelated],
+        pausedTasks: <Task>[paused],
+      ),
+      <String>{running.taskId},
+      reason:
+          'background_downloader allTasks also contains stored paused tasks; '
+          'those must not reserve the only native writer after relaunch',
+    );
+  });
+
   test('durable range drain keeps parent paused while bytes still settle', () {
     expect(
       durableParallelProgressStatusV2(progress: 0.5, parentActive: false),
