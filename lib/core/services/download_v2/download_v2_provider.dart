@@ -97,11 +97,15 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
   late final DownloadManagerV2 manager;
   final diagnostics = ref.read(downloadDiagnosticsV2Provider);
   final connectivity = Connectivity();
+  String? lastNetworkType;
 
   void recordNetworkPath(List<ConnectivityResult> results) {
     final names = results.map((result) => result.name).toSet().toList()..sort();
+    final networkType = names.isEmpty ? 'none' : names.join('+');
+    if (lastNetworkType == networkType) return;
+    lastNetworkType = networkType;
     diagnostics.recordTransport('network.path', <String, Object?>{
-      'networkType': names.isEmpty ? 'none' : names.join('+'),
+      'networkType': networkType,
     });
   }
 
