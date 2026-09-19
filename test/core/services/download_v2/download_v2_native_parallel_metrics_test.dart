@@ -41,6 +41,20 @@ void main() {
       v2Bridge,
       contains('DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent('),
     );
+    expect(
+      v2Bridge,
+      contains('progress: nil'),
+      reason:
+          'Observed child ranges are only a subset of the parent until every '
+          'range has reported. Their subtotal must never become parent progress.',
+    );
+    expect(
+      v2Bridge,
+      isNot(contains('aggregateProgress')),
+      reason:
+          'Dividing aggregate bytes by only observed child ranges caused the '
+          '31/62/93% background jumps seen on the physical iOS log.',
+    );
     expect(v2Bridge, contains('progress: nil'));
     expect(
       v2Bridge,
