@@ -208,6 +208,21 @@ void main() {
     );
   });
 
+  test('durable range drain keeps parent paused while bytes still settle', () {
+    expect(
+      durableParallelProgressStatusV2(progress: 0.5, parentActive: false),
+      DownloadTransportStatus.paused,
+    );
+    expect(
+      durableParallelProgressStatusV2(progress: 0.5, parentActive: true),
+      DownloadTransportStatus.running,
+    );
+    expect(
+      durableParallelProgressStatusV2(progress: 1, parentActive: false),
+      DownloadTransportStatus.complete,
+    );
+  });
+
   test('completed durable parent rehydrates complete after manifest cleanup', () {
     final snapshot = durableParallelInitialSnapshotV2(
       taskId: 'aw_v2_complete_g1',
