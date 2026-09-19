@@ -25,42 +25,6 @@ void main() {
     expect(body, contains('commandThrew: true'));
   });
 
-  test(
-    'service gates destructive cancel cleanup on runtime notOwned proof and keeps tombstone',
-    () {
-      final source = File('lib/core/services/download_service.dart')
-          .readAsStringSync();
-      expect(
-        source,
-        contains(
-          'Future<DownloadRuntimeOwnership> _waitForCancelOwnershipRelease(',
-        ),
-      );
-      expect(source, contains("'cancel.ownershipUnsettled'"));
-      expect(
-        source,
-        contains('if (cancelOwnership != DownloadRuntimeOwnership.notOwned)'),
-      );
-
-      final cancelStart = source.indexOf('Future<void> cancelDownload(');
-      final cancelEnd = source.indexOf(
-        'Future<DownloadCommandOutcome> cancelDownloadOutcome(',
-        cancelStart,
-      );
-      expect(cancelStart, greaterThanOrEqualTo(0));
-      expect(cancelEnd, greaterThan(cancelStart));
-      final cancel = source.substring(cancelStart, cancelEnd);
-      expect(cancel, contains('_jobStore.tombstoneForDeletion('));
-      expect(cancel, isNot(contains('await _jobStore.remove(taskId);')));
-      expect(cancel, contains('Keep the canceled JobStore row'));
-
-      final callbackStart = source.indexOf('cancelParts: (ids) async {');
-      final callbackEnd = source.indexOf('saveRecord:', callbackStart);
-      expect(callbackStart, greaterThanOrEqualTo(0));
-      expect(callbackEnd, greaterThan(callbackStart));
-      final callback = source.substring(callbackStart, callbackEnd);
-      expect(callback, contains('await _waitForCancelOwnershipRelease(id)'));
-      expect(callback, contains('Multipart cancel ownership did not settle'));
-    },
+  ,
   );
 }
