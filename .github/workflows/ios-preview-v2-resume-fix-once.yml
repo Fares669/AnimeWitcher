@@ -1,5 +1,5 @@
-# Triggered after the 2026-09-19 durable resume/process-recreation fixes.
-name: iOS Preview V2 Durable Resume One Shot
+# One-shot preview for the 2026-09-19 V2 deep diagnostics build.
+name: iOS Preview V2 Deep Diagnostics One Shot
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   ios-preview:
-    name: iOS Preview Durable Resume (Unsigned)
+    name: iOS Preview Deep Diagnostics (Unsigned)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -60,12 +60,12 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R build/ios/iphoneos/Runner.app Payload/
-          zip -qry animewitcher-ios-v2-durable-resume.ipa Payload
+          zip -qry animewitcher-ios-v2-deep-diagnostics.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ipa-download-manager-v2-durable-resume
-          path: animewitcher-ios-v2-durable-resume.ipa
+          name: ios-ipa-download-manager-v2-deep-diagnostics
+          path: animewitcher-ios-v2-deep-diagnostics.ipa
           retention-days: 7
           if-no-files-found: error
