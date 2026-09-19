@@ -246,30 +246,42 @@ final class DownloadContinuedProcessingManager {
       ? current.totalBytes
       : totalBytesHint
 
+    let hasAuthoritativeByteCoverage =
+      progress == nil
+      && transferredBytes >= 0
+      && current.totalBytes > 0
+      && totalBytesHint >= current.totalBytes
+
     var nextProgress = progress.map { min(max($0, 0), 1) }
       ?? current.progress
-    nextProgress = max(current.progress, nextProgress)
-
     var nextTransferred = transferredBytes >= 0
       ? transferredBytes
       : current.transferredBytes
     let currentTransferred = max(current.transferredBytes, 0)
 
-    if totalBytes > 0 {
-      let progressBytes = overlayTransferredBytes(
-        progress: nextProgress,
-        totalBytes: totalBytes
-      )
-      nextTransferred = min(
-        max(max(nextTransferred, currentTransferred), progressBytes),
-        totalBytes
-      )
-      nextProgress = max(
-        nextProgress,
-        Double(nextTransferred) / Double(totalBytes)
-      )
+    if hasAuthoritativeByteCoverage {
+      // Once every range is represented, aggregated bytes describe the whole
+      // file and may correct an older inflated partial-denominator snapshot.
+      nextTransferred = min(max(transferredBytes, 0), totalBytes)
+      nextProgress = Double(nextTransferred) / Double(totalBytes)
     } else {
-      nextTransferred = max(nextTransferred, currentTransferred)
+      nextProgress = max(current.progress, nextProgress)
+      if totalBytes > 0 {
+        let progressBytes = overlayTransferredBytes(
+          progress: nextProgress,
+          totalBytes: totalBytes
+        )
+        nextTransferred = min(
+          max(max(nextTransferred, currentTransferred), progressBytes),
+          totalBytes
+        )
+        nextProgress = max(
+          nextProgress,
+          Double(nextTransferred) / Double(totalBytes)
+        )
+      } else {
+        nextTransferred = max(nextTransferred, currentTransferred)
+      }
     }
 
     return update(
