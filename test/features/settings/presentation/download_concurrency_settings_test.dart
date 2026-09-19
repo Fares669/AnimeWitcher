@@ -4,7 +4,6 @@ import 'dart:ui' as ui;
 import 'package:animewitcher/core/providers/device_info_provider.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_parallel.dart';
-import 'package:animewitcher/core/services/download_service.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/settings/presentation/app_version_provider.dart';
 import 'package:animewitcher/features/settings/presentation/settings_screen.dart';
@@ -32,10 +31,6 @@ void main() {
     Hive.init(hiveDirectory.path);
   });
 
-  tearDown(() {
-    DownloadService.configureHoldingQueueForTesting = null;
-  });
-
   tearDownAll(() async {
     await Hive.close();
     if (await hiveDirectory.exists()) {
@@ -47,7 +42,6 @@ void main() {
     tester,
   ) async {
     final storage = MemoryStorageService();
-    DownloadService.configureHoldingQueueForTesting = (_) async {};
     await tester.runAsync(TestFonts.loadWalkthroughFonts);
 
     await tester.binding.setSurfaceSize(const Size(390, 844));
@@ -177,7 +171,6 @@ void main() {
     tester,
   ) async {
     final storage = MemoryStorageService();
-    DownloadService.configureHoldingQueueForTesting = (_) async {};
     await tester.runAsync(TestFonts.loadWalkthroughFonts);
 
     await tester.binding.setSurfaceSize(const Size(390, 844));
