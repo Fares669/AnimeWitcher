@@ -154,6 +154,25 @@ void main() {
     expect(snapshot.transferredBytes, 100);
   });
 
+  test('iOS V2 uses a single package task for lossless pause resume', () async {
+    const spec = DownloadTaskSpecV2(
+      taskId: 'aw_v2_ios_safe_resume_g1',
+      url: 'https://example.invalid/video.mp4',
+      destinationPath: 'downloads/video.mp4',
+      headers: <String, String>{},
+      allowPause: true,
+      retries: 2,
+      parallelChunks: 16,
+    );
+
+    final task = await packageTaskForV2(spec, isIOS: true);
+
+    expect(effectivePackageParallelChunksV2(16, isIOS: true), 1);
+    expect(effectivePackageParallelChunksV2(16, isIOS: false), 16);
+    expect(task, isA<DownloadTask>());
+    expect(task, isNot(isA<ParallelDownloadTask>()));
+  });
+
   test('V2 package task carries long user-initiated transfer hints', () async {
     const spec = DownloadTaskSpecV2(
       taskId: 'aw_v2_hints_g1',
