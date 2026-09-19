@@ -66,6 +66,11 @@ abstract interface class DownloadTransportHandle {
   Future<bool> cancel();
 }
 
+/// Marker for a parallel handle whose pause/resume settlement is owned by the
+/// handle itself. DownloadManagerV2 must not wait for package ParallelDownloadTask
+/// child-resume observations for these durable immutable-range sessions.
+abstract interface class SelfSettlingParallelDownloadTransportHandleV2 {}
+
 /// Thin adapter over background_downloader 9.6's Transfer API.
 ///
 /// The package remains the only transport/persistence authority. This class
@@ -647,7 +652,9 @@ Future<DownloadRangeCapabilityV2> _probeRangeCapabilityV2(
 }
 
 final class _DurableParallelDownloadTransportHandle
-    implements DownloadTransportHandle {
+    implements
+        DownloadTransportHandle,
+        SelfSettlingParallelDownloadTransportHandleV2 {
   _DurableParallelDownloadTransportHandle({
     required this.parent,
     required this.totalBytes,
