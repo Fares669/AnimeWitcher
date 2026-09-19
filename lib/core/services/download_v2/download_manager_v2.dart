@@ -1105,6 +1105,7 @@ final class DownloadManagerV2 {
         allowPause: admitted.allowPause,
         retries: admitted.retries,
         parallelChunks: admitted.parallelChunks,
+        expectedBytes: admitted.expectedBytes,
       ),
     );
     _activateHandle(admitted.logicalId, handle);
@@ -1199,6 +1200,7 @@ final class DownloadManagerV2 {
         allowPause: request.allowPause,
         retries: request.retries,
         parallelChunks: parallelChunks,
+        expectedBytes: expectedBytes,
       ),
     );
     _activateHandle(request.logicalId, handle);
