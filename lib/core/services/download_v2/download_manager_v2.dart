@@ -772,8 +772,11 @@ final class DownloadManagerV2 {
 
     final speedMBps = bytesPerSecond / 1000000.0;
     final totalBytes = current.totalBytes;
-    final transferredBytes = current.transferredBytes ??
-        (totalBytes == null ? null : (totalBytes * current.progress).round());
+    final transferredBytes = _presentationTransferredBytes(
+      transferredBytes: current.transferredBytes,
+      totalBytes: totalBytes,
+      progress: current.progress,
+    );
     final remainingBytes =
         totalBytes != null && transferredBytes != null && totalBytes > transferredBytes
         ? totalBytes - transferredBytes
@@ -1527,9 +1530,11 @@ final class DownloadManagerV2 {
         current.taskId == snapshot.taskId &&
         current.networkSpeedMBps >= 0) {
       final totalBytes = snapshot.totalBytes ?? current.totalBytes;
-      final transferredBytes =
-          snapshot.transferredBytes ??
-          (totalBytes == null ? null : (totalBytes * snapshot.progress).round());
+      final transferredBytes = _presentationTransferredBytes(
+        transferredBytes: snapshot.transferredBytes,
+        totalBytes: totalBytes,
+        progress: snapshot.progress,
+      );
       final speedBytesPerSecond = current.networkSpeedMBps * 1000000;
       final remainingBytes =
           totalBytes != null &&
@@ -1785,6 +1790,17 @@ final class DownloadManagerV2 {
     _recordsByLogicalId.clear();
     await _recordChanges.close();
   }
+}
+
+int? _presentationTransferredBytes({
+  required int? transferredBytes,
+  required int? totalBytes,
+  required double progress,
+}) {
+  if (totalBytes == null || totalBytes <= 0) return transferredBytes;
+  final progressBytes = (totalBytes * progress).round();
+  if (transferredBytes == null) return progressBytes;
+  return transferredBytes >= progressBytes ? transferredBytes : progressBytes;
 }
 
 bool _isRecoverable(DownloadTransportSnapshot snapshot) {

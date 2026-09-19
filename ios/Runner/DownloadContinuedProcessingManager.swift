@@ -58,8 +58,21 @@ final class DownloadContinuedProcessingManager {
   private var identifier: String?
   private var didRegisterIdentifier = false
   private var currentEpisodeTaskId = ""
+  // V2 ranged children report a subtotal of child bytes, not a whole-file
+  // absolute byte count. Capture that subtotal at the foreground -> background
+  // handoff and advance the system UI by its delta over the latest Dart parent
+  // checkpoint.
+  private var nativeAggregateBaselineTaskId = ""
+  private var nativeAggregateBaselineBytes: Int64 = -1
+  private var nativeParentBaselineBytes: Int64 = -1
 
   private init() {}
+
+  private func resetNativeAggregateBaseline() {
+    nativeAggregateBaselineTaskId = ""
+    nativeAggregateBaselineBytes = -1
+    nativeParentBaselineBytes = -1
+  }
 
   func start(
     taskId: String,
@@ -81,6 +94,7 @@ final class DownloadContinuedProcessingManager {
     if taskId != Self.sessionKey, !taskId.isEmpty {
       currentEpisodeTaskId = taskId
     }
+    resetNativeAggregateBaseline()
 
     let normalized = min(max(progress, 0.0), 1.0)
     let transferred = transferredBytes >= 0
@@ -174,13 +188,17 @@ final class DownloadContinuedProcessingManager {
     batchTotal: Int = -1,
     speedBytesPerSecond: Double = -1,
     displayName: String = "",
-    currentIndex: Int = -1
+    currentIndex: Int = -1,
+    preserveNativeAggregateBaseline: Bool = false
   ) -> Bool {
     let previousEpisodeTaskId = currentEpisodeTaskId
     if taskId != Self.sessionKey, !taskId.isEmpty {
       currentEpisodeTaskId = taskId
     }
     guard var snapshot = snapshot else { return false }
+    if !preserveNativeAggregateBaseline {
+      resetNativeAggregateBaseline()
+    }
 
     let switched = !previousEpisodeTaskId.isEmpty
       && taskId != Self.sessionKey
@@ -259,6 +277,24 @@ final class DownloadContinuedProcessingManager {
       : current.transferredBytes
     let currentTransferred = max(current.transferredBytes, 0)
 
+    let hasChildAggregateOnly =
+      progress == nil
+      && transferredBytes >= 0
+      && !hasAuthoritativeByteCoverage
+
+    if hasChildAggregateOnly {
+      if nativeAggregateBaselineTaskId != taskId
+        || nativeAggregateBaselineBytes < 0
+        || nativeParentBaselineBytes < 0
+        || transferredBytes < nativeAggregateBaselineBytes {
+        nativeAggregateBaselineTaskId = taskId
+        nativeAggregateBaselineBytes = transferredBytes
+        nativeParentBaselineBytes = currentTransferred
+      }
+      let aggregateDelta = transferredBytes - nativeAggregateBaselineBytes
+      nextTransferred = nativeParentBaselineBytes + max(aggregateDelta, 0)
+    }
+
     if hasAuthoritativeByteCoverage {
       // Once every range is represented, aggregated bytes describe the whole
       // file and may correct an older inflated partial-denominator snapshot.
@@ -289,7 +325,8 @@ final class DownloadContinuedProcessingManager {
       progress: nextProgress,
       totalBytes: totalBytes,
       transferredBytes: nextTransferred,
-      speedBytesPerSecond: speedBytesPerSecond
+      speedBytesPerSecond: speedBytesPerSecond,
+      preserveNativeAggregateBaseline: true
     )
   }
 
@@ -352,6 +389,7 @@ final class DownloadContinuedProcessingManager {
     snapshot = nil
     identifier = nil
     currentEpisodeTaskId = ""
+    resetNativeAggregateBaseline()
   }
 
   private func attach(_ task: BGContinuedProcessingTask) {
@@ -372,6 +410,7 @@ final class DownloadContinuedProcessingManager {
         self.snapshot = nil
         self.identifier = nil
         self.currentEpisodeTaskId = ""
+        self.resetNativeAggregateBaseline()
       }
     }
 
