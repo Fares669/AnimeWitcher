@@ -41,6 +41,24 @@ void main() {
     );
   });
 
+  test('explicit resume never recreates a missing paused generation', () async {
+    final f = await _startupFixture(intent: DownloadUserIntent.paused);
+
+    await f.manager.initialize();
+    await expectLater(f.manager.resume(f.logicalId), throwsStateError);
+
+    final stored = await f.store.get(f.logicalId);
+    expect(f.gateway.startedSpecs, isEmpty);
+    expect(f.resolver.calls, 0);
+    expect(stored?.generation, 1);
+    expect(stored?.taskId, f.record.taskId);
+    expect(stored?.intent, DownloadUserIntent.paused);
+    expect(
+      f.manager.snapshotFor(f.logicalId)?.status,
+      DownloadTransportStatus.paused,
+    );
+  });
+
   test('startup waits for paused transport settlement before completing', () async {
     final f = await _startupFixture(
       intent: DownloadUserIntent.paused,
