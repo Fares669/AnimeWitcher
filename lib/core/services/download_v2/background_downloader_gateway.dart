@@ -67,9 +67,11 @@ abstract interface class DownloadTransportHandle {
   Future<bool> cancel();
 }
 
-/// Marker for a parallel handle whose pause/resume settlement is owned by the
-/// handle itself. DownloadManagerV2 must not wait for package ParallelDownloadTask
-/// child-resume observations for these durable immutable-range sessions.
+/// Marker for a handle whose pause/resume settlement is complete at the handle
+/// boundary. Despite the legacy type name, this covers both durable ranged
+/// parents and ordinary single package DownloadTasks. Package-managed
+/// ParallelDownloadTask parents deliberately do not implement it because they
+/// need the child pause/readiness barrier.
 abstract interface class SelfSettlingParallelDownloadTransportHandleV2 {}
 
 /// V2 transport adapter over background_downloader 9.6.
@@ -506,7 +508,9 @@ final class PackageBackgroundDownloaderGateway
       return existing;
     }
     existing?.dispose();
-    final handle = _PackageDownloadTransportHandle(transfer, _downloader);
+    final handle = transfer.task is ParallelDownloadTask
+        ? _PackageDownloadTransportHandle(transfer, _downloader)
+        : _SelfSettlingPackageDownloadTransportHandle(transfer, _downloader);
     _handles[transfer.taskId] = handle;
     return handle;
   }
@@ -877,8 +881,7 @@ final class _DurableParallelDownloadTransportHandle
   }
 }
 
-final class _PackageDownloadTransportHandle
-    implements DownloadTransportHandle {
+class _PackageDownloadTransportHandle implements DownloadTransportHandle {
   _PackageDownloadTransportHandle(this.transfer, this._downloader) {
     _updatesSubscription = transfer.updates.listen(_onUpdate);
     _holdReasonListener = _emitCurrent;
@@ -958,6 +961,15 @@ final class _PackageDownloadTransportHandle
     unawaited(_updatesSubscription.cancel());
     unawaited(_snapshots.close());
   }
+}
+
+final class _SelfSettlingPackageDownloadTransportHandle
+    extends _PackageDownloadTransportHandle
+    implements SelfSettlingParallelDownloadTransportHandleV2 {
+  _SelfSettlingPackageDownloadTransportHandle(
+    super.transfer,
+    super.downloader,
+  );
 }
 
 /// Projects one package Transfer into V2 without maintaining a second metric

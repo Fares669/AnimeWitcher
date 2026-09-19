@@ -277,6 +277,28 @@ void main() {
       );
     });
 
+    test(
+      'single package fallback is self-settling even when requested width is parallel',
+      () {
+        final gateway = _read(
+          'lib/core/services/download_v2/background_downloader_gateway.dart',
+        );
+
+        expect(
+          gateway,
+          contains('transfer.task is ParallelDownloadTask'),
+        );
+        expect(
+          gateway,
+          contains('_SelfSettlingPackageDownloadTransportHandle'),
+          reason:
+              'an iOS 16-connection request can fall back to one package task '
+              'when the origin has no Range support; that exact single task '
+              'must not be mistaken for an old unsafe package-parallel parent',
+        );
+      },
+    );
+
     test('V2 manager exposes logical observation and completed availability', () {
       final manager = _read(
         'lib/core/services/download_v2/download_manager_v2.dart',
