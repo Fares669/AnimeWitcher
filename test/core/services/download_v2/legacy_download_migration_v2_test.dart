@@ -57,6 +57,14 @@ void main() {
     expect(migrated.completedAtMillis, isNull);
     expect(migrated.intent, DownloadUserIntent.paused);
     expect(migrated.generation, 1);
+    expect(sourceDescriptorIsMigratedLegacyV2(migrated.sourceDescriptor), isTrue);
+    expect(
+      sourceDescriptorRequiresLegacyRestartV2(migrated.sourceDescriptor),
+      isFalse,
+      reason:
+          'A normal legacy refresh descriptor needs migration permission but '
+          'must stay on the normal V2 resolver path.',
+    );
 
     final gateway = _MigrationGateway();
     final resolver = StaticSourceResolverV2(expectedBytes: 100);
@@ -80,13 +88,20 @@ void main() {
     final restarted = await store.get(item.logicalId);
     expect(restarted?.generation, 2);
     expect(
-      sourceDescriptorRequiresLegacyRestartV2(
+      sourceDescriptorIsMigratedLegacyV2(
         restarted?.sourceDescriptor ?? const <String, Object?>{},
       ),
       isTrue,
       reason:
-          'The production resolver still needs legacy reconstruction metadata '
-          'for future source refresh; generation > 1 is the one-shot fence.',
+          'Migration provenance can remain durable because generation > 1 '
+          'permanently closes the one-time fresh-start exception.',
+    );
+    expect(
+      sourceDescriptorRequiresLegacyRestartV2(
+        restarted?.sourceDescriptor ?? const <String, Object?>{},
+      ),
+      isFalse,
+      reason: 'Normal legacy refresh metadata must remain on the normal resolver.',
     );
   });
 
@@ -108,6 +123,7 @@ void main() {
 
     final migrated = await migration.migrate(item);
     expect(migrated.intent, DownloadUserIntent.paused);
+    expect(sourceDescriptorIsMigratedLegacyV2(migrated.sourceDescriptor), isTrue);
     expect(
       sourceDescriptorRequiresLegacyRestartV2(migrated.sourceDescriptor),
       isTrue,
@@ -375,8 +391,11 @@ final class _LegacyMarkerResolver implements DownloadSourceResolverV2 {
     calls++;
     sawLegacyRestartMarker =
         sourceDescriptorRequiresLegacyRestartV2(descriptor);
-    if (!sawLegacyRestartMarker) {
-      throw StateError('legacy restart marker was stripped before resolution');
+    if (!sourceDescriptorIsMigratedLegacyV2(descriptor) ||
+        !sawLegacyRestartMarker) {
+      throw StateError(
+        'legacy migration/restart markers were not preserved for resolution',
+      );
     }
     return const ResolvedDownloadSourceV2(
       url: 'https://example.invalid/legacy-restarted.mp4',
