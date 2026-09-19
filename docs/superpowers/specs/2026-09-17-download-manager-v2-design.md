@@ -6,9 +6,9 @@ Branch: `feat/download-manager-v2`
 
 ## 1. Goal
 
-Rebuild AnimeWitcher's download manager around `background_downloader` as the **single transport authority**.
+Rebuild AnimeWitcher's download manager around `background_downloader` as the **network/native execution authority**, with one narrowly-scoped iOS multipart exception approved after real-device investigation.
 
-The current manager accumulated custom Range transfer, multipart/chunk state, JobStore lifecycle state, native ownership reconciliation, custom retry/recovery, and platform-specific handoff logic. V2 removes those transport responsibilities from AnimeWitcher instead of reimplementing them in a different form.
+The current manager accumulated custom Range transfer, JobStore lifecycle state, native ownership reconciliation, custom retry/recovery, and platform-specific handoff logic. V2 removes those competing ownership systems. On iOS only, where `background_downloader 9.6.2` cannot guarantee lossless parent pause/resume for package-managed parallel children, the V2 gateway may reuse the already-tested immutable-range coordinator for split/checkpoint/assembly while each actual range transfer remains a package `DownloadTask` executed by URLSession.
 
 The design is correctness-first. Reliable pause/resume/relaunch behavior and one-writer guarantees are more important than preserving every partial byte in unusual recovery cases.
 
@@ -24,44 +24,33 @@ The selected migration policy is **A**:
 
 This is a hard architectural constraint. Reintroducing legacy partial-state migration requires a new design review.
 
-## 3. Single-authority rule
+## 3. Transport-authority rule
 
 `background_downloader` owns:
 
-- actual network transfer;
-- package task persistence;
-- pause/resume transport data;
-- retries and resumable transport behavior;
-- package-managed parallel chunks;
-- native transport execution while the app is backgrounded/suspended;
-- transport progress/status/hold state.
+- every actual network transfer and native URLSession/WorkManager execution;
+- per-child package task persistence and package resume data;
+- native retries/resumable behavior for each package `DownloadTask`;
+- package-managed parallel chunks on platforms where their lifecycle passes acceptance;
+- transport progress/status/hold signals.
 
-AnimeWitcher owns only:
+AnimeWitcher owns:
 
-- logical anime/episode identity;
+- logical anime/episode identity and generation fencing;
 - provider/source information needed to resolve a fresh URL;
-- destination/presentation metadata;
-- explicit user intent: active, paused, canceled;
-- logical priority/concurrency preference;
-- final-file integrity validation;
-- diagnostics and UI projection;
-- generation fencing against stale callbacks.
+- destination/presentation metadata and explicit user intent;
+- logical priority/concurrency preference, integrity validation, diagnostics, and UI projection;
+- on iOS only, when verified byte-range support and a trustworthy total size exist, durable immutable-range split/checkpoint/assembly metadata needed to provide lossless multipart pause/resume. This state is transport-private to the gateway/coordinator and is never mirrored into `LogicalDownloadStoreV2`.
 
-AnimeWitcher V2 must **not** persist or implement:
+AnimeWitcher V2 must **not** reintroduce:
 
-- manual HTTP Range splitting;
-- custom chunk IDs or chunk lifecycle;
-- byte offsets/resume bytes;
-- multipart assembly state;
-- custom transport retry state machines;
-- native writer ownership discovery;
-- `owned / notOwned / unknown / settling` transport ownership states;
-- custom reconciliation between app JobStore and native writers;
-- custom iOS multipart scheduling;
-- direct manipulation of package resume data;
-- legacy transport fallback for a fresh V2 download.
+- `DownloadService`, legacy JobStore lifecycle ownership, `DownloadRangeTransfer`, native promotion/retry ownership, or a second native scheduler;
+- `owned / notOwned / unknown / settling` transport ownership graphs;
+- direct manipulation of opaque package resume data;
+- legacy transport fallback for a fresh V2 download;
+- custom range state on Android/desktop when accepted package-managed parallel transport is available.
 
-For every logical episode there is exactly one current V2 package task generation.
+For every logical episode there is exactly one current V2 parent task generation. On the iOS durable-range path, multiple package child `DownloadTask` writers belong exclusively to that one parent generation.
 
 ## 4. Package baseline
 
@@ -205,24 +194,24 @@ This fence replaces the legacy ownership/tombstone graph without attempting to d
 
 ## 8. Parallel download rule
 
-Preserve the existing user-visible parallel/chunk preference by mapping it to `ParallelDownloadTask` only where package/platform acceptance passes.
+Preserve the existing user-visible parallel/chunk preference while keeping one logical parent generation.
 
 Current acceptance result:
 
-- Android/other accepted package platforms may use package-managed `ParallelDownloadTask`.
-- New iOS generations use one regular package `DownloadTask`. Real-device investigation of `background_downloader 9.6.2` showed that iOS parallel parent pause may be published before every child has durable resume data, so exact lossless Resume cannot be guaranteed for the package parent.
-- Existing Preview-era iOS parallel generations are never silently replaced or adopted through V1; they remain fenced by their exact task/generation and require explicit Restart if exact resume is unavailable.
+- Android/other accepted package platforms use package-managed `ParallelDownloadTask`.
+- On iOS, `background_downloader 9.6.2` cannot make parent parallel pause/resume lossless: parent pause can precede durable child pause state, and parent resume fails/cancels when any serialized child (including an already-complete child) has no resume payload.
+- New iOS generations therefore use the gateway's durable immutable-range path when a `bytes=0-0` probe proves HTTP 206 range support and a trustworthy total size. The requested 1/2/4/8/16 setting is preserved as the active-connection ceiling; slow-start opens connections progressively.
+- If range capability is not proven, iOS falls back truthfully to one normal package `DownloadTask`.
+- Existing Preview-era unsafe package-parallel iOS generations remain fenced by exact task/generation and require explicit Restart if exact resume is unavailable.
 
-Rules:
+Rules for the iOS durable-range path:
 
-- AnimeWitcher creates the package parent task only.
-- Package-created child chunks are never persisted by AnimeWitcher.
-- AnimeWitcher never assembles chunks manually.
-- No custom Range writer may run alongside a package task.
-- UI uses package parent progress; native child callbacks, where retained for old iOS parallel generations, are read-only telemetry only.
-- If package parallel mode fails acceptance on a platform, fallback is a package-managed single `DownloadTask`, never V1.
-
-Existing visible parallel settings are preserved as user preference even when a platform safely collapses the transport width; transport safety policy belongs at the gateway boundary.
+- `PersistentParallelDownload` is reused only behind `BackgroundDownloaderGateway`; V1 `DownloadService`, JobStore ownership, and `DownloadRangeTransfer` remain unreachable from V2.
+- The coordinator owns immutable range boundaries, a transport-private manifest, aggregate progress, and final assembly.
+- Every range writer is still a `background_downloader DownloadTask`; no independent HTTP body writer or native scheduler is introduced.
+- User Pause stops new range admission. On iOS, already-launched immutable ranges may drain to durable files rather than invoking destructive `cancelByProducingResumeData`; Resume launches only unfinished ranges.
+- `LogicalDownloadStoreV2` contains no child IDs/ranges/resume bytes.
+- UI consumes the one parent aggregate snapshot.
 
 ## 9. Lifecycle semantics
 
@@ -368,9 +357,9 @@ Package Transfer hold/offline state is the primary transport signal. Connectivit
 
 ### iOS
 
-`background_downloader`/URLSession owns transport. New V2 generations use a regular package `DownloadTask` so pause publishes only after URLSession has produced resume data. V2 does not use package parallel transport for new iOS generations because the accepted package version cannot guarantee lossless parent resume across all child states.
+`background_downloader`/URLSession owns every actual network writer. A single-part V2 generation uses one normal package `DownloadTask`. A multi-part V2 generation uses durable immutable ranges only after the gateway proves byte-range capability; those ranges are package `DownloadTask` children coordinated by the shared durable range coordinator.
 
-Custom native multipart scheduling and chunk ownership bridges are outside the V2 transport path. Native status/progress observation may remain for presentation features such as iOS 26 Continued Processing while Dart is suspended, including telemetry for transitional old parallel generations, but observers must never independently enqueue, split, retry, resume, or cancel V2 transport.
+Custom native promotion/retry ownership remains outside the V2 path. Native status/progress observation may remain for presentation features such as iOS 26 Continued Processing, but native observers must never independently enqueue, split, retry, resume, or cancel V2 transport.
 
 ### Android
 
@@ -476,8 +465,8 @@ Device-only behavior is never marked complete from mocks/CI alone.
 V2 replaces V1 only when:
 
 - all new transport goes through `BackgroundDownloaderGateway`;
-- no V2 path imports `persistent_parallel_download.dart` or `download_range_transfer.dart`;
-- V2 persists no custom chunk/range ownership state;
+- only the gateway may import `persistent_parallel_download.dart`, solely for the approved iOS durable-range path; `download_range_transfer.dart` and V1 `DownloadService` remain outside V2;
+- `LogicalDownloadStoreV2` persists no custom chunk/range ownership state; the iOS range manifest is transport-private gateway state;
 - startup uses package persistence/Transfer API and exact task IDs;
 - user pause survives relaunch;
 - active missing package state recovers without duplicate writers;

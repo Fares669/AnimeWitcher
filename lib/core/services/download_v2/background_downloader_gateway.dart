@@ -12,8 +12,9 @@ import 'download_v2_models.dart';
 
 /// Package-neutral description of one V2 parent transfer.
 ///
-/// [parallelChunks] is an aggregate preference only. AnimeWitcher never
-/// allocates, persists, or exposes package-managed child chunk identifiers.
+/// [parallelChunks] is the requested connection ceiling. On iOS the production
+/// gateway may satisfy widths greater than one with durable immutable byte
+/// ranges. That transport-private range state never enters the V2 logical store.
 final class DownloadTaskSpecV2 {
   const DownloadTaskSpecV2({
     required this.taskId,
@@ -71,11 +72,13 @@ abstract interface class DownloadTransportHandle {
 /// child-resume observations for these durable immutable-range sessions.
 abstract interface class SelfSettlingParallelDownloadTransportHandleV2 {}
 
-/// Thin adapter over background_downloader 9.6's Transfer API.
+/// V2 transport adapter over background_downloader 9.6.
 ///
-/// The package remains the only transport/persistence authority. This class
-/// only normalizes the package's parent transfer into V2's package-neutral
-/// snapshot contract.
+/// background_downloader remains the network/native execution authority. For
+/// iOS multipart downloads this adapter reuses the shared durable immutable-
+/// range coordinator for splitting/checkpoint/assembly only; every child range
+/// is still a package DownloadTask/URLSession transfer. The V2 logical store
+/// never persists child task IDs, byte ranges, or resume offsets.
 const String kDownloadV2PackageGroup = 'downloads_v2';
 const String kDownloadV2SilentPackageGroup = 'downloads_v2_silent';
 const String kDownloadV2DurableParallelGroup = 'downloads_v2_ranges';
