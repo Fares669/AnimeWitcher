@@ -50,6 +50,31 @@ class DownloadGlobalHandlerLease {
   }
 }
 
+Future<void> configureNativeDownloadDiagnosticLog(
+  bool enabled, {
+  @visibleForTesting bool forceAvailableForTesting = false,
+}) async {
+  if (!forceAvailableForTesting && (kIsWeb || !Platform.isIOS)) return;
+  try {
+    await const MethodChannel(
+      'com.animewitcher.app/download_continued_processing',
+    ).invokeMethod<void>('configureDiagnosticLog', {'enabled': enabled});
+  } on MissingPluginException {
+    // Older/non-iOS builds may not include the native diagnostics bridge.
+  } on PlatformException catch (error) {
+    if (kDebugMode) {
+      debugPrint(
+        '[DownloadDiagnostics] configureDiagnosticLog failed: '
+        '${error.code} ${error.message}',
+      );
+    }
+  } catch (error) {
+    if (kDebugMode) {
+      debugPrint('[DownloadDiagnostics] configureDiagnosticLog failed: $error');
+    }
+  }
+}
+
 /// Bridges AnimeWitcher downloads to iOS 26's system-managed continued
 /// processing task UI. On older iOS versions the native side returns false
 /// and background_downloader continues to work normally.
