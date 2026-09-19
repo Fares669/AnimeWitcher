@@ -495,8 +495,11 @@ final class DownloadManagerV2 {
     });
   }
 
-  /// Resumes the exact current package transfer when possible, otherwise starts
-  /// a fresh generation from byte zero using a newly resolved source.
+  /// Resumes the exact current package transfer when possible.
+  ///
+  /// Paused intent never falls back to a fresh generation: losing the exact
+  /// package handle must preserve the user's existing progress. Active records
+  /// may still use normal missing-transfer recovery.
   Future<DownloadTransportSnapshot> resume(DownloadLogicalId logicalId) {
     return _commands.run(logicalId, () async {
       await initialize();
@@ -543,6 +546,13 @@ final class DownloadManagerV2 {
       final handle = await _exactHandle(record.taskId);
       if (handle != null &&
           handle.current.status == DownloadTransportStatus.paused) {
+        if (Platform.isIOS && record.parallelChunks > 1) {
+          throw StateError(
+            'This older iOS parallel download cannot be resumed safely. '
+            'Existing progress was kept paused; restart it once to move to '
+            'the reliable iOS transport.',
+          );
+        }
         final destinationKey = await _canonicalDestinationPath(
           request.destinationPath,
         );
@@ -617,11 +627,9 @@ final class DownloadManagerV2 {
         });
       }
 
-      if (record.intent == DownloadUserIntent.paused &&
-          handle != null &&
-          handle.current.status != DownloadTransportStatus.missing) {
+      if (record.intent == DownloadUserIntent.paused) {
         throw StateError(
-          'Download cannot resume safely without restarting; '
+          'Download cannot resume safely without its exact paused transfer; '
           'existing progress was kept paused',
         );
       }
@@ -824,6 +832,9 @@ final class DownloadManagerV2 {
 
     final generation = (previous?.generation ?? 0) + 1;
     final taskId = taskIdForGeneration(request.logicalId, generation);
+    final parallelChunks = effectivePackageParallelChunksV2(
+      request.parallelChunks,
+    );
     final queuedRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
       logicalId: request.logicalId,
@@ -838,7 +849,7 @@ final class DownloadManagerV2 {
       expectedBytes: request.expectedBytes,
       allowPause: request.allowPause,
       retries: request.retries,
-      parallelChunks: request.parallelChunks,
+      parallelChunks: parallelChunks,
       awaitingAdmission: true,
       updatedAtMillis: _nowMillis(),
     );
@@ -977,6 +988,10 @@ final class DownloadManagerV2 {
     final existing = await _exactHandle(record.taskId);
     if (existing != null) {
       if (existing.current.status == DownloadTransportStatus.paused) {
+        if (Platform.isIOS && record.parallelChunks > 1) {
+          await _preservePausedResumeFailure(record, existing);
+          return;
+        }
         final readiness = _parallelPauseReadiness;
         if (record.parallelChunks > 1 && readiness != null) {
           final ready = await readiness.waitUntilReady(
@@ -1032,6 +1047,7 @@ final class DownloadManagerV2 {
     final source = await _sourceResolver.resolve(request.sourceDescriptor);
     final admitted = record.copyWith(
       awaitingAdmission: false,
+      parallelChunks: effectivePackageParallelChunksV2(record.parallelChunks),
       expectedBytes: source.expectedBytes ?? record.expectedBytes,
       clearFailure: true,
       updatedAtMillis: _nowMillis(),
@@ -1109,6 +1125,9 @@ final class DownloadManagerV2 {
     final taskId = taskIdForGeneration(request.logicalId, generation);
     final updatedAtMillis = _nowMillis();
     final expectedBytes = source.expectedBytes ?? request.expectedBytes;
+    final parallelChunks = effectivePackageParallelChunksV2(
+      request.parallelChunks,
+    );
 
     final nextRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
@@ -1124,7 +1143,7 @@ final class DownloadManagerV2 {
       expectedBytes: expectedBytes,
       allowPause: request.allowPause,
       retries: request.retries,
-      parallelChunks: request.parallelChunks,
+      parallelChunks: parallelChunks,
       updatedAtMillis: updatedAtMillis,
     );
 
@@ -1149,7 +1168,7 @@ final class DownloadManagerV2 {
         headers: source.headers,
         allowPause: request.allowPause,
         retries: request.retries,
-        parallelChunks: request.parallelChunks,
+        parallelChunks: parallelChunks,
       ),
     );
     _activateHandle(request.logicalId, handle);
