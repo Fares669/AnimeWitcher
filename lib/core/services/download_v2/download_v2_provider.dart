@@ -11,6 +11,7 @@ import '../../extensions/extension_manager.dart';
 import '../../storage/settings_repository.dart';
 import '../../storage/storage_service.dart';
 import '../download_concurrency.dart';
+import '../download_continued_processing_service.dart';
 import '../download_url_refresh.dart';
 import 'background_downloader_gateway.dart';
 import 'download_continued_processing_v2.dart';
@@ -66,6 +67,11 @@ final downloadSourceResolverV2Provider = Provider<DownloadSourceResolverV2>((
 final downloadDiagnosticsFileV2Provider =
     Provider<FileDownloadDiagnosticsV2>((ref) {
       final settings = ref.read(settingsRepositoryProvider);
+      unawaited(
+        configureNativeDownloadDiagnosticLog(
+          settings.getDownloadDiagnosticLog(),
+        ),
+      );
       return FileDownloadDiagnosticsV2(
         enabled: settings.getDownloadDiagnosticLog,
         directoryProvider: () async {
