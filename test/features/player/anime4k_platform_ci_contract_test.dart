@@ -53,15 +53,15 @@ void main() {
       );
     });
 
-    test('source-of-truth plan matches the simplified shipping scope', () {
-      final plan = File('ANIME4K_PERFORMANCE_PLAN.md').readAsStringSync();
-
-      expect(plan, contains('Retired from shipping scope'));
-      expect(plan, contains('Eco/Auto'));
-      expect(plan, contains('MetalFX'));
-      expect(plan, contains('Performance log'));
-      expect(plan, isNot(contains('Expose a persisted experimental MetalFX toggle')));
-      expect(plan, isNot(contains('Apple Eco/Auto is a separate Apple-only mode')));
+    test('retired root performance plan stays removed', () {
+      expect(
+        File('ANIME4K_PERFORMANCE_PLAN.md').existsSync(),
+        isFalse,
+        reason:
+            'The finalized Anime4K plan was intentionally removed after scope '
+            'cleanup; the checked-in benchmark evidence remains the durable '
+            'physical-validation contract.',
+      );
     });
 
     test('temporary one-shot preview workflow is removed before main merge', () {
