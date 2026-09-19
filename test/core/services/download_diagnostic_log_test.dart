@@ -41,4 +41,44 @@ void main() {
     expect(progressRows.first['progress'], 0.1);
     expect(progressRows.last['result'], isTrue);
   });
+
+  test('retains deep child and checkpoint fields', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'animewitcher-download-deep-log-',
+    );
+    addTearDown(() async {
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    });
+
+    final log = DownloadDiagnosticLog(() async => directory);
+    await log.configure(true);
+    log.record('parallel.childState', {
+      'taskId': 'parent',
+      'childTaskId': 'parent.part.0',
+      'attemptGeneration': 3,
+      'durableBytes': 1048576,
+      'checkpointSequence': 7,
+      'previousStatus': 'enqueued',
+      'status': 'running',
+      'freeBytes': 9999999,
+    });
+    await log.flush();
+
+    final rows = <Map<String, dynamic>>[];
+    for (final file in await log.listFiles()) {
+      for (final line in await file.readAsLines()) {
+        final decoded = jsonDecode(line);
+        if (decoded is Map) rows.add(Map<String, dynamic>.from(decoded));
+      }
+    }
+    final row = rows.lastWhere((row) => row['event'] == 'parallel.childState');
+    expect(row['childTaskId'], 'parent.part.0');
+    expect(row['attemptGeneration'], 3);
+    expect(row['durableBytes'], 1048576);
+    expect(row['checkpointSequence'], 7);
+    expect(row['previousStatus'], 'enqueued');
+    expect(row['freeBytes'], 9999999);
+  });
 }
