@@ -65,5 +65,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa-download-manager-v2-lossless-background-final
-          path: animewitcher-ios-v2-resume-fix-preview.ipa
+          path: animewitcher-ios-v2-lossless-background-final.ipa
           retention-days: 7
+          if-no-files-found: error
