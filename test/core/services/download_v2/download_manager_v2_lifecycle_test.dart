@@ -495,46 +495,32 @@ void main() {
     );
   });
 
-  test('pause fallback waits for cancellation settlement', () async {
+  test('failed pause never cancels transport or publishes fake paused state', () async {
     final f = _fixture();
     await f.manager.start(f.request);
     final taskId = f.gateway.startedSpecs.single.taskId;
     final handle = f.gateway.handleFor(taskId)!;
     handle.onPause = () async => false;
-    handle.onCancel = () async => true;
 
-    var completed = false;
-    final pauseFuture = f.manager.pause(f.request.logicalId).whenComplete(() {
-      completed = true;
-    });
-    await Future<void>.delayed(Duration.zero);
-
-    expect(handle.cancelCalls, 1);
-    expect(completed, isFalse);
-
-    f.gateway.emit(taskId, DownloadTransportStatus.canceled);
-    final snapshot = await pauseFuture;
-
-    expect(completed, isTrue);
-    expect(snapshot?.status, DownloadTransportStatus.paused);
-    expect(
-      (await f.store.get(f.request.logicalId))?.intent,
-      DownloadUserIntent.paused,
+    await expectLater(
+      f.manager.pause(f.request.logicalId),
+      throwsStateError,
     );
-  });
 
-  test('non-resumable pause cancels transport but retains paused intent', () async {
-    final f = _fixture();
-    await f.manager.start(f.request);
-    final handle = f.gateway.handleFor(f.gateway.startedSpecs.single.taskId)!;
-    handle.onPause = () async => false;
-
-    await f.manager.pause(f.request.logicalId);
-
-    expect(handle.cancelCalls, 1);
+    expect(
+      handle.cancelCalls,
+      0,
+      reason: 'a failed iOS pause must not destroy the exact resumable writer',
+    );
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.status,
+      DownloadTransportStatus.running,
+      reason: 'V2 must never relabel a live/canceled transport as safely paused',
+    );
     expect(
       (await f.store.get(f.request.logicalId))?.intent,
       DownloadUserIntent.paused,
+      reason: 'user intent remains durable while transport truth stays visible',
     );
   });
 

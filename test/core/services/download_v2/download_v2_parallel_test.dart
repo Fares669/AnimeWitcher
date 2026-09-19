@@ -44,7 +44,7 @@ void main() {
     expect(record.taskId, spec.taskId);
   });
 
-  test('iOS collapses package parallel request to one resumable task', () async {
+  test('iOS preserves the requested parallel width for durable ranged transport', () async {
     const spec = DownloadTaskSpecV2(
       taskId: 'aw_v2_ios_parent_g1',
       url: 'https://example.invalid/video.mp4',
@@ -55,13 +55,13 @@ void main() {
       parallelChunks: 16,
     );
 
-    expect(effectivePackageParallelChunksV2(16, isIOS: true), 1);
+    expect(effectivePackageParallelChunksV2(16, isIOS: true), 16);
     expect(effectivePackageParallelChunksV2(16, isIOS: false), 16);
 
     final task = await packageTaskForV2(spec, isIOS: true);
 
-    expect(task, isA<DownloadTask>());
-    expect(task, isNot(isA<ParallelDownloadTask>()));
+    expect(task, isA<ParallelDownloadTask>());
+    expect((task as ParallelDownloadTask).chunks, 16);
     expect(task.taskId, spec.taskId);
   });
 
