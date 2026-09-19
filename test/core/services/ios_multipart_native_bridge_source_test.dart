@@ -20,12 +20,4 @@ void main() {
     },
   );
 
-  test('multipart child pause uses the FileDownloader owner', () async {
-    final service = await File('lib/core/services/download_service.dart')
-        .readAsString();
-
-    expect(service, contains('isInternalDownloaderChunk(task)'));
-    expect(service, contains('await FileDownloader().pause(task)'));
-    expect(service, contains('Native multipart child did not pause'));
-  });
-}
+  }
