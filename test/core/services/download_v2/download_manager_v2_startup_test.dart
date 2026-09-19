@@ -280,6 +280,82 @@ void main() {
     expect(gateway.startedSpecs, isEmpty);
   });
 
+  test(
+    'startup duplicate writer whose pause fails is canceled instead of fake-paused',
+    () async {
+      final store = InMemoryLogicalDownloadStoreV2();
+      final gateway = _StartupGateway();
+      final resolver = StaticSourceResolverV2(expectedBytes: 100);
+      const destination = 'downloads/anime/shared-failed-pause.mp4';
+
+      LogicalDownloadRecordV2 record({
+        required int anime,
+        required int episode,
+        required int updatedAtMillis,
+      }) {
+        final logicalId = logicalDownloadIdFor(
+          animeId: 'anilist:$anime',
+          episodeKey: '$episode',
+          variantKey: 'sub:1080p',
+        );
+        return LogicalDownloadRecordV2(
+          schemaVersion: kLogicalDownloadSchemaVersionV2,
+          logicalId: logicalId,
+          animeId: 'anilist:$anime',
+          episodeKey: '$episode',
+          variantKey: 'sub:1080p',
+          generation: 1,
+          taskId: taskIdForGeneration(logicalId, 1),
+          intent: DownloadUserIntent.active,
+          destinationPath: destination,
+          sourceDescriptor: const <String, Object?>{
+            'providerId': 'provider.example',
+          },
+          expectedBytes: 100,
+          updatedAtMillis: updatedAtMillis,
+        );
+      }
+
+      final owner = record(anime: 31, episode: 1, updatedAtMillis: 1);
+      final duplicate = record(anime: 32, episode: 1, updatedAtMillis: 2);
+      await store.put(owner);
+      await store.put(duplicate);
+      gateway.addRehydrated(owner.taskId, DownloadTransportStatus.running);
+      gateway.addRehydrated(duplicate.taskId, DownloadTransportStatus.running);
+      final duplicateHandle = gateway.handleFor(duplicate.taskId)!
+        ..onPause = () async => false;
+
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: gateway,
+        sourceResolver: resolver,
+      );
+      addTearDown(manager.dispose);
+
+      await manager.initialize();
+
+      expect(
+        manager.snapshotFor(owner.logicalId)?.status,
+        DownloadTransportStatus.running,
+      );
+      expect(duplicateHandle.pauseCalls, 1);
+      expect(
+        duplicateHandle.cancelCalls,
+        1,
+        reason:
+            'one canonical destination cannot retain two live writers when the '
+            'duplicate cannot pause safely',
+      );
+      expect(
+        manager.snapshotFor(duplicate.logicalId)?.status,
+        DownloadTransportStatus.canceled,
+        reason:
+            'startup must expose transport truth instead of fabricating paused',
+      );
+      expect((await store.get(duplicate.logicalId))?.intent, DownloadUserIntent.paused);
+    },
+  );
+
   test('startup never adopts a different task id even when transport looks related', () async {
     final f = await _startupFixture(
       intent: DownloadUserIntent.active,
@@ -432,6 +508,7 @@ final class _StartupHandle implements DownloadTransportHandle {
   Future<bool> Function()? onPause;
   int pauseCalls = 0;
   int resumeCalls = 0;
+  int cancelCalls = 0;
 
   @override
   String get taskId => _current.taskId;
@@ -468,7 +545,11 @@ final class _StartupHandle implements DownloadTransportHandle {
   }
 
   @override
-  Future<bool> cancel() async => true;
+  Future<bool> cancel() async {
+    cancelCalls++;
+    emitStatus(DownloadTransportStatus.canceled);
+    return true;
+  }
 }
 
 final class _SelectiveStartupResolver implements DownloadSourceResolverV2 {
