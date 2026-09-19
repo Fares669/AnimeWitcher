@@ -77,7 +77,17 @@ void main() {
     expect(gateway.startedSpecs, hasLength(1));
     expect(resolver.calls, 1);
     expect(gateway.startedSpecs.single.taskId, taskIdForGeneration(item.logicalId, 2));
-    expect((await store.get(item.logicalId))?.generation, 2);
+    final restarted = await store.get(item.logicalId);
+    expect(restarted?.generation, 2);
+    expect(
+      sourceDescriptorRequiresLegacyRestartV2(
+        restarted?.sourceDescriptor ?? const <String, Object?>{},
+      ),
+      isFalse,
+      reason:
+          'Once V2 owns transport, losing a paused package handle must not '
+          'silently authorize another byte-zero restart.',
+    );
   });
 
   test('restart-required legacy row stays visible until explicit resume', () async {
