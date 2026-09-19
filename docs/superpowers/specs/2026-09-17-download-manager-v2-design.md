@@ -73,7 +73,8 @@ Use the modern Transfer API:
 - `FileDownloader().transfers.start(...)` for new tasks;
 - `FileDownloader().transfers.rehydrateFromDatabase(...)` on relaunch;
 - exact-task lookup/attachment by current `taskId`;
-- `Transfer.pause()`, `Transfer.resume()`, `Transfer.cancel()`;
+- package pause/cancel APIs plus **exact-task resume** through `FileDownloader().resume(task)`;
+- do not use `Transfer.resume()` where its missing-resume-data fallback may re-enqueue from byte zero;
 - Transfer status/progress/speed/time/hold/exception signals for presentation;
 - the package database only as the package's transport persistence.
 
@@ -238,7 +239,8 @@ No second writer is created for the same logical episode.
 2. Call `Transfer.pause()`.
 3. If resumable pause succeeds, retain the generation.
 4. If package pause cannot establish a resumable state, cancel the transport but retain intent `paused`.
-5. Later resume starts a fresh generation from byte zero if package resume is unavailable.
+5. A normal V2 paused record never silently turns Resume into a byte-zero replacement. If exact resumable transport is unavailable, keep the same generation paused and require an explicit Restart.
+6. Policy-A legacy incomplete rows are the intentional exception: their first explicit Resume may create the first V2 generation from byte zero because no V2 transfer exists by design.
 
 The user guarantee is that paused means no automatic restart on relaunch. Preserving partial bytes is secondary.
 
@@ -246,11 +248,13 @@ The user guarantee is that paused means no automatic restart on relaunch. Preser
 
 For a paused logical record:
 
-- if the exact current Transfer exists and package resume succeeds, continue it;
-- otherwise resolve a fresh source and start a new generation from byte zero;
-- return intent to `active` as part of the accepted resume operation.
+- if the exact current package task exists and exact package resume succeeds, continue the same task/generation;
+- if exact resume is unavailable or fails for a genuine V2 generation, keep the same generation paused and preserve existing logical progress; do **not** implicitly create a replacement writer;
+- an explicit Restart may settle/fence the obsolete generation, resolve a fresh source, and create a new generation from byte zero;
+- a policy-A legacy-incomplete row may use its first explicit Resume to create the first V2 generation from byte zero because no resumable V2 transport exists yet;
+- return intent to `active` only after the requested resume/restart path is actually accepted.
 
-AnimeWitcher never reconstructs byte ranges itself.
+AnimeWitcher never reconstructs byte ranges itself, and a Resume action never disguises a byte-zero restart for a normal V2 generation.
 
 ### 9.4 Failure
 
@@ -414,7 +418,9 @@ Required cases:
 - pause intent survives manager recreation;
 - pause failure leaves logical item paused and stopped;
 - resume uses package resume when possible;
-- resume creates fresh generation when package state is unavailable;
+- failed/missing exact resume keeps a normal V2 generation paused without a replacement;
+- explicit Restart creates a fresh generation when exact package state is unavailable;
+- legacy-incomplete first explicit Resume creates the first V2 generation from byte zero;
 - cancel/delete fence late callbacks;
 - active relaunch with missing package state creates exactly one fresh generation;
 - paused/canceled relaunch never creates transport;
