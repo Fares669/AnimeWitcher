@@ -105,6 +105,40 @@ void main() {
     );
   });
 
+  test('legacy migration marker cannot authorize a second byte-zero resume', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final migration = LegacyDownloadMigrationV2(
+      store: store,
+      nowMillis: () => 200,
+    );
+    final item = _legacyItem(destinationPath: '/tmp/episode-12-generation-2.mp4');
+    final migrated = await migration.migrate(item);
+    final generationTwo = migrated.copyWith(
+      generation: 2,
+      taskId: taskIdForGeneration(item.logicalId, 2),
+      intent: DownloadUserIntent.paused,
+      updatedAtMillis: 300,
+    );
+    await store.put(generationTwo);
+
+    final gateway = _MigrationGateway();
+    final resolver = StaticSourceResolverV2(expectedBytes: 100);
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+    );
+    addTearDown(manager.dispose);
+
+    await manager.initialize();
+
+    await expectLater(manager.resume(item.logicalId), throwsStateError);
+
+    expect(resolver.calls, 0);
+    expect(gateway.startedSpecs, isEmpty);
+    expect((await store.get(item.logicalId))?.generation, 2);
+  });
+
   test('restart-required legacy row stays visible until explicit resume', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final migration = LegacyDownloadMigrationV2(
