@@ -1,4 +1,4 @@
-# Triggered after the 2026-09-19 durable-range connection telemetry fixes.
+# Triggered after the 2026-09-19 Live Task background-byte delta fix.
 name: iOS Preview V2 Lossless Resume One Shot
 
 on:
@@ -60,12 +60,12 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R build/ios/iphoneos/Runner.app Payload/
-          zip -qry animewitcher-ios-v2-range-resume-connections.ipa Payload
+          zip -qry animewitcher-ios-v2-live-task-background-bytes.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ipa-download-manager-v2-range-resume-connections
-          path: animewitcher-ios-v2-range-resume-connections.ipa
+          name: ios-ipa-download-manager-v2-live-task-background-bytes
+          path: animewitcher-ios-v2-live-task-background-bytes.ipa
           retention-days: 7
           if-no-files-found: error
