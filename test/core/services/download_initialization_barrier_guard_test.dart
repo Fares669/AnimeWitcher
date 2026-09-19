@@ -11,9 +11,6 @@ String methodBody(String source, String signature, String nextSignature) {
 }
 
 void main() {
-      ,
-  );
-
   test(
     'startup V2 init failure is explicitly observed while commands can retry',
     () {
