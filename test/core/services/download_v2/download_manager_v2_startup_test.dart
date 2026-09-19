@@ -99,6 +99,25 @@ void main() {
     );
   });
 
+  test('startup resumes an exact paused transfer for active intent', () async {
+    final f = await _startupFixture(
+      intent: DownloadUserIntent.active,
+      hasExactHandle: true,
+      exactHandleStatus: DownloadTransportStatus.paused,
+    );
+    final handle = f.gateway.handleFor(f.record.taskId)!;
+
+    await f.manager.initialize();
+
+    expect(handle.resumeCalls, 1);
+    expect(f.gateway.startedSpecs, isEmpty);
+    expect(f.resolver.calls, 0);
+    expect(
+      f.manager.snapshotFor(f.logicalId)?.status,
+      DownloadTransportStatus.running,
+    );
+  });
+
   test('startup binds exact active transfer without creating a writer', () async {
     final f = await _startupFixture(
       intent: DownloadUserIntent.active,
@@ -280,6 +299,7 @@ Future<_StartupFixture> _startupFixture({
   required DownloadUserIntent intent,
   bool hasExactHandle = false,
   bool hasDifferentHandle = false,
+  DownloadTransportStatus exactHandleStatus = DownloadTransportStatus.running,
 }) async {
   final logicalId = logicalDownloadIdFor(
     animeId: 'anilist:21',
@@ -307,7 +327,7 @@ Future<_StartupFixture> _startupFixture({
   await store.put(record);
   final gateway = _StartupGateway();
   if (hasExactHandle) {
-    gateway.addRehydrated(record.taskId, DownloadTransportStatus.running);
+    gateway.addRehydrated(record.taskId, exactHandleStatus);
   }
   if (hasDifferentHandle) {
     gateway.addRehydrated(
@@ -411,6 +431,7 @@ final class _StartupHandle implements DownloadTransportHandle {
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
   Future<bool> Function()? onPause;
   int pauseCalls = 0;
+  int resumeCalls = 0;
 
   @override
   String get taskId => _current.taskId;
@@ -440,7 +461,11 @@ final class _StartupHandle implements DownloadTransportHandle {
   }
 
   @override
-  Future<bool> resume() async => true;
+  Future<bool> resume() async {
+    resumeCalls++;
+    emitStatus(DownloadTransportStatus.running);
+    return true;
+  }
 
   @override
   Future<bool> cancel() async => true;
