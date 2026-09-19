@@ -239,15 +239,35 @@ final class DownloadManagerV2 {
         if (exactHandle != null && !exactHandle.current.isFinal) {
           settled = await _pauseHandleAndSettle(exactHandle);
         }
+        final pauseBase =
+            settled ??
+            exactHandle?.current ??
+            DownloadTransportSnapshot(
+              taskId: pausedRecord.taskId,
+              status: DownloadTransportStatus.missing,
+              progress: 0,
+              totalBytes: pausedRecord.expectedBytes,
+            );
+
+        if (exactHandle != null &&
+            pauseBase.status != DownloadTransportStatus.paused) {
+          // Startup found two logical records targeting the same canonical
+          // artifact. A duplicate writer that cannot pause safely must not be
+          // hidden behind paused presentation while it keeps writing into the
+          // owner's destination. Canonical-writer safety wins here: settle that
+          // duplicate transport destructively and expose the resulting truth.
+          await _settleObsoleteHandle(
+            exactHandle,
+            cancelEvenIfFinal: false,
+          );
+          final settledTruth = exactHandle.current;
+          _snapshots[pausedRecord.logicalId] = settledTruth;
+          _recordDiagnostic(pausedRecord.logicalId, settledTruth);
+          continue;
+        }
+
         final projected = _snapshotWithStatus(
-          settled ??
-              exactHandle?.current ??
-              DownloadTransportSnapshot(
-                taskId: pausedRecord.taskId,
-                status: DownloadTransportStatus.missing,
-                progress: 0,
-                totalBytes: pausedRecord.expectedBytes,
-              ),
+          pauseBase,
           DownloadTransportStatus.paused,
         );
         _snapshots[pausedRecord.logicalId] = projected;
@@ -1533,9 +1553,11 @@ final class DownloadManagerV2 {
       );
     }
 
-    final projected = _currentIntents[logicalId] == DownloadUserIntent.paused
-        ? _snapshotWithStatus(accepted, DownloadTransportStatus.paused)
-        : accepted;
+    // Transport status stays authoritative even when durable user intent is
+    // paused. A failed iOS pause may leave the exact writer running; relabeling
+    // later progress/cancel callbacks as paused recreates the same unsafe
+    // "fake paused" state that explicit Resume correctly refuses to trust.
+    final projected = accepted;
     _snapshots[logicalId] = projected;
     _recordDiagnostic(logicalId, projected);
     return true;
