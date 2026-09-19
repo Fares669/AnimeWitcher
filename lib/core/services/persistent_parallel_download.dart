@@ -2674,9 +2674,15 @@ class PersistentParallelDownload {
               'rangeEnd': part.to,
               'attemptGeneration': part.attemptGeneration,
               'durableBytes': part.durableBytes,
+              if (part.lastNativeBridgeBytes >= 0)
+                'nativeWrittenBytes': part.lastNativeBridgeBytes,
               'progress': part.credibleProgress,
               'launched': part.launched,
+              'nativeLive': part.launched,
+              'slotReserved': _activeConnectionIds.contains(part.task.taskId),
               'completed': part.complete,
+              'configuredConnections': session.task.chunks,
+              'activeConnections': _activeConnectionsForSession(session),
             });
           }
           // Completion is durable; a late running/progress/retry callback must
