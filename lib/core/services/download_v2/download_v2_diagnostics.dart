@@ -251,6 +251,7 @@ const Set<String> _transportFieldAllowlist = <String>{
   'activeConnections',
   'recordCount',
   'nativeTaskCount',
+  'packageTaskCount',
   'pausedTaskCount',
   'resumeDataCount',
   'manifestPartCount',
@@ -294,5 +295,5 @@ Map<String, Object?> _sanitizeTransportFields(Map<String, Object?> fields) {
 bool _safeDiagnosticToken(String value) =>
     value.isNotEmpty &&
     value.length <= 160 &&
-    RegExp(r'^[a-zA-Z0-9_.:+-]+).hasMatch(value) &&
+    RegExp(r'^[a-zA-Z0-9_.:+-]+$').hasMatch(value) &&
     !value.contains('://');
