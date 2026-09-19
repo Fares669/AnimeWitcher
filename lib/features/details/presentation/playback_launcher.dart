@@ -14,7 +14,7 @@ import 'package:collection/collection.dart';
 import 'details_controller.dart';
 import 'source_picker.dart';
 import 'stream_source_prefetch.dart';
-import '../../../core/services/download_service.dart';
+import 'downloaded_file_provider.dart';
 import '../../../shared/widgets/loading_dialog.dart';
 import '../../../core/utils/app_utils.dart';
 import '../../../core/utils/episode_label.dart';
@@ -159,8 +159,8 @@ class PlaybackLauncher {
 
     if (savedUrl.isNotEmpty) {
       final localFile = await _ref
-          .read(downloadServiceProvider)
-          .getFileForTrackingUrl(
+          .read(downloadedFilesProvider.notifier)
+          .resolveFileForTrackingUrl(
             savedUrl,
             item: item,
             episode: hintEpisode,
@@ -241,11 +241,9 @@ class PlaybackLauncher {
     String episodeDataUrl, {
     Episode? episode,
   }) async {
-    final downloadService = _ref.read(downloadServiceProvider);
-    final localFile = await downloadService.getDownloadedFile(
-      item,
-      episode: episode,
-    );
+    final localFile = await _ref
+        .read(downloadedFilesProvider.notifier)
+        .resolveFile(item, episode: episode);
     if (!context.mounted) return null;
 
     if (localFile != null) {
@@ -364,8 +362,8 @@ class PlaybackLauncher {
     if (!AppUtils.isLocalFile(url)) {
       downloadedPath =
           (await _ref
-                  .read(downloadServiceProvider)
-                  .getDownloadedFile(item, episode: resolvedEpisode))
+                  .read(downloadedFilesProvider.notifier)
+                  .resolveFile(item, episode: resolvedEpisode))
               ?.path;
       if (!context.mounted) return;
     }
