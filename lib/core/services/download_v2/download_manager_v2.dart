@@ -269,17 +269,22 @@ final class DownloadManagerV2 {
             }
             _activateHandle(record.logicalId, exactHandle);
           }
-          final projected = _snapshotWithStatus(
-            settledPause ??
-                exactHandle?.current ??
-                DownloadTransportSnapshot(
-                  taskId: record.taskId,
-                  status: DownloadTransportStatus.missing,
-                  progress: 0,
-                  totalBytes: record.expectedBytes,
-                ),
-            DownloadTransportStatus.paused,
-          );
+          final pauseBase =
+              settledPause ??
+              exactHandle?.current ??
+              DownloadTransportSnapshot(
+                taskId: record.taskId,
+                status: DownloadTransportStatus.missing,
+                progress: 0,
+                totalBytes: record.expectedBytes,
+              );
+          final projected = exactHandle != null &&
+                  pauseBase.status != DownloadTransportStatus.paused
+              ? pauseBase
+              : _snapshotWithStatus(
+                  pauseBase,
+                  DownloadTransportStatus.paused,
+                );
           _snapshots[record.logicalId] = projected;
           _recordDiagnostic(record.logicalId, projected);
 
@@ -337,6 +342,14 @@ final class DownloadManagerV2 {
             }
           } else if (exactHandle != null &&
               _isRecoverable(exactHandle.current)) {
+            if (exactHandle.current.status == DownloadTransportStatus.paused) {
+              final resumed = await exactHandle.resume();
+              if (!resumed) {
+                throw StateError(
+                  'Active download could not resume its exact paused transfer',
+                );
+              }
+            }
             _activateHandle(record.logicalId, exactHandle);
           } else {
             await _startFreshGeneration(
