@@ -511,7 +511,7 @@ final class DownloadManagerV2 {
       _rememberRecord(pausedRecord);
       await _publishRecords();
 
-      final base = packagePause ??
+      final rawBase = packagePause ??
           settledPause ??
           handle?.current ??
           _snapshots[logicalId] ??
@@ -521,6 +521,7 @@ final class DownloadManagerV2 {
             progress: 0,
             totalBytes: record.expectedBytes,
           );
+      final base = _snapshotWithPresentationBytes(rawBase);
 
       if (!record.awaitingAdmission &&
           base.status != DownloadTransportStatus.paused) {
@@ -1807,6 +1808,30 @@ bool _isRecoverable(DownloadTransportSnapshot snapshot) {
   return snapshot.status != DownloadTransportStatus.failed &&
       snapshot.status != DownloadTransportStatus.canceled &&
       snapshot.status != DownloadTransportStatus.missing;
+}
+
+DownloadTransportSnapshot _snapshotWithPresentationBytes(
+  DownloadTransportSnapshot snapshot,
+) {
+  final transferredBytes = _presentationTransferredBytes(
+    transferredBytes: snapshot.transferredBytes,
+    totalBytes: snapshot.totalBytes,
+    progress: snapshot.progress,
+  );
+  if (transferredBytes == snapshot.transferredBytes) return snapshot;
+  return DownloadTransportSnapshot(
+    taskId: snapshot.taskId,
+    status: snapshot.status,
+    progress: snapshot.progress,
+    transferredBytes: transferredBytes,
+    totalBytes: snapshot.totalBytes,
+    networkSpeedMBps: snapshot.networkSpeedMBps,
+    timeRemaining: snapshot.timeRemaining,
+    configuredConnections: snapshot.configuredConnections,
+    activeConnections: snapshot.activeConnections,
+    failureCategory: snapshot.failureCategory,
+    failureMessage: snapshot.failureMessage,
+  );
 }
 
 DownloadTransportSnapshot _snapshotWithStatus(
