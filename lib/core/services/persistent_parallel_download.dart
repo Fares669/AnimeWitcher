@@ -2249,12 +2249,14 @@ class PersistentParallelDownload {
 
     DateTime? latestNativeAt;
     var nativeWrittenBytes = 0;
+    var hasNativeByteEvidence = false;
     for (final part in session.parts) {
       final at = part.lastNativeBridgeAt;
       if (at != null && (latestNativeAt == null || at.isAfter(latestNativeAt))) {
         latestNativeAt = at;
       }
-      if (part.lastNativeBridgeBytes > 0) {
+      if (at != null && part.lastNativeBridgeBytes >= 0) {
+        hasNativeByteEvidence = true;
         nativeWrittenBytes +=
             part.lastNativeBridgeBytes.clamp(0, part.size).toInt();
       }
@@ -2279,7 +2281,7 @@ class PersistentParallelDownload {
       'diskBytes': session.lastDiskObservedBytes >= 0
           ? session.lastDiskObservedBytes
           : durableBytes,
-      'nativeWrittenBytes': nativeWrittenBytes,
+      if (hasNativeByteEvidence) 'nativeWrittenBytes': nativeWrittenBytes,
       'totalBytes': expectedBytes,
       'checkpointSequence': session.checkpointSequence,
       'configuredConnections': task.chunks,
