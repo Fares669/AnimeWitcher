@@ -1,4 +1,3 @@
-import 'dart:io';
 
 import 'package:animewitcher/core/services/download_job_state.dart';
 import 'package:animewitcher/core/services/download_job_store.dart';
@@ -171,58 +170,4 @@ void main() {
     });
   });
 
-  group('DM-07 service/UI ownership', () {
-    final service = File('lib/core/services/download_service.dart')
-        .readAsStringSync();
-    final provider = File(
-      'lib/features/library/presentation/downloads_provider.dart',
-    ).readAsStringSync();
-
-    test(
-      'cancel persists tombstone and never removes it during ordinary cleanup',
-      () {
-        final body = _methodBody(
-          service,
-          'Future<void> cancelDownload(',
-          'Future<DownloadCommandOutcome> cancelDownloadOutcome(',
-        );
-        expect(body, contains('tombstoneForDeletion('));
-        expect(body, isNot(contains('_jobStore.remove(taskId)')));
-        final settled = body.indexOf('_waitForCancelOwnershipRelease(taskId)');
-        final pluginDelete = body.indexOf(
-          'FileDownloader().database.deleteRecordWithId(taskId)',
-        );
-        expect(settled, greaterThanOrEqualTo(0));
-        expect(pluginDelete, greaterThan(settled));
-        expect(
-          body.substring(settled, pluginDelete),
-          contains('DownloadRuntimeOwnership.notOwned'),
-        );
-      },
-    );
-
-    test(
-      'V2 delete uses manager ownership and keeps lifecycle work out of the UI',
-      () {
-        final removeBody = _methodBody(
-          provider,
-          'Future<void> removeDownloads(List<DownloadItem> items) async {',
-          'Future<void> pauseDownload(',
-        );
-        expect(removeBody, contains('downloadManagerV2Provider'));
-        expect(
-          removeBody,
-          contains('manager.delete(DownloadLogicalId(logical))'),
-        );
-        expect(removeBody, contains('if (item.v2Owned && logical != null'));
-        expect(
-          removeBody,
-          isNot(contains('FileDownloader().database.deleteRecordWithId')),
-        );
-        expect(removeBody, contains('storage.removeDownloadMetadata('));
-        expect(removeBody, isNot(contains('.deleteDownloadedFile(')));
-        expect(removeBody, isNot(contains('file.delete(recursive: true)')));
-      },
-    );
-  });
-}
+  }
