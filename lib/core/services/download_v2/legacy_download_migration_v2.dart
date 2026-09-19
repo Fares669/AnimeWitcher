@@ -102,6 +102,16 @@ final class LegacyDownloadMigrationV2 {
       if (current != null) return current;
 
       const generation = 1;
+      final sourceDescriptor = Map<String, Object?>.from(
+        legacy.sourceDescriptor,
+      );
+      // Every usable incomplete legacy row has no V2/package transfer by
+      // definition. Mark that one-time policy exception durably so explicit
+      // Resume may create the first V2 generation, while genuine paused V2
+      // rows continue to require their exact package handle.
+      if (!legacy.isCompleted && sourceDescriptor.isNotEmpty) {
+        sourceDescriptor[kLegacyRestartRequiredSourceDescriptorV2] = true;
+      }
       return LogicalDownloadRecordV2(
         schemaVersion: kLogicalDownloadSchemaVersionV2,
         logicalId: legacy.logicalId,
@@ -115,7 +125,7 @@ final class LegacyDownloadMigrationV2 {
         // keeps migration from inventing active transport intent.
         intent: DownloadUserIntent.paused,
         destinationPath: legacy.destinationPath,
-        sourceDescriptor: Map<String, Object?>.from(legacy.sourceDescriptor),
+        sourceDescriptor: sourceDescriptor,
         expectedBytes: legacy.expectedBytes,
         completedAtMillis: legacy.completedAtMillis,
         updatedAtMillis: _nowMillis(),
