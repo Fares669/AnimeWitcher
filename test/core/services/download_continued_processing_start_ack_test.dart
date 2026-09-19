@@ -15,6 +15,27 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
+  test('native diagnostic toggle uses the bridge without creating a service', () async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return null;
+        });
+
+    await configureNativeDownloadDiagnosticLog(
+      true,
+      forceAvailableForTesting: true,
+    );
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'configureDiagnosticLog');
+    expect(
+      Map<String, Object?>.from(calls.single.arguments as Map),
+      <String, Object?>{'enabled': true},
+    );
+  });
+
   test('start reports native rejection so caller can retry later', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
