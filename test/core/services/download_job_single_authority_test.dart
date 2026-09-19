@@ -98,8 +98,5 @@ void main() {
       expect(record.userPaused, isFalse);
       expect(record.queueWaiting, isFalse);
     });
-
-    ,
-    );
   });
 }
