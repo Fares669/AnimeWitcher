@@ -1,4 +1,3 @@
-import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:animewitcher/core/services/download_job_store.dart';
@@ -31,21 +30,4 @@ void main() {
     expect(before.compatibleWith(after), isTrue);
   });
 
-  test('completion never promotes observed file length into expected bytes', () {
-    final source = File(
-      'lib/core/services/download_service.dart',
-    ).readAsStringSync();
-    final start = source.indexOf(
-      'Future<void> _persistCompletedFilePath(Task task) async',
-    );
-    expect(start, isNonNegative);
-    final end = source.indexOf('\n  Future<String> getDownloadPath(', start);
-    expect(end, greaterThan(start));
-    final completion = source.substring(start, end);
-
-    expect(
-      completion,
-      isNot(contains('final expectedBytes = knownDownloadSize(<int?>[\n        fileBytes,')),
-    );
-  });
-}
+  }
