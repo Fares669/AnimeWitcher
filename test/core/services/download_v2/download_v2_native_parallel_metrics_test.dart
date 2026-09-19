@@ -101,6 +101,28 @@ void main() {
   });
 
 
+  test('V2 persists generation-fenced native refill plans before suspension', () {
+    final gateway = File(
+      'lib/core/services/download_v2/background_downloader_gateway.dart',
+    ).readAsStringSync();
+    final observer = File(
+      'lib/core/services/download_v2/download_continued_processing_v2.dart',
+    ).readAsStringSync();
+    final provider = File(
+      'lib/core/services/download_v2/download_v2_provider.dart',
+    ).readAsStringSync();
+
+    expect(gateway, contains('nativeBackgroundPlansV2'));
+    expect(gateway, contains('nativeBackgroundPlans()'));
+    expect(observer, contains('nativeBackgroundPlans'));
+    expect(observer, contains('persistNativeQueue('));
+    expect(observer, contains('multipartPlans: plans'));
+    expect(
+      provider,
+      contains('nativeBackgroundPlans: packageGateway.nativeBackgroundPlansV2'),
+    );
+  });
+
   test('native overlay refresh rejects stale V2 generations', () {
     final source = File(
       'ios/Runner/DownloadContinuedProcessingManager.swift',
