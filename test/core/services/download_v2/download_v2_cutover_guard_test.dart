@@ -52,6 +52,39 @@ void main() {
       }
     });
 
+    test('all feature-layer production code is sealed from V1 transport', () {
+      final featureFiles = Directory('lib/features')
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.dart'))
+          .toList(growable: false);
+
+      expect(featureFiles, isNotEmpty);
+      for (final file in featureFiles) {
+        final source = file.readAsStringSync();
+        expect(
+          source,
+          isNot(contains('download_service.dart')),
+          reason: '${file.path} must not import the V1 transport service',
+        );
+        expect(
+          source,
+          isNot(contains('downloadServiceProvider')),
+          reason: '${file.path} must not instantiate V1 transport',
+        );
+        expect(
+          source,
+          isNot(contains('PersistentParallelDownload')),
+          reason: '${file.path} must not reach the V1 multipart writer',
+        );
+        expect(
+          source,
+          isNot(contains('DownloadRangeTransfer')),
+          reason: '${file.path} must not reach the V1 range writer',
+        );
+      }
+    });
+
     test('download support UI cannot instantiate V1 transport', () {
       final logDialog = _read(
         'lib/features/settings/presentation/widgets/download_log_dialog.dart',
