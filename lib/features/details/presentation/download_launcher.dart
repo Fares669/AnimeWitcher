@@ -382,17 +382,18 @@ class DownloadLauncher {
                     final preference = _ref
                         .read(settingsRepositoryProvider)
                         .getDownloadParallelParts();
-                    final selectedParallelChunks =
-                        selectAdaptiveDownloadParts(
-                          preference: preference,
-                          totalBytes: metadata.size ?? -1,
-                          supportsRanges: metadata.supportsRanges,
-                        );
+                    final isIOS =
+                        !kIsWeb &&
+                        defaultTargetPlatform == TargetPlatform.iOS;
+                    final selectedParallelChunks = selectV2DownloadParts(
+                      preference: preference,
+                      totalBytes: metadata.size ?? -1,
+                      metadataSupportsRanges: metadata.supportsRanges,
+                      isIOS: isIOS,
+                    );
                     final parallelChunks = effectiveDownloadPartsForPlatform(
                       selectedParts: selectedParallelChunks,
-                      isIOS:
-                          !kIsWeb &&
-                          defaultTargetPlatform == TargetPlatform.iOS,
+                      isIOS: isIOS,
                     );
                     final absolutePath =
                         await absoluteDownloadDestinationPathV2(destinationPath);

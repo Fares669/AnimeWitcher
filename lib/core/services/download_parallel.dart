@@ -101,6 +101,41 @@ int selectAdaptiveDownloadParts({
   return 16;
 }
 
+/// Selects the width handed to Download Manager V2.
+///
+/// On iOS the V2 gateway performs its own exact byte-range probe before it
+/// starts the durable ranged transport. Therefore preliminary metadata must not
+/// collapse an explicit manual width (for example 16) to one connection. Auto
+/// may likewise request a size-based candidate so the gateway gets a chance to
+/// prove Range support. Non-iOS keeps the existing conservative preflight.
+int selectV2DownloadParts({
+  required int preference,
+  required int totalBytes,
+  required bool metadataSupportsRanges,
+  required bool isIOS,
+}) {
+  if (!isIOS) {
+    return selectAdaptiveDownloadParts(
+      preference: preference,
+      totalBytes: totalBytes,
+      supportsRanges: metadataSupportsRanges,
+    );
+  }
+
+  final normalized = normalizeDownloadPartPreference(preference);
+  if (normalized > 0) {
+    return normalized.clamp(kDownloadPartsMin, kDownloadPartsMax).toInt();
+  }
+
+  return selectAdaptiveDownloadParts(
+    preference: kDownloadPartsAuto,
+    totalBytes: totalBytes,
+    // This is only a probe-worthy candidate. The iOS V2 gateway still proves
+    // Range support before opening more than one native writer.
+    supportsRanges: true,
+  );
+}
+
 /// Number of immutable byte ranges kept in the tail work queue.
 ///
 /// This never raises the active connection ceiling. It only creates spare work
