@@ -82,7 +82,7 @@ void main() {
     );
   });
 
-  test('parallel resume readiness waits for every child to pause', () async {
+  test('parallel resume readiness accepts paused or already-complete children', () async {
     final readiness = NativeParallelPauseReadinessV2();
     var completed = false;
 
@@ -107,7 +107,7 @@ void main() {
     readiness.observe(
       parentTaskId: 'aw_v2_parent_g1',
       childTaskId: 'child-2',
-      statusOrdinal: TaskStatus.paused.index,
+      statusOrdinal: TaskStatus.complete.index,
     );
 
     expect(await readyFuture, isTrue);
