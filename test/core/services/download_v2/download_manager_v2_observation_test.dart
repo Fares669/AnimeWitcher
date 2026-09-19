@@ -48,6 +48,54 @@ void main() {
     expect(await manager.hasCompletedDownload(id), isFalse);
   });
 
+  test('native speed overlay preserves configured and active connection telemetry', () async {
+    final id = logicalDownloadIdFor(
+      animeId: 'anime:1',
+      episodeKey: 'metrics',
+      variantKey: 'sub:1080p',
+    );
+    final taskId = taskIdForGeneration(id, 1);
+    final store = InMemoryLogicalDownloadStoreV2();
+    await store.put(
+      _record(
+        id: id,
+        destinationPath: 'downloads/metrics.mp4',
+        expectedBytes: 100,
+        parallelChunks: 16,
+      ),
+    );
+    final handle = _Handle(
+      taskId,
+      initial: DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: .25,
+        transferredBytes: 25,
+        totalBytes: 100,
+        configuredConnections: 16,
+        activeConnections: 4,
+      ),
+    );
+    final gateway = _Gateway(rehydrated: <DownloadTransportHandle>[handle]);
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: StaticSourceResolverV2(),
+    );
+    addTearDown(manager.dispose);
+
+    await manager.initialize();
+    manager.observeNativeNetworkSpeed(
+      taskId: taskId,
+      bytesPerSecond: 5 * 1000 * 1000,
+    );
+
+    final snapshot = manager.snapshotFor(id);
+    expect(snapshot?.networkSpeedMBps, 5);
+    expect(snapshot?.configuredConnections, 16);
+    expect(snapshot?.activeConnections, 4);
+  });
+
   test('startup recreation preserves five-part application policy', () async {
     final id = logicalDownloadIdFor(
       animeId: 'anime:1',
@@ -108,7 +156,10 @@ LogicalDownloadRecordV2 _record({
 }
 
 final class _Gateway implements BackgroundDownloaderGateway {
+  _Gateway({this.rehydrated = const <DownloadTransportHandle>[]});
+
   final List<DownloadTaskSpecV2> startedSpecs = <DownloadTaskSpecV2>[];
+  final List<DownloadTransportHandle> rehydrated;
 
   @override
   Future<void> initialize() async {}
@@ -123,19 +174,21 @@ final class _Gateway implements BackgroundDownloaderGateway {
   Future<DownloadTransportHandle?> attach(String taskId) async => null;
 
   @override
-  Future<List<DownloadTransportHandle>> rehydrate() async => const [];
+  Future<List<DownloadTransportHandle>> rehydrate() async => rehydrated;
 
   @override
   Future<void> removeTracking(String taskId) async {}
 }
 
 final class _Handle implements DownloadTransportHandle {
-  _Handle(this.taskId)
-    : _current = DownloadTransportSnapshot(
-        taskId: taskId,
-        status: DownloadTransportStatus.running,
-        progress: 0,
-      );
+  _Handle(this.taskId, {DownloadTransportSnapshot? initial})
+    : _current =
+          initial ??
+          DownloadTransportSnapshot(
+            taskId: taskId,
+            status: DownloadTransportStatus.running,
+            progress: 0,
+          );
 
   @override
   final String taskId;
