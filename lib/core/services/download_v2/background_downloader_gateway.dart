@@ -77,10 +77,12 @@ abstract interface class SelfSettlingParallelDownloadTransportHandleV2 {}
 /// V2 transport adapter over background_downloader 9.6.
 ///
 /// background_downloader remains the network/native execution authority. For
-/// iOS multipart downloads this adapter reuses the shared durable immutable-
-/// range coordinator for splitting/checkpoint/assembly only; every child range
-/// is still a package DownloadTask/URLSession transfer. The V2 logical store
-/// never persists child task IDs, byte ranges, or resume offsets.
+/// iOS downloads with proven byte-range support this adapter reuses the shared
+/// durable immutable-range coordinator for splitting/checkpoint/assembly only;
+/// every child range is still a package DownloadTask/URLSession transfer. This
+/// also covers a user-selected width of one, because iOS cannot guarantee that
+/// cancelByProducingResumeData returns resumable data for one giant DownloadTask.
+/// The V2 logical store never persists child task IDs, byte ranges, or offsets.
 const String kDownloadV2PackageGroup = 'downloads_v2';
 const String kDownloadV2SilentPackageGroup = 'downloads_v2_silent';
 const String kDownloadV2DurableParallelGroup = 'downloads_v2_ranges';
@@ -214,7 +216,7 @@ final class PackageBackgroundDownloaderGateway
     final prefs = _notificationPreferences();
     await configurePackageNotificationsV2(_downloader, prefs);
 
-    if (_isIOS() && spec.parallelChunks > 1) {
+    if (_isIOS()) {
       final capability = await (_rangeCapabilityProbe?.call(spec) ??
           _probeRangeCapabilityV2(spec));
       if (capability.supportsRanges && capability.totalBytes > 0) {
@@ -222,7 +224,7 @@ final class PackageBackgroundDownloaderGateway
           spec,
           userInitiated: prefs.running,
           group: kDownloadV2DurableParallelGroup,
-          isIOS: false,
+          isIOS: true,
         );
         if (parent is ParallelDownloadTask) {
           final handle = await _durableHandleFor(
@@ -550,7 +552,7 @@ Future<DownloadTask> packageTaskForV2(
     isIOS: isIOS,
   );
 
-  if (parallelChunks > 1) {
+  if (parallelChunks > 1 || isIOS == true) {
     return ParallelDownloadTask(
       taskId: spec.taskId,
       url: spec.url,
