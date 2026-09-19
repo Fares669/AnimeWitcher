@@ -208,6 +208,21 @@ void main() {
     );
   });
 
+  test('completed durable parent rehydrates complete after manifest cleanup', () {
+    final snapshot = durableParallelInitialSnapshotV2(
+      taskId: 'aw_v2_complete_g1',
+      initialStatus: DownloadTransportStatus.complete,
+      totalBytes: 100,
+      restoredProgress: null,
+      durableBytes: null,
+    );
+
+    expect(snapshot.status, DownloadTransportStatus.complete);
+    expect(snapshot.progress, 1);
+    expect(snapshot.transferredBytes, 100);
+    expect(snapshot.totalBytes, 100);
+  });
+
   test('V2 package task carries long user-initiated transfer hints', () async {
     const spec = DownloadTaskSpecV2(
       taskId: 'aw_v2_hints_g1',
