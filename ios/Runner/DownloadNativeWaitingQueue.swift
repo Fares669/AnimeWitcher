@@ -877,7 +877,7 @@ enum DownloadNativeWaitingQueue {
         totalExpected: task.countOfBytesExpectedToReceive,
         completed: terminalSuccess ?? (error == nil)
       )
-      if isLegacyMultipartPart(task) {
+      if isPromotableMultipartPart(task) {
         promoteMultipartIfPossible(on: session, parentId: parentTaskId(from: task))
       }
       return
@@ -1434,22 +1434,17 @@ enum DownloadNativeWaitingQueue {
   /// Forward native URLSession byte counts for multipart children while the
   /// body still lives in Apple's temporary file. Dart cannot stat that file,
   /// which is why polling only `0.part`/`1.part` updated in whole-part jumps.
-  private static func ownsLegacyMultipartParent(_ parentId: String) -> Bool {
+  /// A persisted multipart plan is explicit permission to refill a finished
+  /// URLSession slot while Dart is suspended. It does not grant the legacy
+  /// native retry path ownership over V2 transport failures.
+  private static func ownsPromotableMultipartParent(_ parentId: String) -> Bool {
     lock.lock()
     defer { lock.unlock() }
     let state = loadLocked()
     return state.multipartPlans.contains { $0.parentTaskId == parentId }
   }
 
-  private static func isLegacyMultipartPart(_ task: URLSessionTask) -> Bool {
-    guard isDownloadPart(task),
-          let parentId = parentTaskId(from: task)
-    else { return false }
-    return ownsLegacyMultipartParent(parentId)
-  }
-
-  /// Observation-only recognition for V2's durable immutable range children.
-  /// Native retry/promotion remains fenced to isLegacyMultipartPart.
+  /// Recognition for V2's durable immutable range children.
   private static func isV2DurableMultipartPart(_ task: URLSessionTask) -> Bool {
     guard isDownloadPart(task),
           let parentId = parentTaskId(from: task)
@@ -1460,12 +1455,26 @@ enum DownloadNativeWaitingQueue {
     return group == "animewitcher_parts" && parentId.hasPrefix("aw_v2_")
   }
 
+  /// A Range can be promoted only when Dart persisted a generation-fenced
+  /// plan for its parent. V2 children are intentionally excluded from the
+  /// legacy retry owner: transient failures return to the V2 coordinator.
+  private static func isPromotableMultipartPart(_ task: URLSessionTask) -> Bool {
+    guard isDownloadPart(task),
+          let parentId = parentTaskId(from: task)
+    else { return false }
+    return ownsPromotableMultipartParent(parentId)
+  }
+
+  private static func isLegacyMultipartPart(_ task: URLSessionTask) -> Bool {
+    return isPromotableMultipartPart(task) && !isV2DurableMultipartPart(task)
+  }
+
   private static func isObservableMultipartParent(_ parentId: String) -> Bool {
-    ownsLegacyMultipartParent(parentId) || parentId.hasPrefix("aw_v2_")
+    ownsPromotableMultipartParent(parentId) || parentId.hasPrefix("aw_v2_")
   }
 
   private static func isObservableMultipartPart(_ task: URLSessionTask) -> Bool {
-    isLegacyMultipartPart(task) || isV2DurableMultipartPart(task)
+    isPromotableMultipartPart(task) || isV2DurableMultipartPart(task)
   }
   private static func postMultipartChunkUpdate(
     _ task: URLSessionTask,
@@ -1772,7 +1781,7 @@ enum DownloadNativeWaitingQueue {
   }
 
   private static func promoteMultipartPlan(_ parentId: String, on session: URLSession) {
-    guard ownsLegacyMultipartParent(parentId) else { return }
+    guard ownsPromotableMultipartParent(parentId) else { return }
     lock.lock()
     if multipartPromotionParents.contains(parentId) {
       lock.unlock()
@@ -1791,7 +1800,7 @@ enum DownloadNativeWaitingQueue {
 
       let liveChildIds = Set(tasks.compactMap { task -> String? in
         guard task.state != .completed,
-              isLegacyMultipartPart(task),
+              isPromotableMultipartPart(task),
               parentTaskId(from: task) == parentId
         else { return nil }
         return taskId(from: task)
