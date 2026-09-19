@@ -38,6 +38,15 @@ void main() {
     expect(v2Provider, contains("p.join(documents.path, 'log')"));
     expect(v2Provider, contains('settings.getDownloadDiagnosticLog'));
     expect(
+      v2Provider,
+      contains(
+        'configureNativeDownloadDiagnosticLog(settings.getDownloadDiagnosticLog())',
+      ),
+      reason:
+          'Startup must reconcile the persisted Flutter setting with the native '
+          'iOS logger preference, including upgrades from builds that did not sync it.',
+    );
+    expect(
       settings,
       contains('configureNativeDownloadDiagnosticLog(enabled)'),
       reason:
