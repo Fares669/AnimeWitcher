@@ -210,11 +210,18 @@ Feature acceptance retained:
 - Existing unsafe Preview-era package-parallel generations stay protected by the old exact-resume fence; they are not silently converted or restarted.
 - This amendment intentionally supersedes the earlier “one regular iOS DownloadTask” scope rule. It does **not** revive V1 `DownloadService`, JobStore, Dio range writers, or native promotion/retry ownership.
 
+**Fourth root-cause review (2026-09-19, 16-connection complaint):**
+- the V2 gateway could already run durable iOS ranges, but `DownloadLauncher` called `selectAdaptiveDownloadParts` first. When preliminary metadata reported Range support as false/inconclusive, an explicit user setting of 16 was collapsed to 1 **before the gateway could perform its authoritative Range probe**;
+- iOS V2 now preserves the manual 1-16 preference (and a size-based Auto candidate) until the gateway probe. The gateway still fails closed to a single package task when a real `bytes=0-0` probe does not prove Range support;
+- the probe now accepts case/optional-whitespace variants of a valid `Content-Range`, preventing a standards-valid CDN response from being misclassified as non-range;
+- V2 diagnostics now include allowlisted `configuredConnections` and `activeConnections` telemetry. The next device log can therefore distinguish “setting collapsed to 1”, “configured 16 but slow-start currently at 1”, and “host pressure intentionally capped growth” without exposing child IDs or secrets.
+
 **Required acceptance — device bugs:**
 - [x] RED regression: a paused package transfer whose direct package resume cannot recover must not publish/start a replacement until the obsolete transfer is demonstrably settled; replacement then reaches a runnable package state rather than remaining a zero-progress queued zombie.
 - [x] Resume success keeps the exact generation/task and preserves package resume bytes. An explicit Resume must **never** silently fall back to a fresh generation: if exact package resume is unavailable/fails, V2 keeps the same generation paused and preserves existing progress; byte-zero restart is reserved for an explicit Restart or a policy-approved missing-transport recovery.
 - [x] V2 snapshots expose package throughput + ETA reliably on iOS/parallel parent transfers; add credential-safe diagnostic fields for transferred/total bytes, speed, and ETA so the next device log can prove the signal path.
-- [ ] A real iOS Preview shows non-placeholder speed once package progress contains throughput and pause → resume continues or cleanly restarts without a permanent 0% queue stall.
+- [x] An explicit iOS 1-16 parallel preference is not collapsed by inconclusive preflight metadata. The V2 gateway performs the authoritative Range probe and logs configured/active connection width; unsupported origins still fall back safely to one package task.
+- [ ] A real iOS Preview shows non-placeholder speed once package progress contains throughput, `configuredConnections: 16` when 16 is selected, `activeConnections` ramping above 1 when the origin permits it, and pause → resume continuing without a permanent 0% queue stall.
 
 **Required acceptance — parity items requested from the SkyStream comparison:**
 - [x] **1. Runtime concurrency:** the persisted 1-10 episode limit is actually enforced by V2 without counting package-managed parallel children as independent episodes and without a holding-queue/chunk deadlock.
@@ -224,6 +231,8 @@ Feature acceptance retained:
 - [x] Add focused automated guards for all four parity items and rerun analyzer + focused V2 + iOS build/native typecheck before returning to Task 13.
 
 **Scope rule (amended 2026-09-19):** keep `background_downloader` as the network/native writer authority. The V2 gateway may reuse only the tested immutable-range coordinator for iOS range scheduling/checkpoint/assembly; every child remains a package `DownloadTask`. Do not revive V1 `DownloadService`, JobStore lifecycle ownership, `DownloadRangeTransfer`, native promotion/retry ownership, or a second native scheduler.
+
+**2026-09-19 automated connection-width fix batch:** implementation through `4e758589693af6c8c67650c63f80029b5e457e82` fixes the pre-gateway iOS width collapse, adds active/configured connection diagnostics, and hardens the exact Range probe parser. Focused regression coverage now includes manual 16 with inconclusive metadata, Auto probe-worthy width, connection telemetry serialization, and RFC-valid Content-Range variants. Physical-device proof remains required for the unchecked item below.
 
 **Latest exact-head programmable evidence (2026-09-18):**
 - app-code-equivalent head `e3f7cc25aa802f2121300c3440e4efcae8fe2472` (implementation through `73d5632836ef6e7c44294ec18e2b38f9d5d68dab`), Flutter Checks run `35334038350`: analyzer ✅, focused Download Manager V2 **97/97** ✅, iOS no-codesign build/log ✅, native logger typecheck ✅;
