@@ -253,6 +253,20 @@ void main() {
     expect(snapshot.totalBytes, 100);
   });
 
+  test('iOS range probe accepts RFC-valid Content-Range formatting', () {
+    expect(
+      parseRangeProbeTotalBytesV2('bytes 0-0/391600000'),
+      391600000,
+    );
+    expect(
+      parseRangeProbeTotalBytesV2('Bytes 0 - 0 / 391600000'),
+      391600000,
+    );
+    expect(parseRangeProbeTotalBytesV2('bytes 1-1/391600000'), isNull);
+    expect(parseRangeProbeTotalBytesV2('bytes 0-0/*'), isNull);
+    expect(parseRangeProbeTotalBytesV2(null), isNull);
+  });
+
   test('V2 package task carries long user-initiated transfer hints', () async {
     const spec = DownloadTaskSpecV2(
       taskId: 'aw_v2_hints_g1',
