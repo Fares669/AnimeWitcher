@@ -635,10 +635,14 @@ final class DownloadManagerV2 {
         // Strip the migration marker before persisting that generation; once
         // V2 owns transport, a later missing paused handle must never silently
         // become another byte-zero restart.
-        if (sourceDescriptorRequiresLegacyRestartV2(record.sourceDescriptor)) {
-          final restartRequest = _withoutLegacyRestartMarker(request);
-          _requests[logicalId] = restartRequest;
-          return _startFreshGeneration(restartRequest, record);
+        if (record.generation == 1 &&
+            sourceDescriptorRequiresLegacyRestartV2(record.sourceDescriptor)) {
+          // Keep the marker in the descriptor: the production source resolver
+          // needs it to reconstruct a fresh provider stream for migrated V1
+          // rows. The generation fence, not destructive metadata rewriting,
+          // makes this exception one-shot. Once generation 2 exists, Resume
+          // again requires its exact package transfer just like native V2.
+          return _startFreshGeneration(request, record);
         }
 
         throw StateError(
@@ -1351,25 +1355,6 @@ final class DownloadManagerV2 {
   Future<void> _deleteDestination(String destinationPath) async {
     final file = await _destinationFile(destinationPath);
     if (await file.exists()) await file.delete();
-  }
-
-  DownloadStartRequestV2 _withoutLegacyRestartMarker(
-    DownloadStartRequestV2 request,
-  ) {
-    final descriptor = Map<String, Object?>.from(request.sourceDescriptor)
-      ..remove(kLegacyRestartRequiredSourceDescriptorV2);
-    return DownloadStartRequestV2(
-      logicalId: request.logicalId,
-      animeId: request.animeId,
-      episodeKey: request.episodeKey,
-      variantKey: request.variantKey,
-      destinationPath: request.destinationPath,
-      sourceDescriptor: descriptor,
-      expectedBytes: request.expectedBytes,
-      allowPause: request.allowPause,
-      retries: request.retries,
-      parallelChunks: request.parallelChunks,
-    );
   }
 
   DownloadStartRequestV2 _requestFromRecord(LogicalDownloadRecordV2 record) {
