@@ -19,8 +19,8 @@
 ### Overall count
 
 - **Trackable task groups:** 17 total (`Task 1` through `Task 15`, plus explicit `Task 12A` and `Task 12B`).
-- **Complete:** **11 / 17** — Tasks 1-4, 6-10, 12, and 12A.
-- **Remaining:** **6 / 17** — reopened Tasks 5 and 11, new Task 12B, and Tasks 13-15.
+- **Complete:** **12 / 17** — Tasks 1-4, 6-12, and 12A.
+- **Remaining:** **5 / 17** — reopened Task 5, Task 12B, and Tasks 13-15.
 - **Reopened by deep review:** Tasks 10, 11, and 12 were closed by the follow-up production-path fixes and exact-head verification in this reconciliation.
 - **Device-gated:** Task 13; therefore Task 14 and final merge readiness remain blocked until real iOS + Android evidence exists.
 
@@ -38,7 +38,7 @@
 | 8. Integrity gate | ✅ Complete | Runtime completion requires final-file verification; relaunch/cleanup regressions found later are being closed under Task 12. |
 | 9. Package parallelism + diagnostics DTO | ✅ Complete | One package parent represents parallel work; child IDs remain opaque. |
 | 10. Legacy migration policy A | ✅ Complete | Production migration preserves incomplete/restart-required rows, keeps startup network-free, and routes explicit restart through safe source reconstruction with malformed-row coverage. |
-| 11. Riverpod + production cutover | 🟡 Reopened | Device/review comparison found concurrency and notification settings are persisted but not fully applied by the V2 runtime/package gateway. |
+| 11. Riverpod + production cutover | ✅ Complete | Cutover, runtime concurrency, notification/platform configuration, presentation metadata ordering, and canonical-writer guards are wired and covered. |
 | 12. Native authority cleanup + regression matrix | ✅ Complete | Native remains observation-only, replacement and integrity fences are covered, stale generations cannot resurrect completion, and the retained regression matrix was re-audited. |
 | 12A. iOS CI + runtime/native diagnostics | ✅ Complete | Dedicated iOS build log artifact, native typecheck, production V2 log sink, and redaction protections exist; exact-head evidence is current at `d389ed3…`. |
 | 12B. Device-preflight regressions + platform parity | 🟡 In progress | Real iOS log exposed resume-to-zero/queued stall and missing speed/iOS continued-processing presentation; SkyStream comparison also exposed runtime concurrency/notification/platform configuration gaps. |
@@ -105,7 +105,7 @@ Tasks 1-9 are retained as complete unless a new regression specifically invalida
 
 ---
 
-## Task 11: Production Cutover / Presentation / Settings — 🟡 In progress
+## Task 11: Production Cutover / Presentation / Settings — ✅ Complete
 
 **Deep-review root causes:** Settings could construct V1; metadata was written after transport start; source/server identity could create unsafe logical variants; progress used tracking URL aliases; Android preflight/offline preparation was missing; progress DTO/formatter layering became duplicated/inverted.
 
@@ -127,7 +127,7 @@ Tasks 1-9 are retained as complete unless a new regression specifically invalida
 
 ---
 
-## Task 12: Native Authority Cleanup + Reliability Regression Matrix — 🟡 In progress
+## Task 12: Native Authority Cleanup + Reliability Regression Matrix — ✅ Complete
 
 **Deep-review root causes:** the iOS compatibility hook could become a second retry/queue authority; replacement generation was published before the obsolete writer was safely stopped; startup trusted `completedAtMillis` without file validation; integrity failure left corrupt output behind.
 
@@ -174,7 +174,7 @@ Feature acceptance retained:
 - The system download UI now receives real throughput/byte values (for example the screenshot shows `59KB/s • 474KB/62MB`), so the Transfer metric plumbing itself is active.
 - The episode card still displayed the legacy download icon during an active V2 download. Root cause: `EpisodeCard` still watched V1 `activeDownloadsProvider/downloadProgressProvider`; V2 never publishes into those maps. Fixed by routing the card to V2 `downloadsProvider` + logical progress projection (`c6c9557`).
 - One parallel transfer (`dl_c67de3d81c442edc8ab36af314ac8663`) stayed projected `queued` at 0 for ~52 seconds, then immediately after Pause emitted already-accumulated progress from ~0% to 31.2%, 43.7%, 50.2%, and 56.5%. This proves at least part of the apparent “starts after pause” behavior is stale parent presentation, not a second app transport start.
-- Upstream `background_downloader 9.6.2` iOS `ParallelDownloader.parentTaskStatus()` reports parent `running` only when exactly one chunk is running. With multiple active chunks the parent can remain `enqueued` while bytes move. V2 now projects an `enqueued` parent with real 0<progress<1 as `running` without changing raw pause/resume state or package ownership (`c3ef64f`).
+- Upstream `background_downloader 9.6.1` iOS `ParallelDownloader.parentTaskStatus()` reports parent `running` only when exactly one chunk is running. With multiple active chunks the parent can remain `enqueued` while bytes move. V2 now projects an `enqueued` parent with real 0<progress<1 as `running` without changing raw pause/resume state or package ownership (`c3ef64f`).
 - RED coverage proved the stale-parent bug (`Expected running / Actual queued`) before the projection fix, and a separate architectural guard proved the episode card was still bound to V1 state.
 
 **Third real-iOS Preview evidence + throughput correction (2026-09-18, device screenshots showing 48.7/172.40/212.9 MB/s):**
@@ -194,6 +194,13 @@ Feature acceptance retained:
 - RED/green coverage now proves: exact resumable pause keeps one task/generation; failed exact resume creates no replacement and performs no cancel; a canceled callback after failed resume still cannot create a new generation; parallel resume does not invoke package resume until all child pause observations are ready.
 - Resume-fix app code at `d607917fb2aa7f981da38f21c4f22479a274e5a8`: analyzer ✅, focused V2 ✅, iOS no-codesign build ✅, native typecheck ✅. One-shot Preview `35348426068` built and uploaded `ios-ipa-download-manager-v2-resume-fix` successfully from app-code-equivalent head `ad8f1cc872b16cac0fabb0fb4f65ba188913eca2`.
 
+**Fifth real-iOS evidence + upstream-resume root cause (2026-09-19, `download_v2(5).jsonl`):**
+- The new log repeatedly shows chunk-shaped progress jumps (including ~6.25%, ~31%, ~62%, and ~93%) while reported throughput is zero or far too low to explain those jumps. This matches package-parallel catch-up/presentation behavior rather than bytes arriving at the displayed rate.
+- A separate iOS continued-processing bug was confirmed in AnimeWitcher's native observation bridge: it divided aggregated written bytes by the expected bytes of **only the child ranges observed so far**. That partial denominator could publish an inflated parent percentage; the continued-processing manager then made it sticky by enforcing monotonic progress. Native child telemetry now sends no synthetic parent percentage, and aggregated bytes may drive progress only after the observed ranges cover the already-known full parent size.
+- Exact source review of the **pinned background_downloader 9.6.1** confirms the remaining pause/resume limitation is upstream: iOS `ParallelDownloader.pauseTask()` publishes parent resume data and parent `.paused` before the Dart-side loop has necessarily finished pausing every child; later `resumeChunkTasks()` calls `FileDownloader().resume()` for **every** serialized child and cancels the parent if any child cannot resume. A child that already completed before Pause legitimately has no resume payload, so application code cannot make this lossless without taking ownership of package child state.
+- V2 therefore keeps package ownership intact and chooses the lossless package path on iOS: **new iOS generations use one regular `DownloadTask`**, while Android/other supported platforms retain package-managed parallelism. Existing Preview-era iOS parallel generations are preserved rather than silently reset; if such a paused legacy V2 generation cannot resume safely, it remains paused and requires one explicit Restart to migrate to the safe transport.
+- The manager now also fences the missing-exact-handle case: explicit Resume on paused intent can no longer fall through to a fresh byte-zero generation. Completed parallel children count as settled for the transitional pause barrier, preventing an impossible “all children must emit paused” wait.
+
 **Required acceptance — device bugs:**
 - [x] RED regression: a paused package transfer whose direct package resume cannot recover must not publish/start a replacement until the obsolete transfer is demonstrably settled; replacement then reaches a runnable package state rather than remaining a zero-progress queued zombie.
 - [x] Resume success keeps the exact generation/task and preserves package resume bytes. An explicit Resume must **never** silently fall back to a fresh generation: if exact package resume is unavailable/fails, V2 keeps the same generation paused and preserves existing progress; byte-zero restart is reserved for an explicit Restart or a policy-approved missing-transport recovery.
@@ -202,7 +209,7 @@ Feature acceptance retained:
 
 **Required acceptance — parity items requested from the SkyStream comparison:**
 - [x] **1. Runtime concurrency:** the persisted 1-10 episode limit is actually enforced by V2 without counting package-managed parallel children as independent episodes and without a holding-queue/chunk deadlock.
-- [x] **2. Package/platform configuration:** V2 applies notification preferences at runtime, configures appropriate Android long-download behavior using supported `background_downloader 9.6.2` facilities, and restores iOS download-file cloud-backup exclusion. Do not reintroduce a second transport scheduler.
+- [x] **2. Package/platform configuration:** V2 applies notification preferences at runtime, configures appropriate Android long-download behavior using supported `background_downloader 9.6.1` facilities, and restores iOS download-file cloud-backup exclusion. Do not reintroduce a second transport scheduler.
 - [x] **3. iOS 26 Continued Processing:** reconnect V2 progress/session presentation to the native continued-processing bridge as **observation/UI only**. Expiration/cancellation of the system overlay must not pause, retry, promote, or cancel the package-owned URLSession transfer.
 - [x] **4. Notification permission timing:** request download notification permission on the first real download/action that needs it rather than unconditionally at app launch; older/no-notification flows continue without transport failure.
 - [x] Add focused automated guards for all four parity items and rerun analyzer + focused V2 + iOS build/native typecheck before returning to Task 13.
