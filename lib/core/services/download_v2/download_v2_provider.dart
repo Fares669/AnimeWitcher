@@ -43,7 +43,7 @@ final backgroundDownloaderGatewayV2Provider =
           notificationPreferences: () => ref
               .read(settingsRepositoryProvider)
               .getDownloadNotificationPrefs(),
-          diagnostics: diagnostics,
+          diagnostics: ref.read(downloadDiagnosticsV2Provider),
         ),
         migrate: () => _migrateLegacyPresentationMetadata(ref),
       );
