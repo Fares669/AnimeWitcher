@@ -13,7 +13,9 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../../../core/account/account_providers.dart';
-import '../../../../core/services/download_service.dart';
+import '../../../../core/utils/download_time_remaining.dart' show DownloadProgressData;
+import '../../../library/presentation/download_progress_v2_provider.dart';
+import '../../../library/presentation/downloads_provider.dart';
 
 import '../player_controller.dart';
 import '../../../details/presentation/details_controller.dart';
@@ -32,6 +34,21 @@ import 'package:animewitcher/core/utils/episode_order.dart';
 const List<Shadow> _kGlassTextShadow = [
   Shadow(color: Colors.black54, offset: Offset(0, 1.5), blurRadius: 3.0),
 ];
+
+DownloadItem? _activeEpisodeDownload(
+  List<DownloadItem> downloads,
+  String episodeUrl,
+) {
+  final key = episodeUrl.trim();
+  return downloads.firstWhereOrNull((item) {
+    final matches =
+        item.trackingUrl.trim() == key ||
+        (item.episode?.url.trim() ?? '') == key;
+    if (!matches) return false;
+    return item.status != TaskStatus.complete &&
+        item.status != TaskStatus.canceled;
+  });
+}
 
 String _playerEpisodeDownloadTitle(MultimediaItem item, Episode episode) {
   final label = formatEpisodeLabel(
@@ -520,7 +537,9 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
   void _queueDownloadedFileCheck() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (ref.read(activeDownloadsProvider).contains(widget.episode.url)) return;
+      final downloads =
+          ref.read(downloadsProvider).value ?? const <DownloadItem>[];
+      if (_activeEpisodeDownload(downloads, widget.episode.url) != null) return;
       ref
           .read(downloadedFilesProvider.notifier)
           .checkFile(widget.parentItem, episode: widget.episode);
@@ -589,17 +608,33 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
   @override
   Widget build(BuildContext context) {
     final ep = widget.episode;
-    final activeDownloads = ref.watch(activeDownloadsProvider);
-    final isDownloading = activeDownloads.contains(ep.url);
-    final progressData = ref.watch(downloadProgressProvider)[ep.url];
-    final downloadProgress = progressData?.progress ?? 0.0;
+    final downloads =
+        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
+    final activeDownload = _activeEpisodeDownload(downloads, ep.url);
+    final isDownloading = activeDownload != null;
+    final progressMap = ref.watch(downloadProgressProvider);
+    final logicalId = activeDownload?.logicalId?.trim();
+    final progressData = logicalId != null && logicalId.isNotEmpty
+        ? progressMap[logicalId]
+        : progressMap[ep.url];
+    final downloadProgress =
+        progressData?.progress ?? activeDownload?.progress ?? 0.0;
     final downloadedFile = ref.watch(downloadedFilesProvider)[ep.url];
-    ref.listen<bool>(
-      activeDownloadsProvider.select((active) => active.contains(ep.url)),
-      (previous, next) {
-        if (previous == true && !next) _queueDownloadedFileCheck();
-      },
-    );
+    ref.listen(downloadsProvider, (previous, next) {
+      final wasDownloading = _activeEpisodeDownload(
+            previous?.value ?? const <DownloadItem>[],
+            ep.url,
+          ) !=
+          null;
+      final isStillDownloading = _activeEpisodeDownload(
+            next.value ?? const <DownloadItem>[],
+            ep.url,
+          ) !=
+          null;
+      if (wasDownloading && !isStillDownloading) {
+        _queueDownloadedFileCheck();
+      }
+    });
 
     void triggerDownload() {
       if (downloadedFile != null) {
