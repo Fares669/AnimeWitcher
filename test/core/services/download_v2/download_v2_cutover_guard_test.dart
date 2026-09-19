@@ -228,23 +228,44 @@ void main() {
     });
 
     test(
-      'iOS native multipart transport ownership stays legacy-only while V2 durable ranges are observable',
+      'iOS V2 background refill is plan-fenced while retry stays V2-owned',
       () {
         final native = _read(
           'ios/Runner/DownloadNativeWaitingQueue.swift',
         );
 
-        expect(native, contains('private static func ownsLegacyMultipartParent('));
+        expect(
+          native,
+          contains('private static func ownsPromotableMultipartParent('),
+        );
+        expect(native, contains('private static func isPromotableMultipartPart('));
         expect(native, contains('private static func isLegacyMultipartPart('));
         expect(native, contains('private static func isV2DurableMultipartPart('));
         expect(native, contains('private static func isObservableMultipartPart('));
         expect(native, contains('state.multipartPlans.contains'));
 
-        // Native retry/promotion remains fenced to the dormant legacy path.
-        expect(native, contains('let multipartPart = isLegacyMultipartPart(task)'));
+        // Only a generation-fenced persisted plan may refill a URLSession slot.
+        expect(
+          native,
+          contains(
+            'if isPromotableMultipartPart(task) {\r\n'
+            '        promoteMultipartIfPossible(',
+          ),
+        );
         expect(native, contains('guard nativePromotionAvailable else { return }'));
 
-        // Progress/completion telemetry for V2 durable children must still reach
+        // V2 transport failures are not recreated by the legacy native retry
+        // owner; Dart reconciles/retries them from durable coordinator state.
+        expect(native, contains('let multipartPart = isLegacyMultipartPart(task)'));
+        expect(
+          native,
+          contains(
+            'return isPromotableMultipartPart(task) && '
+            '!isV2DurableMultipartPart(task)',
+          ),
+        );
+
+        // Progress/completion telemetry for V2 durable children still reaches
         // Dart/native Continued Processing while the app is backgrounded.
         expect(
           native,
