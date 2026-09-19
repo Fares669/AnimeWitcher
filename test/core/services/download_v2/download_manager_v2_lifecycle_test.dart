@@ -290,6 +290,7 @@ void main() {
         (await f.store.get(f.request.logicalId))?.intent,
         DownloadUserIntent.paused,
       );
+      handle.emit(DownloadTransportStatus.paused);
       return true;
     };
 
