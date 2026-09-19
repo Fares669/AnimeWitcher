@@ -46,8 +46,9 @@ void main() {
     );
     expect(
       continuedProcessing,
-      contains("invokeMethod<void>('configureDiagnosticLog'"),
+      contains('Future<void> configureNativeDownloadDiagnosticLog('),
     );
+    expect(continuedProcessing, contains("'configureDiagnosticLog'"));
     expect(
       appDelegate,
       contains('DownloadNativeDiagnosticLog.configure'),
