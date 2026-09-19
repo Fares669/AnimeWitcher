@@ -798,6 +798,8 @@ final class DownloadManagerV2 {
       totalBytes: totalBytes,
       networkSpeedMBps: speedMBps,
       timeRemaining: timeRemaining,
+      configuredConnections: current.configuredConnections,
+      activeConnections: current.activeConnections,
       failureCategory: current.failureCategory,
       failureMessage: current.failureMessage,
     );
@@ -1548,6 +1550,10 @@ final class DownloadManagerV2 {
                     ((remainingBytes / speedBytesPerSecond) * 1000).round(),
               )
             : Duration.zero,
+        configuredConnections:
+            snapshot.configuredConnections ?? current.configuredConnections,
+        activeConnections:
+            snapshot.activeConnections ?? current.activeConnections,
         failureCategory: snapshot.failureCategory,
         failureMessage: snapshot.failureMessage,
       );
