@@ -523,6 +523,26 @@ void main() {
       DownloadUserIntent.paused,
       reason: 'user intent remains durable while transport truth stays visible',
     );
+
+    handle.emitSnapshot(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: 0.6,
+        transferredBytes: 60,
+        totalBytes: 100,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.status,
+      DownloadTransportStatus.running,
+      reason:
+          'later transport progress after a failed pause must not be relabeled '
+          'as safely paused just because the durable user intent is paused',
+    );
+    expect(f.manager.snapshotFor(f.request.logicalId)?.progress, 0.6);
   });
 
   test('missing paused V2 transport refuses implicit byte-zero restart', () async {
