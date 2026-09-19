@@ -699,6 +699,27 @@ Future<DownloadRangeCapabilityV2> _probeRangeCapabilityV2(
   }
 }
 
+DownloadTransportSnapshot durableParallelInitialSnapshotV2({
+  required String taskId,
+  required DownloadTransportStatus initialStatus,
+  required int totalBytes,
+  required double? restoredProgress,
+  required int? durableBytes,
+}) {
+  final knownTotal = totalBytes > 0 ? totalBytes : null;
+  final complete = initialStatus == DownloadTransportStatus.complete;
+  final progress = complete
+      ? 1.0
+      : (restoredProgress ?? 0).clamp(0.0, 1.0).toDouble();
+  return DownloadTransportSnapshot(
+    taskId: taskId,
+    status: initialStatus,
+    progress: progress,
+    transferredBytes: complete ? knownTotal : durableBytes,
+    totalBytes: knownTotal,
+  );
+}
+
 final class _DurableParallelDownloadTransportHandle
     implements
         DownloadTransportHandle,
@@ -708,12 +729,12 @@ final class _DurableParallelDownloadTransportHandle
     required this.totalBytes,
     required this.coordinator,
     required DownloadTransportStatus initialStatus,
-  }) : _current = DownloadTransportSnapshot(
+  }) : _current = durableParallelInitialSnapshotV2(
          taskId: parent.taskId,
-         status: initialStatus,
-         progress: coordinator.progressFor(parent.taskId) ?? 0,
-         transferredBytes: coordinator.durableBytesFor(parent.taskId),
-         totalBytes: totalBytes > 0 ? totalBytes : null,
+         initialStatus: initialStatus,
+         totalBytes: totalBytes,
+         restoredProgress: coordinator.progressFor(parent.taskId),
+         durableBytes: coordinator.durableBytesFor(parent.taskId),
        );
 
   final ParallelDownloadTask parent;
