@@ -366,7 +366,8 @@ final class PackageBackgroundDownloaderGateway
     );
     _diagnostics.recordTransport('startup.inventory', <String, Object?>{
       'recordCount': records.length,
-      'nativeTaskCount': packageTasks.length,
+      'nativeTaskCount': activeDurable.length,
+      'count': packageTasks.length,
       'pausedTaskCount': pausedTasks.length,
       'resumeDataCount': resumeDataCount,
       'manifestPartCount': records
@@ -435,9 +436,10 @@ final class PackageBackgroundDownloaderGateway
     if (_lastOwnershipSignature != signature) {
       _lastOwnershipSignature = signature;
       _diagnostics.recordTransport('ownership.snapshot', <String, Object?>{
-        'nativeTaskCount': packageTasks.length,
+        'nativeTaskCount': active.length,
         'pausedTaskCount': pausedTasks.length,
         'activeConnections': active.length,
+        'count': packageTasks.length,
         'count': pausedDurableCount,
         'reason': pausedDurableCount > 0 ? 'pausedExcluded' : 'nativeOwners',
       });
