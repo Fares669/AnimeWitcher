@@ -636,12 +636,12 @@ final class DownloadManagerV2 {
         // V2 owns transport, a later missing paused handle must never silently
         // become another byte-zero restart.
         if (record.generation == 1 &&
-            sourceDescriptorRequiresLegacyRestartV2(record.sourceDescriptor)) {
-          // Keep the marker in the descriptor: the production source resolver
-          // needs it to reconstruct a fresh provider stream for migrated V1
-          // rows. The generation fence, not destructive metadata rewriting,
-          // makes this exception one-shot. Once generation 2 exists, Resume
-          // again requires its exact package transfer just like native V2.
+            sourceDescriptorIsMigratedLegacyV2(record.sourceDescriptor)) {
+          // Policy-A migration is the only paused/no-handle state allowed to
+          // create transport here. The separate legacyRestartRequired flag,
+          // when present, remains available to the production resolver; normal
+          // migrated refresh descriptors keep using the normal V2 resolver.
+          // Generation > 1 closes this exception permanently.
           return _startFreshGeneration(request, record);
         }
 
