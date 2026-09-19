@@ -24,7 +24,4 @@ void main() {
     expect(body, contains('commandSucceeded: canceled'));
     expect(body, contains('commandThrew: true'));
   });
-
-  ,
-  );
 }
