@@ -3838,6 +3838,8 @@ class _ParallelSession {
 
   void resetRamp() {
     cancelPartRetries();
+    activeDiagnosticAnomalies.clear();
+    lastDiagnosticAdvanceAt = DateTime.now();
     connectionCeiling = kDownloadPartsMin;
     lastHealthyConnections = 0;
     slowStartComplete = false;
