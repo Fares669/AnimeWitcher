@@ -1896,7 +1896,6 @@ enum DownloadNativeWaitingQueue {
     let now = CFAbsoluteTimeGetCurrent()
     let appIsBackground = !isAppInForeground()
     var aggregateWritten: Int64 = 0
-    var aggregateExpected: Int64 = 0
     var aggregateSpeed = 0.0
     var shouldUpdateNativeOverlay = false
 
@@ -1946,9 +1945,6 @@ enum DownloadNativeWaitingQueue {
     aggregateWritten = children.values.reduce(Int64(0)) {
       $0 + max($1.written, 0)
     }
-    aggregateExpected = children.values.reduce(Int64(0)) {
-      $0 + ($1.expected > 0 ? $1.expected : 0)
-    }
     aggregateSpeed = children.values.reduce(0.0) {
       $0 + ($1.speed.isFinite && $1.speed > 0 ? $1.speed : 0)
     }
@@ -1992,16 +1988,18 @@ enum DownloadNativeWaitingQueue {
     // wake-ups the Flutter isolate can be suspended, so update the already
     // created system overlay directly from the supported native callback.
     if !isAppInForeground() && shouldUpdateNativeOverlay {
-      // aggregateExpected only covers children observed so far. Dividing by
-      // that partial denominator produced the 31/62/93% jumps seen on device.
-      // Keep parent progress package-owned until child byte coverage reaches
-      // the already-known full parent size.
+      // Child samples cover only ranges observed so far. They are safe byte
+      // and throughput telemetry, but never proof of the full parent length.
+      // Passing their subtotal as totalBytesHint recreated the 31/62/93% jumps
+      // whenever the system overlay did not already know the real parent size.
+      // Let the manager use its existing full size when available; otherwise
+      // keep progress unchanged until package parent progress arrives.
       runOnMainActor {
         if #available(iOS 26.0, *) {
           _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
             taskId: parentId,
             progress: nil,
-            totalBytesHint: aggregateExpected,
+            totalBytesHint: -1,
             transferredBytes: aggregateWritten,
             speedBytesPerSecond: aggregateSpeed
           )
@@ -2016,7 +2014,6 @@ enum DownloadNativeWaitingQueue {
         deadline: .now() + speedStaleInterval
       ) {
         var staleAggregateWritten: Int64 = 0
-        var staleAggregateExpected: Int64 = 0
         var staleAggregateSpeed = 0.0
 
         lock.lock()
@@ -2035,9 +2032,6 @@ enum DownloadNativeWaitingQueue {
           v2ParallelChildSamples[parentId] = children
           staleAggregateWritten = children.values.reduce(Int64(0)) {
             $0 + max($1.written, 0)
-          }
-          staleAggregateExpected = children.values.reduce(Int64(0)) {
-            $0 + ($1.expected > 0 ? $1.expected : 0)
           }
           staleAggregateSpeed = children.values.reduce(0.0) {
             $0 + ($1.speed.isFinite && $1.speed > 0 ? $1.speed : 0)
@@ -2064,7 +2058,7 @@ enum DownloadNativeWaitingQueue {
               _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
                 taskId: parentId,
                 progress: nil,
-                totalBytesHint: staleAggregateExpected,
+                totalBytesHint: -1,
                 transferredBytes: staleAggregateWritten,
                 speedBytesPerSecond: staleAggregateSpeed
               )
