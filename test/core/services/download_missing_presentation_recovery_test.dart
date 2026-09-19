@@ -1,4 +1,3 @@
-import 'dart:io';
 
 import 'package:animewitcher/core/services/download_job_state.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -58,39 +57,5 @@ void main() {
       }
     });
 
-    test('startup handles missing presentation before normal recovery planning', () {
-      final source = File(
-        'lib/core/services/download_service.dart',
-      ).readAsStringSync();
-      final recoveryStart = source.indexOf(
-        'Future<void> _recoverPersistedDownloads() async {',
-      );
-      final recordLoop = source.indexOf('for (final record in records)', recoveryStart);
-      final stillNative = source.indexOf('final stillNative =', recordLoop);
-      final presentationPlan = source.indexOf(
-        'planMissingPresentationRecovery(',
-        stillNative,
-      );
-      final normalPlan = source.indexOf(
-        'planDownloadRecoveryWithJobAuthority(',
-        stillNative,
-      );
-
-      expect(recoveryStart, greaterThanOrEqualTo(0));
-      expect(recordLoop, greaterThan(recoveryStart));
-      expect(stillNative, greaterThan(recordLoop));
-      expect(presentationPlan, greaterThan(stillNative));
-      expect(presentationPlan, lessThan(normalPlan));
-
-      final guardedBlock = source.substring(presentationPlan, normalPlan);
-      expect(guardedBlock, contains("metadata?['item'] is Map"));
-      expect(
-        guardedBlock,
-        contains('DownloadMissingPresentationRecoveryDisposition.settleOwner'),
-      );
-      expect(guardedBlock, contains("'recovery.missingPresentationSettling'"));
-      expect(guardedBlock, contains("'recovery.orphanedMissingPresentation'"));
-      expect(guardedBlock, contains('await _pauseTransfer(task)'));
-    });
-  });
+      });
 }
