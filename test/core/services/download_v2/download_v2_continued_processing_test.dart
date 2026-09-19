@@ -114,6 +114,109 @@ void main() {
     expect(completed, isTrue);
   });
 
+  test('package-owned queued V2 starts iOS session before first progress', () async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'start') {
+            return 'com.animewitcher.app.download.session';
+          }
+          return true;
+        });
+
+    final service = DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {},
+      forceAvailableForTesting: true,
+    );
+    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    final record = LogicalDownloadRecordV2(
+      schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: const DownloadLogicalId('episode-queued'),
+      animeId: 'anime-1',
+      episodeKey: 'queued',
+      variantKey: 'sub|1080p',
+      generation: 1,
+      taskId: 'aw_v2_episode_queued_g1',
+      intent: DownloadUserIntent.active,
+      destinationPath: 'downloads/Queued/Episode.mp4',
+      sourceDescriptor: const <String, Object?>{'providerId': 'provider'},
+      expectedBytes: 400,
+      updatedAtMillis: 1,
+    );
+
+    try {
+      await observer.observe(
+        record,
+        const DownloadTransportSnapshot(
+          taskId: 'aw_v2_episode_queued_g1',
+          status: DownloadTransportStatus.queued,
+          progress: 0,
+          transferredBytes: 0,
+          totalBytes: 400,
+        ),
+      );
+
+      final start = calls.singleWhere((call) => call.method == 'start');
+      final args = Map<String, Object?>.from(start.arguments as Map);
+      expect(args['progress'], 0.0);
+      expect(args['totalBytes'], 400);
+      expect(args['transferredBytes'], 0);
+    } finally {
+      await observer.dispose();
+    }
+  });
+
+  test('admission-only queued V2 does not claim iOS continued processing', () async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'start') {
+            return 'com.animewitcher.app.download.session';
+          }
+          return true;
+        });
+
+    final service = DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {},
+      forceAvailableForTesting: true,
+    );
+    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    final record = LogicalDownloadRecordV2(
+      schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: const DownloadLogicalId('episode-waiting'),
+      animeId: 'anime-1',
+      episodeKey: 'waiting',
+      variantKey: 'sub|1080p',
+      generation: 1,
+      taskId: 'aw_v2_episode_waiting_g1',
+      intent: DownloadUserIntent.active,
+      destinationPath: 'downloads/Waiting/Episode.mp4',
+      sourceDescriptor: const <String, Object?>{'providerId': 'provider'},
+      expectedBytes: 400,
+      awaitingAdmission: true,
+      updatedAtMillis: 1,
+    );
+
+    try {
+      await observer.observe(
+        record,
+        const DownloadTransportSnapshot(
+          taskId: 'aw_v2_episode_waiting_g1',
+          status: DownloadTransportStatus.queued,
+          progress: 0,
+          transferredBytes: 0,
+          totalBytes: 400,
+        ),
+      );
+
+      expect(calls.where((call) => call.method == 'start'), isEmpty);
+    } finally {
+      await observer.dispose();
+    }
+  });
+
   test('V2 drives iOS continued processing as presentation only', () async {
     final calls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
