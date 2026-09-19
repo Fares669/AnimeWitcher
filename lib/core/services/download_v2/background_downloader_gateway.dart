@@ -708,7 +708,404 @@ int? parseRangeProbeTotalBytesV2(String? contentRange) {
   final value = contentRange?.trim();
   if (value == null || value.isEmpty) return null;
   final match = RegExp(
-    r'^bytes\s+0\s*-\s*0\s*/\s*(\d+)\s*\$',
+    r'^bytes\s+0\s*-\s*0\s*/\s*(\d+)\s*,
+    caseSensitive: false,
+  ).firstMatch(value);
+  if (match == null) return null;
+  final total = int.tryParse(match[1]!);
+  return total != null && total > 0 ? total : null;
+}
+
+DownloadTransportStatus durableParallelProgressStatusV2({
+  required double progress,
+  required bool parentActive,
+}) {
+  if (progress >= 1) return DownloadTransportStatus.complete;
+  return parentActive
+      ? DownloadTransportStatus.running
+      : DownloadTransportStatus.paused;
+}
+
+DownloadTransportSnapshot durableParallelInitialSnapshotV2({
+  required String taskId,
+  required DownloadTransportStatus initialStatus,
+  required int totalBytes,
+  required double? restoredProgress,
+  required int? durableBytes,
+  int? configuredConnections,
+  int? activeConnections,
+}) {
+  final knownTotal = totalBytes > 0 ? totalBytes : null;
+  final complete = initialStatus == DownloadTransportStatus.complete;
+  final progress = complete
+      ? 1.0
+      : (restoredProgress ?? 0).clamp(0.0, 1.0).toDouble();
+  return DownloadTransportSnapshot(
+    taskId: taskId,
+    status: initialStatus,
+    progress: progress,
+    transferredBytes: complete ? knownTotal : durableBytes,
+    totalBytes: knownTotal,
+    configuredConnections: configuredConnections,
+    activeConnections: activeConnections,
+  );
+}
+
+final class _DurableParallelDownloadTransportHandle
+    implements
+        DownloadTransportHandle,
+        SelfSettlingParallelDownloadTransportHandleV2 {
+  _DurableParallelDownloadTransportHandle({
+    required this.parent,
+    required this.totalBytes,
+    required this.coordinator,
+    required DownloadTransportStatus initialStatus,
+  }) : _current = durableParallelInitialSnapshotV2(
+         taskId: parent.taskId,
+         initialStatus: initialStatus,
+         totalBytes: totalBytes,
+         restoredProgress: coordinator.progressFor(parent.taskId),
+         durableBytes: coordinator.durableBytesFor(parent.taskId),
+         configuredConnections: parent.chunks,
+         activeConnections:
+             coordinator.activeConnectionCountFor(parent.taskId) ?? 0,
+       );
+
+  final ParallelDownloadTask parent;
+  final int totalBytes;
+  final PersistentParallelDownload coordinator;
+  final StreamController<DownloadTransportSnapshot> _snapshots =
+      StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
+  DownloadTransportSnapshot _current;
+  bool _disposed = false;
+
+  @override
+  String get taskId => parent.taskId;
+
+  @override
+  DownloadTransportSnapshot get current => _current;
+
+  @override
+  Stream<DownloadTransportSnapshot> get snapshots => _snapshots.stream;
+
+  @override
+  Future<bool> pause() =>
+      coordinator.pause(parent, preserveLiveParts: Platform.isIOS);
+
+  @override
+  Future<bool> resume() => coordinator.start(parent, totalBytes);
+
+  @override
+  Future<bool> cancel() async {
+    await coordinator.cancel(parent);
+    if (_current.status != DownloadTransportStatus.canceled) {
+      _emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.canceled,
+          progress: _current.progress,
+          transferredBytes: _current.transferredBytes,
+          totalBytes: _current.totalBytes,
+          configuredConnections: parent.chunks,
+          activeConnections:
+              coordinator.activeConnectionCountFor(taskId) ?? 0,
+        ),
+      );
+    }
+    return true;
+  }
+
+  void accept(TaskUpdate update) {
+    if (_disposed || update.task.taskId != taskId) return;
+    if (update is TaskProgressUpdate) {
+      final progress = update.progress.clamp(0.0, 1.0).toDouble();
+      final total = update.expectedFileSize > 0
+          ? update.expectedFileSize
+          : totalBytes;
+      _emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: durableParallelProgressStatusV2(
+            progress: progress,
+            parentActive: coordinator.isActive(taskId),
+          ),
+          progress: progress,
+          transferredBytes: total > 0 ? (total * progress).round() : null,
+          totalBytes: total > 0 ? total : null,
+          configuredConnections: parent.chunks,
+          activeConnections:
+              coordinator.activeConnectionCountFor(taskId) ?? 0,
+          networkSpeedMBps: update.networkSpeed,
+          timeRemaining: update.timeRemaining,
+        ),
+      );
+      return;
+    }
+    if (update is TaskStatusUpdate) {
+      final status = transportStatusFromPackage(
+        update.status,
+        TransferHoldReason.none,
+      );
+      _emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: status,
+          progress: _current.progress,
+          transferredBytes:
+              coordinator.durableBytesFor(taskId) ?? _current.transferredBytes,
+          totalBytes: _current.totalBytes,
+          configuredConnections: parent.chunks,
+          activeConnections:
+              coordinator.activeConnectionCountFor(taskId) ?? 0,
+          failureCategory: _failureCategory(update.status, update.exception),
+          failureMessage: update.exception?.toString(),
+        ),
+      );
+    }
+  }
+
+  void sourceExpired() {
+    _emit(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.failed,
+        progress: _current.progress,
+        transferredBytes:
+            coordinator.durableBytesFor(taskId) ?? _current.transferredBytes,
+        totalBytes: _current.totalBytes,
+        configuredConnections: parent.chunks,
+        activeConnections: coordinator.activeConnectionCountFor(taskId) ?? 0,
+        failureCategory: DownloadFailureCategory.sourceExpired,
+        failureMessage: 'Download source expired',
+      ),
+    );
+  }
+
+  void fail(String message) {
+    _emit(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.failed,
+        progress: _current.progress,
+        transferredBytes: _current.transferredBytes,
+        totalBytes: _current.totalBytes,
+        configuredConnections: parent.chunks,
+        activeConnections: coordinator.activeConnectionCountFor(taskId) ?? 0,
+        failureCategory: DownloadFailureCategory.transport,
+        failureMessage: message,
+      ),
+    );
+  }
+
+  void _emit(DownloadTransportSnapshot snapshot) {
+    if (_disposed || _snapshots.isClosed) return;
+    _current = snapshot;
+    _snapshots.add(snapshot);
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    unawaited(_snapshots.close());
+  }
+}
+
+class _PackageDownloadTransportHandle implements DownloadTransportHandle {
+  _PackageDownloadTransportHandle(this.transfer, this._downloader) {
+    _updatesSubscription = transfer.updates.listen(_onUpdate);
+    _holdReasonListener = _emitCurrent;
+    transfer.holdReasonNotifier.addListener(_holdReasonListener);
+  }
+
+  final Transfer transfer;
+  final FileDownloader _downloader;
+  final StreamController<DownloadTransportSnapshot> _snapshots =
+      StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
+
+  late final StreamSubscription<TaskUpdate> _updatesSubscription;
+  late final void Function() _holdReasonListener;
+  int? _totalBytes;
+  bool _disposed = false;
+
+  @override
+  String get taskId => transfer.taskId;
+
+  @override
+  DownloadTransportSnapshot get current => _snapshot();
+
+  @override
+  Stream<DownloadTransportSnapshot> get snapshots => _snapshots.stream;
+
+  @override
+  Future<bool> pause() => transfer.pause();
+
+  @override
+  Future<bool> resume() async {
+    final task = transfer.task;
+    if (task is! DownloadTask) return false;
+
+    // Transfer.resume() intentionally falls back to enqueueing from byte zero
+    // when resume data is unavailable. Explicit V2 Resume must never do that:
+    // use the package's lower-level resume-only path for the exact task.
+    if (Platform.isIOS && task is ParallelDownloadTask) {
+      final ready = await waitForPackageParallelResumeDataV2(
+        task: task,
+        // background_downloader 9.6.2 has no public awaitable signal for
+        // "all parallel child resume-data writes are durable". Keep this
+        // read-only probe confined to the adapter and remove it when upstream
+        // exposes/awaits that lifecycle point.
+        // ignore: invalid_use_of_visible_for_testing_member
+        retrieveResumeData:
+            _downloader.database.storage.retrieveResumeData,
+      );
+      if (!ready) return false;
+    }
+    return _downloader.resume(task);
+  }
+
+  @override
+  Future<bool> cancel() => transfer.cancel();
+
+  void _onUpdate(TaskUpdate update) {
+    if (update is TaskProgressUpdate) {
+      if (update.expectedFileSize > 0) {
+        _totalBytes = update.expectedFileSize;
+      }
+    }
+    _emitCurrent();
+  }
+
+  void _emitCurrent() {
+    if (_disposed || _snapshots.isClosed) return;
+    _snapshots.add(_snapshot());
+  }
+
+  DownloadTransportSnapshot _snapshot() =>
+      packageTransportSnapshotForV2(transfer, totalBytes: _totalBytes);
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    transfer.holdReasonNotifier.removeListener(_holdReasonListener);
+    unawaited(_updatesSubscription.cancel());
+    unawaited(_snapshots.close());
+  }
+}
+
+final class _SelfSettlingPackageDownloadTransportHandle
+    extends _PackageDownloadTransportHandle
+    implements SelfSettlingParallelDownloadTransportHandleV2 {
+  _SelfSettlingPackageDownloadTransportHandle(
+    Transfer transfer,
+    FileDownloader downloader,
+  ) : super(transfer, downloader);
+}
+
+/// Projects one package Transfer into V2 without maintaining a second metric
+/// cache. The Transfer notifiers are updated before its progress stream emits,
+/// so reading them here preserves the package's current speed/ETA on iOS and
+/// package-managed parallel parents.
+DownloadTransportSnapshot packageTransportSnapshotForV2(
+  Transfer transfer, {
+  int? totalBytes,
+}) {
+  final progress =
+      transfer.progress ?? (transfer.status == TaskStatus.complete ? 1.0 : 0.0);
+  final transferredBytes =
+      totalBytes == null ? null : (totalBytes * progress).round();
+  final exception = transfer.exception;
+  final packageStatus = transfer.status;
+  var projectedStatus = transportStatusFromPackage(
+    packageStatus,
+    transfer.holdReason,
+  );
+
+  // On iOS, background_downloader 9.6.2 can keep a ParallelDownloadTask
+  // parent enqueued while multiple child chunks are already transferring.
+  // A real parent progress update is authoritative evidence that transport is
+  // active. Promote presentation only; user-paused state is still fenced by
+  // DownloadManagerV2 and raw package pause/resume semantics stay untouched.
+  if (packageStatus == TaskStatus.enqueued &&
+      progress > 0 &&
+      progress < 1 &&
+      transfer.holdReason == TransferHoldReason.none) {
+    projectedStatus = DownloadTransportStatus.running;
+  }
+
+  final parallelParent = transfer.task is ParallelDownloadTask;
+  final configuredConnections = parallelParent
+      ? (transfer.task as ParallelDownloadTask).chunks
+      : 1;
+  final activeConnections = parallelParent
+      ? null
+      : (projectedStatus == DownloadTransportStatus.running ? 1 : 0);
+
+  return DownloadTransportSnapshot(
+    taskId: transfer.taskId,
+    status: projectedStatus,
+    progress: progress,
+    transferredBytes: transferredBytes,
+    totalBytes: totalBytes,
+    // background_downloader derives ParallelDownloadTask parent speed from
+    // aggregate child-progress jumps. Those callbacks can arrive in bursts and
+    // report impossible transient rates (for example 200+ MB/s) followed by 0.
+    // V2 uses read-only native child throughput for parallel presentation.
+    networkSpeedMBps: parallelParent ? -1 : transfer.networkSpeed,
+    timeRemaining: parallelParent
+        ? Duration.zero
+        : transfer.timeRemainingNotifier.value,
+    configuredConnections: configuredConnections,
+    activeConnections: activeConnections,
+    failureCategory: _failureCategory(transfer.status, exception),
+    failureMessage: exception?.toString(),
+  );
+}
+
+/// Normalizes package status into the package-neutral V2 state model.
+///
+/// Kept public so the adapter contract can be regression-tested directly;
+/// application code should consume [DownloadTransportSnapshot] instead.
+DownloadTransportStatus transportStatusFromPackage(
+  TaskStatus status,
+  TransferHoldReason holdReason,
+) {
+  if (holdReason != TransferHoldReason.none && status.isNotFinalState) {
+    return DownloadTransportStatus.held;
+  }
+
+  return switch (status) {
+    TaskStatus.enqueued => DownloadTransportStatus.queued,
+    TaskStatus.running => DownloadTransportStatus.running,
+    TaskStatus.complete => DownloadTransportStatus.complete,
+    TaskStatus.notFound => DownloadTransportStatus.missing,
+    TaskStatus.failed => DownloadTransportStatus.failed,
+    TaskStatus.canceled => DownloadTransportStatus.canceled,
+    TaskStatus.waitingToRetry => DownloadTransportStatus.held,
+    TaskStatus.paused => DownloadTransportStatus.paused,
+  };
+}
+
+DownloadFailureCategory? _failureCategory(
+  TaskStatus status,
+  TaskException? exception,
+) {
+  if (status != TaskStatus.failed) {
+    return null;
+  }
+
+  return switch (exception) {
+    TaskHttpException(httpResponseCode: 401 || 403) =>
+      DownloadFailureCategory.sourceExpired,
+    TaskFileSystemException() => DownloadFailureCategory.filesystem,
+    TaskConnectionException() ||
+    TaskResumeException() ||
+    TaskUrlException() ||
+    TaskHttpException() => DownloadFailureCategory.transport,
+    TaskException() => DownloadFailureCategory.unknown,
+    null => DownloadFailureCategory.transport,
+  };
+}
+,
     caseSensitive: false,
   ).firstMatch(value);
   if (match == null) return null;
