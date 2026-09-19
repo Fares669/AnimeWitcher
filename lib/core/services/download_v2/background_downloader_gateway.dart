@@ -145,6 +145,19 @@ Future<void> configurePackageNotificationsV2(
   );
 }
 
+Set<String> activeDurablePartTaskIdsV2({
+  required Iterable<Task> packageTasks,
+  required Iterable<Task> pausedTasks,
+}) {
+  final pausedIds = pausedTasks.map((task) => task.taskId).toSet();
+  return <String>{
+    for (final task in packageTasks)
+      if (task.group == kPersistentDownloadChunkGroup &&
+          !pausedIds.contains(task.taskId))
+        task.taskId,
+  };
+}
+
 final class PackageBackgroundDownloaderGateway
     implements BackgroundDownloaderGateway {
   PackageBackgroundDownloaderGateway({
@@ -361,6 +374,20 @@ final class PackageBackgroundDownloaderGateway
     ]);
   }
 
+  Future<Set<String>> _activeDurablePartTaskIds() async {
+    final packageTasks = await _downloader.allTasks(allGroups: true);
+    // background_downloader includes stored paused tasks in allTasks().
+    // Keep that package detail inside this adapter: paused children must not
+    // reserve a native-writer slot after an app relaunch.
+    // ignore: invalid_use_of_visible_for_testing_member
+    final pausedTasks =
+        await _downloader.database.storage.retrieveAllPausedTasks();
+    return activeDurablePartTaskIdsV2(
+      packageTasks: packageTasks,
+      pausedTasks: pausedTasks,
+    );
+  }
+
   bool _isDurableInternalTask(Task task) =>
       task.group == kDownloadV2DurableParallelGroup ||
       task.group == kPersistentDownloadChunkGroup;
@@ -391,10 +418,7 @@ final class PackageBackgroundDownloaderGateway
       },
       saveRecord: _saveDurableRecord,
       recordForId: _downloader.database.recordForId,
-      livePartIds: () async => {
-        for (final task in await _downloader.allTasks(allGroups: true))
-          task.taskId,
-      },
+      livePartIds: _activeDurablePartTaskIds,
       shouldDrainPartOnPause: (_) => _isIOS(),
       onUpdate: (update) {
         _durableHandles[update.task.taskId]?.accept(update);
@@ -424,8 +448,8 @@ final class PackageBackgroundDownloaderGateway
     double progress,
     int size,
   ) async {
-    final live = await _downloader.allTasks(allGroups: true);
-    if (live.any((candidate) => candidate.taskId == task.taskId)) return true;
+    final liveTaskIds = await _activeDurablePartTaskIds();
+    if (liveTaskIds.contains(task.taskId)) return true;
 
     try {
       if (await _downloader.taskCanResume(task) &&
@@ -753,6 +777,41 @@ DownloadTransportSnapshot durableParallelInitialSnapshotV2({
   );
 }
 
+DownloadTransportSnapshot durableParallelLiveSnapshotV2({
+  required String taskId,
+  required double liveProgress,
+  required int totalBytes,
+  required int? durableBytes,
+  required bool parentActive,
+  required int configuredConnections,
+  required int activeConnections,
+  required double networkSpeedMBps,
+  required Duration timeRemaining,
+}) {
+  final progress = liveProgress.clamp(0.0, 1.0).toDouble();
+  final knownTotal = totalBytes > 0 ? totalBytes : null;
+  final liveBytes = knownTotal == null ? null : (knownTotal * progress).round();
+  var transferredBytes = liveBytes;
+  if (durableBytes != null &&
+      (transferredBytes == null || durableBytes > transferredBytes)) {
+    transferredBytes = durableBytes;
+  }
+  return DownloadTransportSnapshot(
+    taskId: taskId,
+    status: durableParallelProgressStatusV2(
+      progress: progress,
+      parentActive: parentActive,
+    ),
+    progress: progress,
+    transferredBytes: transferredBytes,
+    totalBytes: knownTotal,
+    configuredConnections: configuredConnections,
+    activeConnections: activeConnections,
+    networkSpeedMBps: networkSpeedMBps,
+    timeRemaining: timeRemaining,
+  );
+}
+
 final class _DurableParallelDownloadTransportHandle
     implements
         DownloadTransportHandle,
@@ -820,24 +879,16 @@ final class _DurableParallelDownloadTransportHandle
   void accept(TaskUpdate update) {
     if (_disposed || update.task.taskId != taskId) return;
     if (update is TaskProgressUpdate) {
-      final progress = (coordinator.durableProgressFor(taskId) ?? 0)
-          .clamp(0.0, 1.0)
-          .toDouble();
-      final durableBytes = coordinator.durableBytesFor(taskId);
       final total = update.expectedFileSize > 0
           ? update.expectedFileSize
           : totalBytes;
       _emit(
-        DownloadTransportSnapshot(
+        durableParallelLiveSnapshotV2(
           taskId: taskId,
-          status: durableParallelProgressStatusV2(
-            progress: progress,
-            parentActive: coordinator.isActive(taskId),
-          ),
-          progress: progress,
-          transferredBytes:
-              durableBytes ?? (total > 0 ? (total * progress).round() : null),
-          totalBytes: total > 0 ? total : null,
+          liveProgress: update.progress,
+          totalBytes: total,
+          durableBytes: coordinator.durableBytesFor(taskId),
+          parentActive: coordinator.isActive(taskId),
           configuredConnections: parent.chunks,
           activeConnections:
               coordinator.activeConnectionCountFor(taskId) ?? 0,
@@ -852,13 +903,19 @@ final class _DurableParallelDownloadTransportHandle
         update.status,
         TransferHoldReason.none,
       );
+      final durableBytes = coordinator.durableBytesFor(taskId);
+      final currentBytes = _current.transferredBytes;
+      final transferredBytes = durableBytes == null
+          ? currentBytes
+          : currentBytes == null || durableBytes > currentBytes
+          ? durableBytes
+          : currentBytes;
       _emit(
         DownloadTransportSnapshot(
           taskId: taskId,
           status: status,
           progress: _current.progress,
-          transferredBytes:
-              coordinator.durableBytesFor(taskId) ?? _current.transferredBytes,
+          transferredBytes: transferredBytes,
           totalBytes: _current.totalBytes,
           configuredConnections: parent.chunks,
           activeConnections:
