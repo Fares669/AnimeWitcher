@@ -69,14 +69,14 @@ void main() {
       );
     });
 
-    test('legacy iOS helper keeps its two-connection safety cap', () {
+    test('legacy preference helper preserves the selected width', () {
       expect(
         effectiveDownloadPartsForPlatform(selectedParts: 16, isIOS: true),
-        2,
+        16,
       );
       expect(
         effectiveDownloadPartsForPlatform(selectedParts: 8, isIOS: true),
-        2,
+        8,
       );
       expect(
         effectiveDownloadPartsForPlatform(selectedParts: 1, isIOS: true),
