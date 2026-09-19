@@ -538,21 +538,24 @@ void main() {
     );
   });
 
-  test('missing current transport resumes with a fresh generation', () async {
+  test('missing paused V2 transport refuses implicit byte-zero restart', () async {
     final f = _fixture();
     await f.manager.start(f.request);
     final firstTaskId = f.gateway.startedSpecs.single.taskId;
     await f.manager.pause(f.request.logicalId);
     f.gateway.emit(firstTaskId, DownloadTransportStatus.missing);
 
-    await f.manager.resume(f.request.logicalId);
+    await expectLater(
+      f.manager.resume(f.request.logicalId),
+      throwsStateError,
+    );
 
-    expect(f.gateway.startedSpecs, hasLength(2));
-    expect(f.gateway.startedSpecs.last.taskId, isNot(firstTaskId));
-    expect(f.resolver.calls, 2);
+    expect(f.gateway.startedSpecs, hasLength(1));
+    expect(f.resolver.calls, 1);
+    expect((await f.store.get(f.request.logicalId))?.generation, 1);
     expect(
       (await f.store.get(f.request.logicalId))?.intent,
-      DownloadUserIntent.active,
+      DownloadUserIntent.paused,
     );
   });
 
