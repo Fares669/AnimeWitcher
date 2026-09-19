@@ -4,6 +4,8 @@ import 'logical_download_store_v2.dart';
 
 const String kLegacyRestartRequiredSourceDescriptorV2 =
     'legacyRestartRequired';
+const String kLegacyMigrationPendingSourceDescriptorV2 =
+    'legacyMigrationPendingV2';
 
 /// Builds the application-owned placeholder used when an incomplete legacy
 /// presentation row has no usable refresh descriptor.
@@ -37,6 +39,10 @@ Map<String, Object?> legacyRestartRequiredSourceDescriptorV2({
 bool sourceDescriptorRequiresLegacyRestartV2(
   Map<String, Object?> descriptor,
 ) => descriptor[kLegacyRestartRequiredSourceDescriptorV2] == true;
+
+bool sourceDescriptorIsMigratedLegacyV2(
+  Map<String, Object?> descriptor,
+) => descriptor[kLegacyMigrationPendingSourceDescriptorV2] == true;
 
 /// Presentation-only legacy input accepted by the V2 migration boundary.
 ///
@@ -106,11 +112,12 @@ final class LegacyDownloadMigrationV2 {
         legacy.sourceDescriptor,
       );
       // Every usable incomplete legacy row has no V2/package transfer by
-      // definition. Mark that one-time policy exception durably so explicit
-      // Resume may create the first V2 generation, while genuine paused V2
-      // rows continue to require their exact package handle.
+      // definition. This marker authorizes exactly the first explicit V2
+      // generation. It is deliberately separate from
+      // legacyRestartRequired, which selects the special provider/source
+      // reconstruction path only when no normal refresh descriptor exists.
       if (!legacy.isCompleted && sourceDescriptor.isNotEmpty) {
-        sourceDescriptor[kLegacyRestartRequiredSourceDescriptorV2] = true;
+        sourceDescriptor[kLegacyMigrationPendingSourceDescriptorV2] = true;
       }
       return LogicalDownloadRecordV2(
         schemaVersion: kLogicalDownloadSchemaVersionV2,
