@@ -1992,14 +1992,15 @@ enum DownloadNativeWaitingQueue {
     // wake-ups the Flutter isolate can be suspended, so update the already
     // created system overlay directly from the supported native callback.
     if !isAppInForeground() && shouldUpdateNativeOverlay {
-      let aggregateProgress: Double? = aggregateExpected > 0
-        ? min(max(Double(aggregateWritten) / Double(aggregateExpected), 0), 1)
-        : nil
+      // aggregateExpected only covers children observed so far. Dividing by
+      // that partial denominator produced the 31/62/93% jumps seen on device.
+      // Keep parent progress package-owned until child byte coverage reaches
+      // the already-known full parent size.
       runOnMainActor {
         if #available(iOS 26.0, *) {
           _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
             taskId: parentId,
-            progress: aggregateProgress,
+            progress: nil,
             totalBytesHint: aggregateExpected,
             transferredBytes: aggregateWritten,
             speedBytesPerSecond: aggregateSpeed
@@ -2058,20 +2059,11 @@ enum DownloadNativeWaitingQueue {
         )
 
         if !isAppInForeground() {
-          let staleProgress: Double? = staleAggregateExpected > 0
-            ? min(
-                max(
-                  Double(staleAggregateWritten) / Double(staleAggregateExpected),
-                  0
-                ),
-                1
-              )
-            : nil
           runOnMainActor {
             if #available(iOS 26.0, *) {
               _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
                 taskId: parentId,
-                progress: staleProgress,
+                progress: nil,
                 totalBytesHint: staleAggregateExpected,
                 transferredBytes: staleAggregateWritten,
                 speedBytesPerSecond: staleAggregateSpeed
