@@ -2237,8 +2237,9 @@ class PersistentParallelDownload {
         latestNativeAt = at;
       }
     }
-    int? ageMs(DateTime? at) =>
-        at == null ? null : timestamp.difference(at).inMilliseconds.clamp(0, 1 << 30);
+    int? ageMs(DateTime? at) => at == null
+        ? null
+        : timestamp.difference(at).inMilliseconds.clamp(0, 1 << 30).toInt();
     final activeConnections = _activeConnectionsForSession(session);
     final liveBytes = observedBytes;
     final durableBytes = session.creditedBytes;
