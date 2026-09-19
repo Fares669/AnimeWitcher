@@ -52,14 +52,20 @@ void main() {
       }
     });
 
-    test('download log UI cannot instantiate V1 transport', () {
+    test('download support UI cannot instantiate V1 transport', () {
       final logDialog = _read(
         'lib/features/settings/presentation/widgets/download_log_dialog.dart',
       );
+      final managementDialog = _read(
+        'lib/features/details/presentation/widgets/download_management_dialog.dart',
+      );
 
-      expect(logDialog, isNot(contains('download_service.dart')));
-      expect(logDialog, isNot(contains('downloadServiceProvider')));
+      for (final source in <String>[logDialog, managementDialog]) {
+        expect(source, isNot(contains('download_service.dart')));
+        expect(source, isNot(contains('downloadServiceProvider')));
+      }
       expect(logDialog, contains('downloadDiagnosticsFileV2Provider'));
+      expect(managementDialog, contains('deleteDownloadedVideo(file)'));
     });
 
     test('production entry points no longer execute lifecycle through V1', () {
