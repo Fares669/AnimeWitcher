@@ -2633,6 +2633,20 @@ class PersistentParallelDownload {
             });
             return;
           }
+          if (update is TaskStatusUpdate) {
+            _recordDiagnostic('parallel.childState', {
+              'taskId': session.task.taskId,
+              'childTaskId': part.task.taskId,
+              'status': update.status.name,
+              'rangeStart': part.from,
+              'rangeEnd': part.to,
+              'attemptGeneration': part.attemptGeneration,
+              'durableBytes': part.durableBytes,
+              'progress': part.credibleProgress,
+              'launched': part.launched,
+              'completed': part.complete,
+            });
+          }
           // Completion is durable; a late running/progress/retry callback must
           // never reserve its connection again or park the remaining parts.
           if (part.complete) return;
@@ -3216,11 +3230,22 @@ class PersistentParallelDownload {
 
   Future<void> _status(_ParallelSession session, TaskStatus status) async {
     session.lastStatusAt = DateTime.now();
+    final previousStatus = session.lastDiagnosticStatus;
+    final reason = status == TaskStatus.complete
+        ? 'allPartsComplete'
+        : status == TaskStatus.paused && session.pauseRequested
+        ? 'pauseRequested'
+        : status == TaskStatus.running
+        ? 'coordinatorActive'
+        : 'coordinator';
     _recordDiagnostic('parallel.status', {
       'taskId': session.task.taskId,
       'status': status.name,
+      if (previousStatus != null) 'previousStatus': previousStatus,
+      'reason': reason,
       'progress': session.progress,
     });
+    session.lastDiagnosticStatus = status.name;
     if (status == TaskStatus.running) {
       session.parentRunningReported = true;
     } else if (status == TaskStatus.enqueued || status == TaskStatus.paused) {
@@ -3528,7 +3553,17 @@ class PersistentParallelDownload {
       final reserve = assemblyStorageReserveBytes < 0
           ? 0
           : assemblyStorageReserveBytes;
-      return free >= remainingBytes + reserve;
+      final enough = free >= remainingBytes + reserve;
+      if (!enough) {
+        _recordDiagnostic('assembly.insufficientStorage', {
+          'taskId': session.task.taskId,
+          'freeBytes': free,
+          'totalBytes': session.size,
+          'durableBytes': session.creditedBytes,
+          'reason': 'preflight',
+        });
+      }
+      return enough;
     } catch (_) {
       return true;
     }
@@ -3708,6 +3743,7 @@ class _ParallelSession {
   double diskObservedSpeed = 0;
   DateTime? lastCheckpointAt;
   DateTime? lastStatusAt;
+  String? lastDiagnosticStatus;
   DateTime? lastDiagnosticAdvanceAt;
   int lastDiagnosticLiveBytes = -1;
   int lastDiagnosticDurableBytes = -1;
