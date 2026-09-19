@@ -21,11 +21,11 @@ abstract interface class DownloadPresentationObserverV2 {
 
 /// Transient observation-only barrier for package-managed parallel pauses.
 ///
-/// background_downloader can publish the parent paused state before every child
+/// background_downloader can publish the parent paused state before every non-complete child
 /// has finished persisting its own resume data. V2 never stores child ranges or
 /// resume bytes; it only waits for the package's child status callbacks.
 final class NativeParallelPauseReadinessV2 {
-  final Map<String, Set<String>> _pausedChildrenByParent =
+  final Map<String, Set<String>> _settledChildrenByParent =
       <String, Set<String>>{};
   final Map<String, List<_ParallelPauseWaiterV2>> _waitersByParent =
       <String, List<_ParallelPauseWaiterV2>>{};
@@ -44,16 +44,18 @@ final class NativeParallelPauseReadinessV2 {
     }
 
     final status = TaskStatus.values[statusOrdinal];
-    final pausedChildren = _pausedChildrenByParent.putIfAbsent(
+    final settledChildren = _settledChildrenByParent.putIfAbsent(
       parentTaskId,
       () => <String>{},
     );
-    if (status == TaskStatus.paused) {
-      pausedChildren.add(childTaskId);
+    if (status == TaskStatus.paused || status == TaskStatus.complete) {
+      // A child that completed before the user's pause is already settled and
+      // will never emit paused. Count it while every non-complete child stops.
+      settledChildren.add(childTaskId);
     } else {
-      pausedChildren.remove(childTaskId);
-      if (pausedChildren.isEmpty) {
-        _pausedChildrenByParent.remove(parentTaskId);
+      settledChildren.remove(childTaskId);
+      if (settledChildren.isEmpty) {
+        _settledChildrenByParent.remove(parentTaskId);
       }
     }
     _completeReadyWaiters(parentTaskId);
@@ -67,7 +69,7 @@ final class NativeParallelPauseReadinessV2 {
     if (!taskId.startsWith('aw_v2_') || expectedChildren <= 1) {
       return Future<bool>.value(true);
     }
-    if ((_pausedChildrenByParent[taskId]?.length ?? 0) >= expectedChildren) {
+    if ((_settledChildrenByParent[taskId]?.length ?? 0) >= expectedChildren) {
       return Future<bool>.value(true);
     }
 
@@ -94,12 +96,12 @@ final class NativeParallelPauseReadinessV2 {
   }
 
   void _completeReadyWaiters(String parentTaskId) {
-    final pausedCount = _pausedChildrenByParent[parentTaskId]?.length ?? 0;
+    final settledCount = _settledChildrenByParent[parentTaskId]?.length ?? 0;
     final waiters = _waitersByParent[parentTaskId];
     if (waiters == null || waiters.isEmpty) return;
 
     final ready = waiters
-        .where((waiter) => pausedCount >= waiter.expectedChildren)
+        .where((waiter) => settledCount >= waiter.expectedChildren)
         .toList(growable: false);
     for (final waiter in ready) {
       waiters.remove(waiter);
