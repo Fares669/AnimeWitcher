@@ -212,10 +212,13 @@ DownloadContinuedProcessingService _newV2ContinuedProcessingService(
   );
 }
 
-/// Bridges V2 parent-transfer progress into iOS 26 Continued Processing.
+/// Bridges V2 progress into iOS 26 Continued Processing and checkpoints the
+/// coordinator's generation-fenced zero-byte Range candidates for native refill.
 ///
-/// The native system task is deliberately an overlay only. Its callback cannot
-/// mutate V2 transport; background_downloader remains the sole URLSession owner.
+/// background_downloader remains the URLSession writer. This observer never
+/// invents ranges or durable bytes: it only snapshots candidates already
+/// prepared by [PersistentParallelDownload] so Apple's background session can
+/// refill completed slots while Flutter is suspended.
 final class IosDownloadContinuedProcessingObserverV2
     implements DownloadPresentationObserverV2 {
   IosDownloadContinuedProcessingObserverV2({
@@ -225,14 +228,20 @@ final class IosDownloadContinuedProcessingObserverV2
       required double bytesPerSecond,
     })? onNativeNetworkSpeed,
     NativeParallelPauseReadinessV2? pauseReadiness,
+    List<Map<String, Object>> Function()? nativeBackgroundPlans,
+    void Function()? releaseNativeBackgroundOffers,
   }) : _service =
            service ??
            _newV2ContinuedProcessingService(
              onNativeNetworkSpeed,
              pauseReadiness,
-           );
+           ),
+       _nativeBackgroundPlans = nativeBackgroundPlans,
+       _releaseNativeBackgroundOffers = releaseNativeBackgroundOffers;
 
   final DownloadContinuedProcessingService _service;
+  final List<Map<String, Object>> Function()? _nativeBackgroundPlans;
+  final void Function()? _releaseNativeBackgroundOffers;
   final Map<String, _ContinuedEntryV2> _outstanding =
       <String, _ContinuedEntryV2>{};
   final Set<String> _sessionMembers = <String>{};
@@ -241,6 +250,7 @@ final class IosDownloadContinuedProcessingObserverV2
   Future<void> _tail = Future<void>.value();
   bool _sessionActive = false;
   bool _disposed = false;
+  String? _nativeQueueSignature;
 
   @override
   Future<void> observe(
@@ -329,6 +339,14 @@ final class IosDownloadContinuedProcessingObserverV2
               ? (totalBytes * currentSnapshot.progress).round()
               : 0);
 
+      await _checkpointNativeQueue(
+        activeEntries: presentableActive,
+        current: current,
+        batchTotal: batchTotal,
+        completedCount: completedCount,
+        currentIndex: currentIndex,
+      );
+
       if (!_sessionActive) {
         _sessionActive = await _service.start(
           taskId: currentSnapshot.taskId,
@@ -359,6 +377,20 @@ final class IosDownloadContinuedProcessingObserverV2
 
     if (!_sessionActive || _outstanding.isNotEmpty) return;
 
+    await _checkpointNativeQueue(
+      activeEntries: const <_ContinuedEntryV2>[],
+      current: entry,
+      batchTotal: _sessionMembers.isEmpty ? 1 : _sessionMembers.length,
+      completedCount: _completedMembers.length.clamp(
+        0,
+        _sessionMembers.isEmpty ? 1 : _sessionMembers.length,
+      ),
+      currentIndex: _sessionMembers.isEmpty
+          ? 1
+          : _completedMembers.length.clamp(1, _sessionMembers.length),
+      paused: snapshot.status == DownloadTransportStatus.paused,
+    );
+
     final allCompleted =
         _sessionMembers.isNotEmpty &&
         _sessionMembers.every(_completedMembers.contains);
@@ -373,6 +405,102 @@ final class IosDownloadContinuedProcessingObserverV2
       await _service.stop(taskId: snapshot.taskId, endSession: true);
     }
     _resetSession();
+  }
+
+  Future<void> _checkpointNativeQueue({
+    required List<_ContinuedEntryV2> activeEntries,
+    required _ContinuedEntryV2 current,
+    required int batchTotal,
+    required int completedCount,
+    required int currentIndex,
+    bool paused = false,
+  }) async {
+    final planProvider = _nativeBackgroundPlans;
+    if (planProvider == null) return;
+
+    List<Map<String, Object>> plans = const <Map<String, Object>>[];
+    try {
+      if (activeEntries.isNotEmpty) {
+        plans = planProvider();
+      }
+
+      final activeTaskIds = <String>[
+        for (final active in activeEntries) active.snapshot.taskId,
+      ];
+      final signature = activeEntries.isEmpty
+          ? 'clear:${current.snapshot.taskId}:${paused ? 'paused' : 'idle'}'
+          : 'active:${_nativePlanSignature(plans)}:${activeTaskIds.join(',')}';
+      if (signature == _nativeQueueSignature) return;
+
+      var maxConcurrent = 1;
+      for (final active in activeEntries) {
+        final configured = active.snapshot.configuredConnections;
+        final live = active.snapshot.activeConnections;
+        final candidate = configured ?? live ?? 1;
+        if (candidate > maxConcurrent) maxConcurrent = candidate;
+      }
+
+      final snapshot = current.snapshot;
+      final record = current.record;
+      final totalBytes = snapshot.totalBytes ?? record.expectedBytes ?? -1;
+      final transferredBytes =
+          snapshot.transferredBytes ??
+          (totalBytes > 0 ? (totalBytes * snapshot.progress).round() : 0);
+      final accepted = await _service.persistNativeQueue(
+        maxConcurrent: maxConcurrent,
+        waiters: const <Map<String, Object>>[],
+        transferringTaskIds: activeTaskIds,
+        pausedTaskIds: paused ? <String>[snapshot.taskId] : const <String>[],
+        sessionTaskIds: activeTaskIds,
+        sessionCompletedCount: completedCount,
+        sessionBatchTotal: batchTotal,
+        sessionCurrentTaskId: snapshot.taskId,
+        sessionDisplayName: _displayName(record),
+        sessionProgress: snapshot.progress,
+        sessionTotalBytes: totalBytes,
+        sessionTransferredBytes: transferredBytes,
+        sessionSpeedBytesPerSecond: _speedBytesPerSecond(snapshot),
+        sessionCurrentIndex: currentIndex,
+        multipartPlans: plans,
+      );
+
+      // A durable ACK with an unavailable native hook is not proof that iOS can
+      // refill. Leave the signature unset so the next foreground sample retries
+      // capability negotiation. Clearing a previously accepted plan is safe
+      // regardless of current hook availability.
+      if (accepted != null &&
+          (activeEntries.isEmpty || _service.nativePromotionAvailable)) {
+        _nativeQueueSignature = signature;
+      }
+    } finally {
+      // Exporting a plan temporarily fences those children in Dart. Once the
+      // native snapshot has been attempted, release that fence so foreground
+      // slow-start continues. Swift rechecks URLSession task IDs before any
+      // background promotion, preventing duplicate writers.
+      _releaseNativeBackgroundOffers?.call();
+    }
+  }
+
+  String _nativePlanSignature(List<Map<String, Object>> plans) {
+    final parents = <String>[];
+    for (final plan in plans) {
+      final parentId = plan['parentTaskId']?.toString() ?? '';
+      final maxConcurrent = plan['maxConcurrent']?.toString() ?? '';
+      final children = <String>[];
+      final rawWaiters = plan['waiters'];
+      if (rawWaiters is List) {
+        for (final raw in rawWaiters) {
+          if (raw is! Map) continue;
+          final taskId = raw['taskId']?.toString() ?? '';
+          final generation = raw['generation']?.toString() ?? '';
+          if (taskId.isNotEmpty) children.add('$taskId:g$generation');
+        }
+      }
+      children.sort();
+      parents.add('$parentId:w$maxConcurrent:${children.join(',')}');
+    }
+    parents.sort();
+    return parents.join('|');
   }
 
   bool _isPackageOwnedActive(_ContinuedEntryV2 entry) {
@@ -395,6 +523,7 @@ final class IosDownloadContinuedProcessingObserverV2
 
   void _resetSession() {
     _sessionActive = false;
+    _nativeQueueSignature = null;
     _sessionMembers.clear();
     _completedMembers.clear();
     _outstanding.clear();
