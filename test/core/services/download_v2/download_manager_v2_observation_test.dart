@@ -122,6 +122,137 @@ void main() {
     expect(snapshot?.activeConnections, 8);
   });
 
+  test('parallel zero-speed handoff keeps the last fresh positive speed', () async {
+    var now = 1000;
+    final id = logicalDownloadIdFor(
+      animeId: 'anime:1',
+      episodeKey: 'speed-handoff',
+      variantKey: 'sub:1080p',
+    );
+    final taskId = taskIdForGeneration(id, 1);
+    final store = InMemoryLogicalDownloadStoreV2();
+    await store.put(
+      _record(
+        id: id,
+        destinationPath: 'downloads/speed-handoff.mp4',
+        expectedBytes: 100,
+        parallelChunks: 16,
+      ),
+    );
+    final handle = _Handle(
+      taskId,
+      initial: DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: .4,
+        transferredBytes: 40,
+        totalBytes: 100,
+        networkSpeedMBps: 2,
+        configuredConnections: 16,
+        activeConnections: 8,
+      ),
+    );
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: _Gateway(rehydrated: <DownloadTransportHandle>[handle]),
+      sourceResolver: StaticSourceResolverV2(),
+      nowMillis: () => now,
+    );
+    addTearDown(manager.dispose);
+
+    await manager.initialize();
+    manager.observeNativeNetworkSpeed(
+      taskId: taskId,
+      bytesPerSecond: 2 * 1000 * 1000,
+    );
+
+    handle.emit(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: .41,
+        transferredBytes: 41,
+        totalBytes: 100,
+        networkSpeedMBps: 0,
+        configuredConnections: 16,
+        activeConnections: 8,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(manager.snapshotFor(id)?.networkSpeedMBps, 2);
+
+    now += 4000;
+    handle.emit(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: .41,
+        transferredBytes: 41,
+        totalBytes: 100,
+        networkSpeedMBps: 0,
+        configuredConnections: 16,
+        activeConnections: 8,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(manager.snapshotFor(id)?.networkSpeedMBps, 0);
+  });
+
+  test('records stream cannot lose a start between initial snapshot and subscription', () async {
+    final store = _RaceStore();
+    final gateway = _Gateway();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: StaticSourceResolverV2(expectedBytes: 100),
+    );
+    addTearDown(manager.dispose);
+    await manager.initialize();
+
+    store.blockNextAll();
+    final emissions = <List<LogicalDownloadRecordV2>>[];
+    final subscription = manager.records.listen(emissions.add);
+    addTearDown(subscription.cancel);
+    await store.blockEntered.future;
+
+    final id = logicalDownloadIdFor(
+      animeId: 'anime:race',
+      episodeKey: '1',
+      variantKey: 'sub:1080p',
+    );
+    final start = manager.start(
+      DownloadStartRequestV2(
+        logicalId: id,
+        animeId: 'anime:race',
+        episodeKey: '1',
+        variantKey: 'sub:1080p',
+        destinationPath: 'downloads/race.mp4',
+        sourceDescriptor: const <String, Object?>{'providerId': 'provider.example'},
+        expectedBytes: 100,
+        allowPause: true,
+        retries: 2,
+        parallelChunks: 1,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    store.releaseBlockedAll();
+    await start;
+
+    for (var i = 0; i < 20 && !emissions.any((items) => items.any((r) => r.logicalId == id)); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+
+    expect(
+      emissions.any((items) => items.any((record) => record.logicalId == id)),
+      isTrue,
+      reason:
+          'a new V2 row must be visible without killing/reopening the app even '
+          'when start races the records stream initial snapshot',
+    );
+  });
+
   test('startup recreation preserves five-part application policy', () async {
     final id = logicalDownloadIdFor(
       animeId: 'anime:1',
@@ -179,6 +310,46 @@ LogicalDownloadRecordV2 _record({
     parallelChunks: parallelChunks,
     updatedAtMillis: 1,
   );
+}
+
+final class _RaceStore implements LogicalDownloadStoreV2 {
+  final InMemoryLogicalDownloadStoreV2 _inner = InMemoryLogicalDownloadStoreV2();
+  Completer<void> blockEntered = Completer<void>();
+  Completer<void>? _release;
+  bool _blockNext = false;
+
+  void blockNextAll() {
+    blockEntered = Completer<void>();
+    _release = Completer<void>();
+    _blockNext = true;
+  }
+
+  void releaseBlockedAll() => _release?.complete();
+
+  @override
+  Future<List<LogicalDownloadRecordV2>> all() async {
+    if (!_blockNext) return _inner.all();
+    _blockNext = false;
+    final stale = await _inner.all();
+    blockEntered.complete();
+    await _release!.future;
+    return stale;
+  }
+
+  @override
+  Future<LogicalDownloadRecordV2?> get(DownloadLogicalId id) => _inner.get(id);
+
+  @override
+  Future<void> put(LogicalDownloadRecordV2 record) => _inner.put(record);
+
+  @override
+  Future<void> remove(DownloadLogicalId id) => _inner.remove(id);
+
+  @override
+  Future<LogicalDownloadRecordV2?> mutate(
+    DownloadLogicalId id,
+    LogicalDownloadRecordV2? Function(LogicalDownloadRecordV2? current) change,
+  ) => _inner.mutate(id, change);
 }
 
 final class _Gateway implements BackgroundDownloaderGateway {
