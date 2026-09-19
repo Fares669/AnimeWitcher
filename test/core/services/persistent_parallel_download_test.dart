@@ -296,6 +296,47 @@ void main() {
     expect(heartbeat['checkpointSequence'], greaterThanOrEqualTo(1));
   });
 
+  test('package progress heartbeat does not invent native byte evidence', () async {
+    final diagnosticEvents = <({String event, Map<String, Object?> fields})>[];
+    await coordinator.dispose();
+    coordinator = create(
+      diagnosticEvent: (event, fields) {
+        diagnosticEvents.add(
+          (event: event, fields: Map<String, Object?>.from(fields)),
+        );
+      },
+    );
+
+    expect(await coordinator.start(parent, 100), isTrue);
+    final first = starts.single;
+    coordinator.handleUpdate(
+      TaskProgressUpdate(
+        first,
+        .5,
+        20,
+        0.5,
+        const Duration(seconds: 1),
+      ),
+    );
+
+    await waitUntil(
+      () => diagnosticEvents.any((entry) => entry.event == 'parallel.heartbeat'),
+    );
+    final heartbeat = diagnosticEvents.lastWhere(
+      (entry) => entry.event == 'parallel.heartbeat',
+    ).fields;
+
+    expect(heartbeat['liveBytes'], 10);
+    expect(
+      heartbeat.containsKey('nativeWrittenBytes'),
+      isFalse,
+      reason:
+          'package/Dart progress is live byte evidence but must not be mislabeled '
+          'as native URLSession bridge bytes',
+    );
+    expect(heartbeat['lastByteAgeMs'], isNotNull);
+  });
+
   test('native iOS completion bridge adopts the exact moved part', () async {
     expect(await coordinator.start(parent, 100), isTrue);
     final first = starts.single;
