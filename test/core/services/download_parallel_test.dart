@@ -57,6 +57,50 @@ void main() {
       }
     });
 
+    test('iOS V2 preserves manual width when metadata Range support is inconclusive', () {
+      const mib = 1024 * 1024;
+      expect(
+        selectV2DownloadParts(
+          preference: 16,
+          totalBytes: 392 * mib,
+          metadataSupportsRanges: false,
+          isIOS: true,
+        ),
+        16,
+      );
+      expect(
+        selectV2DownloadParts(
+          preference: 16,
+          totalBytes: 392 * mib,
+          metadataSupportsRanges: false,
+          isIOS: false,
+        ),
+        1,
+      );
+    });
+
+    test('iOS V2 Auto may request a probe-worthy width before Range is proven', () {
+      const mib = 1024 * 1024;
+      expect(
+        selectV2DownloadParts(
+          preference: 0,
+          totalBytes: 392 * mib,
+          metadataSupportsRanges: false,
+          isIOS: true,
+        ),
+        4,
+      );
+      expect(
+        selectV2DownloadParts(
+          preference: 0,
+          totalBytes: 99 * mib,
+          metadataSupportsRanges: false,
+          isIOS: true,
+        ),
+        1,
+      );
+    });
+
     test('manual preference can request the full sixteen', () {
       const mib = 1024 * 1024;
       expect(
