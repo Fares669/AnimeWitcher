@@ -155,6 +155,28 @@ MultimediaItem mapAnimeWitcherMangaHit(Map<String, Object?> source) {
     'anilist_id',
     'anilistId',
   ]);
+  final rating = _map(source['rating']);
+  final year = _year(source);
+  final state = _firstText(
+    <String, Object?>{...details, ...source},
+    const <String>['state', 'status', 'statictes'],
+  );
+  final malScore = _firstText(
+    details,
+    const <String>['mal_mean', 'mal_score'],
+  );
+  final malScoringUsers = _firstText(
+    details,
+    const <String>['mal_num_scoring_users', 'mal_scoring_users'],
+  );
+  final awScore = _firstText(
+    rating,
+    const <String>['rate', 'score', 'average'],
+  );
+  final awScoreCount = _firstText(
+    rating,
+    const <String>['num', 'count', 'votes', 'num_scoring_users'],
+  );
 
   return MultimediaItem(
     title: title,
@@ -165,7 +187,7 @@ MultimediaItem mapAnimeWitcherMangaHit(Map<String, Object?> source) {
     ),
     contentType: MultimediaContentType.manga,
     provider: 'com.fares669.animewitcher.native',
-    year: _year(source),
+    year: year,
     status: _status(source),
     tags: _tags(source),
     catalogType: _optional(type),
@@ -175,6 +197,14 @@ MultimediaItem mapAnimeWitcherMangaHit(Map<String, Object?> source) {
       if (malId.isNotEmpty) 'malId': malId,
       if (anilistId.isNotEmpty) 'anilistId': anilistId,
       if (englishTitle.isNotEmpty) 'englishTitle': englishTitle,
+      if (type.isNotEmpty) 'awType': type,
+      if (year != null) 'awYear': year.toString(),
+      if (state.isNotEmpty) 'awState': state,
+      if (awScore.isNotEmpty) 'awScore': awScore,
+      if (awScoreCount.isNotEmpty) 'awScoreCount': awScoreCount,
+      if (malScore.isNotEmpty) 'awMalScore': malScore,
+      if (malScoringUsers.isNotEmpty)
+        'awMalScoringUsers': malScoringUsers,
     },
   );
 }
