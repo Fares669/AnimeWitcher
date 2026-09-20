@@ -16,10 +16,9 @@ void main() {
 
       expect(body, contains('final String? logicalId;'));
       expect(body, contains('this.logicalId'));
-      expect(body, contains('final bool v2Owned;'));
     });
 
-    test('known different logical ids never fall through to legacy matching', () {
+    test('known different logical ids do not fall through to fallback matching', () {
       final source = File(
         'lib/features/library/presentation/downloads_provider.dart',
       ).readAsStringSync();
@@ -38,7 +37,7 @@ void main() {
       );
     });
 
-    test('grouping uses legacy tracking/file keys only when logical id is absent', () {
+    test('grouping uses tracking/file keys only when logical id is absent', () {
       final source = File(
         'lib/features/library/presentation/downloads_provider.dart',
       ).readAsStringSync();
