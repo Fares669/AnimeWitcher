@@ -2853,31 +2853,61 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (cached == null ||
         !_latestMangaExpiresAt.isAfter(now) ||
         cached.length < needed) {
-      // Fetch one extra row so pagination can answer hasMore without opening
-      // any Manga details/chapter endpoint.
-      final fetchLimit = (needed + 1).clamp(1, 100).toInt();
-      final raw = await _firestoreRestRunQuery(<String, dynamic>{
-        'from': const <Map<String, dynamic>>[
-          <String, dynamic>{'collectionId': 'manga_recent'},
+      final sections = await _fetchOfficialHomeSections();
+      _OfficialHomeSection? recentMangaSection;
+      for (final section in sections) {
+        final type = section.type.trim().toLowerCase();
+        final text =
+            '${section.title} ${section.type} ${section.indexName}'
+                .toLowerCase();
+        if (type == 'manga_recent' ||
+            text.contains('manga_recent') ||
+            text.contains('فصول المانجا') ||
+            text.contains('فصول جديدة')) {
+          recentMangaSection = section;
+          break;
+        }
+      }
+      if (recentMangaSection == null ||
+          recentMangaSection.indexName.trim().isEmpty) {
+        throw StateError(
+          'AnimeWitcher Manga recent home section is unavailable.',
+        );
+      }
+
+      // v1.4.9 does not read a Firestore manga_recent collection here.
+      // HomeFragment.setupRecentMangaSection passes the remote home section's
+      // index_name to the normal Algolia search path and requests these fields.
+      final fetchLimit = (needed + 1)
+          .clamp(1, recentMangaSection.hitsPerPage.clamp(1, 100))
+          .toInt();
+      final payload = await _algoliaQuery(
+        recentMangaSection.indexName,
+        query: '',
+        page: 0,
+        hitsPerPage: fetchLimit,
+        maxHitsPerPage: 100,
+        attributes: const <String>[
+          'poster_url',
+          'poster_url_aniList',
+          'date',
+          'objectID',
+          'manga_id',
+          'manga_name',
+          'chapter_id',
+          'chapter_name',
+          'type',
         ],
-        'orderBy': const <Map<String, dynamic>>[
-          <String, dynamic>{
-            'field': <String, dynamic>{'fieldPath': 'date'},
-            'direction': 'DESCENDING',
-          },
-        ],
-        'limit': fetchLimit,
-      });
+        throwOnFailure: true,
+      );
 
       final items = <MangaLatestChapter>[];
       final seen = <String>{};
-      for (final rowRaw in raw) {
-        final document = _map(_map(rowRaw)['document']);
-        if (document.isEmpty) continue;
-        final fields = _firestoreFields(document['fields']);
-        if (fields.isEmpty) continue;
+      for (final raw in _list(payload['hits'])) {
+        final hit = _map(raw);
+        if (hit.isEmpty) continue;
         final latest = mapAnimeWitcherRecentMangaHit(
-          Map<String, Object?>.from(fields),
+          Map<String, Object?>.from(hit),
         );
         if (latest == null) continue;
         final key = '${latest.manga.url}|${latest.chapter.id}';

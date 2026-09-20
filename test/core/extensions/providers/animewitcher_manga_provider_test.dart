@@ -14,6 +14,28 @@ Map<String, dynamic> _mapField(Map<String, dynamic> fields) =>
       'mapValue': <String, dynamic>{'fields': fields},
     };
 
+Map<String, dynamic> _intField(int value) =>
+    <String, dynamic>{'integerValue': value.toString()};
+
+Map<String, dynamic> _homeSectionsDocument() => <String, dynamic>{
+  'fields': <String, dynamic>{
+    'sections': <String, dynamic>{
+      'arrayValue': <String, dynamic>{
+        'values': <Map<String, dynamic>>[
+          _mapField(<String, dynamic>{
+            'title': _stringField('فصول جديدة'),
+            'type': _stringField('manga_recent'),
+            'index_name': _stringField('manga_recent_live'),
+            'hits_per_page': _intField(30),
+            'order': _intField(2),
+            'enabled': const <String, dynamic>{'booleanValue': true},
+          }),
+        ],
+      },
+    },
+  },
+};
+
 Map<String, dynamic> _settingsDocument() => <String, dynamic>{
   'fields': <String, dynamic>{
     'search_settings': _mapField(<String, dynamic>{
@@ -56,6 +78,17 @@ class _TestStorageService extends StorageService {
     InterceptorsWrapper(
       onRequest: (options, handler) {
         requests.add(options);
+        if (options.uri.host.contains('firestore') &&
+            options.uri.path.contains('Settings/home_sections')) {
+          handler.resolve(
+            Response<dynamic>(
+              requestOptions: options,
+              statusCode: 200,
+              data: _homeSectionsDocument(),
+            ),
+          );
+          return;
+        }
         if (options.uri.host.contains('firestore') &&
             options.uri.path.contains('Settings/constants')) {
           handler.resolve(
@@ -125,6 +158,43 @@ class _TestStorageService extends StorageService {
             );
             return;
           }
+        }
+        if (_isAlgolia(options.uri) &&
+            options.uri.path.endsWith('/indexes/manga_recent_live/query')) {
+          handler.resolve(
+            Response<dynamic>(
+              requestOptions: options,
+              statusCode: 200,
+              data: <String, dynamic>{
+                'hits': <Map<String, dynamic>>[
+                  <String, dynamic>{
+                    'objectID': 'recent-b-30',
+                    'manga_id': 'recent-b',
+                    'manga_name': 'Recent B',
+                    'type': 'مانهوا',
+                    'poster_url': 'https://img.example/b.webp',
+                    'chapter_id': '30',
+                    'chapter_name': 'الفصل 30',
+                    'date': 1789916400000,
+                  },
+                  <String, dynamic>{
+                    'objectID': 'recent-a-20',
+                    'manga_id': 'recent-a',
+                    'manga_name': 'Recent A',
+                    'type': 'مانجا',
+                    'poster_url': 'https://img.example/a.webp',
+                    'chapter_id': '20',
+                    'chapter_name': 'الفصل 20',
+                    'date': 1789912800000,
+                  },
+                ],
+                'page': 0,
+                'nbPages': 1,
+                'nbHits': 2,
+              },
+            ),
+          );
+          return;
         }
         if (_isAlgolia(options.uri) &&
             options.uri.path.endsWith('/indexes/manga_views_desc/query')) {
@@ -317,7 +387,7 @@ void main() {
     );
   });
 
-  test('latest manga uses manga_recent without prefetching chapters', () async {
+  test('latest manga follows the official manga_recent home Algolia section', () async {
     final stub = _stubDio();
     final page = await _provider(stub.dio).getLatestMangaPage(limit: 2);
 
@@ -330,33 +400,31 @@ void main() {
     expect(page.items[1].chapter.name, 'الفصل 20');
     expect(
       page.items[0].chapter.publishedAt,
-      DateTime.parse('2026-09-20T15:00:00Z'),
+      DateTime.fromMillisecondsSinceEpoch(1789916400000),
     );
 
-    final recentRequest = stub.requests.singleWhere((entry) {
-      if (!entry.uri.host.contains('firestore') ||
-          !entry.uri.path.endsWith('/documents:runQuery')) {
-        return false;
-      }
-      final body = entry.data;
-      final query = body is Map ? body['structuredQuery'] : null;
-      final from = query is Map ? query['from'] : null;
-      final firstFrom = from is List && from.isNotEmpty ? from.first : null;
-      return firstFrom is Map && firstFrom['collectionId'] == 'manga_recent';
-    });
-    final recentBody = recentRequest.data as Map;
-    final recentQuery = recentBody['structuredQuery'] as Map;
-    final orderBy = recentQuery['orderBy'] as List;
-    expect(
-      ((orderBy.first as Map)['field'] as Map)['fieldPath'],
-      'date',
+    final recentRequest = stub.requests.singleWhere(
+      (entry) =>
+          _isAlgolia(entry.uri) &&
+          entry.uri.path.endsWith('/indexes/manga_recent_live/query'),
     );
+    final body = recentRequest.data as Map;
+    final params = body['params']?.toString() ?? '';
+    expect(params, contains('attributesToRetrieve'));
+    expect(params, contains('chapter_name'));
+    expect(params, contains('manga_name'));
 
     expect(
       stub.requests.any((entry) {
+        if (!entry.uri.host.contains('firestore') ||
+            !entry.uri.path.endsWith('/documents:runQuery')) {
+          return false;
+        }
         final body = entry.data;
-        final params = body is Map ? body['params']?.toString() ?? '' : '';
-        return params.contains('lastmodified');
+        final query = body is Map ? body['structuredQuery'] : null;
+        final from = query is Map ? query['from'] : null;
+        final firstFrom = from is List && from.isNotEmpty ? from.first : null;
+        return firstFrom is Map && firstFrom['collectionId'] == 'manga_recent';
       }),
       isFalse,
     );
