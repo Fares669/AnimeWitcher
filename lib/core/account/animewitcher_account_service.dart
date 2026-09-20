@@ -2496,6 +2496,90 @@ class AnimeWitcherAccountService {
     );
   }
 
+  Future<void> saveMangaLibraryItem(
+    MultimediaItem item,
+    LibraryCategory? category, {
+    bool? favorite,
+  }) async {
+    final profile = _profile;
+    final mangaId = animeWitcherMangaIdFromItem(item);
+    if (!isSignedIn || profile == null || mangaId.isEmpty) return;
+
+    final primaryCategory =
+        category == LibraryCategory.favorite ? null : category;
+    final isFavorite = favorite ?? category == LibraryCategory.favorite;
+    await _enqueueLibraryWrite('manga:$mangaId', () async {
+      if (!_isCurrentProfile(profile)) return;
+      final root = 'users/${profile.documentId}';
+
+      if (primaryCategory == null) {
+        await _authenticated(
+          (token) => _firestore.deleteDocument(
+            '$root/user_manga/$mangaId',
+            token,
+          ),
+        );
+      } else {
+        await _authenticated(
+          (token) => _firestore.setDocumentWithServerTimestamps(
+            '$root/user_manga/$mangaId',
+            <String, dynamic>{
+              'manga_id': mangaId,
+              'type': _cloudType(primaryCategory),
+              'views': 0,
+            },
+            token,
+            serverTimestampFields: const <String>{'date'},
+          ),
+        );
+      }
+
+      if (isFavorite) {
+        await _authenticated(
+          (token) => _firestore.setDocumentWithServerTimestamps(
+            '$root/fav_manga/$mangaId',
+            <String, dynamic>{
+              'manga_id': mangaId,
+              'views': 0,
+            },
+            token,
+            serverTimestampFields: const <String>{'date'},
+          ),
+        );
+      } else {
+        await _authenticated(
+          (token) => _firestore.deleteDocument(
+            '$root/fav_manga/$mangaId',
+            token,
+          ),
+        );
+      }
+    });
+  }
+
+  Future<void> removeMangaLibraryItem(String itemUrl) async {
+    final profile = _profile;
+    final mangaId = _mangaIdFromUrl(itemUrl);
+    if (!isSignedIn || profile == null || mangaId == null) return;
+
+    await _enqueueLibraryWrite('manga:$mangaId', () async {
+      if (!_isCurrentProfile(profile)) return;
+      final root = 'users/${profile.documentId}';
+      await _authenticated(
+        (token) => _firestore.deleteDocument(
+          '$root/user_manga/$mangaId',
+          token,
+        ),
+      );
+      await _authenticated(
+        (token) => _firestore.deleteDocument(
+          '$root/fav_manga/$mangaId',
+          token,
+        ),
+      );
+    });
+  }
+
   Future<void> removeLibraryItem(String itemUrl) async {
     final animeId = AnimeWitcherSyncIds.animeIdFromUrl(itemUrl);
     final profile = _profile;
@@ -3485,6 +3569,22 @@ class AnimeWitcherAccountService {
   String? _animeIdFromListDocument(FirestoreDocument document) {
     final reference = _optionalString(document.fields['doc_ref']);
     return reference == null ? document.id : _lastPathSegment(reference);
+  }
+
+  String? _mangaIdFromUrl(String url) {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null || uri.pathSegments.isEmpty) return null;
+    final segments = uri.pathSegments.where((part) => part.isNotEmpty).toList();
+    if (segments.length < 2 || segments[segments.length - 2] != 'manga') {
+      return null;
+    }
+    final raw = segments.last.trim();
+    if (raw.isEmpty) return null;
+    try {
+      return Uri.decodeComponent(raw);
+    } catch (_) {
+      return raw;
+    }
   }
 
   String _cloudType(LibraryCategory category) => switch (category) {
