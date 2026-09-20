@@ -36,7 +36,7 @@ void main() {
     final body = provider.substring(start, end);
 
     expect(body, contains('downloadManagerV2Provider'));
-    expect(body, contains('if (item.v2Owned && logical != null'));
+    expect(body, contains('if (logical != null && logical.isNotEmpty)'));
     expect(body, contains('manager.delete(DownloadLogicalId(logical))'));
     expect(body, contains('_deletingIds.addAll(droppedIds)'));
     expect(body, contains('storage.removeDownloadMetadata('));
