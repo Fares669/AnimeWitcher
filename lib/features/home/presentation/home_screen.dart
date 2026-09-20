@@ -37,6 +37,7 @@ import '../../../shared/widgets/taskbar_visibility.dart';
 
 import 'package:animewitcher/features/news/presentation/news_list_screen.dart';
 import 'package:animewitcher/features/news/presentation/news_utils.dart';
+import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
