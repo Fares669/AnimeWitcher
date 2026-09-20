@@ -48,6 +48,16 @@ final class MangaChapterPageTaskV2 {
   final int retries;
 }
 
+abstract interface class MangaChapterPageResolverV2 {
+  Future<List<MangaPage>> resolve(Map<String, Object?> descriptor);
+}
+
+abstract interface class MangaChapterGatewayV2 {
+  Future<DownloadTransportHandle> startMangaChapter(
+    MangaChapterTransportSpecV2 spec,
+  );
+}
+
 typedef MangaChapterPageStarterV2 =
     Future<DownloadTransportHandle> Function(MangaChapterPageTaskV2 task);
 
