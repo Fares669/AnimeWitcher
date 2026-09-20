@@ -185,13 +185,6 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
     SearchDomain.characters => Icons.groups_rounded,
   };
 
-  String _domainSystemImage(SearchDomain domain) => switch (domain) {
-    SearchDomain.anime => 'play.rectangle.fill',
-    SearchDomain.animation => 'sparkles.tv',
-    SearchDomain.manga => 'book.closed.fill',
-    SearchDomain.characters => 'person.2.fill',
-  };
-
   void _onDomainMenuSelected(String value) {
     final selected = SearchDomain.values.where(
       (domain) => domain.name == value,
@@ -236,24 +229,6 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildDomainToolbarButton(Color tint) {
-    final domain = widget.domain!;
-    return Builder(
-      builder: (context) => AppleLiquidGlassToolbarButton(
-      icon: _domainIcon(domain),
-      systemImage: _domainSystemImage(domain),
-      tooltip: widget.domainTooltip,
-      color: tint,
-      menuTintColor: tint,
-      menuItems: _domainItems(context),
-      selectedMenuValue: domain.name,
-      onMenuSelected: _onDomainMenuSelected,
-      onPressed: () {},
-      width: widget.height,
-    ),
     );
   }
 
