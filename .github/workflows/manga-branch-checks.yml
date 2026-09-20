@@ -69,5 +69,11 @@ jobs:
             test/features/home/presentation/home_provider_test.dart \
             test/features/home/presentation/home_screen_test.dart -r expanded
 
+      - name: Download V2 manga migration RED/GREEN tests
+        run: |
+          flutter test test/core/services/download_v2/download_v2_models_test.dart \
+            test/core/services/download_v2/download_v2_identity_test.dart \
+            test/core/services/download_v2/download_v2_manga_migration_test.dart -r expanded
+
       - name: Probe AnimeWitcher Manga backend
         run: dart run tool/manga_backend_probe.dart
