@@ -29,9 +29,7 @@ class MangaInformationSection extends StatelessWidget {
       sync['englishTitle'] ?? sync['awEnglishTitle'],
     );
 
-    if (rows.isEmpty && (item.tags == null || item.tags!.isEmpty)) {
-      return const SizedBox.shrink();
-    }
+    if (rows.isEmpty) return const SizedBox.shrink();
 
     final colors = Theme.of(context).colorScheme;
     return DecoratedBox(
@@ -72,18 +70,7 @@ class MangaInformationSection extends StatelessWidget {
               ),
               const SizedBox(height: 10),
             ],
-            if (item.tags case final tags? when tags.isNotEmpty)
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final tag in tags)
-                    Chip(
-                      visualDensity: VisualDensity.compact,
-                      label: Text(tag),
-                    ),
-                ],
-              ),
+
           ],
         ),
       ),
