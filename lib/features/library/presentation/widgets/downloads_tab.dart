@@ -8,6 +8,7 @@ import 'package:animewitcher/core/utils/image_fallbacks.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:animewitcher/core/utils/episode_order.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
+import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/services/download_v2/download_v2_models.dart';
 import '../../../../core/router/app_router.dart';
@@ -217,9 +218,10 @@ class _CompletedDownloadsList extends StatelessWidget {
     final List<String> keys = [];
     for (final item in items) {
       final mediaIdentity =
-          item.item.tmdbId?.toString() ?? item.item.url.trim().isNotEmpty
-          ? item.item.url.trim()
-          : item.item.title;
+          item.item.tmdbId?.toString() ??
+          (item.item.url.trim().isNotEmpty
+              ? item.item.url.trim()
+              : item.item.title);
       final key = '${item.mediaKind.name}:$mediaIdentity';
       if (!grouped.containsKey(key)) {
         keys.add(key);
