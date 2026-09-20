@@ -12,7 +12,6 @@ import 'download_source_resolver_v2.dart';
 import 'download_v2_diagnostics.dart';
 import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
-import 'legacy_download_migration_v2.dart';
 import 'logical_download_store_v2.dart';
 
 /// Application request for one logical episode download.
@@ -702,22 +701,6 @@ final class DownloadManagerV2 {
       }
 
       if (record.intent == DownloadUserIntent.paused) {
-        // Policy-A legacy migration is the one intentional exception to exact
-        // resume. It has no package transfer to resume by design, so the first
-        // explicit user Resume starts a clean V2 generation from byte zero.
-        // Strip the migration marker before persisting that generation; once
-        // V2 owns transport, a later missing paused handle must never silently
-        // become another byte-zero restart.
-        if (record.generation == 1 &&
-            sourceDescriptorIsMigratedLegacyV2(record.sourceDescriptor)) {
-          // Policy-A migration is the only paused/no-handle state allowed to
-          // create transport here. The separate legacyRestartRequired flag,
-          // when present, remains available to the production resolver; normal
-          // migrated refresh descriptors keep using the normal V2 resolver.
-          // Generation > 1 closes this exception permanently.
-          return _startFreshGeneration(request, record);
-        }
-
         throw StateError(
           'Download cannot resume safely without its exact paused transfer; '
           'existing progress was kept paused',
