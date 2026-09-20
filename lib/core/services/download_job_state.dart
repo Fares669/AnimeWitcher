@@ -24,7 +24,7 @@ enum DownloadJobState {
 }
 
 /// Queue scheduling is a projection of the durable logical state. Plugin
-/// TaskStatus and legacy metadata are executor/migration evidence only.
+/// TaskStatus and persisted metadata are executor/recovery evidence only.
 bool downloadJobQueueWaiting(DownloadJobState state) =>
     state == DownloadJobState.queued;
 
@@ -250,7 +250,7 @@ DownloadRecoveryInventory buildDownloadRecoveryInventory({
 
   // Preserve executor order when no durable FIFO evidence exists. Once at
   // least one timestamp is available, order all logical rows deterministically
-  // and put unknown-age legacy rows after known FIFO entries.
+  // and put unknown-age persisted rows after known FIFO entries.
   if (orderByTaskId.isNotEmpty) {
     records.sort((a, b) {
       final aOrder = orderByTaskId[a.task.taskId];
@@ -419,7 +419,7 @@ DownloadRecoveryPlan planDownloadRecoveryWithJobAuthority({
       break;
   }
 
-  // Legacy userPaused is migration evidence only when no JobStore authority
+  // userPaused metadata is recovery evidence only when no stronger authority
   // exists (handled above). Once a durable logical state exists, replicas such
   // as metadata/plugin status may not override it.
   if (authoritativeUserPaused ||
