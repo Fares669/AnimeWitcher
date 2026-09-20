@@ -397,6 +397,20 @@ Future<void> main() async {
     '${supportedLatestIndices.join(',')}',
   );
 
+  try {
+    final recentDocument = await _firestoreFirst('manga_recent');
+    if (recentDocument == null) {
+      stdout.writeln('firestore:manga_recent: unavailable');
+    } else {
+      _printSchema(
+        'firestore:manga_recent',
+        _decodeFirestoreFields(recentDocument['fields']),
+      );
+    }
+  } catch (error) {
+    stdout.writeln('firestore:manga_recent: ${_dioSummary(error)}');
+  }
+
   Map<String, Object?>? mangaDocument;
   Map<String, Object?> mangaFields = const <String, Object?>{};
   try {
