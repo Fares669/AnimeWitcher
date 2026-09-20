@@ -7,6 +7,7 @@ import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/storage/manga_reading_repository.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import 'manga_reader_controller.dart';
 import 'widgets/manga_paged_reader.dart';
@@ -73,7 +74,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, _) {
-        return Scaffold(
+        final scaffold = Scaffold(
           appBar: MangaReaderControls(
             chapterLabel: _controller.currentChapter.name,
             pageIndex: _controller.pageIndex,
@@ -88,6 +89,16 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
                 : null,
           ),
           body: _body(context),
+        );
+
+        if (!appleUsesPersistentLiquidGlassHeader) return scaffold;
+        final colors = Theme.of(context).colorScheme;
+        return ApplePersistentGlassHeaderScope(
+          onBack: () => Navigator.of(context).maybePop(),
+          backForegroundColor: colors.onSurface,
+          backFallbackColor: colors.surfaceContainerHigh,
+          trailingButtons: const <AppleLiquidGlassToolbarButton>[],
+          child: scaffold,
         );
       },
     );

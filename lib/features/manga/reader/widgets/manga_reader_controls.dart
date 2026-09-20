@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../shared/widgets/apple_liquid_glass.dart';
 import '../manga_reader_controller.dart';
 
 class MangaReaderControls extends StatelessWidget
@@ -35,6 +36,7 @@ class MangaReaderControls extends StatelessWidget
         : (pageIndex + 1).toString() + ' / ' + pageCount.toString();
 
     return AppBar(
+      automaticallyImplyLeading: !appleUsesPersistentLiquidGlassHeader,
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
