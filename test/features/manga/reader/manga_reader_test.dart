@@ -23,6 +23,10 @@ const pages = <MangaPage>[
 ];
 
 final class _ReaderProvider extends AnimeWitcherProvider {
+  _ReaderProvider({this.emptyPages = false});
+
+  final bool emptyPages;
+
   @override
   String get packageName => 'test.reader.manga';
 
@@ -65,7 +69,7 @@ final class _ReaderProvider extends AnimeWitcherProvider {
   Future<List<MangaPage>> getMangaChapterPages(
     String mangaUrl,
     MangaChapter chapter,
-  ) async => pages;
+  ) async => emptyPages ? const <MangaPage>[] : pages;
 }
 
 final class _ReaderManager extends ExtensionManager {
@@ -150,7 +154,7 @@ void main() {
       applePersistentGlassHeaderController.hide(staleHeader.owner);
     }
 
-    final provider = _ReaderProvider();
+    final provider = _ReaderProvider(emptyPages: true);
     const chapter = MangaChapter(
       id: 'c1',
       mangaId: 'm1',
