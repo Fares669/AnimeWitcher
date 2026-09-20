@@ -1,10 +1,16 @@
 import 'package:animewitcher/features/search/presentation/search_domain.dart';
+import 'package:animewitcher/features/search/presentation/search_provider.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_header_bar.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+final class _IdleSearchNotifier extends PagedSearchNotifier {
+  @override
+  SearchAggregateState build() => const SearchAggregateState();
+}
 
 void main() {
   testWidgets('character search header keeps only the domain action', (
@@ -19,6 +25,9 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
+        overrides: [
+          searchPagedResultsProvider.overrideWith(_IdleSearchNotifier.new),
+        ],
         child: MaterialApp(
           locale: const Locale('ar'),
           localizationsDelegates: AppLocalizations.localizationsDelegates,
