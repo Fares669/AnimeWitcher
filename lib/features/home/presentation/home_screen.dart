@@ -182,6 +182,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     BuildContext context,
     Map<String, List<MultimediaItem>> data,
     List<NewsItem> news,
+    List<MangaLatestChapter> latestManga,
     AnimeWitcherProvider provider,
   ) {
     final entries = visibleHomeRailEntries(data).toList(growable: false);
@@ -238,12 +239,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           forcePortrait: isLatestAddedSectionTitle(entry.key),
         ),
       );
+      if (latestManga.isNotEmpty && _isNewEpisodesSectionTitle(entry.key)) {
+        sections.add(
+          LatestMangaChaptersSection(
+            title: AppLocalizations.of(context)!.latestChapters,
+            items: latestManga,
+            onTap: (latest) {
+              MangaDetailsRoute(
+                $extra: MangaDetailsRouteExtra(item: latest.manga),
+              ).push<void>(context);
+            },
+          ),
+        );
+      }
       if (news.isNotEmpty && index == newsAfterIndex) {
         sections.add(buildNewsSection());
       }
     }
 
     return sections;
+  }
+
+  bool _isNewEpisodesSectionTitle(String title) {
+    final normalized = title.trim().toLowerCase();
+    return normalized.contains('الحلقات الجديدة') ||
+        normalized.contains('حلقات جديدة') ||
+        normalized.contains('new episodes') ||
+        normalized.contains('latest episodes');
   }
 
   Widget _buildBody(
@@ -327,25 +349,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   ),
                 ),
 
-              if (latestManga.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: LatestMangaChaptersSection(
-                    title: l10n.latestChapters,
-                    items: latestManga,
-                    onTap: (entry) {
-                      MangaDetailsRoute(
-                        $extra: MangaDetailsRouteExtra(item: entry.manga),
-                      ).push<void>(context);
-                    },
-                  ),
-                ),
-
               SliverList(
                 delegate: SliverChildListDelegate(
                   _buildProviderSectionsWithNews(
                     context,
                     data,
                     news,
+                    latestManga,
                     activeProvider,
                   ),
                 ),
