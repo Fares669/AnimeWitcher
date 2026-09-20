@@ -514,15 +514,15 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         hasMore: false,
       );
     }
-    if (_query.trim().isNotEmpty) {
-      if (page > 0) {
-        return AnimeWitcherCharacterPage(
-          items: const <AnimeWitcherCharacterHit>[],
-          page: page,
-          hasMore: false,
-        );
-      }
+    if (page == 0) {
       return provider.searchCharacters(_query);
+    }
+    if (_query.trim().isNotEmpty) {
+      return AnimeWitcherCharacterPage(
+        items: const <AnimeWitcherCharacterHit>[],
+        page: page,
+        hasMore: false,
+      );
     }
     return provider.getCharactersPage(page: page);
   }
