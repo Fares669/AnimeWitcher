@@ -2761,11 +2761,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   double? _firestoreMangaChapterNumber(String name, String docId) {
-    final label = RegExp(r'\\d+(?:[.,]\\d+)?').firstMatch(name)?.group(0);
+    final label = RegExp(r'\d+(?:[.,]\d+)?').firstMatch(name)?.group(0);
     final normalized = label?.replaceAll(',', '.');
     return double.tryParse(normalized ?? '') ?? double.tryParse(docId);
   }
-
   MangaChapter? _firestoreMangaChapter(
     dynamic raw, {
     required String mangaId,
