@@ -287,6 +287,60 @@ Future<void> _probeMangaRecencyMetadata(
   }
 }
 
+Future<void> _probeMangaFacets(
+  List<_AlgoliaCredentials> credentials,
+) async {
+  for (final candidate in credentials) {
+    try {
+      final response = await _dio.post<Object?>(
+        'https://${candidate.appId}-dsn.algolia.net/1/indexes/'
+        'manga_views_desc/query',
+        data: <String, Object?>{
+          'query': '',
+          'hitsPerPage': 0,
+          'facets': <String>['type', 'statictes', 'details.year', 'tags'],
+          'maxValuesPerFacet': 100,
+        },
+        options: Options(
+          headers: <String, String>{
+            'X-Algolia-Application-Id': candidate.appId,
+            'X-Algolia-API-Key': candidate.apiKey,
+            'content-type': 'application/json',
+          },
+        ),
+      );
+      if ((response.statusCode ?? 500) >= 300 || response.data is! Map) {
+        continue;
+      }
+      final body = Map<String, Object?>.from(response.data! as Map);
+      final facets = body['facets'];
+      if (facets is! Map) {
+        stdout.writeln('algolia:manga-facets: unavailable');
+        return;
+      }
+      final map = Map<String, Object?>.from(facets);
+      for (final key in <String>['type', 'statictes', 'details.year', 'tags']) {
+        final values = map[key];
+        if (values is Map) {
+          final names = values.keys.map((value) => value.toString()).toList()
+            ..sort();
+          stdout.writeln(
+            'algolia:manga-facet:$key=[${names.take(30).join(',')}]',
+          );
+        } else {
+          stdout.writeln('algolia:manga-facet:$key=unavailable');
+        }
+      }
+      return;
+    } catch (error) {
+      stdout.writeln(
+        'algolia:manga-facets via ${candidate.label}: '
+        '${_dioSummary(error)}',
+      );
+    }
+  }
+}
+
 Future<void> _probeRecentMangaWindow(
   List<_AlgoliaCredentials> credentials,
 ) async {
@@ -561,6 +615,7 @@ Future<void> main() async {
   await _probeMangaIndexNames(constants);
   await _probeMangaRecencyMetadata(credentials);
   await _probeRecentMangaWindow(credentials);
+  await _probeMangaFacets(credentials);
 
   final supportedSortIndices = <String>[];
   for (final index in _mangaSortIndices) {
