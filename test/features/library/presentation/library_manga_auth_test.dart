@@ -51,7 +51,7 @@ void main() {
       secureStorage: SecureTokenStorage(storage),
     );
     final container = ProviderContainer(
-      overrides: <Override>[
+      overrides: [
         storageServiceProvider.overrideWithValue(storage),
         animeWitcherAccountServiceProvider.overrideWithValue(account),
       ],
