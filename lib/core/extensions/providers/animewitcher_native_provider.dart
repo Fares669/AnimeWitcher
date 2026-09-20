@@ -2775,33 +2775,38 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       return List<MangaChapter>.unmodifiable(cached);
     }
 
-    // The current public MangaLek catalog is a WordPress tag/category archive.
-    // Prefer that shape, then retain the historical Madara pointer as fallback.
+    // AnimeWitcher's stored MangaLek URL is still the fastest and most
+    // reliable source when it contains chapter rows. Only use the archive
+    // fallback when that direct page no longer exposes them.
+    try {
+      final html = await _mangaHtml(
+        sourceUrl,
+        acceptHtml: (html) => RegExp(
+          r'wp-manga-chapter',
+          caseSensitive: false,
+        ).hasMatch(html),
+      );
+      final chapters = parseMangaLekChapters(
+        html: html,
+        mangaId: mangaId,
+        documentUrl: sourceUrl,
+      );
+      if (chapters.isNotEmpty) {
+        _mangaChapterCache[mangaId] = chapters;
+        _mangaChapterExpiresAt[mangaId] = DateTime.now().add(_episodeDataTtl);
+        return List<MangaChapter>.unmodifiable(chapters);
+      }
+    } catch (_) {
+      // Fall through to the current WordPress archive shape.
+    }
+
     final archiveChapters = await _loadMangaArchiveChapters(
       sourceUrl: sourceUrl,
       mangaId: mangaId,
     );
-    if (archiveChapters.isNotEmpty) {
-      _mangaChapterCache[mangaId] = archiveChapters;
-      _mangaChapterExpiresAt[mangaId] = DateTime.now().add(_episodeDataTtl);
-      return archiveChapters;
-    }
-
-    final html = await _mangaHtml(
-      sourceUrl,
-      acceptHtml: (html) => RegExp(
-        r'wp-manga-chapter',
-        caseSensitive: false,
-      ).hasMatch(html),
-    );
-    final chapters = parseMangaLekChapters(
-      html: html,
-      mangaId: mangaId,
-      documentUrl: sourceUrl,
-    );
-    _mangaChapterCache[mangaId] = chapters;
+    _mangaChapterCache[mangaId] = archiveChapters;
     _mangaChapterExpiresAt[mangaId] = DateTime.now().add(_episodeDataTtl);
-    return List<MangaChapter>.unmodifiable(chapters);
+    return List<MangaChapter>.unmodifiable(archiveChapters);
   }
 
   @override
