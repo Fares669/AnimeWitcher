@@ -198,12 +198,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('الحلقات الجديدة'), findsOneWidget);
-    expect(find.text('أحدث الفصول'), findsOneWidget);
+    expect(find.text('فصول جديدة'), findsOneWidget);
     expect(find.text('Latest Manga'), findsWidgets);
     expect(find.text('آخر الأعمال المضافة'), findsOneWidget);
 
     final episodesY = tester.getTopLeft(find.text('الحلقات الجديدة')).dy;
-    final chaptersY = tester.getTopLeft(find.text('أحدث الفصول')).dy;
+    final chaptersY = tester.getTopLeft(find.text('فصول جديدة')).dy;
     final addedY = tester.getTopLeft(find.text('آخر الأعمال المضافة')).dy;
     expect(episodesY, lessThan(chaptersY));
     expect(chaptersY, lessThan(addedY));
