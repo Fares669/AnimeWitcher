@@ -41,7 +41,8 @@ jobs:
         run: |
           flutter test test/features/search/presentation/search_domain_test.dart \
             test/features/search/presentation/search_domain_generation_test.dart \
-            test/features/search/presentation/widgets/search_action_buttons_test.dart -r expanded
+            test/features/search/presentation/widgets/search_action_buttons_test.dart \
+            test/features/search/presentation/widgets/search_header_bar_domain_test.dart -r expanded
 
       - name: Probe AnimeWitcher Manga backend
         run: dart run tool/manga_backend_probe.dart
