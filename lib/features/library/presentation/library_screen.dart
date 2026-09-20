@@ -10,8 +10,10 @@ import '../../../core/utils/window_controls_inset.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import 'library_provider.dart';
+import 'library_media_kind.dart';
 import 'widgets/bookmarks_tab.dart';
 import 'widgets/library_category_selector.dart';
+import 'widgets/library_media_selector.dart';
 
 class LibraryScreen extends ConsumerWidget {
   const LibraryScreen({super.key});
@@ -23,15 +25,32 @@ class LibraryScreen extends ConsumerWidget {
     final isWidescreen = isTv || context.isTabletOrLarger;
     final libraryState = ref.watch(libraryProvider);
     final selectedCategory = libraryState.category;
+    final selectedMediaKind = libraryState.mediaKind;
     final repository = ref.read(libraryRepositoryProvider);
     final categoryCounts = <LibraryCategory, int>{
       for (final category in LibraryCategory.values)
-        category: repository.getLibraryItems(category: category).length,
+        category: filterLibraryItemsByKind(
+          repository.getLibraryItems(category: category),
+          selectedMediaKind,
+        ).length,
     };
 
+    final mediaSelector = LibraryMediaSelector(
+      selected: selectedMediaKind,
+      onSelected: ref.read(libraryProvider.notifier).selectMediaKind,
+    );
     final categorySelector = LibraryCategorySelector(
       selected: selectedCategory,
       counts: categoryCounts,
+      mediaKind: selectedMediaKind,
+    );
+    final selectorRow = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        mediaSelector,
+        const SizedBox(width: 8),
+        Flexible(child: categorySelector),
+      ],
     );
 
     if (isWidescreen) {
@@ -53,7 +72,7 @@ class LibraryScreen extends ConsumerWidget {
                       windowControlsTrailingInset,
                 ),
                 alignment: Alignment.centerRight,
-                child: categorySelector,
+                child: selectorRow,
               ),
             ),
             const Expanded(child: BookmarksTab()),
@@ -64,7 +83,7 @@ class LibraryScreen extends ConsumerWidget {
 
     final usePersistentGlass = appleUsesPersistentLiquidGlassHeader;
     final mobileScaffold = Scaffold(
-      appBar: AppBar(title: categorySelector),
+      appBar: AppBar(titleSpacing: 12, title: selectorRow),
       body: const BookmarksTab(),
     );
 
