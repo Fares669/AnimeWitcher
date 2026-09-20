@@ -2609,6 +2609,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     String url, {
     String? referer,
     CancelToken? cancelToken,
+    bool Function(String html)? acceptHtml,
   }) async {
     final original = safeTryParseUri(url.trim());
     if (original == null ||
@@ -2655,7 +2656,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         final status = response.statusCode ?? 0;
         final html = response.data?.toString() ?? '';
         if (status >= 200 && status < 300 && html.isNotEmpty) {
-          return html;
+          if (acceptHtml == null || acceptHtml(html)) return html;
+          lastError = StateError(
+            'AnimeWitcher Manga source returned unexpected content.',
+          );
+          continue;
         }
         lastError = StateError(
           'AnimeWitcher Manga source request failed with status $status.',
@@ -2685,7 +2690,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       return List<MangaChapter>.unmodifiable(cached);
     }
 
-    final html = await _mangaHtml(sourceUrl);
+    final html = await _mangaHtml(
+      sourceUrl,
+      acceptHtml: (html) => RegExp(
+        r'wp-manga-chapter',
+        caseSensitive: false,
+      ).hasMatch(html),
+    );
     final chapters = parseMangaLekChapters(
       html: html,
       mangaId: mangaId,
@@ -2712,7 +2723,14 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
     final details = await getMangaDetails(mangaUrl);
     final referer = details.syncData?['mangalekPageUrl'];
-    final html = await _mangaHtml(key, referer: referer);
+    final html = await _mangaHtml(
+      key,
+      referer: referer,
+      acceptHtml: (html) => RegExp(
+        r'page-break|reading-content',
+        caseSensitive: false,
+      ).hasMatch(html),
+    );
     final pages = parseMangaLekPages(html: html, chapterUrl: key);
     _mangaPageCache[key] = pages;
     _mangaPageExpiresAt[key] = DateTime.now().add(_episodeDataTtl);
@@ -2828,7 +2846,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         mapper: (item) async {
           final sourceUrl = item.syncData!['mangalekPageUrl']!;
           final mangaId = item.syncData!['mangaId'] ?? '';
-          final html = await _mangaHtml(sourceUrl);
+          final html = await _mangaHtml(
+            sourceUrl,
+            acceptHtml: (html) => RegExp(
+              r'wp-manga-chapter',
+              caseSensitive: false,
+            ).hasMatch(html),
+          );
           final chapters = parseMangaLekChapters(
             html: html,
             mangaId: mangaId,
