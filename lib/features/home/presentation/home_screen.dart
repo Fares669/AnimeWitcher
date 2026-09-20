@@ -330,9 +330,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               if (latestManga.isNotEmpty)
                 SliverToBoxAdapter(
                   child: LatestMangaChaptersSection(
-                    title: Localizations.localeOf(context).languageCode == 'ar'
-                        ? 'أحدث الفصول'
-                        : 'Latest chapters',
+                    title: l10n.latestChapters,
                     items: latestManga,
                     onTap: (entry) {
                       MangaDetailsRoute(
