@@ -34,15 +34,20 @@ class LibraryRepository {
       await setFavorite(item, true);
       return;
     }
-    if (target == LibraryCategory.completed &&
+    final isManga = item.contentType == MultimediaContentType.manga;
+    if (!isManga &&
+        target == LibraryCategory.completed &&
         item.status != ShowStatus.completed) {
       return;
     }
-    if (target == LibraryCategory.watching && item.isNotYetAired) {
+    if (!isManga &&
+        target == LibraryCategory.watching &&
+        item.isNotYetAired) {
       return;
     }
 
     await _storageService.addToLibrary(item, category: target.storageKey);
+    if (isManga) return;
     _syncInBackground(
       _accountService.saveLibraryItem(
         item,
@@ -61,18 +66,21 @@ class LibraryRepository {
     }
 
     final item = _findItem(url);
-    if (category == LibraryCategory.completed &&
+    final isManga = item?.contentType == MultimediaContentType.manga;
+    if (!isManga &&
+        category == LibraryCategory.completed &&
         item != null &&
         item.status != ShowStatus.completed) {
       return;
     }
-    if (category == LibraryCategory.watching &&
+    if (!isManga &&
+        category == LibraryCategory.watching &&
         item != null &&
         item.isNotYetAired) {
       return;
     }
     await _storageService.setLibraryItemCategory(url, category.storageKey);
-    if (item != null) {
+    if (item != null && !isManga) {
       _syncInBackground(
         _accountService.saveLibraryItem(
           item,
@@ -88,7 +96,10 @@ class LibraryRepository {
     final item = _findItem(url);
     final favorite = _storageService.isLibraryItemFavorite(url);
     await _storageService.setLibraryItemCategory(url, null);
-    if (item == null) return;
+    if (item == null ||
+        item.contentType == MultimediaContentType.manga) {
+      return;
+    }
     if (favorite) {
       _syncInBackground(
         _accountService.saveLibraryItem(item, null, favorite: true),
@@ -105,6 +116,7 @@ class LibraryRepository {
   Future<void> setFavorite(MultimediaItem item, bool favorite) async {
     final category = getItemCategory(item.url);
     await _storageService.addToLibrary(item, favorite: favorite);
+    if (item.contentType == MultimediaContentType.manga) return;
     if (!favorite && category == null) {
       _syncInBackground(
         _accountService.removeLibraryItem(item.url),
@@ -119,7 +131,9 @@ class LibraryRepository {
   }
 
   Future<void> removeFromLibrary(String url) async {
+    final item = _findItem(url);
     await _storageService.removeFromLibrary(url);
+    if (item?.contentType == MultimediaContentType.manga) return;
     _syncInBackground(
       _accountService.removeLibraryItem(url),
       'remove library item',
