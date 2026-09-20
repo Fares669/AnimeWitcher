@@ -1,6 +1,7 @@
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/widgets/library_media_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -12,6 +13,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         locale: const Locale('ar'),
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
         supportedLocales: const <Locale>[Locale('ar'), Locale('en')],
         home: Scaffold(
           appBar: AppBar(
