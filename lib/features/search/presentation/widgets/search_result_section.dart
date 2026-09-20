@@ -46,9 +46,17 @@ class _SearchResultSectionState extends ConsumerState<SearchResultSection> {
       heroTag: 'search_${widget.providerId}_${item.url}_$rIndex',
       compact: compact,
       focusNode: rIndex == 0 ? widget.firstCardFocusNode : null,
-      onTap: () =>
-          DetailsRoute($extra: DetailsRouteExtra(item: item))
-              .push<void>(context),
+      onTap: () {
+        if (item.contentType == MultimediaContentType.manga) {
+          MangaDetailsRoute(
+            $extra: MangaDetailsRouteExtra(item: item),
+          ).push<void>(context);
+          return;
+        }
+        DetailsRoute(
+          $extra: DetailsRouteExtra(item: item),
+        ).push<void>(context);
+      },
     );
   }
 
