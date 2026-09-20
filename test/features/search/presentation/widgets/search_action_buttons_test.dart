@@ -346,7 +346,7 @@ void main() {
 
     await tester.tap(find.byTooltip('Search domain'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('مانجا'));
+    await tester.tap(find.text('Manga'));
     await tester.pumpAndSettle();
 
     expect(selected, SearchDomain.manga);
