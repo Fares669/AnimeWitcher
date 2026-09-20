@@ -62,7 +62,7 @@ class DownloadUrlRefreshDescriptor {
       quality: _string(map['quality']),
       refreshUrl: _string(map['refreshUrl']),
       updatedAtMillis: _int(map['updatedAtMillis']),
-      // Legacy descriptors predate generation fencing. Generation zero keeps
+      // Older descriptors predate generation fencing. Generation zero keeps
       // them readable until the owning DownloadService rewrites the record.
       generation: _int(map['generation']),
       ownerTaskId: _string(map['ownerTaskId']),
@@ -185,7 +185,7 @@ class DownloadUrlRefreshStore {
             return false;
           }
         } else if (incomingOwner != null && incomingOwner.isNotEmpty) {
-          // Migrating a legacy unowned descriptor to owned state is also a
+          // Adopting an older unowned descriptor into owned state is also a
           // claim operation, never a plain save.
           return false;
         }
@@ -220,7 +220,7 @@ class DownloadUrlRefreshStore {
       await backend.read(key),
     );
     if (descriptor == null) return true;
-    // Generation-only cleanup is retained for legacy unowned rows only. Once
+    // Generation-only cleanup is retained for older unowned rows only. Once
     // an owner exists, callers must prove the task identity as well.
     if (descriptor.ownerTaskId != null) return false;
     if (descriptor.generation != generation) return false;
