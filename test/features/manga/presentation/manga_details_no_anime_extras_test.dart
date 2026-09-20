@@ -3,6 +3,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_screen.dart';
+import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -123,6 +124,9 @@ void main() {
           extensionManagerProvider.overrideWith(() => _Manager(provider)),
         ],
         child: MaterialApp(
+          locale: const Locale('ar'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: MangaDetailsScreen(
             item: MultimediaItem(
               title: 'Manga',
