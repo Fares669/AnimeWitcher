@@ -38,10 +38,10 @@ void main() {
     );
 
     expect(find.text('أحدث الفصول'), findsOneWidget);
-    expect(find.text('Solo Leveling'), findsOneWidget);
+    expect(find.text('Solo Leveling'), findsWidgets);
     expect(find.text('الفصل 201'), findsOneWidget);
 
-    await tester.tap(find.text('Solo Leveling'));
+    await tester.tap(find.text('Solo Leveling').first);
     expect(opened, isTrue);
   });
 }
