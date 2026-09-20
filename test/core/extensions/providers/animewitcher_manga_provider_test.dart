@@ -69,24 +69,53 @@ class _TestStorageService extends StorageService {
         }
         if (_isAlgolia(options.uri) &&
             options.uri.path.endsWith('/indexes/manga_views_desc/query')) {
+          final body = options.data;
+          final params = body is Map ? body['params']?.toString() ?? '' : '';
+          final isRecentQuery = params.contains('lastmodified');
           handler.resolve(
             Response<dynamic>(
               requestOptions: options,
               statusCode: 200,
-              data: <String, dynamic>{
-                'hits': <Map<String, dynamic>>[
-                  <String, dynamic>{
-                    'objectID': 'm1',
-                    'name': 'Manga One',
-                    'type': 'مانهوا',
-                    'poster_uri': 'https://img.example/m1.webp',
-                    'mangalek_page_url':
-                        'https://mangalik.net/manga/manga-one/',
-                  },
-                ],
-                'page': 0,
-                'nbPages': 1,
-              },
+              data: isRecentQuery
+                  ? <String, dynamic>{
+                      'hits': <Map<String, dynamic>>[
+                        <String, dynamic>{
+                          'objectID': 'recent-a',
+                          'name': 'Recent A',
+                          'type': 'مانجا',
+                          'poster_uri': 'https://img.example/a.webp',
+                          'mangalek_page_url':
+                              'https://mangalik.net/manga/recent-a/',
+                          'lastmodified': 200,
+                        },
+                        <String, dynamic>{
+                          'objectID': 'recent-b',
+                          'name': 'Recent B',
+                          'type': 'مانهوا',
+                          'poster_uri': 'https://img.example/b.webp',
+                          'mangalek_page_url':
+                              'https://mangalik.net/manga/recent-b/',
+                          'lastmodified': 300,
+                        },
+                      ],
+                      'page': 0,
+                      'nbPages': 1,
+                      'nbHits': 2,
+                    }
+                  : <String, dynamic>{
+                      'hits': <Map<String, dynamic>>[
+                        <String, dynamic>{
+                          'objectID': 'm1',
+                          'name': 'Manga One',
+                          'type': 'مانهوا',
+                          'poster_uri': 'https://img.example/m1.webp',
+                          'mangalek_page_url':
+                              'https://mangalik.net/manga/manga-one/',
+                        },
+                      ],
+                      'page': 0,
+                      'nbPages': 1,
+                    },
             ),
           );
           return;
@@ -98,6 +127,28 @@ class _TestStorageService extends StorageService {
               requestOptions: options,
               statusCode: 200,
               data: _mangaDocument(),
+            ),
+          );
+          return;
+        }
+        if (options.uri.host == 'mangalik.net' &&
+            (options.uri.path == '/manga/recent-a/' ||
+                options.uri.path == '/manga/recent-b/')) {
+          final isB = options.uri.path.contains('recent-b');
+          handler.resolve(
+            Response<dynamic>(
+              requestOptions: options,
+              statusCode: 200,
+              data: '''
+<ul>
+<li class="wp-manga-chapter">
+<a href="${isB ? '/manga/recent-b/chapter-30/' : '/manga/recent-a/chapter-20/'}">
+${isB ? 'الفصل 30' : 'الفصل 20'}
+</a>
+<span class="chapter-release-date">2026-09-20</span>
+</li>
+</ul>
+''',
             ),
           );
           return;
@@ -187,6 +238,27 @@ void main() {
     expect(
       stub.requests.any((entry) => entry.uri.path.contains('/anime_list/')),
       isFalse,
+    );
+  });
+
+  test('latest manga uses lastmodified and resolves newest chapter', () async {
+    final stub = _stubDio();
+    final page = await _provider(stub.dio).getLatestMangaPage(limit: 2);
+
+    expect(page.items, hasLength(2));
+    expect(page.items.map((entry) => entry.manga.title), <String>[
+      'Recent B',
+      'Recent A',
+    ]);
+    expect(page.items[0].chapter.name, 'الفصل 30');
+    expect(page.items[1].chapter.name, 'الفصل 20');
+    expect(
+      stub.requests.any((entry) {
+        final body = entry.data;
+        final params = body is Map ? body['params']?.toString() ?? '' : '';
+        return params.contains('lastmodified');
+      }),
+      isTrue,
     );
   });
 
