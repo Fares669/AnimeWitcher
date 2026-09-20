@@ -23,16 +23,17 @@ void main() {
     expect(find.byType(InteractiveViewer), findsOneWidget);
     expect(controller.value.getMaxScaleOnAxis(), 1);
 
-    await tester.doubleTapAt(
-      tester.getCenter(find.byType(MangaZoomablePage)),
-    );
+    final center = tester.getCenter(find.byType(MangaZoomablePage));
+    await tester.tapAt(center);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(center);
     await tester.pumpAndSettle();
 
     expect(controller.value.getMaxScaleOnAxis(), greaterThan(1));
 
-    await tester.doubleTapAt(
-      tester.getCenter(find.byType(MangaZoomablePage)),
-    );
+    await tester.tapAt(center);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(center);
     await tester.pumpAndSettle();
 
     expect(controller.value.getMaxScaleOnAxis(), closeTo(1, 0.001));
