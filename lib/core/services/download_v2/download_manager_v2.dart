@@ -408,6 +408,8 @@ final class DownloadManagerV2 {
               }
             }
             _activateHandle(record.logicalId, exactHandle);
+          } else if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+            await _startExistingMangaGenerationUnsafe(request, record);
           } else {
             await _startFreshGeneration(
               request,
@@ -719,12 +721,57 @@ final class DownloadManagerV2 {
       }
 
       if (record.intent == DownloadUserIntent.paused) {
+        if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+          final destinationKey = await _canonicalDestinationPath(
+            request.destinationPath,
+          );
+          return _destinationCommands.run(destinationKey, () {
+            return _admissionCommands.run('episodes', () async {
+              final conflict = await _findDestinationConflict(
+                destinationKey,
+                logicalId,
+              );
+              if (conflict != null) {
+                throw StateError(
+                  'Canonical destination is already owned by ${conflict.logicalId}',
+                );
+              }
+              if (!await _hasAdmissionSlot(excluding: logicalId)) {
+                final waitingRecord = record.copyWith(
+                  intent: DownloadUserIntent.active,
+                  awaitingAdmission: true,
+                  parallelChunks: 1,
+                  clearFailure: true,
+                  updatedAtMillis: _nowMillis(),
+                );
+                await _store.put(waitingRecord);
+                _rememberRecord(waitingRecord);
+                await _publishRecords();
+                final queued = DownloadTransportSnapshot(
+                  taskId: waitingRecord.taskId,
+                  status: DownloadTransportStatus.queued,
+                  progress: _snapshots[logicalId]?.progress ?? 0,
+                  configuredConnections: 1,
+                  activeConnections: 0,
+                );
+                _snapshots[logicalId] = queued;
+                _recordDiagnostic(logicalId, queued);
+                _scheduleAdmissionPromotion();
+                return queued;
+              }
+              return _startExistingMangaGenerationUnsafe(request, record);
+            });
+          });
+        }
         throw StateError(
           'Download cannot resume safely without its exact paused transfer; '
           'existing progress was kept paused',
         );
       }
 
+      if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+        return _startExistingMangaGenerationUnsafe(request, record);
+      }
       return _startFreshGeneration(request, record);
     });
   }
@@ -1141,12 +1188,16 @@ final class DownloadManagerV2 {
         return;
       }
 
-      await _startFreshGenerationUnsafe(
-        request,
-        record,
-        previousHandle: existing,
-        lookUpPreviousHandle: false,
-      );
+      if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+        await _startExistingMangaGenerationUnsafe(request, record);
+      } else {
+        await _startFreshGenerationUnsafe(
+          request,
+          record,
+          previousHandle: existing,
+          lookUpPreviousHandle: false,
+        );
+      }
       return;
     }
 
@@ -1185,6 +1236,46 @@ final class DownloadManagerV2 {
       videoSource: source,
     );
     _activateHandle(admitted.logicalId, handle);
+  }
+
+  Future<DownloadTransportSnapshot> _startExistingMangaGenerationUnsafe(
+    DownloadStartRequestV2 request,
+    LogicalDownloadRecordV2 record,
+  ) async {
+    if (request.mediaKind != DownloadMediaKind.mangaChapter ||
+        record.mediaKind != DownloadMediaKind.mangaChapter) {
+      throw StateError('Existing-generation resume is Manga-only.');
+    }
+
+    final admitted = record.copyWith(
+      intent: DownloadUserIntent.active,
+      awaitingAdmission: false,
+      parallelChunks: 1,
+      clearFailure: true,
+      updatedAtMillis: _nowMillis(),
+    );
+    await _store.put(admitted);
+    _rememberRecord(admitted);
+    await _publishRecords();
+
+    final queued = DownloadTransportSnapshot(
+      taskId: admitted.taskId,
+      status: DownloadTransportStatus.queued,
+      progress: _snapshots[admitted.logicalId]?.progress ?? 0,
+      configuredConnections: 1,
+      activeConnections: 0,
+    );
+    _snapshots[admitted.logicalId] = queued;
+    _recordDiagnostic(admitted.logicalId, queued);
+
+    final handle = await _startTransportForRequest(
+      request: request,
+      taskId: admitted.taskId,
+      parallelChunks: 1,
+      expectedBytes: admitted.expectedBytes,
+    );
+    _activateHandle(admitted.logicalId, handle);
+    return handle.current;
   }
 
   Future<DownloadTransportHandle> _startTransportForRequest({
