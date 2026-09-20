@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
@@ -56,6 +57,107 @@ void main() {
     expect(record, isNotNull);
     expect(record!.parallelChunks, 1);
     expect(record.mediaKind, DownloadMediaKind.mangaChapter);
+  });
+
+  test('paused manga relaunch resumes the same generation from manifest', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_manga_paused_');
+    addTearDown(() => temp.delete(recursive: true));
+
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _Gateway();
+    final logicalId = logicalDownloadIdForMangaChapter(
+      mangaId: 'm1',
+      chapterId: '12.5',
+    );
+    final taskId = taskIdForGeneration(logicalId, 3);
+    await store.put(
+      LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2,
+        logicalId: logicalId,
+        mediaKind: DownloadMediaKind.mangaChapter,
+        mediaId: 'm1',
+        unitKey: '12.5',
+        variantKey: 'pages',
+        generation: 3,
+        taskId: taskId,
+        intent: DownloadUserIntent.paused,
+        destinationPath: temp.path,
+        sourceDescriptor: const <String, Object?>{
+          'providerId': 'animewitcher.native',
+          'mangaUrl': 'manga://m1',
+          'mangaId': 'm1',
+          'chapterId': '12.5',
+          'chapterUrl': 'chapter://12.5',
+          'chapterName': 'Chapter 12.5',
+        },
+        parallelChunks: 1,
+        updatedAtMillis: 1,
+      ),
+    );
+
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver(),
+    );
+    await manager.initialize();
+    final snapshot = await manager.resume(logicalId);
+
+    expect(snapshot.taskId, taskId);
+    expect(gateway.mangaSpecs.single.taskId, taskId);
+    final record = await store.get(logicalId);
+    expect(record?.generation, 3);
+    expect(record?.intent, DownloadUserIntent.active);
+  });
+
+  test('active manga relaunch keeps generation instead of duplicating writer', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_manga_active_');
+    addTearDown(() => temp.delete(recursive: true));
+
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _Gateway();
+    final logicalId = logicalDownloadIdForMangaChapter(
+      mangaId: 'm2',
+      chapterId: '7',
+    );
+    final taskId = taskIdForGeneration(logicalId, 4);
+    await store.put(
+      LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2,
+        logicalId: logicalId,
+        mediaKind: DownloadMediaKind.mangaChapter,
+        mediaId: 'm2',
+        unitKey: '7',
+        variantKey: 'pages',
+        generation: 4,
+        taskId: taskId,
+        intent: DownloadUserIntent.active,
+        destinationPath: temp.path,
+        sourceDescriptor: const <String, Object?>{
+          'providerId': 'animewitcher.native',
+          'mangaUrl': 'manga://m2',
+          'mangaId': 'm2',
+          'chapterId': '7',
+          'chapterUrl': 'chapter://7',
+          'chapterName': 'Chapter 7',
+        },
+        parallelChunks: 1,
+        updatedAtMillis: 1,
+      ),
+    );
+
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver(),
+    );
+    await manager.initialize();
+
+    expect(gateway.mangaSpecs.single.taskId, taskId);
+    final record = await store.get(logicalId);
+    expect(record?.generation, 4);
   });
 
   test('video start preserves requested parallel width', () async {
