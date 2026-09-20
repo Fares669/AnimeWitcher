@@ -134,7 +134,7 @@ MultimediaItem mapAnimeWitcherMangaHit(Map<String, Object?> source) {
   final title = _firstText(
     source,
     const <String>['name', 'manga_name', 'title'],
-  ).replaceFirst(RegExp(r'^!\\s*'), '');
+  ).replaceFirst(RegExp(r'^!\s*'), '');
   final type = _firstText(source, const <String>['type', 'manga_type']);
   final englishTitle = _firstText(
     <String, Object?>{
