@@ -134,7 +134,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
   ) async {
     if (libraryNotifier == null) return;
     if (value == _removeLibraryAction) {
-      await libraryNotifier.clearItemCategory(item.url);
+      await libraryNotifier.clearItemCategory(item.url, manga: true);
       return;
     }
     for (final category in LibraryCategory.assignmentValuesFor(item)) {
