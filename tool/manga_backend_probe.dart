@@ -18,6 +18,7 @@ const _mangaSortIndices = <String>[
 const _latestIndexCandidates = <String>['manga_recent'];
 
 const _mangaLekMirrorHosts = <String>[
+  'manga-leko.net',
   'mangalik.net',
   'lekmanga.online',
   'like-manga.net',
