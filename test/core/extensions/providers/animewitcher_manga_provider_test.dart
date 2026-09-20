@@ -349,10 +349,14 @@ void main() {
 
   test('chapters fall back to current WordPress archive shape', () async {
     final stub = _stubDio();
+    final archiveRequests = <Uri>[];
     stub.dio.interceptors.insert(
       0,
       InterceptorsWrapper(
         onRequest: (options, handler) {
+          if (options.uri.host == 'manga-leko.net') {
+            archiveRequests.add(options.uri);
+          }
           if (options.uri.path == '/manga/manga-one/' &&
               options.uri.host != 'manga-leko.net') {
             handler.resolve(
@@ -418,10 +422,10 @@ void main() {
 
     expect(chapters.map((chapter) => chapter.number), <double?>[30, 29, 28]);
     expect(
-      stub.requests.any(
-        (entry) =>
-            entry.uri.host == 'manga-leko.net' &&
-            entry.uri.path == '/tag/manga-one/',
+      archiveRequests.any(
+        (uri) =>
+            uri.host == 'manga-leko.net' &&
+            uri.path == '/tag/manga-one/',
       ),
       isTrue,
     );
