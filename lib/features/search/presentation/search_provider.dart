@@ -8,6 +8,7 @@ import '../../../../core/account/account_providers.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
+import 'search_domain.dart';
 
 part 'search_provider.g.dart';
 
@@ -420,6 +421,7 @@ final searchClearRequestProvider =
 class PagedSearchNotifier extends Notifier<SearchAggregateState> {
   int _generation = 0;
   String _query = '';
+  SearchDomain _domain = SearchDomain.anime;
   ProviderSearchFilters _filters = const ProviderSearchFilters();
 
   @override
@@ -432,8 +434,13 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       _filters = next;
       _reload();
     });
+    ref.listen(searchDomainProvider, (_, next) {
+      _domain = next;
+      _reload(clearExisting: true);
+    });
     ref.listen(accountDataRevisionProvider, (_, __) => _reload());
     _query = ref.read(searchQueryProvider);
+    _domain = ref.read(searchDomainProvider);
     _filters = ref.read(searchProviderFiltersProvider);
     Future.microtask(_reload);
     return const SearchAggregateState(isLoading: true);
@@ -458,12 +465,19 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
   Future<ProviderMediaPage> _loadPage(
     AnimeWitcherProvider provider,
     int offset,
+    SearchDomain domain,
   ) {
     final pageSize = provider.searchPageSize;
-    // The unified Search page owns its own catalog. Do not route an empty
-    // query through the Home "قائمة الأنمي" section, because that section
-    // is the official latest-added row (series_date_created), not the
-    // AnimeWitcher main anime list.
+    // Manga owns a separate catalog contract. Other domains keep the existing
+    // media search until their dedicated loaders are wired below.
+    if (domain == SearchDomain.manga) {
+      return provider.searchMangaPage(
+        _query,
+        _filters,
+        offset: offset,
+        limit: pageSize,
+      );
+    }
     return provider.searchPage(
       _query,
       _filters,
@@ -472,18 +486,18 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     );
   }
 
-  Future<void> _reload() async {
+  Future<void> _reload({bool clearExisting = false}) async {
     final generation = ++_generation;
-    // Keep the current cards visible while the next query is loading.
-    // This prevents a fast scroll or slow connection from exposing a blank
-    // skeleton-to-black transition.
-    state = state.copyWith(
-      isLoading: true,
-      isLoadingMore: false,
-      hasMore: false,
-      nextOffset: 0,
-      clearError: true,
-    );
+    final requestDomain = _domain;
+    state = clearExisting
+        ? const SearchAggregateState(isLoading: true)
+        : state.copyWith(
+            isLoading: true,
+            isLoadingMore: false,
+            hasMore: false,
+            nextOffset: 0,
+            clearError: true,
+          );
     final provider = _provider();
     if (provider == null) {
       if (generation == _generation) {
@@ -493,8 +507,8 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     }
 
     try {
-      final page = await _loadPage(provider, 0);
-      if (generation != _generation) return;
+      final page = await _loadPage(provider, 0, requestDomain);
+      if (generation != _generation || requestDomain != _domain) return;
       state = SearchAggregateState(
         results: page.items.isEmpty
             ? const <ProviderSearchResult>[]
@@ -511,7 +525,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       );
     } catch (e) {
       debugPrint('[SEARCH PAGE] initial load failed: $e');
-      if (generation == _generation) {
+      if (generation == _generation && requestDomain == _domain) {
         // Keep the last rendered cards on transient network failures. Show the
         // recoverable empty state only when there is nothing left to display.
         final hasCards = state.results.any((entry) => entry.results.isNotEmpty);
@@ -531,11 +545,12 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     final provider = _provider();
     if (provider == null) return;
     final generation = _generation;
+    final requestDomain = _domain;
     state = state.copyWith(isLoadingMore: true);
 
     try {
-      final page = await _loadPage(provider, state.nextOffset);
-      if (generation != _generation) return;
+      final page = await _loadPage(provider, state.nextOffset, requestDomain);
+      if (generation != _generation || requestDomain != _domain) return;
       final current = state.results.isEmpty
           ? const <MultimediaItem>[]
           : state.results.first.results;
@@ -564,7 +579,7 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
       );
     } catch (e) {
       debugPrint('[SEARCH PAGE] load more failed: $e');
-      if (generation == _generation) {
+      if (generation == _generation && requestDomain == _domain) {
         state = state.copyWith(isLoadingMore: false);
       }
     }
