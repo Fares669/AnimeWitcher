@@ -29,12 +29,12 @@ extension SearchDomainCapabilitiesExtension on SearchDomain {
       showFilter: true,
     ),
     SearchDomain.animation => const SearchDomainCapabilities(
-      showSort: true,
-      showFilter: true,
+      showSort: false,
+      showFilter: false,
     ),
     SearchDomain.manga => const SearchDomainCapabilities(
-      showSort: true,
-      showFilter: true,
+      showSort: false,
+      showFilter: false,
     ),
     SearchDomain.characters => const SearchDomainCapabilities(
       showSort: false,
