@@ -41,6 +41,7 @@ void main() {
       }
     }
 
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
     expect(starter.startedPageIndexes, <int>[0, 1, 2, 3]);
     expect(starter.maxActive, 1);
     expect(handle.current.status, DownloadTransportStatus.complete);
@@ -86,6 +87,17 @@ void main() {
 
     expect(starter.startedPageIndexes, <int>[1]);
   });
+}
+
+Future<void> _waitForStatus(
+  DownloadTransportHandle handle,
+  DownloadTransportStatus status,
+) async {
+  for (var attempt = 0; attempt < 100; attempt++) {
+    if (handle.current.status == status) return;
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+  }
+  throw StateError('parent did not reach $status; current=${handle.current.status}');
 }
 
 final class _FakePageStarter {
