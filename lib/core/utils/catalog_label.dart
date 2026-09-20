@@ -12,6 +12,8 @@ String? catalogTypeLabel(MultimediaItem item) {
     case MultimediaContentType.series:
     case MultimediaContentType.anime:
       return 'مسلسل';
+    case MultimediaContentType.manga:
+      return 'مانجا';
     case MultimediaContentType.livestream:
       return 'بث مباشر';
     case MultimediaContentType.other:
