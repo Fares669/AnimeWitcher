@@ -3,6 +3,7 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import 'manga_page_image.dart';
+import 'manga_zoomable_page.dart';
 
 class MangaWebtoonReader extends StatefulWidget {
   const MangaWebtoonReader({
@@ -67,7 +68,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
         'manga-webtoon-' + index.toString() + '-' + page.imageUrl,
       ),
       onVisibilityChanged: (info) => _visibilityChanged(index, info),
-      child: custom?.call(context, page) ?? MangaPageImage(page: page),
+      child: custom?.call(context, page) ??
+          MangaZoomablePage(child: MangaPageImage(page: page)),
     );
   }
 
