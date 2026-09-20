@@ -18,11 +18,13 @@ class MangaReaderScreen extends ConsumerStatefulWidget {
     required this.manga,
     required this.chapter,
     required this.chapters,
+    this.localChapterDirectory,
   });
 
   final MultimediaItem manga;
   final MangaChapter chapter;
   final List<MangaChapter> chapters;
+  final String? localChapterDirectory;
 
   @override
   ConsumerState<MangaReaderScreen> createState() => _MangaReaderScreenState();
@@ -41,6 +43,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
       manga: widget.manga,
       chapter: widget.chapter,
       chapters: widget.chapters,
+      localChapterDirectory: widget.localChapterDirectory,
     );
     _controller.load();
   }
