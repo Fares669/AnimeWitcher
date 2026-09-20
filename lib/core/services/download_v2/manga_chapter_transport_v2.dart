@@ -216,7 +216,16 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
       _pageSubscription = handle.snapshots.listen(
         (snapshot) => unawaited(_onPageSnapshot(index, generation, snapshot)),
       );
-      _emit(_aggregate(handle.current));
+      final currentPage = handle.current;
+      _emit(_aggregate(currentPage));
+      if (currentPage.isFinal) {
+        unawaited(
+          Future<void>.delayed(
+            Duration.zero,
+            () => _onPageSnapshot(index, generation, currentPage),
+          ),
+        );
+      }
     } catch (error) {
       _emit(
         DownloadTransportSnapshot(
