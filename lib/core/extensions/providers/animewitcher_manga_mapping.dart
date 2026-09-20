@@ -131,7 +131,10 @@ String? _optional(String value) => value.isEmpty ? null : value;
 MultimediaItem mapAnimeWitcherMangaHit(Map<String, Object?> source) {
   final id = _stableMangaId(source);
   final details = _map(source['details']);
-  final title = _firstText(source, const <String>['name', 'manga_name', 'title']);
+  final title = _firstText(
+    source,
+    const <String>['name', 'manga_name', 'title'],
+  ).replaceFirst(RegExp(r'^!\\s*'), '');
   final type = _firstText(source, const <String>['type', 'manga_type']);
   final englishTitle = _firstText(
     <String, Object?>{
