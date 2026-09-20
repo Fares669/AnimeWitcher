@@ -12,7 +12,7 @@ import '../../skip/data/aniskip_service.dart';
 import '../../skip/data/mal_id_resolver.dart';
 import '../../skip/data/skip_segment_cache.dart';
 
-/// Preserves the non-transport Android setup that the legacy downloader used
+/// Preserves the non-transport Android setup required before downloads start
 /// to perform before starting a real file transfer. This helper deliberately
 /// owns no queue, task, retry, resume, or transport state.
 Future<void> requestDownloadPermissionsV2({
