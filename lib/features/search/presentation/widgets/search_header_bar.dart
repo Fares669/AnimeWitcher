@@ -289,7 +289,13 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                       tintColor: theme.colorScheme.onSurfaceVariant,
                       height: SearchGlassSurface.height,
                     ),
-                    const SizedBox(width: 8),
+                    SizedBox(
+                      // Anime Details and Character Details both pin their
+                      // native trailing Liquid Glass toolbar at 34pt. Search
+                      // already has 24pt outer padding, so a 10pt trailing
+                      // spacer lands the three-button capsule on the same x.
+                      width: appleUsesPersistentLiquidGlassHeader ? 10 : 8,
+                    ),
                   ],
                 ],
               ),
