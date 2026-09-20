@@ -81,7 +81,7 @@ final class InMemoryLogicalDownloadStoreV2 implements LogicalDownloadStoreV2 {
 
 /// Durable AnimeWitcher-owned metadata store for V2 downloads.
 ///
-/// This box is intentionally independent from the legacy download JobStore and
+/// This box is intentionally independent from transport persistence and
 /// from background_downloader's database. Values contain only
 /// [LogicalDownloadRecordV2.toJson] application metadata.
 final class HiveLogicalDownloadStoreV2 implements LogicalDownloadStoreV2 {
