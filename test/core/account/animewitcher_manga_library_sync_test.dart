@@ -11,6 +11,13 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/memory_storage_service.dart';
 
 final class _Storage extends MemoryStorageService {
+  final Map<String, MultimediaItem> library = <String, MultimediaItem>{};
+  final Map<String, String?> categories = <String, String?>{};
+  final Map<String, bool> favorites = <String, bool>{};
+  final Map<String, int> updatedAt = <String, int>{};
+  final Map<String, int> syncedAt = <String, int>{};
+  final Map<String, String?> syncedUid = <String, String?>{};
+
   @override
   String? getString(String key) => settings[key] as String?;
 
@@ -27,6 +34,72 @@ final class _Storage extends MemoryStorageService {
   Future<void> remove(String key) async {
     settings.remove(key);
   }
+
+  @override
+  Future<void> addToLibrary(
+    MultimediaItem item, {
+    String? category,
+    bool replaceCategory = false,
+    bool? favorite,
+    int? updatedAt,
+    String? syncedAccountUid,
+    int? syncedAt,
+  }) async {
+    library[item.url] = item;
+    if (replaceCategory || category != null) categories[item.url] = category;
+    if (favorite != null) favorites[item.url] = favorite;
+    this.updatedAt[item.url] =
+        updatedAt ?? DateTime.now().millisecondsSinceEpoch;
+    if (syncedAccountUid != null) syncedUid[item.url] = syncedAccountUid;
+    if (syncedAt != null) this.syncedAt[item.url] = syncedAt;
+  }
+
+  @override
+  List<MultimediaItem> getLibraryItems({String? category}) =>
+      library.values.toList(growable: false);
+
+  @override
+  String? getLibraryItemCategory(String url) => categories[url];
+
+  @override
+  bool isLibraryItemFavorite(String url) => favorites[url] == true;
+
+  @override
+  int getLibraryItemUpdatedAt(String url) => updatedAt[url] ?? 0;
+
+  @override
+  int getLibraryItemSyncedAt(String url) => syncedAt[url] ?? 0;
+
+  @override
+  String? getLibraryItemSyncedAccountUid(String url) => syncedUid[url];
+
+  @override
+  Future<void> markLibraryItemSynced(
+    String url, {
+    required String accountUid,
+    required int syncedAt,
+  }) async {
+    syncedUid[url] = accountUid;
+    this.syncedAt[url] = syncedAt;
+  }
+
+  @override
+  Future<void> removeFromLibrary(String url) async {
+    library.remove(url);
+    categories.remove(url);
+    favorites.remove(url);
+    updatedAt.remove(url);
+    syncedAt.remove(url);
+    syncedUid.remove(url);
+  }
+
+  @override
+  List<Map<String, dynamic>> getContinueWatching() =>
+      const <Map<String, dynamic>>[];
+
+  @override
+  List<Map<String, dynamic>> getWatchHistory() =>
+      const <Map<String, dynamic>>[];
 }
 
 final class _SecureStorage extends SecureTokenStorage {
@@ -59,6 +132,10 @@ final class _Write {
 final class _Firestore extends FirestoreRestClient {
   final List<_Write> writes = <_Write>[];
   final List<String> deletes = <String>[];
+  final Map<String, List<FirestoreDocument>> collections =
+      <String, List<FirestoreDocument>>{};
+  final Map<String, FirestoreDocument> documents =
+      <String, FirestoreDocument>{};
 
   @override
   Future<void> setDocumentWithServerTimestamps(
@@ -81,11 +158,40 @@ final class _Firestore extends FirestoreRestClient {
   Future<void> deleteDocument(String path, String idToken) async {
     deletes.add(path);
   }
+
+  @override
+  Future<List<FirestoreDocument>> queryOrderedDocuments(
+    String collectionPath,
+    String idToken, {
+    String orderField = 'date',
+    bool descending = true,
+    int pageSize = 100,
+  }) async => List<FirestoreDocument>.from(
+    collections[collectionPath] ?? const <FirestoreDocument>[],
+  );
+
+  @override
+  Future<List<FirestoreDocument>> listDocuments(
+    String collectionPath,
+    String idToken, {
+    int pageSize = 100,
+  }) async => List<FirestoreDocument>.from(
+    collections[collectionPath] ?? const <FirestoreDocument>[],
+  );
+
+  @override
+  Future<FirestoreDocument?> getDocument(
+    String path,
+    String idToken,
+  ) async => documents[path];
 }
 
-Future<AnimeWitcherAccountService> _signedInService(_Firestore firestore) async {
-  final storage = _Storage();
-  final secure = _SecureStorage(storage);
+Future<AnimeWitcherAccountService> _signedInService(
+  _Firestore firestore, {
+  _Storage? storage,
+}) async {
+  final backing = storage ?? _Storage();
+  final secure = _SecureStorage(backing);
   final session = AnimeWitcherSession(
     uid: 'uid-1',
     idToken: 'token',
@@ -101,11 +207,13 @@ Future<AnimeWitcherAccountService> _signedInService(_Firestore firestore) async 
     email: 'reader@example.com',
     userName: 'Reader',
   );
-  secure.values['animewitcher_account_session_v1'] = jsonEncode(session.toJson());
-  secure.values['animewitcher_account_profile_v1'] = jsonEncode(profile.toJson());
+  secure.values['animewitcher_account_session_v1'] =
+      jsonEncode(session.toJson());
+  secure.values['animewitcher_account_profile_v1'] =
+      jsonEncode(profile.toJson());
 
   final service = AnimeWitcherAccountService(
-    storage: storage,
+    storage: backing,
     secureStorage: secure,
     firestore: firestore,
   );
@@ -120,10 +228,20 @@ MultimediaItem _manga() => MultimediaItem(
   posterUrl: 'https://img.example/m1.webp',
   contentType: MultimediaContentType.manga,
   provider: AnimeWitcherAccountService.animeWitcherProvider,
+  syncData: const <String, String>{'mangaId': 'm1'},
+);
+
+FirestoreDocument _remote({
+  required String path,
+  required Map<String, dynamic> fields,
+}) => FirestoreDocument(
+  id: path.split('/').last,
+  path: path,
+  fields: fields,
 );
 
 void main() {
-  test('manga list write uses user_manga and official fields', () async {
+  test('manga list write uses user_manga and official reference fields', () async {
     final firestore = _Firestore();
     final service = await _signedInService(firestore);
 
@@ -136,11 +254,12 @@ void main() {
     final listWrite = firestore.writes.singleWhere(
       (write) => write.path == 'users/profile-1/user_manga/m1',
     );
-    expect(listWrite.fields, <String, dynamic>{
-      'manga_id': 'm1',
-      'type': 'watching',
-      'views': 0,
-    });
+    expect(listWrite.fields['type'], 'watching');
+    expect(listWrite.fields['views'], 0);
+    expect(listWrite.fields.containsKey('manga_id'), isFalse);
+    final reference = listWrite.fields['doc_ref'];
+    expect(reference, isA<FirestoreReference>());
+    expect((reference as FirestoreReference).path, 'manga_list/m1');
     expect(listWrite.serverTimestampFields, <String>{'date'});
     expect(
       firestore.writes.any((write) => write.path.contains('user_anime')),
@@ -148,7 +267,7 @@ void main() {
     );
   });
 
-  test('manga favorite write uses fav_manga and official fields', () async {
+  test('manga favorite write uses fav_manga and manga_doc_id reference', () async {
     final firestore = _Firestore();
     final service = await _signedInService(firestore);
 
@@ -161,10 +280,11 @@ void main() {
     final favorite = firestore.writes.singleWhere(
       (write) => write.path == 'users/profile-1/fav_manga/m1',
     );
-    expect(favorite.fields, <String, dynamic>{
-      'manga_id': 'm1',
-      'views': 0,
-    });
+    expect(favorite.fields['views'], 0);
+    expect(favorite.fields.containsKey('manga_id'), isFalse);
+    final reference = favorite.fields['manga_doc_id'];
+    expect(reference, isA<FirestoreReference>());
+    expect((reference as FirestoreReference).path, 'manga_list/m1');
     expect(favorite.serverTimestampFields, <String>{'date'});
     expect(
       firestore.writes.any((write) => write.path.contains('fav_anime')),
@@ -191,5 +311,66 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('manga library round-trips from cloud across relaunch and remote delete', () async {
+    final firestore = _Firestore();
+    final storage = _Storage();
+    final remoteDate = DateTime.utc(2026, 9, 20, 12);
+    firestore.collections['users/profile-1/user_manga'] =
+        <FirestoreDocument>[
+      _remote(
+        path: 'users/profile-1/user_manga/m1',
+        fields: <String, dynamic>{
+          'doc_ref': 'manga_list/m1',
+          'type': 'watching',
+          'views': 0,
+          'date': remoteDate,
+        },
+      ),
+    ];
+    firestore.collections['users/profile-1/fav_manga'] =
+        <FirestoreDocument>[
+      _remote(
+        path: 'users/profile-1/fav_manga/m1',
+        fields: <String, dynamic>{
+          'manga_doc_id': 'manga_list/m1',
+          'views': 0,
+          'date': remoteDate,
+        },
+      ),
+    ];
+    firestore.documents['manga_list/m1'] = _remote(
+      path: 'manga_list/m1',
+      fields: <String, dynamic>{
+        'name': 'Manga One',
+        'type': 'مانهوا',
+        'poster_uri': 'https://img.example/m1.webp',
+        'story': 'Story',
+      },
+    );
+
+    var service = await _signedInService(firestore, storage: storage);
+    await service.syncAll();
+
+    var manga = storage.library.values.single;
+    expect(manga.contentType, MultimediaContentType.manga);
+    expect(manga.title, 'Manga One');
+    expect(storage.categories[manga.url], LibraryCategory.watching.storageKey);
+    expect(storage.favorites[manga.url], isTrue);
+    expect(storage.syncedUid[manga.url], 'uid-1');
+
+    service = await _signedInService(firestore, storage: storage);
+    await service.syncAll();
+    expect(storage.library.values.single.title, 'Manga One');
+
+    firestore.collections['users/profile-1/user_manga'] =
+        const <FirestoreDocument>[];
+    firestore.collections['users/profile-1/fav_manga'] =
+        const <FirestoreDocument>[];
+
+    service = await _signedInService(firestore, storage: storage);
+    await service.syncAll();
+    expect(storage.library, isEmpty);
   });
 }
