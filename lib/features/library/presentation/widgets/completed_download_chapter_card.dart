@@ -22,10 +22,12 @@ class CompletedDownloadChapterCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final chapter = item.chapter;
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final title = chapter?.name.trim().isNotEmpty == true
         ? chapter!.name.trim()
-        : l10n.mangaChapterCount(1);
+        : (l10n?.mangaChapterCount(1) ?? (isArabic ? 'فصل' : 'Chapter'));
 
     return InkWell(
       onTap: onOpen,
@@ -84,7 +86,7 @@ class CompletedDownloadChapterCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 5),
                       Text(
-                        l10n.mangaCompleted,
+                        l10n?.mangaCompleted ?? (isArabic ? 'مكتمل' : 'Completed'),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -95,7 +97,7 @@ class CompletedDownloadChapterCard extends StatelessWidget {
               ),
             ),
             IconButton(
-              tooltip: l10n.mangaDeleteChapter,
+              tooltip: l10n?.mangaDeleteChapter ?? (isArabic ? 'حذف الفصل' : 'Delete chapter'),
               onPressed: onDelete,
               icon: const Icon(Icons.delete_outline_rounded),
               color: theme.colorScheme.error,
