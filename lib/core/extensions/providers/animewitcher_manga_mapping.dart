@@ -5,7 +5,18 @@ import '../../domain/entity/multimedia_item.dart';
 
 final _htmlUnescape = HtmlUnescape();
 
-String _text(Object? value) => value?.toString().trim() ?? '';
+String _text(Object? value) {
+  if (value is Map) {
+    final map = _map(value);
+    for (final key in const <String>['ar', 'arabic', 'en', 'english', 'value']) {
+      final nested = map[key];
+      final text = nested?.toString().trim() ?? '';
+      if (text.isNotEmpty) return text;
+    }
+    return '';
+  }
+  return value?.toString().trim() ?? '';
+}
 
 Map<String, Object?> _map(Object? value) {
   if (value is! Map) return const <String, Object?>{};
