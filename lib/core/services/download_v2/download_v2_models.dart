@@ -102,8 +102,8 @@ final class LogicalDownloadRecordV2 {
     this.awaitingAdmission = false,
   }) : mediaId = mediaId ?? animeId ?? '',
        unitKey = unitKey ?? episodeKey ?? '',
-       assert((mediaId ?? animeId ?? '').isNotEmpty),
-       assert((unitKey ?? episodeKey ?? '').isNotEmpty),
+       assert((mediaId ?? animeId ?? '') != ''),
+       assert((unitKey ?? episodeKey ?? '') != ''),
        assert(retries >= 0),
        assert(parallelChunks > 0);
 
