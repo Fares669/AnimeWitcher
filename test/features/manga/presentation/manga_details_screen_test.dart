@@ -58,6 +58,7 @@ final class _MangaProvider extends AnimeWitcherProvider {
     provider: packageName,
     catalogType: 'مانهوا',
     year: 2018,
+    tags: const <String>['Action', 'Fantasy'],
   );
 
   @override
@@ -112,8 +113,21 @@ void main() {
     expect(find.text('الفصول'), findsOneWidget);
     expect(find.text('Solo Leveling'), findsWidgets);
     expect(find.text('Manga description'), findsOneWidget);
+    expect(find.byKey(const ValueKey('manga-details-hero')), findsOneWidget);
+    expect(find.byKey(const ValueKey('manga-rate-action')), findsOneWidget);
+    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.bookmark_border_rounded), findsOneWidget);
+    expect(find.text('المراجعات'), findsNothing);
 
-    await tester.tap(find.text('الفصول'));
+    final actionGenre = find.byKey(const ValueKey('manga-genre-Action'));
+    expect(actionGenre, findsOneWidget);
+    expect(
+      find.ancestor(of: actionGenre, matching: find.byType(InkWell)),
+      findsNothing,
+    );
+
+    await tester.tap(find.textContaining('الفصول'));
+
     await tester.pumpAndSettle();
 
     expect(find.text('الفصل 12.5'), findsOneWidget);
