@@ -1216,4 +1216,74 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get upNext => 'التالي';
+
+  @override
+  String get manga => 'مانجا';
+
+  @override
+  String get manhwa => 'مانهوا';
+
+  @override
+  String get chapters => 'الفصول';
+
+  @override
+  String get latestChapters => 'أحدث الفصول';
+
+  @override
+  String get mangaDetails => 'التفاصيل';
+
+  @override
+  String get mangaNoChapters => 'لا توجد فصول';
+
+  @override
+  String get mangaNoPages => 'لا توجد صفحات';
+
+  @override
+  String get mangaDownloadChapter => 'تنزيل الفصل';
+
+  @override
+  String get mangaDeleteChapter => 'حذف الفصل';
+
+  @override
+  String get mangaCompleted => 'مكتمل';
+
+  @override
+  String get mangaLibraryType => 'نوع المكتبة';
+
+  @override
+  String get mangaReadingNow => 'أقرأها حالياً';
+
+  @override
+  String get mangaContinueLater => 'أكملها لاحقاً';
+
+  @override
+  String get mangaPlanToRead => 'أرغب بقراءتها';
+
+  @override
+  String get mangaCompletedReading => 'تمت قراءتها';
+
+  @override
+  String get mangaNotInterested => 'لا أرغب بقراءتها';
+
+  @override
+  String get searchDomainAnime => 'أنمي';
+
+  @override
+  String get searchDomainAnimation => 'انميشن';
+
+  @override
+  String get searchDomainManga => 'مانجا';
+
+  @override
+  String get searchDomainCharacters => 'شخصيات';
+
+  @override
+  String get searchDomainTooltip => 'نوع البحث';
+
+  @override
+  String mangaChapterCount(int count) {
+    if (count == 1) return 'فصل';
+    if (count == 2) return 'فصلان';
+    return '$count فصول';
+  }
 }
