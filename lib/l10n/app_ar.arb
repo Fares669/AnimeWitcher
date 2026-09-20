@@ -568,5 +568,34 @@
   "titlePosition": "موضع العنوان",
   "titlePositionBelowPoster": "أسفل الملصق",
   "titlePositionInsidePoster": "داخل الملصق",
-  "upNext": "التالي"
+  "upNext": "التالي",
+  "manga": "مانجا",
+  "manhwa": "مانهوا",
+  "chapters": "الفصول",
+  "latestChapters": "أحدث الفصول",
+  "mangaDetails": "التفاصيل",
+  "mangaNoChapters": "لا توجد فصول",
+  "mangaNoPages": "لا توجد صفحات",
+  "mangaDownloadChapter": "تنزيل الفصل",
+  "mangaDeleteChapter": "حذف الفصل",
+  "mangaCompleted": "مكتمل",
+  "mangaLibraryType": "نوع المكتبة",
+  "mangaReadingNow": "أقرأها حالياً",
+  "mangaContinueLater": "أكملها لاحقاً",
+  "mangaPlanToRead": "أرغب بقراءتها",
+  "mangaCompletedReading": "تمت قراءتها",
+  "mangaNotInterested": "لا أرغب بقراءتها",
+  "searchDomainAnime": "أنمي",
+  "searchDomainAnimation": "انميشن",
+  "searchDomainManga": "مانجا",
+  "searchDomainCharacters": "شخصيات",
+  "searchDomainTooltip": "نوع البحث",
+  "mangaChapterCount": "{count, plural, =1{فصل} =2{فصلان} other{{count} فصول}}",
+  "@mangaChapterCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  }
 }
