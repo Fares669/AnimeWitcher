@@ -2689,7 +2689,79 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
           segment == 'tag' ||
           segment == 'category' ||
           segment == 'page' ||
-          RegExp(r'^\d+
+          RegExp(r'^[0-9]+$').hasMatch(segment)) {
+        continue;
+      }
+      return segment;
+    }
+    return '';
+  }
+
+  Future<List<MangaChapter>> _loadMangaArchiveChapters({
+    required String sourceUrl,
+    required String mangaId,
+    int maxPages = 50,
+  }) async {
+    final slug = _mangaArchiveSlug(sourceUrl);
+    if (slug.isEmpty) return const <MangaChapter>[];
+
+    final encodedSlug = Uri.encodeComponent(slug);
+    final roots = <String>[
+      'https://manga-leko.net/tag/' + encodedSlug + '/',
+      'https://manga-leko.net/category/' + encodedSlug + '/',
+    ];
+
+    for (final root in roots) {
+      final chaptersByKey = <String, MangaChapter>{};
+      var currentUrl = root;
+      final visited = <String>{};
+
+      for (var page = 0; page < maxPages; page++) {
+        if (!visited.add(currentUrl)) break;
+        try {
+          final html = await _mangaHtml(
+            currentUrl,
+            acceptHtml: (html) => parseMangaLekArchiveChapters(
+              html: html,
+              mangaId: mangaId,
+              documentUrl: currentUrl,
+            ).isNotEmpty,
+          );
+          final parsed = parseMangaLekArchiveChapters(
+            html: html,
+            mangaId: mangaId,
+            documentUrl: currentUrl,
+          );
+          for (final chapter in parsed) {
+            final key = chapter.number?.toString() ?? chapter.url;
+            chaptersByKey.putIfAbsent(key, () => chapter);
+          }
+
+          if (page + 1 >= maxPages) break;
+          final next = parseMangaLekArchiveNextPage(
+            html: html,
+            documentUrl: currentUrl,
+          );
+          if (next == null || next.isEmpty) break;
+          currentUrl = next;
+        } catch (_) {
+          break;
+        }
+      }
+
+      if (chaptersByKey.isNotEmpty) {
+        final chapters = chaptersByKey.values.toList()
+          ..sort(
+            (a, b) => (b.number ?? -1).compareTo(a.number ?? -1),
+          );
+        return List<MangaChapter>.unmodifiable(chapters);
+      }
+    }
+    return const <MangaChapter>[];
+  }
+
+  @override
+  Future<List<MangaChapter>> getMangaChapters(String url) async {
     final details = await getMangaDetails(url);
     final mangaId = details.syncData?['mangaId']?.trim() ?? '';
     final sourceUrl = details.syncData?['mangalekPageUrl']?.trim() ?? '';
@@ -2703,9 +2775,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       return List<MangaChapter>.unmodifiable(cached);
     }
 
-    // MangaLek migrated its current public catalog from the old Madara
-    // /manga/... shape to WordPress tag/category archives. Prefer that current
-    // archive, then keep the historical AnimeWitcher pointer as a fallback.
+    // The current public MangaLek catalog is a WordPress tag/category archive.
+    // Prefer that shape, then retain the historical Madara pointer as fallback.
     final archiveChapters = await _loadMangaArchiveChapters(
       sourceUrl: sourceUrl,
       mangaId: mangaId,
