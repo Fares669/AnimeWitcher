@@ -21,8 +21,11 @@ import 'logical_download_store_v2.dart';
 final class DownloadStartRequestV2 {
   const DownloadStartRequestV2({
     required this.logicalId,
-    required this.animeId,
-    required this.episodeKey,
+    this.mediaKind = DownloadMediaKind.videoEpisode,
+    String? mediaId,
+    String? unitKey,
+    String? animeId,
+    String? episodeKey,
     required this.variantKey,
     required this.destinationPath,
     required this.sourceDescriptor,
@@ -30,16 +33,19 @@ final class DownloadStartRequestV2 {
     required this.retries,
     required this.parallelChunks,
     this.expectedBytes,
-  }) : assert(animeId != ''),
-       assert(episodeKey != ''),
+  }) : mediaId = mediaId ?? animeId ?? '',
+       unitKey = unitKey ?? episodeKey ?? '',
+       assert((mediaId ?? animeId ?? '').isNotEmpty),
+       assert((unitKey ?? episodeKey ?? '').isNotEmpty),
        assert(variantKey != ''),
        assert(destinationPath != ''),
        assert(retries >= 0),
        assert(parallelChunks > 0);
 
   final DownloadLogicalId logicalId;
-  final String animeId;
-  final String episodeKey;
+  final DownloadMediaKind mediaKind;
+  final String mediaId;
+  final String unitKey;
   final String variantKey;
   final String destinationPath;
   final Map<String, Object?> sourceDescriptor;
@@ -47,6 +53,12 @@ final class DownloadStartRequestV2 {
   final bool allowPause;
   final int retries;
   final int parallelChunks;
+
+  @Deprecated('Use mediaId')
+  String get animeId => mediaId;
+
+  @Deprecated('Use unitKey')
+  String get episodeKey => unitKey;
 }
 
 /// V2 application coordinator.
@@ -920,8 +932,9 @@ final class DownloadManagerV2 {
     final queuedRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
       logicalId: request.logicalId,
-      animeId: request.animeId,
-      episodeKey: request.episodeKey,
+      mediaKind: request.mediaKind,
+      mediaId: request.mediaId,
+      unitKey: request.unitKey,
       variantKey: request.variantKey,
       generation: generation,
       taskId: taskId,
@@ -1219,8 +1232,9 @@ final class DownloadManagerV2 {
     final nextRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
       logicalId: request.logicalId,
-      animeId: request.animeId,
-      episodeKey: request.episodeKey,
+      mediaKind: request.mediaKind,
+      mediaId: request.mediaId,
+      unitKey: request.unitKey,
       variantKey: request.variantKey,
       generation: generation,
       taskId: taskId,
@@ -1435,8 +1449,9 @@ final class DownloadManagerV2 {
   DownloadStartRequestV2 _requestFromRecord(LogicalDownloadRecordV2 record) {
     return DownloadStartRequestV2(
       logicalId: record.logicalId,
-      animeId: record.animeId,
-      episodeKey: record.episodeKey,
+      mediaKind: record.mediaKind,
+      mediaId: record.mediaId,
+      unitKey: record.unitKey,
       variantKey: record.variantKey,
       destinationPath: record.destinationPath,
       sourceDescriptor: Map<String, Object?>.from(record.sourceDescriptor),
