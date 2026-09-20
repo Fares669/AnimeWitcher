@@ -400,7 +400,7 @@ enum DownloadNativeWaitingQueue {
     if let snapshotVersion, snapshotVersion == current.snapshotVersion {
       return current.snapshotVersion
     }
-    // Legacy callers receive a native-allocated next version. Updated Dart
+    // Callers without an explicit version receive a native-allocated next version.
     // always supplies its own monotonic version and receives it back as ack.
     let acceptedVersion = snapshotVersion ?? (current.snapshotVersion + 1)
     let maxConcurrent = clamp(intValue(arguments["maxConcurrent"]) ?? 1)
