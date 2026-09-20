@@ -4,7 +4,6 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:path/path.dart' as p;
 
 import '../services/download_concurrency.dart';
-import '../services/download_job_state.dart';
 import 'download_cleanup.dart';
 
 /// How an interrupted download should be continued.
@@ -147,13 +146,11 @@ bool shouldAutoResumeInterruptedDownload({
   return wasRunningOrFailed;
 }
 
-/// Decide which persisted rows must be restored to AnimeWitcher's logical
-/// waiting queue after process death.
+/// Decide whether a package task snapshot needs requeue after process death.
 ///
-/// The decision now goes through [planDownloadRecovery], which establishes one
-/// precedence order for user pause, native ownership, logical queue state and
-/// stale persisted status. This keeps startup recovery deterministic across
-/// the V2 coordinator and native package state.
+/// Native ownership and explicit user pause always win. Executor-active states
+/// can be rebuilt directly; settled/error states require app presentation
+/// metadata so an invisible transfer is never resurrected.
 bool shouldRequeueInterruptedDownloadAfterRelaunch({
   required TaskStatus persisted,
   required bool queueWaiting,
@@ -161,13 +158,18 @@ bool shouldRequeueInterruptedDownloadAfterRelaunch({
   required bool stillInNativeQueue,
   required bool hasMetadata,
 }) {
-  return planDownloadRecovery(
-    persisted: persisted,
-    queueWaiting: queueWaiting,
-    userPaused: userPaused,
-    stillInNativeQueue: stillInNativeQueue,
-    hasMetadata: hasMetadata,
-  ).shouldRequeue;
+  if (stillInNativeQueue || userPaused) return false;
+  if (queueWaiting) return true;
+  return switch (persisted) {
+    TaskStatus.enqueued ||
+    TaskStatus.running ||
+    TaskStatus.waitingToRetry => true,
+    TaskStatus.paused ||
+    TaskStatus.failed ||
+    TaskStatus.notFound ||
+    TaskStatus.canceled => hasMetadata,
+    TaskStatus.complete => false,
+  };
 }
 
 /// HTTP headers that continue a download from [existingBytes].
