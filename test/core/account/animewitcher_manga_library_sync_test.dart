@@ -15,8 +15,12 @@ final class _Storage extends MemoryStorageService {
   String? getString(String key) => settings[key] as String?;
 
   @override
-  Future<void> setString(String key, String value) async {
-    settings[key] = value;
+  Future<void> setString(String key, String? value) async {
+    if (value == null) {
+      settings.remove(key);
+    } else {
+      settings[key] = value;
+    }
   }
 
   @override

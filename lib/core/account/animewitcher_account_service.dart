@@ -2502,7 +2502,7 @@ class AnimeWitcherAccountService {
     bool? favorite,
   }) async {
     final profile = _profile;
-    final mangaId = animeWitcherMangaIdFromItem(item);
+    final mangaId = _mangaIdFromItem(item);
     if (!isSignedIn || profile == null || mangaId.isEmpty) return;
 
     final primaryCategory =
@@ -3569,6 +3569,12 @@ class AnimeWitcherAccountService {
   String? _animeIdFromListDocument(FirestoreDocument document) {
     final reference = _optionalString(document.fields['doc_ref']);
     return reference == null ? document.id : _lastPathSegment(reference);
+  }
+
+  String _mangaIdFromItem(MultimediaItem item) {
+    final synced = item.syncData?['mangaId']?.trim() ?? '';
+    if (synced.isNotEmpty) return synced;
+    return _mangaIdFromUrl(item.url) ?? '';
   }
 
   String? _mangaIdFromUrl(String url) {

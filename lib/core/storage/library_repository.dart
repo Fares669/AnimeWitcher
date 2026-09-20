@@ -47,7 +47,17 @@ class LibraryRepository {
     }
 
     await _storageService.addToLibrary(item, category: target.storageKey);
-    if (isManga) return;
+    if (isManga) {
+      _syncInBackground(
+        _accountService.saveMangaLibraryItem(
+          item,
+          target,
+          favorite: _storageService.isLibraryItemFavorite(item.url),
+        ),
+        'save manga library item',
+      );
+      return;
+    }
     _syncInBackground(
       _accountService.saveLibraryItem(
         item,
@@ -80,7 +90,18 @@ class LibraryRepository {
       return;
     }
     await _storageService.setLibraryItemCategory(url, category.storageKey);
-    if (item != null && !isManga) {
+    if (item != null && isManga) {
+      _syncInBackground(
+        _accountService.saveMangaLibraryItem(
+          item,
+          category,
+          favorite: _storageService.isLibraryItemFavorite(url),
+        ),
+        'move manga library item',
+      );
+      return;
+    }
+    if (item != null) {
       _syncInBackground(
         _accountService.saveLibraryItem(
           item,
@@ -96,8 +117,19 @@ class LibraryRepository {
     final item = _findItem(url);
     final favorite = _storageService.isLibraryItemFavorite(url);
     await _storageService.setLibraryItemCategory(url, null);
-    if (item == null ||
-        item.contentType == MultimediaContentType.manga) {
+    if (item == null) return;
+    if (item.contentType == MultimediaContentType.manga) {
+      if (favorite) {
+        _syncInBackground(
+          _accountService.saveMangaLibraryItem(item, null, favorite: true),
+          'clear manga library category',
+        );
+      } else {
+        _syncInBackground(
+          _accountService.removeMangaLibraryItem(url),
+          'remove manga library item',
+        );
+      }
       return;
     }
     if (favorite) {
@@ -116,7 +148,24 @@ class LibraryRepository {
   Future<void> setFavorite(MultimediaItem item, bool favorite) async {
     final category = getItemCategory(item.url);
     await _storageService.addToLibrary(item, favorite: favorite);
-    if (item.contentType == MultimediaContentType.manga) return;
+    if (item.contentType == MultimediaContentType.manga) {
+      if (!favorite && category == null) {
+        _syncInBackground(
+          _accountService.removeMangaLibraryItem(item.url),
+          'remove favorite-only manga item',
+        );
+      } else {
+        _syncInBackground(
+          _accountService.saveMangaLibraryItem(
+            item,
+            category,
+            favorite: favorite,
+          ),
+          favorite ? 'save manga favorite' : 'remove manga favorite',
+        );
+      }
+      return;
+    }
     if (!favorite && category == null) {
       _syncInBackground(
         _accountService.removeLibraryItem(item.url),
@@ -133,7 +182,13 @@ class LibraryRepository {
   Future<void> removeFromLibrary(String url) async {
     final item = _findItem(url);
     await _storageService.removeFromLibrary(url);
-    if (item?.contentType == MultimediaContentType.manga) return;
+    if (item?.contentType == MultimediaContentType.manga) {
+      _syncInBackground(
+        _accountService.removeMangaLibraryItem(url),
+        'remove manga library item',
+      );
+      return;
+    }
     _syncInBackground(
       _accountService.removeLibraryItem(url),
       'remove library item',
