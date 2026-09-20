@@ -20,6 +20,37 @@ final class MangaChapter {
   final String name;
   final double? number;
   final DateTime? publishedAt;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'id': id,
+    'mangaId': mangaId,
+    'url': url,
+    'name': name,
+    if (number != null) 'number': number,
+    if (publishedAt != null) 'publishedAt': publishedAt!.toIso8601String(),
+  };
+
+  static MangaChapter? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final map = Map<String, Object?>.from(raw);
+    final id = map['id']?.toString().trim() ?? '';
+    final mangaId = map['mangaId']?.toString().trim() ?? '';
+    final url = map['url']?.toString().trim() ?? '';
+    final name = map['name']?.toString().trim() ?? '';
+    if (id.isEmpty || mangaId.isEmpty || url.isEmpty || name.isEmpty) {
+      return null;
+    }
+    return MangaChapter(
+      id: id,
+      mangaId: mangaId,
+      url: url,
+      name: name,
+      number: map['number'] is num
+          ? (map['number'] as num).toDouble()
+          : double.tryParse(map['number']?.toString() ?? ''),
+      publishedAt: DateTime.tryParse(map['publishedAt']?.toString() ?? ''),
+    );
+  }
 }
 
 /// One ordered image page in a Manga/Manhwa chapter.
