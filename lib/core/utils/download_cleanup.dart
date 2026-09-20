@@ -85,7 +85,7 @@ bool shouldCancelDownload(TaskStatus status) {
 
 enum CompleteDownloadAction { reuse, dropAndEnqueue, enqueue }
 
-/// How [DownloadService.startDownload] should treat an existing complete record.
+/// How a download start should treat an existing complete record.
 CompleteDownloadAction decideCompleteDownloadAction({
   required bool hasCompleteRecord,
   required bool fileExists,
@@ -155,7 +155,7 @@ String? _appDownloadsRootForPath(String value) {
   return null;
 }
 
-/// Legacy lexical marker check retained for non-destructive compatibility.
+/// Lexical marker check retained for non-destructive compatibility.
 ///
 /// Never use this as proof of filesystem ownership: any external directory can
 /// be named `AnimeWitcher/Downloads`. Destructive cleanup must use the
