@@ -13,6 +13,7 @@ import 'download_v2_diagnostics.dart';
 import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
 import 'logical_download_store_v2.dart';
+import 'manga_chapter_manifest_v2.dart';
 import 'manga_chapter_transport_v2.dart';
 
 /// Application request for one logical episode download.
@@ -207,11 +208,12 @@ final class DownloadManagerV2 {
           }
         }
         if (record.completedAtMillis != null) {
-        final file = await _destinationFile(record.destinationPath);
-        final result = await _integrityVerifier.verify(
-          file,
-          expectedBytes: record.expectedBytes,
-        );
+        final result = record.mediaKind == DownloadMediaKind.mangaChapter
+            ? await _verifyMangaDirectory(record)
+            : await _integrityVerifier.verify(
+                await _destinationFile(record.destinationPath),
+                expectedBytes: record.expectedBytes,
+              );
         if (result.isValid) {
           final snapshot = DownloadTransportSnapshot(
             taskId: record.taskId,
@@ -840,11 +842,12 @@ final class DownloadManagerV2 {
     await initialize();
     final record = await _store.get(logicalId);
     if (record?.completedAtMillis == null) return false;
-    final file = await _destinationFile(record!.destinationPath);
-    final result = await _integrityVerifier.verify(
-      file,
-      expectedBytes: record.expectedBytes,
-    );
+    final result = record!.mediaKind == DownloadMediaKind.mangaChapter
+        ? await _verifyMangaDirectory(record)
+        : await _integrityVerifier.verify(
+            await _destinationFile(record.destinationPath),
+            expectedBytes: record.expectedBytes,
+          );
     return result.isValid;
   }
 
@@ -1488,7 +1491,59 @@ final class DownloadManagerV2 {
 
   Future<void> _deleteDestination(String destinationPath) async {
     final file = await _destinationFile(destinationPath);
-    if (await file.exists()) await file.delete();
+    if (await file.exists()) {
+      await file.delete();
+      return;
+    }
+    final directory = Directory(file.path);
+    if (await directory.exists()) {
+      await directory.delete(recursive: true);
+    }
+  }
+
+  Future<DownloadIntegrityResult> _verifyMangaDirectory(
+    LogicalDownloadRecordV2 record,
+  ) async {
+    final destination = await _destinationFile(record.destinationPath);
+    final directory = Directory(destination.path);
+    if (!await directory.exists()) {
+      return const DownloadIntegrityResult.invalid('missing');
+    }
+
+    final manifest = await MangaChapterManifestV2.readFrom(directory);
+    if (manifest == null ||
+        manifest.mangaId != record.mediaId ||
+        manifest.chapterId != record.unitKey ||
+        !manifest.isComplete ||
+        manifest.pageCount <= 0 ||
+        manifest.completedIndexes.length != manifest.pageCount) {
+      return const DownloadIntegrityResult.invalid('manifest-incomplete');
+    }
+
+    var bytes = 0;
+    for (final index in manifest.completedIndexes) {
+      final prefix = (index + 1).toString().padLeft(4, '0');
+      File? pageFile;
+      await for (final entity in directory.list(followLinks: false)) {
+        if (entity is! File) continue;
+        final base = p.basename(entity.path);
+        if (base.startsWith('$prefix.')) {
+          pageFile = entity;
+          break;
+        }
+      }
+      if (pageFile == null || !await pageFile.exists()) {
+        return const DownloadIntegrityResult.invalid('missing-page');
+      }
+      final length = await pageFile.length();
+      if (length <= 0) {
+        return const DownloadIntegrityResult.invalid('empty-page');
+      }
+      bytes += length;
+    }
+    return bytes > 0
+        ? DownloadIntegrityResult.valid(bytes)
+        : const DownloadIntegrityResult.invalid('empty');
   }
 
   DownloadStartRequestV2 _requestFromRecord(LogicalDownloadRecordV2 record) {
@@ -1684,11 +1739,12 @@ final class DownloadManagerV2 {
           return;
         }
 
-        final file = await _destinationFile(record.destinationPath);
-        final result = await _integrityVerifier.verify(
-          file,
-          expectedBytes: record.expectedBytes,
-        );
+        final result = record.mediaKind == DownloadMediaKind.mangaChapter
+            ? await _verifyMangaDirectory(record)
+            : await _integrityVerifier.verify(
+                await _destinationFile(record.destinationPath),
+                expectedBytes: record.expectedBytes,
+              );
         if (!result.isValid) {
           await _deleteDestination(record.destinationPath);
         }
