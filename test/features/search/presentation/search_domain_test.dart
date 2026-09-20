@@ -17,10 +17,17 @@ void main() {
     );
   });
 
-  test('manga keeps its own sort and filter controls', () {
+  test('manga hides unsupported sort and filter controls', () {
     expect(
       SearchDomain.manga.capabilities,
-      const SearchDomainCapabilities(showSort: true, showFilter: true),
+      const SearchDomainCapabilities(showSort: false, showFilter: false),
+    );
+  });
+
+  test('animation hides unsupported sort and filter controls', () {
+    expect(
+      SearchDomain.animation.capabilities,
+      const SearchDomainCapabilities(showSort: false, showFilter: false),
     );
   });
 }
