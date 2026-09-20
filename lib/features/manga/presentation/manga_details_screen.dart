@@ -57,7 +57,9 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     final state = ref.watch(
       mangaDetailsControllerProvider(widget.item.url),
     );
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final item = state.details.asData?.value ?? state.item ?? widget.item;
 
     return Scaffold(
@@ -68,8 +70,8 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
           isScrollable: false,
           indicatorSize: TabBarIndicatorSize.tab,
           tabs: <Widget>[
-            FilterStyleTab(label: l10n.mangaDetails),
-            FilterStyleTab(label: l10n.chapters),
+            FilterStyleTab(label: l10n?.mangaDetails ?? (isArabic ? 'التفاصيل' : 'Details')),
+            FilterStyleTab(label: l10n?.chapters ?? (isArabic ? 'الفصول' : 'Chapters')),
           ],
         ),
       ),
@@ -210,12 +212,14 @@ class _RetryPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     return Center(
       child: FilledButton.tonalIcon(
         onPressed: onRetry,
         icon: const Icon(Icons.refresh_rounded),
-        label: Text(l10n.retry),
+        label: Text(l10n?.retry ?? (isArabic ? 'إعادة المحاولة' : 'Retry')),
       ),
     );
   }
