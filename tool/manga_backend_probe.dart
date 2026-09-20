@@ -56,6 +56,33 @@ String _dioSummary(Object error) {
   return 'DioException(type=${error.type.name}, status=${status ?? 'none'})';
 }
 
+Future<Map<String, Object?>?> _algoliaFirstMatching(
+  String index,
+  _AlgoliaCredentials credentials,
+  String query,
+) async {
+  final response = await _dio.post<Object?>(
+    'https://${credentials.appId}-dsn.algolia.net/1/indexes/'
+    '${Uri.encodeComponent(index)}/query',
+    data: <String, Object?>{'query': query, 'hitsPerPage': 1, 'page': 0},
+    options: Options(
+      headers: <String, String>{
+        'X-Algolia-Application-Id': credentials.appId,
+        'X-Algolia-API-Key': credentials.apiKey,
+        'X-Algolia-Agent': 'Algolia for Android (3.27.0); Android (13)',
+        'content-type': 'application/json',
+      },
+    ),
+  );
+  if ((response.statusCode ?? 500) >= 300 || response.data is! Map) {
+    return null;
+  }
+  final body = Map<String, Object?>.from(response.data! as Map);
+  final hits = body['hits'];
+  if (hits is! List || hits.isEmpty || hits.first is! Map) return null;
+  return Map<String, Object?>.from(hits.first as Map);
+}
+
 Future<Map<String, Object?>?> _algoliaFirst(
   String index,
   _AlgoliaCredentials credentials,
@@ -718,6 +745,40 @@ Future<bool> _probeMangaLek(String rawUrl) async {
   return false;
 }
 
+Future<void> _probeReportedChapterCase(
+  List<_AlgoliaCredentials> credentials,
+) async {
+  const query = 'Shadow Of The Reborn Rogue';
+  for (final candidate in credentials) {
+    if (!candidate.isUsable) continue;
+    try {
+      final hit = await _algoliaFirstMatching(
+        'manga_views_desc',
+        candidate,
+        query,
+      );
+      if (hit == null) continue;
+      final title = _text(hit['name']);
+      final rawUrl = _text(hit['mangalek_page_url']);
+      final uri = Uri.tryParse(rawUrl);
+      stdout.writeln(
+        'reported-case: title=$title sourceHost=${uri?.host ?? 'none'} '
+        'sourcePath=${uri?.path ?? 'none'}',
+      );
+      if (rawUrl.isNotEmpty) {
+        final ok = await _probeMangaLek(rawUrl);
+        stdout.writeln('reported-case: chapterProbe=${ok ? 'ok' : 'failed'}');
+      }
+      return;
+    } catch (error) {
+      stdout.writeln(
+        'reported-case via ${candidate.label}: ${_dioSummary(error)}',
+      );
+    }
+  }
+  stdout.writeln('reported-case: not found');
+}
+
 Future<void> main() async {
   var failures = 0;
 
@@ -761,6 +822,7 @@ Future<void> main() async {
   await _probeMangaFacets(credentials);
   await _probeMangaFilterSupport(credentials);
   await _probeAnimationCapabilities(credentials);
+  await _probeReportedChapterCase(credentials);
 
   await _probeAlgoliaIndex('all_animation', credentials);
 
