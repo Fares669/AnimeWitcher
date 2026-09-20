@@ -56,6 +56,18 @@ void main() {
       expect(body, contains('getAllDownloadMetadata'));
     });
 
+    test('completed artwork work is not relaunched on every progress tick', () {
+      final source = File(
+        'lib/features/library/presentation/downloads_provider.dart',
+      ).readAsStringSync();
+
+      expect(source, contains('final Set<String> _artworkScheduledIds'));
+      expect(
+        source,
+        contains('_artworkScheduledIds.add(projected.id)'),
+      );
+    });
+
     test('presentation lifecycle commands route through V2 logical IDs', () {
       final source = File(
         'lib/features/library/presentation/downloads_provider.dart',
