@@ -317,7 +317,9 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     final completed = _manifest.completedIndexes.length;
     final progress = pageCount == 0
         ? 1.0
-        : ((completed + page.progress.clamp(0, 1)) / pageCount).clamp(0.0, 1.0);
+        : ((completed + page.progress.clamp(0.0, 1.0)) / pageCount)
+              .clamp(0.0, 1.0)
+              .toDouble();
     return DownloadTransportSnapshot(
       taskId: taskId,
       status: page.status,
@@ -334,7 +336,8 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   static double _baseProgress(MangaChapterManifestV2 manifest) {
     if (manifest.pageCount <= 0) return manifest.isComplete ? 1 : 0;
     return (manifest.completedIndexes.length / manifest.pageCount)
-        .clamp(0.0, 1.0);
+        .clamp(0.0, 1.0)
+        .toDouble();
   }
 
   void _emit(DownloadTransportSnapshot snapshot) {
