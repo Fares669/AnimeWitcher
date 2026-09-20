@@ -1,3 +1,4 @@
+import 'package:animewitcher/features/search/presentation/search_domain.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_action_buttons.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:flutter/material.dart';
@@ -300,4 +301,55 @@ void main() {
     final arrow = tester.element(find.byIcon(Icons.arrow_upward_rounded));
     expect(IconTheme.of(arrow).opacity ?? 1.0, 1.0);
   });
+
+
+  testWidgets('characters collapse actions to the domain control only', (
+    tester,
+  ) async {
+    SearchDomain? selected;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          appBar: AppBar(
+            leading: SearchActionButtons(
+              domain: SearchDomain.characters,
+              onDomainSelected: (value) => selected = value,
+              showSort: false,
+              showFilter: false,
+              sortValue: 'favorites',
+              sortItems: const <AppleNativeMenuItem>[
+                AppleNativeMenuItem(value: 'favorites', label: 'Favorites'),
+              ],
+              onSortSelected: (_) {},
+              onFilterPressed: () {},
+              sortTooltip: 'Sort',
+              filterTooltip: 'Filters',
+              sortIcon: Icons.star_rounded,
+              sortSystemImage: 'star.fill',
+              height: 48,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.pump();
+
+    expect(find.byTooltip('Search domain'), findsOneWidget);
+    expect(find.byTooltip('Sort'), findsNothing);
+    expect(find.byTooltip('Filters'), findsNothing);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('search-action-capsule'))).width,
+      48,
+    );
+
+    await tester.tap(find.byTooltip('Search domain'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('مانجا'));
+    await tester.pumpAndSettle();
+
+    expect(selected, SearchDomain.manga);
+  });
+
 }
