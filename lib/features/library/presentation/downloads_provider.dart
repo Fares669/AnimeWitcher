@@ -5,6 +5,7 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:path/path.dart' as p;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../../core/domain/entity/manga.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
@@ -21,6 +22,8 @@ class DownloadItem {
   final double progress;
   final MultimediaItem item;
   final Episode? episode;
+  final MangaChapter? chapter;
+  final DownloadMediaKind mediaKind;
   final String? logicalId;
   final int timestamp;
   final String trackingUrl;
@@ -37,6 +40,8 @@ class DownloadItem {
     required this.progress,
     required this.item,
     this.episode,
+    this.chapter,
+    this.mediaKind = DownloadMediaKind.videoEpisode,
     this.logicalId,
     required this.timestamp,
     String? trackingUrl,
@@ -69,6 +74,9 @@ bool downloadsPointAtSameTarget(DownloadItem a, DownloadItem b) {
   final trackA = a.trackingUrl.trim();
   final trackB = b.trackingUrl.trim();
   if (trackA.isNotEmpty && trackA == trackB) return true;
+  final chapterA = a.chapter?.url.trim() ?? '';
+  final chapterB = b.chapter?.url.trim() ?? '';
+  if (chapterA.isNotEmpty && chapterA == chapterB) return true;
   final episodeA = a.episode?.url.trim() ?? '';
   final episodeB = b.episode?.url.trim() ?? '';
   if (episodeA.isNotEmpty && episodeA == episodeB) return true;
@@ -275,7 +283,16 @@ class DownloadsNotifier extends _$DownloadsNotifier {
               Map<String, dynamic>.from(metadata['episode'] as Map),
             )
           : null;
-      final trackingUrl = _trackingUrlFor(metadata, item, episode);
+      final taskSnapshot = metadata['taskSnapshot'] is Map
+          ? Map<String, dynamic>.from(metadata['taskSnapshot'] as Map)
+          : const <String, dynamic>{};
+      final chapter = MangaChapter.fromJson(taskSnapshot['chapter']);
+      final trackingUrl = _trackingUrlFor(
+        metadata,
+        item,
+        episode,
+        chapter,
+      );
       final snapshot = manager.snapshotFor(record.logicalId);
       final task = _presentationTaskFor(
         record,
@@ -287,6 +304,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         progress: _progressFor(record, snapshot),
         item: item,
         episode: episode,
+        chapter: chapter,
+        mediaKind: record.mediaKind,
         logicalId: record.logicalId.value,
         timestamp: (metadata['timestamp'] as int?) ?? record.updatedAtMillis,
         trackingUrl: trackingUrl,
@@ -298,7 +317,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         timeRemaining: snapshot?.timeRemaining ?? Duration.zero,
       );
       items.add(projected);
-      if (projected.status == TaskStatus.complete) {
+      if (projected.status == TaskStatus.complete &&
+          projected.mediaKind == DownloadMediaKind.videoEpisode) {
         unawaited(
           ensureDownloadedEpisodeArtwork(
             taskId: projected.id,
@@ -401,9 +421,12 @@ String _trackingUrlFor(
   Map<String, dynamic> metadata,
   MultimediaItem item,
   Episode? episode,
+  MangaChapter? chapter,
 ) {
   final stored = (metadata['trackingUrl'] as String?)?.trim();
   if (stored != null && stored.isNotEmpty) return stored;
+  final chapterUrl = chapter?.url.trim();
+  if (chapterUrl != null && chapterUrl.isNotEmpty) return chapterUrl;
   final episodeUrl = episode?.url.trim();
   if (episodeUrl != null && episodeUrl.isNotEmpty) return episodeUrl;
   return item.url.trim();
