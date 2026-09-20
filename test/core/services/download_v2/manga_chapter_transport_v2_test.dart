@@ -36,7 +36,9 @@ void main() {
 
     for (var index = 0; index < 4; index++) {
       await starter.complete(index);
-      await Future<void>.delayed(Duration.zero);
+      if (index + 1 < 4) {
+        await starter.waitUntilStarted(index + 1);
+      }
     }
 
     expect(starter.startedPageIndexes, <int>[0, 1, 2, 3]);
@@ -113,6 +115,14 @@ final class _FakePageStarter {
     await File(handle.destinationPath).writeAsBytes(<int>[1, 2, 3]);
     handle.complete();
     await Future<void>.delayed(Duration.zero);
+  }
+
+  Future<void> waitUntilStarted(int pageIndex) async {
+    for (var attempt = 0; attempt < 100; attempt++) {
+      if (handles.containsKey(pageIndex)) return;
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+    }
+    throw StateError('page $pageIndex did not start');
   }
 }
 
