@@ -313,6 +313,40 @@ void main() {
     );
   });
 
+  test('chapters ignore a 200 challenge page and try the next mirror', () async {
+    final stub = _stubDio();
+    stub.dio.interceptors.insert(
+      0,
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (options.uri.host == 'mangalik.net' &&
+              options.uri.path == '/manga/manga-one/') {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data: '<html><title>Just a moment...</title></html>',
+              ),
+            );
+            return;
+          }
+          handler.next(options);
+        },
+      ),
+    );
+
+    final chapters = await _provider(stub.dio).getMangaChapters(
+      'https://animewitcher.com/manga/m1',
+    );
+
+    expect(chapters, hasLength(1));
+    expect(chapters.single.name, 'الفصل 9');
+    expect(
+      stub.requests.any((entry) => entry.uri.host == 'lekmanga.online'),
+      isTrue,
+    );
+  });
+
   test('chapters and pages follow AnimeWitcher MangaLek pointer', () async {
     final stub = _stubDio();
     final provider = _provider(stub.dio);
