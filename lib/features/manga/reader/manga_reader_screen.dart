@@ -102,13 +102,23 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
         child: FilledButton.tonalIcon(
           onPressed: _controller.load,
           icon: const Icon(Icons.refresh_rounded),
-          label: Text(AppLocalizations.of(context)!.retry),
+          label: Text(
+            AppLocalizations.of(context)?.retry ??
+                (Localizations.localeOf(context).languageCode == 'ar'
+                    ? 'إعادة المحاولة'
+                    : 'Retry'),
+          ),
         ),
       );
     }
     if (_controller.pages.isEmpty) {
       return Center(
-        child: Text(AppLocalizations.of(context)!.mangaNoPages),
+        child: Text(
+          AppLocalizations.of(context)?.mangaNoPages ??
+              (Localizations.localeOf(context).languageCode == 'ar'
+                  ? 'لا توجد صفحات'
+                  : 'No pages'),
+        ),
       );
     }
 
