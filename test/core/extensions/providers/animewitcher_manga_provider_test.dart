@@ -67,6 +67,65 @@ class _TestStorageService extends StorageService {
           );
           return;
         }
+        if (options.uri.host.contains('firestore') &&
+            options.uri.path.endsWith('/documents:runQuery')) {
+          final body = options.data;
+          final query = body is Map ? body['structuredQuery'] : null;
+          final from = query is Map ? query['from'] : null;
+          final firstFrom = from is List && from.isNotEmpty ? from.first : null;
+          final collectionId = firstFrom is Map
+              ? firstFrom['collectionId']?.toString() ?? ''
+              : '';
+          if (collectionId == 'manga_recent') {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data: <Map<String, dynamic>>[
+                  <String, dynamic>{
+                    'document': <String, dynamic>{
+                      'name':
+                          'projects/animewitcher-1c66d/databases/(default)/documents/manga_recent/recent-b-30',
+                      'fields': <String, dynamic>{
+                        'manga_id': _stringField('recent-b'),
+                        'manga_name': _stringField('Recent B'),
+                        'type': _stringField('مانهوا'),
+                        'poster_url': _stringField(
+                          'https://img.example/b.webp',
+                        ),
+                        'chapter_id': _stringField('30'),
+                        'chapter_name': _stringField('الفصل 30'),
+                        'date': <String, dynamic>{
+                          'timestampValue': '2026-09-20T15:00:00Z',
+                        },
+                      },
+                    },
+                  },
+                  <String, dynamic>{
+                    'document': <String, dynamic>{
+                      'name':
+                          'projects/animewitcher-1c66d/databases/(default)/documents/manga_recent/recent-a-20',
+                      'fields': <String, dynamic>{
+                        'manga_id': _stringField('recent-a'),
+                        'manga_name': _stringField('Recent A'),
+                        'type': _stringField('مانجا'),
+                        'poster_url': _stringField(
+                          'https://img.example/a.webp',
+                        ),
+                        'chapter_id': _stringField('20'),
+                        'chapter_name': _stringField('الفصل 20'),
+                        'date': <String, dynamic>{
+                          'timestampValue': '2026-09-20T14:00:00Z',
+                        },
+                      },
+                    },
+                  },
+                ],
+              ),
+            );
+            return;
+          }
+        }
         if (_isAlgolia(options.uri) &&
             options.uri.path.endsWith('/indexes/manga_views_desc/query')) {
           final body = options.data;
@@ -258,7 +317,7 @@ void main() {
     );
   });
 
-  test('latest manga uses lastmodified and resolves newest chapter', () async {
+  test('latest manga uses manga_recent without prefetching chapters', () async {
     final stub = _stubDio();
     final page = await _provider(stub.dio).getLatestMangaPage(limit: 2);
 
@@ -270,12 +329,45 @@ void main() {
     expect(page.items[0].chapter.name, 'الفصل 30');
     expect(page.items[1].chapter.name, 'الفصل 20');
     expect(
+      page.items[0].chapter.publishedAt,
+      DateTime.parse('2026-09-20T15:00:00Z'),
+    );
+
+    final recentRequest = stub.requests.singleWhere((entry) {
+      if (!entry.uri.host.contains('firestore') ||
+          !entry.uri.path.endsWith('/documents:runQuery')) {
+        return false;
+      }
+      final body = entry.data;
+      final query = body is Map ? body['structuredQuery'] : null;
+      final from = query is Map ? query['from'] : null;
+      final firstFrom = from is List && from.isNotEmpty ? from.first : null;
+      return firstFrom is Map && firstFrom['collectionId'] == 'manga_recent';
+    });
+    final recentBody = recentRequest.data as Map;
+    final recentQuery = recentBody['structuredQuery'] as Map;
+    final orderBy = recentQuery['orderBy'] as List;
+    expect(
+      ((orderBy.first as Map)['field'] as Map)['fieldPath'],
+      'date',
+    );
+
+    expect(
       stub.requests.any((entry) {
         final body = entry.data;
         final params = body is Map ? body['params']?.toString() ?? '' : '';
         return params.contains('lastmodified');
       }),
-      isTrue,
+      isFalse,
+    );
+    expect(
+      stub.requests.any(
+        (entry) =>
+            entry.uri.host == 'mangalik.net' ||
+            entry.uri.host == 'manga-leko.net' ||
+            entry.uri.host == 'lekmanga.online',
+      ),
+      isFalse,
     );
   });
 
