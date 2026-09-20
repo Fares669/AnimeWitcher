@@ -41,7 +41,7 @@ class ParallelAssemblyFailure {
   final ParallelAssemblyFailureReason reason;
 }
 
-/// Durable multipart manifest schema. Version 1 was the legacy payload that
+/// Durable multipart manifest schema. Version 1 was the older payload that
 /// contained only `parts`. Version 2 added logical generation/expected byte
 /// identity. Version 3 also pins the first strong ETag (or Last-Modified)
 /// observed from a validated child response, so later/relaunched ranges
@@ -1096,7 +1096,7 @@ class PersistentParallelDownload {
     }
   }
 
-  /// Imports legacy plugin checkpoints without cancelling/deleting their files.
+  /// Imports older plugin checkpoints without cancelling/deleting their files.
   /// Completed parts keep their filenames; the remaining native resume blobs
   /// stay associated with the same child taskIds.
   Future<void> importLegacy(
