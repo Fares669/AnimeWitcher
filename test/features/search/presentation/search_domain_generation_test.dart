@@ -27,10 +27,12 @@ final class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
 
   final Completer<ProviderMediaPage> anime = Completer<ProviderMediaPage>();
   final Completer<ProviderMediaPage> manga = Completer<ProviderMediaPage>();
+  final Completer<ProviderMediaPage> animation = Completer<ProviderMediaPage>();
   final Completer<AnimeWitcherCharacterPage> characters =
       Completer<AnimeWitcherCharacterPage>();
   int animeCalls = 0;
   int mangaCalls = 0;
+  int animationCalls = 0;
   int characterCalls = 0;
 
   @override
@@ -55,6 +57,18 @@ final class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
   }) {
     mangaCalls++;
     return manga.future;
+  }
+
+  @override
+  Future<ProviderMediaPage> searchAnimationPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = 30,
+    CancelToken? cancelToken,
+  }) {
+    animationCalls++;
+    return animation.future;
   }
 
   @override
@@ -148,6 +162,45 @@ void main() {
     expect(renderedTitles, isNot(contains('Late anime result')));
   });
 
+
+  test('animation domain uses the animation catalog instead of anime', () async {
+    final fake = _DeferredSearchProvider();
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(
+          () => _FakeExtensionManager(fake),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container
+        .read(searchDomainProvider.notifier)
+        .set(SearchDomain.animation);
+    container.read(searchPagedResultsProvider);
+    await _flush();
+
+    expect(fake.animationCalls, 1);
+    expect(fake.animeCalls, 0);
+
+    fake.animation.complete(
+      ProviderMediaPage(
+        items: <MultimediaItem>[
+          _item('Animation result', MultimediaContentType.movie),
+        ],
+        nextOffset: 30,
+        hasMore: false,
+      ),
+    );
+    await _flush();
+
+    final titles = container
+        .read(searchPagedResultsProvider)
+        .results
+        .expand((entry) => entry.results)
+        .map((item) => item.title);
+    expect(titles, contains('Animation result'));
+  });
 
   test('characters stay in separate character result state', () async {
     final fake = _DeferredSearchProvider();
