@@ -228,6 +228,125 @@ void _printSchema(String label, Map<String, Object?>? data) {
   stdout.writeln('$label: fields=[${keys.join(', ')}]');
 }
 
+Future<void> _probeMangaRecencyMetadata(
+  List<_AlgoliaCredentials> credentials,
+) async {
+  for (final candidate in credentials) {
+    try {
+      final response = await _dio.post<Object?>(
+        'https://${candidate.appId}-dsn.algolia.net/1/indexes/'
+        'manga_views_desc/query',
+        data: <String, Object?>{
+          'query': '',
+          'hitsPerPage': 3,
+          'page': 0,
+          'attributesToRetrieve': <String>[
+            'objectID',
+            'lastmodified',
+            'date_created',
+          ],
+        },
+        options: Options(
+          headers: <String, String>{
+            'X-Algolia-Application-Id': candidate.appId,
+            'X-Algolia-API-Key': candidate.apiKey,
+            'content-type': 'application/json',
+          },
+        ),
+      );
+      if ((response.statusCode ?? 500) >= 300 || response.data is! Map) {
+        continue;
+      }
+      final body = Map<String, Object?>.from(response.data! as Map);
+      stdout.writeln(
+        'algolia:manga_views_desc metadata '
+        'nbHits=${body['nbHits'] ?? 'unknown'}, '
+        'nbPages=${body['nbPages'] ?? 'unknown'}',
+      );
+      final hits = body['hits'];
+      if (hits is List) {
+        for (final raw in hits.take(3)) {
+          if (raw is! Map) continue;
+          final hit = Map<String, Object?>.from(raw);
+          stdout.writeln(
+            'algolia:manga-recency-sample '
+            'lastmodifiedType=${hit['lastmodified']?.runtimeType ?? 'null'} '
+            'lastmodified=${_text(hit['lastmodified'])} '
+            'dateCreatedType=${hit['date_created']?.runtimeType ?? 'null'} '
+            'dateCreated=${_text(hit['date_created'])}',
+          );
+        }
+      }
+      return;
+    } catch (error) {
+      stdout.writeln(
+        'algolia:manga-recency-metadata via ${candidate.label}: '
+        '${_dioSummary(error)}',
+      );
+    }
+  }
+}
+
+Future<void> _probeMangaIndexNames(
+  Map<String, Object?> constants,
+) async {
+  final search = _asMap(constants['search_settings']);
+  final search2 = _asMap(constants['search_settings2']);
+  final candidates = <_AlgoliaCredentials>[];
+
+  void add(String label, Map<String, Object?> value) {
+    final appId = _text(
+      value['algolia_app_id2'] ??
+          value['app_id_v3'] ??
+          value['app_id'] ??
+          value['application_id'],
+    );
+    final browseKey = _text(value['browse_api_key'] ?? value['browseApiKey']);
+    if (appId.isNotEmpty && browseKey.isNotEmpty) {
+      candidates.add(_AlgoliaCredentials(label, appId, browseKey));
+    }
+  }
+
+  add('remote-primary-browse', search);
+  add('remote-secondary-browse', search2);
+
+  for (final candidate in candidates) {
+    try {
+      final response = await _dio.get<Object?>(
+        'https://${candidate.appId}-dsn.algolia.net/1/indexes',
+        queryParameters: const <String, Object?>{'itemsPerPage': 100},
+        options: Options(
+          headers: <String, String>{
+            'X-Algolia-Application-Id': candidate.appId,
+            'X-Algolia-API-Key': candidate.apiKey,
+          },
+        ),
+      );
+      if ((response.statusCode ?? 500) >= 300 || response.data is! Map) {
+        continue;
+      }
+      final body = Map<String, Object?>.from(response.data! as Map);
+      final items = body['items'];
+      if (items is! List) continue;
+      final names = <String>[
+        for (final raw in items)
+          if (raw is Map)
+            _text(Map<String, Object?>.from(raw)['name']),
+      ].where((name) => name.toLowerCase().contains('manga')).toList()
+        ..sort();
+      stdout.writeln(
+        'algolia:manga-index-names via ${candidate.label}='
+        '${names.join(',')}',
+      );
+      if (names.isNotEmpty) return;
+    } catch (error) {
+      stdout.writeln(
+        'algolia:index-list via ${candidate.label}: ${_dioSummary(error)}',
+      );
+    }
+  }
+}
+
 Future<_AlgoliaCredentials?> _probeAlgoliaIndex(
   String index,
   List<_AlgoliaCredentials> credentials,
@@ -373,6 +492,8 @@ Future<void> main() async {
   stdout.writeln(
     'algolia: credentialProfiles=${credentials.map((e) => e.label).join(',')}',
   );
+  await _probeMangaIndexNames(constants);
+  await _probeMangaRecencyMetadata(credentials);
 
   final supportedSortIndices = <String>[];
   for (final index in _mangaSortIndices) {
