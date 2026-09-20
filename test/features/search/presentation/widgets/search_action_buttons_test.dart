@@ -49,6 +49,7 @@ void main() {
       await tester.pump();
 
       expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(AppleLiquidGlassActionGroup), findsOneWidget);
       final glass = tester.widget<UiKitView>(find.byType(UiKitView));
       expect(glass.viewType, 'com.animewitcher.app/liquid_glass');
       expect(

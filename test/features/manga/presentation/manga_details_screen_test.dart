@@ -113,6 +113,9 @@ void main() {
     await tester.pumpWidget(_app(_MangaProvider()));
     await tester.pumpAndSettle();
 
+    final tabBar = tester.widget<TabBar>(find.byType(TabBar));
+    expect(tabBar.indicatorSize, isNull);
+
     expect(find.text('التفاصيل'), findsOneWidget);
     expect(find.textContaining('الفصول'), findsOneWidget);
     expect(find.text('Solo Leveling'), findsWidgets);
