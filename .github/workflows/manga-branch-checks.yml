@@ -57,6 +57,12 @@ jobs:
       - name: Full Download V2 regression
         run: flutter test test/core/services/download_v2 -r expanded
 
+      - name: Downloads manga RED/GREEN tests
+        run: |
+          flutter test test/features/library/presentation/downloads_manga_test.dart \
+            test/features/library/presentation/manga_download_count_label_test.dart \
+            test/features/manga/reader/manga_reader_offline_test.dart -r expanded
+
       - name: Focused Manga contract tests
         run: |
           flutter test test/core/domain/entity/manga_test.dart \
