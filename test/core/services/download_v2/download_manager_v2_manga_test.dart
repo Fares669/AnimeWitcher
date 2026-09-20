@@ -107,6 +107,14 @@ void main() {
     expect(secondRecord, isNotNull);
     expect(secondRecord!.awaitingAdmission, isTrue);
     expect(secondRecord.parallelChunks, 1);
+
+    await manager.cancel(first.logicalId);
+    await manager.reconcileAdmission();
+
+    expect(gateway.mangaSpecs, hasLength(2));
+    expect(gateway.mangaSpecs.last.mangaId, 'm2');
+    final promoted = await store.get(second.logicalId);
+    expect(promoted?.awaitingAdmission, isFalse);
   });
 
   test('paused manga relaunch resumes the same generation from manifest', () async {
