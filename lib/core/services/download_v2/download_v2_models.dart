@@ -1,6 +1,8 @@
 import 'download_v2_identity.dart';
 
-const int kLogicalDownloadSchemaVersionV2 = 1;
+const int kLogicalDownloadSchemaVersionV2 = 2;
+
+enum DownloadMediaKind { videoEpisode, mangaChapter }
 
 enum DownloadUserIntent { active, paused, canceled }
 
@@ -78,8 +80,11 @@ final class LogicalDownloadRecordV2 {
   const LogicalDownloadRecordV2({
     required this.schemaVersion,
     required this.logicalId,
-    required this.animeId,
-    required this.episodeKey,
+    this.mediaKind = DownloadMediaKind.videoEpisode,
+    String? mediaId,
+    String? unitKey,
+    String? animeId,
+    String? episodeKey,
     required this.variantKey,
     required this.generation,
     required this.taskId,
@@ -95,13 +100,18 @@ final class LogicalDownloadRecordV2 {
     this.retries = 2,
     this.parallelChunks = 1,
     this.awaitingAdmission = false,
-  }) : assert(retries >= 0),
+  }) : mediaId = mediaId ?? animeId ?? '',
+       unitKey = unitKey ?? episodeKey ?? '',
+       assert((mediaId ?? animeId ?? '').isNotEmpty),
+       assert((unitKey ?? episodeKey ?? '').isNotEmpty),
+       assert(retries >= 0),
        assert(parallelChunks > 0);
 
   final int schemaVersion;
   final DownloadLogicalId logicalId;
-  final String animeId;
-  final String episodeKey;
+  final DownloadMediaKind mediaKind;
+  final String mediaId;
+  final String unitKey;
   final String variantKey;
   final int generation;
   final String taskId;
@@ -116,15 +126,23 @@ final class LogicalDownloadRecordV2 {
   final int retries;
   final int parallelChunks;
 
-  /// App-owned logical admission state. True means this episode is waiting
-  /// for one of the user-configured episode slots and has not been handed to
-  /// background_downloader yet. Package child/chunk state is never persisted.
+  /// App-owned logical admission state. Package child/chunk state is never
+  /// persisted here.
   final bool awaitingAdmission;
   final int updatedAtMillis;
+
+  @Deprecated('Use mediaId')
+  String get animeId => mediaId;
+
+  @Deprecated('Use unitKey')
+  String get episodeKey => unitKey;
 
   LogicalDownloadRecordV2 copyWith({
     int? schemaVersion,
     DownloadLogicalId? logicalId,
+    DownloadMediaKind? mediaKind,
+    String? mediaId,
+    String? unitKey,
     String? animeId,
     String? episodeKey,
     String? variantKey,
@@ -148,8 +166,9 @@ final class LogicalDownloadRecordV2 {
     return LogicalDownloadRecordV2(
       schemaVersion: schemaVersion ?? this.schemaVersion,
       logicalId: logicalId ?? this.logicalId,
-      animeId: animeId ?? this.animeId,
-      episodeKey: episodeKey ?? this.episodeKey,
+      mediaKind: mediaKind ?? this.mediaKind,
+      mediaId: mediaId ?? animeId ?? this.mediaId,
+      unitKey: unitKey ?? episodeKey ?? this.unitKey,
       variantKey: variantKey ?? this.variantKey,
       generation: generation ?? this.generation,
       taskId: taskId ?? this.taskId,
@@ -175,8 +194,9 @@ final class LogicalDownloadRecordV2 {
   Map<String, Object?> toJson() => <String, Object?>{
     'schemaVersion': schemaVersion,
     'logicalId': logicalId.value,
-    'animeId': animeId,
-    'episodeKey': episodeKey,
+    'mediaKind': mediaKind.name,
+    'mediaId': mediaId,
+    'unitKey': unitKey,
     'variantKey': variantKey,
     'generation': generation,
     'taskId': taskId,
@@ -198,10 +218,13 @@ final class LogicalDownloadRecordV2 {
     if (raw is! Map) return null;
     final map = Map<String, Object?>.from(raw);
 
-    final schemaVersion = _asInt(map['schemaVersion']);
+    final storedSchemaVersion = _asInt(map['schemaVersion']);
     final logicalId = _asString(map['logicalId']);
-    final animeId = _asString(map['animeId']);
-    final episodeKey = _asString(map['episodeKey']);
+    final mediaKind =
+        _enumByName(DownloadMediaKind.values, map['mediaKind']) ??
+        DownloadMediaKind.videoEpisode;
+    final mediaId = _asString(map['mediaId']) ?? _asString(map['animeId']);
+    final unitKey = _asString(map['unitKey']) ?? _asString(map['episodeKey']);
     final variantKey = _asString(map['variantKey']);
     final generation = _asInt(map['generation']);
     final taskId = _asString(map['taskId']);
@@ -212,10 +235,12 @@ final class LogicalDownloadRecordV2 {
     final retries = _asInt(map['retries']) ?? 2;
     final parallelChunks = _asInt(map['parallelChunks']) ?? 1;
 
-    if (schemaVersion == null ||
+    if (storedSchemaVersion == null ||
+        storedSchemaVersion < 1 ||
+        storedSchemaVersion > kLogicalDownloadSchemaVersionV2 ||
         logicalId == null ||
-        animeId == null ||
-        episodeKey == null ||
+        mediaId == null ||
+        unitKey == null ||
         variantKey == null ||
         generation == null ||
         generation <= 0 ||
@@ -230,10 +255,11 @@ final class LogicalDownloadRecordV2 {
     }
 
     return LogicalDownloadRecordV2(
-      schemaVersion: schemaVersion,
+      schemaVersion: kLogicalDownloadSchemaVersionV2,
       logicalId: DownloadLogicalId(logicalId),
-      animeId: animeId,
-      episodeKey: episodeKey,
+      mediaKind: mediaKind,
+      mediaId: mediaId,
+      unitKey: unitKey,
       variantKey: variantKey,
       generation: generation,
       taskId: taskId,
