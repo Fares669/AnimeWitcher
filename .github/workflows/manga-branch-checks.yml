@@ -29,6 +29,23 @@ jobs:
           flutter pub get
           dart run build_runner build --delete-conflicting-outputs
 
+      - name: Library manga RED/GREEN tests
+        run: |
+          flutter test test/features/library/presentation/library_manga_isolation_test.dart \
+            test/features/library/presentation/library_media_selector_test.dart -r expanded
+
+      - name: Home latest manga RED/GREEN tests
+        run: |
+          flutter test test/features/home/presentation/home_latest_manga_test.dart \
+            test/features/home/presentation/home_provider_test.dart \
+            test/features/home/presentation/home_screen_test.dart -r expanded
+
+      - name: Download V2 manga migration RED/GREEN tests
+        run: |
+          flutter test test/core/services/download_v2/download_v2_models_test.dart \
+            test/core/services/download_v2/download_v2_identity_test.dart \
+            test/core/services/download_v2/download_v2_manga_migration_test.dart -r expanded
+
       - name: Focused Manga contract tests
         run: |
           flutter test test/core/domain/entity/manga_test.dart \
@@ -49,31 +66,14 @@ jobs:
           flutter test test/features/manga/presentation/manga_details_screen_test.dart \
             test/features/manga/presentation/manga_details_no_anime_extras_test.dart -r expanded
 
-      - name: Full search regression
-        run: flutter test test/features/search -r expanded
-
       - name: Manga reader RED/GREEN tests
         run: |
           flutter test test/core/storage/manga_reading_repository_test.dart \
             test/features/manga/reader/manga_reader_test.dart \
             test/features/manga/reader/manga_reader_lazy_pages_test.dart -r expanded
 
-      - name: Library manga RED/GREEN tests
-        run: |
-          flutter test test/features/library/presentation/library_manga_isolation_test.dart \
-            test/features/library/presentation/library_media_selector_test.dart -r expanded
-
-      - name: Home latest manga RED/GREEN tests
-        run: |
-          flutter test test/features/home/presentation/home_latest_manga_test.dart \
-            test/features/home/presentation/home_provider_test.dart \
-            test/features/home/presentation/home_screen_test.dart -r expanded
-
-      - name: Download V2 manga migration RED/GREEN tests
-        run: |
-          flutter test test/core/services/download_v2/download_v2_models_test.dart \
-            test/core/services/download_v2/download_v2_identity_test.dart \
-            test/core/services/download_v2/download_v2_manga_migration_test.dart -r expanded
+      - name: Full search regression
+        run: flutter test test/features/search -r expanded
 
       - name: Probe AnimeWitcher Manga backend
         run: dart run tool/manga_backend_probe.dart
