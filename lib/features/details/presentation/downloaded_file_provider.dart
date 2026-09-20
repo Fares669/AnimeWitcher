@@ -3,18 +3,12 @@ import 'dart:io';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
-import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_v2/download_file_planner_v2.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
-import '../../../core/storage/storage_service.dart';
 
 part 'downloaded_file_provider.g.dart';
 
-/// Tracks completed files without consulting the legacy transport service.
-///
-/// V2 logical records are authoritative. Presentation metadata is retained as
-/// a compatibility fallback for already-completed legacy downloads until the
-/// physical-device gate allows Task 14 to remove legacy storage completely.
+/// Tracks completed files from V2 logical records only.
 @Riverpod(keepAlive: true)
 class DownloadedFiles extends _$DownloadedFiles {
   @override
@@ -66,35 +60,6 @@ class DownloadedFiles extends _$DownloadedFiles {
       }
     }
 
-    // Policy-A compatibility: only verified completed legacy files remain
-    // playable. A partial file may exist on disk after pause/crash, but it must
-    // never masquerade as a completed local episode.
-    if (resolved == null) {
-      final metadata = await ref
-          .read(storageServiceProvider)
-          .getAllDownloadMetadata();
-      final candidates = metadata.values.where((entry) {
-        return entry['trackingUrl'] == key && entry['filePath'] is String;
-      });
-      for (final entry in candidates) {
-        final progress = downloadMetadataProgress(entry);
-        if (progress < 1) continue;
-        final path = (entry['filePath'] as String).trim();
-        if (path.isEmpty) continue;
-        final expectedBytes = downloadMetadataExpectedBytes(entry);
-        final file = File(path);
-        try {
-          if (!await file.exists()) continue;
-          final length = await file.length();
-          if (length <= 0) continue;
-          if (expectedBytes > 0 && length != expectedBytes) continue;
-          resolved = file;
-          break;
-        } catch (_) {
-          continue;
-        }
-      }
-    }
 
     return resolved;
   }
