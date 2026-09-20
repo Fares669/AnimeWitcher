@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('V2 native refill does not inherit the legacy retry owner', () {
+  test('V2 native refill never owns multipart retry', () {
     final nativeQueue = File(
       'ios/Runner/DownloadNativeWaitingQueue.swift',
     ).readAsStringSync();
@@ -12,31 +12,25 @@ void main() {
     expect(
       compact,
       contains('private static func isPromotableMultipartPart('),
-      reason:
-          'Persisted generation-fenced plans may refill URLSession slots for '
-          'V2, but that is distinct from legacy native retry ownership.',
     );
     expect(
       compact,
       contains(
-        'return isPromotableMultipartPart(task) && !isV2DurableMultipartPart(task)',
+        'if isDownloadPart(task) { return false }',
       ),
       reason:
-          'V2 transient failures must return to the V2 coordinator rather than '
-          'being recreated by the legacy retry path.',
+          'Multipart Range failures must return to the V2 coordinator; native '
+          'may only refill persisted zero-byte candidates while Dart sleeps.',
     );
     expect(
       compact,
       contains(
         'if isPromotableMultipartPart(task) { promoteMultipartIfPossible(',
       ),
-      reason:
-          'A finished or failed background Range must free its slot and let '
-          'the native persisted plan start the next immutable Range.',
     );
   });
 
-  test('legacy iOS hook is observation-only after the V2 cutover', () {
+  test('delegate hooks remain fenced behind native capability', () {
     final compatibility = File(
       'ios/Runner/DownloadCallbackCompatibility.swift',
     ).readAsStringSync();
@@ -46,8 +40,6 @@ void main() {
     final compactCompatibility = compatibility.replaceAll(RegExp(r'\s+'), ' ');
     final compactQueue = nativeQueue.replaceAll(RegExp(r'\s+'), ' ');
 
-    // Installing compatible delegate observers may remain for diagnostics, but
-    // production V2 must never turn that observation into transport ownership.
     expect(
       compactCompatibility,
       contains('private let transportOwnershipEnabled: Bool'),
@@ -65,19 +57,10 @@ void main() {
       contains('return transportOwnershipEnabled'),
     );
 
-    // Every legacy retry/promotion path remains fenced behind the ownership
-    // result. V1 source stays dormant until the device gate allows Task 14 to
-    // delete it; background_downloader remains the sole V2 transport authority.
     expect(
       compactQueue,
       contains(
         'static var nativePromotionAvailable: Bool { lock.lock() defer { lock.unlock() } return hookInstalled }',
-      ),
-    );
-    expect(
-      compactQueue,
-      contains(
-        'static func retryBackgroundTransferIfNeeded( session: URLSession, task: URLSessionTask, error: Error ) -> Bool { guard nativePromotionAvailable else { return false }',
       ),
     );
     expect(
