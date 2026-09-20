@@ -97,6 +97,10 @@ Widget _app(AnimeWitcherProvider provider) => ProviderScope(
         posterUrl: '',
         contentType: MultimediaContentType.manga,
         provider: provider.packageName,
+        syncData: const <String, String>{
+          'mangaId': 'm1',
+          'awScore': '9.2',
+        },
       ),
     ),
   ),
@@ -113,6 +117,7 @@ void main() {
     expect(find.textContaining('الفصول'), findsOneWidget);
     expect(find.text('Solo Leveling'), findsWidgets);
     expect(find.text('Manga description'), findsOneWidget);
+    expect(find.text('9.2'), findsOneWidget);
     expect(find.byKey(const ValueKey('manga-details-hero')), findsOneWidget);
     expect(find.byKey(const ValueKey('manga-rate-action')), findsOneWidget);
     expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
