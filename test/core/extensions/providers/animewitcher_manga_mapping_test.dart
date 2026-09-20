@@ -89,6 +89,76 @@ void main() {
     );
   });
 
+  test('parses current MangaLek WordPress archive chapter links', () {
+    const html = '''
+<main>
+  <article class="post">
+    <h2 class="entry-title">
+      <a href="https://manga-leko.net/shadow-of-the-reborn-rogues-dominion-30-%D9%85%D8%AA%D8%B1%D8%AC%D9%85/">
+        !Shadow Of The Reborn Rogue's Dominion الفصل 30 مترجم
+      </a>
+    </h2>
+  </article>
+  <article class="post">
+    <h2 class="entry-title">
+      <a href="https://manga-leko.net/shadow-of-the-reborn-rogues-dominion-29-%D9%85%D8%AA%D8%B1%D8%AC%D9%85/">
+        !Shadow Of The Reborn Rogue's Dominion 29 مترجم
+      </a>
+    </h2>
+  </article>
+  <a href="/tag/shadow-of-the-reborn-rogues-dominion/">Series category</a>
+  <a class="next page-numbers"
+     href="/tag/shadow-of-the-reborn-rogues-dominion/page/2/">Next</a>
+</main>
+''';
+
+    final chapters = parseMangaLekArchiveChapters(
+      html: html,
+      mangaId: 'shadow',
+      documentUrl:
+          'https://manga-leko.net/tag/shadow-of-the-reborn-rogues-dominion/',
+    );
+
+    expect(chapters, hasLength(2));
+    expect(chapters.map((chapter) => chapter.number), <double?>[30, 29]);
+    expect(
+      chapters.first.url,
+      startsWith(
+        'https://manga-leko.net/shadow-of-the-reborn-rogues-dominion-30-',
+      ),
+    );
+  });
+
+  test('parses WordPress chapter article images without site chrome', () {
+    const html = '''
+<html>
+  <body>
+    <img src="https://manga-leko.net/logo.png">
+    <article class="post">
+      <div class="entry-content">
+        <p><img data-src="https://cdn.example/chapter/001.webp"></p>
+        <p><img src="https://cdn.example/chapter/002.jpg"></p>
+      </div>
+      <footer class="entry-footer">
+        <img src="https://manga-leko.net/avatar.png">
+      </footer>
+    </article>
+  </body>
+</html>
+''';
+
+    final pages = parseMangaLekPages(
+      html: html,
+      chapterUrl:
+          'https://manga-leko.net/shadow-of-the-reborn-rogues-dominion-30-%D9%85%D8%AA%D8%B1%D8%AC%D9%85/',
+    );
+
+    expect(pages.map((page) => page.imageUrl).toList(), <String>[
+      'https://cdn.example/chapter/001.webp',
+      'https://cdn.example/chapter/002.jpg',
+    ]);
+  });
+
   test('parses only reader images and keeps referer header', () {
     const html = '''
 <html>
