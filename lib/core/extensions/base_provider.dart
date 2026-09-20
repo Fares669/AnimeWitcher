@@ -209,6 +209,23 @@ abstract class AnimeWitcherProvider {
     );
   }
 
+  /// Animation search is opt-in. Providers without a dedicated animation
+  /// catalog expose an empty page instead of mixing it into Anime results.
+  Future<ProviderMediaPage> searchAnimationPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = 30,
+    CancelToken? cancelToken,
+  }) async {
+    final safeOffset = offset < 0 ? 0 : offset;
+    return ProviderMediaPage(
+      items: const <MultimediaItem>[],
+      nextOffset: safeOffset,
+      hasMore: false,
+    );
+  }
+
   /// Manga/Manhwa search is opt-in. Providers that do not implement it
   /// remain compatible and expose an empty Manga catalog.
   Future<ProviderMediaPage> searchMangaPage(
