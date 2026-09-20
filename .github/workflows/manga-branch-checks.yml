@@ -92,5 +92,10 @@ jobs:
       - name: Full search regression
         run: flutter test test/features/search -r expanded
 
+      - name: Manga localization RED/GREEN tests
+        run: |
+          flutter gen-l10n
+          flutter test test/features/manga/manga_localization_test.dart -r expanded
+
       - name: Probe AnimeWitcher Manga backend
         run: dart run tool/manga_backend_probe.dart
