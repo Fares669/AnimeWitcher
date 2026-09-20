@@ -7,6 +7,7 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   test('manga chapter starts exactly one page writer at a time', () async {
@@ -51,6 +52,36 @@ void main() {
     expect(manifest, isNotNull);
     expect(manifest!.completedIndexes, <int>{0, 1, 2, 3});
     expect(manifest.isComplete, isTrue);
+  });
+
+  test('relative manga directory resolves under app documents root', () async {
+    final root = await Directory.systemTemp.createTemp('aw_manga_root_');
+    addTearDown(() => root.delete(recursive: true));
+
+    final starter = _FakePageStarter();
+    final transport = MangaChapterTransportV2(
+      startPage: starter.start,
+      resolveDirectory: (relativePath) async =>
+          Directory(p.join(root.path, relativePath)),
+    );
+
+    await transport.start(
+      const MangaChapterTransportSpecV2(
+        taskId: 'chapter-relative',
+        mangaId: 'm1',
+        chapterId: '1',
+        destinationDirectory: 'manga/m1/1',
+        pages: <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
+        ],
+        retries: 2,
+      ),
+    );
+
+    expect(
+      starter.handles[0]!.destinationPath,
+      p.join(root.path, 'manga', 'm1', '1', '0001.webp'),
+    );
   });
 
   test('manga transport resumes from first missing manifest page', () async {
