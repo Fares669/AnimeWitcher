@@ -63,7 +63,7 @@ class DownloadUrlRefreshDescriptor {
       refreshUrl: _string(map['refreshUrl']),
       updatedAtMillis: _int(map['updatedAtMillis']),
       // Older descriptors predate generation fencing. Generation zero keeps
-      // them readable until the owning DownloadService rewrites the record.
+      // them readable until the owning V2 record rewrites the descriptor.
       generation: _int(map['generation']),
       ownerTaskId: _string(map['ownerTaskId']),
       logicalId: _string(map['logicalId']),
