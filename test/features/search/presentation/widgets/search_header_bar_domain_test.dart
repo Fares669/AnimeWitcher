@@ -24,67 +24,67 @@ void main() {
     );
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     await tester.binding.setSurfaceSize(const Size(428, 300));
-    addTearDown(() async {
+
+    final controller = TextEditingController();
+    final searchFocus = FocusNode();
+    final clearFocus = FocusNode();
+    try {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            searchPagedResultsProvider.overrideWith(_IdleSearchNotifier.new),
+          ],
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+              body: SearchHeaderBar(
+                textController: controller,
+                searchFocusNode: searchFocus,
+                clearButtonFocusNode: clearFocus,
+                onSubmitted: (_) {},
+                onChanged: (_) {},
+                onShowFilters: () {},
+                onSortSelected: (_) {},
+                sortValue: 'favorites',
+                sortItems: const <AppleNativeMenuItem>[
+                  AppleNativeMenuItem(
+                    value: 'favorites',
+                    label: 'Favorites',
+                    systemImage: 'star.fill',
+                  ),
+                ],
+                sortIcon: Icons.star_rounded,
+                sortSystemImage: 'star.fill',
+                sortTooltip: 'Sort',
+                activeFilterCount: 0,
+                isFilterLoading: false,
+                domain: SearchDomain.anime,
+                onDomainSelected: (_) {},
+                showSort: true,
+                showFilter: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final actionRect = tester.getRect(
+        find.byKey(const ValueKey('search-action-capsule')),
+      );
+      expect(428 - actionRect.right, 34);
+    } finally {
+      controller.dispose();
+      searchFocus.dispose();
+      clearFocus.dispose();
       debugDefaultTargetPlatformOverride = null;
       await tester.binding.setSurfaceSize(null);
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform_views,
         null,
       );
-    });
-
-    final controller = TextEditingController();
-    final searchFocus = FocusNode();
-    final clearFocus = FocusNode();
-    addTearDown(controller.dispose);
-    addTearDown(searchFocus.dispose);
-    addTearDown(clearFocus.dispose);
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          searchPagedResultsProvider.overrideWith(_IdleSearchNotifier.new),
-        ],
-        child: MaterialApp(
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: Scaffold(
-            body: SearchHeaderBar(
-              textController: controller,
-              searchFocusNode: searchFocus,
-              clearButtonFocusNode: clearFocus,
-              onSubmitted: (_) {},
-              onChanged: (_) {},
-              onShowFilters: () {},
-              onSortSelected: (_) {},
-              sortValue: 'favorites',
-              sortItems: const <AppleNativeMenuItem>[
-                AppleNativeMenuItem(
-                  value: 'favorites',
-                  label: 'Favorites',
-                  systemImage: 'star.fill',
-                ),
-              ],
-              sortIcon: Icons.star_rounded,
-              sortSystemImage: 'star.fill',
-              sortTooltip: 'Sort',
-              activeFilterCount: 0,
-              isFilterLoading: false,
-              domain: SearchDomain.anime,
-              onDomainSelected: (_) {},
-              showSort: true,
-              showFilter: true,
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pump();
-
-    final actionRect = tester.getRect(
-      find.byKey(const ValueKey('search-action-capsule')),
-    );
-    expect(428 - actionRect.right, 34);
+    }
   });
 
   testWidgets('character search header keeps only the domain action', (
