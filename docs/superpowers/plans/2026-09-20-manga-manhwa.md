@@ -269,13 +269,13 @@ final Map<String, DateTime> _mangaPageExpiresAt = {};
 
 Map sort values to the verified Manga indices and build only verified Manga facets.
 
-- [ ] **Step 5: Add latest chapter retrieval from the official recent feed — no chapter archive crawling**
+- [x] **Step 5: Add latest chapter retrieval from the official recent feed — no chapter archive crawling**
 
-Return `MangaLatestChapter` directly from the verified `manga_recent`/current live equivalent. Map the APK-proven recent fields (`chapter_id`, `chapter_name`, `date`, `manga_id`, `manga_name`, artwork fields) without calling Anime APIs **and without** calling `_loadMangaArchiveChapters`, `getMangaChapters`, or MangaLek source pages per candidate.
+The official app labels this Home section as `manga_recent`, but v1.4.9 does **not** read a Firestore `manga_recent` collection for the rail. Resolve the section's remote `index_name` from the normal Home-section payload, then query that Algolia index and map the APK-proven recent fields (`chapter_id`, `chapter_name`, `date`, `manga_id`, `manga_name`, artwork fields). Do not call `_loadMangaArchiveChapters`, `getMangaChapters`, Manga details, or MangaLek source pages per candidate.
 
 Add a request-count test proving `getLatestMangaPage()` does not warm details/chapter caches or perform N per-Manga chapter requests.
 
-- [ ] **Step 6: Run provider tests**
+- [x] **Step 6: Run provider tests**
 
 ```bash
 flutter test test/core/extensions/providers/animewitcher_manga_provider_test.dart test/core/extensions/providers/animewitcher_manga_mapping_test.dart -r expanded
@@ -354,7 +354,7 @@ if (generation != _generation || requestDomain != _domain) return;
 
 Anime uses existing `searchPage`; Manga uses `searchMangaPage`; Animation uses the verified animation catalog; Characters use a separate character result state and existing AnimeWitcher character query rather than coercing characters into `MultimediaItem`.
 
-- [ ] **Step 4: Add the third Liquid Glass domain control**
+- [x] **Step 4: Add the third Liquid Glass domain control**
 
 `SearchActionButtons` receives:
 
@@ -390,7 +390,7 @@ expect(renderedTitles, isNot(contains('Late anime result')));
 
 Manga cards push `MangaDetailsRoute`; Anime/Animation cards keep `DetailsRoute`; character cards push the existing character details route.
 
-- [ ] **Step 7: Run search tests**
+- [x] **Step 7: Run search tests**
 
 ```bash
 flutter test test/features/search -r expanded
@@ -457,7 +457,7 @@ class MangaDetailsRoute extends GoRouteData with $MangaDetailsRoute {
 
 Regenerate go_router code later in this task.
 
-- [ ] **Step 3: Implement Manga controller/state**
+- [x] **Step 3: Implement Manga controller/state**
 
 Initial load fetches Manga details. Chapters are loaded by Manga API, not `getEpisodes`.
 
@@ -475,7 +475,7 @@ final class MangaDetailsState {
 }
 ```
 
-- [ ] **Step 4: Implement the two-section UI**
+- [x] **Step 4: Implement the two-section UI**
 
 Only:
 
@@ -487,7 +487,7 @@ Use the exact same shared `FilterStyleTabBar` indicator behavior as Anime detail
 
 Reuse generic poster/title/tag primitives only. Do not import `details_comments_preview.dart`, `details_character_rails.dart`, `details_extra_tabs.dart`, `related_anime_screen.dart`, playback launchers, or episode widgets.
 
-- [ ] **Step 4A: Prove details/chapters are demand-loaded by the Manga route**
+- [x] **Step 4A: Prove details/chapters are demand-loaded by the Manga route**
 
 Before opening `MangaDetailsRoute`, fake-provider counters for `getMangaDetails` and `getMangaChapters` must both be zero. After opening, each logical call starts from the Manga screen. Immediate painting from the incoming search/home item is allowed; network counters are the authority.
 
@@ -504,7 +504,7 @@ onDownload: (chapter) => ...,
 
 Reader/download implementations land in later tasks.
 
-- [ ] **Step 6: Regenerate and test**
+- [x] **Step 6: Regenerate and test**
 
 ```bash
 dart run build_runner build --delete-conflicting-outputs
@@ -596,13 +596,13 @@ after initial pump of a 120-page chapter.
 
 Throttle page-position writes to at most once per second plus reader exit. Last page marks the chapter read.
 
-- [ ] **Step 6: Add route and chapter transitions**
+- [x] **Step 6: Add route and chapter transitions**
 
 Reader route carries stable Manga/chapter identity. Previous/next chapter uses the chapter list and preserves each chapter's saved page.
 
 On native persistent Liquid Glass, `MangaReaderScreen` must register itself as the current `ApplePersistentGlassHeaderConfig` owner, following the existing `PlayerScreen` pattern. The reader publishes its own back action and no Manga-details trailing buttons. Add a push/pop regression test: details owns menu/favorite -> push reader -> details trailing actions disappear -> pop -> details header restores.
 
-- [ ] **Step 7: Test and commit**
+- [x] **Step 7: Test and commit**
 
 ```bash
 dart run build_runner build --delete-conflicting-outputs
@@ -649,7 +649,7 @@ expect(storage.getLibraryItems(mediaKind: LibraryMediaKind.manga), [manga]);
 
 Add a single settings key and default to Anime.
 
-- [ ] **Step 3: Replace the current local-only Manga path with the official AnimeWitcher cloud contract**
+- [x] **Step 3: Replace the current local-only Manga path with the official AnimeWitcher cloud contract**
 
 First pin the APK/live contract read-only. v1.4.9 proves Manga-specific collections/fields exist: `fav_manga`, `user_manga`, `manga_doc_id`, `manga_type`, and `UserMangaModel(date, doc_ref, mangaModel, type, views)`. Verify the exact document id and Firestore field/reference types before the first write; do not guess the shape.
 
@@ -660,6 +660,8 @@ Remove the current `if (isManga) return` / `if (contentType == manga) return` sh
 Add two-way relaunch coverage: add Manga -> remote doc exists -> rebuild local state/account refresh -> Manga returns; remove Manga -> remote doc disappears -> refresh does not resurrect it.
 
 Add account/library tests that fail if a Manga mutation touches Anime collections or never reaches the account service.
+
+Verified follow-up: Manga mutations are awaited rather than fire-and-forget. If the server write/delete fails, the local mutation is rolled back and the error is surfaced; this prevents the UI from claiming a successful Manga library change that never reached AnimeWitcher.
 
 - [ ] **Step 4: Add the requested top-level Liquid Glass selector**
 
@@ -713,7 +715,7 @@ git commit -m "feat(library): separate anime and manga collections"
 - `HomeSuccess` gains `List<MangaLatestChapter> latestManga`.
 - Manga latest request is independent from Anime home/news failure behavior.
 
-- [ ] **Step 1: Write the resilience test**
+- [x] **Step 1: Write the resilience test**
 
 Fake `getLatestMangaPage` to throw while Anime home succeeds:
 
@@ -723,7 +725,7 @@ expect((state as HomeSuccess).data, isNotEmpty);
 expect(state.latestManga, isEmpty);
 ```
 
-- [ ] **Step 2: Add latest Manga to Home state**
+- [x] **Step 2: Add latest Manga to Home state**
 
 ```dart
 class HomeSuccess extends HomeState {
@@ -736,11 +738,11 @@ class HomeSuccess extends HomeState {
 }
 ```
 
-- [ ] **Step 3: Fetch latest chapters in its own guarded future, from `manga_recent` only**
+- [x] **Step 3: Fetch latest chapters in its own guarded future, from the official `manga_recent` Home section's Algolia index**
 
-Add a third `Future.wait` entry whose internal catch returns an empty list, matching the News resilience pattern. The provider behind it must use the direct AnimeWitcher recent feed from Task 2; Home must not scrape chapter archives or call Manga details/chapter APIs.
+Add a third `Future.wait` entry whose internal catch returns an empty list, matching the News resilience pattern. The provider behind it resolves the official `manga_recent` Home section and queries its `index_name` through the normal Algolia path; Home must not scrape chapter archives or call Manga details/chapter APIs.
 
-- [ ] **Step 4: Render Latest Chapters with original AnimeWitcher/New Episodes parity**
+- [x] **Step 4: Render Latest Chapters with original AnimeWitcher/New Episodes parity**
 
 Reuse the existing `MultimediaCard` poster geometry and yellow bottom-right badge. The card composition must be:
 
@@ -750,11 +752,11 @@ Manga title
 relative release time (for example: منذ 20 ساعة)
 ```
 
-Pass the chapter label through the existing yellow badge path (`episodeBadge`, or rename/generalize that property without changing its renderer) and the `manga_recent.date` relative-time string through `subtitle`. Do not use `chapter.name` as the gray subtitle. Tap opens `MangaDetailsRoute`.
+Pass the chapter label through the existing yellow badge path (`episodeBadge`, or rename/generalize that property without changing its renderer) and the recent Algolia hit's `date` relative-time string through `subtitle`. Do not use `chapter.name` as the gray subtitle. Tap opens `MangaDetailsRoute`.
 
 Add widget assertions for the yellow `الفصل` badge, title, relative time, and matching New Episodes card dimensions.
 
-- [ ] **Step 5: Test and commit**
+- [x] **Step 5: Test and commit**
 
 ```bash
 flutter test test/features/home/presentation/home_latest_manga_test.dart test/features/home/presentation/home_provider_test.dart test/features/home/presentation/home_screen_test.dart -r expanded
@@ -1069,13 +1071,13 @@ flutter gen-l10n
 dart run build_runner build --delete-conflicting-outputs
 ```
 
-- [ ] **Step 3: Run focused feature suites**
+- [x] **Step 3: Run focused feature suites**
 
 ```bash
 flutter test test/features/search test/features/manga test/features/library test/features/home test/core/extensions/providers test/core/services/download_v2 -r expanded
 ```
 
-- [ ] **Step 4: Run full static and test gates**
+- [x] **Step 4: Run full static and test gates**
 
 ```bash
 flutter analyze
