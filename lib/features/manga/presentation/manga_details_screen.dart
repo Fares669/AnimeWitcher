@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -101,7 +103,16 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
                       chapters: chapters,
                     ),
                   ).push<void>(context),
-              onDownload: widget.onDownloadChapter,
+              onDownload: widget.onDownloadChapter ??
+                  (chapter) => unawaited(
+                    ref
+                        .read(
+                          mangaDetailsControllerProvider(
+                            widget.item.url,
+                          ).notifier,
+                        )
+                        .downloadChapter(chapter),
+                  ),
             ),
           ),
         ],
