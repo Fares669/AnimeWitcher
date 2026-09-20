@@ -17,7 +17,7 @@ void main() {
         posterUrl: '',
         contentType: MultimediaContentType.manga,
       ),
-      chapter: const MangaChapter(
+      chapter: MangaChapter(
         id: '201',
         mangaId: 'solo',
         url: 'chapter://201',
