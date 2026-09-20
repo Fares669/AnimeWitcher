@@ -5,6 +5,7 @@ import '../../../../core/account/account_providers.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/extensions/base_provider.dart';
 
 import './home_state.dart';
@@ -83,11 +84,27 @@ class HomeData extends _$HomeData {
             );
           }
         }(),
+        () async {
+          try {
+            return await activeProvider.getLatestMangaPage(limit: 20);
+          } catch (_) {
+            return const MangaLatestChapterPage(
+              items: <MangaLatestChapter>[],
+              nextOffset: 0,
+              hasMore: false,
+            );
+          }
+        }(),
       ]);
       if (generation != _fetchGeneration) return;
       final items = results[0] as Map<String, List<MultimediaItem>>;
       final newsPage = results[1] as ProviderNewsPage;
-      state = HomeSuccess(items, news: newsPage.items);
+      final latestManga = results[2] as MangaLatestChapterPage;
+      state = HomeSuccess(
+        items,
+        news: newsPage.items,
+        latestManga: latestManga.items,
+      );
     } catch (e) {
       if (generation != _fetchGeneration) return;
       if (preserveCurrent) return;
