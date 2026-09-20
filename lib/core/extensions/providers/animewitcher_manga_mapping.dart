@@ -312,54 +312,7 @@ double? _archiveChapterNumber(String label, String url, String slug) {
   }
 
   final translated = RegExp(
-    r'(\d+(?:[.,]\d+)?)\s*(?:مترجم|translated)?\s*
-///
-/// Page-specific headers stay attached to each page because many image CDNs
-/// validate the chapter referer.
-List<MangaPage> parseMangaLekPages({
-  required String html,
-  required String chapterUrl,
-}) {
-  final base = Uri.tryParse(chapterUrl);
-  if (base == null) return const <MangaPage>[];
-
-  final blocks = RegExp(
-    r"""<div\b[^>]*class\s*=\s*["'][^"']*page-break[^"']*["'][^>]*>(.*?)</div>""",
-    caseSensitive: false,
-    dotAll: true,
-  ).allMatches(html);
-
-  final pages = <MangaPage>[];
-  final seen = <String>{};
-  for (final block in blocks) {
-    final image = RegExp(
-      r'<img\b([^>]*)>',
-      caseSensitive: false,
-      dotAll: true,
-    ).firstMatch(block.group(1) ?? '');
-    if (image == null) continue;
-
-    final attrs = image.group(1) ?? '';
-    final rawUrl = <String>[
-      _attribute(attrs, 'data-src'),
-      _attribute(attrs, 'data-lazy-src'),
-      _attribute(attrs, 'src'),
-    ].firstWhere((value) => value.isNotEmpty, orElse: () => '');
-    if (rawUrl.isEmpty) continue;
-
-    final imageUrl = base.resolve(_htmlUnescape.convert(rawUrl)).toString();
-    if (!seen.add(imageUrl)) continue;
-    pages.add(
-      MangaPage(
-        index: pages.length,
-        imageUrl: imageUrl,
-        headers: <String, String>{'Referer': chapterUrl},
-      ),
-    );
-  }
-  return pages;
-}
-,
+    r'(\d+(?:[.,]\d+)?)\s*(?:مترجم|translated)?\s*$',
     caseSensitive: false,
   ).firstMatch(label.trim());
   if (translated != null) {
@@ -371,13 +324,13 @@ List<MangaPage> parseMangaLekPages({
       ? ''
       : uri.pathSegments.last.toLowerCase();
   final normalizedSlug = slug.toLowerCase();
-  final tail = segment.startsWith('$normalizedSlug-')
-      ? segment.substring(normalizedSlug.length + 1)
+  final prefix = normalizedSlug + '-';
+  final tail = segment.startsWith(prefix)
+      ? segment.substring(prefix.length)
       : segment;
   final fromUrl = RegExp(r'(\d+(?:[._-]\d+)?)').firstMatch(tail);
-  return double.tryParse(
-    (fromUrl?.group(1) ?? '').replaceAll(RegExp(r'[._-]'), '.'),
-  );
+  final raw = (fromUrl?.group(1) ?? '').replaceAll(RegExp(r'[._-]'), '.');
+  return raw.isEmpty ? null : double.tryParse(raw);
 }
 
 String _archiveSlug(Uri uri) {
@@ -392,54 +345,7 @@ String _archiveSlug(Uri uri) {
         segment == 'tag' ||
         segment == 'category' ||
         segment == 'page' ||
-        RegExp(r'^\d+
-///
-/// Page-specific headers stay attached to each page because many image CDNs
-/// validate the chapter referer.
-List<MangaPage> parseMangaLekPages({
-  required String html,
-  required String chapterUrl,
-}) {
-  final base = Uri.tryParse(chapterUrl);
-  if (base == null) return const <MangaPage>[];
-
-  final blocks = RegExp(
-    r"""<div\b[^>]*class\s*=\s*["'][^"']*page-break[^"']*["'][^>]*>(.*?)</div>""",
-    caseSensitive: false,
-    dotAll: true,
-  ).allMatches(html);
-
-  final pages = <MangaPage>[];
-  final seen = <String>{};
-  for (final block in blocks) {
-    final image = RegExp(
-      r'<img\b([^>]*)>',
-      caseSensitive: false,
-      dotAll: true,
-    ).firstMatch(block.group(1) ?? '');
-    if (image == null) continue;
-
-    final attrs = image.group(1) ?? '';
-    final rawUrl = <String>[
-      _attribute(attrs, 'data-src'),
-      _attribute(attrs, 'data-lazy-src'),
-      _attribute(attrs, 'src'),
-    ].firstWhere((value) => value.isNotEmpty, orElse: () => '');
-    if (rawUrl.isEmpty) continue;
-
-    final imageUrl = base.resolve(_htmlUnescape.convert(rawUrl)).toString();
-    if (!seen.add(imageUrl)) continue;
-    pages.add(
-      MangaPage(
-        index: pages.length,
-        imageUrl: imageUrl,
-        headers: <String, String>{'Referer': chapterUrl},
-      ),
-    );
-  }
-  return pages;
-}
-).hasMatch(segment)) {
+        RegExp(r'^\d+$').hasMatch(segment)) {
       continue;
     }
     return segment.toLowerCase();
@@ -449,10 +355,10 @@ List<MangaPage> parseMangaLekPages({
 
 /// Parses the current MangaLek WordPress archive shape.
 ///
-/// AnimeWitcher still stores historical MangaLek pointers, while the current
-/// public site exposes a series as a tag/category archive whose chapter posts
-/// live at the site root. Restrict links to the series slug so navigation,
-/// related posts and pagination can never become chapters.
+/// AnimeWitcher can still contain historical MangaLek pointers, while the
+/// current public site exposes each series through tag/category archives whose
+/// chapter posts live at the site root. Restricting links to the series slug
+/// keeps navigation, related posts and pagination out of the chapter list.
 List<MangaChapter> parseMangaLekArchiveChapters({
   required String html,
   required String mangaId,
@@ -463,8 +369,9 @@ List<MangaChapter> parseMangaLekArchiveChapters({
   final slug = _archiveSlug(base);
   if (slug.isEmpty) return const <MangaChapter>[];
 
+  final expectedPrefix = '/' + slug + '-';
   final chapters = <MangaChapter>[];
-  final seen = <String>{};
+  final seenNumbers = <String>{};
   final anchors = RegExp(
     r'<a\b([^>]*)>(.*?)</a>',
     caseSensitive: false,
@@ -476,26 +383,25 @@ List<MangaChapter> parseMangaLekArchiveChapters({
     if (href.isEmpty) continue;
     final target = base.resolve(_htmlUnescape.convert(href));
     if (target.host.isNotEmpty && target.host != base.host) continue;
+    if (!target.path.toLowerCase().startsWith(expectedPrefix)) continue;
 
-    final path = target.path.toLowerCase();
-    if (!path.startsWith('/$slug-')) continue;
     final label = _stripHtml(anchor.group(2));
     if (label.isEmpty) continue;
-
     final number = _archiveChapterNumber(label, target.toString(), slug);
     if (number == null) continue;
-    final numberKey = number.toString();
-    if (!seen.add(numberKey)) continue;
 
+    final numberKey = number.toString();
+    if (!seenNumbers.add(numberKey)) continue;
     final displayNumber = number == number.roundToDouble()
         ? number.toInt().toString()
         : number.toString();
+
     chapters.add(
       MangaChapter(
         id: _chapterId(target.toString(), label),
         mangaId: mangaId,
         url: target.toString(),
-        name: 'الفصل $displayNumber',
+        name: 'الفصل ' + displayNumber,
         number: number,
       ),
     );
@@ -534,7 +440,8 @@ String? parseMangaLekArchiveNextPage({
   return null;
 }
 
-/// Parses reader page images from MangaLek/Mangalik `page-break` blocks.
+/// Parses reader page images from both the legacy Madara page-break shape and
+/// the current MangaLek WordPress article shape.
 ///
 /// Page-specific headers stay attached to each page because many image CDNs
 /// validate the chapter referer.
@@ -545,32 +452,30 @@ List<MangaPage> parseMangaLekPages({
   final base = Uri.tryParse(chapterUrl);
   if (base == null) return const <MangaPage>[];
 
-  final blocks = RegExp(
-    r"""<div\b[^>]*class\s*=\s*["'][^"']*page-break[^"']*["'][^>]*>(.*?)</div>""",
-    caseSensitive: false,
-    dotAll: true,
-  ).allMatches(html);
-
   final pages = <MangaPage>[];
   final seen = <String>{};
-  for (final block in blocks) {
-    final image = RegExp(
-      r'<img\b([^>]*)>',
-      caseSensitive: false,
-      dotAll: true,
-    ).firstMatch(block.group(1) ?? '');
-    if (image == null) continue;
 
-    final attrs = image.group(1) ?? '';
+  void addImage(String attrs) {
     final rawUrl = <String>[
       _attribute(attrs, 'data-src'),
       _attribute(attrs, 'data-lazy-src'),
       _attribute(attrs, 'src'),
     ].firstWhere((value) => value.isNotEmpty, orElse: () => '');
-    if (rawUrl.isEmpty) continue;
+    if (rawUrl.isEmpty || rawUrl.startsWith('data:')) return;
 
-    final imageUrl = base.resolve(_htmlUnescape.convert(rawUrl)).toString();
-    if (!seen.add(imageUrl)) continue;
+    final imageUrl = base.resolve(
+      _htmlUnescape.convert(rawUrl.trim()),
+    ).toString();
+    final lower = imageUrl.toLowerCase();
+    if (lower.endsWith('.svg') ||
+        lower.contains('/avatar') ||
+        lower.contains('gravatar') ||
+        lower.contains('/logo') ||
+        lower.contains('emoji')) {
+      return;
+    }
+    if (!seen.add(imageUrl)) return;
+
     pages.add(
       MangaPage(
         index: pages.length,
@@ -578,6 +483,21 @@ List<MangaPage> parseMangaLekPages({
         headers: <String, String>{'Referer': chapterUrl},
       ),
     );
+  }
+
+  final blocks = RegExp(
+    r"""<div\b[^>]*class\s*=\s*["'][^"']*page-break[^"']*["'][^>]*>(.*?)</div>""",
+    caseSensitive: false,
+    dotAll: true,
+  ).allMatches(html);
+
+  for (final block in blocks) {
+    final image = RegExp(
+      r'<img\b([^>]*)>',
+      caseSensitive: false,
+      dotAll: true,
+    ).firstMatch(block.group(1) ?? '');
+    if (image != null) addImage(image.group(1) ?? '');
   }
   if (pages.isNotEmpty) return pages;
 
@@ -600,31 +520,7 @@ List<MangaPage> parseMangaLekPages({
     caseSensitive: false,
     dotAll: true,
   ).allMatches(content)) {
-    final attrs = image.group(1) ?? '';
-    final rawUrl = <String>[
-      _attribute(attrs, 'data-src'),
-      _attribute(attrs, 'data-lazy-src'),
-      _attribute(attrs, 'src'),
-    ].firstWhere((value) => value.isNotEmpty, orElse: () => '');
-    if (rawUrl.isEmpty || rawUrl.startsWith('data:')) continue;
-
-    final imageUrl = base.resolve(_htmlUnescape.convert(rawUrl.trim())).toString();
-    final lower = imageUrl.toLowerCase();
-    if (lower.endsWith('.svg') ||
-        lower.contains('/avatar') ||
-        lower.contains('gravatar') ||
-        lower.contains('/logo') ||
-        lower.contains('emoji')) {
-      continue;
-    }
-    if (!seen.add(imageUrl)) continue;
-    pages.add(
-      MangaPage(
-        index: pages.length,
-        imageUrl: imageUrl,
-        headers: <String, String>{'Referer': chapterUrl},
-      ),
-    );
+    addImage(image.group(1) ?? '');
   }
 
   return pages;
