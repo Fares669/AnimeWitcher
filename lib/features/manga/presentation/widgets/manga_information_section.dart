@@ -31,7 +31,6 @@ class MangaInformationSection extends StatelessWidget {
       ShowStatus.ongoing => isArabic ? 'مستمر' : 'Ongoing',
       ShowStatus.completed => isArabic ? 'مكتمل' : 'Completed',
       ShowStatus.upcoming => isArabic ? 'قادم' : 'Upcoming',
-      _ => null,
     };
   }
 
