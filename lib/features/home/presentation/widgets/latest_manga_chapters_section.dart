@@ -29,6 +29,34 @@ class _LatestMangaChaptersSectionState
     extends State<LatestMangaChaptersSection> {
   final ScrollController _scrollController = ScrollController();
 
+  String _chapterBadge(MangaChapter chapter) {
+    final label = chapter.name.trim();
+    if (label.contains('الفصل')) return label;
+    final number = chapter.number;
+    if (number != null) {
+      final formatted = number == number.truncateToDouble()
+          ? number.toInt().toString()
+          : number.toString();
+      return 'الفصل $formatted';
+    }
+    return label.isEmpty ? 'الفصل' : 'الفصل $label';
+  }
+
+  String _releaseTime(DateTime? publishedAt) {
+    if (publishedAt == null) return '';
+    var elapsed = DateTime.now().toUtc().difference(publishedAt.toUtc());
+    if (elapsed.isNegative) elapsed = Duration.zero;
+
+    if (elapsed.inMinutes < 1) return 'منذ لحظات';
+    if (elapsed.inHours < 1) return 'منذ ${elapsed.inMinutes} دقيقة';
+    if (elapsed.inDays < 1) return 'منذ ${elapsed.inHours} ساعة';
+    if (elapsed.inDays < 30) return 'منذ ${elapsed.inDays} يوم';
+
+    final months = (elapsed.inDays / 30).floor();
+    if (months < 12) return 'منذ $months شهر';
+    return 'منذ ${(months / 12).floor()} سنة';
+  }
+
   @override
   void dispose() {
     _scrollController.dispose();
@@ -87,7 +115,8 @@ class _LatestMangaChaptersSectionState
                       label: manga.title,
                     ),
                     title: manga.title,
-                    subtitle: entry.chapter.name,
+                    episodeBadge: _chapterBadge(entry.chapter),
+                    subtitle: _releaseTime(entry.chapter.publishedAt),
                     heroTag:
                         'latest_manga_${manga.url}_${entry.chapter.id}_$index',
                     lookupTitle: manga.artworkLookupTitle,

@@ -176,10 +176,13 @@ class MangaDetailsController extends _$MangaDetailsController {
       chapters: const AsyncLoading<List<MangaChapter>>(),
     );
 
-    await Future.wait<void>([
-      _loadDetails(provider, item),
-      _loadChapters(provider, item),
-    ]);
+    // The real AnimeWitcher chapter endpoint resolves Manga metadata through
+    // getMangaDetails as well. Finish the route-owned details request first so
+    // the chapter load reuses the populated provider cache instead of racing a
+    // second manga_list/<id> document read.
+    await _loadDetails(provider, item);
+    if (!ref.mounted) return;
+    await _loadChapters(provider, item);
   }
 
   Future<void> _loadDetails(
