@@ -4,6 +4,7 @@ import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.da
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 const pages = <MangaPage>[
   MangaPage(index: 0, imageUrl: 'https://example.test/1.webp'),
@@ -12,6 +13,9 @@ const pages = <MangaPage>[
 ];
 
 void main() {
+  setUpAll(() {
+    VisibilityDetectorController.instance.updateInterval = Duration.zero;
+  });
   test('reader exposes webtoon, paged LTR and paged RTL modes', () {
     expect(
       MangaReaderMode.values,
