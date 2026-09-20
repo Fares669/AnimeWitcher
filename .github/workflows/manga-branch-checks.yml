@@ -101,3 +101,9 @@ jobs:
 
       - name: Probe AnimeWitcher Manga backend
         run: dart run tool/manga_backend_probe.dart
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Full test suite
+        run: flutter test -r expanded
