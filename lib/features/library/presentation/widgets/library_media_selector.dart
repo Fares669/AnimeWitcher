@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 import '../library_media_kind.dart';
 
 class LibraryMediaSelector extends StatelessWidget {
@@ -14,11 +15,10 @@ class LibraryMediaSelector extends StatelessWidget {
   final ValueChanged<LibraryMediaKind> onSelected;
 
   String _label(BuildContext context, LibraryMediaKind kind) {
-    final ar =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final l10n = AppLocalizations.of(context)!;
     return switch (kind) {
-      LibraryMediaKind.anime => ar ? 'أنمي' : 'Anime',
-      LibraryMediaKind.manga => ar ? 'مانجا' : 'Manga',
+      LibraryMediaKind.anime => l10n.searchDomainAnime,
+      LibraryMediaKind.manga => l10n.manga,
     };
   }
 
@@ -34,9 +34,7 @@ class LibraryMediaSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ar =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final tooltip = ar ? 'نوع المكتبة' : 'Library type';
+    final tooltip = AppLocalizations.of(context)!.mangaLibraryType;
     final color = Theme.of(context).colorScheme.primary;
     final items = <AppleNativeMenuItem>[
       for (final kind in LibraryMediaKind.values)
