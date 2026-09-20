@@ -165,18 +165,20 @@ void main() {
     VisibilityDetectorController.instance.notifyNow();
   });
 
-  testWidgets('home does not render the فصول جديدة section', (tester) async {
+  testWidgets('home renders the new manga rail without legacy broken ids', (
+    tester,
+  ) async {
     const size = Size(390, 1800);
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await _loadHomeSuccess(tester);
 
-    expect(find.text('فصول جديدة'), findsNothing);
+    expect(find.text('فصول جديدة'), findsOneWidget);
+    expect(find.text('Latest Manga'), findsWidgets);
     expect(find.text(_brokenChapterId), findsNothing);
     expect(find.text('zQY3tAdwWaVZ5O31zMVd'), findsNothing);
     expect(find.text('ggsM4RzcTrOWXpJudOnj'), findsNothing);
-    expect(find.text('مانهوا'), findsNothing);
 
     expect(find.text('الحلقات الجديدة'), findsOneWidget);
     expect(find.text('آخر الأعمال المضافة'), findsOneWidget);
@@ -209,7 +211,7 @@ void main() {
     expect(chaptersY, lessThan(addedY));
   });
 
-  testWidgets('home without New Chapters screenshot for walkthrough', (
+  testWidgets('home with New Chapters screenshot for walkthrough', (
     tester,
   ) async {
     await tester.runAsync(TestFonts.loadWalkthroughFonts);
@@ -220,7 +222,7 @@ void main() {
 
     await _loadHomeSuccess(tester);
 
-    expect(find.text('فصول جديدة'), findsNothing);
+    expect(find.text('فصول جديدة'), findsOneWidget);
     expect(find.text('آخر الأعمال المضافة'), findsOneWidget);
 
     final artifacts = debugShotDirectory();
