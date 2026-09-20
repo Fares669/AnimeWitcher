@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../core/domain/entity/manga.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
+import '../../../core/services/download_v2/manga_chapter_manifest_v2.dart';
 import '../../../core/storage/manga_reading_repository.dart';
 
 enum MangaReaderMode { webtoon, pagedLtr, pagedRtl }
@@ -16,8 +19,10 @@ class MangaReaderController extends ChangeNotifier {
     required this.manga,
     required this.chapter,
     required this.chapters,
+    this.localChapterDirectory,
     MangaReaderMode? initialMode,
   }) : _chapter = chapter,
+       _localChapterId = chapter.id,
        _mode = initialMode ?? preferredModeFor(manga);
 
   final AnimeWitcherProvider provider;
@@ -25,6 +30,8 @@ class MangaReaderController extends ChangeNotifier {
   final MultimediaItem manga;
   final MangaChapter chapter;
   final List<MangaChapter> chapters;
+  final String? localChapterDirectory;
+  final String _localChapterId;
 
   MangaChapter _chapter;
   MangaReaderMode _mode;
@@ -79,7 +86,10 @@ class MangaReaderController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final pages = await provider.getMangaChapterPages(manga.url, _chapter);
+      final localPages = await _loadLocalPages();
+      final pages = localPages.isNotEmpty
+          ? localPages
+          : await provider.getMangaChapterPages(manga.url, _chapter);
       _pages = pages;
       final saved = progressRepository.get(_mangaId, _chapter.id);
       final maxPage = pages.isEmpty ? 0 : pages.length - 1;
@@ -92,6 +102,50 @@ class MangaReaderController extends ChangeNotifier {
       _error = error;
       notifyListeners();
     }
+  }
+
+  Future<List<MangaPage>> _loadLocalPages() async {
+    final rawDirectory = localChapterDirectory?.trim() ?? '';
+    if (rawDirectory.isEmpty || _chapter.id != _localChapterId) {
+      return const <MangaPage>[];
+    }
+
+    final directory = Directory(rawDirectory);
+    if (!await directory.exists()) return const <MangaPage>[];
+    final manifest = await MangaChapterManifestV2.readFrom(directory);
+    if (manifest == null ||
+        !manifest.isComplete ||
+        manifest.mangaId != _mangaId ||
+        manifest.chapterId != _chapter.id ||
+        manifest.pageCount <= 0) {
+      return const <MangaPage>[];
+    }
+
+    final files = <File>[];
+    await for (final entity in directory.list(followLinks: false)) {
+      if (entity is File &&
+          p.basename(entity.path) != MangaChapterManifestV2.fileName &&
+          !entity.path.endsWith('.tmp')) {
+        files.add(entity);
+      }
+    }
+
+    final pages = <MangaPage>[];
+    for (var index = 0; index < manifest.pageCount; index++) {
+      final prefix = (index + 1).toString().padLeft(4, '0');
+      File? pageFile;
+      for (final file in files) {
+        if (p.basename(file.path).startsWith('$prefix.')) {
+          pageFile = file;
+          break;
+        }
+      }
+      if (pageFile == null || await pageFile.length() <= 0) {
+        return const <MangaPage>[];
+      }
+      pages.add(MangaPage(index: index, imageUrl: pageFile.uri.toString()));
+    }
+    return pages;
   }
 
   void setMode(MangaReaderMode value) {
