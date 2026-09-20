@@ -8,6 +8,7 @@ import '../../../core/domain/entity/manga.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/services/download_v2/manga_chapter_manifest_v2.dart';
+import '../../../core/services/download_v2/manga_chapter_transport_v2.dart';
 import '../../../core/storage/manga_reading_repository.dart';
 
 enum MangaReaderMode { webtoon, pagedLtr, pagedRtl }
@@ -110,7 +111,7 @@ class MangaReaderController extends ChangeNotifier {
       return const <MangaPage>[];
     }
 
-    final directory = Directory(rawDirectory);
+    final directory = await resolveMangaChapterDirectoryV2(rawDirectory);
     if (!await directory.exists()) return const <MangaPage>[];
     final manifest = await MangaChapterManifestV2.readFrom(directory);
     if (manifest == null ||
