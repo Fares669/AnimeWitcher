@@ -69,7 +69,7 @@ abstract interface class DownloadTransportHandle {
 }
 
 /// Marker for a handle whose pause/resume settlement is complete at the handle
-/// boundary. Despite the legacy type name, this covers both durable ranged
+/// boundary. This covers both durable ranged
 /// parents and ordinary single package DownloadTasks. Package-managed
 /// ParallelDownloadTask parents deliberately do not implement it because they
 /// need the child pause/readiness barrier.
