@@ -37,6 +37,7 @@ jobs:
       - name: Home latest manga RED/GREEN tests
         run: |
           flutter test test/features/home/presentation/home_latest_manga_test.dart \
+            test/features/home/presentation/latest_manga_chapters_section_test.dart \
             test/features/home/presentation/home_provider_test.dart \
             test/features/home/presentation/home_screen_test.dart -r expanded
 
