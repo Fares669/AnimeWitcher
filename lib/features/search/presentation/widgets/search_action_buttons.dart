@@ -4,6 +4,7 @@ import '../search_domain.dart';
 import 'search_glass_surface.dart';
 
 import '../../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 
 /// Sort + filter controls.
 ///
@@ -203,32 +204,35 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
     );
   }
 
-  List<AppleNativeMenuItem> get _domainItems => const <AppleNativeMenuItem>[
-    AppleNativeMenuItem(
-      value: 'anime',
-      label: 'أنمي',
-      systemImage: 'play.rectangle.fill',
-      icon: Icons.movie_rounded,
-    ),
-    AppleNativeMenuItem(
-      value: 'animation',
-      label: 'انميشن',
-      systemImage: 'sparkles.tv',
-      icon: Icons.animation_rounded,
-    ),
-    AppleNativeMenuItem(
-      value: 'manga',
-      label: 'مانجا',
-      systemImage: 'book.closed.fill',
-      icon: Icons.menu_book_rounded,
-    ),
-    AppleNativeMenuItem(
-      value: 'characters',
-      label: 'شخصيات',
-      systemImage: 'person.2.fill',
-      icon: Icons.groups_rounded,
-    ),
-  ];
+  List<AppleNativeMenuItem> _domainItems(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    return <AppleNativeMenuItem>[
+      AppleNativeMenuItem(
+        value: 'anime',
+        label: l10n.searchDomainAnime,
+        systemImage: 'play.rectangle.fill',
+        icon: Icons.movie_rounded,
+      ),
+      AppleNativeMenuItem(
+        value: 'animation',
+        label: l10n.searchDomainAnimation,
+        systemImage: 'sparkles.tv',
+        icon: Icons.animation_rounded,
+      ),
+      AppleNativeMenuItem(
+        value: 'manga',
+        label: l10n.searchDomainManga,
+        systemImage: 'book.closed.fill',
+        icon: Icons.menu_book_rounded,
+      ),
+      AppleNativeMenuItem(
+        value: 'characters',
+        label: l10n.searchDomainCharacters,
+        systemImage: 'person.2.fill',
+        icon: Icons.groups_rounded,
+      ),
+    ];
+  }
 
   IconData _domainIcon(SearchDomain domain) => switch (domain) {
     SearchDomain.anime => Icons.movie_rounded,
@@ -254,17 +258,19 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
 
   Widget _buildDomainToolbarButton(Color tint) {
     final domain = widget.domain!;
-    return AppleLiquidGlassToolbarButton(
+    return Builder(
+      builder: (context) => AppleLiquidGlassToolbarButton(
       icon: _domainIcon(domain),
       systemImage: _domainSystemImage(domain),
       tooltip: widget.domainTooltip,
       color: tint,
       menuTintColor: tint,
-      menuItems: _domainItems,
+      menuItems: _domainItems(context),
       selectedMenuValue: domain.name,
       onMenuSelected: _onDomainMenuSelected,
       onPressed: () {},
       width: widget.height,
+    ),
     );
   }
 
