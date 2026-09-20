@@ -13,6 +13,7 @@ import 'download_v2_diagnostics.dart';
 import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
 import 'logical_download_store_v2.dart';
+import 'manga_chapter_transport_v2.dart';
 
 /// Application request for one logical episode download.
 ///
@@ -73,6 +74,7 @@ final class DownloadManagerV2 {
     required BackgroundDownloaderGateway gateway,
     required DownloadSourceResolverV2 sourceResolver,
     DownloadIntegrityVerifierV2? integrityVerifier,
+    MangaChapterPageResolverV2? mangaChapterPageResolver,
     DownloadDiagnosticsV2? diagnostics,
     Iterable<DownloadPresentationObserverV2> presentationObservers =
         const <DownloadPresentationObserverV2>[],
@@ -84,6 +86,7 @@ final class DownloadManagerV2 {
        _sourceResolver = sourceResolver,
        _integrityVerifier =
            integrityVerifier ?? const DownloadIntegrityVerifierV2(),
+       _mangaChapterPageResolver = mangaChapterPageResolver,
        _diagnostics = diagnostics ?? const NoopDownloadDiagnosticsV2(),
        _presentationObservers =
            List<DownloadPresentationObserverV2>.unmodifiable(
@@ -98,6 +101,7 @@ final class DownloadManagerV2 {
   final BackgroundDownloaderGateway _gateway;
   final DownloadSourceResolverV2 _sourceResolver;
   final DownloadIntegrityVerifierV2 _integrityVerifier;
+  final MangaChapterPageResolverV2? _mangaChapterPageResolver;
   final DownloadDiagnosticsV2 _diagnostics;
   final List<DownloadPresentationObserverV2> _presentationObservers;
   final NativeParallelPauseReadinessV2? _parallelPauseReadiness;
@@ -1143,11 +1147,16 @@ final class DownloadManagerV2 {
       return;
     }
 
-    final source = await _sourceResolver.resolve(request.sourceDescriptor);
+    final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
+    final source = isManga
+        ? null
+        : await _sourceResolver.resolve(request.sourceDescriptor);
     final admitted = record.copyWith(
       awaitingAdmission: false,
-      parallelChunks: effectivePackageParallelChunksV2(record.parallelChunks),
-      expectedBytes: source.expectedBytes ?? record.expectedBytes,
+      parallelChunks: isManga
+          ? 1
+          : effectivePackageParallelChunksV2(record.parallelChunks),
+      expectedBytes: source?.expectedBytes ?? record.expectedBytes,
       clearFailure: true,
       updatedAtMillis: _nowMillis(),
     );
@@ -1165,19 +1174,56 @@ final class DownloadManagerV2 {
     _snapshots[admitted.logicalId] = queued;
     _recordDiagnostic(admitted.logicalId, queued);
 
-    final handle = await _gateway.start(
-      DownloadTaskSpecV2(
-        taskId: admitted.taskId,
-        url: source.url,
-        destinationPath: admitted.destinationPath,
-        headers: source.headers,
-        allowPause: admitted.allowPause,
-        retries: admitted.retries,
-        parallelChunks: admitted.parallelChunks,
-        expectedBytes: admitted.expectedBytes,
-      ),
+    final handle = await _startTransportForRequest(
+      request: request,
+      taskId: admitted.taskId,
+      parallelChunks: admitted.parallelChunks,
+      expectedBytes: admitted.expectedBytes,
+      videoSource: source,
     );
     _activateHandle(admitted.logicalId, handle);
+  }
+
+  Future<DownloadTransportHandle> _startTransportForRequest({
+    required DownloadStartRequestV2 request,
+    required String taskId,
+    required int parallelChunks,
+    int? expectedBytes,
+    ResolvedDownloadSourceV2? videoSource,
+  }) async {
+    if (request.mediaKind == DownloadMediaKind.mangaChapter) {
+      final resolver = _mangaChapterPageResolver;
+      final gateway = _gateway;
+      if (resolver == null || gateway is! MangaChapterGatewayV2) {
+        throw StateError('Manga chapter transport is unavailable.');
+      }
+      final pages = await resolver.resolve(request.sourceDescriptor);
+      return gateway.startMangaChapter(
+        MangaChapterTransportSpecV2(
+          taskId: taskId,
+          mangaId: request.mediaId,
+          chapterId: request.unitKey,
+          destinationDirectory: request.destinationPath,
+          pages: pages,
+          retries: request.retries,
+        ),
+      );
+    }
+
+    final source =
+        videoSource ?? await _sourceResolver.resolve(request.sourceDescriptor);
+    return _gateway.start(
+      DownloadTaskSpecV2(
+        taskId: taskId,
+        url: source.url,
+        destinationPath: request.destinationPath,
+        headers: source.headers,
+        allowPause: request.allowPause,
+        retries: request.retries,
+        parallelChunks: parallelChunks,
+        expectedBytes: expectedBytes ?? source.expectedBytes,
+      ),
+    );
   }
 
   Future<void> _preservePausedResumeFailure(
@@ -1220,14 +1266,17 @@ final class DownloadManagerV2 {
       );
     }
 
-    final source = await _sourceResolver.resolve(request.sourceDescriptor);
+    final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
+    final source = isManga
+        ? null
+        : await _sourceResolver.resolve(request.sourceDescriptor);
     final generation = (previous?.generation ?? 0) + 1;
     final taskId = taskIdForGeneration(request.logicalId, generation);
     final updatedAtMillis = _nowMillis();
-    final expectedBytes = source.expectedBytes ?? request.expectedBytes;
-    final parallelChunks = effectivePackageParallelChunksV2(
-      request.parallelChunks,
-    );
+    final expectedBytes = source?.expectedBytes ?? request.expectedBytes;
+    final parallelChunks = isManga
+        ? 1
+        : effectivePackageParallelChunksV2(request.parallelChunks);
 
     final nextRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
@@ -1261,17 +1310,12 @@ final class DownloadManagerV2 {
     _snapshots[request.logicalId] = queued;
     _recordDiagnostic(request.logicalId, queued);
 
-    final handle = await _gateway.start(
-      DownloadTaskSpecV2(
-        taskId: taskId,
-        url: source.url,
-        destinationPath: request.destinationPath,
-        headers: source.headers,
-        allowPause: request.allowPause,
-        retries: request.retries,
-        parallelChunks: parallelChunks,
-        expectedBytes: expectedBytes,
-      ),
+    final handle = await _startTransportForRequest(
+      request: request,
+      taskId: taskId,
+      parallelChunks: parallelChunks,
+      expectedBytes: expectedBytes,
+      videoSource: source,
     );
     _activateHandle(request.logicalId, handle);
     return handle.current;
