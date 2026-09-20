@@ -59,6 +59,56 @@ void main() {
     expect(record.mediaKind, DownloadMediaKind.mangaChapter);
   });
 
+  test('only one manga chapter is admitted globally', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _Gateway();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver(),
+      maxConcurrentDownloads: () => 10,
+    );
+
+    DownloadStartRequestV2 request(String mangaId, String chapterId) {
+      return DownloadStartRequestV2(
+        logicalId: logicalDownloadIdForMangaChapter(
+          mangaId: mangaId,
+          chapterId: chapterId,
+        ),
+        mediaKind: DownloadMediaKind.mangaChapter,
+        mediaId: mangaId,
+        unitKey: chapterId,
+        variantKey: 'pages',
+        destinationPath: 'manga/$mangaId/$chapterId',
+        sourceDescriptor: <String, Object?>{
+          'providerId': 'animewitcher.native',
+          'mangaUrl': 'manga://$mangaId',
+          'chapterId': chapterId,
+        },
+        allowPause: true,
+        retries: 2,
+        parallelChunks: 16,
+      );
+    }
+
+    final first = request('m1', '1');
+    final second = request('m2', '2');
+
+    await manager.start(first);
+    final secondSnapshot = await manager.start(second);
+
+    expect(gateway.mangaSpecs, hasLength(1));
+    expect(gateway.mangaSpecs.single.mangaId, 'm1');
+    expect(secondSnapshot.status, DownloadTransportStatus.queued);
+    expect(secondSnapshot.activeConnections, 0);
+
+    final secondRecord = await store.get(second.logicalId);
+    expect(secondRecord, isNotNull);
+    expect(secondRecord!.awaitingAdmission, isTrue);
+    expect(secondRecord.parallelChunks, 1);
+  });
+
   test('paused manga relaunch resumes the same generation from manifest', () async {
     final temp = await Directory.systemTemp.createTemp('aw_manga_paused_');
     addTearDown(() => temp.delete(recursive: true));
