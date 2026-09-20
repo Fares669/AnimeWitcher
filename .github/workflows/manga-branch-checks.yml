@@ -40,7 +40,8 @@ jobs:
 
       - name: Library manga RED/GREEN tests
         run: |
-          flutter test test/features/library/presentation/library_manga_isolation_test.dart \
+          flutter test test/core/account/animewitcher_manga_library_sync_test.dart \
+            test/features/library/presentation/library_manga_isolation_test.dart \
             test/features/library/presentation/library_media_selector_test.dart -r expanded
 
       - name: Home latest manga RED/GREEN tests
