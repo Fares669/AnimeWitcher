@@ -65,4 +65,25 @@ void main() {
     expect(() => taskIdForGeneration(logical, 0), throwsArgumentError);
     expect(() => taskIdForGeneration(logical, -1), throwsArgumentError);
   });
+
+
+  test('manga logical id uses stable manga and chapter ids only', () {
+    final first = logicalDownloadIdForMangaChapter(
+      mangaId: 'manga-42',
+      chapterId: '12.5',
+    );
+    final rotatedPageUrls = logicalDownloadIdForMangaChapter(
+      mangaId: 'manga-42',
+      chapterId: '12.5',
+    );
+    final nextChapter = logicalDownloadIdForMangaChapter(
+      mangaId: 'manga-42',
+      chapterId: '13',
+    );
+
+    expect(first, rotatedPageUrls);
+    expect(first, isNot(nextChapter));
+    expect(first.value, startsWith('manga_'));
+  });
+
 }
