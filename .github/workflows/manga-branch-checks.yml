@@ -30,6 +30,14 @@ jobs:
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
 
+      - name: Manga chapter transport RED/GREEN tests
+        run: |
+          flutter test test/core/services/download_v2/manga_chapter_transport_v2_test.dart \
+            test/core/services/download_v2/download_manager_v2_manga_test.dart \
+            test/core/services/download_v2/background_downloader_gateway_manga_test.dart \
+            test/core/services/download_v2/download_manager_v2_manga_completion_test.dart \
+            test/features/manga/presentation/manga_download_request_test.dart -r expanded
+
       - name: Library manga RED/GREEN tests
         run: |
           flutter test test/features/library/presentation/library_manga_isolation_test.dart \
@@ -47,14 +55,6 @@ jobs:
           flutter test test/core/services/download_v2/download_v2_models_test.dart \
             test/core/services/download_v2/download_v2_identity_test.dart \
             test/core/services/download_v2/download_v2_manga_migration_test.dart -r expanded
-
-      - name: Manga chapter transport RED/GREEN tests
-        run: |
-          flutter test test/core/services/download_v2/manga_chapter_transport_v2_test.dart \
-            test/core/services/download_v2/download_manager_v2_manga_test.dart \
-            test/core/services/download_v2/background_downloader_gateway_manga_test.dart \
-            test/core/services/download_v2/download_manager_v2_manga_completion_test.dart \
-            test/features/manga/presentation/manga_download_request_test.dart -r expanded
 
       - name: Full Download V2 regression
         run: flutter test test/core/services/download_v2 -r expanded
