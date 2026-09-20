@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:animewitcher/core/account/animewitcher_character_models.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
@@ -26,8 +27,11 @@ final class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
 
   final Completer<ProviderMediaPage> anime = Completer<ProviderMediaPage>();
   final Completer<ProviderMediaPage> manga = Completer<ProviderMediaPage>();
+  final Completer<AnimeWitcherCharacterPage> characters =
+      Completer<AnimeWitcherCharacterPage>();
   int animeCalls = 0;
   int mangaCalls = 0;
+  int characterCalls = 0;
 
   @override
   Future<ProviderMediaPage> searchPage(
@@ -51,6 +55,12 @@ final class _DeferredSearchProvider extends AnimeWitcherNativeProvider {
   }) {
     mangaCalls++;
     return manga.future;
+  }
+
+  @override
+  Future<AnimeWitcherCharacterPage> searchCharacters(String query) {
+    characterCalls++;
+    return characters.future;
   }
 }
 
@@ -137,4 +147,46 @@ void main() {
     expect(renderedTitles, contains('Manga result'));
     expect(renderedTitles, isNot(contains('Late anime result')));
   });
+
+
+  test('characters stay in separate character result state', () async {
+    final fake = _DeferredSearchProvider();
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(
+          () => _FakeExtensionManager(fake),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container
+        .read(searchDomainProvider.notifier)
+        .set(SearchDomain.characters);
+    container.read(searchPagedResultsProvider);
+    await _flush();
+
+    expect(fake.characterCalls, 1);
+    fake.characters.complete(
+      const AnimeWitcherCharacterPage(
+        items: <AnimeWitcherCharacterHit>[
+          AnimeWitcherCharacterHit(
+            id: 'c1',
+            name: 'Character One',
+            imageUrl: 'https://img.example/c1.webp',
+          ),
+        ],
+        page: 0,
+        hasMore: false,
+      ),
+    );
+    await _flush();
+
+    final state = container.read(searchPagedResultsProvider);
+    expect(state.results, isEmpty);
+    expect(state.characters.map((item) => item.name), <String>[
+      'Character One',
+    ]);
+  });
+
 }
