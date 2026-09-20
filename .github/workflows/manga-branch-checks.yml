@@ -58,5 +58,10 @@ jobs:
             test/features/manga/reader/manga_reader_test.dart \
             test/features/manga/reader/manga_reader_lazy_pages_test.dart -r expanded
 
+      - name: Library manga RED/GREEN tests
+        run: |
+          flutter test test/features/library/presentation/library_manga_isolation_test.dart \
+            test/features/library/presentation/library_media_selector_test.dart -r expanded
+
       - name: Probe AnimeWitcher Manga backend
         run: dart run tool/manga_backend_probe.dart
