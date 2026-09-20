@@ -8,6 +8,7 @@ import '../../features/library/presentation/library_screen.dart';
 import '../../features/library/presentation/downloads_screen.dart';
 import '../../features/more/presentation/more_screen.dart';
 import '../../features/details/presentation/details_screen.dart';
+import '../../features/manga/presentation/manga_details_screen.dart';
 import '../../features/player/presentation/player_screen.dart';
 import '../../features/home/presentation/view_all_screen.dart';
 import '../domain/entity/multimedia_item.dart';
@@ -130,6 +131,12 @@ class DetailsRouteExtra {
   final int? resumeSeason;
 }
 
+class MangaDetailsRouteExtra {
+  const MangaDetailsRouteExtra({required this.item});
+
+  final MultimediaItem item;
+}
+
 class PlayerRouteExtra {
   const PlayerRouteExtra({
     required this.item,
@@ -178,6 +185,18 @@ class DetailsRoute extends GoRouteData with $DetailsRoute {
       resumeEpisodeNumber: $extra.resumeEpisodeNumber,
       resumeSeason: $extra.resumeSeason,
     );
+  }
+}
+
+@TypedGoRoute<MangaDetailsRoute>(path: '/manga-details')
+class MangaDetailsRoute extends GoRouteData with $MangaDetailsRoute {
+  const MangaDetailsRoute({required this.$extra});
+
+  final MangaDetailsRouteExtra $extra;
+
+  @override
+  Widget build(BuildContext context, GoRouterState state) {
+    return MangaDetailsScreen(item: $extra.item);
   }
 }
 
