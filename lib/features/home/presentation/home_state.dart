@@ -1,4 +1,5 @@
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/domain/entity/manga.dart';
 
 sealed class HomeState {
   const HomeState();
@@ -24,9 +25,11 @@ class HomeError extends HomeState {
 class HomeSuccess extends HomeState {
   final Map<String, List<MultimediaItem>> data;
   final List<NewsItem> news;
+  final List<MangaLatestChapter> latestManga;
 
   const HomeSuccess(
     this.data, {
     this.news = const <NewsItem>[],
+    this.latestManga = const <MangaLatestChapter>[],
   });
 }
