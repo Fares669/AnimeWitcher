@@ -10,6 +10,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final class _MangaProvider extends AnimeWitcherProvider {
+  int detailsCalls = 0;
+  int chaptersCalls = 0;
+  bool detailsFinished = false;
+  bool chaptersStartedBeforeDetailsFinished = false;
+
   @override
   String get packageName => 'test.manga';
 
@@ -49,29 +54,37 @@ final class _MangaProvider extends AnimeWitcherProvider {
       throw UnsupportedError('Streams must not be used');
 
   @override
-  Future<MultimediaItem> getMangaDetails(String url) async => MultimediaItem(
-    title: 'Solo Leveling',
-    url: url,
-    posterUrl: '',
-    description: 'Manga description',
-    contentType: MultimediaContentType.manga,
-    provider: packageName,
-    catalogType: 'مانهوا',
-    year: 2018,
-    tags: const <String>['Action', 'Fantasy'],
-  );
+  Future<MultimediaItem> getMangaDetails(String url) async {
+    detailsCalls += 1;
+    await Future<void>.delayed(Duration.zero);
+    detailsFinished = true;
+    return MultimediaItem(
+      title: 'Solo Leveling',
+      url: url,
+      posterUrl: '',
+      description: 'Manga description',
+      contentType: MultimediaContentType.manga,
+      provider: packageName,
+      catalogType: 'مانهوا',
+      year: 2018,
+      tags: const <String>['Action', 'Fantasy'],
+    );
+  }
 
   @override
-  Future<List<MangaChapter>> getMangaChapters(String url) async =>
-      const <MangaChapter>[
-        MangaChapter(
-          id: '12.5',
-          mangaId: 'm1',
-          url: 'chapter://12.5',
-          name: 'الفصل 12.5',
-          number: 12.5,
-        ),
-      ];
+  Future<List<MangaChapter>> getMangaChapters(String url) async {
+    chaptersCalls += 1;
+    chaptersStartedBeforeDetailsFinished = !detailsFinished;
+    return const <MangaChapter>[
+      MangaChapter(
+        id: '12.5',
+        mangaId: 'm1',
+        url: 'chapter://12.5',
+        name: 'الفصل 12.5',
+        number: 12.5,
+      ),
+    ];
+  }
 }
 
 final class _Manager extends ExtensionManager {
@@ -107,6 +120,22 @@ Widget _app(AnimeWitcherProvider provider) => ProviderScope(
 );
 
 void main() {
+  testWidgets('manga details loads details before chapters on route open', (
+    tester,
+  ) async {
+    final provider = _MangaProvider();
+
+    expect(provider.detailsCalls, 0);
+    expect(provider.chaptersCalls, 0);
+
+    await tester.pumpWidget(_app(provider));
+    await tester.pumpAndSettle();
+
+    expect(provider.detailsCalls, 1);
+    expect(provider.chaptersCalls, 1);
+    expect(provider.chaptersStartedBeforeDetailsFinished, isFalse);
+  });
+
   testWidgets('manga details renders only details and chapters tabs', (
     tester,
   ) async {
