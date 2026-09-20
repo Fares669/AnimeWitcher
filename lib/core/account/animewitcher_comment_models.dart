@@ -330,6 +330,18 @@ String animeWitcherAnimeRatingPath(String animeId, String userDocId) {
   return 'anime_list/$animeId/ratings/$userDocId';
 }
 
+String animeWitcherMangaIdFromItem(MultimediaItem item) {
+  final explicit = item.syncData?['mangaId']?.trim() ?? '';
+  if (explicit.isNotEmpty) return explicit;
+  final uri = safeTryParseUri(item.url);
+  if (uri == null || uri.pathSegments.isEmpty) return '';
+  return uri.pathSegments.last.trim();
+}
+
+String animeWitcherMangaRatingPath(String mangaId, String userDocId) {
+  return 'manga_list/$mangaId/ratings/$userDocId';
+}
+
 String? _normalizeDocumentPath(String? raw) {
   var value = raw?.trim() ?? '';
   if (value.isEmpty) return null;
