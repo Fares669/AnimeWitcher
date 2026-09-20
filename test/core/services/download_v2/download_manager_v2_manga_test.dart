@@ -59,7 +59,7 @@ void main() {
     expect(record.mediaKind, DownloadMediaKind.mangaChapter);
   });
 
-  test('only one manga chapter is admitted globally', () async {
+  test('multiple manga chapters run concurrently with one connection each', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final gateway = _Gateway();
     final manager = DownloadManagerV2(
@@ -67,10 +67,12 @@ void main() {
       gateway: gateway,
       sourceResolver: _VideoResolver(),
       mangaChapterPageResolver: _MangaResolver(),
-      maxConcurrentDownloads: () => 10,
+      maxConcurrentDownloads: () => 5,
     );
 
-    DownloadStartRequestV2 request(String mangaId, String chapterId) {
+    DownloadStartRequestV2 request(int index) {
+      final mangaId = 'm$index';
+      final chapterId = '$index';
       return DownloadStartRequestV2(
         logicalId: logicalDownloadIdForMangaChapter(
           mangaId: mangaId,
@@ -92,29 +94,24 @@ void main() {
       );
     }
 
-    final first = request('m1', '1');
-    final second = request('m2', '2');
+    final requests = <DownloadStartRequestV2>[
+      for (var index = 1; index <= 5; index++) request(index),
+    ];
 
-    await manager.start(first);
-    final secondSnapshot = await manager.start(second);
+    for (final item in requests) {
+      final snapshot = await manager.start(item);
+      expect(snapshot.status, DownloadTransportStatus.running);
+    }
 
-    expect(gateway.mangaSpecs, hasLength(1));
-    expect(gateway.mangaSpecs.single.mangaId, 'm1');
-    expect(secondSnapshot.status, DownloadTransportStatus.queued);
-    expect(secondSnapshot.activeConnections, 0);
+    expect(gateway.mangaSpecs, hasLength(5));
+    expect(gateway.videoSpecs, isEmpty);
 
-    final secondRecord = await store.get(second.logicalId);
-    expect(secondRecord, isNotNull);
-    expect(secondRecord!.awaitingAdmission, isTrue);
-    expect(secondRecord.parallelChunks, 1);
-
-    await manager.cancel(first.logicalId);
-    await manager.reconcileAdmission();
-
-    expect(gateway.mangaSpecs, hasLength(2));
-    expect(gateway.mangaSpecs.last.mangaId, 'm2');
-    final promoted = await store.get(second.logicalId);
-    expect(promoted?.awaitingAdmission, isFalse);
+    for (final item in requests) {
+      final record = await store.get(item.logicalId);
+      expect(record, isNotNull);
+      expect(record!.awaitingAdmission, isFalse);
+      expect(record.parallelChunks, 1);
+    }
   });
 
   test('paused manga relaunch resumes the same generation from manifest', () async {
