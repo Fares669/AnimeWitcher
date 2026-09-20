@@ -3,9 +3,11 @@ import 'package:animewitcher/core/account/account_providers.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/storage/library_category.dart';
 import '../../../../core/storage/library_repository.dart';
+import '../../../../core/storage/storage_service.dart';
 
 import './library_auth.dart';
 import './library_state.dart';
+import './library_media_kind.dart';
 
 part 'library_provider.g.dart';
 
@@ -16,21 +18,35 @@ class Library extends _$Library {
     ref.watch(accountDataRevisionProvider);
     final repository = ref.read(libraryRepositoryProvider);
     final category = repository.getSelectedCategory();
-    final items = repository.getLibraryItems(category: category);
+    final mediaKind = LibraryMediaKind.fromStorageKey(
+      ref.read(storageServiceProvider).getString('library_media_kind'),
+    );
+    final items = filterLibraryItemsByKind(
+      repository.getLibraryItems(category: category),
+      mediaKind,
+    );
     return items.isEmpty
-        ? LibraryEmpty(category)
-        : LibrarySuccess(items, category);
+        ? LibraryEmpty(category, mediaKind)
+        : LibrarySuccess(items, category, mediaKind);
   }
 
   LibraryCategory get selectedCategory => state.category;
+  LibraryMediaKind get selectedMediaKind => state.mediaKind;
 
-  LibraryState refresh({LibraryCategory? category}) {
+  LibraryState refresh({
+    LibraryCategory? category,
+    LibraryMediaKind? mediaKind,
+  }) {
     final repository = ref.read(libraryRepositoryProvider);
     final selected = category ?? state.category;
-    final items = repository.getLibraryItems(category: selected);
+    final selectedKind = mediaKind ?? state.mediaKind;
+    final items = filterLibraryItemsByKind(
+      repository.getLibraryItems(category: selected),
+      selectedKind,
+    );
     state = items.isEmpty
-        ? LibraryEmpty(selected)
-        : LibrarySuccess(items, selected);
+        ? LibraryEmpty(selected, selectedKind)
+        : LibrarySuccess(items, selected, selectedKind);
     return state;
   }
 
@@ -40,11 +56,20 @@ class Library extends _$Library {
     refresh(category: category);
   }
 
+  Future<void> selectMediaKind(LibraryMediaKind mediaKind) async {
+    await ref
+        .read(storageServiceProvider)
+        .setString('library_media_kind', mediaKind.storageKey);
+    refresh(mediaKind: mediaKind);
+  }
+
   Future<void> addItem(
     MultimediaItem item, {
     LibraryCategory? category,
   }) async {
-    _requireSignedIn();
+    if (item.contentType != MultimediaContentType.manga) {
+      _requireSignedIn();
+    }
     final repository = ref.read(libraryRepositoryProvider);
     await repository.addToLibrary(
       item,
@@ -54,14 +79,18 @@ class Library extends _$Library {
   }
 
   Future<void> clearItemCategory(String url) async {
-    _requireSignedIn();
+    if (state.mediaKind != LibraryMediaKind.manga) {
+      _requireSignedIn();
+    }
     final repository = ref.read(libraryRepositoryProvider);
     await repository.clearCategory(url);
     refresh();
   }
 
   Future<void> setFavorite(MultimediaItem item, bool favorite) async {
-    _requireSignedIn();
+    if (item.contentType != MultimediaContentType.manga) {
+      _requireSignedIn();
+    }
     final repository = ref.read(libraryRepositoryProvider);
     await repository.setFavorite(item, favorite);
     refresh();
