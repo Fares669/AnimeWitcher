@@ -34,7 +34,8 @@ jobs:
           flutter test test/core/domain/entity/manga_test.dart \
             test/core/extensions/manga_provider_contract_test.dart \
             test/core/extensions/providers/animewitcher_manga_mapping_test.dart \
-            test/core/extensions/providers/animewitcher_manga_provider_test.dart -r expanded
+            test/core/extensions/providers/animewitcher_manga_provider_test.dart \
+            test/core/extensions/providers/animewitcher_animation_provider_test.dart -r expanded
 
       - name: Search domain RED/GREEN tests
         run: |
