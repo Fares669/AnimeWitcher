@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
+import '../../extensions/base_provider.dart';
 import '../../extensions/extension_manager.dart';
 import '../../storage/settings_repository.dart';
 import '../download_concurrency.dart';
