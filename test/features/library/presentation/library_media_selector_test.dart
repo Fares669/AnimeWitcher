@@ -12,6 +12,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         locale: const Locale('ar'),
+        supportedLocales: const <Locale>[Locale('ar'), Locale('en')],
         home: Scaffold(
           appBar: AppBar(
             title: LibraryMediaSelector(
