@@ -287,6 +287,71 @@ Future<void> _probeMangaRecencyMetadata(
   }
 }
 
+Future<void> _probeMangaFilterSupport(
+  List<_AlgoliaCredentials> credentials,
+) async {
+  for (final candidate in credentials) {
+    try {
+      final first = await _algoliaFirst('manga_views_desc', candidate);
+      if (first == null) continue;
+
+      final details = _asMap(first['details']);
+      final tagsRaw = first['tags'];
+      final tags = tagsRaw is List
+          ? tagsRaw.map(_text).where((value) => value.isNotEmpty).toList()
+          : const <String>[];
+      final samples = <String, Object?>{
+        'type': first['type'],
+        'statictes': first['statictes'],
+        'details.year': details['year'],
+        'tags': tags.isEmpty ? null : tags.first,
+      };
+
+      for (final entry in samples.entries) {
+        final value = _text(entry.value);
+        if (value.isEmpty) {
+          stdout.writeln('algolia:manga-filter:${entry.key}=no-sample');
+          continue;
+        }
+
+        final response = await _dio.post<Object?>(
+          'https://${candidate.appId}-dsn.algolia.net/1/indexes/'
+          'manga_views_desc/query',
+          data: <String, Object?>{
+            'query': '',
+            'hitsPerPage': 1,
+            'page': 0,
+            'filters': '${entry.key}:${jsonEncode(value)}',
+          },
+          options: Options(
+            headers: <String, String>{
+              'X-Algolia-Application-Id': candidate.appId,
+              'X-Algolia-API-Key': candidate.apiKey,
+              'content-type': 'application/json',
+            },
+          ),
+        );
+
+        final status = response.statusCode ?? 0;
+        final body = response.data;
+        final nbHits = body is Map ? body['nbHits'] : null;
+        final message = body is Map ? _text(body['message']) : '';
+        stdout.writeln(
+          'algolia:manga-filter:${entry.key} '
+          'status=$status nbHits=${nbHits ?? 'unknown'} '
+          'message=${message.isEmpty ? 'none' : message}',
+        );
+      }
+      return;
+    } catch (error) {
+      stdout.writeln(
+        'algolia:manga-filter-probe via ${candidate.label}: '
+        '${_dioSummary(error)}',
+      );
+    }
+  }
+}
+
 Future<void> _probeMangaFacets(
   List<_AlgoliaCredentials> credentials,
 ) async {
@@ -616,6 +681,7 @@ Future<void> main() async {
   await _probeMangaRecencyMetadata(credentials);
   await _probeRecentMangaWindow(credentials);
   await _probeMangaFacets(credentials);
+  await _probeMangaFilterSupport(credentials);
 
   final supportedSortIndices = <String>[];
   for (final index in _mangaSortIndices) {
