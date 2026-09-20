@@ -55,6 +55,24 @@ DownloadLogicalId logicalDownloadIdFor({
   return DownloadLogicalId('dl_${digest.substring(0, 32)}');
 }
 
+/// Builds a compact deterministic ID for one Manga chapter.
+///
+/// Identity contains only stable Manga/chapter IDs. Page URLs are transport
+/// metadata and may rotate without changing the logical download.
+DownloadLogicalId logicalDownloadIdForMangaChapter({
+  required String mangaId,
+  required String chapterId,
+}) {
+  final canonical = <String>[
+    'manga',
+    mangaId.trim(),
+    'chapter',
+    chapterId.trim(),
+  ].join('\u001f');
+  final digest = sha256.convert(utf8.encode(canonical)).toString();
+  return DownloadLogicalId('manga_${digest.substring(0, 32)}');
+}
+
 /// Returns the one package task identity for a logical download generation.
 ///
 /// A new generation always gets a new task ID, making late callbacks from an
