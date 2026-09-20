@@ -21,7 +21,7 @@
 - Anime download behavior and concurrency must remain unchanged.
 - No second Manga download manager; V2 owns logical download lifecycle and `background_downloader` remains the network/native execution authority.
 - No external Manga catalog fallback.
-- No cloud Manga library sync unless the current AnimeWitcher account API proves it already exists without server changes.
+- Manga library/favorite state must use AnimeWitcher's existing cloud Manga contract when signed in. APK v1.4.9 proves Manga-specific user collections already exist (`fav_manga` and `user_manga`); do not invent a new endpoint or reuse Anime-only `fav_anime`/`user_anime` documents.
 - Substantial Apache-2.0 reader source reuse must retain required attribution/license notices.
 
 ## Review Focus
@@ -31,6 +31,21 @@
 - Opening Manga details must not trigger Anime extras in the background even when those APIs are available; Task 4 includes a call-count contract test.
 - Relaunching during a Manga chapter download must not create two page writers or skip a missing page; Tasks 8-9 include restart/one-writer tests.
 - A long Manhwa must not eagerly decode/build every page; Task 5 includes a lazy-build/preload-window widget test.
+- iOS Search controls must remain native interactive Liquid Glass on the native path; a Flutter blur/surface that only looks like glass is not equivalent.
+- Search/Home may carry catalog fields needed to paint immediately, but must not call Manga details/chapter APIs before `MangaDetailsRoute` opens.
+- Opening the reader must make the reader the current persistent-header owner so Manga-details back/menu/favorite controls cannot remain above a chapter.
+- Signed-in Manga library actions must round-trip through AnimeWitcher's Manga collections and survive app relaunch/account refresh.
+
+## Root-cause audit — 2026-09-20
+
+These findings come from the current `feat/manga-manhwa` code, the existing Anime UI implementation, and the supplied AnimeWitcher v1.4.9 APK. They supersede earlier plan assumptions where they conflict.
+
+1. **Search lost true native Liquid Glass.** `main` uses `AppleLiquidGlassActionGroup` + `AppleLiquidGlassToolbarButton` on iOS. The Manga branch replaced that native path with one `AppleLiquidGlassSurface` containing Flutter popup/gesture controls. It can look glass-like but no longer uses the native interactive menu/morph substrate.
+2. **The Manga tab indicator is configured differently from Anime details.** Anime uses the shared `FilterStyleTabBar` without overriding `indicatorSize`; Manga forces `TabBarIndicatorSize.tab`, which explains the long half-width yellow line and different animation.
+3. **The instant Manga page is not, by itself, proof of pre-route detail loading.** `MangaDetailsController.build()` is side-effect free and the screen starts `.load()` from its own `initState`; the incoming catalog item already has enough fields to paint immediately. The real pre-open chapter work is Home latest: current `getLatestMangaPage()` queries `manga_views_desc` and then scrapes chapter archives for multiple Manga before any Manga page is opened.
+4. **Home Latest Chapters diverged from the original AnimeWitcher contract.** APK v1.4.9 contains `manga_recent` plus a `RecentMangaModel` with `chapter_id`, `chapter_name`, `date`, `manga_id`, `manga_name`, `poster_url`, `poster_url_aniList`, `thumb_uri`, `title`, and `type`. Its adapter/view holder has `chapterName`, `mangaName`, and `timeAgo`. The current branch instead resolves latest chapters by crawling Manga chapter pages and then renders `chapter.name` as a gray subtitle.
+5. **Reader overlap is persistent-header ownership.** Manga details registers an `ApplePersistentGlassHeaderScope`. The global controller falls back to the newest active registered route when the current route owns no header. `MangaReaderScreen` registers nothing, so the covered Manga-details header remains selected. `PlayerScreen` already contains the correct current-route owner pattern.
+6. **Manga library is local-only because the branch explicitly makes it so.** `LibraryRepository` returns early for Manga in add/move/favorite/remove paths and `Library` skips the account sign-in gate for Manga. Even without those returns, `AnimeWitcherAccountService.saveLibraryItem()` resolves only Anime ids. APK v1.4.9 proves server support exists: `/fav_manga`, `/user_manga`, `user_list_manga`, `manga_doc_id`, `manga_type`, and Manga statistics are present; `UserMangaModel` carries `date`, `doc_ref`, `mangaModel`, `type`, and `views`.
 
 ---
 
@@ -254,9 +269,11 @@ final Map<String, DateTime> _mangaPageExpiresAt = {};
 
 Map sort values to the verified Manga indices and build only verified Manga facets.
 
-- [ ] **Step 5: Add latest chapter retrieval**
+- [ ] **Step 5: Add latest chapter retrieval from the official recent feed — no chapter archive crawling**
 
-Return `MangaLatestChapter` data from the verified `manga_recent`/current live equivalent without calling Anime home/episode APIs.
+Return `MangaLatestChapter` directly from the verified `manga_recent`/current live equivalent. Map the APK-proven recent fields (`chapter_id`, `chapter_name`, `date`, `manga_id`, `manga_name`, artwork fields) without calling Anime APIs **and without** calling `_loadMangaArchiveChapters`, `getMangaChapters`, or MangaLek source pages per candidate.
+
+Add a request-count test proving `getLatestMangaPage()` does not warm details/chapter caches or perform N per-Manga chapter requests.
 
 - [ ] **Step 6: Run provider tests**
 
@@ -348,7 +365,14 @@ required bool showSort,
 required bool showFilter,
 ```
 
-Render one animated capsule whose width is calculated from visible controls. Character mode leaves one domain button, not disabled sort/filter placeholders.
+Preserve the pre-Manga platform split instead of replacing it:
+
+- On native Apple Liquid Glass, render one `AppleLiquidGlassActionGroup` containing native `AppleLiquidGlassToolbarButton` controls. Sort and domain use native menu items; filter remains a native toolbar action.
+- On fallback/non-native platforms, keep the shared visual capsule with Flutter popup controls.
+- Width still follows the visible-control count; Character mode leaves only the domain button.
+- Do not put Flutter `PopupMenuButton` controls inside `AppleLiquidGlassSurface` on the native iOS path.
+
+Extend `search_action_buttons_test.dart` with a regression assertion for the native action-group configuration so adding the third button cannot silently replace real Liquid Glass again.
 
 - [ ] **Step 5: Add stale-domain RED/GREEN test**
 
@@ -459,7 +483,15 @@ Only:
 التفاصيل | الفصول
 ```
 
+Use the exact same shared `FilterStyleTabBar` indicator behavior as Anime details. Specifically, do not set Manga-only `indicatorSize: TabBarIndicatorSize.tab`; the yellow underline length and animation must resolve identically to Anime details.
+
 Reuse generic poster/title/tag primitives only. Do not import `details_comments_preview.dart`, `details_character_rails.dart`, `details_extra_tabs.dart`, `related_anime_screen.dart`, playback launchers, or episode widgets.
+
+- [ ] **Step 4A: Prove details/chapters are demand-loaded by the Manga route**
+
+Before opening `MangaDetailsRoute`, fake-provider counters for `getMangaDetails` and `getMangaChapters` must both be zero. After opening, each logical call starts from the Manga screen. Immediate painting from the incoming search/home item is allowed; network counters are the authority.
+
+Also coalesce concurrent real-provider `getMangaDetails(url)` work (or sequence the controller) so the details call and the chapter call cannot duplicate the same `manga_list/<id>` backend read during one page open.
 
 - [ ] **Step 5: Add chapter order/read/download hooks**
 
@@ -568,6 +600,8 @@ Throttle page-position writes to at most once per second plus reader exit. Last 
 
 Reader route carries stable Manga/chapter identity. Previous/next chapter uses the chapter list and preserves each chapter's saved page.
 
+On native persistent Liquid Glass, `MangaReaderScreen` must register itself as the current `ApplePersistentGlassHeaderConfig` owner, following the existing `PlayerScreen` pattern. The reader publishes its own back action and no Manga-details trailing buttons. Add a push/pop regression test: details owns menu/favorite -> push reader -> details trailing actions disappear -> pop -> details header restores.
+
 - [ ] **Step 7: Test and commit**
 
 ```bash
@@ -581,7 +615,7 @@ If no third-party source was copied, omit `THIRD_PARTY_NOTICES.md` from the comm
 
 ---
 
-### Task 6: Add Anime/Manga Liquid Glass library switching with isolated local Manga state
+### Task 6: Add Anime/Manga Liquid Glass library switching with AnimeWitcher cloud Manga sync
 
 **Files:**
 - Create: `lib/features/library/presentation/library_media_kind.dart`
@@ -615,9 +649,17 @@ expect(storage.getLibraryItems(mediaKind: LibraryMediaKind.manga), [manga]);
 
 Add a single settings key and default to Anime.
 
-- [ ] **Step 3: Keep Manga library local**
+- [ ] **Step 3: Replace the current local-only Manga path with the official AnimeWitcher cloud contract**
 
-`LibraryRepository` must skip AnimeWitcher account sync and sign-in enforcement for Manga rows, while existing Anime behavior remains unchanged.
+First pin the APK/live contract read-only. v1.4.9 proves Manga-specific collections/fields exist: `fav_manga`, `user_manga`, `manga_doc_id`, `manga_type`, and `UserMangaModel(date, doc_ref, mangaModel, type, views)`. Verify the exact document id and Firestore field/reference types before the first write; do not guess the shape.
+
+Then add Manga-specific account methods (for example `saveMangaLibraryItem`, `removeMangaLibraryItem`, and Manga library refresh) using Manga ids and Manga collection paths. Do not route Manga through `AnimeWitcherSyncIds.animeIdFromUrl` or Anime-only `fav_anime`/`user_anime`.
+
+Remove the current `if (isManga) return` / `if (contentType == manga) return` short circuits from add, move, clear-category, favorite, and remove flows. Signed-in Manga actions must reach the server; sign-in/error behavior must not report a local-only write as a successful cloud save.
+
+Add two-way relaunch coverage: add Manga -> remote doc exists -> rebuild local state/account refresh -> Manga returns; remove Manga -> remote doc disappears -> refresh does not resurrect it.
+
+Add account/library tests that fail if a Manga mutation touches Anime collections or never reaches the account service.
 
 - [ ] **Step 4: Add the requested top-level Liquid Glass selector**
 
@@ -694,13 +736,23 @@ class HomeSuccess extends HomeState {
 }
 ```
 
-- [ ] **Step 3: Fetch latest chapters in its own guarded future**
+- [ ] **Step 3: Fetch latest chapters in its own guarded future, from `manga_recent` only**
 
-Add a third `Future.wait` entry whose internal catch returns an empty list, matching the News resilience pattern.
+Add a third `Future.wait` entry whose internal catch returns an empty list, matching the News resilience pattern. The provider behind it must use the direct AnimeWitcher recent feed from Task 2; Home must not scrape chapter archives or call Manga details/chapter APIs.
 
-- [ ] **Step 4: Render Latest Chapters**
+- [ ] **Step 4: Render Latest Chapters with original AnimeWitcher/New Episodes parity**
 
-Use existing Home rail/card geometry. Show Manga title plus chapter label. Tap opens `MangaDetailsRoute`.
+Reuse the existing `MultimediaCard` poster geometry and yellow bottom-right badge. The card composition must be:
+
+```text
+poster + yellow badge: الفصل <x>
+Manga title
+relative release time (for example: منذ 20 ساعة)
+```
+
+Pass the chapter label through the existing yellow badge path (`episodeBadge`, or rename/generalize that property without changing its renderer) and the `manga_recent.date` relative-time string through `subtitle`. Do not use `chapter.name` as the gray subtitle. Tap opens `MangaDetailsRoute`.
+
+Add widget assertions for the yellow `الفصل` badge, title, relative time, and matching New Episodes card dimensions.
 
 - [ ] **Step 5: Test and commit**
 
@@ -1037,16 +1089,22 @@ Expected: no new analyzer errors and no Manga/Download V2 regressions.
 Verify on a real iPhone:
 
 1. Anime/Manga/Animation/Character search switch.
-2. Manga details has only Details + Chapters and no Anime extras.
-3. Webtoon reader.
-4. Paged RTL/LTR reader.
-5. Reading progress after app relaunch.
-6. 30+ page Manga download with one active transfer.
-7. Background app during chapter download.
-8. Kill/relaunch while chapter download is active.
-9. Pause -> relaunch -> resume.
-10. Offline completed chapter.
-11. Simultaneous Anime multipart download keeps configured Anime connection count.
+2. Search domain/sort/filter are one true native Liquid Glass action group on iOS.
+3. Manga details has only Details + Chapters and no Anime extras.
+4. Details/chapter network counters stay zero until Manga details is opened.
+5. Manga yellow tab underline length/motion matches Anime details.
+6. Latest Chapters matches New Episodes: yellow `الفصل x` badge, Manga title, relative time.
+7. Opening a chapter removes Manga-details menu/favorite controls; reader owns the persistent header and popping restores details.
+8. Signed-in add/favorite/category/remove mutations round-trip through `fav_manga`/`user_manga` and survive kill/relaunch/account refresh.
+9. Webtoon reader.
+10. Paged RTL/LTR reader.
+11. Reading progress after app relaunch.
+12. 30+ page Manga download with one active transfer.
+13. Background app during chapter download.
+14. Kill/relaunch while chapter download is active.
+15. Pause -> relaunch -> resume.
+16. Offline completed chapter.
+17. Simultaneous Anime multipart download keeps configured Anime connection count.
 
 If iOS cannot chain the *next* page while suspended, record the truthful behavior: the current native page may finish and the chapter waits until foreground/relaunch. Do not add a custom native page scheduler in this plan.
 
