@@ -3,7 +3,7 @@
 Date: 2026-09-20  
 Status: Approved  
 Branch: `feat/manga-manhwa`  
-Base: `feat/download-manager-v2` at `2535c4f3893e4a74f40d8f5b0c93a4c92891e7b2`
+Base: `main` after Download Manager V2 merge (`4fadac2f10d7ff08b163f672e0ec78a31de5e8c8`)
 
 ## 1. Goal
 
@@ -26,15 +26,9 @@ The existing anime/player/download behavior must remain unchanged.
 
 ## 2. Branch/base decision
 
-`main` does not yet contain the current Download Manager V2 work, while this feature explicitly depends on that manager for chapter downloads. Therefore this branch is intentionally stacked on `feat/download-manager-v2` rather than the current `main`.
+Download Manager V2 is now merged into `main`. The `feat/manga-manhwa` branch is based directly on that merged `main`, so its history and PR diff must contain only Manga/Manhwa work.
 
-Before final merge:
-
-1. Download Manager V2 must land on `main`.
-2. `feat/manga-manhwa` must be rebased/updated onto that resulting `main`.
-3. Manga-specific regressions must be rerun after the rebase.
-
-The Manga implementation must use the V2 APIs on this branch. It must not revive V1 or old transport ownership code.
+The Manga implementation must use the V2 APIs already present on `main`. It must not revive V1 or old transport ownership code.
 
 ## 3. Source-of-truth data decision
 
