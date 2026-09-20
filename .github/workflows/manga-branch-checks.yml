@@ -1,0 +1,38 @@
+name: Manga Branch Checks
+
+on:
+  push:
+    branches: [feat/manga-manhwa]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manga-branch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manga-contract:
+    name: Manga contract and backend probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Focused Manga contract tests
+        run: |
+          flutter test test/core/domain/entity/manga_test.dart \
+            test/core/extensions/manga_provider_contract_test.dart \
+            test/core/extensions/providers/animewitcher_manga_mapping_test.dart \
+            test/core/extensions/providers/animewitcher_manga_provider_test.dart -r expanded
+
+      - name: Probe AnimeWitcher Manga backend
+        run: dart run tool/manga_backend_probe.dart

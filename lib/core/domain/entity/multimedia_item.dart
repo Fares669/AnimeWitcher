@@ -1,7 +1,7 @@
 import 'package:html_unescape/html_unescape.dart';
 import 'package:collection/collection.dart';
 
-enum MultimediaContentType { movie, series, anime, livestream, other }
+enum MultimediaContentType { movie, series, anime, manga, livestream, other }
 
 enum ShowStatus { completed, ongoing, upcoming }
 
@@ -377,6 +377,7 @@ class MultimediaItem {
       'tvseries',
       'tv',
       'anime',
+      'manga',
       'livestream',
       'live',
       'iptv',
@@ -420,6 +421,9 @@ class MultimediaItem {
         return MultimediaContentType.series;
       case 'anime':
         return MultimediaContentType.anime;
+      case 'manga':
+      case 'manhwa':
+        return MultimediaContentType.manga;
       case 'livestream':
       case 'live':
       case 'iptv':
@@ -427,6 +431,13 @@ class MultimediaItem {
       default:
         if (value.contains('فيلم') || value.contains('فلم')) {
           return MultimediaContentType.movie;
+        }
+        if (value.contains('مانجا') ||
+            value.contains('مانهوا') ||
+            value.contains('مانها') ||
+            value.contains('manhwa') ||
+            value.contains('manga')) {
+          return MultimediaContentType.manga;
         }
         if (value.contains('بث') || value.contains('live')) {
           return MultimediaContentType.livestream;

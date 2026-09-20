@@ -1,7 +1,8 @@
 import 'package:dio/dio.dart';
+import '../domain/entity/manga.dart';
 import '../domain/entity/multimedia_item.dart';
 
-enum ProviderType { movie, series, anime, livestream, other }
+enum ProviderType { movie, series, anime, manga, livestream, other }
 
 class ProviderSearchFilterOptions {
   final List<String> statuses;
@@ -205,6 +206,57 @@ abstract class AnimeWitcherProvider {
       items: all.sublist(safeOffset, end),
       nextOffset: end,
       hasMore: end < all.length,
+    );
+  }
+
+  /// Manga/Manhwa search is opt-in. Providers that do not implement it
+  /// remain compatible and expose an empty Manga catalog.
+  Future<ProviderMediaPage> searchMangaPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = 30,
+    CancelToken? cancelToken,
+  }) async {
+    final safeOffset = offset < 0 ? 0 : offset;
+    return ProviderMediaPage(
+      items: const <MultimediaItem>[],
+      nextOffset: safeOffset,
+      hasMore: false,
+    );
+  }
+
+  /// Optional Manga-specific filter values.
+  Future<ProviderSearchFilterOptions> getMangaSearchFilterOptions() async {
+    return const ProviderSearchFilterOptions();
+  }
+
+  /// Manga details must be implemented explicitly instead of falling through
+  /// the Anime details flow.
+  Future<MultimediaItem> getMangaDetails(String url) {
+    throw UnsupportedError('Manga details are not supported by $name');
+  }
+
+  Future<List<MangaChapter>> getMangaChapters(String url) async {
+    return const <MangaChapter>[];
+  }
+
+  Future<List<MangaPage>> getMangaChapterPages(
+    String mangaUrl,
+    MangaChapter chapter,
+  ) async {
+    return const <MangaPage>[];
+  }
+
+  Future<MangaLatestChapterPage> getLatestMangaPage({
+    int offset = 0,
+    int limit = 30,
+  }) async {
+    final safeOffset = offset < 0 ? 0 : offset;
+    return MangaLatestChapterPage(
+      items: const <MangaLatestChapter>[],
+      nextOffset: safeOffset,
+      hasMore: false,
     );
   }
 
