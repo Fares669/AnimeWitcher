@@ -11,7 +11,7 @@ const int kDownloadPartsMin = 1;
 const int kDownloadPartsMax = 16;
 const int kDownloadGlobalConnectionBudget = 16;
 
-/// Preserve the selected legacy width. Download Manager V2 applies its own
+/// Preserve the selected width. Download Manager V2 applies its own
 /// package/platform safety policy at the gateway boundary instead of mutating
 /// the user's stored preference.
 int effectiveDownloadPartsForPlatform({
