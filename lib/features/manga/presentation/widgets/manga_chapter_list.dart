@@ -17,9 +17,15 @@ class MangaChapterList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     if (chapters.isEmpty) {
-      return Center(child: Text(l10n.mangaNoChapters));
+      return Center(
+        child: Text(
+          l10n?.mangaNoChapters ?? (isArabic ? 'لا توجد فصول' : 'No chapters'),
+        ),
+      );
     }
 
     return ListView.separated(
@@ -48,7 +54,7 @@ class MangaChapterList extends StatelessWidget {
           trailing: onDownload == null
               ? null
               : IconButton(
-                  tooltip: l10n.mangaDownloadChapter,
+                  tooltip: l10n?.mangaDownloadChapter ?? (isArabic ? 'تنزيل الفصل' : 'Download chapter'),
                   onPressed: () => onDownload!(chapter),
                   icon: const Icon(Icons.download_rounded),
                 ),
