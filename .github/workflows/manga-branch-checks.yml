@@ -49,5 +49,14 @@ jobs:
           flutter test test/features/manga/presentation/manga_details_screen_test.dart \
             test/features/manga/presentation/manga_details_no_anime_extras_test.dart -r expanded
 
+      - name: Full search regression
+        run: flutter test test/features/search -r expanded
+
+      - name: Manga reader RED/GREEN tests
+        run: |
+          flutter test test/core/storage/manga_reading_repository_test.dart \
+            test/features/manga/reader/manga_reader_test.dart \
+            test/features/manga/reader/manga_reader_lazy_pages_test.dart -r expanded
+
       - name: Probe AnimeWitcher Manga backend
         run: dart run tool/manga_backend_probe.dart
