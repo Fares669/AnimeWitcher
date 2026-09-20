@@ -56,9 +56,7 @@ class SearchActionButtons extends StatefulWidget {
   static double groupWidthForHeight(
     double height, {
     int visibleControls = 2,
-  }) =>
-      height * visibleControls +
-      (appleUsesPersistentLiquidGlassHeader ? 32 : 0);
+  }) => height * visibleControls;
 
   @override
   State<SearchActionButtons> createState() => _SearchActionButtonsState();
@@ -95,43 +93,8 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
       visibleControls: visibleControls,
     );
 
-    final native = appleUsesPersistentLiquidGlassHeader;
-    final badge = widget.showFilter && widget.filterCount > 0
-        ? SearchFilterBadge(count: widget.filterCount)
-        : null;
-
-    final nativeButtons = <Widget>[
-      if (hasDomain) _buildDomainToolbarButton(tint),
-      if (widget.showSort)
-        AppleLiquidGlassToolbarButton(
-          icon: widget.sortIcon,
-          systemImage: widget.sortSystemImage,
-          tooltip: widget.sortTooltip,
-          color: tint,
-          menuTintColor: tint,
-          menuItems: widget.sortItems,
-          selectedMenuValue: widget.sortValue,
-          onMenuSelected: _onSortSelected,
-          onPressed: () {},
-          width: height,
-        ),
-      if (widget.showFilter)
-        AppleLiquidGlassToolbarButton(
-          icon: Icons.tune_rounded,
-          systemImage: widget.isFilterLoading
-              ? 'hourglass'
-              : 'slider.horizontal.3',
-          tooltip: widget.filterTooltip,
-          color: tint,
-          onPressed: widget.isFilterLoading
-              ? null
-              : widget.onFilterPressed,
-          width: height,
-        ),
-    ];
-
-    final fallbackButtons = <Widget>[
-      if (hasDomain) _buildDomainToolbarButton(tint),
+    final controls = <Widget>[
+      if (hasDomain) _buildDomainControl(tint),
       if (widget.showSort) _buildSortControl(tint),
       if (widget.showFilter)
         _ActionIcon(
@@ -158,47 +121,26 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
         curve: Curves.easeOutCubic,
         child: Directionality(
           textDirection: TextDirection.ltr,
-          child: native
-              ? Stack(
-                  children: [
-                    AppleLiquidGlassActionGroup(
-                      height: height,
-                      captureGestures: true,
-                      children: nativeButtons,
-                    ),
-                    if (badge != null)
-                      Positioned(
-                        top: 2,
-                        right: 14,
-                        child: IgnorePointer(child: badge),
-                      ),
-                  ],
-                )
-              : Stack(
-                  children: [
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: AppleLiquidGlassSurface(
-                          borderRadius: BorderRadius.circular(height / 2),
-                          fallbackColor: Theme.of(context).colorScheme
-                              .surfaceContainerHighest.withValues(alpha: 0.5),
-                          fallbackBorder: BorderSide(
-                            color: Theme.of(context).colorScheme
-                                .onSurfaceVariant.withValues(alpha: 0.12),
-                          ),
-                          child: const SizedBox.expand(),
-                        ),
-                      ),
-                    ),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        for (final button in fallbackButtons)
-                          Expanded(child: button),
-                      ],
-                    ),
-                  ],
-                ),
+          child: AppleLiquidGlassSurface(
+            borderRadius: BorderRadius.circular(height / 2),
+            interactive: true,
+            fallbackColor: Theme.of(context)
+                .colorScheme
+                .surfaceContainerHighest
+                .withValues(alpha: 0.5),
+            fallbackBorder: BorderSide(
+              color: Theme.of(context)
+                  .colorScheme
+                  .onSurfaceVariant
+                  .withValues(alpha: 0.12),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                for (final control in controls) Expanded(child: control),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -256,6 +198,45 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
     );
     if (selected.isEmpty) return;
     widget.onDomainSelected?.call(selected.first);
+  }
+
+  Widget _buildDomainControl(Color tint) {
+    final domain = widget.domain!;
+    return Builder(
+      builder: (context) => PopupMenuButton<String>(
+        tooltip: widget.domainTooltip,
+        padding: EdgeInsets.zero,
+        offset: const Offset(0, 8),
+        color: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        elevation: 0,
+        shape: const RoundedRectangleBorder(),
+        itemBuilder: (menuContext) => <PopupMenuEntry<String>>[
+          PopupMenuItem<String>(
+            enabled: false,
+            padding: EdgeInsets.zero,
+            child: BlurredMenuPanel(
+              items: _domainItems(context),
+              selectedValue: domain.name,
+              tint: tint,
+              fallbackIcon: _domainIcon(domain),
+              onPick: (value) {
+                Navigator.of(menuContext).pop();
+                _onDomainMenuSelected(value);
+              },
+            ),
+          ),
+        ],
+        child: SizedBox(
+          width: widget.height,
+          height: widget.height,
+          child: Center(
+            child: Icon(_domainIcon(domain), size: 22, color: tint),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildDomainToolbarButton(Color tint) {
