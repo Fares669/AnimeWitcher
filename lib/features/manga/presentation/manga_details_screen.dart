@@ -103,7 +103,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     LibraryCategory? current,
   ) {
     final items = <AppleNativeMenuItem>[
-      for (final category in LibraryCategory.assignmentValuesFor(item))
+      for (final category in LibraryCategory.primaryValues)
         AppleNativeMenuItem(
           value: category.storageKey,
           label: _categoryLabel(context, category),
@@ -137,7 +137,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
       await libraryNotifier.clearItemCategory(item.url, manga: true);
       return;
     }
-    for (final category in LibraryCategory.assignmentValuesFor(item)) {
+    for (final category in LibraryCategory.primaryValues) {
       if (category.storageKey == value) {
         await libraryNotifier.addItem(item, category: category);
         return;
