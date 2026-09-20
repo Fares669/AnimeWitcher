@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/entity/manga.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/router/app_router.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/underline_segment_tabs.dart';
 import 'manga_details_controller.dart';
@@ -92,7 +93,14 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
             ),
             data: (chapters) => MangaChapterList(
               chapters: chapters,
-              onOpen: widget.onOpenChapter,
+              onOpen: widget.onOpenChapter ??
+                  (chapter) => MangaReaderRoute(
+                    $extra: MangaReaderRouteExtra(
+                      manga: item,
+                      chapter: chapter,
+                      chapters: chapters,
+                    ),
+                  ).push<void>(context),
               onDownload: widget.onDownloadChapter,
             ),
           ),
