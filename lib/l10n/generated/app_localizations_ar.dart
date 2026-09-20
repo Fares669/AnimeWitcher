@@ -1227,7 +1227,7 @@ class AppLocalizationsAr extends AppLocalizations {
   String get chapters => 'الفصول';
 
   @override
-  String get latestChapters => 'أحدث الفصول';
+  String get latestChapters => 'فصول جديدة';
 
   @override
   String get mangaDetails => 'التفاصيل';
