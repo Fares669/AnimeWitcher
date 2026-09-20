@@ -9,6 +9,8 @@ import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:animewitcher/core/utils/episode_order.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/services/download_v2/download_v2_models.dart';
+import '../../../../core/router/app_router.dart';
 import '../../../../core/services/download_concurrency.dart';
 import '../../../../core/services/download_parallel.dart';
 import 'segmented_download_progress.dart';
@@ -18,6 +20,8 @@ import '../../../details/presentation/downloaded_file_provider.dart';
 import '../../../details/presentation/playback_launcher.dart';
 import '../download_progress_v2_provider.dart';
 import '../downloads_provider.dart';
+import '../download_unit_count_label.dart';
+import 'completed_download_chapter_card.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/utils/file_size_formatter.dart';
@@ -212,7 +216,11 @@ class _CompletedDownloadsList extends StatelessWidget {
     final Map<String, List<DownloadItem>> grouped = {};
     final List<String> keys = [];
     for (final item in items) {
-      final String key = item.item.tmdbId?.toString() ?? item.item.title;
+      final mediaIdentity =
+          item.item.tmdbId?.toString() ?? item.item.url.trim().isNotEmpty
+          ? item.item.url.trim()
+          : item.item.title;
+      final key = '${item.mediaKind.name}:$mediaIdentity';
       if (!grouped.containsKey(key)) {
         keys.add(key);
         grouped[key] = [];
@@ -235,15 +243,6 @@ class _CompletedDownloadsList extends StatelessWidget {
   }
 }
 
-String _completedEpisodeCountLabel(BuildContext context, int count) {
-  final isArabic =
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-  if (!isArabic) return count == 1 ? '1 episode' : '$count episodes';
-  if (count == 1) return 'حلقة';
-  if (count == 2) return 'حلقتان';
-  return '$count حلقات';
-}
-
 class _GroupedDownloadTile extends ConsumerWidget {
   final List<DownloadItem> items;
 
@@ -255,11 +254,29 @@ class _GroupedDownloadTile extends ConsumerWidget {
     final l10n = AppLocalizations.of(context)!;
     final firstItem = items.first;
     final episodeSortAscending = ref.watch(episodeSortAscendingProvider);
-    final orderedItems = episodeItemsInDisplayOrder(
-      items,
-      episodeOf: (item) => item.episode,
-      ascending: episodeSortAscending,
-    );
+    final isManga =
+        firstItem.mediaKind == DownloadMediaKind.mangaChapter;
+    final orderedItems = isManga
+        ? (List<DownloadItem>.from(items)
+            ..sort((a, b) {
+              final an = a.chapter?.number;
+              final bn = b.chapter?.number;
+              if (an != null && bn != null) {
+                final compare = an.compareTo(bn);
+                if (compare != 0) {
+                  return episodeSortAscending ? compare : -compare;
+                }
+              }
+              final compare = (a.chapter?.name ?? '').compareTo(
+                b.chapter?.name ?? '',
+              );
+              return episodeSortAscending ? compare : -compare;
+            }))
+        : episodeItemsInDisplayOrder(
+            items,
+            episodeOf: (item) => item.episode,
+            ascending: episodeSortAscending,
+          );
 
     return Card(
       margin: EdgeInsets.zero,
@@ -332,7 +349,14 @@ class _GroupedDownloadTile extends ConsumerWidget {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        _completedEpisodeCountLabel(context, items.length),
+                        completedDownloadUnitCountLabel(
+                          kind: firstItem.mediaKind,
+                          count: items.length,
+                          isArabic: Localizations.localeOf(context)
+                              .languageCode
+                              .toLowerCase() ==
+                              'ar',
+                        ),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -367,12 +391,26 @@ class _GroupedDownloadTile extends ConsumerWidget {
                   horizontal: LayoutConstants.spacingMd,
                   vertical: LayoutConstants.spacingSm,
                 ),
-                child: CompletedDownloadEpisodeCard(
-                  key: ValueKey(download.id),
-                  item: download,
-                  onPlay: () => _playLocalFile(context, ref, download, l10n),
-                  onDelete: () => _confirmDelete(context, ref, download, l10n),
-                ),
+                child: isManga
+                    ? CompletedDownloadChapterCard(
+                        key: ValueKey(download.id),
+                        item: download,
+                        onOpen: () => _openMangaChapter(
+                          context,
+                          download,
+                          orderedItems,
+                        ),
+                        onDelete: () =>
+                            _confirmDelete(context, ref, download, l10n),
+                      )
+                    : CompletedDownloadEpisodeCard(
+                        key: ValueKey(download.id),
+                        item: download,
+                        onPlay: () =>
+                            _playLocalFile(context, ref, download, l10n),
+                        onDelete: () =>
+                            _confirmDelete(context, ref, download, l10n),
+                      ),
               ),
               if (!isLast)
                 Divider(
@@ -386,6 +424,27 @@ class _GroupedDownloadTile extends ConsumerWidget {
         }).toList(),
       ),
     );
+  }
+
+  void _openMangaChapter(
+    BuildContext context,
+    DownloadItem item,
+    List<DownloadItem> groupItems,
+  ) {
+    final chapter = item.chapter;
+    if (chapter == null) return;
+    final chapters = <MangaChapter>[
+      for (final entry in groupItems)
+        if (entry.chapter != null) entry.chapter!,
+    ];
+    MangaReaderRoute(
+      $extra: MangaReaderRouteExtra(
+        manga: item.item,
+        chapter: chapter,
+        chapters: chapters,
+        localChapterDirectory: item.destinationPath,
+      ),
+    ).push<void>(context);
   }
 
   Future<void> _playLocalFile(
@@ -523,6 +582,9 @@ class _DownloadItemTile extends ConsumerWidget {
             isFinal: item.episode!.isFinal,
             serverName: item.episode!.serverName,
           );
+    final unitLabel = item.mediaKind == DownloadMediaKind.mangaChapter
+        ? item.chapter?.name
+        : episodeLabel;
 
     final poster = ClipRRect(
       borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
@@ -561,8 +623,8 @@ class _DownloadItemTile extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                (isInsideGroup && episodeLabel != null)
-                    ? episodeLabel
+                (isInsideGroup && unitLabel != null)
+                    ? unitLabel
                     : item.item.title,
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.bold,
@@ -571,14 +633,10 @@ class _DownloadItemTile extends ConsumerWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              if (!isInsideGroup &&
-                  episodeLabel != null &&
-                  (item.item.contentType == MultimediaContentType.series ||
-                      item.item.contentType ==
-                          MultimediaContentType.anime)) ...[
+              if (!isInsideGroup && unitLabel != null) ...[
                 const SizedBox(height: 2),
                 Text(
-                  episodeLabel,
+                  unitLabel,
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
