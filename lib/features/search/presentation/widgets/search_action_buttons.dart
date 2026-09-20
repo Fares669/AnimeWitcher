@@ -191,7 +191,10 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
                     ),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: fallbackButtons,
+                      children: <Widget>[
+                        for (final button in fallbackButtons)
+                          Expanded(child: button),
+                      ],
                     ),
                   ],
                 ),
