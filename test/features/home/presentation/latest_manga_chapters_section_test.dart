@@ -1,6 +1,7 @@
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/home/presentation/widgets/latest_manga_chapters_section.dart';
+import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -22,6 +23,7 @@ void main() {
         url: 'chapter://201',
         name: 'الفصل 201',
         number: 201,
+        publishedAt: DateTime(2026, 9, 19, 21),
       ),
     );
 
@@ -40,6 +42,11 @@ void main() {
     expect(find.text('أحدث الفصول'), findsOneWidget);
     expect(find.text('Solo Leveling'), findsWidgets);
     expect(find.text('الفصل 201'), findsOneWidget);
+
+    final card = tester.widget<MultimediaCard>(find.byType(MultimediaCard));
+    expect(card.episodeBadge, 'الفصل 201');
+    expect(card.subtitle, isNot('الفصل 201'));
+    expect(card.subtitle, contains('منذ'));
 
     await tester.tap(find.text('Solo Leveling').first);
     expect(opened, isTrue);
