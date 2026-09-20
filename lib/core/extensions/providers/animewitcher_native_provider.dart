@@ -187,6 +187,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       'AppleWebKit/537.36 (KHTML, like Gecko) '
       'Chrome/131.0.0.0 Safari/537.36';
 
+  static const List<String> _mangaLekMirrorHosts = <String>[
+    'mangalik.net',
+    'lekmanga.online',
+    'like-manga.net',
+    'lekmanga.site',
+    'manga-leko.site',
+  ];
   static const Duration _httpTimeout = Duration(seconds: 15);
   static const Duration _algoliaConnectTimeout = Duration(milliseconds: 2000);
   static const Duration _algoliaReadTimeout = Duration(milliseconds: 5000);
@@ -2603,39 +2610,64 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     String? referer,
     CancelToken? cancelToken,
   }) async {
-    final uri = safeTryParseUri(url.trim());
-    if (uri == null ||
-        (uri.scheme != 'https' && uri.scheme != 'http') ||
-        uri.host.isEmpty) {
+    final original = safeTryParseUri(url.trim());
+    if (original == null ||
+        (original.scheme != 'https' && original.scheme != 'http') ||
+        original.host.isEmpty) {
       throw StateError('AnimeWitcher Manga source URL is invalid.');
     }
 
-    final response = await _dio.get<dynamic>(
-      uri.toString(),
-      cancelToken: cancelToken,
-      options: Options(
-        responseType: ResponseType.plain,
-        headers: <String, String>{
-          'User-Agent': _userAgent,
-          'Accept': 'text/html,application/xhtml+xml',
-          if (referer != null && referer.isNotEmpty) 'Referer': referer,
-        },
-        connectTimeout: _httpTimeout,
-        receiveTimeout: _httpTimeout,
-        sendTimeout: _httpTimeout,
-        validateStatus: (status) =>
-            status != null && status >= 200 && status < 500,
-      ),
+    Object? lastError;
+    final hosts = <String>[
+      original.host,
+      for (final host in _mangaLekMirrorHosts)
+        if (host != original.host) host,
+    ];
+    for (final host in hosts) {
+      final uri = original.replace(scheme: 'https', host: host);
+      final parsedReferer = referer == null || referer.isEmpty
+          ? null
+          : safeTryParseUri(referer);
+      final effectiveReferer = parsedReferer == null
+          ? 'https://$host/'
+          : parsedReferer.replace(scheme: 'https', host: host).toString();
+      try {
+        final response = await _dio.get<dynamic>(
+          uri.toString(),
+          cancelToken: cancelToken,
+          options: Options(
+            responseType: ResponseType.plain,
+            headers: <String, String>{
+              'User-Agent':
+                  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) '
+                  'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 '
+                  'Mobile/15E148 Safari/604.1',
+              'Accept': 'text/html,application/xhtml+xml',
+              'Referer': effectiveReferer,
+            },
+            connectTimeout: _httpTimeout,
+            receiveTimeout: _httpTimeout,
+            sendTimeout: _httpTimeout,
+            validateStatus: (status) =>
+                status != null && status >= 200 && status < 500,
+          ),
+        );
+        final status = response.statusCode ?? 0;
+        final html = response.data?.toString() ?? '';
+        if (status >= 200 && status < 300 && html.isNotEmpty) {
+          return html;
+        }
+        lastError = StateError(
+          'AnimeWitcher Manga source request failed with status $status.',
+        );
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw StateError(
+      'AnimeWitcher Manga source failed on all mirrors: '
+      '${lastError.runtimeType}.',
     );
-    final status = response.statusCode ?? 0;
-    if (status < 200 || status >= 300) {
-      throw StateError('AnimeWitcher Manga source request failed.');
-    }
-    final html = response.data?.toString() ?? '';
-    if (html.isEmpty) {
-      throw StateError('AnimeWitcher Manga source returned no content.');
-    }
-    return html;
   }
 
   @override
