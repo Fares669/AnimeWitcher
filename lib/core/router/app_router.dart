@@ -144,11 +144,13 @@ class MangaReaderRouteExtra {
     required this.manga,
     required this.chapter,
     required this.chapters,
+    this.localChapterDirectory,
   });
 
   final MultimediaItem manga;
   final MangaChapter chapter;
   final List<MangaChapter> chapters;
+  final String? localChapterDirectory;
 }
 
 class PlayerRouteExtra {
@@ -226,6 +228,7 @@ class MangaReaderRoute extends GoRouteData with $MangaReaderRoute {
       manga: $extra.manga,
       chapter: $extra.chapter,
       chapters: $extra.chapters,
+      localChapterDirectory: $extra.localChapterDirectory,
     );
   }
 }
