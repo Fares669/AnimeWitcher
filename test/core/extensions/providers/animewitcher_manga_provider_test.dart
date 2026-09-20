@@ -374,6 +374,7 @@ void main() {
 <main>
   <article><h2><a href="/manga-one-30-%D9%85%D8%AA%D8%B1%D8%AC%D9%85/">Manga One الفصل 30 مترجم</a></h2></article>
   <article><h2><a href="/manga-one-29-%D9%85%D8%AA%D8%B1%D8%AC%D9%85/">Manga One 29 مترجم</a></h2></article>
+  <a class="next page-numbers" href="/tag/manga-one/page/2/">Next</a>
 </main>
 ''',
               ),
