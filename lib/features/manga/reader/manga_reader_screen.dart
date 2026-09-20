@@ -6,6 +6,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/storage/manga_reading_repository.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import 'manga_reader_controller.dart';
 import 'widgets/manga_paged_reader.dart';
@@ -101,21 +102,13 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
         child: FilledButton.tonalIcon(
           onPressed: _controller.load,
           icon: const Icon(Icons.refresh_rounded),
-          label: Text(
-            Localizations.localeOf(context).languageCode == 'ar'
-                ? 'إعادة المحاولة'
-                : 'Retry',
-          ),
+          label: Text(AppLocalizations.of(context)!.retry),
         ),
       );
     }
     if (_controller.pages.isEmpty) {
       return Center(
-        child: Text(
-          Localizations.localeOf(context).languageCode == 'ar'
-              ? 'لا توجد صفحات'
-              : 'No pages',
-        ),
+        child: Text(AppLocalizations.of(context)!.mangaNoPages),
       );
     }
 
