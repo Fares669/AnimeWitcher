@@ -683,7 +683,9 @@ Future<void> main() async {
   await _probeMangaFacets(credentials);
   await _probeMangaFilterSupport(credentials);
 
-  final supportedSortIndices = <String>[];
+  await _probeAlgoliaIndex('all_animation', credentials);
+
+    final supportedSortIndices = <String>[];
   for (final index in _mangaSortIndices) {
     if (await _probeAlgoliaIndex(index, credentials) != null) {
       supportedSortIndices.add(index);
