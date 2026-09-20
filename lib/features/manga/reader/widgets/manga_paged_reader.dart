@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import 'manga_page_image.dart';
+import 'manga_zoomable_page.dart';
 
 class MangaPagedReader extends StatefulWidget {
   const MangaPagedReader({
@@ -77,9 +78,7 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
         final page = widget.pages[index];
         final custom = widget.pageBuilder;
         if (custom != null) return custom(context, page);
-        return InteractiveViewer(
-          minScale: 1,
-          maxScale: 4,
+        return MangaZoomablePage(
           child: MangaPageImage(
             page: page,
             fit: BoxFit.contain,
