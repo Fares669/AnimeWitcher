@@ -205,29 +205,31 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
   }
 
   List<AppleNativeMenuItem> _domainItems(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     return <AppleNativeMenuItem>[
       AppleNativeMenuItem(
         value: 'anime',
-        label: l10n.searchDomainAnime,
+        label: l10n?.searchDomainAnime ?? (isArabic ? 'أنمي' : 'Anime'),
         systemImage: 'play.rectangle.fill',
         icon: Icons.movie_rounded,
       ),
       AppleNativeMenuItem(
         value: 'animation',
-        label: l10n.searchDomainAnimation,
+        label: l10n?.searchDomainAnimation ?? (isArabic ? 'انميشن' : 'Animation'),
         systemImage: 'sparkles.tv',
         icon: Icons.animation_rounded,
       ),
       AppleNativeMenuItem(
         value: 'manga',
-        label: l10n.searchDomainManga,
+        label: l10n?.searchDomainManga ?? (isArabic ? 'مانجا' : 'Manga'),
         systemImage: 'book.closed.fill',
         icon: Icons.menu_book_rounded,
       ),
       AppleNativeMenuItem(
         value: 'characters',
-        label: l10n.searchDomainCharacters,
+        label: l10n?.searchDomainCharacters ?? (isArabic ? 'شخصيات' : 'Characters'),
         systemImage: 'person.2.fill',
         icon: Icons.groups_rounded,
       ),
