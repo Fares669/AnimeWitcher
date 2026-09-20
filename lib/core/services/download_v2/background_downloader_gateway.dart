@@ -10,6 +10,7 @@ import '../download_parallel.dart';
 import '../persistent_parallel_download.dart';
 import 'download_v2_diagnostics.dart';
 import 'download_v2_models.dart';
+import 'manga_chapter_transport_v2.dart';
 
 /// Package-neutral description of one V2 parent transfer.
 ///
@@ -160,7 +161,7 @@ Set<String> activeDurablePartTaskIdsV2({
 }
 
 final class PackageBackgroundDownloaderGateway
-    implements BackgroundDownloaderGateway {
+    implements BackgroundDownloaderGateway, MangaChapterGatewayV2 {
   PackageBackgroundDownloaderGateway({
     FileDownloader? downloader,
     DownloadNotificationPrefs Function()? notificationPreferences,
@@ -261,6 +262,56 @@ final class PackageBackgroundDownloaderGateway
   /// native queue independently filters children that already exist in URLSession.
   void releaseNativeBackgroundOffersV2() {
     _durableParallel?.releaseNativeBackgroundOffers();
+  }
+
+  @override
+  Future<DownloadTransportHandle> startMangaChapter(
+    MangaChapterTransportSpecV2 spec,
+  ) async {
+    await initialize();
+    final transport = MangaChapterTransportV2(
+      startPage: _startMangaPageTaskV2,
+    );
+    return transport.start(spec);
+  }
+
+  Future<DownloadTransportHandle> _startMangaPageTaskV2(
+    MangaChapterPageTaskV2 page,
+  ) async {
+    await initialize();
+
+    final existing = await attach(page.taskId);
+    if (existing != null &&
+        existing.current.status != DownloadTransportStatus.failed &&
+        existing.current.status != DownloadTransportStatus.canceled &&
+        existing.current.status != DownloadTransportStatus.missing) {
+      return existing;
+    }
+    if (existing != null) {
+      await removeTracking(page.taskId);
+    }
+
+    final prefs = _notificationPreferences();
+    await configurePackageNotificationsV2(_downloader, prefs);
+    final task = await packageTaskForV2(
+      DownloadTaskSpecV2(
+        taskId: page.taskId,
+        url: page.url,
+        destinationPath: page.destinationPath,
+        headers: page.headers,
+        allowPause: true,
+        retries: page.retries,
+        parallelChunks: 1,
+      ),
+      userInitiated: prefs.running,
+      group: prefs.noneEnabled
+          ? kDownloadV2SilentPackageGroup
+          : kDownloadV2PackageGroup,
+      // Manga pages are never parallel/ranged tasks, including on iOS.
+      isIOS: false,
+    );
+    final transfer = await _downloader.transfers.start(task);
+    return _handleFor(transfer);
   }
 
   @override
