@@ -279,6 +279,27 @@ void main() {
     );
   });
 
+  test('chapters use stored source before archive fallback', () async {
+    final stub = _stubDio();
+
+    final chapters = await _provider(stub.dio).getMangaChapters(
+      'https://animewitcher.com/manga/m1',
+    );
+
+    expect(chapters, hasLength(1));
+    expect(chapters.single.name, 'الفصل 1');
+    final chapterRequestIndex = stub.requests.indexWhere(
+      (entry) =>
+          entry.uri.host == 'mangalik.net' &&
+          entry.uri.path == '/manga/manga-one/',
+    );
+    expect(chapterRequestIndex, greaterThanOrEqualTo(0));
+    expect(
+      stub.requests.any((entry) => entry.uri.host == 'manga-leko.net'),
+      isFalse,
+    );
+  });
+
   test('chapters fall back to a MangaLek mirror when stored host fails', () async {
     final stub = _stubDio();
     stub.dio.interceptors.insert(
