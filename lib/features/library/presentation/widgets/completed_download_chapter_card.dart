@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/utils/image_fallbacks.dart';
 import '../../../../core/utils/layout_constants.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 import '../downloads_provider.dart';
 
 class CompletedDownloadChapterCard extends StatelessWidget {
@@ -21,11 +22,10 @@ class CompletedDownloadChapterCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final chapter = item.chapter;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final l10n = AppLocalizations.of(context)!;
     final title = chapter?.name.trim().isNotEmpty == true
         ? chapter!.name.trim()
-        : (isArabic ? 'فصل' : 'Chapter');
+        : l10n.mangaChapterCount(1);
 
     return InkWell(
       onTap: onOpen,
@@ -84,7 +84,7 @@ class CompletedDownloadChapterCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 5),
                       Text(
-                        isArabic ? 'مكتمل' : 'Completed',
+                        l10n.mangaCompleted,
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -95,7 +95,7 @@ class CompletedDownloadChapterCard extends StatelessWidget {
               ),
             ),
             IconButton(
-              tooltip: isArabic ? 'حذف الفصل' : 'Delete chapter',
+              tooltip: l10n.mangaDeleteChapter,
               onPressed: onDelete,
               icon: const Icon(Icons.delete_outline_rounded),
               color: theme.colorScheme.error,
