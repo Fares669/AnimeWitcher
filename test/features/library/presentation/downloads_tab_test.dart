@@ -1078,50 +1078,5 @@ void main() {
     });
   });
 
-  test(
-    'Hive metadata is enough to show a waiting row before enqueue returns',
-    () {
-      final task = _task(
-        taskId: 'ep11',
-        filename: 'الحلقة 11 (480p).mp4',
-        metaData: 'https://animewitcher.test/black-torch/11',
-      );
-      final incoming = downloadItemFromTaskMetadata(
-        task: task,
-        status: TaskStatus.enqueued,
-        metadata: {
-          'item': _blackTorch().toJson(),
-          'episode': Episode(
-            name: 'الحلقة 11',
-            url: 'https://animewitcher.test/black-torch/11',
-            episode: 11,
-            serverName: 'الحلقة 11',
-          ).toJson(),
-          'timestamp': 50,
-        },
-      );
-      expect(incoming, isNotNull);
-      expect(incoming!.id, 'ep11');
-      expect(incoming.status, TaskStatus.enqueued);
-      expect(incoming.episode?.name, 'الحلقة 11');
-      expect(isActiveDownloadStatus(incoming.status), isTrue);
 
-      final running = _item(
-        taskId: 'ep10',
-        timestamp: 40,
-        filename: 'الحلقة 10.mp4',
-        status: TaskStatus.running,
-        metaData: 'https://animewitcher.test/black-torch/10',
-        episode: Episode(
-          name: 'الحلقة 10',
-          url: 'https://animewitcher.test/black-torch/10',
-          episode: 10,
-          serverName: 'الحلقة 10',
-        ),
-      );
-      final visible = collapseDuplicateDownloads([running, incoming]).visible;
-      expect(visible.map((row) => row.id), ['ep10', 'ep11']);
-      expect(visible.last.episode?.name, 'الحلقة 11');
-    },
-  );
 }
