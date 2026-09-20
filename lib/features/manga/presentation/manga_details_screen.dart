@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/domain/entity/manga.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/router/app_router.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/underline_segment_tabs.dart';
 import 'manga_details_controller.dart';
@@ -56,8 +57,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     final state = ref.watch(
       mangaDetailsControllerProvider(widget.item.url),
     );
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final l10n = AppLocalizations.of(context)!;
     final item = state.details.asData?.value ?? state.item ?? widget.item;
 
     return Scaffold(
@@ -68,8 +68,8 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
           isScrollable: false,
           indicatorSize: TabBarIndicatorSize.tab,
           tabs: <Widget>[
-            FilterStyleTab(label: isArabic ? 'التفاصيل' : 'Details'),
-            FilterStyleTab(label: isArabic ? 'الفصول' : 'Chapters'),
+            FilterStyleTab(label: l10n.mangaDetails),
+            FilterStyleTab(label: l10n.chapters),
           ],
         ),
       ),
@@ -210,13 +210,12 @@ class _RetryPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final l10n = AppLocalizations.of(context)!;
     return Center(
       child: FilledButton.tonalIcon(
         onPressed: onRetry,
         icon: const Icon(Icons.refresh_rounded),
-        label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+        label: Text(l10n.retry),
       ),
     );
   }
