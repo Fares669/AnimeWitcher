@@ -21,18 +21,39 @@ void main() {
       expect(source, isNot(contains('FileDownloader().database')));
     });
 
-    test('periodic refresh re-reads the durable V2 store instead of stale cached rows', () {
+    test('one-second progress refresh stays memory-only', () {
       final source = File(
         'lib/features/library/presentation/downloads_provider.dart',
       ).readAsStringSync();
-      final start = source.indexOf('Future<void> _refreshState() async {');
-      final end = source.indexOf('Future<List<DownloadItem>> _refreshList()', start);
+      final start = source.indexOf('void _refreshPresentationState()');
+      final end = source.indexOf('Future<void> _reloadDurableState()', start);
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
+
+      expect(body, isNot(contains('logicalDownloadStoreV2Provider')));
+      expect(body, isNot(contains('getAllDownloadMetadata')));
+      expect(body, contains('_projectList()'));
+    });
+
+    test('slow safety refresh is the only periodic durable scan', () {
+      final source = File(
+        'lib/features/library/presentation/downloads_provider.dart',
+      ).readAsStringSync();
+      expect(
+        source,
+        contains(
+          'static const Duration _durableRefreshInterval = Duration(seconds: 30);',
+        ),
+      );
+      final start = source.indexOf('Future<void> _reloadDurableState()');
+      final end = source.indexOf('List<DownloadItem> _projectList()', start);
       expect(start, greaterThanOrEqualTo(0));
       expect(end, greaterThan(start));
       final body = source.substring(start, end);
 
       expect(body, contains('logicalDownloadStoreV2Provider'));
-      expect(body, contains('.all()'));
+      expect(body, contains('getAllDownloadMetadata'));
     });
 
     test('presentation lifecycle commands route through V2 logical IDs', () {

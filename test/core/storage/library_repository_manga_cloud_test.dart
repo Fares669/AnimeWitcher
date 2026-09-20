@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
@@ -89,6 +91,27 @@ final class _FailingMangaAccountService extends AnimeWitcherAccountService {
   }
 }
 
+final class _DelayedMangaAccountService extends AnimeWitcherAccountService {
+  _DelayedMangaAccountService(StorageService storage)
+    : super(storage: storage, secureStorage: SecureTokenStorage(storage));
+
+  final started = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  bool get isSignedIn => true;
+
+  @override
+  Future<void> saveMangaLibraryItem(
+    MultimediaItem item,
+    LibraryCategory? category, {
+    bool? favorite,
+  }) async {
+    if (!started.isCompleted) started.complete();
+    await release.future;
+  }
+}
+
 void main() {
   final manga = MultimediaItem(
     title: 'Manga',
@@ -97,6 +120,50 @@ void main() {
     contentType: MultimediaContentType.manga,
     provider: AnimeWitcherAccountService.animeWitcherProvider,
   );
+
+  test('manga list state is visible before the cloud write finishes', () async {
+    final storage = _LibraryStorage();
+    final account = _DelayedMangaAccountService(storage);
+    final repository = LibraryRepository(storage, account);
+    var localNotifications = 0;
+
+    final operation = repository.addToLibrary(
+      manga,
+      category: LibraryCategory.watching,
+      onLocalChanged: () => localNotifications += 1,
+    );
+    await account.started.future;
+
+    expect(storage.isInLibrary(manga.url), isTrue);
+    expect(
+      storage.getLibraryItemCategory(manga.url),
+      LibraryCategory.watching.storageKey,
+    );
+    expect(localNotifications, 1);
+
+    account.release.complete();
+    await operation;
+  });
+
+  test('manga favorite state is visible before the cloud write finishes', () async {
+    final storage = _LibraryStorage();
+    final account = _DelayedMangaAccountService(storage);
+    final repository = LibraryRepository(storage, account);
+    var localNotifications = 0;
+
+    final operation = repository.setFavorite(
+      manga,
+      true,
+      onLocalChanged: () => localNotifications += 1,
+    );
+    await account.started.future;
+
+    expect(storage.isLibraryItemFavorite(manga.url), isTrue);
+    expect(localNotifications, 1);
+
+    account.release.complete();
+    await operation;
+  });
 
   test('failed manga cloud add rolls local state back and surfaces error', () async {
     final storage = _LibraryStorage();
