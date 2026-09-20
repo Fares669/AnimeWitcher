@@ -23,7 +23,6 @@ import '../../library/presentation/library_provider.dart';
 import 'manga_details_controller.dart';
 import 'widgets/manga_chapter_list.dart';
 import 'widgets/manga_details_hero.dart';
-import 'widgets/manga_information_section.dart';
 
 class MangaDetailsScreen extends ConsumerStatefulWidget {
   const MangaDetailsScreen({
@@ -589,8 +588,7 @@ class _MangaDetailsTab extends StatelessWidget {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 20),
-                      MangaInformationSection(item: item),
+
                     ],
                   ),
                 ),
