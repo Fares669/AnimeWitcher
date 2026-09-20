@@ -9,6 +9,9 @@ import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../home/presentation/widgets/provider_search_filter_dialog.dart';
+import '../../characters/presentation/character_card.dart';
+import '../../characters/presentation/character_details_screen.dart';
+import 'search_domain.dart';
 import 'search_provider.dart';
 import 'search_text_direction.dart';
 import '../../../l10n/generated/app_localizations.dart';
@@ -180,7 +183,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     setState(() => _isLoadingProviderFilters = true);
     ProviderSearchFilters? selected;
     try {
-      final options = await providers.first.getSearchFilterOptions();
+      final domain = ref.read(searchDomainProvider);
+      if (!domain.capabilities.showFilter) return;
+      final options = switch (domain) {
+        SearchDomain.anime => await providers.first.getSearchFilterOptions(),
+        SearchDomain.manga =>
+          await providers.first.getMangaSearchFilterOptions(),
+        SearchDomain.animation ||
+        SearchDomain.characters => const ProviderSearchFilterOptions(),
+      };
       if (!mounted) return;
       if (options.isEmpty) {
         ref
@@ -278,6 +289,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     };
   }
 
+  void _selectSearchDomain(SearchDomain domain) {
+    if (ref.read(searchDomainProvider) == domain) return;
+    _resetResultsScrollPosition();
+    ref.read(searchDomainProvider.notifier).set(domain);
+  }
+
   void _resetResultsScrollPosition() {
     if (_resultsScrollController.hasClients) {
       _resultsScrollController.jumpTo(0);
@@ -324,6 +341,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final domain = ref.watch(searchDomainProvider);
+    final domainCapabilities = domain.capabilities;
 
     if (isWidescreen) {
       return Scaffold(
@@ -513,6 +532,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         .watch(searchProviderFiltersProvider)
                         .count,
                     isFilterLoading: _isLoadingProviderFilters,
+                    domain: domain,
+                    onDomainSelected: _selectSearchDomain,
+                    showSort: domainCapabilities.showSort,
+                    showFilter: domainCapabilities.showFilter,
                     onSubmitted: _submitSearch,
                     onChanged: (val) {
                       ref
@@ -535,9 +558,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget _buildMobileSearchActionGroup(BuildContext context) {
     final activeFilters = ref.watch(searchProviderFiltersProvider);
     final sortOption = SearchSortOption.fromValue(activeFilters.sort);
+    final domain = ref.watch(searchDomainProvider);
+    final capabilities = domain.capabilities;
 
     return SearchActionButtons(
-      filterCount: activeFilters.count,
+      domain: domain,
+      onDomainSelected: _selectSearchDomain,
+      showSort: capabilities.showSort,
+      showFilter: capabilities.showFilter,
+      filterCount: capabilities.showFilter ? activeFilters.count : 0,
       isFilterLoading: _isLoadingProviderFilters,
       sortValue: activeFilters.sort,
       sortItems: _searchSortMenuItems(context),
@@ -669,7 +698,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     // The chips ride in the bar rather than below it, so they stay put while
     // the results scroll under both.
-    final activeFilterCount = ref.watch(searchProviderFiltersProvider).count;
+    final capabilities = ref.watch(searchDomainProvider).capabilities;
+    final activeFilterCount = capabilities.showFilter
+        ? ref.watch(searchProviderFiltersProvider).count
+        : 0;
     const chipsHeight = 44.0;
     final barExtent =
         MediaQuery.paddingOf(context).top +
@@ -734,15 +766,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     double topInset = 0,
   }) {
     final state = ref.watch(searchPagedResultsProvider);
+    final domain = ref.watch(searchDomainProvider);
     final suggestionState = ref.watch(searchSuggestionControllerProvider);
     final typedLongEnough = suggestionState.query.trim().length >= 2;
     final hasSuggestionContent =
         suggestionState.isLoading || suggestionState.suggestions.isNotEmpty;
-    final showSuggestions = typedLongEnough && hasSuggestionContent;
+    final showSuggestions =
+        domain == SearchDomain.anime &&
+        typedLongEnough &&
+        hasSuggestionContent;
 
     // Only the results scroll, so every other state is simply held clear of
     // the floating controls rather than passing under them.
-    final chips = withFilterChips
+    final chips = withFilterChips && domain.capabilities.showFilter
         ? _ActiveSearchFilterChips(
             filters: ref.watch(searchProviderFiltersProvider),
             onRemove: _removeSearchFilter,
@@ -764,6 +800,97 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     if (showSuggestions) {
       return belowHeader(_buildSuggestionsView(context, suggestionState));
+    }
+
+    if (domain == SearchDomain.characters) {
+      if (state.characters.isEmpty && state.isLoading) {
+        return belowHeader(
+          const AnimeCatalogShimmer(characterCaptionSpace: true),
+        );
+      }
+      if (state.characters.isEmpty && state.errorMessage != null) {
+        return belowHeader(
+          RecoverableNetworkState(
+            onRetry: _retrySearch,
+            onOpenDownloads: () => const DownloadsRoute().go(context),
+          ),
+        );
+      }
+      if (state.characters.isEmpty) {
+        return belowHeader(_buildEmptyState(context));
+      }
+
+      return RepaintBoundary(
+        child: CatalogLtr(
+          child: CustomScrollView(
+            controller: _resultsScrollController,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              SliverToBoxAdapter(child: SizedBox(height: topInset)),
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  MultimediaCardLayout.catalogGridHorizontalPadding(context),
+                  10,
+                  MultimediaCardLayout.catalogGridHorizontalPadding(context),
+                  100,
+                ),
+                sliver: SliverGrid(
+                  gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+                    context,
+                    maxCrossAxisExtent: 140,
+                    childAspectRatio:
+                        MultimediaCardLayout.characterGridAspectRatio,
+                    crossAxisSpacing:
+                        MultimediaCardLayout.catalogGridCrossAxisSpacing(
+                          context,
+                          fallback: 12,
+                        ),
+                    mainAxisSpacing:
+                        MultimediaCardLayout.catalogGridMainAxisSpacing(
+                          context,
+                          fallback: 14,
+                        ),
+                    handsetPortraitCrossAxisCount:
+                        MultimediaCardLayout.handsetPortraitGridColumns,
+                    horizontalPadding:
+                        MultimediaCardLayout.catalogGridHorizontalPadding(
+                          context,
+                        ),
+                  ),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
+                      if (index >= state.characters.length) {
+                        return const AnimePosterShimmer();
+                      }
+                      final character = state.characters[index];
+                      return CharacterPosterCard(
+                        key: ValueKey('search-character-${character.id}'),
+                        character: character,
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => CharacterDetailsScreen(
+                                characterId: character.id,
+                                initialName: character.name,
+                                initialImageUrl: character.imageUrl,
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                    childCount:
+                        state.characters.length +
+                        (state.isLoadingMore
+                            ? MultimediaCardLayout.handsetPortraitGridColumns
+                            : 0),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
     final allResults = state.results.expand((entry) => entry.results).toList();
