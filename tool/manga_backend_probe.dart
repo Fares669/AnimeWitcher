@@ -287,6 +287,84 @@ Future<void> _probeMangaRecencyMetadata(
   }
 }
 
+Future<void> _probeAnimationCapabilities(
+  List<_AlgoliaCredentials> credentials,
+) async {
+  const sortCandidates = <String>[
+    'all_animation',
+    'animation_views_desc',
+    'animation_name_asc',
+    'animation_name_desc',
+    'animation_year_asc',
+    'animation_year_desc',
+  ];
+  final supported = <String>[];
+  for (final index in sortCandidates) {
+    final hit = await _probeAlgoliaIndex(index, credentials);
+    if (hit != null) supported.add(index);
+  }
+  stdout.writeln(
+    'algolia:animation-supported-sort-indices=${supported.join(',')}',
+  );
+
+  for (final candidate in credentials) {
+    try {
+      final first = await _algoliaFirst('all_animation', candidate);
+      if (first == null) continue;
+      final details = _asMap(first['details']);
+      final tagsRaw = first['tags'];
+      final tags = tagsRaw is List
+          ? tagsRaw.map(_text).where((value) => value.isNotEmpty).toList()
+          : const <String>[];
+      final samples = <String, Object?>{
+        'type': first['type'],
+        'statictes': first['statictes'],
+        'details.year': details['year'],
+        'tags': tags.isEmpty ? null : tags.first,
+      };
+      for (final entry in samples.entries) {
+        final value = _text(entry.value);
+        if (value.isEmpty) {
+          stdout.writeln('algolia:animation-filter:${entry.key}=no-sample');
+          continue;
+        }
+        final response = await _dio.post<Object?>(
+          'https://${candidate.appId}-dsn.algolia.net/1/indexes/'
+          'all_animation/query',
+          data: <String, Object?>{
+            'query': '',
+            'hitsPerPage': 1,
+            'page': 0,
+            'filters': '${entry.key}:${jsonEncode(value)}',
+          },
+          options: Options(
+            headers: <String, String>{
+              'X-Algolia-Application-Id': candidate.appId,
+              'X-Algolia-API-Key': candidate.apiKey,
+              'content-type': 'application/json',
+            },
+          ),
+        );
+        final body = response.data;
+        final nbHits = body is Map ? body['nbHits'] : null;
+        final message = body is Map ? _text(body['message']) : '';
+        stdout.writeln(
+          'algolia:animation-filter:${entry.key} '
+          'status=${response.statusCode ?? 0} '
+          'nbHits=${nbHits ?? 'unknown'} '
+          'message=${message.isEmpty ? 'none' : message}',
+        );
+      }
+      return;
+    } catch (error) {
+      stdout.writeln(
+        'algolia:animation-filter-probe via ${candidate.label}: '
+        '${_dioSummary(error)}',
+      );
+    }
+  }
+}
+
 Future<void> _probeMangaFilterSupport(
   List<_AlgoliaCredentials> credentials,
 ) async {
@@ -682,6 +760,7 @@ Future<void> main() async {
   await _probeRecentMangaWindow(credentials);
   await _probeMangaFacets(credentials);
   await _probeMangaFilterSupport(credentials);
+  await _probeAnimationCapabilities(credentials);
 
   await _probeAlgoliaIndex('all_animation', credentials);
 
