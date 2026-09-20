@@ -505,6 +505,35 @@ List<MangaChapter> parseMangaLekArchiveChapters({
   return chapters;
 }
 
+String? parseMangaLekArchiveNextPage({
+  required String html,
+  required String documentUrl,
+}) {
+  final base = Uri.tryParse(documentUrl);
+  if (base == null) return null;
+
+  for (final anchor in RegExp(
+    r'<a\b([^>]*)>(.*?)</a>',
+    caseSensitive: false,
+    dotAll: true,
+  ).allMatches(html)) {
+    final attrs = anchor.group(1) ?? '';
+    final cssClass = _attribute(attrs, 'class').toLowerCase();
+    final rel = _attribute(attrs, 'rel').toLowerCase();
+    final isNext =
+        rel.split(RegExp(r'\s+')).contains('next') ||
+        (cssClass.contains('next') && cssClass.contains('page-numbers'));
+    if (!isNext) continue;
+
+    final href = _attribute(attrs, 'href');
+    if (href.isEmpty) continue;
+    final target = base.resolve(_htmlUnescape.convert(href));
+    if (target.host.isNotEmpty && target.host != base.host) continue;
+    return target.toString();
+  }
+  return null;
+}
+
 /// Parses reader page images from MangaLek/Mangalik `page-break` blocks.
 ///
 /// Page-specific headers stay attached to each page because many image CDNs
