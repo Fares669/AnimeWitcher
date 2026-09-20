@@ -72,6 +72,9 @@ final class _FailingMangaAccountService extends AnimeWitcherAccountService {
     : super(storage: storage, secureStorage: SecureTokenStorage(storage));
 
   @override
+  bool get isSignedIn => true;
+
+  @override
   Future<void> saveMangaLibraryItem(
     MultimediaItem item,
     LibraryCategory? category, {

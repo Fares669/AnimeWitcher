@@ -46,16 +46,28 @@ class LibraryRepository {
       return;
     }
 
+    final previousItem = isManga ? _findItem(item.url) : null;
+    final previousCategory = isManga ? getItemCategory(item.url) : null;
+    final previousFavorite = isManga ? isFavorite(item.url) : false;
+    if (isManga) _requireMangaCloudSession();
+
     await _storageService.addToLibrary(item, category: target.storageKey);
     if (isManga) {
-      _syncInBackground(
-        _accountService.saveMangaLibraryItem(
+      try {
+        await _accountService.saveMangaLibraryItem(
           item,
           target,
           favorite: _storageService.isLibraryItemFavorite(item.url),
-        ),
-        'save manga library item',
-      );
+        );
+      } catch (_) {
+        await _restoreMangaLocal(
+          item: previousItem ?? item,
+          existed: previousItem != null,
+          category: previousCategory,
+          favorite: previousFavorite,
+        );
+        rethrow;
+      }
       return;
     }
     _syncInBackground(
@@ -89,16 +101,27 @@ class LibraryRepository {
         item.isNotYetAired) {
       return;
     }
+    final previousCategory = isManga ? getItemCategory(url) : null;
+    final previousFavorite = isManga ? isFavorite(url) : false;
+    if (isManga) _requireMangaCloudSession();
+
     await _storageService.setLibraryItemCategory(url, category.storageKey);
     if (item != null && isManga) {
-      _syncInBackground(
-        _accountService.saveMangaLibraryItem(
+      try {
+        await _accountService.saveMangaLibraryItem(
           item,
           category,
           favorite: _storageService.isLibraryItemFavorite(url),
-        ),
-        'move manga library item',
-      );
+        );
+      } catch (_) {
+        await _restoreMangaLocal(
+          item: item,
+          existed: true,
+          category: previousCategory,
+          favorite: previousFavorite,
+        );
+        rethrow;
+      }
       return;
     }
     if (item != null) {
@@ -116,19 +139,31 @@ class LibraryRepository {
   Future<void> clearCategory(String url) async {
     final item = _findItem(url);
     final favorite = _storageService.isLibraryItemFavorite(url);
+    final previousCategory = getItemCategory(url);
+    final isManga = item?.contentType == MultimediaContentType.manga;
+    if (isManga) _requireMangaCloudSession();
+
     await _storageService.setLibraryItemCategory(url, null);
     if (item == null) return;
-    if (item.contentType == MultimediaContentType.manga) {
-      if (favorite) {
-        _syncInBackground(
-          _accountService.saveMangaLibraryItem(item, null, favorite: true),
-          'clear manga library category',
+    if (isManga) {
+      try {
+        if (favorite) {
+          await _accountService.saveMangaLibraryItem(
+            item,
+            null,
+            favorite: true,
+          );
+        } else {
+          await _accountService.removeMangaLibraryItem(url);
+        }
+      } catch (_) {
+        await _restoreMangaLocal(
+          item: item,
+          existed: true,
+          category: previousCategory,
+          favorite: favorite,
         );
-      } else {
-        _syncInBackground(
-          _accountService.removeMangaLibraryItem(url),
-          'remove manga library item',
-        );
+        rethrow;
       }
       return;
     }
@@ -147,22 +182,31 @@ class LibraryRepository {
 
   Future<void> setFavorite(MultimediaItem item, bool favorite) async {
     final category = getItemCategory(item.url);
+    final isManga = item.contentType == MultimediaContentType.manga;
+    final previousItem = isManga ? _findItem(item.url) : null;
+    final previousFavorite = isManga ? isFavorite(item.url) : false;
+    if (isManga) _requireMangaCloudSession();
+
     await _storageService.addToLibrary(item, favorite: favorite);
-    if (item.contentType == MultimediaContentType.manga) {
-      if (!favorite && category == null) {
-        _syncInBackground(
-          _accountService.removeMangaLibraryItem(item.url),
-          'remove favorite-only manga item',
-        );
-      } else {
-        _syncInBackground(
-          _accountService.saveMangaLibraryItem(
+    if (isManga) {
+      try {
+        if (!favorite && category == null) {
+          await _accountService.removeMangaLibraryItem(item.url);
+        } else {
+          await _accountService.saveMangaLibraryItem(
             item,
             category,
             favorite: favorite,
-          ),
-          favorite ? 'save manga favorite' : 'remove manga favorite',
+          );
+        }
+      } catch (_) {
+        await _restoreMangaLocal(
+          item: previousItem ?? item,
+          existed: previousItem != null,
+          category: category,
+          favorite: previousFavorite,
         );
+        rethrow;
       }
       return;
     }
@@ -181,12 +225,24 @@ class LibraryRepository {
 
   Future<void> removeFromLibrary(String url) async {
     final item = _findItem(url);
+    final isManga = item?.contentType == MultimediaContentType.manga;
+    final previousCategory = isManga ? getItemCategory(url) : null;
+    final previousFavorite = isManga ? isFavorite(url) : false;
+    if (isManga) _requireMangaCloudSession();
+
     await _storageService.removeFromLibrary(url);
-    if (item?.contentType == MultimediaContentType.manga) {
-      _syncInBackground(
-        _accountService.removeMangaLibraryItem(url),
-        'remove manga library item',
-      );
+    if (item != null && isManga) {
+      try {
+        await _accountService.removeMangaLibraryItem(url);
+      } catch (_) {
+        await _restoreMangaLocal(
+          item: item,
+          existed: true,
+          category: previousCategory,
+          favorite: previousFavorite,
+        );
+        rethrow;
+      }
       return;
     }
     _syncInBackground(
@@ -233,6 +289,32 @@ class LibraryRepository {
       if (item.url == url) return item;
     }
     return null;
+  }
+
+  void _requireMangaCloudSession() {
+    if (!_accountService.isSignedIn) {
+      throw StateError(
+        'AnimeWitcher account is required for Manga library mutations.',
+      );
+    }
+  }
+
+  Future<void> _restoreMangaLocal({
+    required MultimediaItem item,
+    required bool existed,
+    required LibraryCategory? category,
+    required bool favorite,
+  }) async {
+    if (!existed) {
+      await _storageService.removeFromLibrary(item.url);
+      return;
+    }
+    await _storageService.addToLibrary(
+      item,
+      category: category?.storageKey,
+      replaceCategory: true,
+      favorite: favorite,
+    );
   }
 
   void _syncInBackground(Future<void> operation, String label) {
