@@ -9,8 +9,10 @@ import '../../features/library/presentation/downloads_screen.dart';
 import '../../features/more/presentation/more_screen.dart';
 import '../../features/details/presentation/details_screen.dart';
 import '../../features/manga/presentation/manga_details_screen.dart';
+import '../../features/manga/reader/manga_reader_screen.dart';
 import '../../features/player/presentation/player_screen.dart';
 import '../../features/home/presentation/view_all_screen.dart';
+import '../domain/entity/manga.dart';
 import '../domain/entity/multimedia_item.dart';
 import '../../shared/widgets/app_scaffold.dart';
 import '../storage/settings_repository.dart';
@@ -137,6 +139,18 @@ class MangaDetailsRouteExtra {
   final MultimediaItem item;
 }
 
+class MangaReaderRouteExtra {
+  const MangaReaderRouteExtra({
+    required this.manga,
+    required this.chapter,
+    required this.chapters,
+  });
+
+  final MultimediaItem manga;
+  final MangaChapter chapter;
+  final List<MangaChapter> chapters;
+}
+
 class PlayerRouteExtra {
   const PlayerRouteExtra({
     required this.item,
@@ -197,6 +211,22 @@ class MangaDetailsRoute extends GoRouteData with $MangaDetailsRoute {
   @override
   Widget build(BuildContext context, GoRouterState state) {
     return MangaDetailsScreen(item: $extra.item);
+  }
+}
+
+@TypedGoRoute<MangaReaderRoute>(path: '/manga-reader')
+class MangaReaderRoute extends GoRouteData with $MangaReaderRoute {
+  const MangaReaderRoute({required this.$extra});
+
+  final MangaReaderRouteExtra $extra;
+
+  @override
+  Widget build(BuildContext context, GoRouterState state) {
+    return MangaReaderScreen(
+      manga: $extra.manga,
+      chapter: $extra.chapter,
+      chapters: $extra.chapters,
+    );
   }
 }
 
