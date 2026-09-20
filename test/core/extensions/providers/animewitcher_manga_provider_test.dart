@@ -441,6 +441,7 @@ void main() {
 
   test('chapters and pages use AnimeWitcher Firestore hierarchy first', () async {
     final stub = _stubDio();
+    Map? chapterStructuredQuery;
     stub.dio.interceptors.insert(
       0,
       InterceptorsWrapper(
@@ -460,6 +461,7 @@ void main() {
 
           if (options.uri.path.endsWith('/documents/manga_list/m1:runQuery') &&
               collectionId == 'chapters') {
+            chapterStructuredQuery = query is Map ? Map.from(query) : null;
             handler.resolve(
               Response<dynamic>(
                 requestOptions: options,
@@ -541,21 +543,8 @@ void main() {
     expect(chapters.single.id, 'c77');
     expect(chapters.single.name, 'الفصل 77.5');
     expect(chapters.single.number, 77.5);
-    final chapterQuery = stub.requests.singleWhere((entry) {
-      if (!entry.uri.path.endsWith('/documents/manga_list/m1:runQuery')) {
-        return false;
-      }
-      final body = entry.data;
-      final query = body is Map ? body['structuredQuery'] : null;
-      final from = query is Map ? query['from'] : null;
-      final firstFrom = from is List && from.isNotEmpty ? from.first : null;
-      return firstFrom is Map && firstFrom['collectionId'] == 'chapters';
-    });
-    final chapterQueryBody = chapterQuery.data as Map;
-    expect(
-      (chapterQueryBody['structuredQuery'] as Map).containsKey('orderBy'),
-      isFalse,
-    );
+    expect(chapterStructuredQuery, isNotNull);
+    expect(chapterStructuredQuery!.containsKey('orderBy'), isFalse);
 
     final pages = await provider.getMangaChapterPages(
       'https://animewitcher.com/manga/m1',
