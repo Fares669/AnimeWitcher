@@ -28,6 +28,7 @@ class LibraryRepository {
   Future<void> addToLibrary(
     MultimediaItem item, {
     LibraryCategory? category,
+    VoidCallback? onLocalChanged,
   }) async {
     final target = category ?? getSelectedCategory();
     if (target == LibraryCategory.favorite) {
@@ -52,6 +53,7 @@ class LibraryRepository {
     if (isManga) _requireMangaCloudSession();
 
     await _storageService.addToLibrary(item, category: target.storageKey);
+    onLocalChanged?.call();
     if (isManga) {
       try {
         await _accountService.saveMangaLibraryItem(
@@ -66,6 +68,7 @@ class LibraryRepository {
           category: previousCategory,
           favorite: previousFavorite,
         );
+        onLocalChanged?.call();
         rethrow;
       }
       return;
@@ -80,7 +83,11 @@ class LibraryRepository {
     );
   }
 
-  Future<void> moveToCategory(String url, LibraryCategory category) async {
+  Future<void> moveToCategory(
+    String url,
+    LibraryCategory category, {
+    VoidCallback? onLocalChanged,
+  }) async {
     if (category == LibraryCategory.favorite) {
       final item = _findItem(url);
       if (item != null) await setFavorite(item, true);
@@ -106,6 +113,7 @@ class LibraryRepository {
     if (isManga) _requireMangaCloudSession();
 
     await _storageService.setLibraryItemCategory(url, category.storageKey);
+    onLocalChanged?.call();
     if (item != null && isManga) {
       try {
         await _accountService.saveMangaLibraryItem(
@@ -120,6 +128,7 @@ class LibraryRepository {
           category: previousCategory,
           favorite: previousFavorite,
         );
+        onLocalChanged?.call();
         rethrow;
       }
       return;
@@ -136,7 +145,10 @@ class LibraryRepository {
     }
   }
 
-  Future<void> clearCategory(String url) async {
+  Future<void> clearCategory(
+    String url, {
+    VoidCallback? onLocalChanged,
+  }) async {
     final item = _findItem(url);
     final favorite = _storageService.isLibraryItemFavorite(url);
     final previousCategory = getItemCategory(url);
@@ -144,6 +156,7 @@ class LibraryRepository {
     if (isManga) _requireMangaCloudSession();
 
     await _storageService.setLibraryItemCategory(url, null);
+    onLocalChanged?.call();
     if (item == null) return;
     if (isManga) {
       try {
@@ -163,6 +176,7 @@ class LibraryRepository {
           category: previousCategory,
           favorite: favorite,
         );
+        onLocalChanged?.call();
         rethrow;
       }
       return;
@@ -180,7 +194,11 @@ class LibraryRepository {
     }
   }
 
-  Future<void> setFavorite(MultimediaItem item, bool favorite) async {
+  Future<void> setFavorite(
+    MultimediaItem item,
+    bool favorite, {
+    VoidCallback? onLocalChanged,
+  }) async {
     final category = getItemCategory(item.url);
     final isManga = item.contentType == MultimediaContentType.manga;
     final previousItem = isManga ? _findItem(item.url) : null;
@@ -188,6 +206,7 @@ class LibraryRepository {
     if (isManga) _requireMangaCloudSession();
 
     await _storageService.addToLibrary(item, favorite: favorite);
+    onLocalChanged?.call();
     if (isManga) {
       try {
         if (!favorite && category == null) {
@@ -206,6 +225,7 @@ class LibraryRepository {
           category: category,
           favorite: previousFavorite,
         );
+        onLocalChanged?.call();
         rethrow;
       }
       return;
@@ -223,7 +243,10 @@ class LibraryRepository {
     );
   }
 
-  Future<void> removeFromLibrary(String url) async {
+  Future<void> removeFromLibrary(
+    String url, {
+    VoidCallback? onLocalChanged,
+  }) async {
     final item = _findItem(url);
     final isManga = item?.contentType == MultimediaContentType.manga;
     final previousCategory = isManga ? getItemCategory(url) : null;
@@ -231,6 +254,7 @@ class LibraryRepository {
     if (isManga) _requireMangaCloudSession();
 
     await _storageService.removeFromLibrary(url);
+    onLocalChanged?.call();
     if (item != null && isManga) {
       try {
         await _accountService.removeMangaLibraryItem(url);
@@ -241,6 +265,7 @@ class LibraryRepository {
           category: previousCategory,
           favorite: previousFavorite,
         );
+        onLocalChanged?.call();
         rethrow;
       }
       return;

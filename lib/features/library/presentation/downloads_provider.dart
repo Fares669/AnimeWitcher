@@ -215,11 +215,17 @@ CollapsedDownloads collapseDuplicateDownloads(List<DownloadItem> items) {
 @Riverpod(keepAlive: true)
 class DownloadsNotifier extends _$DownloadsNotifier {
   static const Duration _refreshInterval = Duration(seconds: 1);
+  static const Duration _durableRefreshInterval = Duration(seconds: 30);
 
   final Set<String> _deletingIds = <String>{};
+  final Set<String> _artworkScheduledIds = <String>{};
   List<LogicalDownloadRecordV2> _records = const <LogicalDownloadRecordV2>[];
+  Map<String, Map<String, dynamic>> _metadataByTaskId =
+      const <String, Map<String, dynamic>>{};
   StreamSubscription<List<LogicalDownloadRecordV2>>? _recordsSubscription;
   Timer? _refreshTimer;
+  Timer? _durableRefreshTimer;
+  Future<void>? _durableReloadInFlight;
 
   @override
   Future<List<DownloadItem>> build() async {
@@ -227,34 +233,67 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     await manager.initialize();
 
     _records = await ref.read(logicalDownloadStoreV2Provider).all();
+    _metadataByTaskId = await ref
+        .read(storageServiceProvider)
+        .getAllDownloadMetadata();
+
     _recordsSubscription = manager.records.listen((records) {
       _records = records;
-      unawaited(_refreshState());
+      unawaited(_reloadMetadataAndRefresh());
     });
+
+    // Progress is ephemeral manager state. Project it from memory every second;
+    // do not scan both Hive boxes on the UI isolate for every progress tick.
     _refreshTimer = Timer.periodic(_refreshInterval, (_) {
-      unawaited(_refreshState());
+      _refreshPresentationState();
+    });
+    // Keep a much slower durable reconciliation as a lifecycle/race safety net.
+    _durableRefreshTimer = Timer.periodic(_durableRefreshInterval, (_) {
+      unawaited(_reloadDurableState());
     });
 
     ref.onDispose(() {
       unawaited(_recordsSubscription?.cancel());
       _refreshTimer?.cancel();
+      _durableRefreshTimer?.cancel();
     });
 
-    return _refreshList();
+    return _projectList();
   }
 
-  Future<void> _refreshState() async {
-    // The timer is the safety net for presentation. Re-read durable V2 truth
-    // instead of repeatedly projecting a cached list if a stream notification
-    // was missed during a lifecycle/subscription race.
-    _records = await ref.read(logicalDownloadStoreV2Provider).all();
-    state = AsyncData(await _refreshList());
+  void _refreshPresentationState() {
+    state = AsyncData(_projectList());
   }
 
-  Future<List<DownloadItem>> _refreshList() async {
+  Future<void> _reloadMetadataAndRefresh() async {
+    _metadataByTaskId = await ref
+        .read(storageServiceProvider)
+        .getAllDownloadMetadata();
+    _refreshPresentationState();
+  }
+
+  Future<void> _reloadDurableState() {
+    final existing = _durableReloadInFlight;
+    if (existing != null) return existing;
+
+    final task = () async {
+      _records = await ref.read(logicalDownloadStoreV2Provider).all();
+      _metadataByTaskId = await ref
+          .read(storageServiceProvider)
+          .getAllDownloadMetadata();
+      _refreshPresentationState();
+    }();
+    _durableReloadInFlight = task;
+    return task.whenComplete(() {
+      if (identical(_durableReloadInFlight, task)) {
+        _durableReloadInFlight = null;
+      }
+    });
+  }
+
+  List<DownloadItem> _projectList() {
     final manager = ref.read(downloadManagerV2Provider);
-    final storage = ref.read(storageServiceProvider);
-    final metadataByTaskId = await storage.getAllDownloadMetadata();
+    final metadataByTaskId = _metadataByTaskId;
     final metadataByLogicalId = <String, Map<String, dynamic>>{};
 
     for (final metadata in metadataByTaskId.values) {
@@ -318,7 +357,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       );
       items.add(projected);
       if (projected.status == TaskStatus.complete &&
-          projected.mediaKind == DownloadMediaKind.videoEpisode) {
+          projected.mediaKind == DownloadMediaKind.videoEpisode &&
+          _artworkScheduledIds.add(projected.id)) {
         unawaited(
           ensureDownloadedEpisodeArtwork(
             taskId: projected.id,
@@ -327,7 +367,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         );
       }
     }
-
 
     items.removeWhere((item) => _deletingIds.contains(item.id));
     items.sort((a, b) => a.timestamp.compareTo(b.timestamp));
@@ -405,7 +444,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
     await ref.read(downloadManagerV2Provider).pause(DownloadLogicalId(logical));
-    await _refreshState();
+    await _reloadDurableState();
   }
 
   Future<void> resumeDownload(String taskId) async {
@@ -413,7 +452,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
     await ref.read(downloadManagerV2Provider).resume(DownloadLogicalId(logical));
-    await _refreshState();
+    await _reloadDurableState();
   }
 }
 

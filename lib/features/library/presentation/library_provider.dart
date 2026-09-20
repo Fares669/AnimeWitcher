@@ -72,6 +72,7 @@ class Library extends _$Library {
     await repository.addToLibrary(
       item,
       category: category ?? state.category,
+      onLocalChanged: refresh,
     );
     refresh();
   }
@@ -79,14 +80,21 @@ class Library extends _$Library {
   Future<void> clearItemCategory(String url, {bool manga = false}) async {
     _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
-    await repository.clearCategory(url);
+    await repository.clearCategory(
+      url,
+      onLocalChanged: refresh,
+    );
     refresh();
   }
 
   Future<void> setFavorite(MultimediaItem item, bool favorite) async {
     _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
-    await repository.setFavorite(item, favorite);
+    await repository.setFavorite(
+      item,
+      favorite,
+      onLocalChanged: refresh,
+    );
     refresh();
   }
 
