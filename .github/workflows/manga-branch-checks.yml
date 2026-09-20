@@ -49,7 +49,10 @@ jobs:
       - name: Manga chapter transport RED/GREEN tests
         run: |
           flutter test test/core/services/download_v2/manga_chapter_transport_v2_test.dart \
-            test/core/services/download_v2/download_manager_v2_manga_test.dart -r expanded
+            test/core/services/download_v2/download_manager_v2_manga_test.dart \
+            test/core/services/download_v2/background_downloader_gateway_manga_test.dart \
+            test/core/services/download_v2/download_manager_v2_manga_completion_test.dart \
+            test/features/manga/presentation/manga_download_request_test.dart -r expanded
 
       - name: Full Download V2 regression
         run: flutter test test/core/services/download_v2 -r expanded
