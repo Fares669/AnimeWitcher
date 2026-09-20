@@ -153,6 +153,23 @@ ${isB ? 'الفصل 30' : 'الفصل 20'}
           );
           return;
         }
+        if (options.uri.host == 'lekmanga.online' &&
+            options.uri.path == '/manga/manga-one/') {
+          handler.resolve(
+            Response<dynamic>(
+              requestOptions: options,
+              statusCode: 200,
+              data: '''
+<ul>
+<li class="wp-manga-chapter">
+<a href="/manga/manga-one/chapter-9/">الفصل 9</a>
+</li>
+</ul>
+''',
+            ),
+          );
+          return;
+        }
         if (options.uri.host == 'mangalik.net' &&
             options.uri.path == '/manga/manga-one/') {
           handler.resolve(
@@ -258,6 +275,40 @@ void main() {
         final params = body is Map ? body['params']?.toString() ?? '' : '';
         return params.contains('lastmodified');
       }),
+      isTrue,
+    );
+  });
+
+  test('chapters fall back to a MangaLek mirror when stored host fails', () async {
+    final stub = _stubDio();
+    stub.dio.interceptors.insert(
+      0,
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (options.uri.host == 'mangalik.net' &&
+              options.uri.path == '/manga/manga-one/') {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 503,
+                data: 'temporarily unavailable',
+              ),
+            );
+            return;
+          }
+          handler.next(options);
+        },
+      ),
+    );
+
+    final chapters = await _provider(stub.dio).getMangaChapters(
+      'https://animewitcher.com/manga/m1',
+    );
+
+    expect(chapters, hasLength(1));
+    expect(chapters.single.name, 'الفصل 9');
+    expect(
+      stub.requests.any((entry) => entry.uri.host == 'lekmanga.online'),
       isTrue,
     );
   });
