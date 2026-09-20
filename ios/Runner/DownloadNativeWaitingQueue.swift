@@ -716,14 +716,12 @@ enum DownloadNativeWaitingQueue {
   }
 
   static func canRecreateBackgroundDownload(
-    isMultipartPart: Bool,
     receivedBytes: Int64,
     hasResumeData: Bool
   ) -> Bool {
-    // Reissuing an immutable multipart Range only loses that one child's
-    // volatile prefix. For a full-file transfer, do not silently throw away
-    // already-downloaded bytes unless Apple gave us resumeData.
-    hasResumeData || isMultipartPart || receivedBytes <= 0
+    // Full-file retries must not silently throw away downloaded bytes unless
+    // Apple supplied resumeData.
+    hasResumeData || receivedBytes <= 0
   }
 
   static func noteBackgroundRetryProgress(_ task: URLSessionTask) {
@@ -790,12 +788,12 @@ enum DownloadNativeWaitingQueue {
 
     let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
     let hasResumeData = !(resumeData?.isEmpty ?? true)
-    let multipartPart = isLegacyMultipartPart(task)
-    if isDownloadPart(task) && !multipartPart {
+    // Multipart Range retries are owned by V2/Dart. Native only refills
+    // generation-fenced zero-byte candidates while Flutter is suspended.
+    if isDownloadPart(task) {
       return false
     }
     guard canRecreateBackgroundDownload(
-      isMultipartPart: multipartPart,
       receivedBytes: task.countOfBytesReceived,
       hasResumeData: hasResumeData
     ) else {
@@ -1435,8 +1433,8 @@ enum DownloadNativeWaitingQueue {
   /// body still lives in Apple's temporary file. Dart cannot stat that file,
   /// which is why polling only `0.part`/`1.part` updated in whole-part jumps.
   /// A persisted multipart plan is explicit permission to refill a finished
-  /// URLSession slot while Dart is suspended. It does not grant the legacy
-  /// native retry path ownership over V2 transport failures.
+  /// URLSession slot while Dart is suspended. It does not grant native retry
+  /// ownership over V2 transport failures.
   private static func ownsPromotableMultipartParent(_ parentId: String) -> Bool {
     lock.lock()
     defer { lock.unlock() }
@@ -1456,17 +1454,12 @@ enum DownloadNativeWaitingQueue {
   }
 
   /// A Range can be promoted only when Dart persisted a generation-fenced
-  /// plan for its parent. V2 children are intentionally excluded from the
-  /// legacy retry owner: transient failures return to the V2 coordinator.
+  /// plan for its parent. Transient failures return to the V2 coordinator.
   private static func isPromotableMultipartPart(_ task: URLSessionTask) -> Bool {
     guard isDownloadPart(task),
           let parentId = parentTaskId(from: task)
     else { return false }
     return ownsPromotableMultipartParent(parentId)
-  }
-
-  private static func isLegacyMultipartPart(_ task: URLSessionTask) -> Bool {
-    return isPromotableMultipartPart(task) && !isV2DurableMultipartPart(task)
   }
 
   private static func isObservableMultipartParent(_ parentId: String) -> Bool {
@@ -2158,7 +2151,7 @@ enum DownloadNativeWaitingQueue {
     let id = task.taskId
     guard !id.isEmpty else { return }
 
-    // Observation is independent from legacy native promotion capability.
+    // Observation is independent from native promotion capability.
     // V2 child metrics leave background_downloader as the sole transport owner.
     if postV2ParallelChunkMetric(
       task: task,
