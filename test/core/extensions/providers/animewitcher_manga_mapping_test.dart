@@ -41,6 +41,19 @@ void main() {
     expect(item.syncData?['englishTitle'], 'Solo Leveling');
   });
 
+  test('removes AnimeWitcher manga sort marker from visible title', () {
+    final item = mapAnimeWitcherMangaHit(<String, Object?>{
+      'objectID': 'm-bang',
+      'name': '!Shadow Of The Reborn Rogue’s Dominion',
+      'type': 'مانهوا',
+      'poster_uri': 'https://img.example/bang.webp',
+      'mangalek_page_url':
+          'https://mangalik.net/manga/shadow-of-the-reborn-rogues-dominion/',
+    });
+
+    expect(item.title, 'Shadow Of The Reborn Rogue’s Dominion');
+  });
+
   test('maps localized Firestore text without map syntax leaking to UI', () {
     final item = mapAnimeWitcherMangaHit(<String, Object?>{
       'objectID': 'm-localized',
