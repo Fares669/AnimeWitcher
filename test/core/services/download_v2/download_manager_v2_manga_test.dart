@@ -318,29 +318,49 @@ final class _Gateway
 }
 
 final class _Handle implements DownloadTransportHandle {
-  _Handle(this.taskId);
+  _Handle(this.taskId)
+      : _current = DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.running,
+          progress: 0,
+        );
 
   @override
   final String taskId;
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast();
+  DownloadTransportSnapshot _current;
 
   @override
-  DownloadTransportSnapshot get current => DownloadTransportSnapshot(
-    taskId: taskId,
-    status: DownloadTransportStatus.running,
-    progress: 0,
-  );
+  DownloadTransportSnapshot get current => _current;
 
   @override
   Stream<DownloadTransportSnapshot> get snapshots => _controller.stream;
 
-  @override
-  Future<bool> pause() async => true;
+  void _emit(DownloadTransportStatus status) {
+    _current = DownloadTransportSnapshot(
+      taskId: taskId,
+      status: status,
+      progress: 0,
+    );
+    _controller.add(_current);
+  }
 
   @override
-  Future<bool> resume() async => true;
+  Future<bool> pause() async {
+    _emit(DownloadTransportStatus.paused);
+    return true;
+  }
 
   @override
-  Future<bool> cancel() async => true;
+  Future<bool> resume() async {
+    _emit(DownloadTransportStatus.running);
+    return true;
+  }
+
+  @override
+  Future<bool> cancel() async {
+    _emit(DownloadTransportStatus.canceled);
+    return true;
+  }
 }
