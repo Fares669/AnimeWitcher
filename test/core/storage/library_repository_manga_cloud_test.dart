@@ -87,7 +87,7 @@ final class _FailingMangaAccountService extends AnimeWitcherAccountService {
 }
 
 void main() {
-  const manga = MultimediaItem(
+  final manga = MultimediaItem(
     title: 'Manga',
     url: 'https://animewitcher.com/manga/m1',
     posterUrl: '',
