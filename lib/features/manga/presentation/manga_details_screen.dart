@@ -297,7 +297,6 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
       child: FilterStyleTabBar(
         controller: _tabs,
         isScrollable: false,
-        indicatorSize: TabBarIndicatorSize.tab,
         tabs: <Widget>[
           FilterStyleTab(
             icon: Icons.info_outline_rounded,

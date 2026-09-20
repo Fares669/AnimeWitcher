@@ -56,7 +56,9 @@ class SearchActionButtons extends StatefulWidget {
   static double groupWidthForHeight(
     double height, {
     int visibleControls = 2,
-  }) => height * visibleControls;
+  }) =>
+      height * visibleControls +
+      (appleUsesPersistentLiquidGlassHeader && visibleControls > 0 ? 32 : 0);
 
   @override
   State<SearchActionButtons> createState() => _SearchActionButtonsState();
@@ -93,7 +95,11 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
       visibleControls: visibleControls,
     );
 
-    final controls = <Widget>[
+    final native = appleUsesPersistentLiquidGlassHeader;
+    final badge = widget.showFilter && widget.filterCount > 0
+        ? SearchFilterBadge(count: widget.filterCount)
+        : null;
+    final fallbackControls = <Widget>[
       if (hasDomain) _buildDomainControl(tint),
       if (widget.showSort) _buildSortControl(tint),
       if (widget.showFilter)
@@ -121,26 +127,83 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
         curve: Curves.easeOutCubic,
         child: Directionality(
           textDirection: TextDirection.ltr,
-          child: AppleLiquidGlassSurface(
-            borderRadius: BorderRadius.circular(height / 2),
-            interactive: true,
-            fallbackColor: Theme.of(context)
-                .colorScheme
-                .surfaceContainerHighest
-                .withValues(alpha: 0.5),
-            fallbackBorder: BorderSide(
-              color: Theme.of(context)
-                  .colorScheme
-                  .onSurfaceVariant
-                  .withValues(alpha: 0.12),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                for (final control in controls) Expanded(child: control),
-              ],
-            ),
-          ),
+          child: native
+              ? Stack(
+                  children: <Widget>[
+                    AppleLiquidGlassActionGroup(
+                      height: height,
+                      captureGestures: true,
+                      children: <Widget>[
+                        if (hasDomain)
+                          AppleLiquidGlassToolbarButton(
+                            icon: _domainIcon(widget.domain!),
+                            systemImage: _domainSystemImage(widget.domain!),
+                            tooltip: widget.domainTooltip,
+                            color: tint,
+                            menuTintColor: tint,
+                            menuItems: _domainItems(context),
+                            selectedMenuValue: widget.domain!.name,
+                            onMenuSelected: _onDomainMenuSelected,
+                            onPressed: () {},
+                            width: height,
+                          ),
+                        if (widget.showSort)
+                          AppleLiquidGlassToolbarButton(
+                            icon: widget.sortIcon,
+                            systemImage: widget.sortSystemImage,
+                            tooltip: widget.sortTooltip,
+                            color: tint,
+                            menuTintColor: tint,
+                            menuItems: widget.sortItems,
+                            selectedMenuValue: widget.sortValue,
+                            onMenuSelected: widget.onSortSelected,
+                            onPressed: () {},
+                            width: height,
+                          ),
+                        if (widget.showFilter)
+                          AppleLiquidGlassToolbarButton(
+                            icon: Icons.tune_rounded,
+                            systemImage: widget.isFilterLoading
+                                ? 'hourglass'
+                                : 'slider.horizontal.3',
+                            tooltip: widget.filterTooltip,
+                            color: tint,
+                            onPressed: widget.isFilterLoading
+                                ? null
+                                : widget.onFilterPressed,
+                            width: height,
+                          ),
+                      ],
+                    ),
+                    if (badge != null)
+                      Positioned(
+                        top: 2,
+                        right: 14,
+                        child: IgnorePointer(child: badge),
+                      ),
+                  ],
+                )
+              : AppleLiquidGlassSurface(
+                  borderRadius: BorderRadius.circular(height / 2),
+                  interactive: true,
+                  fallbackColor: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest
+                      .withValues(alpha: 0.5),
+                  fallbackBorder: BorderSide(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurfaceVariant
+                        .withValues(alpha: 0.12),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      for (final control in fallbackControls)
+                        Expanded(child: control),
+                    ],
+                  ),
+                ),
         ),
       ),
     );
@@ -183,6 +246,13 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
     SearchDomain.animation => Icons.animation_rounded,
     SearchDomain.manga => Icons.menu_book_rounded,
     SearchDomain.characters => Icons.groups_rounded,
+  };
+
+  String _domainSystemImage(SearchDomain domain) => switch (domain) {
+    SearchDomain.anime => 'play.rectangle.fill',
+    SearchDomain.animation => 'sparkles.tv',
+    SearchDomain.manga => 'book.closed.fill',
+    SearchDomain.characters => 'person.2.fill',
   };
 
   void _onDomainMenuSelected(String value) {

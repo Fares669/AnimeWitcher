@@ -51,14 +51,26 @@ void main() {
       expect(find.byType(UiKitView), findsOneWidget);
       expect(find.byType(AppleLiquidGlassActionGroup), findsOneWidget);
       final glass = tester.widget<UiKitView>(find.byType(UiKitView));
-      expect(glass.viewType, 'com.animewitcher.app/liquid_glass');
+      expect(glass.viewType, 'com.animewitcher.app/native_toolbar');
       expect(
         tester.getSize(find.byKey(const ValueKey('search-action-capsule'))).width,
-        SearchGlassSurface.height * 3,
+        SearchActionButtons.groupWidthForHeight(
+          SearchGlassSurface.height,
+          visibleControls: 3,
+        ),
       );
-      expect(find.byTooltip('Search domain'), findsOneWidget);
-      expect(find.byTooltip('Sort'), findsOneWidget);
-      expect(find.byTooltip('Filters'), findsOneWidget);
+      final group = tester.widget<AppleLiquidGlassActionGroup>(
+        find.byType(AppleLiquidGlassActionGroup),
+      );
+      final buttons = group.children.cast<AppleLiquidGlassToolbarButton>().toList();
+      expect(buttons, hasLength(3));
+      expect(buttons.map((button) => button.tooltip), <String?>[
+        'Search domain',
+        'Sort',
+        'Filters',
+      ]);
+      expect(buttons.first.menuItems, hasLength(4));
+      expect(buttons.first.selectedMenuValue, 'anime');
       expect(find.text('3'), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
