@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 
 class MangaChapterList extends StatelessWidget {
   const MangaChapterList({
@@ -16,12 +17,9 @@ class MangaChapterList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     if (chapters.isEmpty) {
-      final isArabic =
-          Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-      return Center(
-        child: Text(isArabic ? 'لا توجد فصول' : 'No chapters'),
-      );
+      return Center(child: Text(l10n.mangaNoChapters));
     }
 
     return ListView.separated(
@@ -50,10 +48,7 @@ class MangaChapterList extends StatelessWidget {
           trailing: onDownload == null
               ? null
               : IconButton(
-                  tooltip:
-                      Localizations.localeOf(context).languageCode == 'ar'
-                      ? 'تنزيل الفصل'
-                      : 'Download chapter',
+                  tooltip: l10n.mangaDownloadChapter,
                   onPressed: () => onDownload!(chapter),
                   icon: const Icon(Icons.download_rounded),
                 ),
