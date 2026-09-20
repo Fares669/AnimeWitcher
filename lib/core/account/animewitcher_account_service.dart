@@ -1459,6 +1459,58 @@ class AnimeWitcherAccountService {
     });
   }
 
+  Future<int?> loadMangaUserRating(String mangaId) async {
+    final id = mangaId.trim();
+    final profile = _profile;
+    if (id.isEmpty || profile == null || _session == null) return null;
+    final document = await _authenticated(
+      (token) => _firestore.getDocument(
+        animeWitcherMangaRatingPath(id, profile.documentId),
+        token,
+      ),
+    );
+    return _ratingValue(document?.fields['rate']);
+  }
+
+  Future<int?> saveMangaUserRating(String mangaId, int rate) async {
+    final id = mangaId.trim();
+    if (id.isEmpty) {
+      throw const AnimeWitcherAccountException(
+        'invalid-manga',
+        'Manga id is missing.',
+      );
+    }
+    if (rate < 1 || rate > 10) {
+      throw const AnimeWitcherAccountException(
+        'invalid-rating',
+        'Rating must be an integer from 1 to 10.',
+      );
+    }
+    final profile = _requireSignedInProfile();
+    final path = animeWitcherMangaRatingPath(id, profile.documentId);
+    await _authenticated(
+      (token) => _firestore.setDocument(
+        path,
+        <String, dynamic>{'rate': rate},
+        token,
+        merge: true,
+      ),
+    );
+    return rate;
+  }
+
+  Future<void> clearMangaUserRating(String mangaId) async {
+    final id = mangaId.trim();
+    if (id.isEmpty) return;
+    final profile = _requireSignedInProfile();
+    final path = animeWitcherMangaRatingPath(id, profile.documentId);
+    await _authenticated((token) async {
+      final existing = await _firestore.getDocument(path, token);
+      if (existing == null) return;
+      await _firestore.deleteDocument(path, token);
+    });
+  }
+
   Future<bool> isAnimeReviewsClosed(String animeId) async {
     final id = animeId.trim();
     if (id.isEmpty) return false;
