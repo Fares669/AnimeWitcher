@@ -138,7 +138,7 @@ bool reservesDownloadSlot({
   }
 }
 
-/// Waiting rows may be stored paused (legacy Dart park) so the Downloads tab
+/// Waiting rows may be stored paused so the Downloads tab
 /// must keep the existing **في الانتظار...** (`enqueued`) label. Native
 /// holding-queue waiters are already [TaskStatus.enqueued]. A live transfer
 /// always wins: `queueWaiting` must not hide **جارٍ التنزيل...**.
