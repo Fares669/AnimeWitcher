@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/storage/library_category.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../shared/widgets/apple_liquid_glass.dart';
 import '../library_provider.dart';
 import '../library_media_kind.dart';
@@ -44,17 +45,14 @@ class _LibraryCategorySelectorState
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     if (widget.mediaKind == LibraryMediaKind.manga) {
+      final l10n = AppLocalizations.of(context)!;
       return switch (category) {
         LibraryCategory.favorite => isArabic ? 'المفضلة' : 'Favorites',
-        LibraryCategory.watching => isArabic ? 'أقرأها حاليًا' : 'Reading',
-        LibraryCategory.continueLater =>
-          isArabic ? 'أكملها لاحقًا' : 'Continue Later',
-        LibraryCategory.planToWatch =>
-          isArabic ? 'أرغب بقراءتها' : 'Plan to Read',
-        LibraryCategory.completed =>
-          isArabic ? 'تمت قراءتها' : 'Completed Reading',
-        LibraryCategory.notInterested =>
-          isArabic ? 'لا أرغب بقراءتها' : 'Not Interested',
+        LibraryCategory.watching => l10n.mangaReadingNow,
+        LibraryCategory.continueLater => l10n.mangaContinueLater,
+        LibraryCategory.planToWatch => l10n.mangaPlanToRead,
+        LibraryCategory.completed => l10n.mangaCompletedReading,
+        LibraryCategory.notInterested => l10n.mangaNotInterested,
       };
     }
     return switch (category) {
