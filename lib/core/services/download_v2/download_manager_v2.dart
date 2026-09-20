@@ -659,7 +659,7 @@ final class DownloadManagerV2 {
               );
             }
 
-            if (!await _hasAdmissionSlot(excluding: logicalId, mediaKind: record.mediaKind)) {
+            if (!await _hasAdmissionSlot(excluding: logicalId)) {
               final waitingRecord = record.copyWith(
                 intent: DownloadUserIntent.active,
                 awaitingAdmission: true,
@@ -736,7 +736,7 @@ final class DownloadManagerV2 {
                   'Canonical destination is already owned by ${conflict.logicalId}',
                 );
               }
-              if (!await _hasAdmissionSlot(excluding: logicalId, mediaKind: record.mediaKind)) {
+              if (!await _hasAdmissionSlot(excluding: logicalId)) {
                 final waitingRecord = record.copyWith(
                   intent: DownloadUserIntent.active,
                   awaitingAdmission: true,
@@ -920,7 +920,7 @@ final class DownloadManagerV2 {
           );
         }
 
-        if (!await _hasAdmissionSlot(excluding: request.logicalId, mediaKind: request.mediaKind)) {
+        if (!await _hasAdmissionSlot(excluding: request.logicalId)) {
           return _queueFreshGenerationUnsafe(
             request,
             previous,
@@ -1021,13 +1021,9 @@ final class DownloadManagerV2 {
     return queued;
   }
 
-  Future<bool> _hasAdmissionSlot({
-    DownloadLogicalId? excluding,
-    DownloadMediaKind? mediaKind,
-  }) async {
+  Future<bool> _hasAdmissionSlot({DownloadLogicalId? excluding}) async {
     final limit = clampDownloadConcurrency(_maxConcurrentDownloads());
     var occupied = 0;
-    var activeMangaChapters = 0;
     for (final record in await _store.all()) {
       if (record.logicalId == excluding ||
           record.intent != DownloadUserIntent.active ||
@@ -1043,17 +1039,8 @@ final class DownloadManagerV2 {
           snapshot.status == DownloadTransportStatus.held ||
           snapshot.status == DownloadTransportStatus.paused;
       if (!reservesSlot) continue;
-
       occupied++;
-      if (record.mediaKind == DownloadMediaKind.mangaChapter) {
-        activeMangaChapters++;
-      }
-
       if (occupied >= limit) return false;
-      if (mediaKind == DownloadMediaKind.mangaChapter &&
-          activeMangaChapters >= 1) {
-        return false;
-      }
     }
     return true;
   }
@@ -1097,7 +1084,7 @@ final class DownloadManagerV2 {
               if (latest == null ||
                   latest.intent != DownloadUserIntent.active ||
                   !latest.awaitingAdmission ||
-                  !await _hasAdmissionSlot(excluding: latest.logicalId, mediaKind: latest.mediaKind)) {
+                  !await _hasAdmissionSlot(excluding: latest.logicalId)) {
                 return false;
               }
 
