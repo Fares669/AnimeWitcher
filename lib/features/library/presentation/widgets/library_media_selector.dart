@@ -102,11 +102,15 @@ class LibraryMediaSelector extends StatelessWidget {
             children: [
               Icon(_icon(selected), color: color, size: 21),
               const SizedBox(width: 7),
-              Text(
-                _label(context, selected),
-                style: TextStyle(
-                  color: color,
-                  fontWeight: FontWeight.w700,
+              Flexible(
+                child: Text(
+                  _label(context, selected),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
               const SizedBox(width: 2),
