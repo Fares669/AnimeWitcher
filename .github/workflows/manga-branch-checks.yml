@@ -36,5 +36,9 @@ jobs:
             test/core/extensions/providers/animewitcher_manga_mapping_test.dart \
             test/core/extensions/providers/animewitcher_manga_provider_test.dart -r expanded
 
+      - name: Search domain RED/GREEN tests
+        run: |
+          flutter test test/features/search/presentation/search_domain_test.dart -r expanded
+
       - name: Probe AnimeWitcher Manga backend
         run: dart run tool/manga_backend_probe.dart
