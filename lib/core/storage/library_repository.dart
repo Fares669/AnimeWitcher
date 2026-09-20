@@ -32,7 +32,11 @@ class LibraryRepository {
   }) async {
     final target = category ?? getSelectedCategory();
     if (target == LibraryCategory.favorite) {
-      await setFavorite(item, true);
+      await setFavorite(
+        item,
+        true,
+        onLocalChanged: onLocalChanged,
+      );
       return;
     }
     final isManga = item.contentType == MultimediaContentType.manga;
@@ -90,7 +94,13 @@ class LibraryRepository {
   }) async {
     if (category == LibraryCategory.favorite) {
       final item = _findItem(url);
-      if (item != null) await setFavorite(item, true);
+      if (item != null) {
+        await setFavorite(
+          item,
+          true,
+          onLocalChanged: onLocalChanged,
+        );
+      }
       return;
     }
 
