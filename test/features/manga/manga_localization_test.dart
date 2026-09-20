@@ -8,7 +8,7 @@ void main() {
     expect(l10n.manga, 'مانجا');
     expect(l10n.manhwa, 'مانهوا');
     expect(l10n.chapters, 'الفصول');
-    expect(l10n.latestChapters, 'أحدث الفصول');
+    expect(l10n.latestChapters, 'فصول جديدة');
     expect(l10n.mangaDetails, 'التفاصيل');
     expect(l10n.mangaNoChapters, 'لا توجد فصول');
     expect(l10n.mangaNoPages, 'لا توجد صفحات');
