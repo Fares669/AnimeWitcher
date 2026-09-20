@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
 import 'background_downloader_gateway.dart';
@@ -61,15 +62,29 @@ abstract interface class MangaChapterGatewayV2 {
 typedef MangaChapterPageStarterV2 =
     Future<DownloadTransportHandle> Function(MangaChapterPageTaskV2 task);
 
+typedef MangaChapterDirectoryResolverV2 =
+    Future<Directory> Function(String path);
+
+Future<Directory> resolveMangaChapterDirectoryV2(String rawPath) async {
+  if (p.isAbsolute(rawPath)) return Directory(rawPath);
+  final documents = await getApplicationDocumentsDirectory();
+  return Directory(p.join(documents.path, rawPath));
+}
+
 final class MangaChapterTransportV2 {
-  const MangaChapterTransportV2({required this.startPage});
+  MangaChapterTransportV2({
+    required this.startPage,
+    MangaChapterDirectoryResolverV2? resolveDirectory,
+  }) : resolveDirectory =
+           resolveDirectory ?? resolveMangaChapterDirectoryV2;
 
   final MangaChapterPageStarterV2 startPage;
+  final MangaChapterDirectoryResolverV2 resolveDirectory;
 
   Future<DownloadTransportHandle> start(
     MangaChapterTransportSpecV2 spec,
   ) async {
-    final directory = Directory(spec.destinationDirectory);
+    final directory = await resolveDirectory(spec.destinationDirectory);
     await directory.create(recursive: true);
 
     var manifest = await MangaChapterManifestV2.readFrom(directory);
