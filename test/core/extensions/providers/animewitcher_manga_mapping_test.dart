@@ -127,6 +127,14 @@ void main() {
         'https://manga-leko.net/shadow-of-the-reborn-rogues-dominion-30-',
       ),
     );
+    expect(
+      parseMangaLekArchiveNextPage(
+        html: html,
+        documentUrl:
+            'https://manga-leko.net/tag/shadow-of-the-reborn-rogues-dominion/',
+      ),
+      'https://manga-leko.net/tag/shadow-of-the-reborn-rogues-dominion/page/2/',
+    );
   });
 
   test('parses WordPress chapter article images without site chrome', () {
