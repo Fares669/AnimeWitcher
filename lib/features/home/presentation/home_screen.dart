@@ -13,6 +13,7 @@ import 'package:animewitcher/features/library/presentation/history_provider.dart
 
 import 'widgets/home_hero_carousel.dart';
 import 'widgets/home_hero_layout.dart';
+import 'widgets/latest_manga_chapters_section.dart';
 import 'widgets/media_horizontal_list.dart';
 import 'view_all_screen.dart';
 import '../../../shared/widgets/loading_indicator.dart';
@@ -286,7 +287,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       ),
       HomeOffline() => _buildErrorState(context, ref),
       HomeError() => _buildErrorState(context, ref),
-      HomeSuccess(:final data, :final news) => _withGradientEdgeHint(
+      HomeSuccess(:final data, :final news, :final latestManga) => _withGradientEdgeHint(
         MouseDragRefreshIndicator(
           onRefresh: () async {
             await Future.wait<void>([
@@ -323,6 +324,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     title: l10n.continueWatching,
                     items: continueWatching,
                     topPadding: isWidescreen ? 0 : null,
+                  ),
+                ),
+
+              if (latestManga.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: LatestMangaChaptersSection(
+                    title: Localizations.localeOf(context).languageCode == 'ar'
+                        ? 'أحدث الفصول'
+                        : 'Latest chapters',
+                    items: latestManga,
+                    onTap: (entry) {
+                      MangaDetailsRoute(
+                        $extra: MangaDetailsRouteExtra(item: entry.manga),
+                      ).push<void>(context);
+                    },
                   ),
                 ),
 
