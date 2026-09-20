@@ -2325,6 +2325,29 @@ abstract class AppLocalizations {
   /// In ar, this message translates to:
   /// **'التالي'**
   String get upNext;
+
+  String get manga;
+  String get manhwa;
+  String get chapters;
+  String get latestChapters;
+  String get mangaDetails;
+  String get mangaNoChapters;
+  String get mangaNoPages;
+  String get mangaDownloadChapter;
+  String get mangaDeleteChapter;
+  String get mangaCompleted;
+  String get mangaLibraryType;
+  String get mangaReadingNow;
+  String get mangaContinueLater;
+  String get mangaPlanToRead;
+  String get mangaCompletedReading;
+  String get mangaNotInterested;
+  String get searchDomainAnime;
+  String get searchDomainAnimation;
+  String get searchDomainManga;
+  String get searchDomainCharacters;
+  String get searchDomainTooltip;
+  String mangaChapterCount(int count);
 }
 
 class _AppLocalizationsDelegate
