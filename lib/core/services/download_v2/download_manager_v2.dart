@@ -980,9 +980,10 @@ final class DownloadManagerV2 {
 
     final generation = (previous?.generation ?? 0) + 1;
     final taskId = taskIdForGeneration(request.logicalId, generation);
-    final parallelChunks = effectivePackageParallelChunksV2(
-      request.parallelChunks,
-    );
+    final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
+    final parallelChunks = isManga
+        ? 1
+        : effectivePackageParallelChunksV2(request.parallelChunks);
     final queuedRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
       logicalId: request.logicalId,
@@ -1012,6 +1013,8 @@ final class DownloadManagerV2 {
       progress: 0,
       totalBytes: request.expectedBytes,
       transferredBytes: request.expectedBytes == null ? null : 0,
+      configuredConnections: isManga ? 1 : null,
+      activeConnections: isManga ? 0 : null,
     );
     _snapshots[request.logicalId] = queued;
     _recordDiagnostic(request.logicalId, queued);
