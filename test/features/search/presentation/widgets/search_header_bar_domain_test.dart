@@ -5,6 +5,8 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final class _IdleSearchNotifier extends PagedSearchNotifier {
@@ -13,6 +15,78 @@ final class _IdleSearchNotifier extends PagedSearchNotifier {
 }
 
 void main() {
+  testWidgets('iOS three-action glass keeps the same 34pt trailing coordinate', (
+    tester,
+  ) async {
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform_views,
+      (_) async => null,
+    );
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await tester.binding.setSurfaceSize(const Size(428, 300));
+    addTearDown(() async {
+      debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform_views,
+        null,
+      );
+    });
+
+    final controller = TextEditingController();
+    final searchFocus = FocusNode();
+    final clearFocus = FocusNode();
+    addTearDown(controller.dispose);
+    addTearDown(searchFocus.dispose);
+    addTearDown(clearFocus.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          searchPagedResultsProvider.overrideWith(_IdleSearchNotifier.new),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: SearchHeaderBar(
+              textController: controller,
+              searchFocusNode: searchFocus,
+              clearButtonFocusNode: clearFocus,
+              onSubmitted: (_) {},
+              onChanged: (_) {},
+              onShowFilters: () {},
+              onSortSelected: (_) {},
+              sortValue: 'favorites',
+              sortItems: const <AppleNativeMenuItem>[
+                AppleNativeMenuItem(
+                  value: 'favorites',
+                  label: 'Favorites',
+                  systemImage: 'star.fill',
+                ),
+              ],
+              sortIcon: Icons.star_rounded,
+              sortSystemImage: 'star.fill',
+              sortTooltip: 'Sort',
+              activeFilterCount: 0,
+              isFilterLoading: false,
+              domain: SearchDomain.anime,
+              onDomainSelected: (_) {},
+              showSort: true,
+              showFilter: true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final actionRect = tester.getRect(
+      find.byKey(const ValueKey('search-action-capsule')),
+    );
+    expect(428 - actionRect.right, 34);
+  });
+
   testWidgets('character search header keeps only the domain action', (
     tester,
   ) async {
