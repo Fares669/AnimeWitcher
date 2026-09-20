@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:html_unescape/html_unescape.dart';
 
 import '../../account/animewitcher_character_models.dart';
+import '../../domain/entity/manga.dart';
 import '../../domain/entity/multimedia_item.dart';
 import '../../network/bounded_batch_scheduler.dart';
 import '../../network/next_airing_timeout.dart';
@@ -15,6 +16,7 @@ import '../../utils/episode_label.dart';
 import '../../utils/artwork_host_fallback.dart';
 import '../../utils/safe_uri.dart';
 import '../base_provider.dart';
+import 'animewitcher_manga_mapping.dart';
 import 'mediafire_utils.dart';
 import 'server_extraction_utils.dart';
 
@@ -145,6 +147,15 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   final Map<String, DateTime> _detailSourceExpiresAt = <String, DateTime>{};
   final Map<String, Future<Map<String, dynamic>>> _detailSourceRequests =
       <String, Future<Map<String, dynamic>>>{};
+  final Map<String, MultimediaItem> _mangaDetailsCache =
+      <String, MultimediaItem>{};
+  final Map<String, DateTime> _mangaDetailsExpiresAt = <String, DateTime>{};
+  final Map<String, List<MangaChapter>> _mangaChapterCache =
+      <String, List<MangaChapter>>{};
+  final Map<String, DateTime> _mangaChapterExpiresAt = <String, DateTime>{};
+  final Map<String, List<MangaPage>> _mangaPageCache =
+      <String, List<MangaPage>>{};
+  final Map<String, DateTime> _mangaPageExpiresAt = <String, DateTime>{};
   final Map<String, List<_EpisodeRecord>> _episodeRecordCache =
       <String, List<_EpisodeRecord>>{};
   final Map<String, DateTime> _episodeRecordExpiresAt = <String, DateTime>{};
@@ -229,6 +240,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   @override
   Set<ProviderType> get supportedTypes => const <ProviderType>{
     ProviderType.anime,
+    ProviderType.manga,
     ProviderType.movie,
   };
 
@@ -2456,6 +2468,183 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       nextOffset: (pageNumber + 1) * safeLimit,
       hasMore: hasMore,
     );
+  }
+
+  String _mangaSearchIndexForSort(String sort) {
+    // The live September 2026 backend currently exposes only this Manga sort
+    // index. Keep unsupported sort values on the verified index instead of
+    // issuing guaranteed-failing requests to stale APK-era replicas.
+    return 'manga_views_desc';
+  }
+
+  @override
+  Future<ProviderMediaPage> searchMangaPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = 30,
+    CancelToken? cancelToken,
+  }) async {
+    await _refreshRemoteConstants();
+    if (!_isSearchActive) {
+      throw const AnimeWitcherSearchDisabledException('لا يوجد بيانات');
+    }
+
+    final safeLimit = limit.clamp(10, 50).toInt();
+    final safeOffset = offset < 0 ? 0 : offset;
+    final pageNumber = safeOffset ~/ safeLimit;
+    final payload = await _algoliaQuery(
+      _mangaSearchIndexForSort(filters.sort),
+      query: query.trim(),
+      page: pageNumber,
+      hitsPerPage: safeLimit,
+      cancelToken: cancelToken,
+      throwOnFailure: true,
+    );
+    final rawHits = _list(payload['hits']);
+    final items = <MultimediaItem>[];
+    final seen = <String>{};
+    for (final raw in rawHits) {
+      final source = _map(raw);
+      if (source.isEmpty) continue;
+      final item = mapAnimeWitcherMangaHit(source);
+      if (item.title.isEmpty || item.url.endsWith('/manga/')) continue;
+      if (seen.add(item.url)) items.add(item);
+    }
+
+    final nbPages = int.tryParse(_text(payload['nbPages'])) ?? 0;
+    final hasMore = nbPages > 0
+        ? pageNumber + 1 < nbPages
+        : rawHits.length >= safeLimit;
+    return ProviderMediaPage(
+      items: items,
+      nextOffset: (pageNumber + 1) * safeLimit,
+      hasMore: hasMore,
+    );
+  }
+
+  String _mangaIdFromUrl(String url) {
+    final uri = safeTryParseUri(url.trim());
+    if (uri == null || uri.pathSegments.isEmpty) return '';
+    final segments = uri.pathSegments.where((value) => value.isNotEmpty).toList();
+    if (segments.length < 2 || segments[segments.length - 2] != 'manga') {
+      return '';
+    }
+    return segments.last.trim();
+  }
+
+  @override
+  Future<MultimediaItem> getMangaDetails(String url) async {
+    final id = _mangaIdFromUrl(url);
+    if (id.isEmpty) {
+      throw StateError('AnimeWitcher Manga id is missing.');
+    }
+
+    final cached = _mangaDetailsCache[id];
+    if (cached != null &&
+        _mangaDetailsExpiresAt[id]?.isAfter(DateTime.now()) == true) {
+      return cached;
+    }
+
+    final fields = await _firestoreDocumentFields('manga_list/$id');
+    if (fields.isEmpty) {
+      throw StateError('AnimeWitcher Manga was not found.');
+    }
+    final item = mapAnimeWitcherMangaHit(
+      <String, Object?>{'objectID': id, ...fields},
+    );
+    _mangaDetailsCache[id] = item;
+    _mangaDetailsExpiresAt[id] = DateTime.now().add(_detailDataTtl);
+    return item;
+  }
+
+  Future<String> _mangaHtml(
+    String url, {
+    String? referer,
+    CancelToken? cancelToken,
+  }) async {
+    final uri = safeTryParseUri(url.trim());
+    if (uri == null ||
+        (uri.scheme != 'https' && uri.scheme != 'http') ||
+        uri.host.isEmpty) {
+      throw StateError('AnimeWitcher Manga source URL is invalid.');
+    }
+
+    final response = await _dio.get<dynamic>(
+      uri.toString(),
+      cancelToken: cancelToken,
+      options: Options(
+        responseType: ResponseType.plain,
+        headers: <String, String>{
+          'User-Agent': _userAgent,
+          'Accept': 'text/html,application/xhtml+xml',
+          if (referer != null && referer.isNotEmpty) 'Referer': referer,
+        },
+        connectTimeout: _httpTimeout,
+        receiveTimeout: _httpTimeout,
+        sendTimeout: _httpTimeout,
+        validateStatus: (status) =>
+            status != null && status >= 200 && status < 500,
+      ),
+    );
+    final status = response.statusCode ?? 0;
+    if (status < 200 || status >= 300) {
+      throw StateError('AnimeWitcher Manga source request failed.');
+    }
+    final html = response.data?.toString() ?? '';
+    if (html.isEmpty) {
+      throw StateError('AnimeWitcher Manga source returned no content.');
+    }
+    return html;
+  }
+
+  @override
+  Future<List<MangaChapter>> getMangaChapters(String url) async {
+    final details = await getMangaDetails(url);
+    final mangaId = details.syncData?['mangaId']?.trim() ?? '';
+    final sourceUrl = details.syncData?['mangalekPageUrl']?.trim() ?? '';
+    if (mangaId.isEmpty || sourceUrl.isEmpty) {
+      return const <MangaChapter>[];
+    }
+
+    final cached = _mangaChapterCache[mangaId];
+    if (cached != null &&
+        _mangaChapterExpiresAt[mangaId]?.isAfter(DateTime.now()) == true) {
+      return List<MangaChapter>.unmodifiable(cached);
+    }
+
+    final html = await _mangaHtml(sourceUrl);
+    final chapters = parseMangaLekChapters(
+      html: html,
+      mangaId: mangaId,
+      documentUrl: sourceUrl,
+    );
+    _mangaChapterCache[mangaId] = chapters;
+    _mangaChapterExpiresAt[mangaId] = DateTime.now().add(_episodeDataTtl);
+    return List<MangaChapter>.unmodifiable(chapters);
+  }
+
+  @override
+  Future<List<MangaPage>> getMangaChapterPages(
+    String mangaUrl,
+    MangaChapter chapter,
+  ) async {
+    final key = chapter.url.trim();
+    if (key.isEmpty) return const <MangaPage>[];
+
+    final cached = _mangaPageCache[key];
+    if (cached != null &&
+        _mangaPageExpiresAt[key]?.isAfter(DateTime.now()) == true) {
+      return List<MangaPage>.unmodifiable(cached);
+    }
+
+    final details = await getMangaDetails(mangaUrl);
+    final referer = details.syncData?['mangalekPageUrl'];
+    final html = await _mangaHtml(key, referer: referer);
+    final pages = parseMangaLekPages(html: html, chapterUrl: key);
+    _mangaPageCache[key] = pages;
+    _mangaPageExpiresAt[key] = DateTime.now().add(_episodeDataTtl);
+    return List<MangaPage>.unmodifiable(pages);
   }
 
   _OfficialHomeSection _officialHomeSection(dynamic raw) {
