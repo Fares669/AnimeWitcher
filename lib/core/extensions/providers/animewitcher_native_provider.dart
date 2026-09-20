@@ -2801,12 +2801,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         'from': const <Map<String, dynamic>>[
           <String, dynamic>{'collectionId': 'chapters'},
         ],
-        'orderBy': const <Map<String, dynamic>>[
-          <String, dynamic>{
-            'field': <String, dynamic>{'fieldPath': 'doc_id'},
-            'direction': 'DESCENDING',
-          },
-        ],
       },
       parent: 'manga_list/$mangaId',
     );
@@ -2817,6 +2811,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       if (chapter == null || !seen.add(chapter.id)) continue;
       chapters.add(chapter);
     }
+    chapters.sort((a, b) {
+      final byNumber = (b.number ?? double.negativeInfinity).compareTo(
+        a.number ?? double.negativeInfinity,
+      );
+      if (byNumber != 0) return byNumber;
+      return b.name.compareTo(a.name);
+    });
     return List<MangaChapter>.unmodifiable(chapters);
   }
 

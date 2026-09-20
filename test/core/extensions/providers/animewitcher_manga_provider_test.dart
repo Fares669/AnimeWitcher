@@ -471,7 +471,7 @@ void main() {
                           'projects/animewitcher-1c66d/databases/(default)/documents/manga_list/m1/chapters/c77',
                       'fields': <String, dynamic>{
                         'doc_id': _stringField('77'),
-                        'name': _stringField('الفصل 77'),
+                        'name': _stringField('الفصل 77.5'),
                         'thumb_uri': _stringField(
                           'https://img.example/ch77.webp',
                         ),
@@ -539,8 +539,23 @@ void main() {
 
     expect(chapters, hasLength(1));
     expect(chapters.single.id, 'c77');
-    expect(chapters.single.name, 'الفصل 77');
-    expect(chapters.single.number, 77);
+    expect(chapters.single.name, 'الفصل 77.5');
+    expect(chapters.single.number, 77.5);
+    final chapterQuery = stub.requests.singleWhere((entry) {
+      if (!entry.uri.path.endsWith('/documents/manga_list/m1:runQuery')) {
+        return false;
+      }
+      final body = entry.data;
+      final query = body is Map ? body['structuredQuery'] : null;
+      final from = query is Map ? query['from'] : null;
+      final firstFrom = from is List && from.isNotEmpty ? from.first : null;
+      return firstFrom is Map && firstFrom['collectionId'] == 'chapters';
+    });
+    final chapterQueryBody = chapterQuery.data as Map;
+    expect(
+      (chapterQueryBody['structuredQuery'] as Map).containsKey('orderBy'),
+      isFalse,
+    );
 
     final pages = await provider.getMangaChapterPages(
       'https://animewitcher.com/manga/m1',
