@@ -22,6 +22,47 @@ String _mangaPathSegment(String value) {
   return encoded.replaceAll('=', '');
 }
 
+MultimediaItem mergeMangaDetails({
+  required MultimediaItem base,
+  required MultimediaItem incoming,
+}) {
+  final mergedSync = <String, String>{
+    ...?base.syncData,
+    ...?incoming.syncData,
+  };
+  final incomingTags = incoming.tags;
+  return MultimediaItem(
+    title: incoming.title.trim().isEmpty ? base.title : incoming.title,
+    url: incoming.url.trim().isEmpty ? base.url : incoming.url,
+    posterUrl: incoming.posterUrl.trim().isEmpty
+        ? base.posterUrl
+        : incoming.posterUrl,
+    fullPosterUrl: incoming.fullPosterUrl ?? base.fullPosterUrl,
+    bannerUrl: incoming.bannerUrl ?? base.bannerUrl,
+    logoUrl: incoming.logoUrl ?? base.logoUrl,
+    description: (incoming.description ?? '').trim().isEmpty
+        ? base.description
+        : incoming.description,
+    contentType: MultimediaContentType.manga,
+    provider: incoming.provider ?? base.provider,
+    headers: incoming.headers ?? base.headers,
+    year: incoming.year ?? base.year,
+    score: incoming.score ?? base.score,
+    status: incoming.status,
+    tags: incomingTags == null || incomingTags.isEmpty
+        ? base.tags
+        : incomingTags,
+    contentRating: incoming.contentRating ?? base.contentRating,
+    syncData: mergedSync.isEmpty ? null : mergedSync,
+    tmdbId: incoming.tmdbId ?? base.tmdbId,
+    imdbId: incoming.imdbId ?? base.imdbId,
+    source: incoming.source ?? base.source,
+    catalogType: incoming.catalogType ?? base.catalogType,
+    publishedAt: incoming.publishedAt ?? base.publishedAt,
+    isDubbed: incoming.isDubbed || base.isDubbed,
+  );
+}
+
 DownloadStartRequestV2 mangaChapterDownloadRequest(
   MultimediaItem manga,
   MangaChapter chapter,
@@ -147,10 +188,11 @@ class MangaDetailsController extends _$MangaDetailsController {
   ) async {
     try {
       final fetched = await provider.getMangaDetails(item.url);
+      final merged = mergeMangaDetails(base: item, incoming: fetched);
       if (!ref.mounted) return;
       state = state.copyWith(
-        item: fetched,
-        details: AsyncData<MultimediaItem?>(fetched),
+        item: merged,
+        details: AsyncData<MultimediaItem?>(merged),
       );
     } catch (error, stackTrace) {
       if (!ref.mounted) return;
