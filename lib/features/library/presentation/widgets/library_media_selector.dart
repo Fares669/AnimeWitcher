@@ -15,10 +15,14 @@ class LibraryMediaSelector extends StatelessWidget {
   final ValueChanged<LibraryMediaKind> onSelected;
 
   String _label(BuildContext context, LibraryMediaKind kind) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     return switch (kind) {
-      LibraryMediaKind.anime => l10n.searchDomainAnime,
-      LibraryMediaKind.manga => l10n.manga,
+      LibraryMediaKind.anime =>
+        l10n?.searchDomainAnime ?? (isArabic ? 'أنمي' : 'Anime'),
+      LibraryMediaKind.manga =>
+        l10n?.manga ?? (isArabic ? 'مانجا' : 'Manga'),
     };
   }
 
@@ -34,7 +38,11 @@ class LibraryMediaSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tooltip = AppLocalizations.of(context)!.mangaLibraryType;
+    final l10n = AppLocalizations.of(context);
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final tooltip =
+        l10n?.mangaLibraryType ?? (isArabic ? 'نوع المكتبة' : 'Library type');
     final color = Theme.of(context).colorScheme.primary;
     final items = <AppleNativeMenuItem>[
       for (final kind in LibraryMediaKind.values)
