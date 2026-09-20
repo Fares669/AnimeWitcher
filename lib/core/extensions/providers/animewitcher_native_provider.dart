@@ -2872,6 +2872,18 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         mapper: (item) async {
           final sourceUrl = item.syncData!['mangalekPageUrl']!;
           final mangaId = item.syncData!['mangaId'] ?? '';
+
+          final archiveChapters = await _loadMangaArchiveChapters(
+            sourceUrl: sourceUrl,
+            mangaId: mangaId,
+          );
+          if (archiveChapters.isNotEmpty) {
+            return MangaLatestChapter(
+              manga: item,
+              chapter: archiveChapters.first,
+            );
+          }
+
           final html = await _mangaHtml(
             sourceUrl,
             acceptHtml: (html) => RegExp(
