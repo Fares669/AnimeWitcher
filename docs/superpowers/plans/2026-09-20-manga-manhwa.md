@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Branch: `feat/manga-manhwa`, stacked on Download Manager V2 head until V2 lands on `main`.
+- Branch: `feat/manga-manhwa`, based directly on `main` after the Download Manager V2 merge.
 - AnimeWitcher backend is the only Manga/Manhwa catalog source.
 - Manga and Manhwa use `MultimediaContentType.manga`; their subtype is metadata, not a separate top-level media type.
 - Manga details is a dedicated screen/controller and must not request or render comments, reviews, characters, similar, related media, recommendations, episodes, streams, or video-history state.
@@ -1058,9 +1058,9 @@ Repeat chapter lifecycle, one-writer, offline, and simultaneous Anime multipart 
 
 Verify Manga search/details/reader/download/offline reader and the existing Anime details -> episodes navigation regression case.
 
-- [ ] **Step 8: Rebase/update onto post-V2 `main`**
+- [ ] **Step 8: Confirm branch remains cleanly based on `main`**
 
-After Download Manager V2 merges, update this branch onto the resulting `main`, resolve conflicts by preserving the V2 APIs that actually landed, then rerun Steps 2-4.
+Before final review, compare `main...feat/manga-manhwa` and verify the branch is not behind and that its diff contains only Manga/Manhwa work.
 
 - [ ] **Step 9: Final scope audit**
 
