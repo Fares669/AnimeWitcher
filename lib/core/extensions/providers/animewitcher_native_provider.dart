@@ -2472,6 +2472,44 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
+  @override
+  Future<ProviderMediaPage> searchAnimationPage(
+    String query,
+    ProviderSearchFilters filters, {
+    int offset = 0,
+    int limit = 30,
+    CancelToken? cancelToken,
+  }) async {
+    await _refreshRemoteConstants();
+    if (!_isSearchActive) {
+      throw const AnimeWitcherSearchDisabledException('لا يوجد بيانات');
+    }
+
+    final safeLimit = limit.clamp(10, 50).toInt();
+    final safeOffset = offset < 0 ? 0 : offset;
+    final pageNumber = safeOffset ~/ safeLimit;
+    final payload = await _algoliaQuery(
+      'all_animation',
+      query: query.trim(),
+      page: pageNumber,
+      hitsPerPage: safeLimit,
+      attributes: _searchAttributes,
+      cancelToken: cancelToken,
+      throwOnFailure: true,
+    );
+    final rawHits = _list(payload['hits']);
+    final items = await _dedupeHits(rawHits);
+    final nbPages = int.tryParse(_text(payload['nbPages'])) ?? 0;
+    final hasMore = nbPages > 0
+        ? pageNumber + 1 < nbPages
+        : rawHits.length >= safeLimit;
+    return ProviderMediaPage(
+      items: items,
+      nextOffset: (pageNumber + 1) * safeLimit,
+      hasMore: hasMore,
+    );
+  }
+
   String _mangaSearchIndexForSort(String sort) {
     // The live September 2026 backend currently exposes only this Manga sort
     // index. Keep unsupported sort values on the verified index instead of
