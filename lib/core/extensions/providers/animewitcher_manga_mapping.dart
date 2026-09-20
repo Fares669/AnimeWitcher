@@ -212,6 +212,57 @@ MultimediaItem mapAnimeWitcherMangaHit(Map<String, Object?> source) {
   );
 }
 
+DateTime? _mangaDateTime(Object? raw) {
+  if (raw is DateTime) return raw;
+  if (raw is num) {
+    var value = raw.toInt();
+    if (value > 0 && value < 100000000000) value *= 1000;
+    return value <= 0 ? null : DateTime.fromMillisecondsSinceEpoch(value);
+  }
+  final value = _text(raw);
+  return value.isEmpty ? null : DateTime.tryParse(value);
+}
+
+/// Maps AnimeWitcher's direct `manga_recent` row without opening the Manga
+/// details document or scraping its chapter source.
+MangaLatestChapter? mapAnimeWitcherRecentMangaHit(
+  Map<String, Object?> source,
+) {
+  final mangaId = _firstText(source, const <String>[
+    'manga_id',
+    'mangaId',
+  ]);
+  final chapterId = _firstText(source, const <String>[
+    'chapter_id',
+    'chapterId',
+  ]);
+  final chapterName = _firstText(source, const <String>[
+    'chapter_name',
+    'chapterName',
+  ]);
+  if (mangaId.isEmpty || chapterId.isEmpty || chapterName.isEmpty) return null;
+
+  final manga = mapAnimeWitcherMangaHit(<String, Object?>{
+    ...source,
+    'objectID': mangaId,
+  });
+  if (manga.title.isEmpty) return null;
+
+  return MangaLatestChapter(
+    manga: manga,
+    chapter: MangaChapter(
+      id: chapterId,
+      mangaId: mangaId,
+      url: '',
+      name: chapterName,
+      number: _chapterNumber(chapterName, chapterId),
+      publishedAt: _mangaDateTime(
+        source['date'] ?? source['published_at'] ?? source['publishedAt'],
+      ),
+    ),
+  );
+}
+
 String _attribute(String tag, String name) {
   final pattern = RegExp(
     RegExp.escape(name) + r"""\s*=\s*["']([^"']*)["']""",

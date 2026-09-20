@@ -2839,68 +2839,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return List<MangaPage>.unmodifiable(pages);
   }
 
-  int _mangaLastModifiedMillis(Map<String, dynamic> source) {
-    final raw = source['lastmodified'] ?? source['last_modified'];
-    if (raw is num) return raw.toInt();
-    return int.tryParse(_text(raw)) ?? 0;
-  }
-
-  Future<Map<String, dynamic>> _recentMangaPayload({
-    required int minimumHits,
-  }) async {
-    const windows = <Duration>[
-      Duration(hours: 1),
-      Duration(hours: 3),
-      Duration(hours: 6),
-      Duration(hours: 12),
-      Duration(hours: 24),
-    ];
-    Map<String, dynamic> best = _emptyAlgoliaHits();
-
-    for (final window in windows) {
-      final threshold = DateTime.now()
-          .toUtc()
-          .subtract(window)
-          .millisecondsSinceEpoch;
-      var payload = await _algoliaQuery(
-        'manga_views_desc',
-        query: '',
-        page: 0,
-        hitsPerPage: 100,
-        maxHitsPerPage: 100,
-        filters: 'lastmodified > $threshold',
-        throwOnFailure: true,
-      );
-      best = payload;
-      final nbHits = int.tryParse(_text(payload['nbHits'])) ?? 0;
-      final hits = _list(payload['hits']);
-      if (hits.length < minimumHits && nbHits <= hits.length) {
-        continue;
-      }
-
-      // The source index ranks by views, not by recency. When more than 100
-      // rows match the time window, fetch the complete matching window (up to
-      // Algolia's 1000-hit request ceiling) before sorting by lastmodified.
-      if (nbHits > hits.length && nbHits <= 1000) {
-        payload = await _algoliaQuery(
-          'manga_views_desc',
-          query: '',
-          page: 0,
-          hitsPerPage: nbHits,
-          maxHitsPerPage: 1000,
-          filters: 'lastmodified > $threshold',
-          throwOnFailure: true,
-        );
-        best = payload;
-      }
-
-      if (_list(best['hits']).length >= minimumHits) {
-        return best;
-      }
-    }
-    return best;
-  }
-
   @override
   Future<MangaLatestChapterPage> getLatestMangaPage({
     int offset = 0,
@@ -2915,72 +2853,38 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (cached == null ||
         !_latestMangaExpiresAt.isAfter(now) ||
         cached.length < needed) {
-      final payload = await _recentMangaPayload(minimumHits: needed);
-      final hits = <Map<String, dynamic>>[
-        for (final raw in _list(payload['hits']))
-          if (_map(raw).isNotEmpty) _map(raw),
-      ]..sort(
-          (a, b) => _mangaLastModifiedMillis(
-            b,
-          ).compareTo(_mangaLastModifiedMillis(a)),
-        );
+      // Fetch one extra row so pagination can answer hasMore without opening
+      // any Manga details/chapter endpoint.
+      final fetchLimit = (needed + 1).clamp(1, 100).toInt();
+      final raw = await _firestoreRestRunQuery(<String, dynamic>{
+        'from': const <Map<String, dynamic>>[
+          <String, dynamic>{'collectionId': 'manga_recent'},
+        ],
+        'orderBy': const <Map<String, dynamic>>[
+          <String, dynamic>{
+            'field': <String, dynamic>{'fieldPath': 'date'},
+            'direction': 'DESCENDING',
+          },
+        ],
+        'limit': fetchLimit,
+      });
 
+      final items = <MangaLatestChapter>[];
       final seen = <String>{};
-      final candidates = <MultimediaItem>[];
-      for (final hit in hits) {
-        final item = mapAnimeWitcherMangaHit(hit);
-        final sourceUrl = item.syncData?['mangalekPageUrl']?.trim() ?? '';
-        if (item.title.isEmpty ||
-            sourceUrl.isEmpty ||
-            !seen.add(item.url)) {
-          continue;
-        }
-        candidates.add(item);
-        if (candidates.length >= needed) break;
+      for (final rowRaw in raw) {
+        final document = _map(_map(rowRaw)['document']);
+        if (document.isEmpty) continue;
+        final fields = _firestoreFields(document['fields']);
+        if (fields.isEmpty) continue;
+        final latest = mapAnimeWitcherRecentMangaHit(
+          Map<String, Object?>.from(fields),
+        );
+        if (latest == null) continue;
+        final key = '${latest.manga.url}|${latest.chapter.id}';
+        if (seen.add(key)) items.add(latest);
       }
 
-      final resolved = await BoundedBatchScheduler.mapOrdered<
-        MultimediaItem,
-        MangaLatestChapter?
-      >(
-        candidates,
-        maxConcurrent: 3,
-        mapper: (item) async {
-          final sourceUrl = item.syncData!['mangalekPageUrl']!;
-          final mangaId = item.syncData!['mangaId'] ?? '';
-
-          final archiveChapters = await _loadMangaArchiveChapters(
-            sourceUrl: sourceUrl,
-            mangaId: mangaId,
-          );
-          if (archiveChapters.isNotEmpty) {
-            return MangaLatestChapter(
-              manga: item,
-              chapter: archiveChapters.first,
-            );
-          }
-
-          final html = await _mangaHtml(
-            sourceUrl,
-            acceptHtml: (html) => RegExp(
-              r'wp-manga-chapter',
-              caseSensitive: false,
-            ).hasMatch(html),
-          );
-          final chapters = parseMangaLekChapters(
-            html: html,
-            mangaId: mangaId,
-            documentUrl: sourceUrl,
-          );
-          if (chapters.isEmpty) return null;
-          return MangaLatestChapter(manga: item, chapter: chapters.first);
-        },
-        onError: (_, __, ___) => null,
-      );
-      cached = <MangaLatestChapter>[
-        for (final item in resolved)
-          if (item != null) item,
-      ];
+      cached = List<MangaLatestChapter>.unmodifiable(items);
       _latestMangaCache = cached;
       _latestMangaExpiresAt = now.add(_episodeDataTtl);
     }
