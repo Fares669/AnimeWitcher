@@ -9,9 +9,12 @@ import 'package:animewitcher/features/search/presentation/widgets/search_glass_s
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('iOS uses one native toolbar with themed menu actions', (tester) async {
+  testWidgets('iOS renders domain sort and filter in one glass capsule', (
+    tester,
+  ) async {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-      SystemChannels.platform_views, (_) async => null,
+      SystemChannels.platform_views,
+      (_) async => null,
     );
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     try {
@@ -20,9 +23,15 @@ void main() {
           home: Scaffold(
             appBar: AppBar(
               title: SearchActionButtons(
+                domain: SearchDomain.anime,
+                onDomainSelected: (_) {},
                 sortValue: 'name_asc',
-                sortItems: const [
-                  AppleNativeMenuItem(value: 'name_asc', label: 'Name', systemImage: 'animewitcher.abc'),
+                sortItems: const <AppleNativeMenuItem>[
+                  AppleNativeMenuItem(
+                    value: 'name_asc',
+                    label: 'Name',
+                    systemImage: 'animewitcher.abc',
+                  ),
                 ],
                 onSortSelected: (_) {},
                 onFilterPressed: () {},
@@ -38,26 +47,25 @@ void main() {
         ),
       );
       await tester.pump();
+
       expect(find.byType(UiKitView), findsOneWidget);
-      final native = tester.widget<UiKitView>(find.byType(UiKitView));
-      expect(native.viewType, 'com.animewitcher.app/native_toolbar');
-      final params = native.creationParams! as Map<String, Object?>;
-      final actions = params['actions']! as List<Map<String, Object?>>;
-      expect(actions, hasLength(2));
-      expect(actions.first['systemName'], 'animewitcher.abc');
-      expect(actions.first['menuTintColor'], Colors.purple.toARGB32());
-      expect(actions.last['systemName'], 'slider.horizontal.3');
-      final recognizer = native.gestureRecognizers!.single.constructor();
-      expect(recognizer, isA<EagerGestureRecognizer>());
-      recognizer.dispose();
+      final glass = tester.widget<UiKitView>(find.byType(UiKitView));
+      expect(glass.viewType, 'com.animewitcher.app/liquid_glass');
+      expect(
+        tester.getSize(find.byKey(const ValueKey('search-action-capsule'))).width,
+        SearchGlassSurface.height * 3,
+      );
+      expect(find.byTooltip('Search domain'), findsOneWidget);
+      expect(find.byTooltip('Sort'), findsOneWidget);
+      expect(find.byTooltip('Filters'), findsOneWidget);
       expect(find.text('3'), findsOneWidget);
-      expect(tester.getSize(find.byType(UiKitView)).height, SearchGlassSurface.height);
     } finally {
       debugDefaultTargetPlatformOverride = null;
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform_views, null,
+        SystemChannels.platform_views,
+        null,
       );
     }
   });
