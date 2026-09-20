@@ -152,8 +152,8 @@ bool shouldAutoResumeInterruptedDownload({
 ///
 /// The decision now goes through [planDownloadRecovery], which establishes one
 /// precedence order for user pause, native ownership, logical queue state and
-/// stale persisted status. This keeps startup recovery deterministic while the
-/// rest of DownloadService is migrated onto the same logical state machine.
+/// stale persisted status. This keeps startup recovery deterministic across
+/// the V2 coordinator and native package state.
 bool shouldRequeueInterruptedDownloadAfterRelaunch({
   required TaskStatus persisted,
   required bool queueWaiting,
