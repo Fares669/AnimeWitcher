@@ -26,7 +26,7 @@ void main() {
         'lib/features/library/presentation/downloads_provider.dart',
       ).readAsStringSync();
       final start = source.indexOf('void _refreshPresentationState()');
-      final end = source.indexOf('Future<void> _reloadDurableState()', start);
+      final end = source.indexOf('Future<void> _reloadMetadataAndRefresh()', start);
       expect(start, greaterThanOrEqualTo(0));
       expect(end, greaterThan(start));
       final body = source.substring(start, end);
