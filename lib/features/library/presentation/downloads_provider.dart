@@ -30,7 +30,6 @@ class DownloadItem {
   final int? totalBytes;
   final double networkSpeedMBps;
   final Duration timeRemaining;
-  final bool v2Owned;
 
   DownloadItem({
     required this.task,
@@ -47,7 +46,6 @@ class DownloadItem {
     this.totalBytes,
     this.networkSpeedMBps = -1,
     this.timeRemaining = Duration.zero,
-    this.v2Owned = true,
   }) : trackingUrl = trackingUrl ?? task.metaData,
        destinationPath = destinationPath ?? '',
        parallelChunks = parallelChunks ??
@@ -67,7 +65,7 @@ bool downloadsPointAtSameTarget(DownloadItem a, DownloadItem b) {
     return logicalA == logicalB;
   }
 
-  // Legacy presentation fallback only. V2-owned rows always have a logical ID.
+  // Defensive fallback for malformed/incomplete presentation rows.
   final trackA = a.trackingUrl.trim();
   final trackB = b.trackingUrl.trim();
   if (trackA.isNotEmpty && trackA == trackB) return true;
@@ -206,49 +204,6 @@ CollapsedDownloads collapseDuplicateDownloads(List<DownloadItem> items) {
   );
 }
 
-/// Compatibility helper retained for presentation tests and legacy metadata.
-/// It does not inspect FileDownloader persistence or execute transport work.
-DownloadItem? downloadItemFromTaskMetadata({
-  required Task task,
-  required TaskStatus status,
-  required Map<String, dynamic> metadata,
-  Object? logicalState,
-  double progress = 0,
-}) {
-  final rawItem = metadata['item'];
-  if (rawItem is! Map) return null;
-  var storedProgress = progress;
-  if (storedProgress < 0 || storedProgress > 1) {
-    storedProgress = status == TaskStatus.complete ? 1.0 : 0.0;
-  }
-  final episode = metadata['episode'] is Map
-      ? Episode.fromJson(Map<String, dynamic>.from(metadata['episode'] as Map))
-      : null;
-  final item = MultimediaItem.fromJson(Map<String, dynamic>.from(rawItem));
-  final trackingUrl = (metadata['trackingUrl'] as String?)?.trim();
-  final filePath = (metadata['filePath'] as String?)?.trim();
-  return DownloadItem(
-    task: task,
-    status: displayDownloadStatus(
-      persisted: status,
-      queueWaiting: isQueueWaitingMetadata(metadata),
-    ),
-    progress: storedProgress,
-    item: item,
-    episode: episode,
-    logicalId: (metadata['logicalId'] as String?)?.trim(),
-    timestamp: (metadata['timestamp'] as int?) ?? 0,
-    trackingUrl: trackingUrl?.isNotEmpty == true
-        ? trackingUrl
-        : (episode?.url ?? item.url),
-    destinationPath: filePath ?? '',
-    totalBytes: downloadMetadataExpectedBytes(metadata) > 0
-        ? downloadMetadataExpectedBytes(metadata)
-        : null,
-    v2Owned: false,
-  );
-}
-
 @Riverpod(keepAlive: true)
 class DownloadsNotifier extends _$DownloadsNotifier {
   static const Duration _refreshInterval = Duration(seconds: 1);
@@ -306,20 +261,11 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     }
 
     final items = <DownloadItem>[];
-    final matchedMetadataTaskIds = <String>{};
-
     for (final record in _records) {
       if (record.intent == DownloadUserIntent.canceled) continue;
       final metadata = metadataByTaskId[record.taskId] ??
           metadataByLogicalId[record.logicalId.value];
       if (metadata == null || metadata['item'] is! Map) continue;
-
-      for (final entry in metadataByTaskId.entries) {
-        if (identical(entry.value, metadata)) {
-          matchedMetadataTaskIds.add(entry.key);
-          break;
-        }
-      }
 
       final item = MultimediaItem.fromJson(
         Map<String, dynamic>.from(metadata['item'] as Map),
@@ -362,14 +308,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       }
     }
 
-    // Preserve verified legacy-complete presentation rows during the Policy-A
-    // transition. This reads only app metadata + the final file; it never
-    // adopts V1 executor state or starts legacy transport.
-    for (final entry in metadataByTaskId.entries) {
-      if (matchedMetadataTaskIds.contains(entry.key)) continue;
-      final legacy = await _legacyCompletedItem(entry.key, entry.value);
-      if (legacy != null) items.add(legacy);
-    }
 
     items.removeWhere((item) => _deletingIds.contains(item.id));
     items.sort((a, b) => a.timestamp.compareTo(b.timestamp));
@@ -389,52 +327,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     active.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     completed.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     return <DownloadItem>[...active, ...completed];
-  }
-
-  Future<DownloadItem?> _legacyCompletedItem(
-    String taskId,
-    Map<String, dynamic> metadata,
-  ) async {
-    if (metadata['item'] is! Map) return null;
-    final progress = downloadMetadataProgress(metadata);
-    final rawPath = (metadata['filePath'] as String?)?.trim();
-    if (progress < 1 || rawPath == null || rawPath.isEmpty) return null;
-
-    final file = File(rawPath);
-    try {
-      if (!await file.exists() || await file.length() <= 0) return null;
-    } catch (_) {
-      return null;
-    }
-
-    final item = MultimediaItem.fromJson(
-      Map<String, dynamic>.from(metadata['item'] as Map),
-    );
-    final episode = metadata['episode'] is Map
-        ? Episode.fromJson(Map<String, dynamic>.from(metadata['episode'] as Map))
-        : null;
-    final trackingUrl = _trackingUrlFor(metadata, item, episode);
-    final task = _presentationTask(
-      taskId: taskId,
-      destinationPath: rawPath,
-      trackingUrl: trackingUrl,
-      parallelChunks: 1,
-    );
-    final bytes = await file.length();
-    return DownloadItem(
-      task: task,
-      status: TaskStatus.complete,
-      progress: 1,
-      item: item,
-      episode: episode,
-      logicalId: (metadata['logicalId'] as String?)?.trim(),
-      timestamp: (metadata['timestamp'] as int?) ?? 0,
-      trackingUrl: trackingUrl,
-      destinationPath: rawPath,
-      transferredBytes: bytes,
-      totalBytes: bytes,
-      v2Owned: false,
-    );
   }
 
   Future<void> removeDownload(DownloadItem item) async {
@@ -459,7 +351,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final storage = ref.read(storageServiceProvider);
     for (final item in toRemove.values) {
       final logical = item.logicalId?.trim();
-      if (item.v2Owned && logical != null && logical.isNotEmpty) {
+      if (logical != null && logical.isNotEmpty) {
         await manager.delete(DownloadLogicalId(logical));
         final metadata = await storage.getAllDownloadMetadata();
         for (final entry in metadata.entries) {
