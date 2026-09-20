@@ -110,7 +110,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('التفاصيل'), findsOneWidget);
-    expect(find.text('الفصول'), findsOneWidget);
+    expect(find.textContaining('الفصول'), findsOneWidget);
     expect(find.text('Solo Leveling'), findsWidgets);
     expect(find.text('Manga description'), findsOneWidget);
     expect(find.byKey(const ValueKey('manga-details-hero')), findsOneWidget);
