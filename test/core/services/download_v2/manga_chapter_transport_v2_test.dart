@@ -101,6 +101,7 @@ final class _FakePageStarter {
     final handle = _FakePageHandle(
       taskId: task.taskId,
       pageIndex: task.pageIndex,
+      destinationPath: task.destinationPath,
       onTerminal: () => active--,
     );
     handles[task.pageIndex] = handle;
@@ -119,14 +120,15 @@ final class _FakePageHandle implements DownloadTransportHandle {
   _FakePageHandle({
     required this.taskId,
     required this.pageIndex,
+    required this.destinationPath,
     required this.onTerminal,
-  }) : destinationPath = '';
+  });
 
   @override
   final String taskId;
   final int pageIndex;
   final void Function() onTerminal;
-  String destinationPath;
+  final String destinationPath;
 
   DownloadTransportSnapshot _current = const DownloadTransportSnapshot(
     taskId: 'placeholder',
@@ -149,7 +151,6 @@ final class _FakePageHandle implements DownloadTransportHandle {
   @override
   Stream<DownloadTransportSnapshot> get snapshots => _controller.stream;
 
-  void bindDestination(String value) => destinationPath = value;
 
   void complete() {
     _current = DownloadTransportSnapshot(
