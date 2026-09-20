@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/account/account_providers.dart';
+import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/utils/localized_text.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/utils/layout_constants.dart';
@@ -10,6 +11,7 @@ import '../../../../shared/widgets/multimedia_card.dart';
 import '../../../settings/presentation/account_screen.dart';
 import '../library_auth.dart';
 import '../library_provider.dart';
+import '../library_media_kind.dart';
 
 import '../library_state.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
@@ -46,7 +48,7 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
     return switch (libraryState) {
       LibraryLoading() => const Center(child: AppLoadingIndicator()),
       LibraryError(message: final msg) => Center(child: Text(msg)),
-      LibraryEmpty() => _buildEmpty(context),
+      LibraryEmpty() => _buildEmpty(context, libraryState.mediaKind),
       LibrarySuccess(items: final items) => CatalogLtr(
         child: GridView.builder(
           padding: EdgeInsets.fromLTRB(
@@ -75,9 +77,17 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
               key: ValueKey(item.url),
               item: item,
               heroTag: 'lib_bookmark_${item.url}_$index',
-              onTap: () => DetailsRoute(
-                $extra: DetailsRouteExtra(item: item),
-              ).push<void>(context),
+              onTap: () {
+                if (item.contentType == MultimediaContentType.manga) {
+                  MangaDetailsRoute(
+                    $extra: MangaDetailsRouteExtra(item: item),
+                  ).push<void>(context);
+                  return;
+                }
+                DetailsRoute(
+                  $extra: DetailsRouteExtra(item: item),
+                ).push<void>(context);
+              },
             );
           },
         ),
@@ -85,14 +95,19 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
     };
   }
 
-  Widget _buildEmpty(BuildContext context) {
+  Widget _buildEmpty(
+    BuildContext context,
+    LibraryMediaKind mediaKind,
+  ) {
+    final isManga = mediaKind == LibraryMediaKind.manga;
     final signedIn =
-        ref
-            .watch(animeWitcherAccountControllerProvider)
-            .asData
-            ?.value
-            .isSignedIn ??
-        false;
+        isManga ||
+        (ref
+                .watch(animeWitcherAccountControllerProvider)
+                .asData
+                ?.value
+                .isSignedIn ??
+            false);
     final colors = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
@@ -112,8 +127,12 @@ class _BookmarksTabState extends ConsumerState<BookmarksTab>
               signedIn
                   ? appText(
                       context,
-                      english: 'No titles in this list yet',
-                      arabic: 'لا توجد أعمال في هذه القائمة بعد',
+                      english: isManga
+                          ? 'No manga in this list yet'
+                          : 'No titles in this list yet',
+                      arabic: isManga
+                          ? 'لا توجد مانجا في هذه القائمة بعد'
+                          : 'لا توجد أعمال في هذه القائمة بعد',
                     )
                   : librarySignInRequiredMessage(isArabic: true),
               textAlign: TextAlign.center,
