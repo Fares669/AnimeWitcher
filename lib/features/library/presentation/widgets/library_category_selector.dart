@@ -45,14 +45,23 @@ class _LibraryCategorySelectorState
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     if (widget.mediaKind == LibraryMediaKind.manga) {
-      final l10n = AppLocalizations.of(context)!;
+      final l10n = AppLocalizations.of(context);
       return switch (category) {
         LibraryCategory.favorite => isArabic ? 'المفضلة' : 'Favorites',
-        LibraryCategory.watching => l10n.mangaReadingNow,
-        LibraryCategory.continueLater => l10n.mangaContinueLater,
-        LibraryCategory.planToWatch => l10n.mangaPlanToRead,
-        LibraryCategory.completed => l10n.mangaCompletedReading,
-        LibraryCategory.notInterested => l10n.mangaNotInterested,
+        LibraryCategory.watching =>
+          l10n?.mangaReadingNow ?? (isArabic ? 'أقرأها حاليًا' : 'Reading'),
+        LibraryCategory.continueLater =>
+          l10n?.mangaContinueLater ??
+              (isArabic ? 'أكملها لاحقًا' : 'Continue Later'),
+        LibraryCategory.planToWatch =>
+          l10n?.mangaPlanToRead ??
+              (isArabic ? 'أرغب بقراءتها' : 'Plan to Read'),
+        LibraryCategory.completed =>
+          l10n?.mangaCompletedReading ??
+              (isArabic ? 'تمت قراءتها' : 'Completed Reading'),
+        LibraryCategory.notInterested =>
+          l10n?.mangaNotInterested ??
+              (isArabic ? 'لا أرغب بقراءتها' : 'Not Interested'),
       };
     }
     return switch (category) {
