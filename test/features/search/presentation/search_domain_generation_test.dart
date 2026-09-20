@@ -79,7 +79,7 @@ void main() {
   test('late anime completion cannot overwrite a newer manga domain', () async {
     final fake = _DeferredSearchProvider();
     final container = ProviderContainer(
-      overrides: <Override>[
+      overrides: [
         extensionManagerProvider.overrideWith(
           () => _FakeExtensionManager(fake),
         ),
