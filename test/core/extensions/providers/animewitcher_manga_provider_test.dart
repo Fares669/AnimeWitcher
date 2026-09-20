@@ -347,6 +347,85 @@ void main() {
     );
   });
 
+  test('chapters fall back to current WordPress archive shape', () async {
+    final stub = _stubDio();
+    stub.dio.interceptors.insert(
+      0,
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (options.uri.path == '/manga/manga-one/' &&
+              options.uri.host != 'manga-leko.net') {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data: '<html><title>Moved</title></html>',
+              ),
+            );
+            return;
+          }
+          if (options.uri.host == 'manga-leko.net' &&
+              options.uri.path == '/tag/manga-one/') {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data: '''
+<main>
+  <article><h2><a href="/manga-one-30-%D9%85%D8%AA%D8%B1%D8%AC%D9%85/">Manga One الفصل 30 مترجم</a></h2></article>
+  <article><h2><a href="/manga-one-29-%D9%85%D8%AA%D8%B1%D8%AC%D9%85/">Manga One 29 مترجم</a></h2></article>
+</main>
+''',
+              ),
+            );
+            return;
+          }
+          if (options.uri.host == 'manga-leko.net' &&
+              options.uri.path == '/tag/manga-one/page/2/') {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data: '''
+<main>
+  <article><h2><a href="/manga-one-28-%D9%85%D8%AA%D8%B1%D8%AC%D9%85/">Manga One الفصل 28 مترجم</a></h2></article>
+</main>
+''',
+              ),
+            );
+            return;
+          }
+          if (options.uri.host == 'manga-leko.net' &&
+              options.uri.path == '/tag/manga-one/page/3/') {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 404,
+                data: 'not found',
+              ),
+            );
+            return;
+          }
+          handler.next(options);
+        },
+      ),
+    );
+
+    final chapters = await _provider(stub.dio).getMangaChapters(
+      'https://animewitcher.com/manga/m1',
+    );
+
+    expect(chapters.map((chapter) => chapter.number), <double?>[30, 29, 28]);
+    expect(
+      stub.requests.any(
+        (entry) =>
+            entry.uri.host == 'manga-leko.net' &&
+            entry.uri.path == '/tag/manga-one/',
+      ),
+      isTrue,
+    );
+  });
+
   test('chapters and pages follow AnimeWitcher MangaLek pointer', () async {
     final stub = _stubDio();
     final provider = _provider(stub.dio);
