@@ -287,7 +287,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     );
   }
 
-  Widget _tabs(BuildContext context, int chapterCount) {
+  Widget _buildTabs(BuildContext context, int chapterCount) {
     final l10n = AppLocalizations.of(context);
     final ar = Localizations.localeOf(context).languageCode == 'ar';
     final chapterLabel = chapterCount > 0
@@ -375,7 +375,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
       appBar: _appBar(context, buttons),
       body: Column(
         children: <Widget>[
-          _tabs(context, chapterCount),
+          _buildTabs(context, chapterCount),
           Expanded(
             child: TabBarView(
               controller: _tabs,
