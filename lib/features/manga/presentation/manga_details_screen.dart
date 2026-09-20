@@ -19,7 +19,9 @@ import '../../../shared/widgets/expandable_text.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/underline_segment_tabs.dart';
 import '../../details/presentation/widgets/details_rating_actions.dart';
+import '../../library/presentation/library_auth.dart';
 import '../../library/presentation/library_provider.dart';
+import '../../settings/presentation/account_screen.dart';
 import 'manga_details_controller.dart';
 import 'widgets/manga_chapter_list.dart';
 import 'widgets/manga_details_hero.dart';
@@ -132,6 +134,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     String value,
   ) async {
     if (libraryNotifier == null) return;
+    if (!await _ensureSignedInForLibrary(context)) return;
     if (value == _removeLibraryAction) {
       await libraryNotifier.clearItemCategory(item.url, manga: true);
       return;
@@ -170,7 +173,10 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
         color: isFavorite ? favoriteRed : foreground,
         onPressed: libraryNotifier == null
             ? null
-            : () => libraryNotifier.setFavorite(item, !isFavorite),
+            : () async {
+                if (!await _ensureSignedInForLibrary(context)) return;
+                await libraryNotifier.setFavorite(item, !isFavorite);
+              },
       ),
       AppleLiquidGlassToolbarButton(
         tooltip: Localizations.localeOf(context).languageCode == 'ar'
@@ -196,6 +202,27 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
         onPressed: null,
       ),
     ];
+  }
+
+  Future<bool> _ensureSignedInForLibrary(BuildContext context) async {
+    if (ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
+      return true;
+    }
+    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
+    ref
+        .read(notificationServiceProvider)
+        .showInfo(
+          librarySignInRequiredMessage(isArabic: isArabic),
+          icon: Icons.lock_outline_rounded,
+          duration: const Duration(seconds: 3),
+        );
+    if (!context.mounted) return false;
+    await Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const AnimeWitcherAccountScreen(),
+      ),
+    );
+    return ref.read(animeWitcherAccountServiceProvider).isSignedIn;
   }
 
   Future<void> _rateManga(MultimediaItem item) async {

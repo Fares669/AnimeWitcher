@@ -67,9 +67,7 @@ class Library extends _$Library {
     MultimediaItem item, {
     LibraryCategory? category,
   }) async {
-    if (item.contentType != MultimediaContentType.manga) {
-      _requireSignedIn();
-    }
+    _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
     await repository.addToLibrary(
       item,
@@ -79,18 +77,14 @@ class Library extends _$Library {
   }
 
   Future<void> clearItemCategory(String url, {bool manga = false}) async {
-    if (!manga && state.mediaKind != LibraryMediaKind.manga) {
-      _requireSignedIn();
-    }
+    _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
     await repository.clearCategory(url);
     refresh();
   }
 
   Future<void> setFavorite(MultimediaItem item, bool favorite) async {
-    if (item.contentType != MultimediaContentType.manga) {
-      _requireSignedIn();
-    }
+    _requireSignedIn();
     final repository = ref.read(libraryRepositoryProvider);
     await repository.setFavorite(item, favorite);
     refresh();
