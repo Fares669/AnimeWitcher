@@ -24,6 +24,7 @@ import 'widgets/bouncy_entry_animation.dart';
 import '../../../shared/widgets/catalog_ltr.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
+import '../../../shared/widgets/multimedia_card.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/recoverable_network_state.dart';
 
