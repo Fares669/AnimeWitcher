@@ -1197,8 +1197,9 @@ final class DownloadManagerV2 {
       if (resolver == null || gateway is! MangaChapterGatewayV2) {
         throw StateError('Manga chapter transport is unavailable.');
       }
+      final mangaGateway = gateway as MangaChapterGatewayV2;
       final pages = await resolver.resolve(request.sourceDescriptor);
-      return gateway.startMangaChapter(
+      return mangaGateway.startMangaChapter(
         MangaChapterTransportSpecV2(
           taskId: taskId,
           mangaId: request.mediaId,
