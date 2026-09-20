@@ -287,6 +287,72 @@ Future<void> _probeMangaRecencyMetadata(
   }
 }
 
+Future<void> _probeRecentMangaWindow(
+  List<_AlgoliaCredentials> credentials,
+) async {
+  final threshold = DateTime.now()
+      .toUtc()
+      .subtract(const Duration(days: 7))
+      .millisecondsSinceEpoch;
+  for (final candidate in credentials) {
+    try {
+      final response = await _dio.post<Object?>(
+        'https://${candidate.appId}-dsn.algolia.net/1/indexes/'
+        'manga_views_desc/query',
+        data: <String, Object?>{
+          'query': '',
+          'filters': 'lastmodified > $threshold',
+          'hitsPerPage': 100,
+          'page': 0,
+          'attributesToRetrieve': <String>[
+            'objectID',
+            'lastmodified',
+            'mangalek_page_url',
+            'name',
+          ],
+        },
+        options: Options(
+          headers: <String, String>{
+            'X-Algolia-Application-Id': candidate.appId,
+            'X-Algolia-API-Key': candidate.apiKey,
+            'content-type': 'application/json',
+          },
+        ),
+      );
+      if ((response.statusCode ?? 500) >= 300 || response.data is! Map) {
+        continue;
+      }
+      final body = Map<String, Object?>.from(response.data! as Map);
+      final hits = body['hits'];
+      stdout.writeln(
+        'algolia:manga-recent-window '
+        'threshold=$threshold nbHits=${body['nbHits'] ?? 'unknown'} '
+        'returned=${hits is List ? hits.length : 0}',
+      );
+      if (hits is List && hits.isNotEmpty) {
+        final timestamps = <int>[
+          for (final raw in hits)
+            if (raw is Map)
+              int.tryParse(
+                    _text(Map<String, Object?>.from(raw)['lastmodified']),
+                  ) ??
+                  0,
+        ]..sort((a, b) => b.compareTo(a));
+        stdout.writeln(
+          'algolia:manga-recent-window newest='
+          '${timestamps.isEmpty ? 0 : timestamps.first}',
+        );
+      }
+      return;
+    } catch (error) {
+      stdout.writeln(
+        'algolia:manga-recent-window via ${candidate.label}: '
+        '${_dioSummary(error)}',
+      );
+    }
+  }
+}
+
 Future<void> _probeMangaIndexNames(
   Map<String, Object?> constants,
 ) async {
@@ -494,6 +560,7 @@ Future<void> main() async {
   );
   await _probeMangaIndexNames(constants);
   await _probeMangaRecencyMetadata(credentials);
+  await _probeRecentMangaWindow(credentials);
 
   final supportedSortIndices = <String>[];
   for (final index in _mangaSortIndices) {
