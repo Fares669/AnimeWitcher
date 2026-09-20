@@ -109,4 +109,7 @@ jobs:
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
 
       - name: Full test suite
-        run: flutter test -r expanded
+        # Several account tests mutate process-global Firestore configuration.
+        # Run the all-repo gate serially so those otherwise-correct tests do not
+        # reset each other's configuration when Flutter shards files in parallel.
+        run: flutter test --concurrency=1 -r expanded
