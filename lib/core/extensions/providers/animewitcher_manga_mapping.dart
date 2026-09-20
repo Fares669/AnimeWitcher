@@ -170,11 +170,11 @@ MultimediaItem mapAnimeWitcherMangaHit(Map<String, Object?> source) {
 
 String _attribute(String tag, String name) {
   final pattern = RegExp(
-    RegExp.escape(name) + r'\s*=\s*(["\'])(.*?)\1',
+    RegExp.escape(name) + r"""\s*=\s*["']([^"']*)["']""",
     caseSensitive: false,
     dotAll: true,
   );
-  return pattern.firstMatch(tag)?.group(2)?.trim() ?? '';
+  return pattern.firstMatch(tag)?.group(1)?.trim() ?? '';
 }
 
 double? _chapterNumber(String label, String url) {
@@ -193,11 +193,11 @@ double? _chapterNumber(String label, String url) {
 
 DateTime? _publishedAt(String block) {
   final dateBlock = RegExp(
-    r'class\s*=\s*(["\'])[^"\']*chapter-release-date[^"\']*\1[^>]*>(.*?)<',
+    r"""class\s*=\s*["'][^"']*chapter-release-date[^"']*["'][^>]*>(.*?)<""",
     caseSensitive: false,
     dotAll: true,
   ).firstMatch(block);
-  final raw = _stripHtml(dateBlock?.group(2));
+  final raw = _stripHtml(dateBlock?.group(1));
   if (raw.isEmpty) return null;
   return DateTime.tryParse(raw);
 }
@@ -224,7 +224,7 @@ List<MangaChapter> parseMangaLekChapters({
   if (base == null) return const <MangaChapter>[];
 
   final rows = RegExp(
-    r'<li\b[^>]*class\s*=\s*(["\'])[^"\']*wp-manga-chapter[^"\']*\1[^>]*>(.*?)</li>',
+    r"""<li\b[^>]*class\s*=\s*["'][^"']*wp-manga-chapter[^"']*["'][^>]*>(.*?)</li>""",
     caseSensitive: false,
     dotAll: true,
   ).allMatches(html);
@@ -232,7 +232,7 @@ List<MangaChapter> parseMangaLekChapters({
   final chapters = <MangaChapter>[];
   final seen = <String>{};
   for (final row in rows) {
-    final block = row.group(2) ?? '';
+    final block = row.group(1) ?? '';
     final anchor = RegExp(
       r'<a\b([^>]*)>(.*?)</a>',
       caseSensitive: false,
@@ -273,7 +273,7 @@ List<MangaPage> parseMangaLekPages({
   if (base == null) return const <MangaPage>[];
 
   final blocks = RegExp(
-    r'<div\b[^>]*class\s*=\s*(["\'])[^"\']*page-break[^"\']*\1[^>]*>(.*?)</div>',
+    r"""<div\b[^>]*class\s*=\s*["'][^"']*page-break[^"']*["'][^>]*>(.*?)</div>""",
     caseSensitive: false,
     dotAll: true,
   ).allMatches(html);
@@ -285,7 +285,7 @@ List<MangaPage> parseMangaLekPages({
       r'<img\b([^>]*)>',
       caseSensitive: false,
       dotAll: true,
-    ).firstMatch(block.group(2) ?? '');
+    ).firstMatch(block.group(1) ?? '');
     if (image == null) continue;
 
     final attrs = image.group(1) ?? '';
