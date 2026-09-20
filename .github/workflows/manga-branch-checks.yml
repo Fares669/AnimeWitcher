@@ -44,5 +44,10 @@ jobs:
             test/features/search/presentation/widgets/search_action_buttons_test.dart \
             test/features/search/presentation/widgets/search_header_bar_domain_test.dart -r expanded
 
+      - name: Manga details RED/GREEN tests
+        run: |
+          flutter test test/features/manga/presentation/manga_details_screen_test.dart \
+            test/features/manga/presentation/manga_details_no_anime_extras_test.dart -r expanded
+
       - name: Probe AnimeWitcher Manga backend
         run: dart run tool/manga_backend_probe.dart
