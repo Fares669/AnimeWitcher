@@ -41,6 +41,24 @@ void main() {
     expect(item.syncData?['englishTitle'], 'Solo Leveling');
   });
 
+  test('maps localized Firestore text without map syntax leaking to UI', () {
+    final item = mapAnimeWitcherMangaHit(<String, Object?>{
+      'objectID': 'm-localized',
+      'name': <String, Object?>{'ar': 'اسم عربي', 'en': 'English Name'},
+      'story': <String, Object?>{
+        'ar': '<p>قصة عربية</p>',
+        'en': '<p>English story</p>',
+      },
+      'type': 'مانهوا',
+      'poster_uri': 'https://img.example/localized.webp',
+      'mangalek_page_url': 'https://mangalik.net/manga/localized/',
+    });
+
+    expect(item.title, 'اسم عربي');
+    expect(item.description, 'قصة عربية');
+    expect(item.description, isNot(contains('{ar:')));
+  });
+
   test('parses MangaLek chapter list including decimal and special chapters', () {
     const html = '''
 <ul class="main version-chap no-volumn">
