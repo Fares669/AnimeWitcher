@@ -56,7 +56,9 @@ void main() {
       ),
     );
 
-    final list = tester.widget<ListView>(find.byType(ListView));
-    expect(list.scrollDirection, Axis.vertical);
+    final scroll = tester.widget<CustomScrollView>(
+      find.byType(CustomScrollView),
+    );
+    expect(scroll.scrollDirection, Axis.vertical);
   });
 }
