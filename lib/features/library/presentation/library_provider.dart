@@ -78,8 +78,8 @@ class Library extends _$Library {
     refresh();
   }
 
-  Future<void> clearItemCategory(String url) async {
-    if (state.mediaKind != LibraryMediaKind.manga) {
+  Future<void> clearItemCategory(String url, {bool manga = false}) async {
+    if (!manga && state.mediaKind != LibraryMediaKind.manga) {
       _requireSignedIn();
     }
     final repository = ref.read(libraryRepositoryProvider);
