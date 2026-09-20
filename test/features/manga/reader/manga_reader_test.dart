@@ -169,7 +169,7 @@ void main() {
     try {
       await tester.pumpWidget(
         ProviderScope(
-          overrides: <Override>[
+          overrides: [
             extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
             mangaReadingRepositoryProvider.overrideWithValue(
               _ReaderProgressRepository(),
