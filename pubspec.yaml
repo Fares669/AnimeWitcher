@@ -47,6 +47,8 @@ dependencies:
   code_assets: ^2.0.0
   hooks: ^2.2.0
   native_toolchain_c: ^0.19.4
+  flutter_avif_ios: ^3.1.0
+  flutter_avif_platform_interface: ^3.1.0
   file_picker: ^12.0.0-beta.7
   image: ^4.8.0
   archive: ^4.0.7
