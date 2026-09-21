@@ -10,6 +10,7 @@ import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -90,6 +91,14 @@ final class _ReaderManager extends ExtensionManager {
 final class _ReaderSettingsNotifier extends MangaReaderSettingsNotifier {
   @override
   MangaReaderSettings build() => const MangaReaderSettings();
+}
+
+final class _OverlayReaderSettingsNotifier
+    extends MangaReaderSettingsNotifier {
+  @override
+  MangaReaderSettings build() => const MangaReaderSettings(
+    showNavigationOverlayOnStart: true,
+  );
 }
 
 final class _ReaderProgressRepository extends MangaReadingRepository {
@@ -196,6 +205,47 @@ void main() {
       find.byType(CustomScrollView),
     );
     expect(scroll.scrollDirection, Axis.vertical);
+  });
+
+  testWidgets('reader uses Mangayomi navigation overlay widget', (tester) async {
+    final provider = _ReaderProvider(emptyPages: true);
+    const chapter = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/1',
+      name: 'Chapter 1',
+    );
+    final manga = MultimediaItem(
+      title: 'Reader Manga',
+      url: 'https://animewitcher.com/manga/m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _OverlayReaderSettingsNotifier.new,
+          ),
+        ],
+        child: MaterialApp(
+          home: MangaReaderScreen(
+            manga: manga,
+            chapter: chapter,
+            chapters: const <MangaChapter>[chapter],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(MangaReaderNavigationOverlay), findsOneWidget);
   });
 
   testWidgets('reader owns the persistent iOS header without details actions', (

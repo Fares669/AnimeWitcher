@@ -77,6 +77,70 @@ void main() {
     expect(find.text('Next chapter'), findsOneWidget);
   });
 
+  testWidgets('paged reader appends Mangayomi chapter transition page', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaPagedReader(
+          pages: _pages,
+          initialPage: 0,
+          rtl: false,
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) => Text('page-${page.index}'),
+          trailingPage: const Text('chapter-transition'),
+        ),
+      ),
+    );
+
+    final view = tester.widget<PageView>(find.byType(PageView));
+    expect(view.childrenDelegate.estimatedChildCount, _pages.length + 1);
+  });
+
+  testWidgets('continuous reader appends Mangayomi chapter transition page', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) => Text('page-${page.index}'),
+          trailingPage: const Text('chapter-transition'),
+        ),
+      ),
+    );
+
+    final list = tester.widget<ListView>(find.byType(ListView));
+    expect(list.childrenDelegate.estimatedChildCount, _pages.length + 1);
+  });
+
+  testWidgets('webtoon appends Mangayomi chapter transition page', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaWebtoonReader(
+          pages: _pages,
+          initialPage: 0,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) => SizedBox(
+            height: 300,
+            child: Text('page-${page.index}'),
+          ),
+          trailingPage: const Text('chapter-transition'),
+        ),
+      ),
+    );
+
+    expect(find.text('chapter-transition'), findsOneWidget);
+  });
+
   testWidgets('vertical reader pages along the vertical axis', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
