@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../manga_reader_settings.dart';
+import '../subsampling/subsampling_scale_image_view.dart';
 
 typedef MangaPageBuilder = Widget Function(
   BuildContext context,
@@ -85,6 +86,11 @@ class _MangaPageImageState extends State<MangaPageImage> {
     if (oldListener != null) _sizeStream?.removeListener(oldListener);
 
     final uri = Uri.tryParse(widget.page.imageUrl);
+    if (uri != null && uri.scheme == 'file' && widget.expand) {
+      _sizeStream = null;
+      _sizeListener = null;
+      return;
+    }
     final ImageProvider provider = uri != null && uri.scheme == 'file'
         ? FileImage(File.fromUri(uri))
         : CachedNetworkImageProvider(
@@ -152,19 +158,54 @@ class _MangaPageImageState extends State<MangaPageImage> {
   Widget build(BuildContext context) {
     final uri = Uri.tryParse(widget.page.imageUrl);
     final Widget image;
+    final useSubsampling =
+        uri != null && uri.scheme == 'file' && widget.expand;
     if (uri != null && uri.scheme == 'file') {
       final file = File.fromUri(uri);
       if (!file.existsSync()) {
         return _errorView(context);
       }
-      image = Image.file(
-        file,
-        key: ValueKey<String>('reader-local-${widget.page.imageUrl}-$_retryEpoch'),
-        width: double.infinity,
-        height: widget.expand ? double.infinity : null,
-        fit: _fit,
-        errorBuilder: (_, _, _) => _errorView(context),
-      );
+      if (useSubsampling) {
+        final imageSize = _imageSize;
+        final quarterTurns = imageSize == null
+            ? 0
+            : mangaReaderRotateQuarterTurns(
+                settings: widget.settings,
+                imageSize: imageSize,
+              );
+        image = SubsamplingScaleImageView(
+          key: ValueKey<String>(
+            'reader-subsampling-${widget.page.imageUrl}-$_retryEpoch',
+          ),
+          image: FileImage(file),
+          resolvedFilePath: file.path,
+          cropBorders: widget.settings.cropBorders,
+          fit: _fit,
+          rotation: quarterTurns * 90,
+          onImageLoaded: (width, height) {
+            final size = Size(width.toDouble(), height.toDouble());
+            if (!mounted || size == _imageSize) return;
+            setState(() => _imageSize = size);
+            widget.onImageSize?.call(size);
+          },
+          loadStateChanged: (state) => switch (state.loadState) {
+            LoadState.loading => const Center(child: AppLoadingIndicator()),
+            LoadState.failed => _errorView(context),
+            LoadState.completed => null,
+          },
+        );
+      } else {
+        image = Image.file(
+          file,
+          key: ValueKey<String>(
+            'reader-local-${widget.page.imageUrl}-$_retryEpoch',
+          ),
+          width: double.infinity,
+          height: widget.expand ? double.infinity : null,
+          fit: _fit,
+          errorBuilder: (_, _, _) => _errorView(context),
+        );
+      }
     } else {
       image = CachedNetworkImage(
         key: ValueKey<String>('reader-network-${widget.page.imageUrl}-$_retryEpoch'),
@@ -198,7 +239,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
       );
     }
 
-    if (widget.settings.cropBorders) {
+    if (widget.settings.cropBorders && !useSubsampling) {
       filtered = ClipRect(
         child: FractionallySizedBox(
           widthFactor: 1.02,
@@ -209,7 +250,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
     }
 
     final imageSize = _imageSize;
-    if (imageSize != null) {
+    if (imageSize != null && !useSubsampling) {
       final quarterTurns = mangaReaderRotateQuarterTurns(
         settings: widget.settings,
         imageSize: imageSize,
