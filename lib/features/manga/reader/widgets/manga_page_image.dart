@@ -153,8 +153,12 @@ class _MangaPageImageState extends State<MangaPageImage> {
     final uri = Uri.tryParse(widget.page.imageUrl);
     final Widget image;
     if (uri != null && uri.scheme == 'file') {
+      final file = File.fromUri(uri);
+      if (!file.existsSync()) {
+        return _errorView(context);
+      }
       image = Image.file(
-        File.fromUri(uri),
+        file,
         key: ValueKey<String>('reader-local-${widget.page.imageUrl}-$_retryEpoch'),
         width: double.infinity,
         height: widget.expand ? double.infinity : null,
