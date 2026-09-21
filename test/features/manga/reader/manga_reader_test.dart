@@ -113,8 +113,7 @@ final class _FakeReaderImageActions extends MangaReaderImageActions {
     required String chapterName,
   }) async {
     saveCalls++;
-    final temp = await Directory.systemTemp.createTemp('aw_reader_saved_');
-    return File('${temp.path}/saved.webp')..writeAsBytesSync(<int>[1]);
+    return File('/tmp/aw-reader-test-saved.webp');
   }
 }
 
@@ -497,6 +496,11 @@ void main() {
     expect(find.text('Set as cover'), findsOneWidget);
     expect(find.text('Share'), findsOneWidget);
     expect(find.text('Save'), findsOneWidget);
+
+    // _showImageActions awaits the bottom-sheet route. Dismiss it so the
+    // widget-test zone has no intentionally pending Future.
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('Mangayomi Save image action invokes the reader action service', (
@@ -565,7 +569,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.text('Save'));
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(actions.saveCalls, 1);
   });
