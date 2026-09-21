@@ -13,6 +13,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
+void _ignorePage(int _) {}
+
 const _pages = <MangaPage>[
   MangaPage(index: 0, imageUrl: 'https://example.test/0.webp'),
   MangaPage(index: 1, imageUrl: 'https://example.test/1.webp'),
@@ -484,6 +486,64 @@ void main() {
     expect(controller.offset, greaterThan(0));
     expect(find.text('page-2'), findsOneWidget);
     expect(reported, isNot(contains(0)));
+  });
+
+  testWidgets('continuous reader applies Mangayomi preload cache extent', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: SizedBox(
+          width: 400,
+          height: 300,
+          child: MangaContinuousReader(
+            pages: _pages,
+            initialPage: 0,
+            scrollDirection: Axis.vertical,
+            reverse: false,
+            settings: MangaReaderSettings(pagePreloadAmount: 6),
+            onPageChanged: _ignorePage,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final viewport = tester.widget<Viewport>(
+      find.descendant(
+        of: find.byType(SuperListView),
+        matching: find.byType(Viewport),
+      ).first,
+    );
+    expect(viewport.cacheExtent, 1350);
+  });
+
+  testWidgets('webtoon applies Mangayomi preload cache extent', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: SizedBox(
+          width: 400,
+          height: 300,
+          child: MangaWebtoonReader(
+            pages: _pages,
+            initialPage: 0,
+            settings: MangaReaderSettings(pagePreloadAmount: 6),
+            onPageChanged: _ignorePage,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final viewport = tester.widget<Viewport>(
+      find.descendant(
+        of: find.byType(CustomScrollView),
+        matching: find.byType(Viewport),
+      ).first,
+    );
+    expect(viewport.cacheExtent, 1350);
   });
 
   testWidgets('continuous reader uses one shared Mangayomi zoom surface', (
