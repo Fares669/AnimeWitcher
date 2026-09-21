@@ -847,6 +847,20 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
 
   Widget _bottomBar(BuildContext context, MangaReaderSettings settings) {
     final max = (_controller.pages.length - 1).clamp(0, 1 << 30).toInt();
+    final doublePage = shouldUseMangaDoublePage(
+      settings: settings,
+      viewport: MediaQuery.sizeOf(context),
+      mode: _controller.mode,
+      forceDoublePage: _forceDoublePage,
+    );
+    final currentLabel = mangaReaderPageLabel(
+      pageIndex: _controller.pageIndex,
+      pageCount: _controller.pages.length,
+      doublePage: doublePage,
+      singleFirst: settings.doublePageSingleFirstPage,
+    );
+    final readerDirection =
+        _controller.mode.isRtl ? TextDirection.rtl : TextDirection.ltr;
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 300),
       curve: Curves.ease,
@@ -861,6 +875,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               Row(
+                textDirection: readerDirection,
                 children: <Widget>[
                   IconButton(
                     onPressed: _controller.canPrevious
@@ -874,22 +889,23 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                   SizedBox(
                     width: 52,
                     child: Text(
-                      _controller.pages.isEmpty
-                          ? '0'
-                          : '${_controller.pageIndex + 1}',
+                      currentLabel,
                       textAlign: TextAlign.center,
                     ),
                   ),
                   Expanded(
-                    child: Slider(
-                      min: 0,
-                      max: max.toDouble(),
-                      divisions: max <= 0 ? null : max,
-                      value: _controller.pageIndex.clamp(0, max).toDouble(),
-                      label: '${_controller.pageIndex + 1}',
-                      onChanged: max <= 0
-                          ? null
-                          : (value) => _jumpToPage(value.toInt()),
+                    child: Directionality(
+                      textDirection: readerDirection,
+                      child: Slider(
+                        min: 0,
+                        max: max.toDouble(),
+                        divisions: max <= 0 ? null : max,
+                        value: _controller.pageIndex.clamp(0, max).toDouble(),
+                        label: currentLabel,
+                        onChanged: max <= 0
+                            ? null
+                            : (value) => _jumpToPage(value.toInt()),
+                      ),
                     ),
                   ),
                   SizedBox(
