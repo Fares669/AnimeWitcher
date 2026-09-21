@@ -14,6 +14,7 @@ class MangaWebtoonReader extends StatefulWidget {
     required this.onPageChanged,
     this.pageBuilder,
     this.settings = const MangaReaderSettings(),
+    this.doublePage = false,
     this.controller,
     this.trailingPage,
   });
@@ -23,6 +24,7 @@ class MangaWebtoonReader extends StatefulWidget {
   final ValueChanged<int> onPageChanged;
   final MangaPageBuilder? pageBuilder;
   final MangaReaderSettings settings;
+  final bool doublePage;
   final ScrollController? controller;
   final Widget? trailingPage;
 
@@ -39,14 +41,33 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       widget.controller ?? ScrollController();
   late final bool _ownsController = widget.controller == null;
 
-  int get _start => widget.pages.isEmpty
+  List<List<int>> get _spreads => widget.doublePage
+      ? mangaReaderPageSpreads(
+          pageCount: widget.pages.length,
+          singleFirst: widget.settings.doublePageSingleFirstPage,
+        )
+      : <List<int>>[
+          for (var index = 0; index < widget.pages.length; index++)
+            <int>[index],
+        ];
+
+  int get _startPage => widget.pages.isEmpty
       ? 0
       : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
+
+  int get _startSpread {
+    final page = _startPage;
+    final spreads = _spreads;
+    for (var index = 0; index < spreads.length; index++) {
+      if (spreads[index].contains(page)) return index;
+    }
+    return 0;
+  }
 
   @override
   void initState() {
     super.initState();
-    _lastReported = _start;
+    _lastReported = _startPage;
   }
 
   @override
@@ -55,8 +76,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     super.dispose();
   }
 
-  void _visibilityChanged(int index, VisibilityInfo info) {
-    _visibleFractions[index] = info.visibleFraction;
+  void _visibilityChanged(int pageIndex, VisibilityInfo info) {
+    _visibleFractions[pageIndex] = info.visibleFraction;
     if (_visibilityUpdateScheduled) return;
     _visibilityUpdateScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -76,15 +97,35 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     });
   }
 
-  Widget _page(BuildContext context, int index) {
+  Widget _pageContent(BuildContext context, int index) {
     final page = widget.pages[index];
-    final custom = widget.pageBuilder;
-    Widget child = custom?.call(context, page) ??
-        MangaZoomablePage(
-          settings: widget.settings,
-          continuous: true,
-          child: MangaPageImage(page: page, settings: widget.settings),
-        );
+    return widget.pageBuilder?.call(context, page) ??
+        MangaPageImage(page: page, settings: widget.settings);
+  }
+
+  Widget _spread(BuildContext context, List<int> indices) {
+    final primaryIndex = indices.first;
+    Widget child;
+    if (indices.length == 1) {
+      child = MangaZoomablePage(
+        settings: widget.settings,
+        continuous: true,
+        child: _pageContent(context, primaryIndex),
+      );
+    } else {
+      child = MangaZoomablePage(
+        settings: widget.settings,
+        continuous: true,
+        child: Row(
+          key: const ValueKey<String>('manga-reader-webtoon-double-page'),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            for (final index in indices)
+              Expanded(child: _pageContent(context, index)),
+          ],
+        ),
+      );
+    }
     if (widget.settings.showPageGaps) {
       child = Padding(
         key: const ValueKey('manga-reader-page-gap'),
@@ -93,8 +134,10 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       );
     }
     return VisibilityDetector(
-      key: ValueKey<String>('manga-webtoon-$index-${page.imageUrl}'),
-      onVisibilityChanged: (info) => _visibilityChanged(index, info),
+      key: ValueKey<String>(
+        'manga-webtoon-$primaryIndex-${indices.join('-')}',
+      ),
+      onVisibilityChanged: (info) => _visibilityChanged(primaryIndex, info),
       child: child,
     );
   }
@@ -103,7 +146,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   Widget build(BuildContext context) {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
 
-    final start = _start;
+    final spreads = _spreads;
+    final start = _startSpread;
     final side = MediaQuery.sizeOf(context).width *
         (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
     return Padding(
@@ -116,7 +160,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
           if (start > 0)
             SliverList(
               delegate: SliverChildBuilderDelegate(
-                (context, index) => _page(context, index),
+                (context, index) => _spread(context, spreads[index]),
                 childCount: start,
               ),
             ),
@@ -125,9 +169,9 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
             delegate: SliverChildBuilderDelegate(
               (context, localIndex) {
                 final index = start + localIndex;
-                return _page(context, index);
+                return _spread(context, spreads[index]);
               },
-              childCount: widget.pages.length - start,
+              childCount: spreads.length - start,
             ),
           ),
           if (widget.trailingPage != null)
