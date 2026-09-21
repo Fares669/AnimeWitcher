@@ -111,13 +111,21 @@ class MangaReadingRepository {
 
   Future<bool> toggleBookmark(String mangaId, String chapterId) async {
     final current = get(mangaId, chapterId);
-    if (current == null) return false;
-    final next = !current.isBookmarked;
+    final next = !(current?.isBookmarked ?? false);
+    final now = DateTime.now().millisecondsSinceEpoch;
     await save(
-      current.copyWith(
-        isBookmarked: next,
-        updatedAt: DateTime.now().millisecondsSinceEpoch,
-      ),
+      current?.copyWith(
+            isBookmarked: next,
+            updatedAt: now,
+          ) ??
+          MangaReadingProgress(
+            mangaId: mangaId,
+            chapterId: chapterId,
+            pageIndex: 0,
+            pageCount: 0,
+            updatedAt: now,
+            isBookmarked: next,
+          ),
     );
     return next;
   }
