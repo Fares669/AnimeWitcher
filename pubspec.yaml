@@ -44,6 +44,9 @@ dependencies:
   device_info_plus: any
   crypto: ^3.0.7
   ffi: ^2.2.0
+  code_assets: ^2.0.0
+  hooks: ^2.2.0
+  native_toolchain_c: ^0.19.4
   file_picker: ^12.0.0-beta.7
   image: ^4.8.0
   archive: ^4.0.7
