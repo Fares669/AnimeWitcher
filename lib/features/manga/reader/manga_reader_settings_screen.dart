@@ -382,7 +382,7 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
                 min: 2,
                 max: 30,
                 divisions: 28,
-                value: settings.autoScrollSpeed.clamp(2, 30),
+                value: settings.autoScrollSpeed.clamp(2, 30).toDouble(),
                 onChanged: (value) =>
                     update((s) => s.copyWith(autoScrollSpeed: value)),
               ),
@@ -486,7 +486,7 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
         subtitle: Slider(
           min: min,
           max: max,
-          value: value.clamp(min, max),
+          value: value.clamp(min, max).toDouble(),
           onChanged: onChanged,
         ),
       );

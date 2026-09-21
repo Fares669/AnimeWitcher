@@ -92,7 +92,12 @@ jobs:
         run: |
           flutter test test/core/storage/manga_reading_repository_test.dart \
             test/features/manga/reader/manga_reader_test.dart \
-            test/features/manga/reader/manga_reader_lazy_pages_test.dart -r expanded
+            test/features/manga/reader/manga_reader_lazy_pages_test.dart \
+            test/features/manga/reader/manga_reader_zoom_test.dart \
+            test/features/manga/reader/manga_reader_offline_test.dart \
+            test/features/manga/reader/manga_reader_settings_test.dart \
+            test/features/manga/reader/mangayomi_reader_widgets_test.dart \
+            test/features/manga/reader/manga_reader_settings_screen_test.dart -r expanded
 
       - name: Full search regression
         run: flutter test test/features/search -r expanded

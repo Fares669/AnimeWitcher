@@ -602,7 +602,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   }
 
   Widget _bottomBar(BuildContext context, MangaReaderSettings settings) {
-    final max = (_controller.pages.length - 1).clamp(0, 1 << 30);
+    final max = (_controller.pages.length - 1).clamp(0, 1 << 30).toInt();
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 300),
       curve: Curves.ease,
