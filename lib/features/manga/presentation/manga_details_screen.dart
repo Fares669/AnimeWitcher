@@ -13,6 +13,7 @@ import '../../../core/router/app_router.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/storage/library_category.dart';
 import '../../../core/utils/image_fallbacks.dart';
+import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
