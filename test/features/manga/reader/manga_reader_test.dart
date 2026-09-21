@@ -225,6 +225,46 @@ void main() {
     expect(second.pages.map((page) => page.imageUrl), pages.map((page) => page.imageUrl));
   });
 
+  test('reader refresh bypasses cached page URLs and refetches source', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_refresh_');
+    addTearDown(() => temp.delete(recursive: true));
+
+    final provider = _ReaderProvider();
+    const chapter = MangaChapter(
+      id: 'refresh-c1',
+      mangaId: 'refresh-m1',
+      url: 'https://example.test/chapter/refresh-1',
+      name: 'Chapter refresh',
+      number: 1,
+    );
+    final manga = MultimediaItem(
+      title: 'Refresh Reader Manga',
+      url: 'https://animewitcher.com/manga/refresh-m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+    final controller = MangaReaderController(
+      provider: provider,
+      progressRepository: _ReaderProgressRepository(),
+      manga: manga,
+      chapter: chapter,
+      chapters: const <MangaChapter>[chapter],
+      pageCache: MangaReaderPageCache(cacheDirectory: temp),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.load();
+    expect(provider.requestedChapterIds, <String>['refresh-c1']);
+
+    await controller.load();
+
+    expect(
+      provider.requestedChapterIds,
+      <String>['refresh-c1', 'refresh-c1'],
+    );
+  });
+
   test('reader preloads the adjacent chapter after current chapter loads', () async {
     final temp = await Directory.systemTemp.createTemp('aw_reader_preload_');
     addTearDown(() => temp.delete(recursive: true));
