@@ -176,6 +176,54 @@ void main() {
     );
   });
 
+  test('Mangayomi double-page page labels show the active spread', () {
+    expect(
+      mangaReaderPageLabel(
+        pageIndex: 0,
+        pageCount: 5,
+        doublePage: true,
+        singleFirst: false,
+      ),
+      '1-2',
+    );
+    expect(
+      mangaReaderPageLabel(
+        pageIndex: 1,
+        pageCount: 5,
+        doublePage: true,
+        singleFirst: false,
+      ),
+      '1-2',
+    );
+    expect(
+      mangaReaderPageLabel(
+        pageIndex: 0,
+        pageCount: 5,
+        doublePage: true,
+        singleFirst: true,
+      ),
+      '1',
+    );
+    expect(
+      mangaReaderPageLabel(
+        pageIndex: 2,
+        pageCount: 5,
+        doublePage: true,
+        singleFirst: true,
+      ),
+      '2-3',
+    );
+    expect(
+      mangaReaderPageLabel(
+        pageIndex: 4,
+        pageCount: 5,
+        doublePage: true,
+        singleFirst: false,
+      ),
+      '5',
+    );
+  });
+
   test('Mangayomi reader hide thresholds are preserved', () {
     expect(mangaReaderHideThresholdPixels(0), 5);
     expect(mangaReaderHideThresholdPixels(1), 13);
