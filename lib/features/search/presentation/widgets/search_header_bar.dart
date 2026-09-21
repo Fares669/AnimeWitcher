@@ -290,11 +290,12 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                       height: SearchGlassSurface.height,
                     ),
                     SizedBox(
-                      // Anime Details and Character Details both pin their
-                      // native trailing Liquid Glass toolbar at 34pt. Search
-                      // already has 24pt outer padding, so a 10pt trailing
-                      // spacer lands the three-button capsule on the same x.
-                      width: appleUsesPersistentLiquidGlassHeader ? 10 : 8,
+                      // Details pins its native toolbar 34pt inside the iOS
+                      // safe-area trailing edge. Search is an inline platform
+                      // view, so include that same safe-area inset explicitly.
+                      width: appleUsesPersistentLiquidGlassHeader
+                          ? 10 + MediaQuery.paddingOf(context).right
+                          : 8,
                     ),
                   ],
                 ],
