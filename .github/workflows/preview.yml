@@ -1,6 +1,11 @@
 name: Build Preview
 
 on:
+  push:
+    branches:
+      - feat/manga-manhwa
+    paths:
+      - '.github/preview-ios-trigger'
   workflow_dispatch:
     inputs:
       branch:
@@ -32,7 +37,7 @@ on:
 jobs:
   android:
     name: Android Build
-    if: ${{ github.event.inputs.build_android == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.build_android == 'true' }}
     runs-on: ubuntu-latest
     env:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -104,12 +109,12 @@ jobs:
 
   ios:
     name: iOS Build (Unsigned)
-    if: ${{ github.event.inputs.build_ios == 'true' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.build_ios == 'true') || github.event_name == 'push' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.branch }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch || github.sha }}
       - name: Select Latest Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -161,7 +166,7 @@ jobs:
 
   macos:
     name: macOS Build (${{ matrix.arch }})
-    if: ${{ github.event.inputs.build_macos == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.build_macos == 'true' }}
     runs-on: macos-latest
     strategy:
       matrix:
@@ -263,7 +268,7 @@ jobs:
 
   windows:
     name: Windows Build (${{ matrix.arch }})
-    if: ${{ github.event.inputs.build_windows == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.build_windows == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
