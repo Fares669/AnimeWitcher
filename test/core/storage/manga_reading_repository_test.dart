@@ -44,6 +44,17 @@ void main() {
     expect(restored.isRead, isFalse);
   });
 
+  test('toggleBookmark creates progress for an unseen chapter', () async {
+    final repository = MangaReadingRepository(_MemoryStorage());
+
+    expect(await repository.toggleBookmark('m1', 'c1'), isTrue);
+
+    final restored = repository.get('m1', 'c1');
+    expect(restored, isNotNull);
+    expect(restored!.isBookmarked, isTrue);
+    expect(restored.isRead, isFalse);
+  });
+
   test('markRead can create a read row for an unseen duplicate chapter', () async {
     final repository = MangaReadingRepository(_MemoryStorage());
 
