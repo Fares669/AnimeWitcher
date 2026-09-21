@@ -101,6 +101,18 @@ final class _OverlayReaderSettingsNotifier
   );
 }
 
+final class _PerMangaReaderSettingsNotifier
+    extends MangaReaderSettingsNotifier {
+  @override
+  MangaReaderSettings build() => const MangaReaderSettings(
+    defaultMode: MangaReaderMode.vertical,
+    personalReaderModes: <String, MangaReaderMode>{
+      'm1': MangaReaderMode.webtoon,
+    },
+  );
+}
+
+
 final class _RecordingReaderProgressRepository
     extends MangaReadingRepository {
   _RecordingReaderProgressRepository() : super(StorageService());
@@ -274,6 +286,48 @@ void main() {
       find.byType(CustomScrollView),
     );
     expect(scroll.scrollDirection, Axis.vertical);
+  });
+
+  testWidgets('reader uses the Mangayomi per-manga reading mode', (tester) async {
+    final provider = _ReaderProvider();
+    const chapter = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/1',
+      name: 'Chapter 1',
+    );
+    final manga = MultimediaItem(
+      title: 'Reader Manga',
+      url: 'https://animewitcher.com/manga/m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _PerMangaReaderSettingsNotifier.new,
+          ),
+        ],
+        child: MaterialApp(
+          home: MangaReaderScreen(
+            manga: manga,
+            chapter: chapter,
+            chapters: const <MangaChapter>[chapter],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(MangaWebtoonReader), findsOneWidget);
   });
 
   testWidgets('reader uses Mangayomi navigation overlay widget', (tester) async {
