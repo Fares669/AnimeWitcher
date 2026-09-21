@@ -62,13 +62,22 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   bool? _keepAwakeApplied;
   bool? _fullScreenApplied;
 
+  String get _readerMangaId {
+    final chapterId = widget.chapter.mangaId.trim();
+    if (chapterId.isNotEmpty) return chapterId;
+    final syncId = widget.manga.syncData?['mangaId']?.trim() ?? '';
+    return syncId.isNotEmpty ? syncId : widget.manga.url;
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     final provider = _resolveProvider();
     final settings = ref.read(mangaReaderSettingsProvider);
-    _autoScrollRunning = settings.autoScrollEnabled;
+    final autoScroll = settings.autoScrollForManga(_readerMangaId);
+    _autoScrollRunning = autoScroll.enabled;
+    _forceDoublePage = settings.doublePageForManga(_readerMangaId);
     _showNavigationOverlay = settings.showNavigationOverlayOnStart;
     _controller = MangaReaderController(
       provider: provider,
@@ -77,7 +86,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       chapter: widget.chapter,
       chapters: widget.chapters,
       localChapterDirectory: widget.localChapterDirectory,
-      initialMode: settings.defaultMode,
+      initialMode: settings.modeForManga(_readerMangaId),
     );
     _controller.load();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -151,9 +160,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   }
 
   void _syncAutoScroll(MangaReaderSettings settings) {
+    final autoScroll = settings.autoScrollForManga(_readerMangaId);
     final shouldRun =
         _autoScrollRunning &&
-        settings.autoScrollEnabled &&
+        autoScroll.enabled &&
         _controller.mode.isContinuous;
     if (!shouldRun) {
       _autoScrollTimer?.cancel();
@@ -164,7 +174,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     _autoScrollTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
       if (!mounted || !_continuousController.hasClients) return;
       final position = _continuousController.position;
-      final delta = settings.autoScrollSpeed * 0.15;
+      final delta = autoScroll.speed * 0.15;
       final target = (position.pixels + delta).clamp(
         position.minScrollExtent,
         position.maxScrollExtent,
@@ -181,17 +191,40 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   }
 
   void _toggleAutoScroll(MangaReaderSettings settings) {
-    setState(() => _autoScrollRunning = !_autoScrollRunning);
-    _syncAutoScroll(settings);
+    final current = settings.autoScrollForManga(_readerMangaId);
+    final nextEnabled = !current.enabled;
+    final next = settings.withMangaAutoScroll(
+      _readerMangaId,
+      enabled: nextEnabled,
+      speed: current.speed,
+    );
+    setState(() => _autoScrollRunning = nextEnabled);
+    unawaited(
+      ref.read(mangaReaderSettingsProvider.notifier).setSettings(next),
+    );
+    _syncAutoScroll(next);
   }
 
   void _setMode(MangaReaderMode mode, MangaReaderSettings settings) {
     _controller.setMode(mode);
+    final next = settings.withMangaMode(_readerMangaId, mode);
+    unawaited(
+      ref.read(mangaReaderSettingsProvider.notifier).setSettings(next),
+    );
     setState(() {
       _readerEpoch++;
       if (!mode.isContinuous) _autoScrollRunning = false;
     });
-    _syncAutoScroll(settings);
+    _syncAutoScroll(next);
+  }
+
+  void _toggleDoublePage(MangaReaderSettings settings) {
+    final nextValue = !_forceDoublePage;
+    final next = settings.withMangaDoublePage(_readerMangaId, nextValue);
+    setState(() => _forceDoublePage = nextValue);
+    unawaited(
+      ref.read(mangaReaderSettingsProvider.notifier).setSettings(next),
+    );
   }
 
   void _onPageChanged(int index, MangaReaderSettings settings) {
@@ -469,10 +502,18 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                   if (_controller.mode.isContinuous)
                     SwitchListTile(
                       title: const Text('Auto scroll'),
-                      value: current.autoScrollEnabled,
-                      onChanged: (value) => notifier.update(
-                        (s) => s.copyWith(autoScrollEnabled: value),
-                      ),
+                      value: current.autoScrollForManga(_readerMangaId).enabled,
+                      onChanged: (value) {
+                        final auto = current.autoScrollForManga(_readerMangaId);
+                        final next = current.withMangaAutoScroll(
+                          _readerMangaId,
+                          enabled: value,
+                          speed: auto.speed,
+                        );
+                        setState(() => _autoScrollRunning = value);
+                        unawaited(notifier.setSettings(next));
+                        _syncAutoScroll(next);
+                      },
                     ),
                   ListTile(
                     leading: const Icon(Icons.settings_rounded),
@@ -790,9 +831,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                     onPressed: _controller.mode.isContinuous ||
                             _controller.mode == MangaReaderMode.vertical
                         ? null
-                        : () => setState(
-                            () => _forceDoublePage = !_forceDoublePage,
-                          ),
+                        : () => _toggleDoublePage(settings),
                     icon: Icon(
                       _forceDoublePage ||
                               shouldUseMangaDoublePage(
@@ -890,7 +929,8 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                 child: MangaReaderAutoScrollButton(
                   isContinuousMode: _controller.mode.isContinuous,
                   isUiVisible: _controlsVisible,
-                  enabled: settings.autoScrollEnabled,
+                  enabled:
+                      settings.autoScrollForManga(_readerMangaId).enabled,
                   isPlaying: _autoScrollRunning,
                   onToggle: () => _toggleAutoScroll(settings),
                 ),
