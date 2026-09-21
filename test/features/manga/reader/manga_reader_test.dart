@@ -101,6 +101,25 @@ final class _OverlayReaderSettingsNotifier
   );
 }
 
+final class _RecordingReaderProgressRepository
+    extends MangaReadingRepository {
+  _RecordingReaderProgressRepository() : super(StorageService());
+
+  final Map<String, MangaReadingProgress> values =
+      <String, MangaReadingProgress>{};
+
+  String _key(String mangaId, String chapterId) => '$mangaId::$chapterId';
+
+  @override
+  MangaReadingProgress? get(String mangaId, String chapterId) =>
+      values[_key(mangaId, chapterId)];
+
+  @override
+  Future<void> save(MangaReadingProgress progress) async {
+    values[_key(progress.mangaId, progress.chapterId)] = progress;
+  }
+}
+
 final class _ReaderProgressRepository extends MangaReadingRepository {
   _ReaderProgressRepository() : super(StorageService());
 
@@ -166,6 +185,56 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     expect(provider.requestedChapterIds, containsAll(<String>['c1', 'c2']));
+  });
+
+  test('auto-read duplicate chapters follows Mangayomi reader completion', () async {
+    final provider = _ReaderProvider();
+    final progress = _RecordingReaderProgressRepository();
+    const first = MangaChapter(
+      id: 'c1-a',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/1-a',
+      name: 'Chapter 1',
+      number: 1,
+    );
+    const duplicate = MangaChapter(
+      id: 'c1-b',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/1-b',
+      name: 'Chapter 1 duplicate',
+      number: 1,
+    );
+    const second = MangaChapter(
+      id: 'c2',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/2',
+      name: 'Chapter 2',
+      number: 2,
+    );
+    final manga = MultimediaItem(
+      title: 'Reader Manga',
+      url: 'https://animewitcher.com/manga/m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+    final controller = MangaReaderController(
+      provider: provider,
+      progressRepository: progress,
+      manga: manga,
+      chapter: first,
+      chapters: const <MangaChapter>[first, duplicate, second],
+      initialMode: MangaReaderMode.pagedRtl,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.load();
+    controller.setPageIndex(1, autoReadDuplicateChapters: true);
+    await controller.flushProgress();
+
+    expect(progress.get('m1', 'c1-a')?.isRead, isTrue);
+    expect(progress.get('m1', 'c1-b')?.isRead, isTrue);
+    expect(progress.get('m1', 'c2'), isNull);
   });
 
   testWidgets('paged RTL reader reverses page direction', (tester) async {

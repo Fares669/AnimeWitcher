@@ -44,6 +44,18 @@ void main() {
     expect(restored.isRead, isFalse);
   });
 
+  test('markRead can create a read row for an unseen duplicate chapter', () async {
+    final repository = MangaReadingRepository(_MemoryStorage());
+
+    await repository.markRead('m1', 'duplicate', pageCount: 1);
+
+    final restored = repository.get('m1', 'duplicate');
+    expect(restored, isNotNull);
+    expect(restored!.isRead, isTrue);
+    expect(restored.pageIndex, 0);
+    expect(restored.pageCount, 1);
+  });
+
   test('markRead preserves identity and marks the last page', () async {
     final repository = MangaReadingRepository(_MemoryStorage());
     await repository.save(
