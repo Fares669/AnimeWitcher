@@ -13,6 +13,7 @@ import 'package:animewitcher/features/manga/reader/manga_reader_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
@@ -406,6 +407,57 @@ void main() {
       find.byType(CustomScrollView),
     );
     expect(scroll.scrollDirection, Axis.vertical);
+  });
+
+  testWidgets('long press opens Mangayomi image actions', (tester) async {
+    final provider = _ReaderProvider();
+    const chapter = MangaChapter(
+      id: 'actions-c1',
+      mangaId: 'actions-m1',
+      url: 'https://example.test/chapter/actions-1',
+      name: 'Chapter actions',
+      number: 1,
+    );
+    final manga = MultimediaItem(
+      title: 'Actions Reader Manga',
+      url: 'https://animewitcher.com/manga/actions-m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _ReaderSettingsNotifier.new,
+          ),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          home: MangaReaderScreen(
+            manga: manga,
+            chapter: chapter,
+            chapters: const <MangaChapter>[chapter],
+          ),
+        ),
+      ),
+    );
+    await provider.waitUntilRequested('actions-c1');
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(MangaPageImage), findsWidgets);
+    await tester.longPress(find.byType(MangaPageImage).first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Set as cover'), findsOneWidget);
+    expect(find.text('Share'), findsOneWidget);
+    expect(find.text('Save'), findsOneWidget);
   });
 
   testWidgets('reader uses the Mangayomi per-manga reading mode', (tester) async {
