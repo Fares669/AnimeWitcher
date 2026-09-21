@@ -90,6 +90,10 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
   @override
   void didUpdateWidget(covariant MangaZoomablePage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.navigationController, widget.navigationController)) {
+      oldWidget.navigationController?._detach(this);
+      widget.navigationController?._attach(this);
+    }
     if (oldWidget.contentSize != widget.contentSize ||
         oldWidget.settings.landscapeZoom != widget.settings.landscapeZoom ||
         oldWidget.settings.zoomStartPosition !=
@@ -136,14 +140,6 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     });
   }
 
-  @override
-  void didUpdateWidget(covariant MangaZoomablePage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.navigationController, widget.navigationController)) {
-      oldWidget.navigationController?._detach(this);
-      widget.navigationController?._attach(this);
-    }
-  }
 
   @override
   void dispose() {
