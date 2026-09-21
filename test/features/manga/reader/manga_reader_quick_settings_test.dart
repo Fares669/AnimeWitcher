@@ -24,7 +24,7 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: <Override>[
+        overrides: [
           mangaReaderSettingsProvider.overrideWith(
             _QuickSettingsNotifier.new,
           ),
@@ -91,7 +91,7 @@ void main() {
   ) async {
     await tester.pumpWidget(
       ProviderScope(
-        overrides: <Override>[
+        overrides: [
           mangaReaderSettingsProvider.overrideWith(
             _QuickSettingsNotifier.new,
           ),
