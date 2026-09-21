@@ -92,6 +92,16 @@ void main() {
     expect(find.text('Background color'), findsOneWidget);
     expect(find.text('Scale type'), findsOneWidget);
     expect(find.text('Flash on page change'), findsOneWidget);
+
+    final generalScrollable = find.descendant(
+      of: find.byType(ListView).hitTestable(),
+      matching: find.byType(Scrollable),
+    ).first;
+    await tester.scrollUntilVisible(
+      find.text('All reader settings'),
+      240,
+      scrollable: generalScrollable,
+    );
     expect(find.text('All reader settings'), findsOneWidget);
 
     await tester.tap(find.text('Filter'));
@@ -99,6 +109,16 @@ void main() {
     expect(find.text('Invert colors'), findsOneWidget);
     expect(find.text('Grayscale'), findsOneWidget);
     expect(find.text('Brightness'), findsOneWidget);
+
+    final filterScrollable = find.descendant(
+      of: find.byType(ListView).hitTestable(),
+      matching: find.byType(Scrollable),
+    ).first;
+    await tester.scrollUntilVisible(
+      find.text('Custom color filter'),
+      240,
+      scrollable: filterScrollable,
+    );
     expect(find.text('Custom color filter'), findsOneWidget);
 
     await tester.tap(find.text('Custom color filter'));
@@ -107,6 +127,11 @@ void main() {
     expect(find.text('G'), findsOneWidget);
     expect(find.text('B'), findsOneWidget);
     expect(find.text('A'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Blend mode'),
+      200,
+      scrollable: filterScrollable,
+    );
     expect(find.text('Blend mode'), findsOneWidget);
   });
 
