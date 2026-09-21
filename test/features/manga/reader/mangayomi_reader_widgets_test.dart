@@ -543,7 +543,7 @@ void main() {
     final scroll = tester.widget<CustomScrollView>(
       find.byType(CustomScrollView),
     );
-    expect(scroll.scrollCacheExtent, 1350);
+    expect(scroll.scrollCacheExtent?.value, 1350);
   });
 
   test('continuous reader routes loaded wide pages through split logic', () {

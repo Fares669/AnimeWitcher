@@ -169,7 +169,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       padding: EdgeInsets.symmetric(horizontal: side),
       child: CustomScrollView(
         controller: _controller,
-        scrollCacheExtent: cacheExtent,
+        scrollCacheExtent: ScrollCacheExtent.pixels(cacheExtent),
         center: _centerKey,
         slivers: <Widget>[
           if (start > 0)
