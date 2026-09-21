@@ -10,6 +10,7 @@ import 'package:animewitcher/features/manga/reader/widgets/manga_reader_gesture_
 import 'package:animewitcher/features/manga/reader/widgets/manga_chapter_transition_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 const _pages = <MangaPage>[
@@ -177,8 +178,8 @@ void main() {
       ),
     );
 
-    final list = tester.widget<ListView>(find.byType(ListView));
-    expect(list.childrenDelegate.estimatedChildCount, _pages.length + 1);
+    expect(find.byType(SuperListView), findsOneWidget);
+    expect(find.text('chapter-transition'), findsOneWidget);
   });
 
   testWidgets('webtoon appends Mangayomi chapter transition page', (
@@ -242,9 +243,14 @@ void main() {
       ),
     );
 
-    final list = tester.widget<ListView>(find.byType(ListView));
-    expect(list.scrollDirection, Axis.horizontal);
-    expect(list.reverse, isTrue);
+    expect(find.byType(SuperListView), findsOneWidget);
+    final scrollable = tester.widget<Scrollable>(
+      find.descendant(
+        of: find.byType(SuperListView),
+        matching: find.byType(Scrollable),
+      ).first,
+    );
+    expect(scrollable.axisDirection, AxisDirection.left);
   });
 
   testWidgets('double page renders a pair in one paged viewport', (tester) async {
@@ -296,8 +302,7 @@ void main() {
     );
     expect(find.text('page-0'), findsOneWidget);
     expect(find.text('page-1'), findsOneWidget);
-    final list = tester.widget<ListView>(find.byType(ListView));
-    expect(list.childrenDelegate.estimatedChildCount, 2);
+    expect(find.byType(SuperListView), findsOneWidget);
   });
 
   testWidgets('webtoon double page renders one vertical spread', (tester) async {
@@ -342,7 +347,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byType(MangaContinuousZoomSurface), findsOneWidget);
+    expect(find.byType(InteractiveViewer), findsOneWidget);
   });
 
   testWidgets('continuous zoom leaves one-finger scroll native', (
@@ -374,10 +379,44 @@ void main() {
     await tester.pump();
 
     expect(controller.offset, 0);
-    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.drag(find.byType(SuperListView), const Offset(0, -300));
     await tester.pumpAndSettle();
 
     expect(controller.offset, greaterThan(0));
+  });
+
+  testWidgets('continuous reader resumes at the persisted page index', (
+    tester,
+  ) async {
+    final controller = ScrollController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 360,
+          child: MangaContinuousReader(
+            pages: _pages,
+            initialPage: 2,
+            scrollDirection: Axis.vertical,
+            reverse: false,
+            settings: const MangaReaderSettings(),
+            controller: controller,
+            onPageChanged: (_) {},
+            pageBuilder: (_, page) => SizedBox(
+              height: 500,
+              child: Text('page-${page.index}'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(controller.hasClients, isTrue);
+    expect(controller.offset, greaterThan(0));
+    expect(find.text('page-2'), findsOneWidget);
   });
 
   testWidgets('continuous reader uses one shared Mangayomi zoom surface', (

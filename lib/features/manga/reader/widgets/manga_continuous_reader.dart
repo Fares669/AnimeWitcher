@@ -1,5 +1,6 @@
 // Adapted from Mangayomi's continuous reader behavior (Apache-2.0).
 import 'package:flutter/material.dart';
+import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../../core/domain/entity/manga.dart';
@@ -41,6 +42,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   late final ScrollController _controller =
       widget.controller ?? ScrollController();
   late final bool _ownsController = widget.controller == null;
+  final ListController _listController = ListController();
   final Map<int, double> _visibility = <int, double>{};
   late int _lastReported = widget.pages.isEmpty
       ? 0
@@ -59,6 +61,42 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
           for (var index = 0; index < widget.pages.length; index++)
             <int>[index],
         ];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _jumpToInitialSpread();
+    });
+  }
+
+  int _spreadIndexForPage(int pageIndex) {
+    final spreads = _spreads;
+    for (var index = 0; index < spreads.length; index++) {
+      if (spreads[index].contains(pageIndex)) return index;
+    }
+    return 0;
+  }
+
+  void _jumpToInitialSpread([int attempt = 0]) {
+    if (!mounted || widget.pages.isEmpty || widget.initialPage <= 0) return;
+    final targetPage = widget.initialPage
+        .clamp(0, widget.pages.length - 1)
+        .toInt();
+    final targetSpread = _spreadIndexForPage(targetPage);
+    if (_listController.isAttached && _controller.hasClients) {
+      _listController.jumpToItem(
+        index: targetSpread,
+        scrollController: _controller,
+        alignment: 0,
+      );
+      return;
+    }
+    if (attempt >= 5) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _jumpToInitialSpread(attempt + 1);
+    });
+  }
 
   @override
   void dispose() {
@@ -145,8 +183,9 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
       padding: widget.scrollDirection == Axis.vertical
           ? EdgeInsets.symmetric(horizontal: side)
           : EdgeInsets.zero,
-      child: ListView.builder(
+      child: SuperListView.builder(
         controller: _controller,
+        listController: _listController,
         scrollDirection: widget.scrollDirection,
         reverse: widget.reverse,
         itemCount: spreads.length + (widget.trailingPage == null ? 0 : 1),

@@ -61,6 +61,7 @@ dependencies:
   flutter_svg: ^2.2.3
   dpad: ^2.0.2
   shimmer: ^3.0.0
+  super_sliver_list: ^0.4.1
   video_view:
     path: packages/video_view
   flutter_cache_manager: ^3.4.1
