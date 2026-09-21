@@ -99,9 +99,13 @@ void main() {
     expect(
       MangaReaderMode.values,
       <MangaReaderMode>[
-        MangaReaderMode.webtoon,
+        MangaReaderMode.vertical,
+        MangaReaderMode.verticalContinuous,
         MangaReaderMode.pagedLtr,
         MangaReaderMode.pagedRtl,
+        MangaReaderMode.horizontalContinuous,
+        MangaReaderMode.horizontalContinuousRtl,
+        MangaReaderMode.webtoon,
       ],
     );
   });
