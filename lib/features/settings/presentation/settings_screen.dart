@@ -20,6 +20,7 @@ import 'widgets/settings_dialogs.dart';
 import 'widgets/taskbar_customization_dialog.dart';
 import 'player_settings_provider.dart';
 import 'general_settings_provider.dart';
+import '../../manga/reader/manga_reader_settings_screen.dart';
 import 'app_version_provider.dart';
 
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -430,6 +431,31 @@ class SettingsScreen extends ConsumerWidget {
             subtitle: l10n.playerControlsSubtitle,
             isLast: true,
             onTap: () => showPlayerControlsDialog(context, ref),
+          ),
+        ],
+      ),
+      const SizedBox(height: LayoutConstants.spacingLg),
+      SettingsGroup(
+        title: appText(context, english: 'Reader', arabic: 'القارئ'),
+        children: [
+          SettingsTile(
+            icon: Icons.chrome_reader_mode_rounded,
+            title: appText(
+              context,
+              english: 'Manga Reader',
+              arabic: 'قارئ المانجا',
+            ),
+            subtitle: appText(
+              context,
+              english: 'Reading modes, display, navigation and color filters',
+              arabic: 'أوضاع القراءة والعرض والتنقل وفلاتر الألوان',
+            ),
+            isLast: true,
+            onTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => const MangaReaderSettingsScreen(),
+              ),
+            ),
           ),
         ],
       ),
