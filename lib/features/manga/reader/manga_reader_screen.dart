@@ -67,6 +67,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   int _pageChangeCount = 0;
   bool? _keepAwakeApplied;
   bool? _fullScreenApplied;
+  bool _chapterNavigationInProgress = false;
 
   String get _readerMangaId {
     final chapterId = widget.chapter.mangaId.trim();
@@ -409,22 +410,30 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     return true;
   }
 
+  Future<void> _navigateChapter({required bool next}) async {
+    if (_chapterNavigationInProgress ||
+        (next ? !_controller.canNext : !_controller.canPrevious)) {
+      return;
+    }
+    _chapterNavigationInProgress = true;
+    try {
+      if (next) {
+        await _controller.nextChapter();
+      } else {
+        await _controller.previousChapter();
+      }
+      if (mounted) setState(() => _readerEpoch++);
+    } finally {
+      _chapterNavigationInProgress = false;
+    }
+  }
+
   void _openPreviousChapter() {
-    if (!_controller.canPrevious) return;
-    unawaited(
-      _controller.previousChapter().then((_) {
-        if (mounted) setState(() => _readerEpoch++);
-      }),
-    );
+    unawaited(_navigateChapter(next: false));
   }
 
   void _openNextChapter() {
-    if (!_controller.canNext) return;
-    unawaited(
-      _controller.nextChapter().then((_) {
-        if (mounted) setState(() => _readerEpoch++);
-      }),
-    );
+    unawaited(_navigateChapter(next: true));
   }
 
   void _toggleFullScreen(MangaReaderSettings settings) {
@@ -654,6 +663,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     nextChapter: _nextChapter,
     mangaName: widget.manga.title,
     readerMode: _controller.mode,
+    onContinue: _controller.canNext ? _openNextChapter : null,
   );
 
   Widget _readerBody(
@@ -710,6 +720,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         settings: settings,
         navigationController: _zoomNavigationController,
         trailingPage: _chapterTransitionPage(),
+        onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.pagedLtr => MangaPagedReader(
@@ -721,6 +732,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         settings: settings,
         navigationController: _zoomNavigationController,
         trailingPage: _chapterTransitionPage(),
+        onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.pagedRtl => MangaPagedReader(
@@ -732,6 +744,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         settings: settings,
         navigationController: _zoomNavigationController,
         trailingPage: _chapterTransitionPage(),
+        onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.verticalContinuous => MangaContinuousReader(
@@ -744,6 +757,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         settings: settings,
         controller: _continuousController,
         trailingPage: _chapterTransitionPage(),
+        onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.webtoon => MangaWebtoonReader(
@@ -754,6 +768,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         doublePage: doublePage,
         controller: _continuousController,
         trailingPage: _chapterTransitionPage(),
+        onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.horizontalContinuous => MangaContinuousReader(
@@ -765,6 +780,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         settings: settings,
         controller: _continuousController,
         trailingPage: _chapterTransitionPage(),
+        onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.horizontalContinuousRtl => MangaContinuousReader(
@@ -776,6 +792,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         settings: settings,
         controller: _continuousController,
         trailingPage: _chapterTransitionPage(),
+        onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
     };

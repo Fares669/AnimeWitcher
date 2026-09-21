@@ -17,6 +17,7 @@ class MangaWebtoonReader extends StatefulWidget {
     this.doublePage = false,
     this.controller,
     this.trailingPage,
+    this.onTrailingAdvance,
   });
 
   final List<MangaPage> pages;
@@ -27,6 +28,7 @@ class MangaWebtoonReader extends StatefulWidget {
   final bool doublePage;
   final ScrollController? controller;
   final Widget? trailingPage;
+  final VoidCallback? onTrailingAdvance;
 
   @override
   State<MangaWebtoonReader> createState() => _MangaWebtoonReaderState();
@@ -40,6 +42,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   late final ScrollController _controller =
       widget.controller ?? ScrollController();
   late final bool _ownsController = widget.controller == null;
+  bool _trailingAdvanceRequested = false;
 
   List<List<int>> get _spreads => widget.doublePage
       ? mangaReaderPageSpreads(
@@ -131,6 +134,22 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     );
   }
 
+  bool _handleOverscroll(OverscrollNotification notification) {
+    final callback = widget.onTrailingAdvance;
+    if (_trailingAdvanceRequested ||
+        widget.trailingPage == null ||
+        callback == null ||
+        !mangaReaderShouldAdvancePastTransition(
+          extentAfter: notification.metrics.extentAfter,
+          overscroll: notification.overscroll,
+        )) {
+      return false;
+    }
+    _trailingAdvanceRequested = true;
+    callback();
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
@@ -172,7 +191,10 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       scrollController: _controller,
       scrollDirection: Axis.vertical,
       settings: widget.settings,
-      child: scrollable,
+      child: NotificationListener<OverscrollNotification>(
+        onNotification: _handleOverscroll,
+        child: scrollable,
+      ),
     );
   }
 }

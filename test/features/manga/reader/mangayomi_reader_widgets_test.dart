@@ -106,6 +106,33 @@ void main() {
     expect(previous, 1);
   });
 
+  test(
+    'chapter transition advances only on forward overscroll at the list end',
+    () {
+      expect(
+        mangaReaderShouldAdvancePastTransition(
+          extentAfter: 0,
+          overscroll: 8,
+        ),
+        isTrue,
+      );
+      expect(
+        mangaReaderShouldAdvancePastTransition(
+          extentAfter: 24,
+          overscroll: 8,
+        ),
+        isFalse,
+      );
+      expect(
+        mangaReaderShouldAdvancePastTransition(
+          extentAfter: 0,
+          overscroll: -8,
+        ),
+        isFalse,
+      );
+    },
+  );
+
   testWidgets('Mangayomi chapter transition shows current and next chapters', (
     tester,
   ) async {
@@ -138,6 +165,44 @@ void main() {
     expect(find.text('Chapter 1'), findsOneWidget);
     expect(find.text('Chapter 2'), findsOneWidget);
     expect(find.text('Next chapter'), findsOneWidget);
+  });
+
+  testWidgets('next chapter transition card continues reading', (tester) async {
+    var continued = 0;
+    const current = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://example.test/c1',
+      name: 'Chapter 1',
+    );
+    const next = MangaChapter(
+      id: 'c2',
+      mangaId: 'm1',
+      url: 'https://example.test/c2',
+      name: 'Chapter 2',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('en'),
+        home: MangaReaderChapterTransitionPage(
+          currentChapter: current,
+          nextChapter: next,
+          mangaName: 'Reader Manga',
+          readerMode: MangaReaderMode.vertical,
+          onContinue: () => continued++,
+        ),
+      ),
+    );
+
+    await tester.tap(
+      find.byKey(
+        const ValueKey<String>('manga-reader-next-chapter-transition'),
+      ),
+    );
+    await tester.pump();
+
+    expect(continued, 1);
   });
 
   testWidgets('paged reader appends Mangayomi chapter transition page', (

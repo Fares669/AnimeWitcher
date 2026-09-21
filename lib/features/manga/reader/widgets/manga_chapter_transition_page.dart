@@ -5,6 +5,11 @@ import 'package:flutter/material.dart';
 import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
 
+bool mangaReaderShouldAdvancePastTransition({
+  required double extentAfter,
+  required double overscroll,
+}) => extentAfter <= 0.5 && overscroll > 0;
+
 class MangaReaderChapterTransitionPage extends StatelessWidget {
   const MangaReaderChapterTransitionPage({
     super.key,
@@ -12,12 +17,14 @@ class MangaReaderChapterTransitionPage extends StatelessWidget {
     required this.nextChapter,
     required this.mangaName,
     required this.readerMode,
+    this.onContinue,
   });
 
   final MangaChapter currentChapter;
   final MangaChapter? nextChapter;
   final String mangaName;
   final MangaReaderMode readerMode;
+  final VoidCallback? onContinue;
 
   String _t(BuildContext context, String en, String ar) =>
       Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
@@ -78,6 +85,7 @@ class MangaReaderChapterTransitionPage extends StatelessWidget {
                     label: _t(context, 'Next chapter', 'الفصل التالي'),
                     name: nextChapter!.name,
                     primary: true,
+                    onTap: onContinue,
                   ),
                   const SizedBox(height: 20),
                   Text(
@@ -111,6 +119,7 @@ class MangaReaderChapterTransitionPage extends StatelessWidget {
             label: _t(context, 'Next chapter', 'الفصل التالي'),
             name: nextChapter!.name,
             primary: true,
+            onTap: onContinue,
           );
     final arrow = Icon(
       nextChapter == null
@@ -172,9 +181,10 @@ class MangaReaderChapterTransitionPage extends StatelessWidget {
     required String label,
     required String name,
     required bool primary,
+    VoidCallback? onTap,
   }) {
     final theme = Theme.of(context);
-    return Container(
+    final card = Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: primary
@@ -201,6 +211,17 @@ class MangaReaderChapterTransitionPage extends StatelessWidget {
                 ?.copyWith(fontWeight: FontWeight.w600),
           ),
         ],
+      ),
+    );
+    if (onTap == null) return card;
+    return Semantics(
+      button: true,
+      label: _t(context, 'Continue to next chapter', 'متابعة إلى الفصل التالي'),
+      child: GestureDetector(
+        key: const ValueKey<String>('manga-reader-next-chapter-transition'),
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: card,
       ),
     );
   }

@@ -19,6 +19,7 @@ class MangaPagedReader extends StatefulWidget {
     this.doublePage = false,
     this.settings = const MangaReaderSettings(),
     this.trailingPage,
+    this.onTrailingAdvance,
     this.navigationController,
   });
 
@@ -31,6 +32,7 @@ class MangaPagedReader extends StatefulWidget {
   final bool doublePage;
   final MangaReaderSettings settings;
   final Widget? trailingPage;
+  final VoidCallback? onTrailingAdvance;
   final MangaZoomNavigationController? navigationController;
 
   @override
@@ -49,6 +51,8 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
   final Set<int> _widePages = <int>{};
   int _lastActualPage = 0;
   late int _currentSpreadIndex;
+  bool _onTrailingPage = false;
+  bool _trailingAdvanceRequested = false;
 
   List<List<_MangaPageUnit>> get _spreads {
     if (!widget.doublePage) {
@@ -193,10 +197,28 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     );
   }
 
+  bool _handleOverscroll(OverscrollNotification notification) {
+    final callback = widget.onTrailingAdvance;
+    if (!_onTrailingPage ||
+        _trailingAdvanceRequested ||
+        callback == null ||
+        !mangaReaderShouldAdvancePastTransition(
+          extentAfter: notification.metrics.extentAfter,
+          overscroll: notification.overscroll,
+        )) {
+      return false;
+    }
+    _trailingAdvanceRequested = true;
+    callback();
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
     final spreads = _spreads;
-    return PageView.builder(
+    return NotificationListener<OverscrollNotification>(
+      onNotification: _handleOverscroll,
+      child: PageView.builder(
       controller: _controller,
       scrollDirection: widget.scrollDirection,
       reverse: widget.rtl && widget.scrollDirection == Axis.horizontal,
@@ -206,10 +228,17 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
           : const PageScrollPhysics(),
       itemCount: spreads.length + (widget.trailingPage == null ? 0 : 1),
       onPageChanged: (spreadIndex) {
-        if (spreadIndex >= spreads.length) return;
+        if (spreadIndex >= spreads.length) {
+          setState(() => _onTrailingPage = true);
+          return;
+        }
         final units = spreads[spreadIndex];
         final actual = units.isEmpty ? 0 : units.first.pageIndex;
-        setState(() => _currentSpreadIndex = spreadIndex);
+        setState(() {
+          _currentSpreadIndex = spreadIndex;
+          _onTrailingPage = false;
+          _trailingAdvanceRequested = false;
+        });
         _lastActualPage = actual;
         widget.onPageChanged(actual);
         _preloadAround(actual);
@@ -218,6 +247,7 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
         if (index >= spreads.length) return widget.trailingPage!;
         return _spread(context, spreads[index], index);
       },
+    ),
     );
   }
 }
