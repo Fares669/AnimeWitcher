@@ -152,12 +152,11 @@ void main() {
     }
   });
 
-  test('Mangayomi double-page spreads preserve single-first and inversion', () {
+  test('Mangayomi double-page spreads preserve logical page order', () {
     expect(
       mangaReaderPageSpreads(
         pageCount: 5,
         singleFirst: true,
-        invert: false,
       ),
       const <List<int>>[
         <int>[0],
@@ -169,11 +168,10 @@ void main() {
       mangaReaderPageSpreads(
         pageCount: 4,
         singleFirst: false,
-        invert: true,
       ),
       const <List<int>>[
-        <int>[1, 0],
-        <int>[3, 2],
+        <int>[0, 1],
+        <int>[2, 3],
       ],
     );
   });
