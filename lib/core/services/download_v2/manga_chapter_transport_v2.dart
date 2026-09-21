@@ -354,9 +354,13 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         : ((completed + page.progress.clamp(0.0, 1.0)) / pageCount)
               .clamp(0.0, 1.0)
               .toDouble();
+    final parentStatus =
+        page.status == DownloadTransportStatus.complete && !_manifest.isComplete
+        ? DownloadTransportStatus.running
+        : page.status;
     return DownloadTransportSnapshot(
       taskId: taskId,
-      status: page.status,
+      status: parentStatus,
       progress: progress,
       networkSpeedMBps: page.networkSpeedMBps,
       timeRemaining: page.timeRemaining,
