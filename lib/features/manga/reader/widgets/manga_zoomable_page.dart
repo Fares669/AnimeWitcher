@@ -75,6 +75,22 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     }
   }
 
+  Matrix4 _zoomMatrix({
+    required double scale,
+    required Offset focalPoint,
+  }) {
+    final matrix = Matrix4.identity();
+    matrix
+      ..setEntry(0, 0, scale)
+      ..setEntry(1, 1, scale)
+      ..setTranslationRaw(
+        -focalPoint.dx * (scale - 1),
+        -focalPoint.dy * (scale - 1),
+        0,
+      );
+    return matrix;
+  }
+
   void _scheduleLandscapeZoom() {
     if (_landscapeZoomApplied || widget.contentSize == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -91,14 +107,7 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
       _landscapeZoomApplied = true;
       final scale = target.scale;
       final focal = target.focalPoint;
-      _animate(
-        Matrix4.identity()
-          ..translate(
-            -focal.dx * (scale - 1),
-            -focal.dy * (scale - 1),
-          )
-          ..scale(scale),
-      );
+      _animate(_zoomMatrix(scale: scale, focalPoint: focal));
     });
   }
 
@@ -148,13 +157,9 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     final targetScale = widget.doubleTapScale
         .clamp(widget.minScale, widget.maxScale)
         .toDouble();
-    final target = Matrix4.identity()
-      ..translate(
-        -position.dx * (targetScale - 1),
-        -position.dy * (targetScale - 1),
-      )
-      ..scale(targetScale);
-    _animate(target);
+    _animate(
+      _zoomMatrix(scale: targetScale, focalPoint: position),
+    );
   }
 
   @override

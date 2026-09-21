@@ -33,7 +33,7 @@ class MangaReaderControls extends StatelessWidget
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final pageLabel = pageCount <= 0
         ? ''
-        : (pageIndex + 1).toString() + ' / ' + pageCount.toString();
+        : '${pageIndex + 1} / $pageCount';
 
     return AppBar(
       automaticallyImplyLeading: !appleUsesPersistentLiquidGlassHeader,

@@ -175,8 +175,12 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
             for (final option in values)
               RadioListTile<T>(
                 value: option,
+                // TODO(flutter): migrate to RadioGroup when the app's
+                // minimum Flutter SDK exposes the stable inherited API.
+                // ignore: deprecated_member_use
                 groupValue: value,
                 title: Text(label(option)),
+                // ignore: deprecated_member_use
                 onChanged: (next) => Navigator.of(context).pop(next),
               ),
           ],

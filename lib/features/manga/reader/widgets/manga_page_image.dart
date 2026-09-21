@@ -122,7 +122,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
         width: double.infinity,
         height: widget.expand ? double.infinity : null,
         fit: _fit,
-        errorBuilder: (_, __, ___) => SizedBox(
+        errorBuilder: (_, _, _) => SizedBox(
           height: widget.expand ? null : 280,
           child: const Center(
             child: Icon(Icons.broken_image_outlined, size: 42),
@@ -136,11 +136,11 @@ class _MangaPageImageState extends State<MangaPageImage> {
         width: double.infinity,
         height: widget.expand ? double.infinity : null,
         fit: _fit,
-        placeholder: (_, __) => SizedBox(
+        placeholder: (_, _) => SizedBox(
           height: widget.expand ? null : 360,
           child: const Center(child: AppLoadingIndicator()),
         ),
-        errorWidget: (_, __, ___) => SizedBox(
+        errorWidget: (_, _, _) => SizedBox(
           height: widget.expand ? null : 280,
           child: const Center(
             child: Icon(Icons.broken_image_outlined, size: 42),

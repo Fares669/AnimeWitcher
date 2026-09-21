@@ -51,7 +51,11 @@ final class _MemoryStorage extends StorageService {
   String? getString(String key) => values[key];
   @override
   Future<void> setString(String key, String? value) async {
-    if (value == null) values.remove(key); else values[key] = value;
+    if (value == null) {
+      values.remove(key);
+    } else {
+      values[key] = value;
+    }
   }
   @override
   Future<void> remove(String key) async => values.remove(key);
@@ -62,14 +66,15 @@ void main() {
     final dir = await Directory.systemTemp.createTemp('aw_manga_offline_');
     addTearDown(() => dir.delete(recursive: true));
 
-    await MangaChapterManifestV2(
+    const manifest = MangaChapterManifestV2(
       version: MangaChapterManifestV2.currentVersion,
       mangaId: 'm1',
       chapterId: '1',
       pageCount: 2,
-      completedIndexes: const {0, 1},
+      completedIndexes: {0, 1},
       isComplete: true,
-    ).writeTo(dir);
+    );
+    await manifest.writeTo(dir);
     await File('${dir.path}/0001.webp').writeAsBytes([1]);
     await File('${dir.path}/0002.png').writeAsBytes([2]);
 
