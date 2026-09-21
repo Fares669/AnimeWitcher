@@ -172,6 +172,10 @@ void main() {
     await tester.pump();
 
     expect(clipboardText, 'Solo Leveling');
+
+    // NotificationService keeps the success toast alive for one second.
+    // Let that timer expire so this widget test does not leak a pending timer.
+    await tester.pump(const Duration(seconds: 1));
   });
 
   testWidgets('manga details renders only details and chapters tabs', (
