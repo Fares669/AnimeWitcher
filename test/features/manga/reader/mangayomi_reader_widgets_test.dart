@@ -138,6 +138,12 @@ void main() {
       ),
     );
 
+    await tester.drag(
+      find.byType(CustomScrollView),
+      const Offset(0, -1200),
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('chapter-transition'), findsOneWidget);
   });
 
