@@ -47,5 +47,22 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     expect(find.text('Color filters'), findsOneWidget);
+
+    for (final label in <String>[
+      'Custom color filter',
+      'Blend mode',
+      'Reader hide threshold',
+      'Flash color',
+      'Swipe from start',
+      'Swipe from end',
+      'Auto-read duplicate chapters',
+    ]) {
+      await tester.scrollUntilVisible(
+        find.text(label),
+        500,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text(label), findsOneWidget);
+    }
   });
 }

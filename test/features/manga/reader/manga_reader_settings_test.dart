@@ -69,6 +69,18 @@ void main() {
     expect(MangaReaderSettings.fromJson(settings.toJson()), settings);
   });
 
+  test('Mangayomi-only reader options are persisted too', () {
+    const settings = MangaReaderSettings();
+
+    expect(settings.toJson()['autoReadDuplicateChapters'], isFalse);
+    expect(settings.toJson().containsKey('chapterSwipeStartAction'), isTrue);
+    expect(settings.toJson().containsKey('chapterSwipeEndAction'), isTrue);
+    expect(settings.toJson().containsKey('readerHideThreshold'), isTrue);
+    expect(settings.toJson().containsKey('flashColor'), isTrue);
+    expect(settings.toJson().containsKey('enableCustomColorFilter'), isTrue);
+    expect(settings.toJson().containsKey('colorFilterBlendMode'), isTrue);
+  });
+
   test('automatic double page only activates in landscape', () {
     const settings = MangaReaderSettings(doublePageAuto: true);
 
