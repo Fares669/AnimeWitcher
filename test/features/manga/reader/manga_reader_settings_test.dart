@@ -101,6 +101,27 @@ void main() {
     expect(restored.autoScrollForManga('m1').speed, 18);
   });
 
+  test('per-manga auto scroll falls back to global reader defaults', () {
+    const settings = MangaReaderSettings(
+      autoScrollEnabled: true,
+      autoScrollSpeed: 17,
+    );
+
+    final inherited = settings.autoScrollForManga('manga-without-override');
+    expect(inherited.enabled, isTrue);
+    expect(inherited.speed, 17);
+
+    final overridden = settings.withMangaAutoScroll(
+      'm1',
+      enabled: false,
+      speed: 9,
+    );
+    expect(overridden.autoScrollForManga('m1').enabled, isFalse);
+    expect(overridden.autoScrollForManga('m1').speed, 9);
+    expect(overridden.autoScrollForManga('m2').enabled, isTrue);
+    expect(overridden.autoScrollForManga('m2').speed, 17);
+  });
+
   test('automatic double page only activates in landscape', () {
     const settings = MangaReaderSettings(doublePageAuto: true);
 
