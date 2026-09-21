@@ -42,6 +42,9 @@ class MangaReaderController extends ChangeNotifier {
   bool _loading = true;
   Object? _error;
   Timer? _progressTimer;
+  final Map<String, List<MangaPage>> _preloadedChapterPages =
+      <String, List<MangaPage>>{};
+  final Set<String> _preloadingChapterIds = <String>{};
 
   static MangaReaderMode preferredModeFor(MultimediaItem item) {
     final type = (item.catalogType ?? '').trim().toLowerCase();
@@ -92,9 +95,10 @@ class MangaReaderController extends ChangeNotifier {
 
     try {
       final localPages = await _loadLocalPages();
+      final preloaded = _preloadedChapterPages.remove(_chapter.id);
       final pages = localPages.isNotEmpty
           ? localPages
-          : await provider.getMangaChapterPages(manga.url, _chapter);
+          : preloaded ?? await provider.getMangaChapterPages(manga.url, _chapter);
       _pages = pages;
       final saved = progressRepository.get(_mangaId, _chapter.id);
       final maxPage = pages.isEmpty ? 0 : pages.length - 1;
@@ -102,11 +106,45 @@ class MangaReaderController extends ChangeNotifier {
       _loading = false;
       _error = null;
       notifyListeners();
+      unawaited(_preloadAdjacentChapters());
     } catch (error) {
       _loading = false;
       _error = error;
       notifyListeners();
     }
+  }
+
+
+  Future<void> _preloadAdjacentChapters() async {
+    final index = currentChapterIndex;
+    if (index < 0 || chapters.isEmpty) return;
+
+    final adjacent = <MangaChapter>[
+      if (index > 0) chapters[index - 1],
+      if (index + 1 < chapters.length) chapters[index + 1],
+    ];
+
+    await Future.wait<void>(
+      adjacent.map((chapter) async {
+        final id = chapter.id;
+        if (id.isEmpty ||
+            id == _chapter.id ||
+            _preloadedChapterPages.containsKey(id) ||
+            !_preloadingChapterIds.add(id)) {
+          return;
+        }
+        try {
+          final pages = await provider.getMangaChapterPages(manga.url, chapter);
+          if (pages.isNotEmpty) {
+            _preloadedChapterPages[id] = List<MangaPage>.unmodifiable(pages);
+          }
+        } catch (_) {
+          // Preload failures must never interrupt the chapter currently open.
+        } finally {
+          _preloadingChapterIds.remove(id);
+        }
+      }),
+    );
   }
 
   Future<List<MangaPage>> _loadLocalPages() async {
@@ -226,6 +264,8 @@ class MangaReaderController extends ChangeNotifier {
   @override
   void dispose() {
     _progressTimer?.cancel();
+    _preloadedChapterPages.clear();
+    _preloadingChapterIds.clear();
     unawaited(flushProgress());
     super.dispose();
   }

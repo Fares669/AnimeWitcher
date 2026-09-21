@@ -67,13 +67,13 @@ enum MangaReaderChapterSwipeAction {
 @immutable
 class MangaReaderSettings {
   const MangaReaderSettings({
-    this.defaultMode = MangaReaderMode.pagedRtl,
+    this.defaultMode = MangaReaderMode.vertical,
     this.animatePageTransitions = true,
     this.doubleTapAnimationSpeed = 1,
     this.cropBorders = false,
     this.scaleType = MangaReaderScaleType.fitScreen,
     this.pagePreloadAmount = 6,
-    this.background = MangaReaderBackground.automatic,
+    this.background = MangaReaderBackground.black,
     this.usePageTapZones = true,
     this.fullScreen = true,
     this.showPageNumber = true,
@@ -338,7 +338,7 @@ class MangaReaderSettings {
       defaultMode: enumValue(
         MangaReaderMode.values,
         json['defaultMode'],
-        MangaReaderMode.pagedRtl,
+        MangaReaderMode.vertical,
       ),
       animatePageTransitions: boolean('animatePageTransitions', true),
       doubleTapAnimationSpeed: integer('doubleTapAnimationSpeed', 1),
@@ -352,7 +352,7 @@ class MangaReaderSettings {
       background: enumValue(
         MangaReaderBackground.values,
         json['background'],
-        MangaReaderBackground.automatic,
+        MangaReaderBackground.black,
       ),
       usePageTapZones: boolean('usePageTapZones', true),
       fullScreen: boolean('fullScreen', true),
