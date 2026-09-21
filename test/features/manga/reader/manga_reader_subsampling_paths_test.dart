@@ -1,12 +1,33 @@
 import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
+import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
+import 'package:animewitcher/features/manga/reader/subsampling/subsampling_scale_image_view.dart' as ssiv;
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('smart fit maps to Mangayomi subsampling smart-fit semantics', () {
+    expect(
+      mangaReaderMinimumScaleType(MangaReaderScaleType.smartFit),
+      ssiv.ScaleType.smartFit,
+    );
+    expect(
+      mangaReaderMinimumScaleType(MangaReaderScaleType.fitScreen),
+      ssiv.ScaleType.centerInside,
+    );
+    expect(
+      mangaReaderMinimumScaleType(MangaReaderScaleType.fitWidth),
+      ssiv.ScaleType.fitWidth,
+    );
+    expect(
+      mangaReaderMinimumScaleType(MangaReaderScaleType.fitHeight),
+      ssiv.ScaleType.fitHeight,
+    );
+  });
+
   test('network paged images route to Mangayomi paged subsampling', () {
     const page = MangaPage(
       index: 0,
