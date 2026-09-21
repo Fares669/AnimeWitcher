@@ -754,6 +754,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         initialPage: _controller.pageIndex,
         rtl: false,
         scrollDirection: Axis.vertical,
+        doublePage: doublePage,
         settings: settings,
         navigationController: _zoomNavigationController,
         trailingPage: _chapterTransitionPage(),
@@ -787,6 +788,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         initialPage: _controller.pageIndex,
         scrollDirection: Axis.vertical,
         reverse: false,
+        doublePage: doublePage,
         settings: settings,
         controller: _continuousController,
         trailingPage: _chapterTransitionPage(),
@@ -797,6 +799,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         pages: _controller.pages,
         initialPage: _controller.pageIndex,
         settings: settings,
+        doublePage: doublePage,
         controller: _continuousController,
         trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
@@ -986,10 +989,12 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                   ),
                   IconButton(
                     tooltip: 'Double page',
-                    onPressed: _controller.mode.isContinuous ||
-                            _controller.mode == MangaReaderMode.vertical
-                        ? null
-                        : () => _toggleDoublePage(settings),
+                    onPressed:
+                        _controller.mode == MangaReaderMode.horizontalContinuous ||
+                                _controller.mode ==
+                                    MangaReaderMode.horizontalContinuousRtl
+                            ? null
+                            : () => _toggleDoublePage(settings),
                     icon: Icon(
                       _forceDoublePage ||
                               shouldUseMangaDoublePage(
