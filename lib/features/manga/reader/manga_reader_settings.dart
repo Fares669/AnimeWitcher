@@ -667,6 +667,28 @@ List<List<int>> mangaReaderPageSpreads({
   return List<List<int>>.unmodifiable(result);
 }
 
+
+String mangaReaderPageLabel({
+  required int pageIndex,
+  required int pageCount,
+  required bool doublePage,
+  required bool singleFirst,
+}) {
+  if (pageCount <= 0) return '0';
+  final safeIndex = pageIndex.clamp(0, pageCount - 1).toInt();
+  if (!doublePage) return '${safeIndex + 1}';
+
+  final spreads = mangaReaderPageSpreads(
+    pageCount: pageCount,
+    singleFirst: singleFirst,
+  );
+  for (final spread in spreads) {
+    if (!spread.contains(safeIndex)) continue;
+    return spread.map((index) => '${index + 1}').join('-');
+  }
+  return '${safeIndex + 1}';
+}
+
 const List<double> identityMangaReaderColorMatrix = <double>[
   1, 0, 0, 0, 0,
   0, 1, 0, 0, 0,
