@@ -40,6 +40,13 @@ class _MangaPageImageState extends State<MangaPageImage> {
   ImageStreamListener? _sizeListener;
   Size? _imageSize;
   int _retryEpoch = 0;
+  late ImageProvider<Object> _provider;
+
+  @override
+  void initState() {
+    super.initState();
+    _provider = _createImageProvider(widget.page);
+  }
 
   BoxFit get _fit => widget.fit ?? switch (widget.settings.scaleType) {
     MangaReaderScaleType.fitScreen => BoxFit.contain,
@@ -58,15 +65,17 @@ class _MangaPageImageState extends State<MangaPageImage> {
 
   bool get _useSubsampling => !_isAnimatedImage;
 
-  ImageProvider<Object> get _imageProvider {
-    final uri = Uri.tryParse(widget.page.imageUrl);
+  ImageProvider<Object> _createImageProvider(MangaPage page) {
+    final uri = Uri.tryParse(page.imageUrl);
     return uri != null && uri.scheme == 'file'
         ? FileImage(File.fromUri(uri))
         : CachedNetworkImageProvider(
-            widget.page.imageUrl,
-            headers: widget.page.headers,
+            page.imageUrl,
+            headers: page.headers,
           );
   }
+
+  ImageProvider<Object> get _imageProvider => _provider;
 
   String? get _resolvedFilePath {
     final uri = Uri.tryParse(widget.page.imageUrl);
@@ -100,6 +109,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.page.imageUrl != widget.page.imageUrl ||
         !mapEquals(oldWidget.page.headers, widget.page.headers)) {
+      _provider = _createImageProvider(widget.page);
       _imageSize = null;
       _listenForImageSize();
     }
@@ -223,7 +233,8 @@ class _MangaPageImageState extends State<MangaPageImage> {
         );
       } else {
         image = MangaMinSubsamplingImage(
-          page: widget.page,
+          image: _imageProvider,
+          resolvedFilePath: _resolvedFilePath,
           settings: widget.settings,
           fit: _fit,
           rotation: quarterTurns * 90,
