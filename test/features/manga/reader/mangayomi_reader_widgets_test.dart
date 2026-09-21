@@ -275,6 +275,7 @@ void main() {
           doublePage: true,
           settings: const MangaReaderSettings(),
           onPageChanged: (_) {},
+          pageBuilder: (_, page) => Text('page-${page.index}'),
         ),
       ),
     );
