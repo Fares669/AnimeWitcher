@@ -210,7 +210,7 @@ class _MangaDetailsArtwork extends StatelessWidget {
   final Alignment alignment;
   final String? fallbackUrl;
 
-  Widget _image(BuildContext context, String url, int decodeWidth) {
+  Widget _image(BuildContext context, String url, int? decodeWidth) {
     final uri = Uri.tryParse(url);
     if (uri != null && uri.scheme == 'file') {
       return Image.file(
