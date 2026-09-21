@@ -25,6 +25,7 @@ import 'widgets/manga_chapter_transition_page.dart';
 import 'widgets/manga_reader_auto_scroll_button.dart';
 import 'widgets/manga_reader_navigation_overlay.dart';
 import 'widgets/manga_reader_page_indicator.dart';
+import 'widgets/manga_reader_quick_settings.dart';
 import 'widgets/manga_paged_reader.dart';
 import 'widgets/manga_webtoon_reader.dart';
 import 'widgets/manga_zoomable_page.dart';
@@ -195,19 +196,23 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     });
   }
 
-  void _toggleAutoScroll(MangaReaderSettings settings) {
-    final current = settings.autoScrollForManga(_readerMangaId);
-    final nextEnabled = !current.enabled;
+  void _setAutoScroll({required bool enabled, required double speed}) {
+    final settings = ref.read(mangaReaderSettingsProvider);
     final next = settings.withMangaAutoScroll(
       _readerMangaId,
-      enabled: nextEnabled,
-      speed: current.speed,
+      enabled: enabled,
+      speed: speed,
     );
-    setState(() => _autoScrollRunning = nextEnabled);
+    setState(() => _autoScrollRunning = enabled);
     unawaited(
       ref.read(mangaReaderSettingsProvider.notifier).setSettings(next),
     );
     _syncAutoScroll(next);
+  }
+
+  void _toggleAutoScroll(MangaReaderSettings settings) {
+    final current = settings.autoScrollForManga(_readerMangaId);
+    _setAutoScroll(enabled: !current.enabled, speed: current.speed);
   }
 
   void _setMode(MangaReaderMode mode, MangaReaderSettings settings) {
@@ -466,84 +471,31 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     if (mounted) setState(() => _readerEpoch++);
   }
 
-  Future<void> _showQuickSettings(MangaReaderSettings settings) async {
+  Future<void> _showQuickSettings() async {
+    final readerContext = context;
     await showModalBottomSheet<void>(
-      context: context,
+      context: readerContext,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (sheetContext) => Consumer(
-        builder: (context, ref, _) {
-          final current = ref.watch(mangaReaderSettingsProvider);
-          final notifier = ref.read(mangaReaderSettingsProvider.notifier);
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  ListTile(
-                    title: const Text('Reading mode'),
-                    trailing: DropdownButton<MangaReaderMode>(
-                      value: _controller.mode,
-                      items: <DropdownMenuItem<MangaReaderMode>>[
-                        for (final mode in MangaReaderMode.values)
-                          DropdownMenuItem(
-                            value: mode,
-                            child: Text(mode.name),
-                          ),
-                      ],
-                      onChanged: (mode) {
-                        if (mode != null) _setMode(mode, current);
-                      },
-                    ),
-                  ),
-                  SwitchListTile(
-                    title: const Text('Crop borders'),
-                    value: current.cropBorders,
-                    onChanged: (value) => notifier.update(
-                      (s) => s.copyWith(cropBorders: value),
-                    ),
-                  ),
-                  SwitchListTile(
-                    title: const Text('Automatic double page'),
-                    value: current.doublePageAuto,
-                    onChanged: (value) => notifier.update(
-                      (s) => s.copyWith(doublePageAuto: value),
-                    ),
-                  ),
-                  if (_controller.mode.isContinuous)
-                    SwitchListTile(
-                      title: const Text('Auto scroll'),
-                      value: current.autoScrollForManga(_readerMangaId).enabled,
-                      onChanged: (value) {
-                        final auto = current.autoScrollForManga(_readerMangaId);
-                        final next = current.withMangaAutoScroll(
-                          _readerMangaId,
-                          enabled: value,
-                          speed: auto.speed,
-                        );
-                        setState(() => _autoScrollRunning = value);
-                        unawaited(notifier.setSettings(next));
-                        _syncAutoScroll(next);
-                      },
-                    ),
-                  ListTile(
-                    leading: const Icon(Icons.settings_rounded),
-                    title: const Text('All reader settings'),
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const MangaReaderSettingsScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                ],
+      builder: (sheetContext) => SafeArea(
+        child: MangaReaderQuickSettings(
+          currentMode: _controller.mode,
+          mangaId: _readerMangaId,
+          onModeChanged: (mode) {
+            _setMode(mode, ref.read(mangaReaderSettingsProvider));
+          },
+          onAutoScrollChanged: (enabled, speed) {
+            _setAutoScroll(enabled: enabled, speed: speed);
+          },
+          onOpenAllSettings: () {
+            Navigator.of(sheetContext).pop();
+            Navigator.of(readerContext).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => const MangaReaderSettingsScreen(),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -1008,7 +960,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                   ),
                   IconButton(
                     tooltip: 'Reader settings',
-                    onPressed: () => _showQuickSettings(settings),
+                    onPressed: _showQuickSettings,
                     icon: const Icon(Icons.settings_rounded),
                   ),
                 ],
