@@ -198,17 +198,18 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     final viewport = context.size;
     if (scale <= 1.01 || viewport == null || viewport.width <= 0) return false;
 
+    const edgeSlack = 15.0;
     final translation = _controller.value.getTranslation();
     final minX = viewport.width - (viewport.width * scale);
-    final wantsLeft = forward ? rtl : !rtl;
+    final towardPositive = forward ? rtl : !rtl;
     final currentX = translation.x;
 
     final double targetX;
-    if (wantsLeft) {
-      if (currentX >= -1) return false;
+    if (towardPositive) {
+      if (currentX >= -edgeSlack) return false;
       targetX = (currentX + viewport.width).clamp(minX, 0).toDouble();
     } else {
-      if (currentX <= minX + 1) return false;
+      if (currentX <= minX + edgeSlack) return false;
       targetX = (currentX - viewport.width).clamp(minX, 0).toDouble();
     }
 
@@ -224,6 +225,7 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     final minScale = widget.continuous && !widget.settings.webtoonDisableZoomOut
         ? 0.5
         : widget.minScale;
+    final maxScale = widget.continuous ? 5.0 : widget.maxScale;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onDoubleTapDown: (details) => _doubleTapDetails = details,
@@ -231,7 +233,7 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
       child: InteractiveViewer(
         transformationController: _controller,
         minScale: minScale,
-        maxScale: widget.maxScale,
+        maxScale: maxScale,
         panEnabled: _panEnabled,
         scaleEnabled: true,
         child: widget.child,
