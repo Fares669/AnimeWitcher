@@ -532,6 +532,9 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     final scaleTypeChanged =
         widget.minimumScaleType != oldWidget.minimumScaleType ||
         widget.fit != oldWidget.fit;
+    final geometryChanged =
+        widget.rotation != oldWidget.rotation ||
+        widget.srcRect != oldWidget.srcRect;
 
     if (imageChanged || cropChanged) {
       _isInitialized = false;
@@ -540,9 +543,10 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _loadFromProvider();
       });
-    } else if (scaleTypeChanged && _isInitialized) {
+    } else if ((scaleTypeChanged || geometryChanged) && _isInitialized) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() => _setupInitialViewState());
+        if (!mounted) return;
+        setState(() => _setupInitialViewState());
       });
     }
 
