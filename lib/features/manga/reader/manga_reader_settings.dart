@@ -633,6 +633,17 @@ double mangaReaderHideThresholdPixels(int index) => switch (index) {
   _ => 47,
 };
 
+double mangaReaderPreloadCacheExtent({
+  required MangaReaderSettings settings,
+  required Size viewport,
+  required Axis axis,
+}) {
+  final mainAxisExtent = axis == Axis.horizontal
+      ? viewport.width
+      : viewport.height;
+  return settings.pagePreloadAmount.clamp(1, 3) * 1.5 * mainAxisExtent;
+}
+
 bool shouldUseMangaDoublePage({
   required MangaReaderSettings settings,
   required Size viewport,

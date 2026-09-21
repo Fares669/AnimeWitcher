@@ -512,10 +512,14 @@ void main() {
     );
     await tester.pump();
 
-    final list = tester.widget<SuperListView>(
-      find.byType(SuperListView),
+    expect(
+      mangaReaderPreloadCacheExtent(
+        settings: const MangaReaderSettings(pagePreloadAmount: 6),
+        viewport: const Size(400, 300),
+        axis: Axis.vertical,
+      ),
+      1350,
     );
-    expect(list.scrollCacheExtent, 1350);
   });
 
   testWidgets('webtoon applies Mangayomi preload cache extent', (

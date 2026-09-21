@@ -159,10 +159,11 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     final spreads = _spreads;
     final start = _startSpread;
     final viewport = MediaQuery.sizeOf(context);
-    final cacheExtent =
-        widget.settings.pagePreloadAmount.clamp(1, 3) *
-        1.5 *
-        viewport.height;
+    final cacheExtent = mangaReaderPreloadCacheExtent(
+      settings: widget.settings,
+      viewport: viewport,
+      axis: Axis.vertical,
+    );
     final side = viewport.width *
         (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
     final scrollable = Padding(

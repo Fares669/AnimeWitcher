@@ -313,12 +313,11 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
         (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
     final entries = _entries;
     final viewport = MediaQuery.sizeOf(context);
-    final cacheExtent =
-        widget.settings.pagePreloadAmount.clamp(1, 3) *
-        1.5 *
-        (widget.scrollDirection == Axis.horizontal
-            ? viewport.width
-            : viewport.height);
+    final cacheExtent = mangaReaderPreloadCacheExtent(
+      settings: widget.settings,
+      viewport: viewport,
+      axis: widget.scrollDirection,
+    );
     final scrollable = Padding(
       key: const ValueKey('manga-reader-continuous-padding'),
       padding: widget.scrollDirection == Axis.vertical
