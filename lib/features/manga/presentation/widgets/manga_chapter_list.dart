@@ -32,7 +32,7 @@ class MangaChapterList extends ConsumerWidget {
       case MangaReaderChapterSwipeAction.toggleRead:
         await ref
             .read(mangaReadingRepositoryProvider)
-            .markRead(chapter.mangaId, chapter.id);
+            .toggleRead(chapter.mangaId, chapter.id);
       case MangaReaderChapterSwipeAction.download:
         onDownload?.call(chapter);
       case MangaReaderChapterSwipeAction.disabled:

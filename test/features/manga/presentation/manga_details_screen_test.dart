@@ -3,6 +3,8 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_screen.dart';
+import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
+import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -88,6 +90,12 @@ final class _MangaProvider extends AnimeWitcherProvider {
   }
 }
 
+final class _MangaDetailsReaderSettingsNotifier
+    extends MangaReaderSettingsNotifier {
+  @override
+  MangaReaderSettings build() => const MangaReaderSettings();
+}
+
 final class _Manager extends ExtensionManager {
   _Manager(this.provider);
   final AnimeWitcherProvider provider;
@@ -99,6 +107,9 @@ final class _Manager extends ExtensionManager {
 Widget _app(AnimeWitcherProvider provider) => ProviderScope(
   overrides: [
     extensionManagerProvider.overrideWith(() => _Manager(provider)),
+    mangaReaderSettingsProvider.overrideWith(
+      _MangaDetailsReaderSettingsNotifier.new,
+    ),
   ],
   child: MaterialApp(
     locale: const Locale('ar'),

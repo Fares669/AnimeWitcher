@@ -130,6 +130,36 @@ class MangaReadingRepository {
     return next;
   }
 
+  Future<bool> toggleRead(
+    String mangaId,
+    String chapterId, {
+    int pageCount = 1,
+  }) async {
+    final current = get(mangaId, chapterId);
+    final next = !(current?.isRead ?? false);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final count = current == null || current.pageCount <= 0
+        ? pageCount.clamp(1, 1 << 30).toInt()
+        : current.pageCount;
+    await save(
+      current?.copyWith(
+            pageIndex: next ? count - 1 : current.pageIndex,
+            pageCount: count,
+            updatedAt: now,
+            isRead: next,
+          ) ??
+          MangaReadingProgress(
+            mangaId: mangaId,
+            chapterId: chapterId,
+            pageIndex: next ? count - 1 : 0,
+            pageCount: count,
+            updatedAt: now,
+            isRead: next,
+          ),
+    );
+    return next;
+  }
+
   Future<void> markRead(
     String mangaId,
     String chapterId, {
