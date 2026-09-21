@@ -67,29 +67,17 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       return result;
     }
 
-    final result = <List<_MangaPageUnit>>[];
-    var index = 0;
-    if (widget.settings.doublePageSingleFirstPage && widget.pages.isNotEmpty) {
-      result.add(const <_MangaPageUnit>[
-        _MangaPageUnit(0, MangaReaderPageSlice.full),
-      ]);
-      index = 1;
-    }
-    while (index < widget.pages.length) {
-      final pair = <_MangaPageUnit>[
-        _MangaPageUnit(index, MangaReaderPageSlice.full),
-      ];
-      if (index + 1 < widget.pages.length) {
-        pair.add(_MangaPageUnit(index + 1, MangaReaderPageSlice.full));
-      }
-      if (widget.settings.dualPageInvert && pair.length == 2) {
-        result.add(pair.reversed.toList(growable: false));
-      } else {
-        result.add(pair);
-      }
-      index += 2;
-    }
-    return result;
+    return mangaReaderPageSpreads(
+      pageCount: widget.pages.length,
+      singleFirst: widget.settings.doublePageSingleFirstPage,
+    )
+        .map(
+          (spread) => <_MangaPageUnit>[
+            for (final index in spread)
+              _MangaPageUnit(index, MangaReaderPageSlice.full),
+          ],
+        )
+        .toList(growable: false);
   }
 
   int get _safeInitialPage => widget.pages.isEmpty
