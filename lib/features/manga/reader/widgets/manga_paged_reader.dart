@@ -111,14 +111,10 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
   Widget _page(BuildContext context, MangaPage page) {
     final custom = widget.pageBuilder;
     if (custom != null) return custom(context, page);
-    return MangaZoomablePage(
+    return _MangaPagedImage(
+      page: page,
       settings: widget.settings,
-      child: MangaPageImage(
-        page: page,
-        settings: widget.settings,
-        fit: BoxFit.contain,
-        expand: true,
-      ),
+      rtl: widget.rtl,
     );
   }
 
@@ -152,6 +148,45 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
         _preloadAround(actual);
       },
       itemBuilder: (context, index) => _spread(context, spreads[index]),
+    );
+  }
+}
+
+
+class _MangaPagedImage extends StatefulWidget {
+  const _MangaPagedImage({
+    required this.page,
+    required this.settings,
+    required this.rtl,
+  });
+
+  final MangaPage page;
+  final MangaReaderSettings settings;
+  final bool rtl;
+
+  @override
+  State<_MangaPagedImage> createState() => _MangaPagedImageState();
+}
+
+class _MangaPagedImageState extends State<_MangaPagedImage> {
+  Size? _imageSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return MangaZoomablePage(
+      settings: widget.settings,
+      contentSize: _imageSize,
+      rtl: widget.rtl,
+      child: MangaPageImage(
+        page: widget.page,
+        settings: widget.settings,
+        fit: BoxFit.contain,
+        expand: true,
+        onImageSize: (size) {
+          if (!mounted || size == _imageSize) return;
+          setState(() => _imageSize = size);
+        },
+      ),
     );
   }
 }

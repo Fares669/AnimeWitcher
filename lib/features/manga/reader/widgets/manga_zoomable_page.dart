@@ -12,6 +12,8 @@ class MangaZoomablePage extends StatefulWidget {
     this.doubleTapScale = 2.5,
     this.settings = const MangaReaderSettings(),
     this.continuous = false,
+    this.contentSize,
+    this.rtl = false,
   });
 
   final Widget child;
@@ -21,6 +23,8 @@ class MangaZoomablePage extends StatefulWidget {
   final double doubleTapScale;
   final MangaReaderSettings settings;
   final bool continuous;
+  final Size? contentSize;
+  final bool rtl;
 
   @override
   State<MangaZoomablePage> createState() => _MangaZoomablePageState();
@@ -34,6 +38,7 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
   Animation<Matrix4>? _animation;
   TapDownDetails? _doubleTapDetails;
   bool _panEnabled = false;
+  bool _landscapeZoomApplied = false;
 
   @override
   void initState() {
@@ -57,6 +62,46 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     1 => const Duration(milliseconds: 250),
     _ => const Duration(milliseconds: 120),
   };
+
+  @override
+  void didUpdateWidget(covariant MangaZoomablePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.contentSize != widget.contentSize ||
+        oldWidget.settings.landscapeZoom != widget.settings.landscapeZoom ||
+        oldWidget.settings.zoomStartPosition !=
+            widget.settings.zoomStartPosition ||
+        oldWidget.settings.scaleType != widget.settings.scaleType) {
+      _landscapeZoomApplied = false;
+      _scheduleLandscapeZoom();
+    }
+  }
+
+  void _scheduleLandscapeZoom() {
+    if (_landscapeZoomApplied || widget.contentSize == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _landscapeZoomApplied) return;
+      final viewport = context.size;
+      final contentSize = widget.contentSize;
+      if (viewport == null || contentSize == null) return;
+      final target = mangaReaderLandscapeZoomTarget(
+        settings: widget.settings,
+        imageSize: contentSize,
+        viewport: viewport,
+      );
+      if (target == null) return;
+      _landscapeZoomApplied = true;
+      final scale = target.scale;
+      final focal = target.focalPoint;
+      _animate(
+        Matrix4.identity()
+          ..translate(
+            -focal.dx * (scale - 1),
+            -focal.dy * (scale - 1),
+          )
+          ..scale(scale),
+      );
+    });
+  }
 
   @override
   void dispose() {
@@ -115,6 +160,7 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
 
   @override
   Widget build(BuildContext context) {
+    _scheduleLandscapeZoom();
     final minScale = widget.continuous && !widget.settings.webtoonDisableZoomOut
         ? 0.5
         : widget.minScale;

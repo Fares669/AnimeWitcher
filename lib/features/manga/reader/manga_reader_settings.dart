@@ -1,5 +1,7 @@
 // Adapted from the Mangayomi reader preference surface.
 // Mangayomi is licensed under Apache-2.0. See docs/third_party/MANGAYOMI_READER_NOTICE.md.
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -419,6 +421,65 @@ class MangaReaderSettings {
 
   @override
   int get hashCode => Object.hashAll(toJson().values);
+}
+
+@immutable
+class MangaReaderLandscapeZoomTarget {
+  const MangaReaderLandscapeZoomTarget({
+    required this.scale,
+    required this.focalPoint,
+  });
+
+  final double scale;
+  final Offset focalPoint;
+}
+
+int mangaReaderRotateQuarterTurns({
+  required MangaReaderSettings settings,
+  required Size imageSize,
+}) {
+  if (!settings.dualPageRotateToFit ||
+      imageSize.width <= 0 ||
+      imageSize.height <= 0 ||
+      imageSize.width <= imageSize.height) {
+    return 0;
+  }
+  return settings.dualPageRotateToFitInvert ? 3 : 1;
+}
+
+MangaReaderLandscapeZoomTarget? mangaReaderLandscapeZoomTarget({
+  required MangaReaderSettings settings,
+  required Size imageSize,
+  required Size viewport,
+}) {
+  if (!settings.landscapeZoom ||
+      settings.scaleType != MangaReaderScaleType.fitScreen ||
+      imageSize.width <= imageSize.height ||
+      imageSize.width <= 0 ||
+      imageSize.height <= 0 ||
+      viewport.width <= 0 ||
+      viewport.height <= 0) {
+    return null;
+  }
+
+  final fitScreenScale = math.min(
+    viewport.width / imageSize.width,
+    viewport.height / imageSize.height,
+  );
+  if (fitScreenScale <= 0) return null;
+  final fitHeightScale = viewport.height / imageSize.height;
+  final scale = fitHeightScale / fitScreenScale;
+  if (!scale.isFinite || scale <= 1.01) return null;
+
+  final focalPoint = switch (settings.zoomStartPosition) {
+    0 => Offset.zero,
+    1 => Offset(viewport.width, 0),
+    _ => viewport.center(Offset.zero),
+  };
+  return MangaReaderLandscapeZoomTarget(
+    scale: scale,
+    focalPoint: focalPoint,
+  );
 }
 
 double mangaReaderHideThresholdPixels(int index) => switch (index) {
