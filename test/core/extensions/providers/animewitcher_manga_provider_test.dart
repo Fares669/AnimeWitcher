@@ -439,6 +439,79 @@ void main() {
     );
   });
 
+  test('chapters use the original chapters_summery document before queries', () async {
+    final stub = _stubDio();
+    var queriedChaptersCollection = false;
+    stub.dio.interceptors.insert(
+      0,
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (!options.uri.host.contains('firestore')) {
+            handler.next(options);
+            return;
+          }
+
+          if (options.uri.path.endsWith(
+            '/documents/manga_list/m1/chapters_summery/summery',
+          )) {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data: <String, dynamic>{
+                  'fields': <String, dynamic>{
+                    'chapters': <String, dynamic>{
+                      'arrayValue': <String, dynamic>{
+                        'values': <Map<String, dynamic>>[
+                          _mapField(<String, dynamic>{
+                            'doc_id': _stringField('42.5'),
+                            'name': _stringField('الفصل 42.5'),
+                            'thumb_uri': _stringField(
+                              'https://img.example/ch42.webp',
+                            ),
+                          }),
+                        ],
+                      },
+                    },
+                  },
+                },
+              ),
+            );
+            return;
+          }
+
+          final body = options.data;
+          final query = body is Map ? body['structuredQuery'] : null;
+          final from = query is Map ? query['from'] : null;
+          final firstFrom = from is List && from.isNotEmpty ? from.first : null;
+          if (firstFrom is Map && firstFrom['collectionId'] == 'chapters') {
+            queriedChaptersCollection = true;
+          }
+          handler.next(options);
+        },
+      ),
+    );
+
+    final chapters = await _provider(stub.dio).getMangaChapters(
+      'https://animewitcher.com/manga/m1',
+    );
+
+    expect(chapters, hasLength(1));
+    expect(chapters.single.id, '42.5');
+    expect(chapters.single.name, 'الفصل 42.5');
+    expect(chapters.single.number, 42.5);
+    expect(queriedChaptersCollection, isFalse);
+    expect(
+      stub.requests.any(
+        (entry) =>
+            entry.uri.host == 'mangalik.net' ||
+            entry.uri.host == 'manga-leko.net' ||
+            entry.uri.host == 'lekmanga.online',
+      ),
+      isFalse,
+    );
+  });
+
   test('chapters and pages use AnimeWitcher Firestore hierarchy first', () async {
     final stub = _stubDio();
     Map? chapterStructuredQuery;
