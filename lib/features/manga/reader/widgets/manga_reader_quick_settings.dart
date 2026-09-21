@@ -60,6 +60,13 @@ class _MangaReaderQuickSettingsState
         MangaReaderScaleType.smartFit => _t('Smart fit', 'ملاءمة ذكية'),
       };
 
+  String _backgroundLabel(MangaReaderBackground value) => switch (value) {
+        MangaReaderBackground.black => _t('Black', 'أسود'),
+        MangaReaderBackground.grey => _t('Grey', 'رمادي'),
+        MangaReaderBackground.white => _t('White', 'أبيض'),
+        MangaReaderBackground.automatic => _t('Automatic', 'تلقائي'),
+      };
+
   String _tapInversionLabel(int value) => switch (value) {
         1 => _t('Horizontal', 'أفقي'),
         2 => _t('Vertical', 'عمودي'),
@@ -304,6 +311,24 @@ class _MangaReaderQuickSettingsState
       padding: const EdgeInsets.only(bottom: 24),
       children: <Widget>[
         ListTile(
+          title: Text(_t('Background color', 'لون الخلفية')),
+          trailing: DropdownButton<MangaReaderBackground>(
+            value: settings.background,
+            items: <DropdownMenuItem<MangaReaderBackground>>[
+              for (final value in MangaReaderBackground.values)
+                DropdownMenuItem(
+                  value: value,
+                  child: Text(_backgroundLabel(value)),
+                ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                unawaited(_update((s) => s.copyWith(background: value)));
+              }
+            },
+          ),
+        ),
+        ListTile(
           title: Text(_t('Scale type', 'طريقة الملاءمة')),
           trailing: DropdownButton<MangaReaderScaleType>(
             value: settings.scaleType,
@@ -472,6 +497,34 @@ class _MangaReaderQuickSettingsState
   }
 
   Widget _filterTab(MangaReaderSettings settings) {
+    Widget colorChannel({
+      required String label,
+      required int value,
+      required ValueChanged<int> onChanged,
+    }) {
+      return ListTile(
+        dense: true,
+        title: Row(
+          children: <Widget>[
+            SizedBox(width: 24, child: Text(label)),
+            Expanded(
+              child: Slider(
+                min: 0,
+                max: 255,
+                divisions: 255,
+                value: value.toDouble(),
+                onChanged: (next) => onChanged(next.round()),
+              ),
+            ),
+            SizedBox(
+              width: 36,
+              child: Text(value.toString(), textAlign: TextAlign.end),
+            ),
+          ],
+        ),
+      );
+    }
+
     Widget slider({
       required String title,
       required double value,
@@ -552,7 +605,58 @@ class _MangaReaderQuickSettingsState
             (s) => s.copyWith(enableCustomColorFilter: value),
           ),
         ),
-        if (settings.enableCustomColorFilter)
+        if (settings.enableCustomColorFilter) ...<Widget>[
+          Builder(
+            builder: (context) {
+              final argb = settings.customColorFilterArgb;
+              final alpha = (argb >> 24) & 0xff;
+              final red = (argb >> 16) & 0xff;
+              final green = (argb >> 8) & 0xff;
+              final blue = argb & 0xff;
+
+              Future<void> setChannel({
+                int? a,
+                int? r,
+                int? g,
+                int? b,
+              }) {
+                final next = Color.fromARGB(
+                  a ?? alpha,
+                  r ?? red,
+                  g ?? green,
+                  b ?? blue,
+                ).toARGB32();
+                return _update(
+                  (s) => s.copyWith(customColorFilterArgb: next),
+                );
+              }
+
+              return Column(
+                children: <Widget>[
+                  colorChannel(
+                    label: 'R',
+                    value: red,
+                    onChanged: (value) => unawaited(setChannel(r: value)),
+                  ),
+                  colorChannel(
+                    label: 'G',
+                    value: green,
+                    onChanged: (value) => unawaited(setChannel(g: value)),
+                  ),
+                  colorChannel(
+                    label: 'B',
+                    value: blue,
+                    onChanged: (value) => unawaited(setChannel(b: value)),
+                  ),
+                  colorChannel(
+                    label: 'A',
+                    value: alpha,
+                    onChanged: (value) => unawaited(setChannel(a: value)),
+                  ),
+                ],
+              );
+            },
+          ),
           ListTile(
             title: Text(_t('Blend mode', 'وضع المزج')),
             trailing: DropdownButton<MangaReaderColorBlendMode>(
@@ -573,6 +677,7 @@ class _MangaReaderQuickSettingsState
               },
             ),
           ),
+        ],
       ],
     );
   }
