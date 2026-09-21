@@ -15,6 +15,7 @@ class MangaWebtoonReader extends StatefulWidget {
     this.pageBuilder,
     this.settings = const MangaReaderSettings(),
     this.controller,
+    this.trailingPage,
   });
 
   final List<MangaPage> pages;
@@ -23,6 +24,7 @@ class MangaWebtoonReader extends StatefulWidget {
   final MangaPageBuilder? pageBuilder;
   final MangaReaderSettings settings;
   final ScrollController? controller;
+  final Widget? trailingPage;
 
   @override
   State<MangaWebtoonReader> createState() => _MangaWebtoonReaderState();
@@ -128,6 +130,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
               childCount: widget.pages.length - start,
             ),
           ),
+          if (widget.trailingPage != null)
+            SliverToBoxAdapter(child: widget.trailingPage),
         ],
       ),
     );

@@ -39,7 +39,7 @@ class MangaReaderChapterTransitionPage extends StatelessWidget {
         child: ConstrainedBox(
           constraints: BoxConstraints(
             maxWidth: constraints.maxWidth.clamp(100.0, 480.0),
-            maxHeight: constraints.maxHeight.clamp(100.0, double.infinity),
+            maxHeight: double.infinity,
           ),
           child: Padding(
             padding: const EdgeInsets.all(24),

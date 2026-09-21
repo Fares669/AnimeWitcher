@@ -57,11 +57,10 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     _onTransformChanged();
   }
 
-  Duration get _animationDuration => switch (widget.settings.doubleTapAnimationSpeed) {
-    0 => Duration.zero,
-    1 => const Duration(milliseconds: 250),
-    _ => const Duration(milliseconds: 120),
-  };
+  Duration get _animationDuration =>
+      mangaReaderDoubleTapAnimationDuration(
+        widget.settings.doubleTapAnimationSpeed,
+      );
 
   @override
   void didUpdateWidget(covariant MangaZoomablePage oldWidget) {

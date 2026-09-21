@@ -18,6 +18,7 @@ class MangaPagedReader extends StatefulWidget {
     this.scrollDirection = Axis.horizontal,
     this.doublePage = false,
     this.settings = const MangaReaderSettings(),
+    this.trailingPage,
   });
 
   final List<MangaPage> pages;
@@ -28,6 +29,7 @@ class MangaPagedReader extends StatefulWidget {
   final Axis scrollDirection;
   final bool doublePage;
   final MangaReaderSettings settings;
+  final Widget? trailingPage;
 
   @override
   State<MangaPagedReader> createState() => _MangaPagedReaderState();
@@ -140,14 +142,18 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       physics: widget.settings.animatePageTransitions
           ? null
           : const PageScrollPhysics(),
-      itemCount: spreads.length,
+      itemCount: spreads.length + (widget.trailingPage == null ? 0 : 1),
       onPageChanged: (spreadIndex) {
+        if (spreadIndex >= spreads.length) return;
         final indexes = spreads[spreadIndex];
         final actual = indexes.isEmpty ? 0 : indexes.first;
         widget.onPageChanged(actual);
         _preloadAround(actual);
       },
-      itemBuilder: (context, index) => _spread(context, spreads[index]),
+      itemBuilder: (context, index) {
+        if (index >= spreads.length) return widget.trailingPage!;
+        return _spread(context, spreads[index]);
+      },
     );
   }
 }

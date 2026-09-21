@@ -18,6 +18,7 @@ class MangaContinuousReader extends StatefulWidget {
     required this.onPageChanged,
     this.controller,
     this.pageBuilder,
+    this.trailingPage,
   });
 
   final List<MangaPage> pages;
@@ -28,6 +29,7 @@ class MangaContinuousReader extends StatefulWidget {
   final ValueChanged<int> onPageChanged;
   final ScrollController? controller;
   final MangaPageBuilder? pageBuilder;
+  final Widget? trailingPage;
 
   @override
   State<MangaContinuousReader> createState() => _MangaContinuousReaderState();
@@ -119,8 +121,11 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
         controller: _controller,
         scrollDirection: widget.scrollDirection,
         reverse: widget.reverse,
-        itemCount: widget.pages.length,
-        itemBuilder: _page,
+        itemCount: widget.pages.length + (widget.trailingPage == null ? 0 : 1),
+        itemBuilder: (context, index) {
+          if (index >= widget.pages.length) return widget.trailingPage!;
+          return _page(context, index);
+        },
       ),
     );
   }

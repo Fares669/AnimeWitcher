@@ -19,6 +19,8 @@ import 'manga_reader_settings.dart';
 import 'manga_reader_settings_provider.dart';
 import 'manga_reader_settings_screen.dart';
 import 'widgets/manga_continuous_reader.dart';
+import 'widgets/manga_chapter_transition_page.dart';
+import 'widgets/manga_reader_navigation_overlay.dart';
 import 'widgets/manga_paged_reader.dart';
 import 'widgets/manga_webtoon_reader.dart';
 
@@ -438,6 +440,19 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     );
   }
 
+  MangaChapter? get _nextChapter {
+    final index = _controller.currentChapterIndex;
+    if (index < 0 || index + 1 >= widget.chapters.length) return null;
+    return widget.chapters[index + 1];
+  }
+
+  Widget _chapterTransitionPage() => MangaReaderChapterTransitionPage(
+    currentChapter: _controller.currentChapter,
+    nextChapter: _nextChapter,
+    mangaName: widget.manga.title,
+    readerMode: _controller.mode,
+  );
+
   Widget _readerBody(
     BuildContext context,
     MangaReaderSettings settings,
@@ -489,6 +504,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         rtl: false,
         scrollDirection: Axis.vertical,
         settings: settings,
+        trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.pagedLtr => MangaPagedReader(
@@ -498,6 +514,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         rtl: false,
         doublePage: doublePage,
         settings: settings,
+        trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.pagedRtl => MangaPagedReader(
@@ -507,6 +524,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         rtl: true,
         doublePage: doublePage,
         settings: settings,
+        trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.verticalContinuous => MangaContinuousReader(
@@ -517,6 +535,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         reverse: false,
         settings: settings,
         controller: _continuousController,
+        trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.webtoon => MangaWebtoonReader(
@@ -525,6 +544,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         initialPage: _controller.pageIndex,
         settings: settings,
         controller: _continuousController,
+        trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.horizontalContinuous => MangaContinuousReader(
@@ -535,6 +555,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         reverse: false,
         settings: settings,
         controller: _continuousController,
+        trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
       MangaReaderMode.horizontalContinuousRtl => MangaContinuousReader(
@@ -545,6 +566,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         reverse: true,
         settings: settings,
         controller: _continuousController,
+        trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
     };
@@ -828,24 +850,12 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                 ),
               if (_showNavigationOverlay)
                 Positioned.fill(
-                  child: GestureDetector(
-                    onTap: () =>
+                  child: MangaReaderNavigationOverlay(
+                    navigationLayout: settings.navigationLayout,
+                    tappingInversion: settings.tappingInversion,
+                    isRtl: _controller.mode.isRtl,
+                    onClose: () =>
                         setState(() => _showNavigationOverlay = false),
-                    child: ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.7),
-                      child: Center(
-                        child: Text(
-                          'MENU  •  PREV  •  NEXT\n'
-                          'Layout ${settings.navigationLayout + 1}',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
                   ),
                 ),
               ],
