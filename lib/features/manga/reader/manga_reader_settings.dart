@@ -482,6 +482,12 @@ MangaReaderLandscapeZoomTarget? mangaReaderLandscapeZoomTarget({
   );
 }
 
+Duration mangaReaderDoubleTapAnimationDuration(int speed) => switch (speed) {
+  0 => const Duration(milliseconds: 10),
+  1 => const Duration(milliseconds: 800),
+  _ => const Duration(milliseconds: 200),
+};
+
 double mangaReaderHideThresholdPixels(int index) => switch (index) {
   0 => 5,
   1 => 13,
