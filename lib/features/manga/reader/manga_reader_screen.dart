@@ -536,6 +536,70 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     );
   }
 
+  Future<void> _showImageActions() async {
+    if (_controller.pages.isEmpty) return;
+    final index = _controller.pageIndex
+        .clamp(0, _controller.pages.length - 1)
+        .toInt();
+    final page = _controller.pages[index];
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: _ReaderImageActionButton(
+                icon: Icons.image_outlined,
+                label: isArabic ? 'تعيين كغلاف' : 'Set as cover',
+                onPressed: () {
+                  Navigator.of(sheetContext).pop();
+                  _setReaderCover(page);
+                },
+              ),
+            ),
+            Expanded(
+              child: _ReaderImageActionButton(
+                icon: Icons.share_outlined,
+                label: isArabic ? 'مشاركة' : 'Share',
+                onPressed: () {
+                  Navigator.of(sheetContext).pop();
+                  _shareReaderPage(page);
+                },
+              ),
+            ),
+            Expanded(
+              child: _ReaderImageActionButton(
+                icon: Icons.save_outlined,
+                label: isArabic ? 'حفظ' : 'Save',
+                onPressed: () {
+                  Navigator.of(sheetContext).pop();
+                  _saveReaderPage(page);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _setReaderCover(MangaPage page) {
+    // The action surface is ported first; persistence is wired separately so
+    // the reader never mutates AnimeWitcher cloud/library state implicitly.
+  }
+
+  void _shareReaderPage(MangaPage page) {
+    // Wired in the next reader-adapter step.
+  }
+
+  void _saveReaderPage(MangaPage page) {
+    // Wired in the next reader-adapter step.
+  }
+
   MangaChapter? get _nextChapter {
     final index = _controller.currentChapterIndex;
     if (index < 0 || index + 1 >= widget.chapters.length) return null;
@@ -897,6 +961,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                     Size(constraints.maxWidth, constraints.maxHeight),
                     settings,
                   ),
+                  onLongPress: _showImageActions,
                   child: _readerBody(context, settings),
                 ),
               ),
@@ -964,3 +1029,34 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     );
   }
 }
+
+class _ReaderImageActionButton extends StatelessWidget {
+  const _ReaderImageActionButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: TextButton(
+        onPressed: onPressed,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(icon),
+            const SizedBox(height: 6),
+            Text(label, textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
