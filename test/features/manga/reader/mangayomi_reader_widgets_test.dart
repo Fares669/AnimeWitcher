@@ -389,6 +389,7 @@ void main() {
     tester,
   ) async {
     final controller = ScrollController();
+    final reported = <int>[];
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(
@@ -402,7 +403,7 @@ void main() {
             reverse: false,
             settings: const MangaReaderSettings(),
             controller: controller,
-            onPageChanged: (_) {},
+            onPageChanged: reported.add,
             pageBuilder: (_, page) => SizedBox(
               height: 500,
               child: Text('page-${page.index}'),
@@ -417,6 +418,7 @@ void main() {
     expect(controller.hasClients, isTrue);
     expect(controller.offset, greaterThan(0));
     expect(find.text('page-2'), findsOneWidget);
+    expect(reported, isNot(contains(0)));
   });
 
   testWidgets('continuous reader uses one shared Mangayomi zoom surface', (

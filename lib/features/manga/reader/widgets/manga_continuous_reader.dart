@@ -47,6 +47,8 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   late int _lastReported = widget.pages.isEmpty
       ? 0
       : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
+  late bool _initialJumpPending =
+      widget.pages.isNotEmpty && widget.initialPage > 0;
   bool _scheduled = false;
 
   bool get _doublePageActive =>
@@ -111,6 +113,21 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scheduled = false;
       if (!mounted || _visibility.isEmpty) return;
+      if (_initialJumpPending) {
+        final targetPage = widget.initialPage
+            .clamp(0, widget.pages.length - 1)
+            .toInt();
+        final targetSpread = _spreadIndexForPage(targetPage);
+        final spreads = _spreads;
+        final targetAnchor = targetSpread < spreads.length
+            ? spreads[targetSpread].first
+            : targetPage;
+        if ((_visibility[targetAnchor] ?? 0) <= 0) return;
+        _initialJumpPending = false;
+        // Keep the persisted index as the progress anchor for this frame.
+        // A later user/visibility update may advance it normally.
+        return;
+      }
       var best = _lastReported;
       var fraction = -1.0;
       for (final entry in _visibility.entries) {
