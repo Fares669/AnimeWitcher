@@ -45,6 +45,7 @@ class MangaReaderController extends ChangeNotifier {
   final Map<String, List<MangaPage>> _preloadedChapterPages =
       <String, List<MangaPage>>{};
   final Set<String> _preloadingChapterIds = <String>{};
+  bool _autoReadDuplicateChapters = false;
 
   static MangaReaderMode preferredModeFor(MultimediaItem item) {
     final type = (item.catalogType ?? '').trim().toLowerCase();
@@ -197,7 +198,11 @@ class MangaReaderController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setPageIndex(int value) {
+  void setPageIndex(
+    int value, {
+    bool autoReadDuplicateChapters = false,
+  }) {
+    _autoReadDuplicateChapters = autoReadDuplicateChapters;
     if (_pages.isEmpty) return;
     final next = value.clamp(0, _pages.length - 1).toInt();
     if (_pageIndex == next) return;
@@ -214,9 +219,43 @@ class MangaReaderController extends ChangeNotifier {
     );
   }
 
+  double? _recognizedChapterNumber(MangaChapter chapter) {
+    if (chapter.number != null) return chapter.number;
+    final match = RegExp(r'\d+(?:[.,]\d+)?').firstMatch(chapter.name);
+    return double.tryParse((match?.group(0) ?? '').replaceAll(',', '.'));
+  }
+
+  bool get _shouldMarkCurrentChapterRead {
+    if (_pages.isEmpty) return false;
+    if (_mode.isContinuous) {
+      return (_pageIndex + 2) >= _pages.length - 1;
+    }
+    return (_pageIndex + 2) >= _pages.length;
+  }
+
+  Future<void> _markDuplicateChaptersRead() async {
+    final currentNumber = _recognizedChapterNumber(_chapter);
+    if (currentNumber == null) return;
+    for (final sibling in chapters) {
+      if (sibling.id == _chapter.id ||
+          _recognizedChapterNumber(sibling) != currentNumber) {
+        continue;
+      }
+      final current = progressRepository.get(_mangaId, sibling.id);
+      if (current?.isRead == true) continue;
+      await progressRepository.markRead(
+        _mangaId,
+        sibling.id,
+        pageCount: current?.pageCount ?? 1,
+      );
+    }
+  }
+
   Future<void> flushProgress() async {
     if (_pages.isEmpty) return;
     final previous = progressRepository.get(_mangaId, _chapter.id);
+    final isRead =
+        (previous?.isRead ?? false) || _shouldMarkCurrentChapterRead;
     await progressRepository.save(
       MangaReadingProgress(
         mangaId: _mangaId,
@@ -224,10 +263,13 @@ class MangaReaderController extends ChangeNotifier {
         pageIndex: _pageIndex,
         pageCount: _pages.length,
         updatedAt: DateTime.now().millisecondsSinceEpoch,
-        isRead: _pageIndex >= _pages.length - 1,
+        isRead: isRead,
         isBookmarked: previous?.isBookmarked ?? false,
       ),
     );
+    if (isRead && _autoReadDuplicateChapters) {
+      await _markDuplicateChaptersRead();
+    }
   }
 
   Future<void> toggleBookmark() async {

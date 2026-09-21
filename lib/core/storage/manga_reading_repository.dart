@@ -122,15 +122,33 @@ class MangaReadingRepository {
     return next;
   }
 
-  Future<void> markRead(String mangaId, String chapterId) async {
+  Future<void> markRead(
+    String mangaId,
+    String chapterId, {
+    int pageCount = 1,
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
     final current = get(mangaId, chapterId);
-    if (current == null) return;
+    final count = current == null
+        ? pageCount.clamp(1, 1 << 30).toInt()
+        : (current.pageCount <= 0
+              ? pageCount.clamp(1, 1 << 30).toInt()
+              : current.pageCount);
     await save(
-      current.copyWith(
-        pageIndex: current.pageCount <= 0 ? 0 : current.pageCount - 1,
-        updatedAt: DateTime.now().millisecondsSinceEpoch,
-        isRead: true,
-      ),
+      current?.copyWith(
+            pageIndex: count - 1,
+            pageCount: count,
+            updatedAt: now,
+            isRead: true,
+          ) ??
+          MangaReadingProgress(
+            mangaId: mangaId,
+            chapterId: chapterId,
+            pageIndex: count - 1,
+            pageCount: count,
+            updatedAt: now,
+            isRead: true,
+          ),
     );
   }
 }

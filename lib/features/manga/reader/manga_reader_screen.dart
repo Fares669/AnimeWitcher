@@ -195,7 +195,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   }
 
   void _onPageChanged(int index, MangaReaderSettings settings) {
-    _controller.setPageIndex(index);
+    _controller.setPageIndex(
+      index,
+      autoReadDuplicateChapters: settings.autoReadDuplicateChapters,
+    );
     _pageChangeCount++;
     if (!settings.flashOnPageChange ||
         _pageChangeCount % settings.flashInterval != 0) {
