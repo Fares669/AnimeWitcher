@@ -1,6 +1,7 @@
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_zoom_surface.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
@@ -341,7 +342,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byType(InteractiveViewer), findsOneWidget);
+    expect(find.byType(MangaContinuousZoomSurface), findsOneWidget);
   });
 
   testWidgets('continuous reader uses one shared Mangayomi zoom surface', (
@@ -365,7 +366,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byType(InteractiveViewer), findsOneWidget);
+    expect(find.byType(MangaContinuousZoomSurface), findsOneWidget);
   });
 
   testWidgets('webtoon uses one shared Mangayomi zoom surface', (tester) async {
@@ -385,7 +386,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byType(InteractiveViewer), findsOneWidget);
+    expect(find.byType(MangaContinuousZoomSurface), findsOneWidget);
   });
 
   testWidgets('webtoon applies side padding and optional page gaps', (tester) async {
