@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_screen.dart';
+import 'package:animewitcher/features/manga/reader/manga_reader_cover_provider.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -96,6 +99,16 @@ final class _MangaDetailsReaderSettingsNotifier
   MangaReaderSettings build() => const MangaReaderSettings();
 }
 
+String _testCustomCoverUri = '';
+
+final class _MangaDetailsCustomCoverNotifier
+    extends MangaReaderCustomCoversNotifier {
+  @override
+  Map<String, String> build() => <String, String>{
+    'https://animewitcher.com/manga/m1': _testCustomCoverUri,
+  };
+}
+
 final class _Manager extends ExtensionManager {
   _Manager(this.provider);
   final AnimeWitcherProvider provider;
@@ -104,12 +117,19 @@ final class _Manager extends ExtensionManager {
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
 }
 
-Widget _app(AnimeWitcherProvider provider) => ProviderScope(
+Widget _app(
+  AnimeWitcherProvider provider, {
+  bool customCover = false,
+}) => ProviderScope(
   overrides: [
     extensionManagerProvider.overrideWith(() => _Manager(provider)),
     mangaReaderSettingsProvider.overrideWith(
       _MangaDetailsReaderSettingsNotifier.new,
     ),
+    if (customCover)
+      mangaReaderCustomCoversProvider.overrideWith(
+        _MangaDetailsCustomCoverNotifier.new,
+      ),
   ],
   child: MaterialApp(
     locale: const Locale('ar'),
@@ -187,6 +207,25 @@ void main() {
     // NotificationService keeps the success toast alive for one second.
     // Let that timer expire so this widget test does not leak a pending timer.
     await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('manga details uses the reader custom cover override', (
+    tester,
+  ) async {
+    final temp = await Directory.systemTemp.createTemp('aw_manga_cover_');
+    addTearDown(() => temp.delete(recursive: true));
+    final cover = File('${temp.path}/cover.webp');
+    await cover.writeAsBytes(<int>[1, 2, 3, 4]);
+    _testCustomCoverUri = cover.uri.toString();
+
+    await tester.pumpWidget(_app(_MangaProvider(), customCover: true));
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('manga-details-custom-cover')),
+      findsWidgets,
+    );
   });
 
   testWidgets('manga details renders only details and chapters tabs', (
