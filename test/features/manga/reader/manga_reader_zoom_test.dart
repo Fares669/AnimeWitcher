@@ -1,8 +1,28 @@
+import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_zoom_surface.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_zoomable_page.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('continuous zoom recognizer yields one-finger drag while unzoomed', () {
+    final recognizer = MangaContinuousScaleGestureRecognizer(
+      canPanCallback: () => false,
+    );
+    addTearDown(recognizer.dispose);
+
+    expect(
+      recognizer.resolveDisposition(GestureDisposition.accepted),
+      GestureDisposition.rejected,
+    );
+
+    recognizer.canPanCallback = () => true;
+    expect(
+      recognizer.resolveDisposition(GestureDisposition.accepted),
+      GestureDisposition.accepted,
+    );
+  });
+
   testWidgets('double tap toggles page zoom while keeping pinch support', (
     tester,
   ) async {
