@@ -105,27 +105,16 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
 
   Widget _spread(BuildContext context, List<int> indices) {
     final primaryIndex = indices.first;
-    Widget child;
-    if (indices.length == 1) {
-      child = MangaZoomablePage(
-        settings: widget.settings,
-        continuous: true,
-        child: _pageContent(context, primaryIndex),
-      );
-    } else {
-      child = MangaZoomablePage(
-        settings: widget.settings,
-        continuous: true,
-        child: Row(
-          key: const ValueKey<String>('manga-reader-webtoon-double-page'),
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            for (final index in indices)
-              Expanded(child: _pageContent(context, index)),
-          ],
-        ),
-      );
-    }
+    Widget child = indices.length == 1
+        ? _pageContent(context, primaryIndex)
+        : Row(
+            key: const ValueKey<String>('manga-reader-webtoon-double-page'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              for (final index in indices)
+                Expanded(child: _pageContent(context, index)),
+            ],
+          );
     if (widget.settings.showPageGaps) {
       child = Padding(
         key: const ValueKey('manga-reader-page-gap'),
@@ -150,7 +139,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     final start = _startSpread;
     final side = MediaQuery.sizeOf(context).width *
         (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
-    return Padding(
+    final scrollable = Padding(
       key: const ValueKey('manga-reader-webtoon-padding'),
       padding: EdgeInsets.symmetric(horizontal: side),
       child: CustomScrollView(
@@ -178,6 +167,11 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
             SliverToBoxAdapter(child: widget.trailingPage),
         ],
       ),
+    );
+    return MangaZoomablePage(
+      settings: widget.settings,
+      continuous: true,
+      child: scrollable,
     );
   }
 }
