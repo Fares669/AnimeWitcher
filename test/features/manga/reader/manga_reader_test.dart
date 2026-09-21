@@ -453,7 +453,8 @@ void main() {
 
     expect(find.byType(MangaPageImage), findsWidgets);
     await tester.longPress(find.byType(MangaPageImage).first);
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('Set as cover'), findsOneWidget);
     expect(find.text('Share'), findsOneWidget);
