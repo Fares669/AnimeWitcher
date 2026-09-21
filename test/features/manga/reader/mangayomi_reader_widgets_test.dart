@@ -265,6 +265,24 @@ void main() {
     expect(find.text('page-1'), findsOneWidget);
   });
 
+  testWidgets('double page shares one Mangayomi zoom surface', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaPagedReader(
+          pages: _pages,
+          initialPage: 0,
+          rtl: true,
+          doublePage: true,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+  });
+
   testWidgets('webtoon applies side padding and optional page gaps', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
