@@ -187,9 +187,18 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         position.maxScrollExtent,
       );
       if ((target - position.pixels).abs() < 0.1) {
-        _autoScrollRunning = false;
         _autoScrollTimer?.cancel();
         _autoScrollTimer = null;
+        if (_controller.canNext) {
+          unawaited(
+            _navigateChapter(next: true).then((_) {
+              if (!mounted || !_autoScrollRunning) return;
+              _syncAutoScroll(ref.read(mangaReaderSettingsProvider));
+            }),
+          );
+          return;
+        }
+        _autoScrollRunning = false;
         if (mounted) setState(() {});
         return;
       }
@@ -274,13 +283,26 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     required MangaReaderSettings settings,
   }) {
     if (_controller.mode.isContinuous && _continuousController.hasClients) {
+      final position = _continuousController.position;
+      if (forward &&
+          position.extentAfter <= 0.5 &&
+          _controller.canNext) {
+        _openNextChapter();
+        return;
+      }
+      if (!forward &&
+          position.extentBefore <= 0.5 &&
+          _controller.canPrevious) {
+        _openPreviousChapter();
+        return;
+      }
+
       final viewport = MediaQuery.sizeOf(context);
       final horizontal =
           _controller.mode == MangaReaderMode.horizontalContinuous ||
           _controller.mode == MangaReaderMode.horizontalContinuousRtl;
       final dimension = horizontal ? viewport.width : viewport.height;
       final offset = dimension * 0.60 * (forward ? 1 : -1);
-      final position = _continuousController.position;
       final target = (position.pixels + offset)
           .clamp(position.minScrollExtent, position.maxScrollExtent)
           .toDouble();
@@ -302,6 +324,16 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
           forward: forward,
           rtl: _controller.mode.isRtl,
         )) {
+      return;
+    }
+    if (forward &&
+        _controller.pageIndex >= _controller.pages.length - 1 &&
+        _controller.canNext) {
+      _openNextChapter();
+      return;
+    }
+    if (!forward && _controller.pageIndex <= 0 && _controller.canPrevious) {
+      _openPreviousChapter();
       return;
     }
     forward ? _nextPage() : _previousPage();
