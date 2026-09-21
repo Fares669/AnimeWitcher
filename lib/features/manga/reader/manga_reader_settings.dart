@@ -639,9 +639,37 @@ bool shouldUseMangaDoublePage({
   required MangaReaderMode mode,
   bool forceDoublePage = false,
 }) {
-  if (mode.isContinuous || mode == MangaReaderMode.vertical) return false;
+  final horizontalContinuous =
+      mode == MangaReaderMode.horizontalContinuous ||
+      mode == MangaReaderMode.horizontalContinuousRtl;
+  if (horizontalContinuous) return false;
   if (forceDoublePage) return true;
   return settings.doublePageAuto && viewport.width > viewport.height;
+}
+
+List<List<int>> mangaReaderPageSpreads({
+  required int pageCount,
+  required bool singleFirst,
+  required bool invert,
+}) {
+  if (pageCount <= 0) return const <List<int>>[];
+  final result = <List<int>>[];
+  var index = 0;
+  if (singleFirst) {
+    result.add(const <int>[0]);
+    index = 1;
+  }
+  while (index < pageCount) {
+    final pair = <int>[index];
+    if (index + 1 < pageCount) pair.add(index + 1);
+    result.add(
+      invert && pair.length == 2
+          ? pair.reversed.toList(growable: false)
+          : List<int>.unmodifiable(pair),
+    );
+    index += 2;
+  }
+  return List<List<int>>.unmodifiable(result);
 }
 
 const List<double> identityMangaReaderColorMatrix = <double>[
