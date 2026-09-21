@@ -15,6 +15,8 @@ import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import 'manga_reader_controller.dart';
 import 'manga_reader_keyboard_handler.dart';
+import 'manga_reader_image_actions.dart';
+import 'manga_reader_cover_provider.dart';
 import 'manga_reader_settings.dart';
 import 'manga_reader_settings_provider.dart';
 import 'manga_reader_settings_screen.dart';
@@ -557,7 +559,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                 label: isArabic ? 'تعيين كغلاف' : 'Set as cover',
                 onPressed: () {
                   Navigator.of(sheetContext).pop();
-                  _setReaderCover(page);
+                  unawaited(_setReaderCover(page));
                 },
               ),
             ),
@@ -567,7 +569,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                 label: isArabic ? 'مشاركة' : 'Share',
                 onPressed: () {
                   Navigator.of(sheetContext).pop();
-                  _shareReaderPage(page);
+                  unawaited(_shareReaderPage(page));
                 },
               ),
             ),
@@ -577,7 +579,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                 label: isArabic ? 'حفظ' : 'Save',
                 onPressed: () {
                   Navigator.of(sheetContext).pop();
-                  _saveReaderPage(page);
+                  unawaited(_saveReaderPage(page));
                 },
               ),
             ),
@@ -587,17 +589,96 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     );
   }
 
-  void _setReaderCover(MangaPage page) {
-    // The action surface is ported first; persistence is wired separately so
-    // the reader never mutates AnimeWitcher cloud/library state implicitly.
+  Future<void> _setReaderCover(MangaPage page) async {
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        content: Text(
+          isArabic ? 'استخدام هذه الصورة كغلاف؟' : 'Use this as cover art?',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(isArabic ? 'إلغاء' : 'Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(isArabic ? 'موافق' : 'OK'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final file = await ref
+          .read(mangaReaderImageActionsProvider)
+          .saveCover(page: page, mangaTitle: widget.manga.title);
+      await ref
+          .read(mangaReaderCustomCoversProvider.notifier)
+          .setCover(widget.manga.url, file.uri.toString());
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(isArabic ? 'تم تحديث الغلاف' : 'Cover updated')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isArabic ? 'تعذر تحديث الغلاف' : 'Could not update cover',
+          ),
+        ),
+      );
+    }
   }
 
-  void _shareReaderPage(MangaPage page) {
-    // Wired in the next reader-adapter step.
+  Future<void> _shareReaderPage(MangaPage page) async {
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    try {
+      await ref.read(mangaReaderImageActionsProvider).sharePage(
+        page: page,
+        mangaTitle: widget.manga.title,
+        chapterName: _controller.currentChapter.name,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isArabic ? 'تعذرت مشاركة الصورة' : 'Could not share image'),
+        ),
+      );
+    }
   }
 
-  void _saveReaderPage(MangaPage page) {
-    // Wired in the next reader-adapter step.
+  Future<void> _saveReaderPage(MangaPage page) async {
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    try {
+      final file = await ref.read(mangaReaderImageActionsProvider).savePage(
+        page: page,
+        mangaTitle: widget.manga.title,
+        chapterName: _controller.currentChapter.name,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isArabic ? 'تم حفظ الصورة: ${file.path}' : 'Image saved: ${file.path}',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isArabic ? 'تعذر حفظ الصورة' : 'Could not save image'),
+        ),
+      );
+    }
   }
 
   MangaChapter? get _nextChapter {
