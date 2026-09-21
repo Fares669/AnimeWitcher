@@ -152,7 +152,11 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     });
   }
 
-  Widget _page(BuildContext context, _MangaPageUnit unit) {
+  Widget _page(
+    BuildContext context,
+    _MangaPageUnit unit, {
+    bool zoomable = true,
+  }) {
     final page = widget.pages[unit.pageIndex];
     final custom = widget.pageBuilder;
     if (custom != null) return custom(context, page);
@@ -162,16 +166,22 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       rtl: widget.rtl,
       slice: unit.slice,
       onImageSize: (size) => _handleImageSize(unit.pageIndex, size),
+      zoomable: zoomable,
     );
   }
 
   Widget _spread(BuildContext context, List<_MangaPageUnit> units) {
     if (units.length == 1) return _page(context, units.first);
-    return Row(
-      textDirection: widget.rtl ? TextDirection.rtl : TextDirection.ltr,
-      children: <Widget>[
-        for (final unit in units) Expanded(child: _page(context, unit)),
-      ],
+    return MangaZoomablePage(
+      settings: widget.settings,
+      rtl: widget.rtl,
+      child: Row(
+        textDirection: widget.rtl ? TextDirection.rtl : TextDirection.ltr,
+        children: <Widget>[
+          for (final unit in units)
+            Expanded(child: _page(context, unit, zoomable: false)),
+        ],
+      ),
     );
   }
 
@@ -210,6 +220,7 @@ class _MangaPagedImage extends StatefulWidget {
     required this.rtl,
     required this.slice,
     required this.onImageSize,
+    this.zoomable = true,
   });
 
   final MangaPage page;
@@ -217,6 +228,7 @@ class _MangaPagedImage extends StatefulWidget {
   final bool rtl;
   final MangaReaderPageSlice slice;
   final ValueChanged<Size> onImageSize;
+  final bool zoomable;
 
   @override
   State<_MangaPagedImage> createState() => _MangaPagedImageState();
@@ -276,6 +288,7 @@ class _MangaPagedImageState extends State<_MangaPagedImage> {
       );
     }
 
+    if (!widget.zoomable) return image;
     return MangaZoomablePage(
       settings: widget.settings,
       contentSize: contentSize,
