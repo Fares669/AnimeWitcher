@@ -166,6 +166,24 @@ class SettingsRepository {
   Map<String, dynamic> getMangaReaderSettings() =>
       _readJsonMap(_kMangaReaderSettings);
 
+  static const String _kMangaReaderCustomCovers =
+      'manga_reader_custom_covers_json';
+
+  Future<void> saveMangaReaderCustomCovers(Map<String, String> value) =>
+      _writeJsonMap(
+        _kMangaReaderCustomCovers,
+        <String, dynamic>{...value},
+      );
+
+  Map<String, String> getMangaReaderCustomCovers() {
+    final raw = _readJsonMap(_kMangaReaderCustomCovers);
+    return <String, String>{
+      for (final entry in raw.entries)
+        if (entry.value != null && entry.value.toString().trim().isNotEmpty)
+          entry.key: entry.value.toString(),
+    };
+  }
+
   /// Cached AnimeWitcher `Settings/constants.search_settings`.
   ///
   /// The official Android client persists these in SharedPreferences so Algolia
