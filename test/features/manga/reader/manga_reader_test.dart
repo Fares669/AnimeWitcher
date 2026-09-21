@@ -199,6 +199,19 @@ void main() {
     expect(provider.requestedChapterIds, containsAll(<String>['c1', 'c2']));
   });
 
+  test('Mangayomi chapter read action toggles read and unread', () async {
+    final progress = _RecordingReaderProgressRepository();
+
+    expect(
+      await progress.toggleRead('m1', 'c1', pageCount: 12),
+      isTrue,
+    );
+    expect(progress.get('m1', 'c1')?.isRead, isTrue);
+
+    expect(await progress.toggleRead('m1', 'c1'), isFalse);
+    expect(progress.get('m1', 'c1')?.isRead, isFalse);
+  });
+
   test('auto-read duplicate chapters follows Mangayomi reader completion', () async {
     final provider = _ReaderProvider();
     final progress = _RecordingReaderProgressRepository();
