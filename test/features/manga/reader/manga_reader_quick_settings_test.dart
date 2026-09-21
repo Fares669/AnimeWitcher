@@ -74,6 +74,7 @@ void main() {
 
     await tester.tap(find.text('General'));
     await tester.pumpAndSettle();
+    expect(find.text('Background color'), findsOneWidget);
     expect(find.text('Scale type'), findsOneWidget);
     expect(find.text('Flash on page change'), findsOneWidget);
     expect(find.text('All reader settings'), findsOneWidget);
@@ -84,6 +85,14 @@ void main() {
     expect(find.text('Grayscale'), findsOneWidget);
     expect(find.text('Brightness'), findsOneWidget);
     expect(find.text('Custom color filter'), findsOneWidget);
+
+    await tester.tap(find.text('Custom color filter'));
+    await tester.pump();
+    expect(find.text('R'), findsOneWidget);
+    expect(find.text('G'), findsOneWidget);
+    expect(find.text('B'), findsOneWidget);
+    expect(find.text('A'), findsOneWidget);
+    expect(find.text('Blend mode'), findsOneWidget);
   });
 
   testWidgets('paged quick settings exposes navigate-to-pan instead of webtoon zoom', (
