@@ -8,7 +8,6 @@ import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_controller.dart';
-import 'package:animewitcher/features/manga/reader/manga_reader_image_actions.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_page_cache.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
@@ -99,22 +98,6 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
     return emptyPages ? const <MangaPage>[] : pageList;
-  }
-}
-
-final class _FakeReaderImageActions extends MangaReaderImageActions {
-  _FakeReaderImageActions() : super(Dio());
-
-  int saveCalls = 0;
-
-  @override
-  Future<File> savePage({
-    required MangaPage page,
-    required String mangaTitle,
-    required String chapterName,
-  }) async {
-    saveCalls++;
-    return File('/tmp/aw-reader-test-saved.webp');
   }
 }
 
