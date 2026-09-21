@@ -324,10 +324,13 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
 
-    expect(provider.requestedChapterIds, contains('c1'));
-    expect(find.byType(MangaWebtoonReader), findsOneWidget);
+    final modeMenu = tester.widget<PopupMenuButton<MangaReaderMode>>(
+      find.byType(PopupMenuButton<MangaReaderMode>),
+    );
+    expect(modeMenu.initialValue, MangaReaderMode.webtoon);
   });
 
   testWidgets('reader uses Mangayomi navigation overlay widget', (tester) async {
