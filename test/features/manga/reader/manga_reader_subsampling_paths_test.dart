@@ -49,6 +49,36 @@ void main() {
     expect(renderer.image, isA<CachedNetworkImageProvider>());
   });
 
+  testWidgets('network continuous image uses Mangayomi min-subsampling renderer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 600,
+            height: 800,
+            child: MangaPageImage(
+              page: MangaPage(
+                index: 0,
+                imageUrl: 'https://example.test/continuous.webp',
+                headers: <String, String>{'Referer': 'https://example.test/'},
+              ),
+              settings: MangaReaderSettings(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(MangaMinSubsamplingImage), findsOneWidget);
+    final renderer = tester.widget<MangaMinSubsamplingImage>(
+      find.byType(MangaMinSubsamplingImage),
+    );
+    expect(renderer.image, isA<CachedNetworkImageProvider>());
+  });
+
   testWidgets('vertical continuous page uses Mangayomi min-subsampling renderer', (
     tester,
   ) async {
