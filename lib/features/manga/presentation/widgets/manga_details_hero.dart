@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
@@ -67,37 +69,17 @@ class MangaDetailsHero extends StatelessWidget {
                   else
                     ColoredBox(
                       color: Colors.black,
-                      child: ArtworkDecode(
+                      child: _MangaDetailsArtwork(
+                        imageUrl: bannerUrl,
+                        fit: BoxFit.cover,
+                        alignment: Alignment.center,
                         paintedWidth: screenSize.width,
-                        builder: (context, decodeWidth) => CachedNetworkImage(
-                          key: ValueKey<String>(
-                            'manga_details_banner_$bannerUrl',
-                          ),
-                          imageUrl: bannerUrl,
-                          fit: BoxFit.cover,
-                          alignment: Alignment.center,
-                          memCacheWidth: decodeWidth,
-                          filterQuality: FilterQuality.medium,
-                          placeholder: (_, _) =>
-                              const ColoredBox(color: Colors.black),
-                          errorWidget: (_, _, _) {
-                            if (providedBannerUrl != null &&
+                        fallbackUrl:
+                            providedBannerUrl != null &&
                                 posterUrl.isNotEmpty &&
-                                providedBannerUrl != posterUrl) {
-                              return CachedNetworkImage(
-                                key: ValueKey<String>(
-                                  'manga_details_banner_poster_$posterUrl',
-                                ),
-                                imageUrl: posterUrl,
-                                fit: BoxFit.cover,
-                                alignment: Alignment.center,
-                                memCacheWidth: decodeWidth,
-                                filterQuality: FilterQuality.medium,
-                              );
-                            }
-                            return const ColoredBox(color: Colors.black);
-                          },
-                        ),
+                                providedBannerUrl != posterUrl
+                            ? posterUrl
+                            : null,
                       ),
                     ),
                   const DecoratedBox(
@@ -140,24 +122,17 @@ class MangaDetailsHero extends StatelessWidget {
                             color: Colors.white38,
                           ),
                         )
-                      : ArtworkDecode(
+                      : _MangaDetailsArtwork(
+                          key: posterUrl.startsWith('file:')
+                              ? const ValueKey('manga-details-custom-cover')
+                              : ValueKey<String>(
+                                  'manga_details_poster_$posterUrl',
+                                ),
+                          imageUrl: posterUrl,
+                          fit: BoxFit.cover,
                           paintedWidth: sdp(
                             LayoutConstants.detailsPosterWidthMobile,
                           ),
-                          builder: (context, decodeWidth) =>
-                              CachedNetworkImage(
-                                key: ValueKey<String>(
-                                  'manga_details_poster_$posterUrl',
-                                ),
-                                imageUrl: posterUrl,
-                                fit: BoxFit.cover,
-                                memCacheWidth: decodeWidth,
-                                filterQuality: FilterQuality.medium,
-                                placeholder: (_, _) =>
-                                    const ColoredBox(color: Colors.black),
-                                errorWidget: (_, _, _) =>
-                                    const ColoredBox(color: Colors.black),
-                              ),
                         ),
                 ),
               ),
@@ -214,6 +189,60 @@ class MangaDetailsHero extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+
+class _MangaDetailsArtwork extends StatelessWidget {
+  const _MangaDetailsArtwork({
+    super.key,
+    required this.imageUrl,
+    required this.fit,
+    required this.paintedWidth,
+    this.alignment = Alignment.center,
+    this.fallbackUrl,
+  });
+
+  final String imageUrl;
+  final BoxFit fit;
+  final double paintedWidth;
+  final Alignment alignment;
+  final String? fallbackUrl;
+
+  Widget _image(BuildContext context, String url, int decodeWidth) {
+    final uri = Uri.tryParse(url);
+    if (uri != null && uri.scheme == 'file') {
+      return Image.file(
+        File.fromUri(uri),
+        fit: fit,
+        alignment: alignment,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black),
+      );
+    }
+    return CachedNetworkImage(
+      imageUrl: url,
+      fit: fit,
+      alignment: alignment,
+      memCacheWidth: decodeWidth,
+      filterQuality: FilterQuality.medium,
+      placeholder: (_, _) => const ColoredBox(color: Colors.black),
+      errorWidget: (_, _, _) {
+        final fallback = fallbackUrl?.trim() ?? '';
+        if (fallback.isEmpty || fallback == url) {
+          return const ColoredBox(color: Colors.black);
+        }
+        return _image(context, fallback, decodeWidth);
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ArtworkDecode(
+      paintedWidth: paintedWidth,
+      builder: (context, decodeWidth) => _image(context, imageUrl, decodeWidth),
     );
   }
 }

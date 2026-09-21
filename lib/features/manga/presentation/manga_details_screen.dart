@@ -24,6 +24,7 @@ import '../../details/presentation/widgets/details_rating_actions.dart';
 import '../../library/presentation/library_auth.dart';
 import '../../library/presentation/library_provider.dart';
 import '../../settings/presentation/account_screen.dart';
+import '../reader/manga_reader_cover_provider.dart';
 import 'manga_details_controller.dart';
 import 'widgets/manga_chapter_list.dart';
 import 'widgets/manga_details_hero.dart';
@@ -387,7 +388,18 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     final state = ref.watch(
       mangaDetailsControllerProvider(widget.item.url),
     );
-    final item = state.details.asData?.value ?? state.item ?? widget.item;
+    final baseItem = state.details.asData?.value ?? state.item ?? widget.item;
+    final customCover = ref.watch(
+      mangaReaderCustomCoversProvider.select(
+        (covers) => covers[baseItem.url]?.trim() ?? '',
+      ),
+    );
+    final item = customCover.isEmpty
+        ? baseItem
+        : baseItem.copyWith(
+            posterUrl: customCover,
+            fullPosterUrl: customCover,
+          );
     final chapterCount = state.chapters.asData?.value.length ?? 0;
 
     dynamic libraryNotifier;
