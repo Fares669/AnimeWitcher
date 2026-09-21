@@ -421,6 +421,13 @@ class MangaReaderSettings {
   int get hashCode => Object.hashAll(toJson().values);
 }
 
+double mangaReaderHideThresholdPixels(int index) => switch (index) {
+  0 => 5,
+  1 => 13,
+  2 => 31,
+  _ => 47,
+};
+
 bool shouldUseMangaDoublePage({
   required MangaReaderSettings settings,
   required Size viewport,

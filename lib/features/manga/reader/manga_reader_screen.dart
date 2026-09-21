@@ -296,6 +296,19 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     }
   }
 
+  bool _handleReaderScrollNotification(
+    ScrollNotification notification,
+    MangaReaderSettings settings,
+  ) {
+    if (notification is ScrollUpdateNotification &&
+        _controlsVisible &&
+        (notification.scrollDelta ?? 0).abs() >
+            mangaReaderHideThresholdPixels(settings.readerHideThreshold)) {
+      setState(() => _controlsVisible = false);
+    }
+    return true;
+  }
+
   void _handleKey(KeyEvent event, MangaReaderSettings settings) {
     if (event is! KeyDownEvent) return;
     final key = event.logicalKey;
@@ -744,10 +757,13 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         focusNode: _keyboardFocusNode,
         autofocus: true,
         onKeyEvent: (event) => _handleKey(event, settings),
-        child: LayoutBuilder(
-          builder: (context, constraints) => Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (notification) =>
+              _handleReaderScrollNotification(notification, settings),
+          child: LayoutBuilder(
+            builder: (context, constraints) => Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
               ColoredBox(
                 color: background,
                 child: GestureDetector(
@@ -832,7 +848,8 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                     ),
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
