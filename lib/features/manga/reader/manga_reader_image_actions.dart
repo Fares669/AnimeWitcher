@@ -1,6 +1,7 @@
 // Adapted from Mangayomi's image-actions path (Apache-2.0).
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' show Rect;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
