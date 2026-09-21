@@ -110,6 +110,13 @@ void main() {
     );
   });
 
+  test('Mangayomi reader hide thresholds are preserved', () {
+    expect(mangaReaderHideThresholdPixels(0), 5);
+    expect(mangaReaderHideThresholdPixels(1), 13);
+    expect(mangaReaderHideThresholdPixels(2), 31);
+    expect(mangaReaderHideThresholdPixels(3), 47);
+  });
+
   test('reader color matrix changes when filters are enabled', () {
     const settings = MangaReaderSettings(
       invertColors: true,
