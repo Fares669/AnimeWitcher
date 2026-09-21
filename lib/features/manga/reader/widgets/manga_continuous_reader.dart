@@ -16,6 +16,7 @@ class MangaContinuousReader extends StatefulWidget {
     required this.reverse,
     required this.settings,
     required this.onPageChanged,
+    this.doublePage = false,
     this.controller,
     this.pageBuilder,
     this.trailingPage,
@@ -27,6 +28,7 @@ class MangaContinuousReader extends StatefulWidget {
   final bool reverse;
   final MangaReaderSettings settings;
   final ValueChanged<int> onPageChanged;
+  final bool doublePage;
   final ScrollController? controller;
   final MangaPageBuilder? pageBuilder;
   final Widget? trailingPage;
@@ -45,14 +47,27 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
       : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
   bool _scheduled = false;
 
+  bool get _doublePageActive =>
+      widget.doublePage && widget.scrollDirection == Axis.vertical;
+
+  List<List<int>> get _spreads => _doublePageActive
+      ? mangaReaderPageSpreads(
+          pageCount: widget.pages.length,
+          singleFirst: widget.settings.doublePageSingleFirstPage,
+        )
+      : <List<int>>[
+          for (var index = 0; index < widget.pages.length; index++)
+            <int>[index],
+        ];
+
   @override
   void dispose() {
     if (_ownsController) _controller.dispose();
     super.dispose();
   }
 
-  void _changed(int index, VisibilityInfo info) {
-    _visibility[index] = info.visibleFraction;
+  void _changed(int pageIndex, VisibilityInfo info) {
+    _visibility[pageIndex] = info.visibleFraction;
     if (_scheduled) return;
     _scheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -73,21 +88,42 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     });
   }
 
-  Widget _page(BuildContext context, int index) {
+  Widget _pageContent(BuildContext context, int index) {
     final page = widget.pages[index];
-    final custom = widget.pageBuilder;
-    Widget child = custom?.call(context, page) ??
-        MangaZoomablePage(
+    return widget.pageBuilder?.call(context, page) ??
+        MangaPageImage(
+          page: page,
           settings: widget.settings,
-          continuous: true,
-          child: MangaPageImage(
-            page: page,
-            settings: widget.settings,
-            fit: widget.scrollDirection == Axis.horizontal
-                ? BoxFit.contain
-                : null,
-          ),
+          fit: widget.scrollDirection == Axis.horizontal
+              ? BoxFit.contain
+              : null,
         );
+  }
+
+  Widget _spread(BuildContext context, List<int> indices) {
+    final primaryIndex = indices.first;
+    Widget child;
+    if (indices.length == 1) {
+      child = MangaZoomablePage(
+        settings: widget.settings,
+        continuous: true,
+        child: _pageContent(context, primaryIndex),
+      );
+    } else {
+      child = MangaZoomablePage(
+        settings: widget.settings,
+        continuous: true,
+        child: Row(
+          key: const ValueKey<String>('manga-reader-continuous-double-page'),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            for (final index in indices)
+              Expanded(child: _pageContent(context, index)),
+          ],
+        ),
+      );
+    }
+
     if (widget.scrollDirection == Axis.horizontal) {
       child = SizedBox(width: MediaQuery.sizeOf(context).width, child: child);
     }
@@ -101,8 +137,10 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
       );
     }
     return VisibilityDetector(
-      key: ValueKey<String>('manga-continuous-$index-${page.imageUrl}'),
-      onVisibilityChanged: (info) => _changed(index, info),
+      key: ValueKey<String>(
+        'manga-continuous-$primaryIndex-${indices.join('-')}',
+      ),
+      onVisibilityChanged: (info) => _changed(primaryIndex, info),
       child: child,
     );
   }
@@ -112,6 +150,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
     final side = MediaQuery.sizeOf(context).width *
         (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
+    final spreads = _spreads;
     return Padding(
       key: const ValueKey('manga-reader-continuous-padding'),
       padding: widget.scrollDirection == Axis.vertical
@@ -121,10 +160,10 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
         controller: _controller,
         scrollDirection: widget.scrollDirection,
         reverse: widget.reverse,
-        itemCount: widget.pages.length + (widget.trailingPage == null ? 0 : 1),
+        itemCount: spreads.length + (widget.trailingPage == null ? 0 : 1),
         itemBuilder: (context, index) {
-          if (index >= widget.pages.length) return widget.trailingPage!;
-          return _page(context, index);
+          if (index >= spreads.length) return widget.trailingPage!;
+          return _spread(context, spreads[index]);
         },
       ),
     );
