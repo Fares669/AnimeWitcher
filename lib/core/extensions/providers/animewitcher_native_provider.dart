@@ -2765,15 +2765,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final normalized = label?.replaceAll(',', '.');
     return double.tryParse(normalized ?? '') ?? double.tryParse(docId);
   }
-  MangaChapter? _firestoreMangaChapter(
-    dynamic raw, {
+  MangaChapter? _mangaChapterFromFields(
+    Map<String, dynamic> fields, {
     required String mangaId,
+    String documentId = '',
   }) {
-    final document = _map(_map(raw)['document']);
-    if (document.isEmpty) return null;
-    final fields = _firestoreFields(document['fields']);
-    final documentName = _text(document['name']);
-    final documentId = documentName.isEmpty ? '' : documentName.split('/').last;
     final docId = _text(fields['doc_id']);
     final chapterId = documentId.isNotEmpty ? documentId : docId;
     final name = _text(fields['name']);
@@ -2790,6 +2786,41 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       number: _firestoreMangaChapterNumber(name, docId),
       publishedAt: publishedText.isEmpty ? null : DateTime.tryParse(publishedText),
     );
+  }
+
+  MangaChapter? _firestoreMangaChapter(
+    dynamic raw, {
+    required String mangaId,
+  }) {
+    final document = _map(_map(raw)['document']);
+    if (document.isEmpty) return null;
+    final documentName = _text(document['name']);
+    final documentId = documentName.isEmpty ? '' : documentName.split('/').last;
+    return _mangaChapterFromFields(
+      _firestoreFields(document['fields']),
+      mangaId: mangaId,
+      documentId: documentId,
+    );
+  }
+
+  Future<List<MangaChapter>> _loadFirestoreMangaSummaryChapters(
+    String mangaId,
+  ) async {
+    final summary = await _firestoreDocumentFields(
+      'manga_list/$mangaId/chapters_summery/summery',
+    );
+    final chapters = <MangaChapter>[];
+    final seen = <String>{};
+    for (final raw in _list(summary['chapters'])) {
+      if (raw is! Map) continue;
+      final chapter = _mangaChapterFromFields(
+        Map<String, dynamic>.from(raw),
+        mangaId: mangaId,
+      );
+      if (chapter == null || !seen.add(chapter.id)) continue;
+      chapters.add(chapter);
+    }
+    return List<MangaChapter>.unmodifiable(chapters);
   }
 
   Future<List<MangaChapter>> _loadFirestoreMangaChapters(
@@ -2896,8 +2927,15 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       return List<MangaChapter>.unmodifiable(cached);
     }
 
-    // AnimeWitcher v1.4.9 reads the title's Firestore chapters collection.
-    // External MangaLek HTML is only a compatibility fallback for legacy rows.
+    // v1.4.9 first reads manga_list/{id}/chapters_summery/summery.
+    // The direct chapters collection is its pagination/fallback path.
+    final summaryChapters = await _loadFirestoreMangaSummaryChapters(mangaId);
+    if (summaryChapters.isNotEmpty) {
+      _mangaChapterCache[mangaId] = summaryChapters;
+      _mangaChapterExpiresAt[mangaId] = DateTime.now().add(_episodeDataTtl);
+      return summaryChapters;
+    }
+
     final firestoreChapters = await _loadFirestoreMangaChapters(mangaId);
     if (firestoreChapters.isNotEmpty) {
       _mangaChapterCache[mangaId] = firestoreChapters;
