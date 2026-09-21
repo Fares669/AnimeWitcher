@@ -6,6 +6,8 @@ import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_controller.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_screen.dart';
+import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
+import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
@@ -79,6 +81,11 @@ final class _ReaderManager extends ExtensionManager {
 
   @override
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
+}
+
+final class _ReaderSettingsNotifier extends MangaReaderSettingsNotifier {
+  @override
+  MangaReaderSettings build() => const MangaReaderSettings();
 }
 
 final class _ReaderProgressRepository extends MangaReadingRepository {
@@ -181,6 +188,9 @@ void main() {
             extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
             mangaReadingRepositoryProvider.overrideWithValue(
               _ReaderProgressRepository(),
+            ),
+            mangaReaderSettingsProvider.overrideWith(
+              _ReaderSettingsNotifier.new,
             ),
           ],
           child: MaterialApp(

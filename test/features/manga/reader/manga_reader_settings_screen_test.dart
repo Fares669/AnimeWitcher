@@ -32,8 +32,20 @@ void main() {
     expect(find.text('Reading mode'), findsOneWidget);
     expect(find.text('Automatic double page'), findsOneWidget);
     expect(find.text('Crop borders'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('Keep screen on'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('Keep screen on'), findsOneWidget);
     expect(find.text('Show page number'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('Color filters'),
+      500,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('Color filters'), findsOneWidget);
   });
 }

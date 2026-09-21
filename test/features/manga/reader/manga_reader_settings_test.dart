@@ -63,7 +63,7 @@ void main() {
       webtoonDisableZoomOut: true,
       webtoonDoubleTapZoomEnabled: false,
       readerHideThreshold: 2,
-      autoScrollSpeed: 35,
+      autoScrollSpeed: 25,
     );
 
     expect(MangaReaderSettings.fromJson(settings.toJson()), settings);
