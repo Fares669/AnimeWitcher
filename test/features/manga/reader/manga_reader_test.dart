@@ -324,9 +324,9 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
-    await tester.pump();
+    await tester.pumpAndSettle();
 
+    expect(provider.requestedChapterIds, contains('c1'));
     expect(find.byType(MangaWebtoonReader), findsOneWidget);
   });
 
