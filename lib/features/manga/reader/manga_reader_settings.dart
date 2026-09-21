@@ -315,11 +315,10 @@ class MangaReaderSettings {
   factory MangaReaderSettings.fromJson(Map<String, dynamic> json) {
     T enumValue<T extends Enum>(List<T> values, dynamic raw, T fallback) {
       final name = raw?.toString();
-      return values.cast<T?>().firstWhere(
-            (value) => value?.name == name,
-            orElse: () => fallback,
-          ) ??
-          fallback;
+      for (final value in values) {
+        if (value.name == name) return value;
+      }
+      return fallback;
     }
 
     bool boolean(String key, bool fallback) =>
@@ -343,7 +342,7 @@ class MangaReaderSettings {
         json['scaleType'],
         MangaReaderScaleType.fitScreen,
       ),
-      pagePreloadAmount: integer('pagePreloadAmount', 6).clamp(0, 20),
+      pagePreloadAmount: integer('pagePreloadAmount', 6).clamp(0, 20).toInt(),
       background: enumValue(
         MangaReaderBackground.values,
         json['background'],
@@ -353,13 +352,13 @@ class MangaReaderSettings {
       fullScreen: boolean('fullScreen', true),
       showPageNumber: boolean('showPageNumber', true),
       keepScreenOn: boolean('keepScreenOn', true),
-      webtoonSidePadding: integer('webtoonSidePadding', 0).clamp(0, 50),
+      webtoonSidePadding: integer('webtoonSidePadding', 0).clamp(0, 50).toInt(),
       showPageGaps: boolean('showPageGaps', true),
       invertColors: boolean('invertColors', false),
       grayscale: boolean('grayscale', false),
-      brightness: number('brightness', 0).clamp(-1, 1),
-      contrast: number('contrast', 1).clamp(0, 2),
-      saturation: number('saturation', 1).clamp(0, 2),
+      brightness: number('brightness', 0).clamp(-1, 1).toDouble(),
+      contrast: number('contrast', 1).clamp(0, 2).toDouble(),
+      saturation: number('saturation', 1).clamp(0, 2).toDouble(),
       enableCustomColorFilter: boolean('enableCustomColorFilter', false),
       customColorFilterArgb: integer('customColorFilterArgb', 0x00000000),
       colorFilterBlendMode: enumValue(
@@ -367,7 +366,7 @@ class MangaReaderSettings {
         json['colorFilterBlendMode'],
         MangaReaderColorBlendMode.none,
       ),
-      navigationLayout: integer('navigationLayout', 0).clamp(0, 5),
+      navigationLayout: integer('navigationLayout', 0).clamp(0, 5).toInt(),
       splitWidePages: boolean('splitWidePages', false),
       dualPageInvert: boolean('dualPageInvert', false),
       dualPageRotateToFit: boolean('dualPageRotateToFit', false),
@@ -377,21 +376,21 @@ class MangaReaderSettings {
           boolean('doublePageSingleFirstPage', false),
       doublePageAuto: boolean('doublePageAuto', false),
       landscapeZoom: boolean('landscapeZoom', false),
-      zoomStartPosition: integer('zoomStartPosition', 1).clamp(0, 2),
+      zoomStartPosition: integer('zoomStartPosition', 1).clamp(0, 2).toInt(),
       navigateToPan: boolean('navigateToPan', true),
-      tappingInversion: integer('tappingInversion', 0).clamp(0, 3),
+      tappingInversion: integer('tappingInversion', 0).clamp(0, 3).toInt(),
       flashOnPageChange: boolean('flashOnPageChange', false),
-      flashDurationMs: integer('flashDurationMs', 100).clamp(50, 500),
-      flashInterval: integer('flashInterval', 1).clamp(1, 10),
-      flashColor: integer('flashColor', 0).clamp(0, 2),
+      flashDurationMs: integer('flashDurationMs', 100).clamp(50, 500).toInt(),
+      flashInterval: integer('flashInterval', 1).clamp(1, 10).toInt(),
+      flashColor: integer('flashColor', 0).clamp(0, 2).toInt(),
       showNavigationOverlayOnStart:
           boolean('showNavigationOverlayOnStart', false),
       webtoonDisableZoomOut: boolean('webtoonDisableZoomOut', false),
       webtoonDoubleTapZoomEnabled:
           boolean('webtoonDoubleTapZoomEnabled', true),
-      readerHideThreshold: integer('readerHideThreshold', 1).clamp(0, 3),
+      readerHideThreshold: integer('readerHideThreshold', 1).clamp(0, 3).toInt(),
       autoScrollEnabled: boolean('autoScrollEnabled', false),
-      autoScrollSpeed: number('autoScrollSpeed', 10).clamp(2, 30),
+      autoScrollSpeed: number('autoScrollSpeed', 10).clamp(2, 30).toDouble(),
       chapterSwipeStartAction: enumValue(
         MangaReaderChapterSwipeAction.values,
         json['chapterSwipeStartAction'],

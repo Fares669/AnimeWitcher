@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../../core/domain/entity/manga.dart';
+import '../manga_reader_settings.dart';
 import 'manga_page_image.dart';
 import 'manga_zoomable_page.dart';
 
@@ -12,12 +13,16 @@ class MangaWebtoonReader extends StatefulWidget {
     required this.initialPage,
     required this.onPageChanged,
     this.pageBuilder,
+    this.settings = const MangaReaderSettings(),
+    this.controller,
   });
 
   final List<MangaPage> pages;
   final int initialPage;
   final ValueChanged<int> onPageChanged;
   final MangaPageBuilder? pageBuilder;
+  final MangaReaderSettings settings;
+  final ScrollController? controller;
 
   @override
   State<MangaWebtoonReader> createState() => _MangaWebtoonReaderState();
@@ -28,6 +33,9 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   final Map<int, double> _visibleFractions = <int, double>{};
   bool _visibilityUpdateScheduled = false;
   late int _lastReported;
+  late final ScrollController _controller =
+      widget.controller ?? ScrollController();
+  late final bool _ownsController = widget.controller == null;
 
   int get _start => widget.pages.isEmpty
       ? 0
@@ -37,6 +45,12 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   void initState() {
     super.initState();
     _lastReported = _start;
+  }
+
+  @override
+  void dispose() {
+    if (_ownsController) _controller.dispose();
+    super.dispose();
   }
 
   void _visibilityChanged(int index, VisibilityInfo info) {
@@ -63,13 +77,23 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   Widget _page(BuildContext context, int index) {
     final page = widget.pages[index];
     final custom = widget.pageBuilder;
+    Widget child = custom?.call(context, page) ??
+        MangaZoomablePage(
+          settings: widget.settings,
+          continuous: true,
+          child: MangaPageImage(page: page, settings: widget.settings),
+        );
+    if (widget.settings.showPageGaps) {
+      child = Padding(
+        key: const ValueKey('manga-reader-page-gap'),
+        padding: const EdgeInsets.only(bottom: 8),
+        child: child,
+      );
+    }
     return VisibilityDetector(
-      key: ValueKey<String>(
-        'manga-webtoon-' + index.toString() + '-' + page.imageUrl,
-      ),
+      key: ValueKey<String>('manga-webtoon-$index-${page.imageUrl}'),
       onVisibilityChanged: (info) => _visibilityChanged(index, info),
-      child: custom?.call(context, page) ??
-          MangaZoomablePage(child: MangaPageImage(page: page)),
+      child: child,
     );
   }
 
@@ -78,27 +102,34 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
 
     final start = _start;
-    return CustomScrollView(
-      center: _centerKey,
-      slivers: <Widget>[
-        if (start > 0)
+    final side = MediaQuery.sizeOf(context).width *
+        (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
+    return Padding(
+      key: const ValueKey('manga-reader-webtoon-padding'),
+      padding: EdgeInsets.symmetric(horizontal: side),
+      child: CustomScrollView(
+        controller: _controller,
+        center: _centerKey,
+        slivers: <Widget>[
+          if (start > 0)
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => _page(context, index),
+                childCount: start,
+              ),
+            ),
           SliverList(
+            key: _centerKey,
             delegate: SliverChildBuilderDelegate(
-              (context, index) => _page(context, index),
-              childCount: start,
+              (context, localIndex) {
+                final index = start + localIndex;
+                return _page(context, index);
+              },
+              childCount: widget.pages.length - start,
             ),
           ),
-        SliverList(
-          key: _centerKey,
-          delegate: SliverChildBuilderDelegate(
-            (context, localIndex) {
-              final index = start + localIndex;
-              return _page(context, index);
-            },
-            childCount: widget.pages.length - start,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
