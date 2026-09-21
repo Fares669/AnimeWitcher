@@ -12,6 +12,7 @@ import 'package:animewitcher/features/manga/reader/manga_reader_image_actions.da
 import 'package:animewitcher/features/manga/reader/manga_reader_page_cache.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
+import 'package:animewitcher/features/manga/reader/subsampling/ffi_image_decoder.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
@@ -26,9 +27,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 const pages = <MangaPage>[
-  MangaPage(index: 0, imageUrl: 'https://example.test/1.webp'),
-  MangaPage(index: 1, imageUrl: 'https://example.test/2.webp'),
-  MangaPage(index: 2, imageUrl: 'https://example.test/3.webp'),
+  MangaPage(index: 0, imageUrl: 'http://127.0.0.1:1/1.webp'),
+  MangaPage(index: 1, imageUrl: 'http://127.0.0.1:1/2.webp'),
+  MangaPage(index: 2, imageUrl: 'http://127.0.0.1:1/3.webp'),
 ];
 
 final class _ReaderProvider extends AnimeWitcherProvider {
@@ -184,6 +185,9 @@ final class _ReaderProgressRepository extends MangaReadingRepository {
 void main() {
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
+  });
+  tearDown(() async {
+    await ffiImageDecoder.stop();
   });
   test('reader exposes webtoon, paged LTR and paged RTL modes', () {
     expect(

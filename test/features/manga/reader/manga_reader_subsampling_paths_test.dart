@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
+import 'package:animewitcher/features/manga/reader/subsampling/ffi_image_decoder.dart';
 import 'package:animewitcher/features/manga/reader/subsampling/manga_min_subsampling_image.dart';
 import 'package:animewitcher/features/manga/reader/subsampling/subsampling_scale_image_view.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
@@ -16,6 +17,9 @@ void main() {
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
   });
+  tearDown(() async {
+    await ffiImageDecoder.stop();
+  });
 
   testWidgets('network paged image uses Mangayomi subsampling renderer', (
     tester,
@@ -29,8 +33,8 @@ void main() {
             child: MangaPageImage(
               page: MangaPage(
                 index: 0,
-                imageUrl: 'https://example.test/page.webp',
-                headers: <String, String>{'Referer': 'https://example.test/'},
+                imageUrl: 'http://127.0.0.1:1/page.webp',
+                headers: <String, String>{'Referer': 'http://127.0.0.1:1/'},
               ),
               settings: MangaReaderSettings(),
               fit: BoxFit.contain,
@@ -61,8 +65,8 @@ void main() {
             child: MangaPageImage(
               page: MangaPage(
                 index: 0,
-                imageUrl: 'https://example.test/continuous.webp',
-                headers: <String, String>{'Referer': 'https://example.test/'},
+                imageUrl: 'http://127.0.0.1:1/continuous.webp',
+                headers: <String, String>{'Referer': 'http://127.0.0.1:1/'},
               ),
               settings: MangaReaderSettings(),
             ),
