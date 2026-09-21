@@ -344,6 +344,50 @@ void main() {
     expect(find.byType(InteractiveViewer), findsOneWidget);
   });
 
+  testWidgets('continuous reader uses one shared Mangayomi zoom surface', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) => SizedBox(
+            height: 300,
+            child: Text('page-${page.index}'),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+  });
+
+  testWidgets('webtoon uses one shared Mangayomi zoom surface', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaWebtoonReader(
+          pages: _pages,
+          initialPage: 0,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) => SizedBox(
+            height: 300,
+            child: Text('page-${page.index}'),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+  });
+
   testWidgets('webtoon applies side padding and optional page gaps', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
