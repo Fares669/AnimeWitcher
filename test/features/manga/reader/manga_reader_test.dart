@@ -31,9 +31,13 @@ const pages = <MangaPage>[
 ];
 
 final class _ReaderProvider extends AnimeWitcherProvider {
-  _ReaderProvider({this.emptyPages = false});
+  _ReaderProvider({
+    this.emptyPages = false,
+    this.pageList = pages,
+  });
 
   final bool emptyPages;
+  final List<MangaPage> pageList;
   final List<String> requestedChapterIds = <String>[];
   final Map<String, Completer<void>> _requestWaiters =
       <String, Completer<void>>{};
@@ -92,7 +96,7 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     requestedChapterIds.add(chapter.id);
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
-    return emptyPages ? const <MangaPage>[] : pages;
+    return emptyPages ? const <MangaPage>[] : pageList;
   }
 }
 
@@ -410,7 +414,15 @@ void main() {
   });
 
   testWidgets('long press opens Mangayomi image actions', (tester) async {
-    final provider = _ReaderProvider();
+    final temp = await Directory.systemTemp.createTemp('aw_reader_actions_');
+    addTearDown(() => temp.delete(recursive: true));
+    final localPage = File('${temp.path}/page.webp');
+    await localPage.writeAsBytes(<int>[1, 2, 3, 4]);
+    final provider = _ReaderProvider(
+      pageList: <MangaPage>[
+        MangaPage(index: 0, imageUrl: localPage.uri.toString()),
+      ],
+    );
     const chapter = MangaChapter(
       id: 'actions-c1',
       mangaId: 'actions-m1',
