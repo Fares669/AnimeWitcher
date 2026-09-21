@@ -15,6 +15,36 @@ typedef MangaPageBuilder = Widget Function(
   MangaPage page,
 );
 
+enum MangaPageImageTier {
+  pagedSubsampling,
+  continuousSubsampling,
+  animated,
+}
+
+@visibleForTesting
+MangaPageImageTier mangaPageImageTier({
+  required MangaPage page,
+  required bool expand,
+}) {
+  final uri = Uri.tryParse(page.imageUrl);
+  final path = (uri?.path ?? page.imageUrl).toLowerCase();
+  if (path.endsWith('.gif')) return MangaPageImageTier.animated;
+  return expand
+      ? MangaPageImageTier.pagedSubsampling
+      : MangaPageImageTier.continuousSubsampling;
+}
+
+@visibleForTesting
+ImageProvider<Object> mangaPageImageProvider(MangaPage page) {
+  final uri = Uri.tryParse(page.imageUrl);
+  return uri != null && uri.scheme == 'file'
+      ? FileImage(File.fromUri(uri))
+      : CachedNetworkImageProvider(
+          page.imageUrl,
+          headers: page.headers,
+        );
+}
+
 class MangaPageImage extends StatefulWidget {
   const MangaPageImage({
     super.key,
@@ -57,23 +87,12 @@ class _MangaPageImageState extends State<MangaPageImage> {
     MangaReaderScaleType.smartFit => BoxFit.contain,
   };
 
-  bool get _isAnimatedImage {
-    final uri = Uri.tryParse(widget.page.imageUrl);
-    final path = (uri?.path ?? widget.page.imageUrl).toLowerCase();
-    return path.endsWith('.gif');
-  }
+  bool get _useSubsampling =>
+      mangaPageImageTier(page: widget.page, expand: widget.expand) !=
+      MangaPageImageTier.animated;
 
-  bool get _useSubsampling => !_isAnimatedImage;
-
-  ImageProvider<Object> _createImageProvider(MangaPage page) {
-    final uri = Uri.tryParse(page.imageUrl);
-    return uri != null && uri.scheme == 'file'
-        ? FileImage(File.fromUri(uri))
-        : CachedNetworkImageProvider(
-            page.imageUrl,
-            headers: page.headers,
-          );
-  }
+  ImageProvider<Object> _createImageProvider(MangaPage page) =>
+      mangaPageImageProvider(page);
 
   ImageProvider<Object> get _imageProvider => _provider;
 
