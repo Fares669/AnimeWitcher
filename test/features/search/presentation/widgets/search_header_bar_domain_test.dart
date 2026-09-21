@@ -15,7 +15,7 @@ final class _IdleSearchNotifier extends PagedSearchNotifier {
 }
 
 void main() {
-  testWidgets('iOS three-action glass keeps the same 34pt trailing coordinate', (
+  testWidgets('iOS three-action glass matches details safe-area trailing coordinate', (
     tester,
   ) async {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -37,32 +37,38 @@ void main() {
           child: MaterialApp(
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: AppLocalizations.supportedLocales,
-            home: Scaffold(
-              body: SearchHeaderBar(
-                textController: controller,
-                searchFocusNode: searchFocus,
-                clearButtonFocusNode: clearFocus,
-                onSubmitted: (_) {},
-                onChanged: (_) {},
-                onShowFilters: () {},
-                onSortSelected: (_) {},
-                sortValue: 'favorites',
-                sortItems: const <AppleNativeMenuItem>[
-                  AppleNativeMenuItem(
-                    value: 'favorites',
-                    label: 'Favorites',
-                    systemImage: 'star.fill',
-                  ),
-                ],
-                sortIcon: Icons.star_rounded,
-                sortSystemImage: 'star.fill',
-                sortTooltip: 'Sort',
-                activeFilterCount: 0,
-                isFilterLoading: false,
-                domain: SearchDomain.anime,
-                onDomainSelected: (_) {},
-                showSort: true,
-                showFilter: true,
+            home: MediaQuery(
+              data: const MediaQueryData(
+                size: Size(428, 300),
+                padding: EdgeInsets.only(right: 59),
+              ),
+              child: Scaffold(
+                body: SearchHeaderBar(
+                  textController: controller,
+                  searchFocusNode: searchFocus,
+                  clearButtonFocusNode: clearFocus,
+                  onSubmitted: (_) {},
+                  onChanged: (_) {},
+                  onShowFilters: () {},
+                  onSortSelected: (_) {},
+                  sortValue: 'favorites',
+                  sortItems: const <AppleNativeMenuItem>[
+                    AppleNativeMenuItem(
+                      value: 'favorites',
+                      label: 'Favorites',
+                      systemImage: 'star.fill',
+                    ),
+                  ],
+                  sortIcon: Icons.star_rounded,
+                  sortSystemImage: 'star.fill',
+                  sortTooltip: 'Sort',
+                  activeFilterCount: 0,
+                  isFilterLoading: false,
+                  domain: SearchDomain.anime,
+                  onDomainSelected: (_) {},
+                  showSort: true,
+                  showFilter: true,
+                ),
               ),
             ),
           ),
@@ -73,7 +79,7 @@ void main() {
       final actionRect = tester.getRect(
         find.byKey(const ValueKey('search-action-capsule')),
       );
-      expect(428 - actionRect.right, 34);
+      expect(428 - actionRect.right, 59 + 34);
     } finally {
       controller.dispose();
       searchFocus.dispose();
