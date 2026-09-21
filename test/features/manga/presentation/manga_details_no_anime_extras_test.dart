@@ -119,6 +119,18 @@ final class _Manager extends ExtensionManager {
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
 }
 
+Future<void> _pumpUntilLoaded(WidgetTester tester) async {
+  for (var i = 0; i < 40; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+    if (find.byType(CircularProgressIndicator).evaluate().isEmpty &&
+        find.byType(LinearProgressIndicator).evaluate().isEmpty) {
+      await tester.pump();
+      return;
+    }
+  }
+  await tester.pump();
+}
+
 void main() {
   testWidgets('opening manga details never touches anime-only provider APIs', (
     tester,
@@ -149,7 +161,7 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await _pumpUntilLoaded(tester);
 
     expect(provider.mangaDetailsCalls, 1);
     expect(provider.mangaChapterCalls, 1);
