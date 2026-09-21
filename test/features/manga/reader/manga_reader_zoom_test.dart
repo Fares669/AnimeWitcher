@@ -38,4 +38,41 @@ void main() {
 
     expect(controller.value.getMaxScaleOnAxis(), closeTo(1, 0.001));
   });
+
+
+  testWidgets('navigate-to-pan consumes navigation before changing page', (
+    tester,
+  ) async {
+    final transform = TransformationController();
+    final navigation = MangaZoomNavigationController();
+    addTearDown(transform.dispose);
+    addTearDown(navigation.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MangaZoomablePage(
+            transformationController: transform,
+            navigationController: navigation,
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(navigation.tryPan(forward: true, rtl: false), isFalse);
+
+    final center = tester.getCenter(find.byType(MangaZoomablePage));
+    await tester.tapAt(center);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(center);
+    await tester.pumpAndSettle();
+
+    final before = transform.value.getTranslation().x;
+    expect(transform.value.getMaxScaleOnAxis(), greaterThan(1));
+    expect(navigation.tryPan(forward: true, rtl: false), isTrue);
+    await tester.pump();
+    expect(transform.value.getTranslation().x, lessThan(before));
+  });
 }
