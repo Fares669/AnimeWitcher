@@ -509,13 +509,10 @@ void main() {
     );
     await tester.pump();
 
-    final viewport = tester.widget<Viewport>(
-      find.descendant(
-        of: find.byType(SuperListView),
-        matching: find.byType(Viewport),
-      ).first,
+    final list = tester.widget<SuperListView>(
+      find.byType(SuperListView),
     );
-    expect(viewport.cacheExtent, 1350);
+    expect(list.cacheExtent, 1350);
   });
 
   testWidgets('webtoon applies Mangayomi preload cache extent', (
@@ -537,13 +534,10 @@ void main() {
     );
     await tester.pump();
 
-    final viewport = tester.widget<Viewport>(
-      find.descendant(
-        of: find.byType(CustomScrollView),
-        matching: find.byType(Viewport),
-      ).first,
+    final scroll = tester.widget<CustomScrollView>(
+      find.byType(CustomScrollView),
     );
-    expect(viewport.cacheExtent, 1350);
+    expect(scroll.cacheExtent, 1350);
   });
 
   testWidgets('continuous reader uses one shared Mangayomi zoom surface', (
