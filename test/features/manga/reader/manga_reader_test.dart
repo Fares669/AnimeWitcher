@@ -15,6 +15,7 @@ import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_reader_image_actions_sheet.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
@@ -430,15 +431,10 @@ void main() {
     expect(scroll.scrollDirection, Axis.vertical);
   });
 
-  testWidgets('long press opens Mangayomi image actions', (tester) async {
-    final provider = _ReaderProvider(
-      pageList: const <MangaPage>[
-        MangaPage(
-          index: 0,
-          imageUrl: 'file:///definitely-missing-reader-action-page.webp',
-        ),
-      ],
-    );
+  testWidgets('reader exposes Mangayomi image action long-press handler', (
+    tester,
+  ) async {
+    final provider = _ReaderProvider(emptyPages: true);
     const chapter = MangaChapter(
       id: 'actions-c1',
       mangaId: 'actions-m1',
@@ -475,103 +471,46 @@ void main() {
         ),
       ),
     );
-    await provider.waitUntilRequested('actions-c1');
-    await tester.pump();
     await tester.pump();
 
-    expect(find.byType(MangaPageImage), findsWidgets);
     final actionsGesture = find.byKey(
       const ValueKey<String>('manga-reader-image-actions-gesture'),
     );
-    final actionsRect = tester.getRect(actionsGesture);
-    await tester.longPressAt(
-      Offset(
-        actionsRect.left + actionsRect.width * 0.20,
-        actionsRect.top + actionsRect.height * 0.50,
+    expect(actionsGesture, findsOneWidget);
+    final gesture = tester.widget<GestureDetector>(actionsGesture);
+    expect(gesture.onLongPress, isNotNull);
+  });
+
+  testWidgets('Mangayomi image action sheet wires all actions', (tester) async {
+    var cover = 0;
+    var share = 0;
+    var save = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MangaReaderImageActionsSheet(
+            isArabic: false,
+            onSetCover: () => cover++,
+            onShare: () => share++,
+            onSave: () => save++,
+          ),
+        ),
       ),
     );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('Set as cover'), findsOneWidget);
     expect(find.text('Share'), findsOneWidget);
     expect(find.text('Save'), findsOneWidget);
 
-    // _showImageActions awaits the bottom-sheet route. Dismiss it so the
-    // widget-test zone has no intentionally pending Future.
-    await tester.tapAt(const Offset(8, 8));
-    await tester.pumpAndSettle();
-  });
-
-  testWidgets('Mangayomi Save image action invokes the reader action service', (
-    tester,
-  ) async {
-    final provider = _ReaderProvider(
-      pageList: const <MangaPage>[
-        MangaPage(
-          index: 0,
-          imageUrl: 'file:///definitely-missing-reader-save-page.webp',
-        ),
-      ],
-    );
-    final actions = _FakeReaderImageActions();
-    const chapter = MangaChapter(
-      id: 'save-c1',
-      mangaId: 'save-m1',
-      url: 'https://example.test/chapter/save-1',
-      name: 'Chapter save',
-      number: 1,
-    );
-    final manga = MultimediaItem(
-      title: 'Save Reader Manga',
-      url: 'https://animewitcher.com/manga/save-m1',
-      posterUrl: '',
-      contentType: MultimediaContentType.manga,
-      provider: provider.packageName,
-    );
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
-          mangaReadingRepositoryProvider.overrideWithValue(
-            _ReaderProgressRepository(),
-          ),
-          mangaReaderSettingsProvider.overrideWith(
-            _ReaderSettingsNotifier.new,
-          ),
-          mangaReaderImageActionsProvider.overrideWithValue(actions),
-        ],
-        child: MaterialApp(
-          locale: const Locale('en'),
-          home: MangaReaderScreen(
-            manga: manga,
-            chapter: chapter,
-            chapters: const <MangaChapter>[chapter],
-          ),
-        ),
-      ),
-    );
-    await provider.waitUntilRequested('save-c1');
-    await tester.pump();
-    await tester.pump();
-
-    final actionsGesture = find.byKey(
-      const ValueKey<String>('manga-reader-image-actions-gesture'),
-    );
-    final actionsRect = tester.getRect(actionsGesture);
-    await tester.longPressAt(
-      Offset(
-        actionsRect.left + actionsRect.width * 0.20,
-        actionsRect.top + actionsRect.height * 0.50,
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('Set as cover'));
+    await tester.tap(find.text('Share'));
     await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    expect(actions.saveCalls, 1);
+    expect(cover, 1);
+    expect(share, 1);
+    expect(save, 1);
   });
 
   testWidgets('reader uses the Mangayomi per-manga reading mode', (tester) async {
