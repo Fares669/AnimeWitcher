@@ -5,11 +5,86 @@ import 'dart:ui' show Rect;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../core/domain/entity/manga.dart';
+import '../../../core/network/dio_client_provider.dart';
+
+final mangaReaderImageActionsProvider = Provider<MangaReaderImageActions>(
+  (ref) => MangaReaderImageActions(ref.watch(dioClientProvider)),
+);
+
+class MangaReaderImageActions {
+  MangaReaderImageActions(this.dio);
+
+  final Dio dio;
+
+  Future<Uint8List> bytesFor(MangaPage page) =>
+      loadMangaReaderPageBytes(page, dio);
+
+  Future<File> savePage({
+    required MangaPage page,
+    required String mangaTitle,
+    required String chapterName,
+  }) async {
+    final bytes = await bytesFor(page);
+    final extension = mangaReaderImageExtension(bytes);
+    return saveMangaReaderPageImage(
+      bytes: bytes,
+      fileName: mangaReaderImageFileName(
+        mangaTitle: mangaTitle,
+        chapterName: chapterName,
+        pageIndex: page.index,
+        extension: extension,
+      ),
+    );
+  }
+
+  Future<void> sharePage({
+    required MangaPage page,
+    required String mangaTitle,
+    required String chapterName,
+    Rect? sharePositionOrigin,
+  }) async {
+    final bytes = await bytesFor(page);
+    final extension = mangaReaderImageExtension(bytes);
+    await shareMangaReaderPageImage(
+      bytes: bytes,
+      fileName: mangaReaderImageFileName(
+        mangaTitle: mangaTitle,
+        chapterName: chapterName,
+        pageIndex: page.index,
+        extension: extension,
+      ),
+      sharePositionOrigin: sharePositionOrigin,
+    );
+  }
+
+  Future<File> saveCover({
+    required MangaPage page,
+    required String mangaTitle,
+  }) async {
+    final bytes = await bytesFor(page);
+    final extension = mangaReaderImageExtension(bytes);
+    final root = await getApplicationDocumentsDirectory();
+    final directory = Directory(
+      p.join(root.path, 'MangaCovers'),
+    );
+    return saveMangaReaderPageImage(
+      bytes: bytes,
+      fileName: mangaReaderImageFileName(
+        mangaTitle: mangaTitle,
+        chapterName: 'cover',
+        pageIndex: 0,
+        extension: extension,
+      ),
+      directory: directory,
+    );
+  }
+}
 
 Future<Uint8List> loadMangaReaderPageBytes(MangaPage page, Dio dio) async {
   final uri = Uri.tryParse(page.imageUrl);
