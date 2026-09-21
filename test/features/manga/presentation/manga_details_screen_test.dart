@@ -158,6 +158,18 @@ Widget _app(
   ),
 );
 
+Future<void> _pumpUntilLoaded(WidgetTester tester) async {
+  for (var i = 0; i < 40; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+    if (find.byType(CircularProgressIndicator).evaluate().isEmpty &&
+        find.byType(LinearProgressIndicator).evaluate().isEmpty) {
+      await tester.pump();
+      return;
+    }
+  }
+  await tester.pump();
+}
+
 void main() {
   testWidgets('manga details loads details before chapters on route open', (
     tester,
@@ -168,7 +180,7 @@ void main() {
     expect(provider.chaptersCalls, 0);
 
     await tester.pumpWidget(_app(provider));
-    await tester.pumpAndSettle();
+    await _pumpUntilLoaded(tester);
 
     expect(provider.detailsCalls, 1);
     expect(provider.chaptersCalls, 1);
@@ -198,7 +210,7 @@ void main() {
     });
 
     await tester.pumpWidget(_app(_MangaProvider()));
-    await tester.pumpAndSettle();
+    await _pumpUntilLoaded(tester);
 
     final title = find.descendant(
       of: find.byKey(const ValueKey('manga-details-hero')),
@@ -249,7 +261,7 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(_app(_MangaProvider()));
-    await tester.pumpAndSettle();
+    await _pumpUntilLoaded(tester);
 
     final tabBar = tester.widget<TabBar>(find.byType(TabBar));
     expect(tabBar.indicatorSize, isNull);
@@ -274,7 +286,7 @@ void main() {
 
     await tester.tap(find.textContaining('الفصول'));
 
-    await tester.pumpAndSettle();
+    await _pumpUntilLoaded(tester);
 
     expect(find.text('الفصل 12.5'), findsOneWidget);
     expect(find.text('الحلقات'), findsNothing);
