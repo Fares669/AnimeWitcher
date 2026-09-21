@@ -50,6 +50,7 @@ class MangaReaderController extends ChangeNotifier {
       <String, List<MangaPage>>{};
   final Set<String> _preloadingChapterIds = <String>{};
   bool _autoReadDuplicateChapters = false;
+  String? _lastLoadChapterId;
 
   static MangaReaderMode preferredModeFor(MultimediaItem item) {
     final type = (item.catalogType ?? '').trim().toLowerCase();
@@ -93,6 +94,9 @@ class MangaReaderController extends ChangeNotifier {
 
   Future<void> load() async {
     _progressTimer?.cancel();
+    final chapterId = _chapter.id;
+    final forceSourceReload = _lastLoadChapterId == chapterId;
+    _lastLoadChapterId = chapterId;
     _loading = true;
     _error = null;
     _pages = const <MangaPage>[];
@@ -100,11 +104,20 @@ class MangaReaderController extends ChangeNotifier {
 
     try {
       final localPages = await _loadLocalPages();
-      final preloaded = _preloadedChapterPages.remove(_chapter.id);
-      final cached = localPages.isEmpty && preloaded == null
+      if (forceSourceReload && localPages.isEmpty) {
+        _preloadedChapterPages.remove(chapterId);
+        await _pageCache.remove(_mangaId, _chapter);
+      }
+      final preloaded = localPages.isEmpty && !forceSourceReload
+          ? _preloadedChapterPages.remove(chapterId)
+          : null;
+      final cached =
+          localPages.isEmpty && !forceSourceReload && preloaded == null
           ? await _pageCache.get(_mangaId, _chapter)
           : null;
-      final remote = localPages.isEmpty && preloaded == null && cached == null
+      final remote =
+          localPages.isEmpty &&
+              (forceSourceReload || (preloaded == null && cached == null))
           ? await provider.getMangaChapterPages(manga.url, _chapter)
           : null;
       final pages = localPages.isNotEmpty
