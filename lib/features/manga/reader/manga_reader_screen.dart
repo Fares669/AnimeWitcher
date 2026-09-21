@@ -187,6 +187,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         position.maxScrollExtent,
       );
       if ((target - position.pixels).abs() < 0.1) {
+        if (_chapterNavigationInProgress) return;
         _autoScrollTimer?.cancel();
         _autoScrollTimer = null;
         if (_controller.canNext) {
