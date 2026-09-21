@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
+import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
 import 'manga_zoomable_page.dart';
 
