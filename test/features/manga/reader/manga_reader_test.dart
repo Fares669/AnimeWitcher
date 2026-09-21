@@ -28,6 +28,7 @@ final class _ReaderProvider extends AnimeWitcherProvider {
   _ReaderProvider({this.emptyPages = false});
 
   final bool emptyPages;
+  final List<String> requestedChapterIds = <String>[];
 
   @override
   String get packageName => 'test.reader.manga';
@@ -71,7 +72,10 @@ final class _ReaderProvider extends AnimeWitcherProvider {
   Future<List<MangaPage>> getMangaChapterPages(
     String mangaUrl,
     MangaChapter chapter,
-  ) async => emptyPages ? const <MangaPage>[] : pages;
+  ) async {
+    requestedChapterIds.add(chapter.id);
+    return emptyPages ? const <MangaPage>[] : pages;
+  }
 }
 
 final class _ReaderManager extends ExtensionManager {
@@ -115,6 +119,44 @@ void main() {
         MangaReaderMode.horizontalContinuousRtl,
       ],
     );
+  });
+
+  test('reader preloads the adjacent chapter after current chapter loads', () async {
+    final provider = _ReaderProvider();
+    const first = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/1',
+      name: 'Chapter 1',
+      number: 1,
+    );
+    const second = MangaChapter(
+      id: 'c2',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/2',
+      name: 'Chapter 2',
+      number: 2,
+    );
+    final manga = MultimediaItem(
+      title: 'Reader Manga',
+      url: 'https://animewitcher.com/manga/m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+    final controller = MangaReaderController(
+      provider: provider,
+      progressRepository: _ReaderProgressRepository(),
+      manga: manga,
+      chapter: first,
+      chapters: const <MangaChapter>[first, second],
+    );
+    addTearDown(controller.dispose);
+
+    await controller.load();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(provider.requestedChapterIds, containsAll(<String>['c1', 'c2']));
   });
 
   testWidgets('paged RTL reader reverses page direction', (tester) async {

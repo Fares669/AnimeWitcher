@@ -6,13 +6,13 @@ void main() {
   test('Mangayomi reader defaults are preserved', () {
     const settings = MangaReaderSettings();
 
-    expect(settings.defaultMode, MangaReaderMode.pagedRtl);
+    expect(settings.defaultMode, MangaReaderMode.vertical);
     expect(settings.animatePageTransitions, isTrue);
     expect(settings.doubleTapAnimationSpeed, 1);
     expect(settings.cropBorders, isFalse);
     expect(settings.scaleType, MangaReaderScaleType.fitScreen);
     expect(settings.pagePreloadAmount, 6);
-    expect(settings.background, MangaReaderBackground.automatic);
+    expect(settings.background, MangaReaderBackground.black);
     expect(settings.usePageTapZones, isTrue);
     expect(settings.fullScreen, isTrue);
     expect(settings.showPageNumber, isTrue);
