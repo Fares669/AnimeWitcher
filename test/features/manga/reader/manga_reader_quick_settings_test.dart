@@ -126,7 +126,14 @@ void main() {
       matching: find.byType(SwitchListTile),
     );
     expect(customFilterTile, findsOneWidget);
-    await tester.tap(customFilterTile);
+    await tester.ensureVisible(customFilterTile);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: customFilterTile,
+        matching: find.byType(Switch),
+      ),
+    );
     await tester.pump();
     expect(find.text('R'), findsOneWidget);
     expect(find.text('G'), findsOneWidget);
