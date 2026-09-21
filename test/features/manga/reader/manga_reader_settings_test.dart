@@ -117,6 +117,75 @@ void main() {
     expect(mangaReaderHideThresholdPixels(3), 47);
   });
 
+  test('Mangayomi rotate-to-fit only rotates landscape pages', () {
+    const normal = MangaReaderSettings(dualPageRotateToFit: true);
+    const inverted = MangaReaderSettings(
+      dualPageRotateToFit: true,
+      dualPageRotateToFitInvert: true,
+    );
+
+    expect(
+      mangaReaderRotateQuarterTurns(
+        settings: normal,
+        imageSize: const Size(1600, 900),
+      ),
+      1,
+    );
+    expect(
+      mangaReaderRotateQuarterTurns(
+        settings: inverted,
+        imageSize: const Size(1600, 900),
+      ),
+      3,
+    );
+    expect(
+      mangaReaderRotateQuarterTurns(
+        settings: normal,
+        imageSize: const Size(900, 1600),
+      ),
+      0,
+    );
+  });
+
+  test('Mangayomi landscape zoom respects start position', () {
+    const left = MangaReaderSettings(
+      landscapeZoom: true,
+      zoomStartPosition: 0,
+    );
+    const right = MangaReaderSettings(
+      landscapeZoom: true,
+      zoomStartPosition: 1,
+    );
+    const center = MangaReaderSettings(
+      landscapeZoom: true,
+      zoomStartPosition: 2,
+    );
+    const image = Size(1600, 900);
+    const viewport = Size(900, 1200);
+
+    final leftTarget = mangaReaderLandscapeZoomTarget(
+      settings: left,
+      imageSize: image,
+      viewport: viewport,
+    );
+    final rightTarget = mangaReaderLandscapeZoomTarget(
+      settings: right,
+      imageSize: image,
+      viewport: viewport,
+    );
+    final centerTarget = mangaReaderLandscapeZoomTarget(
+      settings: center,
+      imageSize: image,
+      viewport: viewport,
+    );
+
+    expect(leftTarget, isNotNull);
+    expect(leftTarget!.scale, greaterThan(1));
+    expect(leftTarget.focalPoint.dx, 0);
+    expect(rightTarget!.focalPoint.dx, viewport.width);
+    expect(centerTarget!.focalPoint, viewport.center(Offset.zero));
+  });
+
   test('reader color matrix changes when filters are enabled', () {
     const settings = MangaReaderSettings(
       invertColors: true,
