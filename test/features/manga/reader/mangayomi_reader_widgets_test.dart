@@ -496,16 +496,19 @@ void main() {
   ) async {
     await tester.pumpWidget(
       const MaterialApp(
-        home: SizedBox(
-          width: 400,
-          height: 300,
-          child: MangaContinuousReader(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(400, 300)),
+          child: SizedBox(
+            width: 400,
+            height: 300,
+            child: MangaContinuousReader(
             pages: _pages,
             initialPage: 0,
             scrollDirection: Axis.vertical,
             reverse: false,
             settings: MangaReaderSettings(pagePreloadAmount: 6),
-            onPageChanged: _ignorePage,
+              onPageChanged: _ignorePage,
+            ),
           ),
         ),
       ),
@@ -523,14 +526,17 @@ void main() {
   ) async {
     await tester.pumpWidget(
       const MaterialApp(
-        home: SizedBox(
-          width: 400,
-          height: 300,
-          child: MangaWebtoonReader(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(400, 300)),
+          child: SizedBox(
+            width: 400,
+            height: 300,
+            child: MangaWebtoonReader(
             pages: _pages,
             initialPage: 0,
             settings: MangaReaderSettings(pagePreloadAmount: 6),
-            onPageChanged: _ignorePage,
+              onPageChanged: _ignorePage,
+            ),
           ),
         ),
       ),
@@ -550,9 +556,9 @@ void main() {
       'aw_reader_wide_continuous_',
     );
     addTearDown(() => temp.delete(recursive: true));
-    final file = File('${temp.path}/wide.bmp');
+    final file = File('${temp.path}/wide.gif');
     file.writeAsBytesSync(
-      img.encodeBmp(img.Image(width: 8, height: 4)),
+      img.encodeGif(img.Image(width: 8, height: 4)),
       flush: true,
     );
 
@@ -574,7 +580,9 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump();
 
     expect(find.byType(MangaPageImage), findsNWidgets(2));
   });
