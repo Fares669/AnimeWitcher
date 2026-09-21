@@ -54,6 +54,45 @@ void main() {
     expect(manifest.isComplete, isTrue);
   });
 
+  test('completed child page never reports the whole chapter complete early', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_manga_child_complete_');
+    addTearDown(() => temp.delete(recursive: true));
+
+    final starter = _DelayedAlreadyCompleteStarter();
+    final transport = MangaChapterTransportV2(startPage: starter.start);
+    final handle = await transport.start(
+      MangaChapterTransportSpecV2(
+        taskId: 'chapter-parent',
+        mangaId: 'm1',
+        chapterId: '16',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.webp'),
+        ],
+        retries: 2,
+      ),
+    );
+
+    final statuses = <DownloadTransportStatus>[];
+    final subscription = handle.snapshots.listen(
+      (snapshot) => statuses.add(snapshot.status),
+    );
+    addTearDown(subscription.cancel);
+
+    await starter.firstRequested.future;
+    starter.releaseFirst.complete();
+    await starter.secondRequested.future;
+
+    expect(statuses, isNot(contains(DownloadTransportStatus.complete)));
+    expect(handle.current.status, isNot(DownloadTransportStatus.complete));
+
+    final manifest = await MangaChapterManifestV2.readFrom(temp);
+    expect(manifest, isNotNull);
+    expect(manifest!.completedIndexes, <int>{0});
+    expect(manifest.isComplete, isFalse);
+  });
+
   test('relative manga directory resolves under app documents root', () async {
     final root = await Directory.systemTemp.createTemp('aw_manga_root_');
     addTearDown(() => root.delete(recursive: true));
@@ -129,6 +168,38 @@ Future<void> _waitForStatus(
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }
   throw StateError('parent did not reach $status; current=${handle.current.status}');
+}
+
+final class _DelayedAlreadyCompleteStarter {
+  final Completer<void> firstRequested = Completer<void>();
+  final Completer<void> releaseFirst = Completer<void>();
+  final Completer<void> secondRequested = Completer<void>();
+
+  Future<DownloadTransportHandle> start(MangaChapterPageTaskV2 task) async {
+    if (task.pageIndex == 0) {
+      if (!firstRequested.isCompleted) firstRequested.complete();
+      await releaseFirst.future;
+      File(task.destinationPath)
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(<int>[1, 2, 3]);
+      final handle = _FakePageHandle(
+        taskId: task.taskId,
+        pageIndex: task.pageIndex,
+        destinationPath: task.destinationPath,
+        onTerminal: () {},
+      );
+      handle.complete();
+      return handle;
+    }
+
+    if (!secondRequested.isCompleted) secondRequested.complete();
+    return _FakePageHandle(
+      taskId: task.taskId,
+      pageIndex: task.pageIndex,
+      destinationPath: task.destinationPath,
+      onTerminal: () {},
+    );
+  }
 }
 
 final class _FakePageStarter {
