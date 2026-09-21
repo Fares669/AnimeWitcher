@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../manga_reader_settings.dart';
+import '../subsampling/manga_min_subsampling_image.dart';
 import '../subsampling/subsampling_scale_image_view.dart';
 
 typedef MangaPageBuilder = Widget Function(
@@ -49,6 +50,29 @@ class _MangaPageImageState extends State<MangaPageImage> {
     MangaReaderScaleType.smartFit => BoxFit.contain,
   };
 
+  bool get _isAnimatedImage {
+    final uri = Uri.tryParse(widget.page.imageUrl);
+    final path = (uri?.path ?? widget.page.imageUrl).toLowerCase();
+    return path.endsWith('.gif');
+  }
+
+  bool get _useSubsampling => !_isAnimatedImage;
+
+  ImageProvider<Object> get _imageProvider {
+    final uri = Uri.tryParse(widget.page.imageUrl);
+    return uri != null && uri.scheme == 'file'
+        ? FileImage(File.fromUri(uri))
+        : CachedNetworkImageProvider(
+            widget.page.imageUrl,
+            headers: widget.page.headers,
+          );
+  }
+
+  String? get _resolvedFilePath {
+    final uri = Uri.tryParse(widget.page.imageUrl);
+    return uri != null && uri.scheme == 'file' ? File.fromUri(uri).path : null;
+  }
+
   BlendMode? get _blendMode => switch (widget.settings.colorFilterBlendMode) {
     MangaReaderColorBlendMode.none => null,
     MangaReaderColorBlendMode.multiply => BlendMode.multiply,
@@ -85,18 +109,12 @@ class _MangaPageImageState extends State<MangaPageImage> {
     final oldListener = _sizeListener;
     if (oldListener != null) _sizeStream?.removeListener(oldListener);
 
-    final uri = Uri.tryParse(widget.page.imageUrl);
-    if (uri != null && uri.scheme == 'file' && widget.expand) {
+    if (_useSubsampling) {
       _sizeStream = null;
       _sizeListener = null;
       return;
     }
-    final ImageProvider provider = uri != null && uri.scheme == 'file'
-        ? FileImage(File.fromUri(uri))
-        : CachedNetworkImageProvider(
-            widget.page.imageUrl,
-            headers: widget.page.headers,
-          );
+    final ImageProvider<Object> provider = _imageProvider;
     final stream = provider.resolve(createLocalImageConfiguration(context));
     final listener = ImageStreamListener((info, _) {
       final size = Size(
@@ -157,37 +175,46 @@ class _MangaPageImageState extends State<MangaPageImage> {
   @override
   Widget build(BuildContext context) {
     final uri = Uri.tryParse(widget.page.imageUrl);
+    final localFile = uri != null && uri.scheme == 'file'
+        ? File.fromUri(uri)
+        : null;
+    if (localFile != null && !localFile.existsSync()) {
+      return _errorView(context);
+    }
+
     final Widget image;
-    final useSubsampling =
-        uri != null && uri.scheme == 'file' && widget.expand;
-    if (uri != null && uri.scheme == 'file') {
-      final file = File.fromUri(uri);
-      if (!file.existsSync()) {
-        return _errorView(context);
+    final useSubsampling = _useSubsampling;
+    if (useSubsampling) {
+      final imageSize = _imageSize;
+      final quarterTurns = imageSize == null
+          ? 0
+          : mangaReaderRotateQuarterTurns(
+              settings: widget.settings,
+              imageSize: imageSize,
+            );
+      void loaded(int width, int height) {
+        final size = Size(width.toDouble(), height.toDouble());
+        if (!mounted || size == _imageSize) return;
+        setState(() => _imageSize = size);
+        widget.onImageSize?.call(size);
       }
-      if (useSubsampling) {
-        final imageSize = _imageSize;
-        final quarterTurns = imageSize == null
-            ? 0
-            : mangaReaderRotateQuarterTurns(
-                settings: widget.settings,
-                imageSize: imageSize,
-              );
+
+      if (widget.expand) {
         image = SubsamplingScaleImageView(
           key: ValueKey<String>(
             'reader-subsampling-${widget.page.imageUrl}-$_retryEpoch',
           ),
-          image: FileImage(file),
-          resolvedFilePath: file.path,
+          image: _imageProvider,
+          resolvedFilePath: _resolvedFilePath,
           cropBorders: widget.settings.cropBorders,
           fit: _fit,
           rotation: quarterTurns * 90,
-          onImageLoaded: (width, height) {
-            final size = Size(width.toDouble(), height.toDouble());
-            if (!mounted || size == _imageSize) return;
-            setState(() => _imageSize = size);
-            widget.onImageSize?.call(size);
-          },
+          // MangaZoomablePage owns gestures in the paged reader. Leaving the
+          // renderer interactive here creates two competing zoom recognizers.
+          panEnabled: false,
+          zoomEnabled: false,
+          quickScaleEnabled: false,
+          onImageLoaded: loaded,
           loadStateChanged: (state) => switch (state.loadState) {
             LoadState.loading => const Center(child: AppLoadingIndicator()),
             LoadState.failed => _errorView(context),
@@ -195,20 +222,34 @@ class _MangaPageImageState extends State<MangaPageImage> {
           },
         );
       } else {
-        image = Image.file(
-          file,
-          key: ValueKey<String>(
-            'reader-local-${widget.page.imageUrl}-$_retryEpoch',
-          ),
-          width: double.infinity,
-          height: widget.expand ? double.infinity : null,
+        image = MangaMinSubsamplingImage(
+          page: widget.page,
+          settings: widget.settings,
           fit: _fit,
-          errorBuilder: (_, _, _) => _errorView(context),
+          rotation: quarterTurns * 90,
+          onImageLoaded: loaded,
+          onRetry: () {
+            _retry();
+          },
+          retryEpoch: _retryEpoch,
         );
       }
+    } else if (localFile != null) {
+      image = Image.file(
+        localFile,
+        key: ValueKey<String>(
+          'reader-local-${widget.page.imageUrl}-$_retryEpoch',
+        ),
+        width: double.infinity,
+        height: widget.expand ? double.infinity : null,
+        fit: _fit,
+        errorBuilder: (_, _, _) => _errorView(context),
+      );
     } else {
       image = CachedNetworkImage(
-        key: ValueKey<String>('reader-network-${widget.page.imageUrl}-$_retryEpoch'),
+        key: ValueKey<String>(
+          'reader-network-${widget.page.imageUrl}-$_retryEpoch',
+        ),
         imageUrl: widget.page.imageUrl,
         httpHeaders: widget.page.headers,
         width: double.infinity,
