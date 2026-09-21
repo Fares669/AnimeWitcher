@@ -37,13 +37,13 @@ class DecodeParams {
   };
   factory DecodeParams.fromJson(Map<String, dynamic> json) {
     return DecodeParams(
-      bottom: json['bottom'],
-      filePath: json['filePath'],
-      left: json['left'],
-      top: json['top'],
-      right: json['right'],
-      sampleSize: json['sampleSize'],
-      cropBorders: json['cropBorders'] ?? false,
+      bottom: json['bottom'] as int,
+      filePath: json['filePath'] as String,
+      left: json['left'] as int,
+      top: json['top'] as int,
+      right: json['right'] as int,
+      sampleSize: json['sampleSize'] as int,
+      cropBorders: json['cropBorders'] as bool? ?? false,
     );
   }
 }
@@ -259,7 +259,15 @@ class FfiImageDecoder {
       if (message is Map<String, dynamic>) {
         final responsePort = message['responsePort'] as SendPort;
         final action = message['action'] as String?;
-        final params = DecodeParams.fromJson(message['params']);
+        final paramsJson = message['params'];
+        if (paramsJson is! Map<String, dynamic>) {
+          responsePort.send(<String, dynamic>{
+            'success': false,
+            'error': 'Invalid decode params',
+          });
+          return;
+        }
+        final params = DecodeParams.fromJson(paramsJson);
 
         final key = "${params.filePath}_${params.cropBorders}";
         Pointer<Opaque> ctx = cachedContexts[key] ?? Pointer.fromAddress(0);
@@ -492,7 +500,9 @@ class FfiImageDecoder {
               if (job.action == 'getDimensions') {
                 job.completer.complete(null);
               } else {
-                job.completer.complete(DecodeResult(error: response['error']));
+                job.completer.complete(
+                  DecodeResult(error: response['error'] as String?),
+                );
               }
             }
           } else {

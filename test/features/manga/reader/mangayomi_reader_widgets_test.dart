@@ -494,7 +494,7 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(
         home: MediaQuery(
-          data: const MediaQueryData(size: Size(400, 300)),
+          data: MediaQueryData(size: Size(400, 300)),
           child: SizedBox(
             width: 400,
             height: 300,
@@ -515,7 +515,7 @@ void main() {
     final list = tester.widget<SuperListView>(
       find.byType(SuperListView),
     );
-    expect(list.cacheExtent, 1350);
+    expect(list.scrollCacheExtent, 1350);
   });
 
   testWidgets('webtoon applies Mangayomi preload cache extent', (
@@ -524,7 +524,7 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(
         home: MediaQuery(
-          data: const MediaQueryData(size: Size(400, 300)),
+          data: MediaQueryData(size: Size(400, 300)),
           child: SizedBox(
             width: 400,
             height: 300,
@@ -543,7 +543,7 @@ void main() {
     final scroll = tester.widget<CustomScrollView>(
       find.byType(CustomScrollView),
     );
-    expect(scroll.cacheExtent, 1350);
+    expect(scroll.scrollCacheExtent, 1350);
   });
 
   test('continuous reader routes loaded wide pages through split logic', () {

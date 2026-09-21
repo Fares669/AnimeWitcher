@@ -13,7 +13,6 @@ import 'package:animewitcher/features/manga/reader/manga_reader_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
-import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_image_actions_sheet.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
@@ -32,13 +31,9 @@ const pages = <MangaPage>[
 ];
 
 final class _ReaderProvider extends AnimeWitcherProvider {
-  _ReaderProvider({
-    this.emptyPages = false,
-    this.pageList = pages,
-  });
+  _ReaderProvider({this.emptyPages = false});
 
   final bool emptyPages;
-  final List<MangaPage> pageList;
   final List<String> requestedChapterIds = <String>[];
   final Map<String, Completer<void>> _requestWaiters =
       <String, Completer<void>>{};
@@ -97,7 +92,7 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     requestedChapterIds.add(chapter.id);
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
-    return emptyPages ? const <MangaPage>[] : pageList;
+    return emptyPages ? const <MangaPage>[] : pages;
   }
 }
 

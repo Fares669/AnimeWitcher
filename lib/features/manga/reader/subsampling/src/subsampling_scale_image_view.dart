@@ -657,8 +657,9 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     // Duck-typing for ExtendedFileImageProvider (or any provider exposing a File)
     try {
       final dynamic dynProvider = provider;
-      if (dynProvider.file is File) {
-        _resolvedFilePath = dynProvider.file.path;
+      final dynamic candidateFile = dynProvider.file;
+      if (candidateFile is File) {
+        _resolvedFilePath = candidateFile.path;
         await _initImage();
         return;
       }
@@ -667,8 +668,9 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     // 2. Fast path: Memory-based providers (MemoryImage, ExtendedMemoryImageProvider, etc.)
     try {
       final dynamic dynProvider = provider;
-      if (dynProvider.bytes is Uint8List) {
-        final Uint8List bytes = dynProvider.bytes;
+      final dynamic candidateBytes = dynProvider.bytes;
+      if (candidateBytes is Uint8List) {
+        final bytes = candidateBytes;
         final cacheKey = provider.hashCode.abs();
         final tempFile = await cacheImageBytesToTempFile(
           tempDir: await getTemporaryDirectory(),
@@ -687,8 +689,12 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
     String? cacheFolderName;
     try {
       final dynamic dynProvider = provider;
-      networkUrl = dynProvider.url;
-      cacheFolderName = dynProvider.imageCacheFolderName;
+      final dynamic candidateUrl = dynProvider.url;
+      final dynamic candidateCacheFolderName = dynProvider.imageCacheFolderName;
+      if (candidateUrl is String) networkUrl = candidateUrl;
+      if (candidateCacheFolderName is String) {
+        cacheFolderName = candidateCacheFolderName;
+      }
     } catch (_) {}
 
     if (networkUrl != null) {

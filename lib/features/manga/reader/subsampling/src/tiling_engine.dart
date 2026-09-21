@@ -75,7 +75,7 @@ class TilingEngine {
     required int sWidth,
     required int sHeight,
     required int targetSampleSize,
-    required Function(Tile tile) loadTileCallback,
+    required void Function(Tile tile) loadTileCallback,
   }) {
     for (final entry in tileMap.entries) {
       final tiles = entry.value;
