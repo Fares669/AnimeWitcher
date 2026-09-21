@@ -345,6 +345,41 @@ void main() {
     expect(find.byType(MangaContinuousZoomSurface), findsOneWidget);
   });
 
+  testWidgets('continuous zoom leaves one-finger scroll native', (
+    tester,
+  ) async {
+    final controller = ScrollController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 400,
+          child: MangaContinuousReader(
+            pages: _pages,
+            initialPage: 0,
+            scrollDirection: Axis.vertical,
+            reverse: false,
+            settings: const MangaReaderSettings(),
+            controller: controller,
+            onPageChanged: (_) {},
+            pageBuilder: (_, page) => SizedBox(
+              height: 320,
+              child: Text('page-${page.index}'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(controller.offset, 0);
+    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.pumpAndSettle();
+
+    expect(controller.offset, greaterThan(0));
+  });
+
   testWidgets('continuous reader uses one shared Mangayomi zoom surface', (
     tester,
   ) async {
