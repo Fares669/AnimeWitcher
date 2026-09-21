@@ -132,6 +132,56 @@ void main() {
     );
   });
 
+  test('Mangayomi split-wide order respects RTL and dual-page inversion', () {
+    const settings = MangaReaderSettings(splitWidePages: true);
+
+    expect(
+      mangaReaderWidePageSlices(
+        settings: settings,
+        isWide: true,
+        isRtl: false,
+        doublePageActive: false,
+      ),
+      const <MangaReaderPageSlice>[
+        MangaReaderPageSlice.left,
+        MangaReaderPageSlice.right,
+      ],
+    );
+    expect(
+      mangaReaderWidePageSlices(
+        settings: settings,
+        isWide: true,
+        isRtl: true,
+        doublePageActive: false,
+      ),
+      const <MangaReaderPageSlice>[
+        MangaReaderPageSlice.right,
+        MangaReaderPageSlice.left,
+      ],
+    );
+    expect(
+      mangaReaderWidePageSlices(
+        settings: settings.copyWith(dualPageInvert: true),
+        isWide: true,
+        isRtl: true,
+        doublePageActive: false,
+      ),
+      const <MangaReaderPageSlice>[
+        MangaReaderPageSlice.left,
+        MangaReaderPageSlice.right,
+      ],
+    );
+    expect(
+      mangaReaderWidePageSlices(
+        settings: settings,
+        isWide: true,
+        isRtl: false,
+        doublePageActive: true,
+      ),
+      const <MangaReaderPageSlice>[MangaReaderPageSlice.full],
+    );
+  });
+
   test('Mangayomi rotate-to-fit only rotates landscape pages', () {
     const normal = MangaReaderSettings(dualPageRotateToFit: true);
     const inverted = MangaReaderSettings(
