@@ -66,6 +66,8 @@ enum MangaReaderChapterSwipeAction {
   disabled,
 }
 
+enum MangaReaderPageSlice { full, left, right }
+
 @immutable
 class MangaReaderSettings {
   const MangaReaderSettings({
@@ -480,6 +482,27 @@ MangaReaderLandscapeZoomTarget? mangaReaderLandscapeZoomTarget({
     scale: scale,
     focalPoint: focalPoint,
   );
+}
+
+List<MangaReaderPageSlice> mangaReaderWidePageSlices({
+  required MangaReaderSettings settings,
+  required bool isWide,
+  required bool isRtl,
+  required bool doublePageActive,
+}) {
+  if (!settings.splitWidePages || !isWide || doublePageActive) {
+    return const <MangaReaderPageSlice>[MangaReaderPageSlice.full];
+  }
+  final rightFirst = isRtl ^ settings.dualPageInvert;
+  return rightFirst
+      ? const <MangaReaderPageSlice>[
+          MangaReaderPageSlice.right,
+          MangaReaderPageSlice.left,
+        ]
+      : const <MangaReaderPageSlice>[
+          MangaReaderPageSlice.left,
+          MangaReaderPageSlice.right,
+        ];
 }
 
 Duration mangaReaderDoubleTapAnimationDuration(int speed) => switch (speed) {
