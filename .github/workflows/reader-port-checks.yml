@@ -9,8 +9,38 @@ on:
       - 'test/features/manga/reader/**'
       - '.github/workflows/reader-port-checks.yml'
 
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: reader-port-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  cleanup-stale-runs:
+    name: Cancel stale reader runs
+    runs-on: windows-latest
+    steps:
+      - name: Cancel obsolete Reader Port Checks runs
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $workflow = 'reader-port-checks.yml'
+          foreach ($status in @('in_progress', 'queued')) {
+            $response = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/$workflow/runs?branch=$env:GITHUB_REF_NAME&status=$status&per_page=100" | ConvertFrom-Json
+            foreach ($run in $response.workflow_runs) {
+              if ("$($run.id)" -eq "$env:GITHUB_RUN_ID") {
+                continue
+              }
+              Write-Host "Cancelling stale reader run $($run.id) ($status)"
+              gh api --method POST "repos/$env:GITHUB_REPOSITORY/actions/runs/$($run.id)/cancel" | Out-Null
+            }
+          }
+
   reader:
+    needs: cleanup-stale-runs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
