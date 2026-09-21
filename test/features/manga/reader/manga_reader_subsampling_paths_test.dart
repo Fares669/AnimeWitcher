@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
+import 'package:animewitcher/features/manga/reader/subsampling/manga_min_subsampling_image.dart';
 import 'package:animewitcher/features/manga/reader/subsampling/subsampling_scale_image_view.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
@@ -76,10 +77,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(
-      find.byKey(const ValueKey<String>('manga-reader-min-subsampling')),
-      findsOneWidget,
-    );
+    expect(find.byType(MangaMinSubsamplingImage), findsOneWidget);
   });
 
   testWidgets('webtoon page uses Mangayomi min-subsampling renderer', (
@@ -108,10 +106,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(
-      find.byKey(const ValueKey<String>('manga-reader-min-subsampling')),
-      findsOneWidget,
-    );
+    expect(find.byType(MangaMinSubsamplingImage), findsOneWidget);
   });
 }
 
