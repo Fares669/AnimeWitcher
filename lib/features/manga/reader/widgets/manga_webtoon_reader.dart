@@ -3,6 +3,7 @@ import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
+import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
 import 'manga_continuous_zoom_surface.dart';
 
