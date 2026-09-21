@@ -9,6 +9,20 @@ import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
 import 'manga_continuous_zoom_surface.dart';
 
+class _ContinuousPagePart {
+  const _ContinuousPagePart(this.pageIndex, this.slice);
+
+  final int pageIndex;
+  final MangaReaderPageSlice slice;
+}
+
+class _ContinuousEntry {
+  const _ContinuousEntry(this.parts);
+
+  final List<_ContinuousPagePart> parts;
+  int get primaryIndex => parts.first.pageIndex;
+}
+
 class MangaContinuousReader extends StatefulWidget {
   const MangaContinuousReader({
     super.key,
@@ -47,6 +61,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   late final bool _ownsController = widget.controller == null;
   final ListController _listController = ListController();
   final Map<int, double> _visibility = <int, double>{};
+  final Map<int, Size> _imageSizes = <int, Size>{};
   late int _lastReported = widget.pages.isEmpty
       ? 0
       : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
@@ -58,15 +73,41 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   bool get _doublePageActive =>
       widget.doublePage && widget.scrollDirection == Axis.vertical;
 
-  List<List<int>> get _spreads => _doublePageActive
-      ? mangaReaderPageSpreads(
+  List<_ContinuousEntry> get _entries {
+    if (_doublePageActive) {
+      return <_ContinuousEntry>[
+        for (final spread in mangaReaderPageSpreads(
           pageCount: widget.pages.length,
           singleFirst: widget.settings.doublePageSingleFirstPage,
-        )
-      : <List<int>>[
-          for (var index = 0; index < widget.pages.length; index++)
-            <int>[index],
-        ];
+        ))
+          _ContinuousEntry(<_ContinuousPagePart>[
+            for (final index in spread)
+              _ContinuousPagePart(index, MangaReaderPageSlice.full),
+          ]),
+      ];
+    }
+
+    final entries = <_ContinuousEntry>[];
+    for (var index = 0; index < widget.pages.length; index++) {
+      final size = _imageSizes[index];
+      final slices = widget.pageBuilder == null
+          ? mangaReaderWidePageSlices(
+              settings: widget.settings,
+              isWide: size != null && size.width > size.height * 1.2,
+              isRtl: widget.reverse,
+              doublePageActive: false,
+            )
+          : const <MangaReaderPageSlice>[MangaReaderPageSlice.full];
+      for (final slice in slices) {
+        entries.add(
+          _ContinuousEntry(<_ContinuousPagePart>[
+            _ContinuousPagePart(index, slice),
+          ]),
+        );
+      }
+    }
+    return entries;
+  }
 
   @override
   void initState() {
@@ -77,9 +118,11 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   }
 
   int _spreadIndexForPage(int pageIndex) {
-    final spreads = _spreads;
-    for (var index = 0; index < spreads.length; index++) {
-      if (spreads[index].contains(pageIndex)) return index;
+    final entries = _entries;
+    for (var index = 0; index < entries.length; index++) {
+      if (entries[index].parts.any((part) => part.pageIndex == pageIndex)) {
+        return index;
+      }
     }
     return 0;
   }
@@ -122,9 +165,9 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
             .clamp(0, widget.pages.length - 1)
             .toInt();
         final targetSpread = _spreadIndexForPage(targetPage);
-        final spreads = _spreads;
-        final targetAnchor = targetSpread < spreads.length
-            ? spreads[targetSpread].first
+        final entries = _entries;
+        final targetAnchor = targetSpread < entries.length
+            ? entries[targetSpread].primaryIndex
             : targetPage;
         if ((_visibility[targetAnchor] ?? 0) <= 0) return;
         _initialJumpPending = false;
@@ -147,28 +190,60 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     });
   }
 
-  Widget _pageContent(BuildContext context, int index) {
-    final page = widget.pages[index];
-    return widget.pageBuilder?.call(context, page) ??
-        MangaPageImage(
-          page: page,
-          settings: widget.settings,
-          fit: widget.scrollDirection == Axis.horizontal
-              ? BoxFit.contain
-              : null,
-        );
+  void _imageSizeChanged(int index, Size size) {
+    if (!mounted || size.width <= 0 || size.height <= 0) return;
+    final previous = _imageSizes[index];
+    if (previous == size) return;
+    setState(() => _imageSizes[index] = size);
   }
 
-  Widget _spread(BuildContext context, List<int> indices) {
-    final primaryIndex = indices.first;
-    Widget child = indices.length == 1
-        ? _pageContent(context, primaryIndex)
+  Rect? _sourceRectFor(_ContinuousPagePart part) {
+    if (part.slice == MangaReaderPageSlice.full) return null;
+    final size = _imageSizes[part.pageIndex];
+    if (size == null || size.width <= 0 || size.height <= 0) return null;
+    final halfWidth = size.width / 2;
+    return switch (part.slice) {
+      MangaReaderPageSlice.left => Rect.fromLTWH(
+          0,
+          0,
+          halfWidth,
+          size.height,
+        ),
+      MangaReaderPageSlice.right => Rect.fromLTWH(
+          halfWidth,
+          0,
+          halfWidth,
+          size.height,
+        ),
+      MangaReaderPageSlice.full => null,
+    };
+  }
+
+  Widget _pageContent(BuildContext context, _ContinuousPagePart part) {
+    final page = widget.pages[part.pageIndex];
+    final custom = widget.pageBuilder;
+    if (custom != null) return custom(context, page);
+    return MangaPageImage(
+      page: page,
+      settings: widget.settings,
+      fit: widget.scrollDirection == Axis.horizontal ? BoxFit.contain : null,
+      sourceRect: _sourceRectFor(part),
+      onImageSize: part.slice == MangaReaderPageSlice.full
+          ? (size) => _imageSizeChanged(part.pageIndex, size)
+          : null,
+    );
+  }
+
+  Widget _spread(BuildContext context, _ContinuousEntry entry) {
+    final primaryIndex = entry.primaryIndex;
+    Widget child = entry.parts.length == 1
+        ? _pageContent(context, entry.parts.first)
         : Row(
             key: const ValueKey<String>('manga-reader-continuous-double-page'),
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              for (final index in indices)
-                Expanded(child: _pageContent(context, index)),
+              for (final part in entry.parts)
+                Expanded(child: _pageContent(context, part)),
             ],
           );
 
@@ -186,7 +261,8 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     }
     return VisibilityDetector(
       key: ValueKey<String>(
-        'manga-continuous-$primaryIndex-${indices.join('-')}',
+        'manga-continuous-$primaryIndex-'
+        '${entry.parts.map((part) => '${part.pageIndex}:${part.slice.name}').join('-')}',
       ),
       onVisibilityChanged: (info) => _changed(primaryIndex, info),
       child: child,
@@ -214,7 +290,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     if (widget.pages.isEmpty) return const SizedBox.shrink();
     final side = MediaQuery.sizeOf(context).width *
         (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
-    final spreads = _spreads;
+    final entries = _entries;
     final viewport = MediaQuery.sizeOf(context);
     final cacheExtent =
         widget.settings.pagePreloadAmount.clamp(1, 3) *
@@ -233,10 +309,10 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
         listController: _listController,
         scrollDirection: widget.scrollDirection,
         reverse: widget.reverse,
-        itemCount: spreads.length + (widget.trailingPage == null ? 0 : 1),
+        itemCount: entries.length + (widget.trailingPage == null ? 0 : 1),
         itemBuilder: (context, index) {
-          if (index >= spreads.length) return widget.trailingPage!;
-          return _spread(context, spreads[index]);
+          if (index >= entries.length) return widget.trailingPage!;
+          return _spread(context, entries[index]);
         },
       ),
     );

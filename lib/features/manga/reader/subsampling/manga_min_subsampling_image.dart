@@ -15,6 +15,7 @@ class MangaMinSubsamplingImage extends StatelessWidget {
     required this.settings,
     required this.fit,
     required this.rotation,
+    this.sourceRect,
     required this.onImageLoaded,
     required this.onRetry,
     required this.retryEpoch,
@@ -25,6 +26,7 @@ class MangaMinSubsamplingImage extends StatelessWidget {
   final MangaReaderSettings settings;
   final BoxFit fit;
   final int rotation;
+  final Rect? sourceRect;
   final void Function(int width, int height) onImageLoaded;
   final VoidCallback onRetry;
   final int retryEpoch;
@@ -38,6 +40,7 @@ class MangaMinSubsamplingImage extends StatelessWidget {
       cropBorders: settings.cropBorders,
       fit: fit,
       rotation: rotation,
+      srcRect: sourceRect,
       // Mangayomi's continuous reader owns zoom/pan for the whole strip.
       // Keep the image renderer out of the gesture arena.
       panEnabled: false,

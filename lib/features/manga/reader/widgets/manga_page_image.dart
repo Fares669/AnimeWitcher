@@ -53,6 +53,7 @@ class MangaPageImage extends StatefulWidget {
     this.expand = false,
     this.settings = const MangaReaderSettings(),
     this.onImageSize,
+    this.sourceRect,
   });
 
   final MangaPage page;
@@ -60,6 +61,7 @@ class MangaPageImage extends StatefulWidget {
   final bool expand;
   final MangaReaderSettings settings;
   final ValueChanged<Size>? onImageSize;
+  final Rect? sourceRect;
 
   @override
   State<MangaPageImage> createState() => _MangaPageImageState();
@@ -238,6 +240,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
           cropBorders: widget.settings.cropBorders,
           fit: _fit,
           rotation: quarterTurns * 90,
+          srcRect: widget.sourceRect,
           // MangaZoomablePage owns gestures in the paged reader. Leaving the
           // renderer interactive here creates two competing zoom recognizers.
           panEnabled: false,
@@ -257,6 +260,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
           settings: widget.settings,
           fit: _fit,
           rotation: quarterTurns * 90,
+          sourceRect: widget.sourceRect,
           onImageLoaded: loaded,
           onRetry: () {
             _retry();
@@ -321,6 +325,22 @@ class _MangaPageImageState extends State<MangaPageImage> {
     }
 
     final imageSize = _imageSize;
+    if (imageSize != null &&
+        !useSubsampling &&
+        widget.sourceRect != null &&
+        imageSize.width > 0) {
+      final rect = widget.sourceRect!;
+      final alignment = rect.left > 0
+          ? Alignment.centerRight
+          : Alignment.centerLeft;
+      filtered = ClipRect(
+        child: Align(
+          alignment: alignment,
+          widthFactor: (rect.width / imageSize.width).clamp(0.0, 1.0),
+          child: filtered,
+        ),
+      );
+    }
     if (imageSize != null && !useSubsampling) {
       final quarterTurns = mangaReaderRotateQuarterTurns(
         settings: widget.settings,
