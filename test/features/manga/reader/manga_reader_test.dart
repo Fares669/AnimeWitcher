@@ -481,8 +481,15 @@ void main() {
     await tester.pump();
 
     expect(find.byType(MangaPageImage), findsWidgets);
-    await tester.longPress(
-      find.byKey(const ValueKey<String>('manga-reader-image-actions-gesture')),
+    final actionsGesture = find.byKey(
+      const ValueKey<String>('manga-reader-image-actions-gesture'),
+    );
+    final actionsRect = tester.getRect(actionsGesture);
+    await tester.longPressAt(
+      Offset(
+        actionsRect.left + actionsRect.width * 0.20,
+        actionsRect.top + actionsRect.height * 0.50,
+      ),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
@@ -545,8 +552,15 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    await tester.longPress(
-      find.byKey(const ValueKey<String>('manga-reader-image-actions-gesture')),
+    final actionsGesture = find.byKey(
+      const ValueKey<String>('manga-reader-image-actions-gesture'),
+    );
+    final actionsRect = tester.getRect(actionsGesture);
+    await tester.longPressAt(
+      Offset(
+        actionsRect.left + actionsRect.width * 0.20,
+        actionsRect.top + actionsRect.height * 0.50,
+      ),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
