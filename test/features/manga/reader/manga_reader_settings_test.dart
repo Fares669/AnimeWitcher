@@ -117,6 +117,21 @@ void main() {
     expect(mangaReaderHideThresholdPixels(3), 47);
   });
 
+  test('Mangayomi double-tap animation speeds are exact', () {
+    expect(
+      mangaReaderDoubleTapAnimationDuration(0),
+      const Duration(milliseconds: 10),
+    );
+    expect(
+      mangaReaderDoubleTapAnimationDuration(1),
+      const Duration(milliseconds: 800),
+    );
+    expect(
+      mangaReaderDoubleTapAnimationDuration(2),
+      const Duration(milliseconds: 200),
+    );
+  });
+
   test('Mangayomi rotate-to-fit only rotates landscape pages', () {
     const normal = MangaReaderSettings(dualPageRotateToFit: true);
     const inverted = MangaReaderSettings(

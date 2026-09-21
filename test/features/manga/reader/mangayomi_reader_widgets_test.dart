@@ -3,6 +3,8 @@ import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_chapter_transition_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:visibility_detector/visibility_detector.dart';
@@ -16,6 +18,63 @@ const _pages = <MangaPage>[
 void main() {
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
+  });
+
+  testWidgets('Mangayomi navigation overlay places RTL next zone on the left', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 600,
+          height: 400,
+          child: MangaReaderNavigationOverlay(
+            navigationLayout: 4,
+            tappingInversion: 0,
+            isRtl: true,
+            onClose: () {},
+          ),
+        ),
+      ),
+    );
+
+    final next = tester.getCenter(find.text('NEXT'));
+    final previous = tester.getCenter(find.text('PREV'));
+    expect(next.dx, lessThan(previous.dx));
+  });
+
+  testWidgets('Mangayomi chapter transition shows current and next chapters', (
+    tester,
+  ) async {
+    const current = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://example.test/c1',
+      name: 'Chapter 1',
+    );
+    const next = MangaChapter(
+      id: 'c2',
+      mangaId: 'm1',
+      url: 'https://example.test/c2',
+      name: 'Chapter 2',
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        locale: Locale('en'),
+        home: MangaReaderChapterTransitionPage(
+          currentChapter: current,
+          nextChapter: next,
+          mangaName: 'Reader Manga',
+          readerMode: MangaReaderMode.vertical,
+        ),
+      ),
+    );
+
+    expect(find.text('End of chapter'), findsOneWidget);
+    expect(find.text('Chapter 1'), findsOneWidget);
+    expect(find.text('Chapter 2'), findsOneWidget);
+    expect(find.text('Next chapter'), findsOneWidget);
   });
 
   testWidgets('vertical reader pages along the vertical axis', (tester) async {

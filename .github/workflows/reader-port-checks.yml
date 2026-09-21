@@ -1,0 +1,25 @@
+name: Reader Port Checks
+
+on:
+  push:
+    branches:
+      - feat/manga-manhwa
+    paths:
+      - 'lib/features/manga/reader/**'
+      - 'test/features/manga/reader/**'
+      - '.github/workflows/reader-port-checks.yml'
+
+jobs:
+  reader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Reader tests
+        run: flutter test test/features/manga/reader --concurrency=1 -r expanded
+      - name: Reader analyze
+        run: flutter analyze lib/features/manga/reader test/features/manga/reader
