@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
