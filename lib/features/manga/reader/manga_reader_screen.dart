@@ -27,6 +27,7 @@ import 'widgets/manga_reader_navigation_overlay.dart';
 import 'widgets/manga_reader_page_indicator.dart';
 import 'widgets/manga_paged_reader.dart';
 import 'widgets/manga_webtoon_reader.dart';
+import 'widgets/manga_zoomable_page.dart';
 
 class MangaReaderScreen extends ConsumerStatefulWidget {
   const MangaReaderScreen({
