@@ -650,7 +650,6 @@ bool shouldUseMangaDoublePage({
 List<List<int>> mangaReaderPageSpreads({
   required int pageCount,
   required bool singleFirst,
-  required bool invert,
 }) {
   if (pageCount <= 0) return const <List<int>>[];
   final result = <List<int>>[];
@@ -662,11 +661,7 @@ List<List<int>> mangaReaderPageSpreads({
   while (index < pageCount) {
     final pair = <int>[index];
     if (index + 1 < pageCount) pair.add(index + 1);
-    result.add(
-      invert && pair.length == 2
-          ? pair.reversed.toList(growable: false)
-          : List<int>.unmodifiable(pair),
-    );
+    result.add(List<int>.unmodifiable(pair));
     index += 2;
   }
   return List<List<int>>.unmodifiable(result);
