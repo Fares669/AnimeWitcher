@@ -55,7 +55,7 @@ class MangaChapterList extends ConsumerWidget {
   Widget _swipeBackground(
     BuildContext context,
     MangaReaderChapterSwipeAction action, {
-    required Alignment alignment,
+    required AlignmentGeometry alignment,
   }) {
     final icon = switch (action) {
       MangaReaderChapterSwipeAction.toggleBookmark => Icons.bookmark_rounded,
