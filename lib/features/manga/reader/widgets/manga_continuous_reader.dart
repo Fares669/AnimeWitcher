@@ -23,6 +23,28 @@ class _ContinuousEntry {
   int get primaryIndex => parts.first.pageIndex;
 }
 
+List<MangaReaderPageSlice> mangaContinuousPageSlices({
+  required MangaReaderSettings settings,
+  required Size? imageSize,
+  required bool isRtl,
+  required bool doublePageActive,
+  required bool hasCustomPageBuilder,
+}) {
+  if (hasCustomPageBuilder) {
+    return const <MangaReaderPageSlice>[MangaReaderPageSlice.full];
+  }
+  return mangaReaderWidePageSlices(
+    settings: settings,
+    isWide:
+        imageSize != null &&
+        imageSize.width > 0 &&
+        imageSize.height > 0 &&
+        imageSize.width > imageSize.height * 1.2,
+    isRtl: isRtl,
+    doublePageActive: doublePageActive,
+  );
+}
+
 class MangaContinuousReader extends StatefulWidget {
   const MangaContinuousReader({
     super.key,
@@ -90,14 +112,13 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     final entries = <_ContinuousEntry>[];
     for (var index = 0; index < widget.pages.length; index++) {
       final size = _imageSizes[index];
-      final slices = widget.pageBuilder == null
-          ? mangaReaderWidePageSlices(
-              settings: widget.settings,
-              isWide: size != null && size.width > size.height * 1.2,
-              isRtl: widget.reverse,
-              doublePageActive: false,
-            )
-          : const <MangaReaderPageSlice>[MangaReaderPageSlice.full];
+      final slices = mangaContinuousPageSlices(
+        settings: widget.settings,
+        imageSize: size,
+        isRtl: widget.reverse,
+        doublePageActive: false,
+        hasCustomPageBuilder: widget.pageBuilder != null,
+      );
       for (final slice in slices) {
         entries.add(
           _ContinuousEntry(<_ContinuousPagePart>[

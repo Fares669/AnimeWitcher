@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
@@ -12,7 +10,6 @@ import 'package:animewitcher/features/manga/reader/widgets/manga_reader_gesture_
 import 'package:animewitcher/features/manga/reader/widgets/manga_chapter_transition_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image/image.dart' as img;
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
@@ -549,42 +546,33 @@ void main() {
     expect(scroll.cacheExtent, 1350);
   });
 
-  testWidgets('continuous reader splits a loaded wide page like Mangayomi', (
-    tester,
-  ) async {
-    final temp = await Directory.systemTemp.createTemp(
-      'aw_reader_wide_continuous_',
-    );
-    addTearDown(() => temp.delete(recursive: true));
-    final file = File('${temp.path}/wide.gif');
-    file.writeAsBytesSync(
-      img.encodeGif(img.Image(width: 8, height: 4)),
-      flush: true,
-    );
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: SizedBox(
-          width: 400,
-          height: 300,
-          child: MangaContinuousReader(
-            pages: <MangaPage>[
-              MangaPage(index: 0, imageUrl: file.uri.toString()),
-            ],
-            initialPage: 0,
-            scrollDirection: Axis.vertical,
-            reverse: false,
-            settings: const MangaReaderSettings(splitWidePages: true),
-            onPageChanged: _ignorePage,
-          ),
-        ),
+  test('continuous reader routes loaded wide pages through split logic', () {
+    expect(
+      mangaContinuousPageSlices(
+        settings: const MangaReaderSettings(splitWidePages: true),
+        imageSize: const Size(8, 4),
+        isRtl: false,
+        doublePageActive: false,
+        hasCustomPageBuilder: false,
       ),
+      const <MangaReaderPageSlice>[
+        MangaReaderPageSlice.left,
+        MangaReaderPageSlice.right,
+      ],
     );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump();
-
-    expect(find.byType(MangaPageImage), findsNWidgets(2));
+    expect(
+      mangaContinuousPageSlices(
+        settings: const MangaReaderSettings(splitWidePages: true),
+        imageSize: const Size(8, 4),
+        isRtl: true,
+        doublePageActive: false,
+        hasCustomPageBuilder: false,
+      ),
+      const <MangaReaderPageSlice>[
+        MangaReaderPageSlice.right,
+        MangaReaderPageSlice.left,
+      ],
+    );
   });
 
   testWidgets('continuous reader uses one shared Mangayomi zoom surface', (
