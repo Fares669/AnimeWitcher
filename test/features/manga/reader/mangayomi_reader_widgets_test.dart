@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
@@ -10,6 +12,7 @@ import 'package:animewitcher/features/manga/reader/widgets/manga_reader_gesture_
 import 'package:animewitcher/features/manga/reader/widgets/manga_chapter_transition_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:super_sliver_list/super_sliver_list.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
@@ -538,6 +541,42 @@ void main() {
       find.byType(CustomScrollView),
     );
     expect(scroll.cacheExtent, 1350);
+  });
+
+  testWidgets('continuous reader splits a loaded wide page like Mangayomi', (
+    tester,
+  ) async {
+    final temp = await Directory.systemTemp.createTemp(
+      'aw_reader_wide_continuous_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+    final file = File('${temp.path}/wide.bmp');
+    file.writeAsBytesSync(
+      img.encodeBmp(img.Image(width: 8, height: 4)),
+      flush: true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 400,
+          height: 300,
+          child: MangaContinuousReader(
+            pages: <MangaPage>[
+              MangaPage(index: 0, imageUrl: file.uri.toString()),
+            ],
+            initialPage: 0,
+            scrollDirection: Axis.vertical,
+            reverse: false,
+            settings: const MangaReaderSettings(splitWidePages: true),
+            onPageChanged: _ignorePage,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(MangaPageImage), findsNWidgets(2));
   });
 
   testWidgets('continuous reader uses one shared Mangayomi zoom surface', (
