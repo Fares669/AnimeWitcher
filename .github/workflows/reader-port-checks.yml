@@ -52,6 +52,8 @@ jobs:
           flutter pub get
           flutter gen-l10n
           dart run build_runner build --delete-conflicting-outputs
+      - name: Reader subsampling parity tests
+        run: flutter test test/features/manga/reader/manga_reader_subsampling_paths_test.dart -r expanded
       - name: Reader tests
         run: flutter test test/features/manga/reader --concurrency=1 -r expanded
       - name: Reader analyze
