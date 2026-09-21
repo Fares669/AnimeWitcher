@@ -10,6 +10,7 @@ import '../../../core/extensions/base_provider.dart';
 import '../../../core/services/download_v2/manga_chapter_manifest_v2.dart';
 import '../../../core/services/download_v2/manga_chapter_transport_v2.dart';
 import '../../../core/storage/manga_reading_repository.dart';
+import 'manga_reader_page_cache.dart';
 import 'manga_reader_settings.dart';
 
 export 'manga_reader_settings.dart' show MangaReaderMode;
@@ -22,9 +23,11 @@ class MangaReaderController extends ChangeNotifier {
     required this.chapter,
     required this.chapters,
     this.localChapterDirectory,
+    MangaReaderPageCache? pageCache,
     MangaReaderMode? initialMode,
   }) : _chapter = chapter,
        _localChapterId = chapter.id,
+       _pageCache = pageCache ?? MangaReaderPageCache(),
        _mode = initialMode ?? preferredModeFor(manga);
 
   final AnimeWitcherProvider provider;
@@ -34,6 +37,7 @@ class MangaReaderController extends ChangeNotifier {
   final List<MangaChapter> chapters;
   final String? localChapterDirectory;
   final String _localChapterId;
+  final MangaReaderPageCache _pageCache;
 
   MangaChapter _chapter;
   MangaReaderMode _mode;
@@ -97,9 +101,18 @@ class MangaReaderController extends ChangeNotifier {
     try {
       final localPages = await _loadLocalPages();
       final preloaded = _preloadedChapterPages.remove(_chapter.id);
+      final cached = localPages.isEmpty && preloaded == null
+          ? await _pageCache.get(_mangaId, _chapter)
+          : null;
+      final remote = localPages.isEmpty && preloaded == null && cached == null
+          ? await provider.getMangaChapterPages(manga.url, _chapter)
+          : null;
       final pages = localPages.isNotEmpty
           ? localPages
-          : preloaded ?? await provider.getMangaChapterPages(manga.url, _chapter);
+          : preloaded ?? cached ?? remote ?? const <MangaPage>[];
+      if (remote != null && remote.isNotEmpty) {
+        await _pageCache.put(_mangaId, _chapter, remote);
+      }
       _pages = pages;
       final saved = progressRepository.get(_mangaId, _chapter.id);
       final maxPage = pages.isEmpty ? 0 : pages.length - 1;
@@ -135,9 +148,14 @@ class MangaReaderController extends ChangeNotifier {
           return;
         }
         try {
-          final pages = await provider.getMangaChapterPages(manga.url, chapter);
+          final cached = await _pageCache.get(_mangaId, chapter);
+          final pages =
+              cached ?? await provider.getMangaChapterPages(manga.url, chapter);
           if (pages.isNotEmpty) {
             _preloadedChapterPages[id] = List<MangaPage>.unmodifiable(pages);
+            if (cached == null) {
+              await _pageCache.put(_mangaId, chapter, pages);
+            }
           }
         } catch (_) {
           // Preload failures must never interrupt the chapter currently open.

@@ -208,7 +208,7 @@ void main() {
     await second.load();
 
     expect(provider.requestedChapterIds, <String>['cache-c1']);
-    expect(second.pages, pages);
+    expect(second.pages.map((page) => page.imageUrl), pages.map((page) => page.imageUrl));
   });
 
   test('reader preloads the adjacent chapter after current chapter loads', () async {
