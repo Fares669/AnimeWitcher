@@ -7,7 +7,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 final class _ReaderSettingsNotifier extends MangaReaderSettingsNotifier {
   @override
-  MangaReaderSettings build() => const MangaReaderSettings();
+  MangaReaderSettings build() => const MangaReaderSettings(
+    enableCustomColorFilter: true,
+    flashOnPageChange: true,
+  );
 
   @override
   Future<void> setSettings(MangaReaderSettings value) async {
@@ -33,36 +36,34 @@ void main() {
     expect(find.text('Automatic double page'), findsOneWidget);
     expect(find.text('Crop borders'), findsOneWidget);
 
-    await tester.scrollUntilVisible(
-      find.text('Keep screen on'),
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('Keep screen on'), findsOneWidget);
-    expect(find.text('Show page number'), findsOneWidget);
+    Future<void> expectWhileScrolling(String label) async {
+      final list = find.byType(ListView);
+      for (var attempt = 0; attempt < 24; attempt++) {
+        if (find.text(label).evaluate().isNotEmpty) {
+          expect(find.text(label), findsOneWidget);
+          return;
+        }
+        await tester.drag(list, const Offset(0, -280));
+        await tester.pump();
+      }
+      fail('Reader setting "$label" was not reachable in the settings list.');
+    }
 
-    await tester.scrollUntilVisible(
-      find.text('Color filters'),
-      500,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('Color filters'), findsOneWidget);
-
+    // Assert in the same top-to-bottom order as the lazy ListView so an item
+    // is verified while it is actually mounted.
     for (final label in <String>[
+      'Keep screen on',
+      'Show page number',
+      'Auto-read duplicate chapters',
+      'Reader hide threshold',
+      'Color filters',
       'Custom color filter',
       'Blend mode',
-      'Reader hide threshold',
-      'Flash color',
       'Swipe from start',
       'Swipe from end',
-      'Auto-read duplicate chapters',
+      'Flash color',
     ]) {
-      await tester.scrollUntilVisible(
-        find.text(label),
-        500,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(find.text(label), findsOneWidget);
+      await expectWhileScrolling(label);
     }
   });
 }
