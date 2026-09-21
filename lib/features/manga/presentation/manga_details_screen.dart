@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
@@ -338,6 +339,19 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     );
   }
 
+  Future<void> _copyMangaTitle(BuildContext context, String title) async {
+    await Clipboard.setData(ClipboardData(text: title));
+    await HapticFeedback.selectionClick();
+
+    if (!context.mounted) return;
+
+    ref
+        .read(notificationServiceProvider)
+        .showSuccess(
+          appText(context, english: 'Title copied', arabic: 'تم نسخ العنوان'),
+        );
+  }
+
   Future<void> _showPoster(MultimediaItem item) async {
     final url =
         AppImageFallbacks.poster(item.fullPosterUrl ?? item.posterUrl) ?? '';
@@ -415,6 +429,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
                       )
                       .retry(),
                   onPosterTap: () => _showPoster(item),
+                  onTitleLongPress: () => _copyMangaTitle(context, item.title),
                   onRate: () => _rateManga(item),
                 ),
                 state.chapters.when(
@@ -476,6 +491,7 @@ class _MangaDetailsTab extends StatelessWidget {
     required this.error,
     required this.onRetry,
     required this.onPosterTap,
+    required this.onTitleLongPress,
     required this.onRate,
   });
 
@@ -484,6 +500,7 @@ class _MangaDetailsTab extends StatelessWidget {
   final bool error;
   final Future<void> Function() onRetry;
   final VoidCallback onPosterTap;
+  final VoidCallback onTitleLongPress;
   final VoidCallback onRate;
 
   List<String> _genres() {
@@ -515,6 +532,7 @@ class _MangaDetailsTab extends StatelessWidget {
             item: item,
             isLoading: loading,
             onPosterTap: onPosterTap,
+            onTitleLongPress: onTitleLongPress,
           ),
         ),
         if (error)

@@ -13,11 +13,13 @@ class MangaDetailsHero extends StatelessWidget {
     required this.item,
     this.isLoading = false,
     this.onPosterTap,
+    this.onTitleLongPress,
   });
 
   final MultimediaItem item;
   final bool isLoading;
   final VoidCallback? onPosterTap;
+  final VoidCallback? onTitleLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -167,18 +169,22 @@ class MangaDetailsHero extends StatelessWidget {
               height: titleHeight,
               child: Directionality(
                 textDirection: TextDirection.ltr,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    item.title,
-                    textAlign: TextAlign.start,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      height: 1.1,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onLongPress: onTitleLongPress,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      item.title,
+                      textAlign: TextAlign.start,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        height: 1.1,
+                      ),
                     ),
                   ),
                 ),
