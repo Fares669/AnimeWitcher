@@ -2,6 +2,7 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_gesture_handler.dart';
@@ -19,6 +20,27 @@ const _pages = <MangaPage>[
 void main() {
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
+  });
+
+  testWidgets('failed reader page exposes Mangayomi retry action', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: MangaPageImage(
+            page: MangaPage(
+              index: 0,
+              imageUrl: 'file:///definitely-missing-reader-page.webp',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Retry'), findsOneWidget);
+    expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
   });
 
   testWidgets('Mangayomi navigation overlay places RTL next zone on the left', (
