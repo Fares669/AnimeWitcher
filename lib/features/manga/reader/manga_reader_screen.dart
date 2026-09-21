@@ -49,6 +49,8 @@ class MangaReaderScreen extends ConsumerStatefulWidget {
 class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     with WidgetsBindingObserver {
   late final MangaReaderController _controller;
+  final MangaZoomNavigationController _zoomNavigationController =
+      MangaZoomNavigationController();
   final ScrollController _continuousController = ScrollController();
   final FocusNode _keyboardFocusNode = FocusNode();
 
@@ -286,6 +288,13 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
             )
             .catchError((_) {}),
       );
+      return;
+    }
+    if (settings.navigateToPan &&
+        _zoomNavigationController.tryPan(
+          forward: forward,
+          rtl: _controller.mode.isRtl,
+        )) {
       return;
     }
     forward ? _nextPage() : _previousPage();
@@ -745,6 +754,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         rtl: false,
         scrollDirection: Axis.vertical,
         settings: settings,
+        navigationController: _zoomNavigationController,
         trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
@@ -755,6 +765,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         rtl: false,
         doublePage: doublePage,
         settings: settings,
+        navigationController: _zoomNavigationController,
         trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),
@@ -765,6 +776,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         rtl: true,
         doublePage: doublePage,
         settings: settings,
+        navigationController: _zoomNavigationController,
         trailingPage: _chapterTransitionPage(),
         onPageChanged: (value) => _onPageChanged(value, settings),
       ),

@@ -19,6 +19,7 @@ class MangaPagedReader extends StatefulWidget {
     this.doublePage = false,
     this.settings = const MangaReaderSettings(),
     this.trailingPage,
+    this.navigationController,
   });
 
   final List<MangaPage> pages;
@@ -30,6 +31,7 @@ class MangaPagedReader extends StatefulWidget {
   final bool doublePage;
   final MangaReaderSettings settings;
   final Widget? trailingPage;
+  final MangaZoomNavigationController? navigationController;
 
   @override
   State<MangaPagedReader> createState() => _MangaPagedReaderState();
@@ -46,6 +48,7 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
   late final PageController _controller;
   final Set<int> _widePages = <int>{};
   int _lastActualPage = 0;
+  late int _currentSpreadIndex;
 
   List<List<_MangaPageUnit>> get _spreads {
     if (!widget.doublePage) {
@@ -105,7 +108,8 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
   void initState() {
     super.initState();
     _lastActualPage = _safeInitialPage;
-    _controller = PageController(initialPage: _spreadForPage(_safeInitialPage));
+    _currentSpreadIndex = _spreadForPage(_safeInitialPage);
+    _controller = PageController(initialPage: _currentSpreadIndex);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _preloadAround(_safeInitialPage);
     });
@@ -156,6 +160,7 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     BuildContext context,
     _MangaPageUnit unit, {
     bool zoomable = true,
+    MangaZoomNavigationController? navigationController,
   }) {
     final page = widget.pages[unit.pageIndex];
     final custom = widget.pageBuilder;
@@ -167,13 +172,28 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       slice: unit.slice,
       onImageSize: (size) => _handleImageSize(unit.pageIndex, size),
       zoomable: zoomable,
+      navigationController: navigationController,
     );
   }
 
-  Widget _spread(BuildContext context, List<_MangaPageUnit> units) {
-    if (units.length == 1) return _page(context, units.first);
+  Widget _spread(
+    BuildContext context,
+    List<_MangaPageUnit> units,
+    int spreadIndex,
+  ) {
+    final navigationController = spreadIndex == _currentSpreadIndex
+        ? widget.navigationController
+        : null;
+    if (units.length == 1) {
+      return _page(
+        context,
+        units.first,
+        navigationController: navigationController,
+      );
+    }
     return MangaZoomablePage(
       settings: widget.settings,
+      navigationController: navigationController,
       rtl: widget.rtl,
       child: Row(
         textDirection: widget.rtl ? TextDirection.rtl : TextDirection.ltr,
@@ -201,13 +221,14 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
         if (spreadIndex >= spreads.length) return;
         final units = spreads[spreadIndex];
         final actual = units.isEmpty ? 0 : units.first.pageIndex;
+        setState(() => _currentSpreadIndex = spreadIndex);
         _lastActualPage = actual;
         widget.onPageChanged(actual);
         _preloadAround(actual);
       },
       itemBuilder: (context, index) {
         if (index >= spreads.length) return widget.trailingPage!;
-        return _spread(context, spreads[index]);
+        return _spread(context, spreads[index], index);
       },
     );
   }
@@ -221,6 +242,7 @@ class _MangaPagedImage extends StatefulWidget {
     required this.slice,
     required this.onImageSize,
     this.zoomable = true,
+    this.navigationController,
   });
 
   final MangaPage page;
@@ -229,6 +251,7 @@ class _MangaPagedImage extends StatefulWidget {
   final MangaReaderPageSlice slice;
   final ValueChanged<Size> onImageSize;
   final bool zoomable;
+  final MangaZoomNavigationController? navigationController;
 
   @override
   State<_MangaPagedImage> createState() => _MangaPagedImageState();
@@ -293,6 +316,7 @@ class _MangaPagedImageState extends State<_MangaPagedImage> {
       settings: widget.settings,
       contentSize: contentSize,
       rtl: widget.rtl,
+      navigationController: widget.navigationController,
       child: image,
     );
   }

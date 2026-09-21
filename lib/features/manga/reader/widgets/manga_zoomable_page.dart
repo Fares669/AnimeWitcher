@@ -2,11 +2,34 @@ import 'package:flutter/material.dart';
 
 import '../manga_reader_settings.dart';
 
+class MangaZoomNavigationController extends ChangeNotifier {
+  _MangaZoomablePageState? _state;
+
+  bool tryPan({required bool forward, required bool rtl}) {
+    final state = _state;
+    if (state == null) return false;
+    return state._tryPan(forward: forward, rtl: rtl);
+  }
+
+  void _attach(_MangaZoomablePageState state) => _state = state;
+
+  void _detach(_MangaZoomablePageState state) {
+    if (identical(_state, state)) _state = null;
+  }
+
+  @override
+  void dispose() {
+    _state = null;
+    super.dispose();
+  }
+}
+
 class MangaZoomablePage extends StatefulWidget {
   const MangaZoomablePage({
     super.key,
     required this.child,
     this.transformationController,
+    this.navigationController,
     this.minScale = 1,
     this.maxScale = 4,
     this.doubleTapScale = 2.5,
@@ -18,6 +41,7 @@ class MangaZoomablePage extends StatefulWidget {
 
   final Widget child;
   final TransformationController? transformationController;
+  final MangaZoomNavigationController? navigationController;
   final double minScale;
   final double maxScale;
   final double doubleTapScale;
@@ -54,6 +78,7 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
         if (animation != null) _controller.value = animation.value;
       });
     _controller.addListener(_onTransformChanged);
+    widget.navigationController?._attach(this);
     _onTransformChanged();
   }
 
@@ -112,7 +137,17 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
   }
 
   @override
+  void didUpdateWidget(covariant MangaZoomablePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.navigationController, widget.navigationController)) {
+      oldWidget.navigationController?._detach(this);
+      widget.navigationController?._attach(this);
+    }
+  }
+
+  @override
   void dispose() {
+    widget.navigationController?._detach(this);
     _controller.removeListener(_onTransformChanged);
     _animationController.dispose();
     if (_ownsController) _controller.dispose();
@@ -160,6 +195,31 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     _animate(
       _zoomMatrix(scale: targetScale, focalPoint: position),
     );
+  }
+
+  bool _tryPan({required bool forward, required bool rtl}) {
+    final scale = _controller.value.getMaxScaleOnAxis();
+    final viewport = context.size;
+    if (scale <= 1.01 || viewport == null || viewport.width <= 0) return false;
+
+    final translation = _controller.value.getTranslation();
+    final minX = viewport.width - (viewport.width * scale);
+    final wantsLeft = forward ? rtl : !rtl;
+    final currentX = translation.x;
+
+    final double targetX;
+    if (wantsLeft) {
+      if (currentX >= -1) return false;
+      targetX = (currentX + viewport.width).clamp(minX, 0).toDouble();
+    } else {
+      if (currentX <= minX + 1) return false;
+      targetX = (currentX - viewport.width).clamp(minX, 0).toDouble();
+    }
+
+    final next = Matrix4.copy(_controller.value)
+      ..setTranslationRaw(targetX, translation.y, translation.z);
+    _controller.value = next;
+    return true;
   }
 
   @override
