@@ -434,8 +434,8 @@ void main() {
   testWidgets('long press opens Mangayomi image actions', (tester) async {
     final temp = await Directory.systemTemp.createTemp('aw_reader_actions_');
     addTearDown(() => temp.delete(recursive: true));
-    final localPage = File('${temp.path}/page.webp');
-    await localPage.writeAsBytes(<int>[1, 2, 3, 4]);
+    final localPage = File('${temp.path}/page.png');
+    await localPage.writeAsBytes(_tinyReaderPng());
     final provider = _ReaderProvider(
       pageList: <MangaPage>[
         MangaPage(index: 0, imageUrl: localPage.uri.toString()),
@@ -496,8 +496,8 @@ void main() {
   ) async {
     final temp = await Directory.systemTemp.createTemp('aw_reader_save_action_');
     addTearDown(() => temp.delete(recursive: true));
-    final localPage = File('${temp.path}/page.webp');
-    await localPage.writeAsBytes(<int>[1, 2, 3, 4]);
+    final localPage = File('${temp.path}/page.png');
+    await localPage.writeAsBytes(_tinyReaderPng());
     final provider = _ReaderProvider(
       pageList: <MangaPage>[
         MangaPage(index: 0, imageUrl: localPage.uri.toString()),
@@ -705,3 +705,16 @@ void main() {
     }
   });
 }
+
+
+List<int> _tinyReaderPng() => <int>[
+  0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+  0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+  0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+  0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+  0x00, 0x04, 0x00, 0x01, 0xDD, 0x8D, 0xB1, 0x1C,
+  0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+  0xAE, 0x42, 0x60, 0x82,
+];

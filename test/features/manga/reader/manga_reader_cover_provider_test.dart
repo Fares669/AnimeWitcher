@@ -25,7 +25,7 @@ void main() {
   test('reader custom cover persists per Manga without touching cloud item', () async {
     final repository = _FakeCoverSettingsRepository();
     final container = ProviderContainer(
-      overrides: <Override>[
+      overrides: [
         settingsRepositoryProvider.overrideWithValue(repository),
       ],
     );

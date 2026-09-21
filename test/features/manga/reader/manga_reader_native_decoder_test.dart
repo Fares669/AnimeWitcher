@@ -20,7 +20,7 @@ void main() {
 }
 
 List<int> _bmp2x1() {
-  // 24-bit BMP, two pixels wide, one row padded to four-byte alignment.
+  // 32-bit BMP, matching Mangayomi's native regional BMP decoder.
   const fileSize = 62;
   const pixelOffset = 54;
   return <int>[
@@ -32,16 +32,15 @@ List<int> _bmp2x1() {
     2, 0, 0, 0,
     1, 0, 0, 0,
     1, 0,
-    24, 0,
+    32, 0,
     0, 0, 0, 0,
     8, 0, 0, 0,
     0, 0, 0, 0,
     0, 0, 0, 0,
     0, 0, 0, 0,
     0, 0, 0, 0,
-    // BGR pixels + 2-byte row padding.
-    0, 0, 255,
-    0, 255, 0,
-    0, 0,
+    // BGRA pixels.
+    0, 0, 255, 255,
+    0, 255, 0, 255,
   ];
 }

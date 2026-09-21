@@ -107,7 +107,7 @@ Future<Uint8List> loadMangaReaderPageBytes(MangaPage page, Dio dio) async {
 }
 
 String mangaReaderImageExtension(Uint8List bytes) {
-  if (bytes.length >= 8 &&
+  if (bytes.length >= 4 &&
       bytes[0] == 0x89 &&
       bytes[1] == 0x50 &&
       bytes[2] == 0x4e &&
