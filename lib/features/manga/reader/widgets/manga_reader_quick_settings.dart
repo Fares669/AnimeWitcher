@@ -290,7 +290,7 @@ class _MangaReaderQuickSettingsState
               min: 2,
               max: 30,
               divisions: 28,
-              value: auto.speed.clamp(2, 30),
+              value: auto.speed.clamp(2, 30).toDouble(),
               onChanged: (speed) =>
                   widget.onAutoScrollChanged(true, speed),
             ),
@@ -496,7 +496,7 @@ class _MangaReaderQuickSettingsState
         subtitle: Slider(
           min: min,
           max: max,
-          value: value.clamp(min, max),
+          value: value.clamp(min, max).toDouble(),
           onChanged: onChanged,
         ),
       );
