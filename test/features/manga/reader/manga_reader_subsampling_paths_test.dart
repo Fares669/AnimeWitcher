@@ -48,7 +48,7 @@ void main() {
     expect(renderer.image, isA<CachedNetworkImageProvider>());
   });
 
-  testWidgets('vertical continuous page uses Mangayomi subsampling renderer', (
+  testWidgets('vertical continuous page uses Mangayomi min-subsampling renderer', (
     tester,
   ) async {
     final file = await _tempBmp('continuous');
@@ -76,10 +76,13 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byType(SubsamplingScaleImageView), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('manga-reader-min-subsampling')),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('webtoon page uses Mangayomi subsampling renderer', (
+  testWidgets('webtoon page uses Mangayomi min-subsampling renderer', (
     tester,
   ) async {
     final file = await _tempBmp('webtoon');
@@ -105,7 +108,10 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byType(SubsamplingScaleImageView), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('manga-reader-min-subsampling')),
+      findsOneWidget,
+    );
   });
 }
 
