@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
@@ -33,6 +34,16 @@ final class _ReaderProvider extends AnimeWitcherProvider {
 
   final bool emptyPages;
   final List<String> requestedChapterIds = <String>[];
+  final Map<String, Completer<void>> _requestWaiters =
+      <String, Completer<void>>{};
+
+  Future<void> waitUntilRequested(String chapterId) {
+    if (requestedChapterIds.contains(chapterId)) return Future<void>.value();
+    return _requestWaiters
+        .putIfAbsent(chapterId, Completer<void>.new)
+        .future
+        .timeout(const Duration(seconds: 1));
+  }
 
   @override
   String get packageName => 'test.reader.manga';
@@ -78,6 +89,8 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     MangaChapter chapter,
   ) async {
     requestedChapterIds.add(chapter.id);
+    final waiter = _requestWaiters[chapter.id];
+    if (waiter != null && !waiter.isCompleted) waiter.complete();
     return emptyPages ? const <MangaPage>[] : pages;
   }
 }
@@ -248,7 +261,7 @@ void main() {
     addTearDown(controller.dispose);
 
     await controller.load();
-    await Future<void>.delayed(Duration.zero);
+    await provider.waitUntilRequested('c2');
 
     expect(provider.requestedChapterIds, containsAll(<String>['c1', 'c2']));
   });
