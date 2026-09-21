@@ -102,27 +102,16 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
 
   Widget _spread(BuildContext context, List<int> indices) {
     final primaryIndex = indices.first;
-    Widget child;
-    if (indices.length == 1) {
-      child = MangaZoomablePage(
-        settings: widget.settings,
-        continuous: true,
-        child: _pageContent(context, primaryIndex),
-      );
-    } else {
-      child = MangaZoomablePage(
-        settings: widget.settings,
-        continuous: true,
-        child: Row(
-          key: const ValueKey<String>('manga-reader-continuous-double-page'),
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            for (final index in indices)
-              Expanded(child: _pageContent(context, index)),
-          ],
-        ),
-      );
-    }
+    Widget child = indices.length == 1
+        ? _pageContent(context, primaryIndex)
+        : Row(
+            key: const ValueKey<String>('manga-reader-continuous-double-page'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              for (final index in indices)
+                Expanded(child: _pageContent(context, index)),
+            ],
+          );
 
     if (widget.scrollDirection == Axis.horizontal) {
       child = SizedBox(width: MediaQuery.sizeOf(context).width, child: child);
@@ -151,7 +140,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     final side = MediaQuery.sizeOf(context).width *
         (widget.settings.webtoonSidePadding.clamp(0, 50) / 100);
     final spreads = _spreads;
-    return Padding(
+    final scrollable = Padding(
       key: const ValueKey('manga-reader-continuous-padding'),
       padding: widget.scrollDirection == Axis.vertical
           ? EdgeInsets.symmetric(horizontal: side)
@@ -166,6 +155,11 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
           return _spread(context, spreads[index]);
         },
       ),
+    );
+    return MangaZoomablePage(
+      settings: widget.settings,
+      continuous: true,
+      child: scrollable,
     );
   }
 }
