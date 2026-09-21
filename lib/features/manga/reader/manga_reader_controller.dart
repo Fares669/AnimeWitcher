@@ -68,6 +68,9 @@ class MangaReaderController extends ChangeNotifier {
   }
 
   bool get canPrevious => currentChapterIndex > 0;
+  String get mangaId => _mangaId;
+  bool get isBookmarked =>
+      progressRepository.get(_mangaId, _chapter.id)?.isBookmarked ?? false;
   bool get canNext {
     final index = currentChapterIndex;
     return index >= 0 && index + 1 < chapters.length;
@@ -175,6 +178,7 @@ class MangaReaderController extends ChangeNotifier {
 
   Future<void> flushProgress() async {
     if (_pages.isEmpty) return;
+    final previous = progressRepository.get(_mangaId, _chapter.id);
     await progressRepository.save(
       MangaReadingProgress(
         mangaId: _mangaId,
@@ -183,8 +187,20 @@ class MangaReaderController extends ChangeNotifier {
         pageCount: _pages.length,
         updatedAt: DateTime.now().millisecondsSinceEpoch,
         isRead: _pageIndex >= _pages.length - 1,
+        isBookmarked: previous?.isBookmarked ?? false,
       ),
     );
+  }
+
+  Future<void> toggleBookmark() async {
+    if (_pages.isEmpty) return;
+    await flushProgress();
+    await progressRepository.toggleBookmark(_mangaId, _chapter.id);
+    notifyListeners();
+  }
+
+  void jumpToPage(int value) {
+    setPageIndex(value);
   }
 
   Future<void> openChapter(MangaChapter value) async {

@@ -13,6 +13,7 @@ final class MangaReadingProgress {
     required this.pageCount,
     required this.updatedAt,
     this.isRead = false,
+    this.isBookmarked = false,
   });
 
   final String mangaId;
@@ -21,12 +22,14 @@ final class MangaReadingProgress {
   final int pageCount;
   final int updatedAt;
   final bool isRead;
+  final bool isBookmarked;
 
   MangaReadingProgress copyWith({
     int? pageIndex,
     int? pageCount,
     int? updatedAt,
     bool? isRead,
+    bool? isBookmarked,
   }) {
     return MangaReadingProgress(
       mangaId: mangaId,
@@ -35,6 +38,7 @@ final class MangaReadingProgress {
       pageCount: pageCount ?? this.pageCount,
       updatedAt: updatedAt ?? this.updatedAt,
       isRead: isRead ?? this.isRead,
+      isBookmarked: isBookmarked ?? this.isBookmarked,
     );
   }
 
@@ -45,6 +49,7 @@ final class MangaReadingProgress {
     'pageCount': pageCount,
     'updatedAt': updatedAt,
     'isRead': isRead,
+    'isBookmarked': isBookmarked,
   };
 
   factory MangaReadingProgress.fromJson(Map<String, Object?> json) {
@@ -58,6 +63,7 @@ final class MangaReadingProgress {
       pageCount: readInt('pageCount'),
       updatedAt: readInt('updatedAt'),
       isRead: json['isRead'] == true,
+      isBookmarked: json['isBookmarked'] == true,
     );
   }
 }
@@ -101,6 +107,19 @@ class MangaReadingRepository {
       _key(progress.mangaId, progress.chapterId),
       jsonEncode(normalized.toJson()),
     );
+  }
+
+  Future<bool> toggleBookmark(String mangaId, String chapterId) async {
+    final current = get(mangaId, chapterId);
+    if (current == null) return false;
+    final next = !current.isBookmarked;
+    await save(
+      current.copyWith(
+        isBookmarked: next,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+    return next;
   }
 
   Future<void> markRead(String mangaId, String chapterId) async {
