@@ -8,6 +8,7 @@ import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_controller.dart';
+import 'package:animewitcher/features/manga/reader/manga_reader_image_actions.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_page_cache.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
@@ -97,6 +98,23 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
     return emptyPages ? const <MangaPage>[] : pageList;
+  }
+}
+
+final class _FakeReaderImageActions extends MangaReaderImageActions {
+  _FakeReaderImageActions() : super(Dio());
+
+  int saveCalls = 0;
+
+  @override
+  Future<File> savePage({
+    required MangaPage page,
+    required String mangaTitle,
+    required String chapterName,
+  }) async {
+    saveCalls++;
+    final temp = await Directory.systemTemp.createTemp('aw_reader_saved_');
+    return File('${temp.path}/saved.webp')..writeAsBytesSync(<int>[1]);
   }
 }
 
@@ -471,6 +489,69 @@ void main() {
     expect(find.text('Set as cover'), findsOneWidget);
     expect(find.text('Share'), findsOneWidget);
     expect(find.text('Save'), findsOneWidget);
+  });
+
+  testWidgets('Mangayomi Save image action invokes the reader action service', (
+    tester,
+  ) async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_save_action_');
+    addTearDown(() => temp.delete(recursive: true));
+    final localPage = File('${temp.path}/page.webp');
+    await localPage.writeAsBytes(<int>[1, 2, 3, 4]);
+    final provider = _ReaderProvider(
+      pageList: <MangaPage>[
+        MangaPage(index: 0, imageUrl: localPage.uri.toString()),
+      ],
+    );
+    final actions = _FakeReaderImageActions();
+    const chapter = MangaChapter(
+      id: 'save-c1',
+      mangaId: 'save-m1',
+      url: 'https://example.test/chapter/save-1',
+      name: 'Chapter save',
+      number: 1,
+    );
+    final manga = MultimediaItem(
+      title: 'Save Reader Manga',
+      url: 'https://animewitcher.com/manga/save-m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _ReaderSettingsNotifier.new,
+          ),
+          mangaReaderImageActionsProvider.overrideWithValue(actions),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          home: MangaReaderScreen(
+            manga: manga,
+            chapter: chapter,
+            chapters: const <MangaChapter>[chapter],
+          ),
+        ),
+      ),
+    );
+    await provider.waitUntilRequested('save-c1');
+    await tester.pump();
+    await tester.pump();
+
+    await tester.longPress(find.byType(MangaPageImage).first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+
+    expect(actions.saveCalls, 1);
   });
 
   testWidgets('reader uses the Mangayomi per-manga reading mode', (tester) async {
