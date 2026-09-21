@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
@@ -159,6 +161,54 @@ void main() {
         MangaReaderMode.horizontalContinuousRtl,
       ],
     );
+  });
+
+  test('reader reuses Mangayomi chapter page-list disk cache', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_cache_');
+    addTearDown(() => temp.delete(recursive: true));
+
+    final provider = _ReaderProvider();
+    const chapter = MangaChapter(
+      id: 'cache-c1',
+      mangaId: 'cache-m1',
+      url: 'https://example.test/chapter/cache-1',
+      name: 'Chapter cache',
+      number: 1,
+    );
+    final manga = MultimediaItem(
+      title: 'Cached Reader Manga',
+      url: 'https://animewitcher.com/manga/cache-m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+    final cache = MangaReaderPageCache(cacheDirectory: temp);
+
+    final first = MangaReaderController(
+      provider: provider,
+      progressRepository: _ReaderProgressRepository(),
+      manga: manga,
+      chapter: chapter,
+      chapters: const <MangaChapter>[chapter],
+      pageCache: cache,
+    );
+    await first.load();
+    first.dispose();
+    expect(provider.requestedChapterIds, <String>['cache-c1']);
+
+    final second = MangaReaderController(
+      provider: provider,
+      progressRepository: _ReaderProgressRepository(),
+      manga: manga,
+      chapter: chapter,
+      chapters: const <MangaChapter>[chapter],
+      pageCache: cache,
+    );
+    addTearDown(second.dispose);
+    await second.load();
+
+    expect(provider.requestedChapterIds, <String>['cache-c1']);
+    expect(second.pages, pages);
   });
 
   test('reader preloads the adjacent chapter after current chapter loads', () async {
