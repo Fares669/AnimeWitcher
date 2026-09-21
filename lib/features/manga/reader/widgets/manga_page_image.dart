@@ -35,6 +35,17 @@ MangaPageImageTier mangaPageImageTier({
 }
 
 @visibleForTesting
+ScaleType mangaReaderMinimumScaleType(MangaReaderScaleType scaleType) =>
+    switch (scaleType) {
+      MangaReaderScaleType.fitScreen => ScaleType.centerInside,
+      MangaReaderScaleType.stretch => ScaleType.centerCrop,
+      MangaReaderScaleType.fitWidth => ScaleType.fitWidth,
+      MangaReaderScaleType.fitHeight => ScaleType.fitHeight,
+      MangaReaderScaleType.originalSize => ScaleType.originalSize,
+      MangaReaderScaleType.smartFit => ScaleType.smartFit,
+    };
+
+@visibleForTesting
 ImageProvider<Object> mangaPageImageProvider(MangaPage page) {
   final uri = Uri.tryParse(page.imageUrl);
   return uri != null && uri.scheme == 'file'
@@ -238,7 +249,9 @@ class _MangaPageImageState extends State<MangaPageImage> {
           image: _imageProvider,
           resolvedFilePath: _resolvedFilePath,
           cropBorders: widget.settings.cropBorders,
-          fit: _fit,
+          minimumScaleType: mangaReaderMinimumScaleType(
+            widget.settings.scaleType,
+          ),
           rotation: quarterTurns * 90,
           srcRect: widget.sourceRect,
           // MangaZoomablePage owns gestures in the paged reader. Leaving the
@@ -258,7 +271,9 @@ class _MangaPageImageState extends State<MangaPageImage> {
           image: _imageProvider,
           resolvedFilePath: _resolvedFilePath,
           settings: widget.settings,
-          fit: _fit,
+          minimumScaleType: mangaReaderMinimumScaleType(
+            widget.settings.scaleType,
+          ),
           rotation: quarterTurns * 90,
           sourceRect: widget.sourceRect,
           onImageLoaded: loaded,

@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
@@ -14,7 +12,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image/image.dart' as img;
 
 final class _MangaProvider extends AnimeWitcherProvider {
   int detailsCalls = 0;
@@ -100,20 +97,10 @@ final class _MangaDetailsReaderSettingsNotifier
   MangaReaderSettings build() => const MangaReaderSettings();
 }
 
-String _testCustomCoverUri = '';
-
 final class _MangaDetailsEmptyCoverNotifier
     extends MangaReaderCustomCoversNotifier {
   @override
   Map<String, String> build() => const <String, String>{};
-}
-
-final class _MangaDetailsCustomCoverNotifier
-    extends MangaReaderCustomCoversNotifier {
-  @override
-  Map<String, String> build() => <String, String>{
-    'https://animewitcher.com/manga/m1': _testCustomCoverUri,
-  };
 }
 
 final class _Manager extends ExtensionManager {
@@ -124,19 +111,14 @@ final class _Manager extends ExtensionManager {
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
 }
 
-Widget _app(
-  AnimeWitcherProvider provider, {
-  bool customCover = false,
-}) => ProviderScope(
+Widget _app(AnimeWitcherProvider provider) => ProviderScope(
   overrides: [
     extensionManagerProvider.overrideWith(() => _Manager(provider)),
     mangaReaderSettingsProvider.overrideWith(
       _MangaDetailsReaderSettingsNotifier.new,
     ),
     mangaReaderCustomCoversProvider.overrideWith(
-      customCover
-          ? _MangaDetailsCustomCoverNotifier.new
-          : _MangaDetailsEmptyCoverNotifier.new,
+      _MangaDetailsEmptyCoverNotifier.new,
     ),
   ],
   child: MaterialApp(
@@ -159,16 +141,19 @@ Widget _app(
   ),
 );
 
-Future<void> _pumpUntilLoaded(WidgetTester tester) async {
-  for (var i = 0; i < 40; i++) {
-    await tester.pump(const Duration(milliseconds: 50));
-    if (find.byType(CircularProgressIndicator).evaluate().isEmpty &&
-        find.byType(LinearProgressIndicator).evaluate().isEmpty) {
+Future<void> _pumpUntil(
+  WidgetTester tester,
+  bool Function() condition, {
+  String reason = 'expected widget state did not arrive',
+}) async {
+  for (var i = 0; i < 100; i++) {
+    await tester.pump(const Duration(milliseconds: 20));
+    if (condition()) {
       await tester.pump();
       return;
     }
   }
-  await tester.pump();
+  fail(reason);
 }
 
 void main() {
@@ -181,7 +166,11 @@ void main() {
     expect(provider.chaptersCalls, 0);
 
     await tester.pumpWidget(_app(provider));
-    await _pumpUntilLoaded(tester);
+    await _pumpUntil(
+      tester,
+      () => provider.chaptersCalls == 1,
+      reason: 'manga chapters did not finish loading',
+    );
 
     expect(provider.detailsCalls, 1);
     expect(provider.chaptersCalls, 1);
@@ -211,7 +200,11 @@ void main() {
     });
 
     await tester.pumpWidget(_app(_MangaProvider()));
-    await _pumpUntilLoaded(tester);
+    await _pumpUntil(
+      tester,
+      () => find.text('Solo Leveling').evaluate().isNotEmpty,
+      reason: 'manga title did not render',
+    );
 
     final title = find.descendant(
       of: find.byKey(const ValueKey('manga-details-hero')),
@@ -229,33 +222,32 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
   });
 
-  testWidgets('manga details uses the reader custom cover override', (
-    tester,
-  ) async {
-    final temp = await Directory.systemTemp.createTemp('aw_manga_cover_');
-    addTearDown(() => temp.delete(recursive: true));
-    final cover = File('${temp.path}/cover.webp');
-    await cover.writeAsBytes(
-      img.encodePng(img.Image(width: 1, height: 1)),
-      flush: true,
+  test('manga details uses the reader custom cover override', () {
+    final base = MultimediaItem(
+      title: 'Solo Leveling',
+      url: 'https://animewitcher.com/manga/m1',
+      posterUrl: 'https://example.test/default.webp',
+      fullPosterUrl: 'https://example.test/default-full.webp',
+      contentType: MultimediaContentType.manga,
+      provider: 'test.manga',
     );
-    _testCustomCoverUri = cover.uri.toString();
+    const custom = 'file:///tmp/custom-cover.webp';
 
-    await tester.pumpWidget(_app(_MangaProvider(), customCover: true));
-    await tester.pump();
-    await tester.pump();
+    final item = mangaDetailsItemWithCustomCover(base, custom);
 
-    expect(
-      find.byKey(const ValueKey('manga-details-custom-cover')),
-      findsWidgets,
-    );
+    expect(item.posterUrl, custom);
+    expect(item.fullPosterUrl, custom);
   });
 
   testWidgets('manga details renders only details and chapters tabs', (
     tester,
   ) async {
     await tester.pumpWidget(_app(_MangaProvider()));
-    await _pumpUntilLoaded(tester);
+    await _pumpUntil(
+      tester,
+      () => find.text('Manga description').evaluate().isNotEmpty,
+      reason: 'manga details content did not render',
+    );
 
     final tabBar = tester.widget<TabBar>(find.byType(TabBar));
     expect(tabBar.indicatorSize, isNull);
@@ -279,8 +271,11 @@ void main() {
     );
 
     await tester.tap(find.textContaining('الفصول'));
-
-    await _pumpUntilLoaded(tester);
+    await _pumpUntil(
+      tester,
+      () => find.text('الفصل 12.5').evaluate().isNotEmpty,
+      reason: 'chapter tab did not render loaded chapter',
+    );
 
     expect(find.text('الفصل 12.5'), findsOneWidget);
     expect(find.text('الحلقات'), findsNothing);

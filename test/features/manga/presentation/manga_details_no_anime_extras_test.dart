@@ -119,16 +119,19 @@ final class _Manager extends ExtensionManager {
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
 }
 
-Future<void> _pumpUntilLoaded(WidgetTester tester) async {
-  for (var i = 0; i < 40; i++) {
-    await tester.pump(const Duration(milliseconds: 50));
-    if (find.byType(CircularProgressIndicator).evaluate().isEmpty &&
-        find.byType(LinearProgressIndicator).evaluate().isEmpty) {
+Future<void> _pumpUntil(
+  WidgetTester tester,
+  bool Function() condition, {
+  String reason = 'expected widget state did not arrive',
+}) async {
+  for (var i = 0; i < 100; i++) {
+    await tester.pump(const Duration(milliseconds: 20));
+    if (condition()) {
       await tester.pump();
       return;
     }
   }
-  await tester.pump();
+  fail(reason);
 }
 
 void main() {
@@ -161,7 +164,11 @@ void main() {
         ),
       ),
     );
-    await _pumpUntilLoaded(tester);
+    await _pumpUntil(
+      tester,
+      () => provider.mangaChapterCalls == 1,
+      reason: 'manga chapter load did not complete',
+    );
 
     expect(provider.mangaDetailsCalls, 1);
     expect(provider.mangaChapterCalls, 1);

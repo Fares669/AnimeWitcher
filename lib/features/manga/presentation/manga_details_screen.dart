@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,6 +29,20 @@ import '../reader/manga_reader_cover_provider.dart';
 import 'manga_details_controller.dart';
 import 'widgets/manga_chapter_list.dart';
 import 'widgets/manga_details_hero.dart';
+
+@visibleForTesting
+MultimediaItem mangaDetailsItemWithCustomCover(
+  MultimediaItem baseItem,
+  String customCover,
+) {
+  final cover = customCover.trim();
+  return cover.isEmpty
+      ? baseItem
+      : baseItem.copyWith(
+          posterUrl: cover,
+          fullPosterUrl: cover,
+        );
+}
 
 class MangaDetailsScreen extends ConsumerStatefulWidget {
   const MangaDetailsScreen({
@@ -394,12 +409,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
         (covers) => covers[baseItem.url]?.trim() ?? '',
       ),
     );
-    final item = customCover.isEmpty
-        ? baseItem
-        : baseItem.copyWith(
-            posterUrl: customCover,
-            fullPosterUrl: customCover,
-          );
+    final item = mangaDetailsItemWithCustomCover(baseItem, customCover);
     final chapterCount = state.chapters.asData?.value.length ?? 0;
 
     dynamic libraryNotifier;
