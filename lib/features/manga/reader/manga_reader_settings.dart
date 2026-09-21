@@ -80,6 +80,7 @@ class MangaReaderSettings {
     this.keepScreenOn = true,
     this.webtoonSidePadding = 0,
     this.showPageGaps = true,
+    this.autoReadDuplicateChapters = false,
     this.invertColors = false,
     this.grayscale = false,
     this.brightness = 0,
@@ -127,6 +128,7 @@ class MangaReaderSettings {
   final bool keepScreenOn;
   final int webtoonSidePadding;
   final bool showPageGaps;
+  final bool autoReadDuplicateChapters;
   final bool invertColors;
   final bool grayscale;
   final double brightness;
@@ -173,6 +175,7 @@ class MangaReaderSettings {
     bool? keepScreenOn,
     int? webtoonSidePadding,
     bool? showPageGaps,
+    bool? autoReadDuplicateChapters,
     bool? invertColors,
     bool? grayscale,
     double? brightness,
@@ -221,6 +224,8 @@ class MangaReaderSettings {
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
       webtoonSidePadding: webtoonSidePadding ?? this.webtoonSidePadding,
       showPageGaps: showPageGaps ?? this.showPageGaps,
+      autoReadDuplicateChapters:
+          autoReadDuplicateChapters ?? this.autoReadDuplicateChapters,
       invertColors: invertColors ?? this.invertColors,
       grayscale: grayscale ?? this.grayscale,
       brightness: brightness ?? this.brightness,
@@ -279,6 +284,7 @@ class MangaReaderSettings {
     'keepScreenOn': keepScreenOn,
     'webtoonSidePadding': webtoonSidePadding,
     'showPageGaps': showPageGaps,
+    'autoReadDuplicateChapters': autoReadDuplicateChapters,
     'invertColors': invertColors,
     'grayscale': grayscale,
     'brightness': brightness,
@@ -354,6 +360,8 @@ class MangaReaderSettings {
       keepScreenOn: boolean('keepScreenOn', true),
       webtoonSidePadding: integer('webtoonSidePadding', 0).clamp(0, 50).toInt(),
       showPageGaps: boolean('showPageGaps', true),
+      autoReadDuplicateChapters:
+          boolean('autoReadDuplicateChapters', false),
       invertColors: boolean('invertColors', false),
       grayscale: boolean('grayscale', false),
       brightness: number('brightness', 0).clamp(-1, 1).toDouble(),

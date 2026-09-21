@@ -44,6 +44,122 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
     MangaReaderBackground.automatic => _t(context, 'Automatic', 'تلقائي'),
   };
 
+  String _blendLabel(
+    BuildContext context,
+    MangaReaderColorBlendMode value,
+  ) => switch (value) {
+    MangaReaderColorBlendMode.none => _t(context, 'None', 'بدون'),
+    MangaReaderColorBlendMode.multiply => _t(context, 'Multiply', 'ضرب'),
+    MangaReaderColorBlendMode.screen => _t(context, 'Screen', 'شاشة'),
+    MangaReaderColorBlendMode.overlay => _t(context, 'Overlay', 'تراكب'),
+    MangaReaderColorBlendMode.colorDodge => _t(context, 'Color dodge', 'تفتيح اللون'),
+    MangaReaderColorBlendMode.lighten => _t(context, 'Lighten', 'تفتيح'),
+    MangaReaderColorBlendMode.colorBurn => _t(context, 'Color burn', 'حرق اللون'),
+    MangaReaderColorBlendMode.darken => _t(context, 'Darken', 'تغميق'),
+    MangaReaderColorBlendMode.difference => _t(context, 'Difference', 'اختلاف'),
+    MangaReaderColorBlendMode.saturation => _t(context, 'Saturation', 'تشبع'),
+    MangaReaderColorBlendMode.softLight => _t(context, 'Soft light', 'ضوء ناعم'),
+    MangaReaderColorBlendMode.plus => _t(context, 'Plus', 'إضافة'),
+    MangaReaderColorBlendMode.exclusion => _t(context, 'Exclusion', 'استبعاد'),
+  };
+
+  String _swipeLabel(
+    BuildContext context,
+    MangaReaderChapterSwipeAction value,
+  ) => switch (value) {
+    MangaReaderChapterSwipeAction.toggleBookmark =>
+      _t(context, 'Toggle bookmark', 'تبديل الإشارة المرجعية'),
+    MangaReaderChapterSwipeAction.toggleRead =>
+      _t(context, 'Mark read / unread', 'مقروء / غير مقروء'),
+    MangaReaderChapterSwipeAction.download =>
+      _t(context, 'Download', 'تنزيل'),
+    MangaReaderChapterSwipeAction.disabled =>
+      _t(context, 'Disabled', 'معطل'),
+  };
+
+  String _flashColorLabel(BuildContext context, int value) => switch (value) {
+    1 => _t(context, 'White', 'أبيض'),
+    2 => _t(context, 'Soft white', 'أبيض خفيف'),
+    _ => _t(context, 'Black', 'أسود'),
+  };
+
+  Future<int?> _editCustomColor(
+    BuildContext context,
+    int initialArgb,
+  ) async {
+    var alpha = (initialArgb >> 24) & 0xff;
+    var red = (initialArgb >> 16) & 0xff;
+    var green = (initialArgb >> 8) & 0xff;
+    var blue = initialArgb & 0xff;
+
+    return showDialog<int>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Widget channel(String label, int value, ValueChanged<int> setValue) =>
+              Row(
+                children: <Widget>[
+                  SizedBox(width: 28, child: Text(label)),
+                  Expanded(
+                    child: Slider(
+                      min: 0,
+                      max: 255,
+                      divisions: 255,
+                      value: value.toDouble(),
+                      onChanged: (next) =>
+                          setDialogState(() => setValue(next.round())),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 36,
+                    child: Text(value.toString(), textAlign: TextAlign.end),
+                  ),
+                ],
+              );
+
+          final color = Color.fromARGB(alpha, red, green, blue);
+          return AlertDialog(
+            title: Text(_t(context, 'Custom color filter', 'فلتر لون مخصص')),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Container(
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  channel('R', red, (value) => red = value),
+                  channel('G', green, (value) => green = value),
+                  channel('B', blue, (value) => blue = value),
+                  channel('A', alpha, (value) => alpha = value),
+                ],
+              ),
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text(_t(context, 'Cancel', 'إلغاء')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(
+                  Color.fromARGB(alpha, red, green, blue).toARGB32(),
+                ),
+                child: Text(_t(context, 'Apply', 'تطبيق')),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<T?> _choose<T>({
     required BuildContext context,
     required String title,
@@ -263,6 +379,19 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
             onChanged: (value) =>
                 update((s) => s.copyWith(showPageGaps: value)),
           ),
+          SwitchListTile(
+            title: Text(
+              _t(
+                context,
+                'Auto-read duplicate chapters',
+                'تعليم الفصول المكررة كمقروءة تلقائيًا',
+              ),
+            ),
+            value: settings.autoReadDuplicateChapters,
+            onChanged: (value) => update(
+              (s) => s.copyWith(autoReadDuplicateChapters: value),
+            ),
+          ),
           ListTile(
             title: Text(
               '${_t(context, 'Webtoon side padding', 'هوامش الويب تون')}: '
@@ -317,6 +446,21 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
             value: settings.navigateToPan,
             onChanged: (value) =>
                 update((s) => s.copyWith(navigateToPan: value)),
+          ),
+          ListTile(
+            title: Text(
+              _t(context, 'Reader hide threshold', 'عتبة إخفاء أدوات القارئ'),
+            ),
+            subtitle: Slider(
+              min: 0,
+              max: 3,
+              divisions: 3,
+              value: settings.readerHideThreshold.toDouble(),
+              label: settings.readerHideThreshold.toString(),
+              onChanged: (value) => update(
+                (s) => s.copyWith(readerHideThreshold: value.toInt()),
+              ),
+            ),
           ),
           SwitchListTile(
             title: Text(_t(context, 'Landscape zoom', 'تكبير الوضع الأفقي')),
@@ -401,6 +545,50 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
             onChanged: (value) =>
                 update((s) => s.copyWith(grayscale: value)),
           ),
+          SwitchListTile(
+            title: Text(
+              _t(context, 'Custom color filter', 'فلتر لون مخصص'),
+            ),
+            value: settings.enableCustomColorFilter,
+            onChanged: (value) => update(
+              (s) => s.copyWith(enableCustomColorFilter: value),
+            ),
+          ),
+          if (settings.enableCustomColorFilter) ...<Widget>[
+            ListTile(
+              title: Text(_t(context, 'Custom filter color', 'لون الفلتر المخصص')),
+              leading: CircleAvatar(
+                backgroundColor: Color(settings.customColorFilterArgb),
+              ),
+              onTap: () async {
+                final value = await _editCustomColor(
+                  context,
+                  settings.customColorFilterArgb,
+                );
+                if (value != null) {
+                  await update((s) => s.copyWith(customColorFilterArgb: value));
+                }
+              },
+            ),
+            ListTile(
+              title: Text(_t(context, 'Blend mode', 'وضع المزج')),
+              subtitle: Text(
+                _blendLabel(context, settings.colorFilterBlendMode),
+              ),
+              onTap: () async {
+                final value = await _choose<MangaReaderColorBlendMode>(
+                  context: context,
+                  title: _t(context, 'Blend mode', 'وضع المزج'),
+                  value: settings.colorFilterBlendMode,
+                  values: MangaReaderColorBlendMode.values,
+                  label: (value) => _blendLabel(context, value),
+                );
+                if (value != null) {
+                  await update((s) => s.copyWith(colorFilterBlendMode: value));
+                }
+              },
+            ),
+          ],
           _slider(
             context,
             label: _t(context, 'Brightness', 'السطوع'),
@@ -429,6 +617,48 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
                 update((s) => s.copyWith(saturation: value)),
           ),
 
+          _section(context, _t(context, 'Chapter swipes', 'سحب الفصول')),
+          ListTile(
+            title: Text(_t(context, 'Swipe from start', 'السحب من البداية')),
+            subtitle: Text(
+              _swipeLabel(context, settings.chapterSwipeStartAction),
+            ),
+            onTap: () async {
+              final value = await _choose<MangaReaderChapterSwipeAction>(
+                context: context,
+                title: _t(context, 'Swipe from start', 'السحب من البداية'),
+                value: settings.chapterSwipeStartAction,
+                values: MangaReaderChapterSwipeAction.values,
+                label: (value) => _swipeLabel(context, value),
+              );
+              if (value != null) {
+                await update(
+                  (s) => s.copyWith(chapterSwipeStartAction: value),
+                );
+              }
+            },
+          ),
+          ListTile(
+            title: Text(_t(context, 'Swipe from end', 'السحب من النهاية')),
+            subtitle: Text(
+              _swipeLabel(context, settings.chapterSwipeEndAction),
+            ),
+            onTap: () async {
+              final value = await _choose<MangaReaderChapterSwipeAction>(
+                context: context,
+                title: _t(context, 'Swipe from end', 'السحب من النهاية'),
+                value: settings.chapterSwipeEndAction,
+                values: MangaReaderChapterSwipeAction.values,
+                label: (value) => _swipeLabel(context, value),
+              );
+              if (value != null) {
+                await update(
+                  (s) => s.copyWith(chapterSwipeEndAction: value),
+                );
+              }
+            },
+          ),
+
           _section(context, _t(context, 'Page-change flash', 'وميض تغيير الصفحة')),
           SwitchListTile(
             title: Text(_t(context, 'Flash on page change', 'وميض عند تغيير الصفحة')),
@@ -436,6 +666,23 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
             onChanged: (value) =>
                 update((s) => s.copyWith(flashOnPageChange: value)),
           ),
+          if (settings.flashOnPageChange)
+            ListTile(
+              title: Text(_t(context, 'Flash color', 'لون الوميض')),
+              subtitle: Text(_flashColorLabel(context, settings.flashColor)),
+              onTap: () async {
+                final value = await _choose<int>(
+                  context: context,
+                  title: _t(context, 'Flash color', 'لون الوميض'),
+                  value: settings.flashColor,
+                  values: const <int>[0, 1, 2],
+                  label: (value) => _flashColorLabel(context, value),
+                );
+                if (value != null) {
+                  await update((s) => s.copyWith(flashColor: value));
+                }
+              },
+            ),
           if (settings.flashOnPageChange) ...<Widget>[
             ListTile(
               title: Text(
