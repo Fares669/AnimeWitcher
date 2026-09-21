@@ -121,7 +121,12 @@ void main() {
     );
     expect(find.text('Custom color filter'), findsOneWidget);
 
-    await tester.tap(find.text('Custom color filter'));
+    final customFilterTile = find.ancestor(
+      of: find.text('Custom color filter'),
+      matching: find.byType(SwitchListTile),
+    );
+    expect(customFilterTile, findsOneWidget);
+    await tester.tap(customFilterTile);
     await tester.pump();
     expect(find.text('R'), findsOneWidget);
     expect(find.text('G'), findsOneWidget);
