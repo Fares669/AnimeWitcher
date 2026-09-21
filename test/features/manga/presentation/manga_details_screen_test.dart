@@ -101,6 +101,12 @@ final class _MangaDetailsReaderSettingsNotifier
 
 String _testCustomCoverUri = '';
 
+final class _MangaDetailsEmptyCoverNotifier
+    extends MangaReaderCustomCoversNotifier {
+  @override
+  Map<String, String> build() => const <String, String>{};
+}
+
 final class _MangaDetailsCustomCoverNotifier
     extends MangaReaderCustomCoversNotifier {
   @override
@@ -126,10 +132,11 @@ Widget _app(
     mangaReaderSettingsProvider.overrideWith(
       _MangaDetailsReaderSettingsNotifier.new,
     ),
-    if (customCover)
-      mangaReaderCustomCoversProvider.overrideWith(
-        _MangaDetailsCustomCoverNotifier.new,
-      ),
+    mangaReaderCustomCoversProvider.overrideWith(
+      customCover
+          ? _MangaDetailsCustomCoverNotifier.new
+          : _MangaDetailsEmptyCoverNotifier.new,
+    ),
   ],
   child: MaterialApp(
     locale: const Locale('ar'),

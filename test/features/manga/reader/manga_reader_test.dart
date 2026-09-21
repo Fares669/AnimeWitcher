@@ -432,13 +432,12 @@ void main() {
   });
 
   testWidgets('long press opens Mangayomi image actions', (tester) async {
-    final temp = await Directory.systemTemp.createTemp('aw_reader_actions_');
-    addTearDown(() => temp.delete(recursive: true));
-    final localPage = File('${temp.path}/page.gif');
-    await localPage.writeAsBytes(_tinyReaderGif());
     final provider = _ReaderProvider(
-      pageList: <MangaPage>[
-        MangaPage(index: 0, imageUrl: localPage.uri.toString()),
+      pageList: const <MangaPage>[
+        MangaPage(
+          index: 0,
+          imageUrl: 'file:///definitely-missing-reader-action-page.webp',
+        ),
       ],
     );
     const chapter = MangaChapter(
@@ -482,7 +481,9 @@ void main() {
     await tester.pump();
 
     expect(find.byType(MangaPageImage), findsWidgets);
-    await tester.longPress(find.byType(MangaPageImage).first);
+    await tester.longPress(
+      find.byKey(const ValueKey<String>('manga-reader-image-actions-gesture')),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
@@ -494,13 +495,12 @@ void main() {
   testWidgets('Mangayomi Save image action invokes the reader action service', (
     tester,
   ) async {
-    final temp = await Directory.systemTemp.createTemp('aw_reader_save_action_');
-    addTearDown(() => temp.delete(recursive: true));
-    final localPage = File('${temp.path}/page.gif');
-    await localPage.writeAsBytes(_tinyReaderGif());
     final provider = _ReaderProvider(
-      pageList: <MangaPage>[
-        MangaPage(index: 0, imageUrl: localPage.uri.toString()),
+      pageList: const <MangaPage>[
+        MangaPage(
+          index: 0,
+          imageUrl: 'file:///definitely-missing-reader-save-page.webp',
+        ),
       ],
     );
     final actions = _FakeReaderImageActions();
@@ -545,7 +545,9 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    await tester.longPress(find.byType(MangaPageImage).first);
+    await tester.longPress(
+      find.byKey(const ValueKey<String>('manga-reader-image-actions-gesture')),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.text('Save'));
@@ -705,18 +707,3 @@ void main() {
     }
   });
 }
-
-
-List<int> _tinyReaderGif() => <int>[
-  0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
-  0x01, 0x00, 0x01, 0x00,
-  0x80, 0x00, 0x00,
-  0x00, 0x00, 0x00,
-  0xff, 0xff, 0xff,
-  0x21, 0xf9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00,
-  0x2c, 0x00, 0x00, 0x00, 0x00,
-  0x01, 0x00, 0x01, 0x00,
-  0x00,
-  0x02, 0x02, 0x44, 0x01, 0x00,
-  0x3b,
-];

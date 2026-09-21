@@ -1022,6 +1022,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
               ColoredBox(
                 color: background,
                 child: GestureDetector(
+                  key: const ValueKey<String>('manga-reader-image-actions-gesture'),
                   behavior: HitTestBehavior.translucent,
                   onTapUp: (details) => _handleTapZone(
                     details,

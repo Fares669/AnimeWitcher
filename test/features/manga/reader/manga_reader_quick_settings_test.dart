@@ -53,9 +53,26 @@ void main() {
     expect(find.text('Filter'), findsOneWidget);
     expect(find.text('Disable zoom out'), findsOneWidget);
     expect(find.text('Double-tap zoom'), findsOneWidget);
+
+    final readingList = find.byType(ListView).first;
+    await tester.scrollUntilVisible(
+      find.text('Show page gaps'),
+      240,
+      scrollable: readingList,
+    );
     expect(find.text('Show page gaps'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Auto scroll'),
+      240,
+      scrollable: readingList,
+    );
     expect(find.text('Auto scroll'), findsOneWidget);
 
+    await tester.scrollUntilVisible(
+      find.text('Disable zoom out'),
+      -240,
+      scrollable: readingList,
+    );
     await tester.tap(find.text('Disable zoom out'));
     await tester.pump();
 
@@ -67,6 +84,11 @@ void main() {
       isTrue,
     );
 
+    await tester.scrollUntilVisible(
+      find.text('Auto scroll'),
+      240,
+      scrollable: readingList,
+    );
     await tester.tap(find.text('Auto scroll'));
     await tester.pump();
     expect(autoScrollEnabled, isTrue);
