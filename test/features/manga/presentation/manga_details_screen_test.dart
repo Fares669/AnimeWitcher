@@ -6,6 +6,7 @@ import 'package:animewitcher/features/manga/presentation/manga_details_screen.da
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -134,6 +135,43 @@ void main() {
     expect(provider.detailsCalls, 1);
     expect(provider.chaptersCalls, 1);
     expect(provider.chaptersStartedBeforeDetailsFinished, isFalse);
+  });
+
+  testWidgets('long pressing manga title copies it like anime details', (
+    tester,
+  ) async {
+    String? clipboardText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData' && call.arguments is Map) {
+          clipboardText = Map<Object?, Object?>.from(
+            call.arguments as Map,
+          )['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    });
+
+    await tester.pumpWidget(_app(_MangaProvider()));
+    await tester.pumpAndSettle();
+
+    final title = find.descendant(
+      of: find.byKey(const ValueKey('manga-details-hero')),
+      matching: find.text('Solo Leveling'),
+    );
+    expect(title, findsOneWidget);
+
+    await tester.longPress(title);
+    await tester.pump();
+
+    expect(clipboardText, 'Solo Leveling');
   });
 
   testWidgets('manga details renders only details and chapters tabs', (
