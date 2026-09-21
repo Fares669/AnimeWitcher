@@ -1,5 +1,6 @@
 // Adapted from the Mangayomi reader preference surface.
 // Mangayomi is licensed under Apache-2.0. See docs/third_party/MANGAYOMI_READER_NOTICE.md.
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -117,6 +118,10 @@ class MangaReaderSettings {
     this.chapterSwipeStartAction =
         MangaReaderChapterSwipeAction.toggleBookmark,
     this.chapterSwipeEndAction = MangaReaderChapterSwipeAction.toggleRead,
+    this.personalReaderModes = const <String, MangaReaderMode>{},
+    this.personalDoublePage = const <String, bool>{},
+    this.personalAutoScrollEnabled = const <String, bool>{},
+    this.personalAutoScrollSpeed = const <String, double>{},
   });
 
   final MangaReaderMode defaultMode;
@@ -164,6 +169,65 @@ class MangaReaderSettings {
   final double autoScrollSpeed;
   final MangaReaderChapterSwipeAction chapterSwipeStartAction;
   final MangaReaderChapterSwipeAction chapterSwipeEndAction;
+  final Map<String, MangaReaderMode> personalReaderModes;
+  final Map<String, bool> personalDoublePage;
+  final Map<String, bool> personalAutoScrollEnabled;
+  final Map<String, double> personalAutoScrollSpeed;
+
+  MangaReaderMode modeForManga(String mangaId) =>
+      personalReaderModes[mangaId.trim()] ?? defaultMode;
+
+  bool doublePageForManga(String mangaId) =>
+      personalDoublePage[mangaId.trim()] ?? false;
+
+  ({bool enabled, double speed}) autoScrollForManga(String mangaId) {
+    final id = mangaId.trim();
+    return (
+      enabled: personalAutoScrollEnabled[id] ?? false,
+      speed: personalAutoScrollSpeed[id] ?? 10,
+    );
+  }
+
+  MangaReaderSettings withMangaMode(String mangaId, MangaReaderMode mode) {
+    final id = mangaId.trim();
+    if (id.isEmpty) return this;
+    return copyWith(
+      personalReaderModes: <String, MangaReaderMode>{
+        ...personalReaderModes,
+        id: mode,
+      },
+    );
+  }
+
+  MangaReaderSettings withMangaDoublePage(String mangaId, bool enabled) {
+    final id = mangaId.trim();
+    if (id.isEmpty) return this;
+    return copyWith(
+      personalDoublePage: <String, bool>{
+        ...personalDoublePage,
+        id: enabled,
+      },
+    );
+  }
+
+  MangaReaderSettings withMangaAutoScroll(
+    String mangaId, {
+    required bool enabled,
+    required double speed,
+  }) {
+    final id = mangaId.trim();
+    if (id.isEmpty) return this;
+    return copyWith(
+      personalAutoScrollEnabled: <String, bool>{
+        ...personalAutoScrollEnabled,
+        id: enabled,
+      },
+      personalAutoScrollSpeed: <String, double>{
+        ...personalAutoScrollSpeed,
+        id: speed.clamp(2, 30).toDouble(),
+      },
+    );
+  }
 
   MangaReaderSettings copyWith({
     MangaReaderMode? defaultMode,
@@ -211,6 +275,10 @@ class MangaReaderSettings {
     double? autoScrollSpeed,
     MangaReaderChapterSwipeAction? chapterSwipeStartAction,
     MangaReaderChapterSwipeAction? chapterSwipeEndAction,
+    Map<String, MangaReaderMode>? personalReaderModes,
+    Map<String, bool>? personalDoublePage,
+    Map<String, bool>? personalAutoScrollEnabled,
+    Map<String, double>? personalAutoScrollSpeed,
   }) {
     return MangaReaderSettings(
       defaultMode: defaultMode ?? this.defaultMode,
@@ -271,6 +339,12 @@ class MangaReaderSettings {
           chapterSwipeStartAction ?? this.chapterSwipeStartAction,
       chapterSwipeEndAction:
           chapterSwipeEndAction ?? this.chapterSwipeEndAction,
+      personalReaderModes: personalReaderModes ?? this.personalReaderModes,
+      personalDoublePage: personalDoublePage ?? this.personalDoublePage,
+      personalAutoScrollEnabled:
+          personalAutoScrollEnabled ?? this.personalAutoScrollEnabled,
+      personalAutoScrollSpeed:
+          personalAutoScrollSpeed ?? this.personalAutoScrollSpeed,
     );
   }
 
@@ -320,6 +394,12 @@ class MangaReaderSettings {
     'autoScrollSpeed': autoScrollSpeed,
     'chapterSwipeStartAction': chapterSwipeStartAction.name,
     'chapterSwipeEndAction': chapterSwipeEndAction.name,
+    'personalReaderModes': personalReaderModes.map(
+      (key, value) => MapEntry(key, value.name),
+    ),
+    'personalDoublePage': personalDoublePage,
+    'personalAutoScrollEnabled': personalAutoScrollEnabled,
+    'personalAutoScrollSpeed': personalAutoScrollSpeed,
   };
 
   factory MangaReaderSettings.fromJson(Map<String, dynamic> json) {
@@ -337,6 +417,37 @@ class MangaReaderSettings {
         json[key] is num ? (json[key] as num).toInt() : fallback;
     double number(String key, double fallback) =>
         json[key] is num ? (json[key] as num).toDouble() : fallback;
+    Map<String, MangaReaderMode> readerModeMap(dynamic raw) {
+      if (raw is! Map) return const <String, MangaReaderMode>{};
+      final result = <String, MangaReaderMode>{};
+      for (final entry in raw.entries) {
+        final key = entry.key.toString().trim();
+        if (key.isEmpty) continue;
+        result[key] = enumValue(
+          MangaReaderMode.values,
+          entry.value,
+          MangaReaderMode.vertical,
+        );
+      }
+      return result;
+    }
+    Map<String, bool> boolMap(dynamic raw) {
+      if (raw is! Map) return const <String, bool>{};
+      return <String, bool>{
+        for (final entry in raw.entries)
+          if (entry.key.toString().trim().isNotEmpty && entry.value is bool)
+            entry.key.toString().trim(): entry.value as bool,
+      };
+    }
+    Map<String, double> speedMap(dynamic raw) {
+      if (raw is! Map) return const <String, double>{};
+      return <String, double>{
+        for (final entry in raw.entries)
+          if (entry.key.toString().trim().isNotEmpty && entry.value is num)
+            entry.key.toString().trim():
+                (entry.value as num).toDouble().clamp(2, 30).toDouble(),
+      };
+    }
 
     return MangaReaderSettings(
       defaultMode: enumValue(
@@ -413,16 +524,21 @@ class MangaReaderSettings {
         json['chapterSwipeEndAction'],
         MangaReaderChapterSwipeAction.toggleRead,
       ),
+      personalReaderModes: readerModeMap(json['personalReaderModes']),
+      personalDoublePage: boolMap(json['personalDoublePage']),
+      personalAutoScrollEnabled: boolMap(json['personalAutoScrollEnabled']),
+      personalAutoScrollSpeed: speedMap(json['personalAutoScrollSpeed']),
     );
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is MangaReaderSettings && mapEquals(toJson(), other.toJson());
+      other is MangaReaderSettings &&
+          jsonEncode(toJson()) == jsonEncode(other.toJson());
 
   @override
-  int get hashCode => Object.hashAll(toJson().values);
+  int get hashCode => jsonEncode(toJson()).hashCode;
 }
 
 @immutable
