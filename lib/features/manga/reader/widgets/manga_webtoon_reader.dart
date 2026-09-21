@@ -4,7 +4,7 @@ import 'package:visibility_detector/visibility_detector.dart';
 import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
 import 'manga_page_image.dart';
-import 'manga_zoomable_page.dart';
+import 'manga_continuous_zoom_surface.dart';
 
 class MangaWebtoonReader extends StatefulWidget {
   const MangaWebtoonReader({
@@ -168,9 +168,10 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
         ],
       ),
     );
-    return MangaZoomablePage(
+    return MangaContinuousZoomSurface(
+      scrollController: _controller,
+      scrollDirection: Axis.vertical,
       settings: widget.settings,
-      continuous: true,
       child: scrollable,
     );
   }
