@@ -265,6 +265,66 @@ void main() {
     expect(find.text('page-1'), findsOneWidget);
   });
 
+  testWidgets('vertical continuous double page renders one spread', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaContinuousReader(
+          pages: _pages,
+          initialPage: 0,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          doublePage: true,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) => SizedBox(
+            height: 300,
+            child: Text('page-${page.index}'),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(
+        const ValueKey<String>('manga-reader-continuous-double-page'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('page-0'), findsOneWidget);
+    expect(find.text('page-1'), findsOneWidget);
+    final list = tester.widget<ListView>(find.byType(ListView));
+    expect(list.childrenDelegate.estimatedChildCount, 2);
+  });
+
+  testWidgets('webtoon double page renders one vertical spread', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MangaWebtoonReader(
+          pages: _pages,
+          initialPage: 0,
+          doublePage: true,
+          settings: const MangaReaderSettings(),
+          onPageChanged: (_) {},
+          pageBuilder: (_, page) => SizedBox(
+            height: 300,
+            child: Text('page-${page.index}'),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey<String>('manga-reader-webtoon-double-page')),
+      findsOneWidget,
+    );
+    expect(find.text('page-0'), findsOneWidget);
+    expect(find.text('page-1'), findsOneWidget);
+  });
+
   testWidgets('double page shares one Mangayomi zoom surface', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
