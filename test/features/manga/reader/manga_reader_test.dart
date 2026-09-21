@@ -213,6 +213,8 @@ void main() {
   });
 
   test('reader preloads the adjacent chapter after current chapter loads', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_preload_');
+    addTearDown(() => temp.delete(recursive: true));
     final provider = _ReaderProvider();
     const first = MangaChapter(
       id: 'c1',
@@ -241,6 +243,7 @@ void main() {
       manga: manga,
       chapter: first,
       chapters: const <MangaChapter>[first, second],
+      pageCache: MangaReaderPageCache(cacheDirectory: temp),
     );
     addTearDown(controller.dispose);
 
