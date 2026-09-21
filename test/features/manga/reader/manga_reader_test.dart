@@ -100,12 +100,12 @@ void main() {
       MangaReaderMode.values,
       <MangaReaderMode>[
         MangaReaderMode.vertical,
-        MangaReaderMode.verticalContinuous,
         MangaReaderMode.pagedLtr,
         MangaReaderMode.pagedRtl,
+        MangaReaderMode.verticalContinuous,
+        MangaReaderMode.webtoon,
         MangaReaderMode.horizontalContinuous,
         MangaReaderMode.horizontalContinuousRtl,
-        MangaReaderMode.webtoon,
       ],
     );
   });

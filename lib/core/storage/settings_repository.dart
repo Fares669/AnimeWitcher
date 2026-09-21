@@ -157,6 +157,15 @@ class SettingsRepository {
     return _storageService.getPlayerSetting<T>(key, defaultValue: defaultValue);
   }
 
+  static const String _kMangaReaderSettings =
+      'manga_reader_settings_json';
+
+  Future<void> saveMangaReaderSettings(Map<String, dynamic> value) =>
+      _writeJsonMap(_kMangaReaderSettings, value);
+
+  Map<String, dynamic> getMangaReaderSettings() =>
+      _readJsonMap(_kMangaReaderSettings);
+
   /// Cached AnimeWitcher `Settings/constants.search_settings`.
   ///
   /// The official Android client persists these in SharedPreferences so Algolia

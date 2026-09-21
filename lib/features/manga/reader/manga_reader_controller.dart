@@ -10,8 +10,9 @@ import '../../../core/extensions/base_provider.dart';
 import '../../../core/services/download_v2/manga_chapter_manifest_v2.dart';
 import '../../../core/services/download_v2/manga_chapter_transport_v2.dart';
 import '../../../core/storage/manga_reading_repository.dart';
+import 'manga_reader_settings.dart';
 
-enum MangaReaderMode { webtoon, pagedLtr, pagedRtl }
+export 'manga_reader_settings.dart' show MangaReaderMode;
 
 class MangaReaderController extends ChangeNotifier {
   MangaReaderController({
