@@ -120,13 +120,61 @@ void main() {
       ),
       isFalse,
     );
+    for (final mode in <MangaReaderMode>[
+      MangaReaderMode.vertical,
+      MangaReaderMode.verticalContinuous,
+      MangaReaderMode.webtoon,
+    ]) {
+      expect(
+        shouldUseMangaDoublePage(
+          settings: settings,
+          viewport: const Size(1200, 700),
+          mode: mode,
+        ),
+        isTrue,
+        reason: '${mode.name} supports Mangayomi double-page',
+      );
+    }
+    for (final mode in <MangaReaderMode>[
+      MangaReaderMode.horizontalContinuous,
+      MangaReaderMode.horizontalContinuousRtl,
+    ]) {
+      expect(
+        shouldUseMangaDoublePage(
+          settings: settings,
+          viewport: const Size(1200, 700),
+          mode: mode,
+          forceDoublePage: true,
+        ),
+        isFalse,
+        reason: '${mode.name} is the Mangayomi double-page exception',
+      );
+    }
+  });
+
+  test('Mangayomi double-page spreads preserve single-first and inversion', () {
     expect(
-      shouldUseMangaDoublePage(
-        settings: settings,
-        viewport: const Size(1200, 700),
-        mode: MangaReaderMode.webtoon,
+      mangaReaderPageSpreads(
+        pageCount: 5,
+        singleFirst: true,
+        invert: false,
       ),
-      isFalse,
+      const <List<int>>[
+        <int>[0],
+        <int>[1, 2],
+        <int>[3, 4],
+      ],
+    );
+    expect(
+      mangaReaderPageSpreads(
+        pageCount: 4,
+        singleFirst: false,
+        invert: true,
+      ),
+      const <List<int>>[
+        <int>[1, 0],
+        <int>[3, 2],
+      ],
     );
   });
 
