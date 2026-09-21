@@ -81,6 +81,26 @@ void main() {
     expect(settings.toJson().containsKey('colorFilterBlendMode'), isTrue);
   });
 
+  test('Mangayomi keeps reader mode, page mode and auto scroll per manga', () {
+    final personalized = const MangaReaderSettings()
+        .withMangaMode('m1', MangaReaderMode.webtoon)
+        .withMangaDoublePage('m1', true)
+        .withMangaAutoScroll('m1', enabled: true, speed: 18);
+
+    expect(personalized.modeForManga('m1'), MangaReaderMode.webtoon);
+    expect(personalized.modeForManga('m2'), MangaReaderMode.vertical);
+    expect(personalized.doublePageForManga('m1'), isTrue);
+    expect(personalized.doublePageForManga('m2'), isFalse);
+    expect(personalized.autoScrollForManga('m1').enabled, isTrue);
+    expect(personalized.autoScrollForManga('m1').speed, 18);
+    expect(personalized.autoScrollForManga('m2').enabled, isFalse);
+
+    final restored = MangaReaderSettings.fromJson(personalized.toJson());
+    expect(restored.modeForManga('m1'), MangaReaderMode.webtoon);
+    expect(restored.doublePageForManga('m1'), isTrue);
+    expect(restored.autoScrollForManga('m1').speed, 18);
+  });
+
   test('automatic double page only activates in landscape', () {
     const settings = MangaReaderSettings(doublePageAuto: true);
 
