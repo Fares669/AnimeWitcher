@@ -37,6 +37,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
   ImageStream? _sizeStream;
   ImageStreamListener? _sizeListener;
   Size? _imageSize;
+  int _retryEpoch = 0;
 
   BoxFit get _fit => widget.fit ?? switch (widget.settings.scaleType) {
     MangaReaderScaleType.fitScreen => BoxFit.contain,
@@ -112,6 +113,41 @@ class _MangaPageImageState extends State<MangaPageImage> {
     super.dispose();
   }
 
+  Future<void> _retry() async {
+    final uri = Uri.tryParse(widget.page.imageUrl);
+    if (uri == null || uri.scheme != 'file') {
+      await CachedNetworkImage.evictFromCache(widget.page.imageUrl);
+    }
+    if (!mounted) return;
+    setState(() {
+      _imageSize = null;
+      _retryEpoch++;
+    });
+    _listenForImageSize();
+  }
+
+  Widget _errorView(BuildContext context) => SizedBox(
+    height: widget.expand ? null : 280,
+    child: Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          const Icon(Icons.broken_image_outlined, size: 42),
+          const SizedBox(height: 10),
+          FilledButton.tonalIcon(
+            onPressed: _retry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: Text(
+              Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
+                  ? 'إعادة المحاولة'
+                  : 'Retry',
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final uri = Uri.tryParse(widget.page.imageUrl);
@@ -119,18 +155,15 @@ class _MangaPageImageState extends State<MangaPageImage> {
     if (uri != null && uri.scheme == 'file') {
       image = Image.file(
         File.fromUri(uri),
+        key: ValueKey<String>('reader-local-${widget.page.imageUrl}-$_retryEpoch'),
         width: double.infinity,
         height: widget.expand ? double.infinity : null,
         fit: _fit,
-        errorBuilder: (_, _, _) => SizedBox(
-          height: widget.expand ? null : 280,
-          child: const Center(
-            child: Icon(Icons.broken_image_outlined, size: 42),
-          ),
-        ),
+        errorBuilder: (_, _, _) => _errorView(context),
       );
     } else {
       image = CachedNetworkImage(
+        key: ValueKey<String>('reader-network-${widget.page.imageUrl}-$_retryEpoch'),
         imageUrl: widget.page.imageUrl,
         httpHeaders: widget.page.headers,
         width: double.infinity,
@@ -140,12 +173,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
           height: widget.expand ? null : 360,
           child: const Center(child: AppLoadingIndicator()),
         ),
-        errorWidget: (_, _, _) => SizedBox(
-          height: widget.expand ? null : 280,
-          child: const Center(
-            child: Icon(Icons.broken_image_outlined, size: 42),
-          ),
-        ),
+        errorWidget: (_, _, _) => _errorView(context),
       );
     }
 
