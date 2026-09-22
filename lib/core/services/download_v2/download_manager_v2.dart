@@ -1693,7 +1693,6 @@ final class DownloadManagerV2 {
 
     var bytes = 0;
     for (final index in manifest.completedIndexes) {
-      final prefix = (index + 1).toString().padLeft(4, '0');
       final pageFile = await _mangaPageFile(directory, index);
       if (pageFile == null || !await pageFile.exists()) {
         return const DownloadIntegrityResult.invalid('missing-page');

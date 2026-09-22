@@ -140,6 +140,20 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     }
   }
 
+  @override
+  void didUpdateWidget(covariant MangaPagedReader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pages.length != widget.pages.length ||
+        oldWidget.initialPage != widget.initialPage ||
+        oldWidget.settings.pagePreloadAmount !=
+            widget.settings.pagePreloadAmount) {
+      _preloadGeneration++;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_preloadInOrderedBatches());
+      });
+    }
+  }
+
   void _handleImageSize(int pageIndex, Size size) {
     if (!widget.settings.splitWidePages ||
         widget.doublePage ||
