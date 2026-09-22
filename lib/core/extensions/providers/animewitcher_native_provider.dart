@@ -2979,6 +2979,23 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   }
 
   @override
+  Future<List<MangaPage>> refreshMangaChapterPages(
+    String mangaUrl,
+    MangaChapter chapter,
+  ) {
+    final mangaId = chapter.mangaId.trim().isNotEmpty
+        ? chapter.mangaId.trim()
+        : _mangaIdFromUrl(mangaUrl);
+    final chapterId = chapter.id.trim();
+    if (mangaId.isNotEmpty && chapterId.isNotEmpty) {
+      final key = '$mangaId|$chapterId';
+      _mangaPageCache.remove(key);
+      _mangaPageExpiresAt.remove(key);
+    }
+    return getMangaChapterPages(mangaUrl, chapter);
+  }
+
+  @override
   Future<List<MangaPage>> getMangaChapterPages(
     String mangaUrl,
     MangaChapter chapter,
