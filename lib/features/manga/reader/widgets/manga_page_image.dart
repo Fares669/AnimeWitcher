@@ -116,21 +116,6 @@ class _MangaPageImageState extends State<MangaPageImage> {
     return uri != null && uri.scheme == 'file' ? File.fromUri(uri).path : null;
   }
 
-  BlendMode? get _blendMode => switch (widget.settings.colorFilterBlendMode) {
-    MangaReaderColorBlendMode.none => null,
-    MangaReaderColorBlendMode.multiply => BlendMode.multiply,
-    MangaReaderColorBlendMode.screen => BlendMode.screen,
-    MangaReaderColorBlendMode.overlay => BlendMode.overlay,
-    MangaReaderColorBlendMode.colorDodge => BlendMode.colorDodge,
-    MangaReaderColorBlendMode.lighten => BlendMode.lighten,
-    MangaReaderColorBlendMode.colorBurn => BlendMode.colorBurn,
-    MangaReaderColorBlendMode.darken => BlendMode.darken,
-    MangaReaderColorBlendMode.difference => BlendMode.difference,
-    MangaReaderColorBlendMode.saturation => BlendMode.saturation,
-    MangaReaderColorBlendMode.softLight => BlendMode.softLight,
-    MangaReaderColorBlendMode.plus => BlendMode.plus,
-    MangaReaderColorBlendMode.exclusion => BlendMode.exclusion,
-  };
 
   @override
   void didChangeDependencies() {
@@ -334,22 +319,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
       );
     }
 
-    Widget filtered = ColorFiltered(
-      colorFilter: ColorFilter.matrix(
-        mangaReaderColorMatrix(widget.settings),
-      ),
-      child: image,
-    );
-    final blend = _blendMode;
-    if (widget.settings.enableCustomColorFilter && blend != null) {
-      filtered = ColorFiltered(
-        colorFilter: ColorFilter.mode(
-          Color(widget.settings.customColorFilterArgb),
-          blend,
-        ),
-        child: filtered,
-      );
-    }
+    Widget filtered = image;
 
     if (widget.settings.cropBorders && !useSubsampling) {
       filtered = ClipRect(

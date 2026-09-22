@@ -695,14 +695,17 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     }
     if (_controller.error != null) {
       return Center(
-        child: FilledButton.tonalIcon(
-          onPressed: _controller.load,
-          icon: const Icon(Icons.refresh_rounded),
-          label: Text(
-            AppLocalizations.of(context)?.retry ??
-                (Localizations.localeOf(context).languageCode == 'ar'
-                    ? 'إعادة المحاولة'
-                    : 'Retry'),
+        child: Transform.translate(
+          offset: const Offset(20, 0),
+          child: FilledButton.tonalIcon(
+            onPressed: _controller.load,
+            icon: const Icon(Icons.refresh_rounded),
+            label: Text(
+              AppLocalizations.of(context)?.retry ??
+                  (Localizations.localeOf(context).languageCode == 'ar'
+                      ? 'إعادة المحاولة'
+                      : 'Retry'),
+            ),
           ),
         ),
       );
@@ -825,10 +828,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       left: 0,
       right: 0,
       top: _controlsVisible ? 0 : -120,
-      child: SafeArea(
-        bottom: false,
-        child: Material(
-          color: Colors.black.withValues(alpha: 0.82),
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.82),
+        child: SafeArea(
+          bottom: false,
           child: SizedBox(
             height: 64,
             child: Row(
@@ -904,10 +907,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       left: 0,
       right: 0,
       bottom: _controlsVisible ? 0 : -150,
-      child: SafeArea(
-        top: false,
-        child: Material(
-          color: Colors.black.withValues(alpha: 0.86),
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.86),
+        child: SafeArea(
+          top: false,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
@@ -1125,10 +1128,12 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     if (!appleUsesPersistentLiquidGlassHeader) return scaffold;
     final colors = Theme.of(context).colorScheme;
     return ApplePersistentGlassHeaderScope(
-      enabled: _controlsVisible,
-      onBack: () => Navigator.of(context).maybePop(),
+      onBack: _controlsVisible ? () => Navigator.of(context).maybePop() : null,
       backForegroundColor: colors.onSurface,
       backFallbackColor: colors.surfaceContainerHigh,
+      // Keep the reader's route registered even while its chrome is hidden so
+      // Details favorite/list actions never reappear over the reader.
+      trailing: const SizedBox.shrink(),
       trailingButtons: const <AppleLiquidGlassToolbarButton>[],
       child: scaffold,
     );

@@ -89,7 +89,7 @@ class _MangaReaderQuickSettingsState
   Widget build(BuildContext context) {
     final settings = ref.watch(mangaReaderSettingsProvider);
     return DefaultTabController(
-      length: 3,
+      length: 2,
       child: SizedBox(
         height: MediaQuery.sizeOf(context).height * 0.78,
         child: Column(
@@ -98,7 +98,6 @@ class _MangaReaderQuickSettingsState
               tabs: <Tab>[
                 Tab(text: _t('Reading', 'القراءة')),
                 Tab(text: _t('General', 'عام')),
-                Tab(text: _t('Filter', 'الفلتر')),
               ],
             ),
             Expanded(
@@ -106,7 +105,6 @@ class _MangaReaderQuickSettingsState
                 children: <Widget>[
                   _readingTab(settings),
                   _generalTab(settings),
-                  _filterTab(settings),
                 ],
               ),
             ),
@@ -496,189 +494,4 @@ class _MangaReaderQuickSettingsState
     );
   }
 
-  Widget _filterTab(MangaReaderSettings settings) {
-    Widget colorChannel({
-      required String label,
-      required int value,
-      required ValueChanged<int> onChanged,
-    }) {
-      return ListTile(
-        dense: true,
-        title: Row(
-          children: <Widget>[
-            SizedBox(width: 24, child: Text(label)),
-            Expanded(
-              child: Slider(
-                min: 0,
-                max: 255,
-                divisions: 255,
-                value: value.toDouble(),
-                onChanged: (next) => onChanged(next.round()),
-              ),
-            ),
-            SizedBox(
-              width: 36,
-              child: Text(value.toString(), textAlign: TextAlign.end),
-            ),
-          ],
-        ),
-      );
-    }
-
-    Widget slider({
-      required String title,
-      required double value,
-      required double min,
-      required double max,
-      required double reset,
-      required ValueChanged<double> onChanged,
-    }) {
-      return ListTile(
-        title: Row(
-          children: <Widget>[
-            Expanded(child: Text(title)),
-            Text(value.toStringAsFixed(1)),
-            if ((value - reset).abs() > .01)
-              IconButton(
-                tooltip: _t('Reset', 'إعادة ضبط'),
-                onPressed: () => onChanged(reset),
-                icon: const Icon(Icons.replay_rounded, size: 18),
-              ),
-          ],
-        ),
-        subtitle: Slider(
-          min: min,
-          max: max,
-          value: value.clamp(min, max).toDouble(),
-          onChanged: onChanged,
-        ),
-      );
-    }
-
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 24),
-      children: <Widget>[
-        SwitchListTile(
-          title: Text(_t('Invert colors', 'عكس الألوان')),
-          value: settings.invertColors,
-          onChanged: (value) =>
-              _update((s) => s.copyWith(invertColors: value)),
-        ),
-        SwitchListTile(
-          title: Text(_t('Grayscale', 'تدرج رمادي')),
-          value: settings.grayscale,
-          onChanged: (value) =>
-              _update((s) => s.copyWith(grayscale: value)),
-        ),
-        slider(
-          title: _t('Brightness', 'السطوع'),
-          value: settings.brightness,
-          min: -1,
-          max: 1,
-          reset: 0,
-          onChanged: (value) =>
-              unawaited(_update((s) => s.copyWith(brightness: value))),
-        ),
-        slider(
-          title: _t('Contrast', 'التباين'),
-          value: settings.contrast,
-          min: 0,
-          max: 2,
-          reset: 1,
-          onChanged: (value) =>
-              unawaited(_update((s) => s.copyWith(contrast: value))),
-        ),
-        slider(
-          title: _t('Saturation', 'التشبع'),
-          value: settings.saturation,
-          min: 0,
-          max: 2,
-          reset: 1,
-          onChanged: (value) =>
-              unawaited(_update((s) => s.copyWith(saturation: value))),
-        ),
-        const Divider(),
-        SwitchListTile(
-          title: Text(_t('Custom color filter', 'فلتر لون مخصص')),
-          value: settings.enableCustomColorFilter,
-          onChanged: (value) => _update(
-            (s) => s.copyWith(enableCustomColorFilter: value),
-          ),
-        ),
-        if (settings.enableCustomColorFilter) ...<Widget>[
-          Builder(
-            builder: (context) {
-              final argb = settings.customColorFilterArgb;
-              final alpha = (argb >> 24) & 0xff;
-              final red = (argb >> 16) & 0xff;
-              final green = (argb >> 8) & 0xff;
-              final blue = argb & 0xff;
-
-              Future<void> setChannel({
-                int? a,
-                int? r,
-                int? g,
-                int? b,
-              }) {
-                final next = Color.fromARGB(
-                  a ?? alpha,
-                  r ?? red,
-                  g ?? green,
-                  b ?? blue,
-                ).toARGB32();
-                return _update(
-                  (s) => s.copyWith(customColorFilterArgb: next),
-                );
-              }
-
-              return Column(
-                children: <Widget>[
-                  colorChannel(
-                    label: 'R',
-                    value: red,
-                    onChanged: (value) => unawaited(setChannel(r: value)),
-                  ),
-                  colorChannel(
-                    label: 'G',
-                    value: green,
-                    onChanged: (value) => unawaited(setChannel(g: value)),
-                  ),
-                  colorChannel(
-                    label: 'B',
-                    value: blue,
-                    onChanged: (value) => unawaited(setChannel(b: value)),
-                  ),
-                  colorChannel(
-                    label: 'A',
-                    value: alpha,
-                    onChanged: (value) => unawaited(setChannel(a: value)),
-                  ),
-                ],
-              );
-            },
-          ),
-          ListTile(
-            title: Text(_t('Blend mode', 'وضع المزج')),
-            trailing: DropdownButton<MangaReaderColorBlendMode>(
-              value: settings.colorFilterBlendMode,
-              items: <DropdownMenuItem<MangaReaderColorBlendMode>>[
-                for (final mode in MangaReaderColorBlendMode.values)
-                  DropdownMenuItem(
-                    value: mode,
-                    child: Text(mode.name),
-                  ),
-              ],
-              onChanged: (mode) {
-                if (mode != null) {
-                  unawaited(
-                    _update((s) => s.copyWith(colorFilterBlendMode: mode)),
-                  );
-                }
-              },
-            ),
-          ),
-        ],
-      ],
-    );
-  }
 }

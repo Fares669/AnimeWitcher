@@ -43,22 +43,6 @@ enum MangaReaderScaleType {
 
 enum MangaReaderBackground { black, grey, white, automatic }
 
-enum MangaReaderColorBlendMode {
-  none,
-  multiply,
-  screen,
-  overlay,
-  colorDodge,
-  lighten,
-  colorBurn,
-  darken,
-  difference,
-  saturation,
-  softLight,
-  plus,
-  exclusion,
-}
-
 enum MangaReaderChapterSwipeAction {
   toggleBookmark,
   toggleRead,
@@ -85,14 +69,6 @@ class MangaReaderSettings {
     this.webtoonSidePadding = 0,
     this.showPageGaps = true,
     this.autoReadDuplicateChapters = false,
-    this.invertColors = false,
-    this.grayscale = false,
-    this.brightness = 0,
-    this.contrast = 1,
-    this.saturation = 1,
-    this.enableCustomColorFilter = false,
-    this.customColorFilterArgb = 0x00000000,
-    this.colorFilterBlendMode = MangaReaderColorBlendMode.none,
     this.navigationLayout = 0,
     this.splitWidePages = false,
     this.dualPageInvert = false,
@@ -137,14 +113,6 @@ class MangaReaderSettings {
   final int webtoonSidePadding;
   final bool showPageGaps;
   final bool autoReadDuplicateChapters;
-  final bool invertColors;
-  final bool grayscale;
-  final double brightness;
-  final double contrast;
-  final double saturation;
-  final bool enableCustomColorFilter;
-  final int customColorFilterArgb;
-  final MangaReaderColorBlendMode colorFilterBlendMode;
   final int navigationLayout;
   final bool splitWidePages;
   final bool dualPageInvert;
@@ -243,14 +211,6 @@ class MangaReaderSettings {
     int? webtoonSidePadding,
     bool? showPageGaps,
     bool? autoReadDuplicateChapters,
-    bool? invertColors,
-    bool? grayscale,
-    double? brightness,
-    double? contrast,
-    double? saturation,
-    bool? enableCustomColorFilter,
-    int? customColorFilterArgb,
-    MangaReaderColorBlendMode? colorFilterBlendMode,
     int? navigationLayout,
     bool? splitWidePages,
     bool? dualPageInvert,
@@ -297,17 +257,6 @@ class MangaReaderSettings {
       showPageGaps: showPageGaps ?? this.showPageGaps,
       autoReadDuplicateChapters:
           autoReadDuplicateChapters ?? this.autoReadDuplicateChapters,
-      invertColors: invertColors ?? this.invertColors,
-      grayscale: grayscale ?? this.grayscale,
-      brightness: brightness ?? this.brightness,
-      contrast: contrast ?? this.contrast,
-      saturation: saturation ?? this.saturation,
-      enableCustomColorFilter:
-          enableCustomColorFilter ?? this.enableCustomColorFilter,
-      customColorFilterArgb:
-          customColorFilterArgb ?? this.customColorFilterArgb,
-      colorFilterBlendMode:
-          colorFilterBlendMode ?? this.colorFilterBlendMode,
       navigationLayout: navigationLayout ?? this.navigationLayout,
       splitWidePages: splitWidePages ?? this.splitWidePages,
       dualPageInvert: dualPageInvert ?? this.dualPageInvert,
@@ -362,14 +311,6 @@ class MangaReaderSettings {
     'webtoonSidePadding': webtoonSidePadding,
     'showPageGaps': showPageGaps,
     'autoReadDuplicateChapters': autoReadDuplicateChapters,
-    'invertColors': invertColors,
-    'grayscale': grayscale,
-    'brightness': brightness,
-    'contrast': contrast,
-    'saturation': saturation,
-    'enableCustomColorFilter': enableCustomColorFilter,
-    'customColorFilterArgb': customColorFilterArgb,
-    'colorFilterBlendMode': colorFilterBlendMode.name,
     'navigationLayout': navigationLayout,
     'splitWidePages': splitWidePages,
     'dualPageInvert': dualPageInvert,
@@ -476,18 +417,6 @@ class MangaReaderSettings {
       showPageGaps: boolean('showPageGaps', true),
       autoReadDuplicateChapters:
           boolean('autoReadDuplicateChapters', false),
-      invertColors: boolean('invertColors', false),
-      grayscale: boolean('grayscale', false),
-      brightness: number('brightness', 0).clamp(-1, 1).toDouble(),
-      contrast: number('contrast', 1).clamp(0, 2).toDouble(),
-      saturation: number('saturation', 1).clamp(0, 2).toDouble(),
-      enableCustomColorFilter: boolean('enableCustomColorFilter', false),
-      customColorFilterArgb: integer('customColorFilterArgb', 0x00000000),
-      colorFilterBlendMode: enumValue(
-        MangaReaderColorBlendMode.values,
-        json['colorFilterBlendMode'],
-        MangaReaderColorBlendMode.none,
-      ),
       navigationLayout: integer('navigationLayout', 0).clamp(0, 5).toInt(),
       splitWidePages: boolean('splitWidePages', false),
       dualPageInvert: boolean('dualPageInvert', false),
@@ -700,75 +629,3 @@ String mangaReaderPageLabel({
   return '${safeIndex + 1}';
 }
 
-const List<double> identityMangaReaderColorMatrix = <double>[
-  1, 0, 0, 0, 0,
-  0, 1, 0, 0, 0,
-  0, 0, 1, 0, 0,
-  0, 0, 0, 1, 0,
-];
-
-List<double> _multiplyColorMatrices(List<double> a, List<double> b) {
-  final result = List<double>.filled(20, 0);
-  for (var row = 0; row < 4; row++) {
-    for (var col = 0; col < 4; col++) {
-      var value = 0.0;
-      for (var k = 0; k < 4; k++) {
-        value += a[row * 5 + k] * b[k * 5 + col];
-      }
-      result[row * 5 + col] = value;
-    }
-    var offset = a[row * 5 + 4];
-    for (var k = 0; k < 4; k++) {
-      offset += a[row * 5 + k] * b[k * 5 + 4];
-    }
-    result[row * 5 + 4] = offset;
-  }
-  return result;
-}
-
-List<double> mangaReaderColorMatrix(MangaReaderSettings settings) {
-  var matrix = List<double>.of(identityMangaReaderColorMatrix);
-
-  final saturation = settings.grayscale ? 0.0 : settings.saturation;
-  const lr = 0.2126;
-  const lg = 0.7152;
-  const lb = 0.0722;
-  final invSat = 1 - saturation;
-  final sr = invSat * lr;
-  final sg = invSat * lg;
-  final sb = invSat * lb;
-  matrix = _multiplyColorMatrices(<double>[
-    sr + saturation, sg, sb, 0, 0,
-    sr, sg + saturation, sb, 0, 0,
-    sr, sg, sb + saturation, 0, 0,
-    0, 0, 0, 1, 0,
-  ], matrix);
-
-  final contrast = settings.contrast;
-  final contrastOffset = 128 * (1 - contrast);
-  matrix = _multiplyColorMatrices(<double>[
-    contrast, 0, 0, 0, contrastOffset,
-    0, contrast, 0, 0, contrastOffset,
-    0, 0, contrast, 0, contrastOffset,
-    0, 0, 0, 1, 0,
-  ], matrix);
-
-  final brightnessOffset = settings.brightness * 255;
-  matrix = _multiplyColorMatrices(<double>[
-    1, 0, 0, 0, brightnessOffset,
-    0, 1, 0, 0, brightnessOffset,
-    0, 0, 1, 0, brightnessOffset,
-    0, 0, 0, 1, 0,
-  ], matrix);
-
-  if (settings.invertColors) {
-    matrix = _multiplyColorMatrices(const <double>[
-      -1, 0, 0, 0, 255,
-      0, -1, 0, 0, 255,
-      0, 0, -1, 0, 255,
-      0, 0, 0, 1, 0,
-    ], matrix);
-  }
-
-  return matrix;
-}
