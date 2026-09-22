@@ -795,7 +795,7 @@ final class DownloadManagerV2 {
       if (record == null) return;
 
       await _cancelRecord(record);
-      await _deleteRecordDestination(record);
+      await _deleteDestination(record.destinationPath);
       await _store.remove(logicalId);
       _currentTaskIds.remove(logicalId);
       _currentGenerations.remove(logicalId);
@@ -1593,19 +1593,6 @@ final class DownloadManagerV2 {
     }
   }
 
-  Future<void> _deleteRecordDestination(LogicalDownloadRecordV2 record) async {
-    if (record.mediaKind != DownloadMediaKind.mangaChapter) {
-      await _deleteDestination(record.destinationPath);
-      return;
-    }
-    final directory = await resolveMangaChapterDirectoryV2(
-      record.destinationPath,
-    );
-    if (await directory.exists()) {
-      await directory.delete(recursive: true);
-    }
-  }
-
   Future<DownloadIntegrityResult> _verifyRecordDestination(
     LogicalDownloadRecordV2 record, {
     required bool repairManga,
@@ -1651,9 +1638,8 @@ final class DownloadManagerV2 {
   Future<void> _reconcileMangaDirectory(
     LogicalDownloadRecordV2 record,
   ) async {
-    final directory = await resolveMangaChapterDirectoryV2(
-      record.destinationPath,
-    );
+    final destination = await _destinationFile(record.destinationPath);
+    final directory = Directory(destination.path);
     if (!await directory.exists()) return;
 
     final manifest = await MangaChapterManifestV2.readFrom(directory);
@@ -1689,9 +1675,8 @@ final class DownloadManagerV2 {
   Future<DownloadIntegrityResult> _verifyMangaDirectory(
     LogicalDownloadRecordV2 record,
   ) async {
-    final directory = await resolveMangaChapterDirectoryV2(
-      record.destinationPath,
-    );
+    final destination = await _destinationFile(record.destinationPath);
+    final directory = Directory(destination.path);
     if (!await directory.exists()) {
       return const DownloadIntegrityResult.invalid('missing');
     }

@@ -5,9 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
-import '../../domain/entity/manga.dart';
 import '../../domain/entity/multimedia_item.dart';
-import '../../utils/episode_label.dart';
 import '../../utils/episode_label.dart';
 
 final class DownloadSourceMetadataV2 {
@@ -167,69 +165,6 @@ Future<String> mangaChapterDestinationDirectoryV2(
     'manga',
     <String>[title, chapterFolder],
   );
-}
-
-Future<String> absoluteDownloadDestinationPathV2(String destinationPath) async {
-  if (p.isAbsolute(destinationPath)) return destinationPath;
-  final documents = await getApplicationDocumentsDirectory();
-  return p.join(documents.path, destinationPath);
-}String _downloadDirectorySegmentV2(
-  String value, {
-  String fallback = 'Unknown',
-}) {
-  final sanitized = sanitizeDownloadFileName(value);
-  return sanitized.isEmpty ? fallback : sanitized;
-}
-
-/// Relative Anime path inside the platform's user-visible Downloads folder.
-String animeDownloadRelativePathV2(
-  MultimediaItem item, {
-  required String filename,
-}) {
-  final title = _downloadDirectorySegmentV2(item.title);
-  return p.join('anime', title, filename);
-}
-
-/// Stable logical Manga chapter destination.
-///
-/// Keeping the leading Downloads segment makes iOS storage portable across
-/// sandbox relocation while [resolveMangaChapterDirectoryV2] maps the same
-/// logical path to the real user Downloads directory on other platforms.
-String mangaChapterDestinationPathV2(
-  MultimediaItem manga,
-  MangaChapter chapter,
-) {
-  final title = _downloadDirectorySegmentV2(manga.title);
-  final number = chapter.number;
-  final rawChapterName = number == null
-      ? chapter.name
-      : 'الفصل ${number == number.roundToDouble() ? number.toInt() : number}';
-  final chapterName = _downloadDirectorySegmentV2(
-    rawChapterName,
-    fallback: _downloadDirectorySegmentV2(chapter.id, fallback: 'الفصل'),
-  );
-  return p.join('Downloads', 'manga', title, chapterName);
-}
-
-/// Produces the final Anime path expected by V2.
-Future<String> downloadDestinationPathV2(
-  MultimediaItem item, {
-  Episode? episode,
-  required String filename,
-}) async {
-  final relativePath = animeDownloadRelativePathV2(
-    item,
-    filename: filename,
-  );
-
-  if (Platform.isIOS) return p.join('Downloads', relativePath);
-  if (Platform.isAndroid) {
-    return p.join('/storage/emulated/0/Download', relativePath);
-  }
-
-  final dir =
-      await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
-  return p.join(dir.path, relativePath);
 }
 
 Future<String> absoluteDownloadDestinationPathV2(String destinationPath) async {
