@@ -2,6 +2,8 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/storage/manga_reading_repository.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_cover_provider.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
@@ -103,6 +105,27 @@ final class _MangaDetailsEmptyCoverNotifier
   Map<String, String> build() => const <String, String>{};
 }
 
+final class _MangaDetailsReadingStorage extends StorageService {
+  final Map<String, String> values = <String, String>{};
+
+  @override
+  String? getString(String key) => values[key];
+
+  @override
+  Future<void> setString(String key, String? value) async {
+    if (value == null) {
+      values.remove(key);
+    } else {
+      values[key] = value;
+    }
+  }
+
+  @override
+  Future<void> remove(String key) async {
+    values.remove(key);
+  }
+}
+
 final class _Manager extends ExtensionManager {
   _Manager(this.provider);
   final AnimeWitcherProvider provider;
@@ -119,6 +142,9 @@ Widget _app(AnimeWitcherProvider provider) => ProviderScope(
     ),
     mangaReaderCustomCoversProvider.overrideWith(
       _MangaDetailsEmptyCoverNotifier.new,
+    ),
+    mangaReadingRepositoryProvider.overrideWithValue(
+      MangaReadingRepository(_MangaDetailsReadingStorage()),
     ),
   ],
   child: MaterialApp(

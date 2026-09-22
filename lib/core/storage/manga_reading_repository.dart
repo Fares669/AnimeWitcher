@@ -3,7 +3,15 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../account/account_providers.dart';
 import 'storage_service.dart';
+
+typedef MangaCloudReadLookup = bool Function(String mangaId, String chapterId);
+typedef MangaCloudReadSync = Future<void> Function(
+  String mangaId,
+  Iterable<String> chapterIds,
+  bool read,
+);
 
 final class MangaReadingProgress {
   const MangaReadingProgress({
@@ -23,6 +31,12 @@ final class MangaReadingProgress {
   final int updatedAt;
   final bool isRead;
   final bool isBookmarked;
+
+  int get pagesRead {
+    if (pageCount <= 0) return 0;
+    if (isRead) return pageCount;
+    return (pageIndex + 1).clamp(0, pageCount).toInt();
+  }
 
   MangaReadingProgress copyWith({
     int? pageIndex,
@@ -69,9 +83,19 @@ final class MangaReadingProgress {
 }
 
 class MangaReadingRepository {
-  MangaReadingRepository(this._storage);
+  MangaReadingRepository(
+    this._storage, {
+    MangaCloudReadLookup? isCloudRead,
+    MangaCloudReadSync? syncReadStates,
+    void Function()? onChanged,
+  }) : _isCloudRead = isCloudRead,
+       _syncReadStates = syncReadStates,
+       _onChanged = onChanged;
 
   final StorageService _storage;
+  final MangaCloudReadLookup? _isCloudRead;
+  final MangaCloudReadSync? _syncReadStates;
+  final void Function()? _onChanged;
 
   String _hash(String value) =>
       md5.convert(utf8.encode(value.trim())).toString();
@@ -79,7 +103,7 @@ class MangaReadingRepository {
   String _key(String mangaId, String chapterId) =>
       'manga_progress:' + _hash(mangaId) + ':' + _hash(chapterId);
 
-  MangaReadingProgress? get(String mangaId, String chapterId) {
+  MangaReadingProgress? _local(String mangaId, String chapterId) {
     final raw = _storage.getString(_key(mangaId, chapterId));
     if (raw == null || raw.trim().isEmpty) return null;
     try {
@@ -95,18 +119,72 @@ class MangaReadingRepository {
     }
   }
 
-  Future<void> save(MangaReadingProgress progress) {
+  MangaReadingProgress? get(String mangaId, String chapterId) {
+    final local = _local(mangaId, chapterId);
+    final cloudRead = _isCloudRead?.call(mangaId, chapterId) ?? false;
+    if (!cloudRead) return local;
+
+    if (local == null) {
+      return MangaReadingProgress(
+        mangaId: mangaId,
+        chapterId: chapterId,
+        pageIndex: 0,
+        pageCount: 0,
+        updatedAt: 0,
+        isRead: true,
+      );
+    }
+    if (local.isRead) return local;
+    return local.copyWith(
+      isRead: true,
+      pageIndex: local.pageCount > 0 ? local.pageCount - 1 : local.pageIndex,
+    );
+  }
+
+  MangaReadingProgress _normalize(MangaReadingProgress progress) {
     final pageCount = progress.pageCount < 0 ? 0 : progress.pageCount;
     final maxPage = pageCount <= 0 ? 0 : pageCount - 1;
     final pageIndex = progress.pageIndex.clamp(0, maxPage).toInt();
-    final normalized = progress.copyWith(
-      pageIndex: pageIndex,
-      pageCount: pageCount,
-    );
+    return progress.copyWith(pageIndex: pageIndex, pageCount: pageCount);
+  }
+
+  Future<void> _write(MangaReadingProgress progress) {
     return _storage.setString(
       _key(progress.mangaId, progress.chapterId),
-      jsonEncode(normalized.toJson()),
+      jsonEncode(progress.toJson()),
     );
+  }
+
+  Future<void> _sync(
+    String mangaId,
+    Iterable<String> chapterIds,
+    bool read,
+  ) async {
+    final callback = _syncReadStates;
+    if (callback == null) return;
+    try {
+      await callback(mangaId, chapterIds, read);
+    } catch (_) {
+      // The AnimeWitcher account service keeps a durable pending mutation.
+      // Local reading progress remains immediately usable while offline.
+    }
+  }
+
+  Future<void> save(MangaReadingProgress progress) async {
+    final previous = _local(progress.mangaId, progress.chapterId);
+    final cloudRead =
+        _isCloudRead?.call(progress.mangaId, progress.chapterId) ?? false;
+    final normalized = _normalize(progress);
+    await _write(normalized);
+    _onChanged?.call();
+
+    if (normalized.isRead && previous?.isRead != true && !cloudRead) {
+      await _sync(
+        normalized.mangaId,
+        <String>[normalized.chapterId],
+        true,
+      );
+    }
   }
 
   Future<bool> toggleBookmark(String mangaId, String chapterId) async {
@@ -137,26 +215,11 @@ class MangaReadingRepository {
   }) async {
     final current = get(mangaId, chapterId);
     final next = !(current?.isRead ?? false);
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final count = current == null || current.pageCount <= 0
-        ? pageCount.clamp(1, 1 << 30).toInt()
-        : current.pageCount;
-    await save(
-      current?.copyWith(
-            pageIndex: next ? count - 1 : current.pageIndex,
-            pageCount: count,
-            updatedAt: now,
-            isRead: next,
-          ) ??
-          MangaReadingProgress(
-            mangaId: mangaId,
-            chapterId: chapterId,
-            pageIndex: next ? count - 1 : 0,
-            pageCount: count,
-            updatedAt: now,
-            isRead: next,
-          ),
-    );
+    if (next) {
+      await markRead(mangaId, chapterId, pageCount: pageCount);
+    } else {
+      await setReadStates(mangaId, <String>[chapterId], read: false);
+    }
     return next;
   }
 
@@ -165,18 +228,15 @@ class MangaReadingRepository {
     String chapterId, {
     int pageCount = 1,
   }) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final current = get(mangaId, chapterId);
-    final count = current == null
+    final current = _local(mangaId, chapterId);
+    final count = current == null || current.pageCount <= 0
         ? pageCount.clamp(1, 1 << 30).toInt()
-        : (current.pageCount <= 0
-              ? pageCount.clamp(1, 1 << 30).toInt()
-              : current.pageCount);
+        : current.pageCount;
     await save(
       current?.copyWith(
             pageIndex: count - 1,
             pageCount: count,
-            updatedAt: now,
+            updatedAt: DateTime.now().millisecondsSinceEpoch,
             isRead: true,
           ) ??
           MangaReadingProgress(
@@ -184,13 +244,83 @@ class MangaReadingRepository {
             chapterId: chapterId,
             pageIndex: count - 1,
             pageCount: count,
-            updatedAt: now,
+            updatedAt: DateTime.now().millisecondsSinceEpoch,
             isRead: true,
           ),
     );
   }
+
+  Future<void> setReadStates(
+    String mangaId,
+    Iterable<String> chapterIds, {
+    required bool read,
+  }) async {
+    final ids = chapterIds
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (mangaId.trim().isEmpty || ids.isEmpty) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final chapterId in ids) {
+      final current = _local(mangaId, chapterId);
+      final count = current?.pageCount ?? 0;
+      final next = current?.copyWith(
+            pageIndex: read && count > 0 ? count - 1 : 0,
+            pageCount: read ? count : 0,
+            updatedAt: now,
+            isRead: read,
+          ) ??
+          MangaReadingProgress(
+            mangaId: mangaId,
+            chapterId: chapterId,
+            pageIndex: 0,
+            pageCount: 0,
+            updatedAt: now,
+            isRead: read,
+          );
+      await _write(_normalize(next));
+    }
+    _onChanged?.call();
+    await _sync(mangaId, ids, read);
+  }
+}
+
+final mangaReadingRevisionProvider =
+    NotifierProvider<MangaReadingRevision, int>(MangaReadingRevision.new);
+
+class MangaReadingRevision extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void bump() => state++;
 }
 
 final mangaReadingRepositoryProvider = Provider<MangaReadingRepository>((ref) {
-  return MangaReadingRepository(ref.watch(storageServiceProvider));
+  ref.watch(accountDataRevisionProvider);
+  return MangaReadingRepository(
+    ref.watch(storageServiceProvider),
+    isCloudRead: (mangaId, chapterId) {
+      try {
+        return ref
+            .read(animeWitcherAccountServiceProvider)
+            .isMangaChapterWatchedCached(mangaId, chapterId);
+      } catch (_) {
+        return false;
+      }
+    },
+    syncReadStates: (mangaId, chapterIds, read) async {
+      try {
+        final service = ref.read(animeWitcherAccountServiceProvider);
+        if (!service.isSignedIn) return;
+        await service.setMangaChaptersWatched(
+          mangaId: mangaId,
+          chapterIds: chapterIds,
+          watched: read,
+        );
+      } catch (_) {}
+    },
+    onChanged: () => ref.read(mangaReadingRevisionProvider.notifier).bump(),
+  );
 });

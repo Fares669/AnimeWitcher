@@ -44,20 +44,6 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
     MangaReaderBackground.automatic => _t(context, 'Automatic', 'تلقائي'),
   };
 
-  String _swipeLabel(
-    BuildContext context,
-    MangaReaderChapterSwipeAction value,
-  ) => switch (value) {
-    MangaReaderChapterSwipeAction.toggleBookmark =>
-      _t(context, 'Toggle bookmark', 'تبديل الإشارة المرجعية'),
-    MangaReaderChapterSwipeAction.toggleRead =>
-      _t(context, 'Mark read / unread', 'مقروء / غير مقروء'),
-    MangaReaderChapterSwipeAction.download =>
-      _t(context, 'Download', 'تنزيل'),
-    MangaReaderChapterSwipeAction.disabled =>
-      _t(context, 'Disabled', 'معطل'),
-  };
-
   String _flashColorLabel(BuildContext context, int value) => switch (value) {
     1 => _t(context, 'White', 'أبيض'),
     2 => _t(context, 'Soft white', 'أبيض خفيف'),
@@ -439,48 +425,6 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
                     update((s) => s.copyWith(autoScrollSpeed: value)),
               ),
             ),
-
-          _section(context, _t(context, 'Chapter swipes', 'سحب الفصول')),
-          ListTile(
-            title: Text(_t(context, 'Swipe from start', 'السحب من البداية')),
-            subtitle: Text(
-              _swipeLabel(context, settings.chapterSwipeStartAction),
-            ),
-            onTap: () async {
-              final value = await _choose<MangaReaderChapterSwipeAction>(
-                context: context,
-                title: _t(context, 'Swipe from start', 'السحب من البداية'),
-                value: settings.chapterSwipeStartAction,
-                values: MangaReaderChapterSwipeAction.values,
-                label: (value) => _swipeLabel(context, value),
-              );
-              if (value != null) {
-                await update(
-                  (s) => s.copyWith(chapterSwipeStartAction: value),
-                );
-              }
-            },
-          ),
-          ListTile(
-            title: Text(_t(context, 'Swipe from end', 'السحب من النهاية')),
-            subtitle: Text(
-              _swipeLabel(context, settings.chapterSwipeEndAction),
-            ),
-            onTap: () async {
-              final value = await _choose<MangaReaderChapterSwipeAction>(
-                context: context,
-                title: _t(context, 'Swipe from end', 'السحب من النهاية'),
-                value: settings.chapterSwipeEndAction,
-                values: MangaReaderChapterSwipeAction.values,
-                label: (value) => _swipeLabel(context, value),
-              );
-              if (value != null) {
-                await update(
-                  (s) => s.copyWith(chapterSwipeEndAction: value),
-                );
-              }
-            },
-          ),
 
           _section(context, _t(context, 'Page-change flash', 'وميض تغيير الصفحة')),
           SwitchListTile(

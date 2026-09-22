@@ -1,12 +1,13 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/utils/image_fallbacks.dart';
-import '../../../../core/utils/layout_constants.dart';
+import '../../../../core/storage/manga_reading_repository.dart';
 import '../../../../l10n/generated/app_localizations.dart';
+import '../../../details/presentation/widgets/episode_action_chip.dart';
+import '../../../manga/presentation/widgets/manga_chapter_row.dart';
 import '../downloads_provider.dart';
 
-class CompletedDownloadChapterCard extends StatelessWidget {
+class CompletedDownloadChapterCard extends ConsumerWidget {
   const CompletedDownloadChapterCard({
     super.key,
     required this.item,
@@ -19,91 +20,28 @@ class CompletedDownloadChapterCard extends StatelessWidget {
   final VoidCallback onDelete;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(mangaReadingRevisionProvider);
     final chapter = item.chapter;
-    final l10n = AppLocalizations.of(context);
+    if (chapter == null) return const SizedBox.shrink();
+
+    final repository = ref.watch(mangaReadingRepositoryProvider);
+    final progress = repository.get(chapter.mangaId, chapter.id);
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final title = chapter?.name.trim().isNotEmpty == true
-        ? chapter!.name.trim()
-        : (l10n?.mangaChapterCount(1) ?? (isArabic ? 'فصل' : 'Chapter'));
+    final l10n = AppLocalizations.of(context);
 
-    return InkWell(
+    return MangaChapterRow(
+      chapter: chapter,
+      progress: progress,
       onTap: onOpen,
-      borderRadius: BorderRadius.circular(LayoutConstants.radiusLg),
-      child: Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(LayoutConstants.radiusLg),
-          border: Border.all(
-            color: theme.dividerColor.withValues(alpha: 0.35),
-          ),
-        ),
-        padding: const EdgeInsets.all(LayoutConstants.spacingSm),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
-              child: SizedBox(
-                width: 72,
-                height: 104,
-                child: CachedNetworkImage(
-                  imageUrl:
-                      AppImageFallbacks.poster(
-                        item.item.posterUrl,
-                        label: item.item.title,
-                      ) ??
-                      '',
-                  fit: BoxFit.cover,
-                  errorWidget: (_, __, ___) => ColoredBox(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    child: const Icon(Icons.menu_book_rounded),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: LayoutConstants.spacingMd),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.check_circle_rounded,
-                        size: 15,
-                        color: theme.colorScheme.primary,
-                      ),
-                      const SizedBox(width: 5),
-                      Text(
-                        l10n?.mangaCompleted ?? (isArabic ? 'مكتمل' : 'Completed'),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            IconButton(
-              tooltip: l10n?.mangaDeleteChapter ?? (isArabic ? 'حذف الفصل' : 'Delete chapter'),
-              onPressed: onDelete,
-              icon: const Icon(Icons.delete_outline_rounded),
-              color: theme.colorScheme.error,
-            ),
-          ],
-        ),
+      action: EpisodeActionChip(
+        tooltip:
+            l10n?.mangaDeleteChapter ??
+            (isArabic ? 'حذف الفصل' : 'Delete chapter'),
+        onPressed: onDelete,
+        icon: Icons.delete_outline_rounded,
+        color: Theme.of(context).colorScheme.error,
       ),
     );
   }
