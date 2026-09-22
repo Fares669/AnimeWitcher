@@ -31,10 +31,9 @@ const pages = <MangaPage>[
 ];
 
 final class _ReaderProvider extends AnimeWitcherProvider {
-  _ReaderProvider({this.emptyPages = false, this.failPages = false});
+  _ReaderProvider({this.emptyPages = false});
 
   final bool emptyPages;
-  final bool failPages;
   final List<String> requestedChapterIds = <String>[];
   final Map<String, Completer<void>> _requestWaiters =
       <String, Completer<void>>{};
@@ -93,7 +92,6 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     requestedChapterIds.add(chapter.id);
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
-    if (failPages) throw StateError('reader page failure');
     return emptyPages ? const <MangaPage>[] : pages;
   }
 }

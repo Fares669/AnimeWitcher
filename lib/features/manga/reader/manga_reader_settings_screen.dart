@@ -543,21 +543,4 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _slider(
-    BuildContext context, {
-    required String label,
-    required double value,
-    required double min,
-    required double max,
-    required ValueChanged<double> onChanged,
-  }) =>
-      ListTile(
-        title: Text('$label: ${value.toStringAsFixed(1)}'),
-        subtitle: Slider(
-          min: min,
-          max: max,
-          value: value.clamp(min, max).toDouble(),
-          onChanged: onChanged,
-        ),
-      );
 }
