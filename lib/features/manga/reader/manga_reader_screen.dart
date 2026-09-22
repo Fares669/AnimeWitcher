@@ -96,6 +96,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       localChapterDirectory: widget.localChapterDirectory,
       initialMode: settings.modeForManga(_readerMangaId),
     );
+    _controller.addListener(_handleControllerChanged);
     _controller.load();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -114,6 +115,11 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       if (provider.supportedTypes.contains(ProviderType.manga)) return provider;
     }
     throw StateError('No Manga provider is available.');
+  }
+
+  void _handleControllerChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   @override
@@ -138,6 +144,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     _flashTimer?.cancel();
     _continuousController.dispose();
     _keyboardFocusNode.dispose();
+    _controller.removeListener(_handleControllerChanged);
     _controller.dispose();
     unawaited(WakelockPlus.disable().catchError((_) {}));
     unawaited(
