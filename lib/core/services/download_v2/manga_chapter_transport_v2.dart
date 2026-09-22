@@ -299,6 +299,11 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   ) async {
     if (_canceled || generation != _generation) return;
 
+    if (snapshot.status == DownloadTransportStatus.complete &&
+        _manifest.completedIndexes.contains(index)) {
+      return;
+    }
+
     if (snapshot.status == DownloadTransportStatus.complete) {
       final file = File(
         p.join(directory.path, _pageFileName(index, spec.pages[index])),
