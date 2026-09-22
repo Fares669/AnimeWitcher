@@ -1,4 +1,6 @@
 import 'package:animewitcher/core/domain/entity/manga.dart';
+import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -93,6 +95,55 @@ void main() {
               height: 500,
               child: _LifecycleProbe(
                 label: 'probe-' + page.index.toString(),
+                onDispose: page.index == 0
+                    ? () => firstDisposed = true
+                    : () {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(firstDisposed, isFalse);
+    controller.jumpTo(controller.position.maxScrollExtent);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(firstDisposed, isFalse);
+  });
+
+  testWidgets('continuous reader keeps visited pages alive until chapter closes', (
+    tester,
+  ) async {
+    final pages = List<MangaPage>.generate(
+      80,
+      (index) => MangaPage(
+        index: index,
+        imageUrl: 'https://example.test/continuous-' + index.toString() + '.webp',
+      ),
+    );
+    final controller = ScrollController();
+    addTearDown(controller.dispose);
+    var firstDisposed = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 700,
+          child: MangaContinuousReader(
+            pages: pages,
+            initialPage: 0,
+            scrollDirection: Axis.vertical,
+            reverse: false,
+            settings: const MangaReaderSettings(),
+            controller: controller,
+            onPageChanged: (_) {},
+            pageBuilder: (_, page) => SizedBox(
+              height: 500,
+              child: _LifecycleProbe(
+                label: 'continuous-probe-' + page.index.toString(),
                 onDispose: page.index == 0
                     ? () => firstDisposed = true
                     : () {},
