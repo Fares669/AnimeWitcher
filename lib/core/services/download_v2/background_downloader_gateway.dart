@@ -281,15 +281,12 @@ final class PackageBackgroundDownloaderGateway
     await initialize();
 
     final existing = await attach(page.taskId);
-    if (existing != null &&
-        existing.current.status != DownloadTransportStatus.failed &&
-        existing.current.status != DownloadTransportStatus.canceled &&
-        existing.current.status != DownloadTransportStatus.missing) {
-      return existing;
-    }
-    if (existing != null) {
-      await removeTracking(page.taskId);
-    }
+    final reusable = await reusableMangaPageHandleV2(
+      existing: existing,
+      destinationPath: page.destinationPath,
+      removeTracking: () => removeTracking(page.taskId),
+    );
+    if (reusable != null) return reusable;
 
     final prefs = _notificationPreferences();
     await configurePackageNotificationsV2(_downloader, prefs);
@@ -760,6 +757,30 @@ int effectivePackageParallelChunksV2(
 }) {
   assert(requestedChunks > 0);
   return requestedChunks;
+}
+
+Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
+  required DownloadTransportHandle? existing,
+  required String destinationPath,
+  required Future<void> Function() removeTracking,
+}) async {
+  if (existing == null) return null;
+
+  final status = existing.current.status;
+  if (status == DownloadTransportStatus.complete) {
+    final file = File(destinationPath);
+    if (await file.exists() && await file.length() > 0) return existing;
+    await removeTracking();
+    return null;
+  }
+
+  if (status == DownloadTransportStatus.failed ||
+      status == DownloadTransportStatus.canceled ||
+      status == DownloadTransportStatus.missing) {
+    await removeTracking();
+    return null;
+  }
+  return existing;
 }
 
 /// Maps one AnimeWitcher parent transfer spec to exactly one package task.

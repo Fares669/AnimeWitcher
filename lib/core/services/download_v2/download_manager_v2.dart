@@ -208,12 +208,10 @@ final class DownloadManagerV2 {
           }
         }
         if (record.completedAtMillis != null) {
-        final result = record.mediaKind == DownloadMediaKind.mangaChapter
-            ? await _verifyMangaDirectory(record)
-            : await _integrityVerifier.verify(
-                await _destinationFile(record.destinationPath),
-                expectedBytes: record.expectedBytes,
-              );
+        final result = await _verifyRecordDestination(
+          record,
+          repairManga: true,
+        );
         if (result.isValid) {
           final snapshot = DownloadTransportSnapshot(
             taskId: record.taskId,
@@ -231,7 +229,9 @@ final class DownloadManagerV2 {
           continue;
         }
 
-        await _deleteDestination(record.destinationPath);
+        if (record.mediaKind != DownloadMediaKind.mangaChapter) {
+          await _deleteDestination(record.destinationPath);
+        }
         final invalidRecord = record.copyWith(
           clearCompletedAtMillis: true,
           failureCategory: DownloadFailureCategory.integrity,
@@ -889,12 +889,10 @@ final class DownloadManagerV2 {
     await initialize();
     final record = await _store.get(logicalId);
     if (record?.completedAtMillis == null) return false;
-    final result = record!.mediaKind == DownloadMediaKind.mangaChapter
-        ? await _verifyMangaDirectory(record)
-        : await _integrityVerifier.verify(
-            await _destinationFile(record.destinationPath),
-            expectedBytes: record.expectedBytes,
-          );
+    final result = await _verifyRecordDestination(
+      record!,
+      repairManga: true,
+    );
     return result.isValid;
   }
 
@@ -1595,6 +1593,85 @@ final class DownloadManagerV2 {
     }
   }
 
+  Future<DownloadIntegrityResult> _verifyRecordDestination(
+    LogicalDownloadRecordV2 record, {
+    required bool repairManga,
+  }) async {
+    if (record.mediaKind != DownloadMediaKind.mangaChapter) {
+      return _integrityVerifier.verify(
+        await _destinationFile(record.destinationPath),
+        expectedBytes: record.expectedBytes,
+      );
+    }
+
+    var result = await _verifyMangaDirectory(record);
+    if (result.isValid || !repairManga) return result;
+
+    // The package can publish its terminal callback a few milliseconds before
+    // every page/manifest write is visible. Reconcile first, then give those
+    // final filesystem writes a bounded settle window instead of deleting the
+    // entire completed chapter.
+    await _reconcileMangaDirectory(record);
+    for (var attempt = 0; attempt < 3; attempt++) {
+      result = await _verifyMangaDirectory(record);
+      if (result.isValid) return result;
+      if (attempt < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        await _reconcileMangaDirectory(record);
+      }
+    }
+    return result;
+  }
+
+  Future<File?> _mangaPageFile(
+    Directory directory,
+    int index,
+  ) async {
+    final prefix = (index + 1).toString().padLeft(4, '0');
+    await for (final entity in directory.list(followLinks: false)) {
+      if (entity is! File) continue;
+      if (p.basename(entity.path).startsWith('$prefix.')) return entity;
+    }
+    return null;
+  }
+
+  Future<void> _reconcileMangaDirectory(
+    LogicalDownloadRecordV2 record,
+  ) async {
+    final destination = await _destinationFile(record.destinationPath);
+    final directory = Directory(destination.path);
+    if (!await directory.exists()) return;
+
+    final manifest = await MangaChapterManifestV2.readFrom(directory);
+    if (manifest == null ||
+        manifest.mangaId != record.mediaId ||
+        manifest.chapterId != record.unitKey ||
+        manifest.pageCount <= 0) {
+      return;
+    }
+
+    final valid = <int>{};
+    for (var index = 0; index < manifest.pageCount; index++) {
+      final pageFile = await _mangaPageFile(directory, index);
+      if (pageFile == null || !await pageFile.exists()) continue;
+      final length = await pageFile.length();
+      if (length > 0) {
+        valid.add(index);
+      } else {
+        try {
+          await pageFile.delete();
+        } catch (_) {}
+      }
+    }
+
+    await manifest
+        .copyWith(
+          completedIndexes: valid,
+          isComplete: valid.length == manifest.pageCount,
+        )
+        .writeTo(directory);
+  }
+
   Future<DownloadIntegrityResult> _verifyMangaDirectory(
     LogicalDownloadRecordV2 record,
   ) async {
@@ -1617,15 +1694,7 @@ final class DownloadManagerV2 {
     var bytes = 0;
     for (final index in manifest.completedIndexes) {
       final prefix = (index + 1).toString().padLeft(4, '0');
-      File? pageFile;
-      await for (final entity in directory.list(followLinks: false)) {
-        if (entity is! File) continue;
-        final base = p.basename(entity.path);
-        if (base.startsWith('$prefix.')) {
-          pageFile = entity;
-          break;
-        }
-      }
+      final pageFile = await _mangaPageFile(directory, index);
       if (pageFile == null || !await pageFile.exists()) {
         return const DownloadIntegrityResult.invalid('missing-page');
       }
@@ -1833,13 +1902,12 @@ final class DownloadManagerV2 {
           return;
         }
 
-        final result = record.mediaKind == DownloadMediaKind.mangaChapter
-            ? await _verifyMangaDirectory(record)
-            : await _integrityVerifier.verify(
-                await _destinationFile(record.destinationPath),
-                expectedBytes: record.expectedBytes,
-              );
-        if (!result.isValid) {
+        final result = await _verifyRecordDestination(
+          record,
+          repairManga: true,
+        );
+        if (!result.isValid &&
+            record.mediaKind != DownloadMediaKind.mangaChapter) {
           await _deleteDestination(record.destinationPath);
         }
         final now = _nowMillis();

@@ -63,15 +63,73 @@ void main() {
     final record = await store.get(logicalId);
     expect(record?.completedAtMillis, isNotNull);
   });
+  test('invalid manga completion preserves valid pages and repairs manifest', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_manga_preserve_');
+    addTearDown(() => temp.delete(recursive: true));
+
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'm2',
+      chapterId: '2',
+      pageCount: 2,
+      completedIndexes: const <int>{0, 1},
+      isComplete: true,
+    ).writeTo(temp);
+    final firstPage = File('${temp.path}/0001.webp');
+    await firstPage.writeAsBytes(<int>[1, 2, 3]);
+
+    final gateway = _Gateway();
+    final store = InMemoryLogicalDownloadStoreV2();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver(),
+    );
+    final logicalId = logicalDownloadIdForMangaChapter(
+      mangaId: 'm2',
+      chapterId: '2',
+    );
+
+    await manager.start(
+      DownloadStartRequestV2(
+        logicalId: logicalId,
+        mediaKind: DownloadMediaKind.mangaChapter,
+        mediaId: 'm2',
+        unitKey: '2',
+        variantKey: 'pages',
+        destinationPath: temp.path,
+        sourceDescriptor: const <String, Object?>{'chapterId': '2'},
+        allowPause: true,
+        retries: 1,
+        parallelChunks: 1,
+      ),
+    );
+
+    gateway.handle.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 260));
+
+    expect(await temp.exists(), isTrue);
+    expect(await firstPage.exists(), isTrue);
+    final repaired = await MangaChapterManifestV2.readFrom(temp);
+    expect(repaired, isNotNull);
+    expect(repaired!.completedIndexes, <int>{0});
+    expect(repaired.isComplete, isFalse);
+    final record = await store.get(logicalId);
+    expect(record?.completedAtMillis, isNull);
+    expect(record?.failureCategory, DownloadFailureCategory.integrity);
+  });
 }
 
 final class _MangaResolver implements MangaChapterPageResolverV2 {
   @override
-  Future<List<MangaPage>> resolve(Map<String, Object?> descriptor) async =>
-      const <MangaPage>[
-        MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
-        MangaPage(index: 1, imageUrl: 'https://cdn.test/1.webp'),
-      ];
+  Future<List<MangaPage>> resolve(Map<String, Object?> descriptor) async {
+    final chapterId = descriptor['chapterId']?.toString() ?? '1';
+    return <MangaPage>[
+      MangaPage(index: 0, imageUrl: 'https://cdn.test/$chapterId/0.webp'),
+      MangaPage(index: 1, imageUrl: 'https://cdn.test/$chapterId/1.webp'),
+    ];
+  }
 }
 
 final class _VideoResolver implements DownloadSourceResolverV2 {
