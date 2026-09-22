@@ -59,16 +59,13 @@ void main() {
     expect(removed, 0);
   });
   test('manga page package tasks are silent child transfers', () async {
-    final temp = await Directory.systemTemp.createTemp('aw_manga_silent_');
-    addTearDown(() => temp.delete(recursive: true));
-
     final task = await packageMangaPageTaskForV2(
-      MangaChapterPageTaskV2(
+      const MangaChapterPageTaskV2(
         taskId: 'chapter_p0001',
         pageIndex: 0,
         url: 'https://cdn.test/0001.webp',
-        headers: const <String, String>{'Referer': 'https://manga.test/'},
-        destinationPath: '${temp.path}/0001.webp',
+        headers: <String, String>{'Referer': 'https://manga.test/'},
+        destinationPath: 'manga/test/0001.webp',
         retries: 2,
       ),
       userInitiated: true,
