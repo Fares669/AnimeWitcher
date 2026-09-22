@@ -796,6 +796,8 @@ void main() {
       ),
     );
     await tester.pump();
+    await provider.waitUntilRequested('retry-c1');
+    await tester.pump();
     await tester.pump();
 
     final retry = find.byType(FilledButton);
