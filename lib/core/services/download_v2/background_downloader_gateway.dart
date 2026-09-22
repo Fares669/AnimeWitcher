@@ -760,6 +760,18 @@ Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
     return null;
   }
 
+  if (status == DownloadTransportStatus.paused) {
+    final resumed = await existing.resume();
+    if (resumed) return existing;
+
+    // A recovered Manga page must never leave an active chapter parked on a
+    // stale paused package task. Cancel/forget it and let the caller recreate
+    // only this page from its fresh chapter-page descriptor.
+    await existing.cancel();
+    await removeTracking();
+    return null;
+  }
+
   if (status == DownloadTransportStatus.failed ||
       status == DownloadTransportStatus.canceled ||
       status == DownloadTransportStatus.missing) {
