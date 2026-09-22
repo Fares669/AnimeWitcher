@@ -112,14 +112,6 @@ Future<void> configurePackageNotificationsV2(
   FileDownloader downloader,
   DownloadNotificationPrefs prefs,
 ) async {
-  // Manga page children use this group. Configure it explicitly with no
-  // notifications so it cannot inherit a package-wide/default notification
-  // layout and surface one system notification per image.
-  downloader.configureNotificationForGroup(
-    kDownloadV2SilentPackageGroup,
-    progressBar: false,
-  );
-
   if (prefs.noneEnabled) return;
   const title = '{displayName}';
   downloader.configureNotificationForGroup(
