@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:animewitcher/features/search/presentation/widgets/search_action_buttons.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_glass_surface.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
@@ -10,6 +12,16 @@ import 'package:flutter_test/flutter_test.dart';
 /// smaller than what it is given — which is how the group came to stand at the
 /// toolbar's own 56 next to a shorter field.
 void main() {
+  test('mobile search glass uses the same 34pt trailing coordinate as details', () {
+    final source = File(
+      'lib/features/search/presentation/search_screen.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('titleSpacing: 12'));
+    expect(source, contains('const SizedBox(width: 22)'));
+    expect(12 + 22, 34);
+  });
+
   testWidgets('the button group keeps its height inside an AppBar slot', (
     tester,
   ) async {
