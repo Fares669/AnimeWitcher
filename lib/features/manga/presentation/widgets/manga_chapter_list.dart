@@ -97,6 +97,10 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       if (mangaId.isEmpty) continue;
       byManga.putIfAbsent(mangaId, () => <String>[]).add(chapter.id);
     }
+
+    // Match Anime selection UX: close the selection surface immediately.
+    _clearSelection();
+
     for (final entry in byManga.entries) {
       await repository.setReadStates(
         entry.key,
@@ -104,7 +108,6 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         read: read,
       );
     }
-    if (mounted) _clearSelection();
   }
 
   Widget _selectionBar(BuildContext context) {
