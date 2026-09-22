@@ -165,7 +165,9 @@ class MangaReaderController extends ChangeNotifier {
         if (listEquals(
           fresh.map((page) => page.imageUrl).toList(),
           _pages.map((page) => page.imageUrl).toList(),
-        )) return;
+        )) {
+          return;
+        }
         _pages = fresh;
         _pageIndex = _pageIndex.clamp(0, fresh.length - 1).toInt();
         await _pageCache.put(_mangaId, chapter, fresh);
