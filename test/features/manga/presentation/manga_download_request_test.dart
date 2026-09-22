@@ -48,22 +48,37 @@ void main() {
     );
   });
 
-  test('anime destination uses anime/title without AnimeWitcher wrapper', () async {
+  test('anime episodes stay directly in Downloads/anime/title', () async {
+    final seasonOne = Episode(
+      name: 'حلقة 1',
+      url: 'https://anime.test/one-piece/1',
+      season: 1,
+      episode: 1,
+    );
+    final seasonTwo = Episode(
+      name: 'حلقة 1',
+      url: 'https://anime.test/one-piece/season-2/1',
+      season: 2,
+      episode: 1,
+    );
     final anime = MultimediaItem(
       title: 'ون بيس',
       url: 'https://anime.test/one-piece',
       posterUrl: '',
       contentType: MultimediaContentType.anime,
+      episodes: <Episode>[seasonOne, seasonTwo],
     );
 
     final destination = await downloadDestinationPathV2(
       anime,
+      episode: seasonTwo,
       filename: 'حلقة 1.mp4',
     );
-    final normalized = p.normalize(destination);
 
-    expect(normalized, contains(p.join('anime', 'ون بيس')));
-    expect(normalized, isNot(contains(p.join('AnimeWitcher', 'Downloads'))));
+    expect(
+      p.normalize(destination),
+      p.join('/tmp/Downloads', 'anime', 'ون بيس', 'حلقة 1.mp4'),
+    );
   });
 }
 
