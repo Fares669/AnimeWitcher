@@ -299,11 +299,6 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   ) async {
     if (_canceled || generation != _generation) return;
 
-    if (snapshot.status == DownloadTransportStatus.complete &&
-        _manifest.completedIndexes.contains(index)) {
-      return;
-    }
-
     if (snapshot.status == DownloadTransportStatus.complete) {
       // Package streams can repeat the same terminal callback. Once this page
       // is durably checkpointed, a duplicate must not rewrite manifest.json
