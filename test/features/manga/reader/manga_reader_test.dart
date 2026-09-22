@@ -130,9 +130,30 @@ final class _PerMangaReaderSettingsNotifier
 }
 
 
+final class _ReaderStorage extends StorageService {
+  final Map<String, String> values = <String, String>{};
+
+  @override
+  String? getString(String key) => values[key];
+
+  @override
+  Future<void> setString(String key, String? value) async {
+    if (value == null) {
+      values.remove(key);
+    } else {
+      values[key] = value;
+    }
+  }
+
+  @override
+  Future<void> remove(String key) async {
+    values.remove(key);
+  }
+}
+
 final class _RecordingReaderProgressRepository
     extends MangaReadingRepository {
-  _RecordingReaderProgressRepository() : super(StorageService());
+  _RecordingReaderProgressRepository() : super(_ReaderStorage());
 
   final Map<String, MangaReadingProgress> values =
       <String, MangaReadingProgress>{};
@@ -150,7 +171,7 @@ final class _RecordingReaderProgressRepository
 }
 
 final class _ReaderProgressRepository extends MangaReadingRepository {
-  _ReaderProgressRepository() : super(StorageService());
+  _ReaderProgressRepository() : super(_ReaderStorage());
 
   @override
   MangaReadingProgress? get(String mangaId, String chapterId) => null;
@@ -363,6 +384,12 @@ void main() {
 
     await controller.load();
     controller.setPageIndex(1, autoReadDuplicateChapters: true);
+    await controller.flushProgress();
+
+    expect(progress.get('m1', 'c1-a')?.isRead, isFalse);
+    expect(progress.get('m1', 'c1-b'), isNull);
+
+    controller.setPageIndex(2, autoReadDuplicateChapters: true);
     await controller.flushProgress();
 
     expect(progress.get('m1', 'c1-a')?.isRead, isTrue);

@@ -148,6 +148,7 @@ final class _Write {
 final class _Firestore extends FirestoreRestClient {
   final List<_Write> writes = <_Write>[];
   final List<_ArrayTransform> arrayTransforms = <_ArrayTransform>[];
+  bool failArrayTransforms = false;
   final List<String> deletes = <String>[];
   final Map<String, List<FirestoreDocument>> collections =
       <String, List<FirestoreDocument>>{};
@@ -196,6 +197,9 @@ final class _Firestore extends FirestoreRestClient {
     required bool append,
     Map<String, dynamic> baseFields = const <String, dynamic>{},
   }) async {
+    if (failArrayTransforms) {
+      throw StateError('offline');
+    }
     arrayTransforms.add(
       _ArrayTransform(
         path: path,
@@ -469,6 +473,22 @@ void main() {
     expect(service.isMangaChapterWatchedCached('m1', '12'), isTrue);
     expect(service.isMangaChapterWatchedCached('m1', '13'), isTrue);
     expect(service.isMangaChapterWatchedCached('m1', '14'), isFalse);
+  });
+
+  test('manga read cache updates optimistically while cloud is offline', () async {
+    final firestore = _Firestore()..failArrayTransforms = true;
+    final service = await _signedInService(firestore);
+
+    await expectLater(
+      service.setMangaChaptersWatched(
+        mangaId: 'm1',
+        chapterIds: const <String>['7'],
+        watched: true,
+      ),
+      throwsStateError,
+    );
+
+    expect(service.isMangaChapterWatchedCached('m1', '7'), isTrue);
   });
 
 }
