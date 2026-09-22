@@ -222,4 +222,5 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         ),
       ],
     );
-  }}
+  }
+}
