@@ -167,12 +167,15 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
         child: child,
       );
     }
-    return VisibilityDetector(
-      key: ValueKey<String>(
-        'manga-webtoon-$primaryIndex-${indices.join('-')}',
+    return KeepAlive(
+      keepAlive: true,
+      child: VisibilityDetector(
+        key: ValueKey<String>(
+          'manga-webtoon-$primaryIndex-${indices.join('-')}',
+        ),
+        onVisibilityChanged: (info) => _visibilityChanged(primaryIndex, info),
+        child: child,
       ),
-      onVisibilityChanged: (info) => _visibilityChanged(primaryIndex, info),
-      child: child,
     );
   }
 
@@ -219,6 +222,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) => _spread(context, spreads[index]),
                 childCount: start,
+                addAutomaticKeepAlives: false,
               ),
             ),
           SliverList(
@@ -229,6 +233,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
                 return _spread(context, spreads[index]);
               },
               childCount: spreads.length - start,
+              addAutomaticKeepAlives: false,
             ),
           ),
           if (widget.trailingPage != null)
