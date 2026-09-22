@@ -7,6 +7,7 @@ import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   test('production background gateway exposes manga chapter transport', () {
     final gateway = PackageBackgroundDownloaderGateway(
       initializePackage: () async {},
