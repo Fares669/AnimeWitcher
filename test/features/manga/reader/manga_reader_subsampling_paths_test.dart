@@ -157,14 +157,14 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     final before = tester.state<State<StatefulWidget>>(find.byKey(pageKey));
 
     controller.jumpTo(2400);
-    await tester.pumpAndSettle();
+    await tester.pump();
     controller.jumpTo(0);
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     final after = tester.state<State<StatefulWidget>>(find.byKey(pageKey));
     expect(identical(after, before), isTrue);
