@@ -17,6 +17,7 @@ class MangaWebtoonReader extends StatefulWidget {
     required this.initialPage,
     required this.onPageChanged,
     this.pageBuilder,
+    this.onPageImageError,
     this.settings = const MangaReaderSettings(),
     this.doublePage = false,
     this.controller,
@@ -28,6 +29,7 @@ class MangaWebtoonReader extends StatefulWidget {
   final int initialPage;
   final ValueChanged<int> onPageChanged;
   final MangaPageBuilder? pageBuilder;
+  final ValueChanged<MangaPage>? onPageImageError;
   final MangaReaderSettings settings;
   final bool doublePage;
   final ScrollController? controller;
@@ -156,6 +158,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     }
     return MangaPageImage(
       page: page,
+      onImageError: widget.onPageImageError,
       settings: widget.settings,
       onLoadSettled: () {
         _settledPages.add(index);

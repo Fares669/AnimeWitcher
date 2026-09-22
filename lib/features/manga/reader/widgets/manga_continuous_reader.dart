@@ -59,6 +59,7 @@ class MangaContinuousReader extends StatefulWidget {
     this.doublePage = false,
     this.controller,
     this.pageBuilder,
+    this.onPageImageError,
     this.trailingPage,
     this.onTrailingAdvance,
   });
@@ -72,6 +73,7 @@ class MangaContinuousReader extends StatefulWidget {
   final bool doublePage;
   final ScrollController? controller;
   final MangaPageBuilder? pageBuilder;
+  final ValueChanged<MangaPage>? onPageImageError;
   final Widget? trailingPage;
   final VoidCallback? onTrailingAdvance;
 
@@ -293,6 +295,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     }
     return MangaPageImage(
       page: page,
+      onImageError: widget.onPageImageError,
       settings: widget.settings,
       fit: widget.scrollDirection == Axis.horizontal ? BoxFit.contain : null,
       sourceRect: _sourceRectFor(part),

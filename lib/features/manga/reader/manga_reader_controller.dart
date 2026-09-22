@@ -51,6 +51,9 @@ class MangaReaderController extends ChangeNotifier {
   final Set<String> _preloadingChapterIds = <String>{};
   bool _autoReadDuplicateChapters = false;
   String? _lastLoadChapterId;
+  bool _attemptedPageRefresh = false;
+  Future<void>? _refreshingPages;
+  String? _refreshingChapterId;
 
   static MangaReaderMode preferredModeFor(MultimediaItem item) {
     final type = (item.catalogType ?? '').trim().toLowerCase();
@@ -97,6 +100,7 @@ class MangaReaderController extends ChangeNotifier {
     final chapterId = _chapter.id;
     final forceSourceReload = _lastLoadChapterId == chapterId;
     _lastLoadChapterId = chapterId;
+    _attemptedPageRefresh = false;
     _loading = true;
     _error = null;
     _pages = const <MangaPage>[];
@@ -141,6 +145,46 @@ class MangaReaderController extends ChangeNotifier {
     }
   }
 
+
+  Future<void> refreshFailedPage(MangaPage failedPage) async {
+    if (failedPage.imageUrl.startsWith('file:') ||
+        !_pages.any((page) => page.imageUrl == failedPage.imageUrl)) {
+      return;
+    }
+    final activeRefresh = _refreshingPages;
+    if (_refreshingChapterId == _chapter.id && activeRefresh != null) {
+      return activeRefresh;
+    }
+    if (_attemptedPageRefresh) return;
+    _attemptedPageRefresh = true;
+    final chapter = _chapter;
+    final future = () async {
+      try {
+        final fresh = await provider.refreshMangaChapterPages(manga.url, chapter);
+        if (chapter.id != _chapter.id || fresh.isEmpty) return;
+        if (listEquals(
+          fresh.map((page) => page.imageUrl).toList(),
+          _pages.map((page) => page.imageUrl).toList(),
+        )) return;
+        _pages = fresh;
+        _pageIndex = _pageIndex.clamp(0, fresh.length - 1).toInt();
+        await _pageCache.put(_mangaId, chapter, fresh);
+        notifyListeners();
+      } catch (_) {
+        // Keep the current pages and let the reader offer its manual retry.
+      }
+    }();
+    _refreshingPages = future;
+    _refreshingChapterId = chapter.id;
+    try {
+      await future;
+    } finally {
+      if (identical(_refreshingPages, future)) {
+        _refreshingPages = null;
+        _refreshingChapterId = null;
+      }
+    }
+  }
 
   Future<void> _preloadAdjacentChapters() async {
     final index = currentChapterIndex;

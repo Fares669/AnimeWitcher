@@ -686,6 +686,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     onContinue: _controller.canNext ? _openNextChapter : null,
   );
 
+  void _onPageImageError(MangaPage page) {
+    unawaited(_controller.refreshFailedPage(page));
+  }
+
   Widget _readerBody(
     BuildContext context,
     MangaReaderSettings settings,
@@ -736,6 +740,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       MangaReaderMode.vertical => MangaPagedReader(
         key: key,
         pages: _controller.pages,
+        onPageImageError: _onPageImageError,
         initialPage: _controller.pageIndex,
         rtl: false,
         scrollDirection: Axis.vertical,
@@ -749,6 +754,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       MangaReaderMode.pagedLtr => MangaPagedReader(
         key: key,
         pages: _controller.pages,
+        onPageImageError: _onPageImageError,
         initialPage: _controller.pageIndex,
         rtl: false,
         doublePage: doublePage,
@@ -761,6 +767,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       MangaReaderMode.pagedRtl => MangaPagedReader(
         key: key,
         pages: _controller.pages,
+        onPageImageError: _onPageImageError,
         initialPage: _controller.pageIndex,
         rtl: true,
         doublePage: doublePage,
@@ -773,6 +780,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       MangaReaderMode.verticalContinuous => MangaContinuousReader(
         key: key,
         pages: _controller.pages,
+        onPageImageError: _onPageImageError,
         initialPage: _controller.pageIndex,
         scrollDirection: Axis.vertical,
         reverse: false,
@@ -786,6 +794,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       MangaReaderMode.webtoon => MangaWebtoonReader(
         key: key,
         pages: _controller.pages,
+        onPageImageError: _onPageImageError,
         initialPage: _controller.pageIndex,
         settings: settings,
         doublePage: doublePage,
@@ -797,6 +806,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       MangaReaderMode.horizontalContinuous => MangaContinuousReader(
         key: key,
         pages: _controller.pages,
+        onPageImageError: _onPageImageError,
         initialPage: _controller.pageIndex,
         scrollDirection: Axis.horizontal,
         reverse: false,
@@ -809,6 +819,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       MangaReaderMode.horizontalContinuousRtl => MangaContinuousReader(
         key: key,
         pages: _controller.pages,
+        onPageImageError: _onPageImageError,
         initialPage: _controller.pageIndex,
         scrollDirection: Axis.horizontal,
         reverse: true,

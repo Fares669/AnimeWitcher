@@ -47,6 +47,12 @@ class MangaReaderPageCache {
       if (!await file.exists()) return null;
       final decoded = jsonDecode(await file.readAsString());
       if (decoded is! Map) return null;
+      final savedAt = decoded['timestamp'];
+      if (savedAt is! int ||
+          DateTime.now().millisecondsSinceEpoch - savedAt >
+              const Duration(minutes: 5).inMilliseconds) {
+        return null;
+      }
       final rawPages = decoded['pages'];
       if (rawPages is! List || rawPages.isEmpty) return null;
 

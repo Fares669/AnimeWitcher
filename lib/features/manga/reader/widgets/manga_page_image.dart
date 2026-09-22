@@ -64,6 +64,7 @@ class MangaPageImage extends StatefulWidget {
     this.settings = const MangaReaderSettings(),
     this.onImageSize,
     this.onLoadSettled,
+    this.onImageError,
     this.sourceRect,
   });
 
@@ -73,6 +74,7 @@ class MangaPageImage extends StatefulWidget {
   final MangaReaderSettings settings;
   final ValueChanged<Size>? onImageSize;
   final VoidCallback? onLoadSettled;
+  final ValueChanged<MangaPage>? onImageError;
   final Rect? sourceRect;
 
   @override
@@ -86,6 +88,7 @@ class _MangaPageImageState extends State<MangaPageImage>
   Size? _imageSize;
   int _retryEpoch = 0;
   bool _loadSettledNotified = false;
+  bool _errorReported = false;
   late ImageProvider<Object> _provider;
 
   @override
@@ -132,6 +135,7 @@ class _MangaPageImageState extends State<MangaPageImage>
       _provider = _createImageProvider(widget.page);
       _imageSize = null;
       _loadSettledNotified = false;
+      _errorReported = false;
       _listenForImageSize();
     }
   }
@@ -190,6 +194,7 @@ class _MangaPageImageState extends State<MangaPageImage>
     setState(() {
       _imageSize = null;
       _loadSettledNotified = false;
+      _errorReported = false;
       _retryEpoch++;
     });
     _listenForImageSize();
@@ -197,6 +202,12 @@ class _MangaPageImageState extends State<MangaPageImage>
 
   Widget _errorView(BuildContext context) {
     _scheduleLoadSettled();
+    if (!_errorReported) {
+      _errorReported = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onImageError?.call(widget.page);
+      });
+    }
     return SizedBox(
     height: mangaReaderPageLoadingExtent(MediaQuery.sizeOf(context)),
     child: Center(

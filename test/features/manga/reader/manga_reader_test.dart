@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
@@ -34,6 +35,7 @@ final class _ReaderProvider extends AnimeWitcherProvider {
   _ReaderProvider({this.emptyPages = false});
 
   final bool emptyPages;
+  int refreshCalls = 0;
   final List<String> requestedChapterIds = <String>[];
   final Map<String, Completer<void>> _requestWaiters =
       <String, Completer<void>>{};
@@ -93,6 +95,19 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
     return emptyPages ? const <MangaPage>[] : pages;
+  }
+
+  @override
+  Future<List<MangaPage>> refreshMangaChapterPages(
+    String mangaUrl,
+    MangaChapter chapter,
+  ) async {
+    refreshCalls++;
+    return const <MangaPage>[
+      MangaPage(index: 0, imageUrl: 'https://cdn.example/fresh.webp'),
+      MangaPage(index: 1, imageUrl: 'https://cdn.example/fresh-2.webp'),
+      MangaPage(index: 2, imageUrl: 'https://cdn.example/fresh-3.webp'),
+    ];
   }
 }
 
@@ -271,6 +286,54 @@ void main() {
       provider.requestedChapterIds,
       <String>['refresh-c1', 'refresh-c1'],
     );
+  });
+
+  test('expired chapter page lists are reloaded on next open', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_expired_');
+    addTearDown(() => temp.delete(recursive: true));
+    final cache = MangaReaderPageCache(cacheDirectory: temp);
+    const chapter = MangaChapter(
+      id: 'expired-c1', mangaId: 'expired-m1',
+      url: 'https://example.test/chapter/expired-1', name: 'Chapter 1',
+    );
+    await cache.put('expired-m1', chapter, const <MangaPage>[
+      MangaPage(index: 0, imageUrl: 'https://cdn.example/expired.webp'),
+    ]);
+    final file = (await temp.list().first) as File;
+    final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    data['timestamp'] = DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch;
+    await file.writeAsString(jsonEncode(data));
+    expect(await cache.get('expired-m1', chapter), isNull);
+  });
+
+  test('failed reader image refreshes chapter URLs once and preserves position', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_page_error_');
+    addTearDown(() => temp.delete(recursive: true));
+    final provider = _ReaderProvider();
+    const chapter = MangaChapter(
+      id: 'bad-c1', mangaId: 'bad-m1',
+      url: 'https://example.test/chapter/bad-1', name: 'Chapter 1',
+    );
+    final controller = MangaReaderController(
+      provider: provider,
+      progressRepository: _ReaderProgressRepository(),
+      manga: MultimediaItem(
+        title: 'Reader Manga', url: 'https://animewitcher.com/manga/bad-m1',
+        posterUrl: '', contentType: MultimediaContentType.manga,
+        provider: provider.packageName,
+      ),
+      chapter: chapter,
+      chapters: const <MangaChapter>[chapter],
+      pageCache: MangaReaderPageCache(cacheDirectory: temp),
+    );
+    addTearDown(controller.dispose);
+    await controller.load();
+    controller.setPageIndex(1);
+    await controller.refreshFailedPage(controller.pages.first);
+    expect(controller.pageIndex, 1);
+    expect(controller.pages.first.imageUrl, 'https://cdn.example/fresh.webp');
+    await controller.refreshFailedPage(controller.pages.first);
+    expect(provider.refreshCalls, 1);
   });
 
   test('reader preloads the adjacent chapter after current chapter loads', () async {
