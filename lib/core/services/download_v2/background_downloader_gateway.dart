@@ -288,6 +288,19 @@ final class PackageBackgroundDownloaderGateway
   ) async {
     await initialize();
 
+    // Older Manga builds placed page children in the normal V2 group, which
+    // makes them inherit user-facing notifications. Replace such an exact
+    // child once so upgraded installs also become notification-silent.
+    final tracked = _downloader.transfers.forId(page.taskId);
+    final persisted = await _downloader.database.recordForId(page.taskId);
+    final existingTask = tracked?.task ?? persisted?.task;
+    if (existingTask != null &&
+        existingTask.group != kDownloadV2SilentPackageGroup) {
+      final legacy = await attach(page.taskId);
+      await legacy?.cancel();
+      await removeTracking(page.taskId);
+    }
+
     final existing = await attach(page.taskId);
     final reusable = await reusableMangaPageHandleV2(
       existing: existing,
