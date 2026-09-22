@@ -140,9 +140,9 @@ class MangaDetailsController extends _$MangaDetailsController {
       throw StateError('Manga details are not loaded.');
     }
     final request = await mangaChapterDownloadRequest(item, chapter);
-    final snapshot = await ref.read(downloadManagerV2Provider).start(request);
-    await ref.read(storageServiceProvider).saveDownloadMetadata(
-      snapshot.taskId,
+    final storage = ref.read(storageServiceProvider);
+    await storage.saveDownloadMetadata(
+      request.logicalId.value,
       item,
       trackingUrl: chapter.url,
       filePath: request.destinationPath,
@@ -160,6 +160,13 @@ class MangaDetailsController extends _$MangaDetailsController {
         },
       },
     );
+
+    try {
+      await ref.read(downloadManagerV2Provider).start(request);
+    } catch (error, stackTrace) {
+      await storage.removeDownloadMetadata(request.logicalId.value);
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   Future<void> _load(MultimediaItem item) async {
