@@ -43,6 +43,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   final Map<int, double> _visibleFractions = <int, double>{};
   bool _visibilityUpdateScheduled = false;
   late int _lastReported;
+  late final int _sessionInitialPage;
+  final Set<int> _settledPages = <int>{};
   late final ScrollController _controller =
       widget.controller ?? ScrollController();
   late final bool _ownsController = widget.controller == null;
@@ -61,7 +63,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
 
   int get _startPage => widget.pages.isEmpty
       ? 0
-      : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
+      : _sessionInitialPage.clamp(0, widget.pages.length - 1).toInt();
 
   int get _startSpread {
     final page = _startPage;
@@ -75,6 +77,9 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   @override
   void initState() {
     super.initState();
+    _sessionInitialPage = widget.pages.isEmpty
+        ? 0
+        : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
     _lastReported = _startPage;
     _resetLoadBatches();
   }
@@ -84,7 +89,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     _loadBatches?.dispose();
     _loadBatches = MangaReaderLoadBatchController(
       pageCount: widget.pages.length,
-      initialPage: widget.initialPage,
+      initialPage: _sessionInitialPage,
       batchSize: widget.settings.pagePreloadAmount,
     )..addListener(_onLoadBatchChanged);
   }
@@ -97,7 +102,6 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   void didUpdateWidget(covariant MangaWebtoonReader oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.pages.length != widget.pages.length ||
-        oldWidget.initialPage != widget.initialPage ||
         oldWidget.settings.pagePreloadAmount !=
             widget.settings.pagePreloadAmount) {
       _resetLoadBatches();
@@ -138,13 +142,18 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
     final custom = widget.pageBuilder;
     if (custom != null) return custom(context, page);
     final batches = _loadBatches;
-    if (batches != null && !batches.canLoad(index)) {
+    if (!_settledPages.contains(index) &&
+        batches != null &&
+        !batches.canLoad(index)) {
       return const MangaReaderPageLoadingPlaceholder();
     }
     return MangaPageImage(
       page: page,
       settings: widget.settings,
-      onLoadSettled: () => _loadBatches?.markSettled(index),
+      onLoadSettled: () {
+        _settledPages.add(index);
+        _loadBatches?.markSettled(index);
+      },
     );
   }
 
