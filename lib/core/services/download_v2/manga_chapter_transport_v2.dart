@@ -234,7 +234,8 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
       );
       final currentPage = handle.current;
       _emit(_aggregate(currentPage));
-      if (currentPage.isFinal) {
+      if (currentPage.isFinal ||
+          currentPage.status == DownloadTransportStatus.missing) {
         unawaited(
           Future<void>.delayed(
             Duration.zero,
