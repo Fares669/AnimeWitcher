@@ -86,11 +86,10 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   final ListController _listController = ListController();
   final Map<int, double> _visibility = <int, double>{};
   final Map<int, Size> _imageSizes = <int, Size>{};
-  late int _lastReported = widget.pages.isEmpty
-      ? 0
-      : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
-  late bool _initialJumpPending =
-      widget.pages.isNotEmpty && widget.initialPage > 0;
+  final Set<int> _settledPages = <int>{};
+  late final int _sessionInitialPage;
+  late int _lastReported;
+  late bool _initialJumpPending;
   bool _scheduled = false;
   bool _trailingAdvanceRequested = false;
   MangaReaderLoadBatchController? _loadBatches;
@@ -136,6 +135,11 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   @override
   void initState() {
     super.initState();
+    _sessionInitialPage = widget.pages.isEmpty
+        ? 0
+        : widget.initialPage.clamp(0, widget.pages.length - 1).toInt();
+    _lastReported = _sessionInitialPage;
+    _initialJumpPending = widget.pages.isNotEmpty && _sessionInitialPage > 0;
     _resetLoadBatches();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _jumpToInitialSpread();
@@ -153,8 +157,8 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   }
 
   void _jumpToInitialSpread([int attempt = 0]) {
-    if (!mounted || widget.pages.isEmpty || widget.initialPage <= 0) return;
-    final targetPage = widget.initialPage
+    if (!mounted || widget.pages.isEmpty || _sessionInitialPage <= 0) return;
+    final targetPage = _sessionInitialPage
         .clamp(0, widget.pages.length - 1)
         .toInt();
     final targetSpread = _spreadIndexForPage(targetPage);
@@ -177,7 +181,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     _loadBatches?.dispose();
     _loadBatches = MangaReaderLoadBatchController(
       pageCount: widget.pages.length,
-      initialPage: widget.initialPage,
+      initialPage: _sessionInitialPage,
       batchSize: widget.settings.pagePreloadAmount,
     )..addListener(_onLoadBatchChanged);
   }
@@ -190,7 +194,6 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   void didUpdateWidget(covariant MangaContinuousReader oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.pages.length != widget.pages.length ||
-        oldWidget.initialPage != widget.initialPage ||
         oldWidget.settings.pagePreloadAmount !=
             widget.settings.pagePreloadAmount) {
       _resetLoadBatches();
@@ -213,7 +216,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
       _scheduled = false;
       if (!mounted || _visibility.isEmpty) return;
       if (_initialJumpPending) {
-        final targetPage = widget.initialPage
+        final targetPage = _sessionInitialPage
             .clamp(0, widget.pages.length - 1)
             .toInt();
         final targetSpread = _spreadIndexForPage(targetPage);
@@ -276,7 +279,9 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     final custom = widget.pageBuilder;
     if (custom != null) return custom(context, page);
     final batches = _loadBatches;
-    if (batches != null && !batches.canLoad(part.pageIndex)) {
+    if (!_settledPages.contains(part.pageIndex) &&
+        batches != null &&
+        !batches.canLoad(part.pageIndex)) {
       return const MangaReaderPageLoadingPlaceholder();
     }
     return MangaPageImage(
@@ -284,7 +289,10 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
       settings: widget.settings,
       fit: widget.scrollDirection == Axis.horizontal ? BoxFit.contain : null,
       sourceRect: _sourceRectFor(part),
-      onLoadSettled: () => _loadBatches?.markSettled(part.pageIndex),
+      onLoadSettled: () {
+        _settledPages.add(part.pageIndex);
+        _loadBatches?.markSettled(part.pageIndex);
+      },
       onImageSize: part.slice == MangaReaderPageSlice.full
           ? (size) => _imageSizeChanged(part.pageIndex, size)
           : null,
