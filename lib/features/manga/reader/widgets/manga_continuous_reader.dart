@@ -7,6 +7,8 @@ import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
 import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
+import 'manga_reader_load_scheduler.dart';
+import 'manga_reader_page_loading.dart';
 import 'manga_continuous_zoom_surface.dart';
 
 class _ContinuousPagePart {
@@ -91,6 +93,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
       widget.pages.isNotEmpty && widget.initialPage > 0;
   bool _scheduled = false;
   bool _trailingAdvanceRequested = false;
+  MangaReaderLoadBatchController? _loadBatches;
 
   bool get _doublePageActive =>
       widget.doublePage && widget.scrollDirection == Axis.vertical;
@@ -133,6 +136,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
   @override
   void initState() {
     super.initState();
+    _resetLoadBatches();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _jumpToInitialSpread();
     });
@@ -168,8 +172,35 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     });
   }
 
+  void _resetLoadBatches() {
+    _loadBatches?.removeListener(_onLoadBatchChanged);
+    _loadBatches?.dispose();
+    _loadBatches = MangaReaderLoadBatchController(
+      pageCount: widget.pages.length,
+      initialPage: widget.initialPage,
+      batchSize: widget.settings.pagePreloadAmount,
+    )..addListener(_onLoadBatchChanged);
+  }
+
+  void _onLoadBatchChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void didUpdateWidget(covariant MangaContinuousReader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pages.length != widget.pages.length ||
+        oldWidget.initialPage != widget.initialPage ||
+        oldWidget.settings.pagePreloadAmount !=
+            widget.settings.pagePreloadAmount) {
+      _resetLoadBatches();
+    }
+  }
+
   @override
   void dispose() {
+    _loadBatches?.removeListener(_onLoadBatchChanged);
+    _loadBatches?.dispose();
     if (_ownsController) _controller.dispose();
     super.dispose();
   }
@@ -244,11 +275,16 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
     final page = widget.pages[part.pageIndex];
     final custom = widget.pageBuilder;
     if (custom != null) return custom(context, page);
+    final batches = _loadBatches;
+    if (batches != null && !batches.canLoad(part.pageIndex)) {
+      return const MangaReaderPageLoadingPlaceholder();
+    }
     return MangaPageImage(
       page: page,
       settings: widget.settings,
       fit: widget.scrollDirection == Axis.horizontal ? BoxFit.contain : null,
       sourceRect: _sourceRectFor(part),
+      onLoadSettled: () => _loadBatches?.markSettled(part.pageIndex),
       onImageSize: part.slice == MangaReaderPageSlice.full
           ? (size) => _imageSizeChanged(part.pageIndex, size)
           : null,

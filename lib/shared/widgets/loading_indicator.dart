@@ -11,12 +11,20 @@ class AppLoadingIndicator extends StatelessWidget {
   /// Sizing constraints for the indicator. Defaults to Material's 36x36 spinner.
   final BoxConstraints? constraints;
 
-  const AppLoadingIndicator({super.key, this.color, this.constraints});
+  /// Optional determinate progress. Null keeps the normal indeterminate spinner.
+  final double? value;
+
+  const AppLoadingIndicator({
+    super.key,
+    this.color,
+    this.constraints,
+    this.value,
+  });
 
   @override
   Widget build(BuildContext context) {
     if (constraints == null) {
-      return CircularProgressIndicator(color: color);
+      return CircularProgressIndicator(color: color, value: value);
     }
 
     final double width =
@@ -32,6 +40,7 @@ class AppLoadingIndicator extends StatelessWidget {
       child: CircularProgressIndicator(
         color: color,
         strokeWidth: strokeWidth,
+        value: value,
       ),
     );
   }

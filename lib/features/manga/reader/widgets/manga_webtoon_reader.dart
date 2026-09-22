@@ -6,6 +6,8 @@ import '../../../../core/domain/entity/manga.dart';
 import '../manga_reader_settings.dart';
 import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
+import 'manga_reader_load_scheduler.dart';
+import 'manga_reader_page_loading.dart';
 import 'manga_continuous_zoom_surface.dart';
 
 class MangaWebtoonReader extends StatefulWidget {
@@ -45,6 +47,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       widget.controller ?? ScrollController();
   late final bool _ownsController = widget.controller == null;
   bool _trailingAdvanceRequested = false;
+  MangaReaderLoadBatchController? _loadBatches;
 
   List<List<int>> get _spreads => widget.doublePage
       ? mangaReaderPageSpreads(
@@ -73,10 +76,38 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
   void initState() {
     super.initState();
     _lastReported = _startPage;
+    _resetLoadBatches();
+  }
+
+  void _resetLoadBatches() {
+    _loadBatches?.removeListener(_onLoadBatchChanged);
+    _loadBatches?.dispose();
+    _loadBatches = MangaReaderLoadBatchController(
+      pageCount: widget.pages.length,
+      initialPage: widget.initialPage,
+      batchSize: widget.settings.pagePreloadAmount,
+    )..addListener(_onLoadBatchChanged);
+  }
+
+  void _onLoadBatchChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void didUpdateWidget(covariant MangaWebtoonReader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pages.length != widget.pages.length ||
+        oldWidget.initialPage != widget.initialPage ||
+        oldWidget.settings.pagePreloadAmount !=
+            widget.settings.pagePreloadAmount) {
+      _resetLoadBatches();
+    }
   }
 
   @override
   void dispose() {
+    _loadBatches?.removeListener(_onLoadBatchChanged);
+    _loadBatches?.dispose();
     if (_ownsController) _controller.dispose();
     super.dispose();
   }
@@ -104,8 +135,17 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
 
   Widget _pageContent(BuildContext context, int index) {
     final page = widget.pages[index];
-    return widget.pageBuilder?.call(context, page) ??
-        MangaPageImage(page: page, settings: widget.settings);
+    final custom = widget.pageBuilder;
+    if (custom != null) return custom(context, page);
+    final batches = _loadBatches;
+    if (batches != null && !batches.canLoad(index)) {
+      return const MangaReaderPageLoadingPlaceholder();
+    }
+    return MangaPageImage(
+      page: page,
+      settings: widget.settings,
+      onLoadSettled: () => _loadBatches?.markSettled(index),
+    );
   }
 
   Widget _spread(BuildContext context, List<int> indices) {

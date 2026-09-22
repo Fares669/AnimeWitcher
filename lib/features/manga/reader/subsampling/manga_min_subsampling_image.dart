@@ -3,8 +3,8 @@
 // decoding/tiling so continuous pages do not install a second gesture arena.
 import 'package:flutter/material.dart';
 
-import '../../../../shared/widgets/loading_indicator.dart';
 import '../manga_reader_settings.dart';
+import '../widgets/manga_reader_page_loading.dart';
 import 'subsampling_scale_image_view.dart';
 
 class MangaMinSubsamplingImage extends StatelessWidget {
@@ -17,6 +17,7 @@ class MangaMinSubsamplingImage extends StatelessWidget {
     required this.rotation,
     this.sourceRect,
     required this.onImageLoaded,
+    required this.onLoadSettled,
     required this.onRetry,
     required this.retryEpoch,
   });
@@ -28,8 +29,27 @@ class MangaMinSubsamplingImage extends StatelessWidget {
   final int rotation;
   final Rect? sourceRect;
   final void Function(int width, int height) onImageLoaded;
+  final VoidCallback onLoadSettled;
   final VoidCallback onRetry;
   final int retryEpoch;
+
+  Widget _failedView(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => onLoadSettled());
+    return SizedBox(
+      height: mangaReaderPageLoadingExtent(MediaQuery.sizeOf(context)),
+      child: Center(
+        child: FilledButton.tonalIcon(
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh_rounded),
+          label: Text(
+            Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
+                ? 'إعادة المحاولة'
+                : 'Retry',
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,18 +68,10 @@ class MangaMinSubsamplingImage extends StatelessWidget {
       quickScaleEnabled: false,
       onImageLoaded: onImageLoaded,
       loadStateChanged: (state) => switch (state.loadState) {
-        LoadState.loading => const Center(child: AppLoadingIndicator()),
-        LoadState.failed => Center(
-          child: FilledButton.tonalIcon(
-            onPressed: onRetry,
-            icon: const Icon(Icons.refresh_rounded),
-            label: Text(
-              Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
-                  ? 'إعادة المحاولة'
-                  : 'Retry',
-            ),
-          ),
+        LoadState.loading => MangaReaderPageLoadingPlaceholder(
+          progress: mangaReaderChunkProgress(state.loadingProgress),
         ),
+        LoadState.failed => _failedView(context),
         LoadState.completed => null,
       },
     );

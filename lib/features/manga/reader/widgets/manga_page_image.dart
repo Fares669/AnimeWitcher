@@ -5,8 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
-import '../../../../shared/widgets/loading_indicator.dart';
 import '../manga_reader_settings.dart';
+import 'manga_reader_page_loading.dart';
 import '../subsampling/manga_min_subsampling_image.dart';
 import '../subsampling/subsampling_scale_image_view.dart';
 
@@ -64,6 +64,7 @@ class MangaPageImage extends StatefulWidget {
     this.expand = false,
     this.settings = const MangaReaderSettings(),
     this.onImageSize,
+    this.onLoadSettled,
     this.sourceRect,
   });
 
@@ -72,6 +73,7 @@ class MangaPageImage extends StatefulWidget {
   final bool expand;
   final MangaReaderSettings settings;
   final ValueChanged<Size>? onImageSize;
+  final VoidCallback? onLoadSettled;
   final Rect? sourceRect;
 
   @override
@@ -83,6 +85,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
   ImageStreamListener? _sizeListener;
   Size? _imageSize;
   int _retryEpoch = 0;
+  bool _loadSettledNotified = false;
   late ImageProvider<Object> _provider;
 
   @override
@@ -143,6 +146,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
         !mapEquals(oldWidget.page.headers, widget.page.headers)) {
       _provider = _createImageProvider(widget.page);
       _imageSize = null;
+      _loadSettledNotified = false;
       _listenForImageSize();
     }
   }
@@ -166,10 +170,23 @@ class _MangaPageImageState extends State<MangaPageImage> {
       if (!mounted || size == _imageSize) return;
       setState(() => _imageSize = size);
       widget.onImageSize?.call(size);
+      _notifyLoadSettled();
     });
     _sizeStream = stream;
     _sizeListener = listener;
     stream.addListener(listener);
+  }
+
+  void _notifyLoadSettled() {
+    if (_loadSettledNotified) return;
+    _loadSettledNotified = true;
+    widget.onLoadSettled?.call();
+  }
+
+  void _scheduleLoadSettled() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _notifyLoadSettled();
+    });
   }
 
   @override
@@ -187,13 +204,16 @@ class _MangaPageImageState extends State<MangaPageImage> {
     if (!mounted) return;
     setState(() {
       _imageSize = null;
+      _loadSettledNotified = false;
       _retryEpoch++;
     });
     _listenForImageSize();
   }
 
-  Widget _errorView(BuildContext context) => SizedBox(
-    height: widget.expand ? null : 280,
+  Widget _errorView(BuildContext context) {
+    _scheduleLoadSettled();
+    return SizedBox(
+    height: mangaReaderPageLoadingExtent(MediaQuery.sizeOf(context)),
     child: Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -213,6 +233,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
       ),
     ),
   );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -239,6 +260,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
         if (!mounted || size == _imageSize) return;
         setState(() => _imageSize = size);
         widget.onImageSize?.call(size);
+        _notifyLoadSettled();
       }
 
       if (widget.expand) {
@@ -261,7 +283,9 @@ class _MangaPageImageState extends State<MangaPageImage> {
           quickScaleEnabled: false,
           onImageLoaded: loaded,
           loadStateChanged: (state) => switch (state.loadState) {
-            LoadState.loading => const Center(child: AppLoadingIndicator()),
+            LoadState.loading => MangaReaderPageLoadingPlaceholder(
+              progress: mangaReaderChunkProgress(state.loadingProgress),
+            ),
             LoadState.failed => _errorView(context),
             LoadState.completed => null,
           },
@@ -277,6 +301,7 @@ class _MangaPageImageState extends State<MangaPageImage> {
           rotation: quarterTurns * 90,
           sourceRect: widget.sourceRect,
           onImageLoaded: loaded,
+          onLoadSettled: _notifyLoadSettled,
           onRetry: () {
             _retry();
           },
@@ -304,10 +329,8 @@ class _MangaPageImageState extends State<MangaPageImage> {
         width: double.infinity,
         height: widget.expand ? double.infinity : null,
         fit: _fit,
-        placeholder: (_, _) => SizedBox(
-          height: widget.expand ? null : 360,
-          child: const Center(child: AppLoadingIndicator()),
-        ),
+        progressIndicatorBuilder: (_, _, progress) =>
+            MangaReaderPageLoadingPlaceholder(progress: progress.progress),
         errorWidget: (_, _, _) => _errorView(context),
       );
     }
