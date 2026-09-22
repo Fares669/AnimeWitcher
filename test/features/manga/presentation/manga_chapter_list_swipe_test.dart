@@ -108,4 +108,58 @@ void main() {
     expect(downloaded?.id, 'c1');
     expect(find.text('Chapter 1'), findsOneWidget);
   });
+
+  testWidgets('chapter list mirrors episode heading and sort toggle', (
+    tester,
+  ) async {
+    const chapters = <MangaChapter>[
+      MangaChapter(
+        id: 'c1',
+        mangaId: 'm1',
+        url: 'https://example.test/c1',
+        name: 'Chapter 1',
+        number: 1,
+      ),
+      MangaChapter(
+        id: 'c2',
+        mangaId: 'm1',
+        url: 'https://example.test/c2',
+        name: 'Chapter 2',
+        number: 2,
+      ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(body: MangaChapterList(chapters: chapters)),
+        ),
+      ),
+    );
+
+    expect(find.text('Chapters'), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_upward_rounded), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Chapter 2')).dy,
+      lessThan(tester.getTopLeft(find.text('Chapter 1')).dy),
+    );
+
+    await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.arrow_downward_rounded), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Chapter 1')).dy,
+      lessThan(tester.getTopLeft(find.text('Chapter 2')).dy),
+    );
+  });
+
 }
