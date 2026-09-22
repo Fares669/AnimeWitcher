@@ -157,6 +157,33 @@ void main() {
 
     expect(starter.startedPageIndexes, <int>[1]);
   });
+
+  test('manga page 404 requests a fresh chapter source', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_manga_page_404_');
+    addTearDown(() => temp.delete(recursive: true));
+
+    final starter = _FakePageStarter();
+    final transport = MangaChapterTransportV2(startPage: starter.start);
+    final handle = await transport.start(
+      MangaChapterTransportSpecV2(
+        taskId: 'chapter-parent',
+        mangaId: 'm1',
+        chapterId: '404',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/gone.webp'),
+        ],
+        retries: 2,
+      ),
+    );
+
+    starter.handles[0]!.missing();
+    await _waitForStatus(handle, DownloadTransportStatus.failed);
+
+    expect(handle.current.failureCategory, DownloadFailureCategory.sourceExpired);
+    expect(handle.current.progress, 0.8);
+  });
+
   test('duplicate page completion callbacks cannot corrupt the chapter manifest', () async {
     final temp = await Directory.systemTemp.createTemp(
       'aw_manga_duplicate_complete_',
@@ -312,6 +339,16 @@ final class _FakePageHandle implements DownloadTransportHandle {
   @override
   Stream<DownloadTransportSnapshot> get snapshots => _controller.stream;
 
+
+  void missing() {
+    _current = DownloadTransportSnapshot(
+      taskId: taskId,
+      status: DownloadTransportStatus.missing,
+      progress: 0.8,
+    );
+    onTerminal();
+    _controller.add(_current);
+  }
 
   void complete({int times = 1}) {
     _current = DownloadTransportSnapshot(
