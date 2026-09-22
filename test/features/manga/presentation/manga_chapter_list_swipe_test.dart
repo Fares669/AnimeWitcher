@@ -1,5 +1,8 @@
 import 'package:animewitcher/core/domain/entity/manga.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
+import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/presentation/widgets/manga_chapter_list.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
@@ -127,6 +130,51 @@ void main() {
     expect(repository.get('m1', 'c1')?.isRead, isTrue);
     expect(repository.get('m1', 'c2')?.isRead, isTrue);
     expect(find.textContaining('selected'), findsNothing);
+  });
+
+  testWidgets('downloading chapter replaces download button with progress ring', (
+    tester,
+  ) async {
+    final logicalId = logicalDownloadIdForMangaChapter(
+      mangaId: 'm1',
+      chapterId: 'c1',
+    ).value;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+          downloadProgressProvider.overrideWithValue(
+            <String, DownloadProgressData>{
+              logicalId: const DownloadProgressData(
+                taskId: 'task-c1',
+                progress: 0.42,
+                networkSpeed: 1,
+                timeRemaining: Duration(seconds: 5),
+                status: TaskStatus.running,
+              ),
+            },
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(
+              chapters: const <MangaChapter>[chapter],
+              onDownload: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('42%'), findsOneWidget);
+    expect(find.byIcon(Icons.download_rounded), findsNothing);
   });
 
   testWidgets('chapter list mirrors episode heading and sort toggle', (

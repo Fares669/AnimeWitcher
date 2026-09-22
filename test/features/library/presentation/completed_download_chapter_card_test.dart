@@ -11,11 +11,30 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/memory_storage_service.dart';
 
+final class _MemoryStorage extends MemoryStorageService {
+  @override
+  String? getString(String key) => settings[key] as String?;
+
+  @override
+  Future<void> setString(String key, String? value) async {
+    if (value == null) {
+      settings.remove(key);
+    } else {
+      settings[key] = value;
+    }
+  }
+
+  @override
+  Future<void> remove(String key) async {
+    settings.remove(key);
+  }
+}
+
 void main() {
   testWidgets('completed manga chapter mirrors chapter read progress row', (
     tester,
   ) async {
-    final repository = MangaReadingRepository(MemoryStorageService());
+    final repository = MangaReadingRepository(_MemoryStorage());
     await repository.save(
       const MangaReadingProgress(
         mangaId: 'm1',

@@ -66,6 +66,7 @@ jobs:
         run: |
           flutter test test/features/library/presentation/downloads_manga_test.dart \
             test/features/library/presentation/completed_download_chapter_card_test.dart \
+            test/features/manga/presentation/manga_chapter_list_swipe_test.dart \
             test/features/library/presentation/manga_download_count_label_test.dart \
             test/features/manga/reader/manga_reader_offline_test.dart -r expanded
 
