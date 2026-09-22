@@ -75,7 +75,7 @@ void main() {
       80,
       (index) => MangaPage(
         index: index,
-        imageUrl: 'https://example.test/keep-' + index.toString() + '.webp',
+        imageUrl: 'https://example.test/keep-$index.webp',
       ),
     );
     final controller = ScrollController();
@@ -94,7 +94,7 @@ void main() {
             pageBuilder: (_, page) => SizedBox(
               height: 500,
               child: _LifecycleProbe(
-                label: 'probe-' + page.index.toString(),
+                label: 'probe-${page.index}',
                 onDispose: page.index == 0
                     ? () => firstDisposed = true
                     : () {},
@@ -121,7 +121,7 @@ void main() {
       80,
       (index) => MangaPage(
         index: index,
-        imageUrl: 'https://example.test/continuous-' + index.toString() + '.webp',
+        imageUrl: 'https://example.test/continuous-$index.webp',
       ),
     );
     final controller = ScrollController();
@@ -143,7 +143,7 @@ void main() {
             pageBuilder: (_, page) => SizedBox(
               height: 500,
               child: _LifecycleProbe(
-                label: 'continuous-probe-' + page.index.toString(),
+                label: 'continuous-probe-${page.index}',
                 onDispose: page.index == 0
                     ? () => firstDisposed = true
                     : () {},
