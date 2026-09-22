@@ -168,6 +168,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   DownloadTransportSnapshot _current;
   DownloadTransportHandle? _pageHandle;
   StreamSubscription<DownloadTransportSnapshot>? _pageSubscription;
+  Future<void> _pageCompletionTail = Future<void>.value();
   bool _paused = false;
   bool _canceled = false;
   bool _starting = false;
@@ -229,7 +230,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
       _pageHandle = handle;
       await _pageSubscription?.cancel();
       _pageSubscription = handle.snapshots.listen(
-        (snapshot) => unawaited(_onPageSnapshot(index, generation, snapshot)),
+        (snapshot) => _dispatchPageSnapshot(index, generation, snapshot),
       );
       final currentPage = handle.current;
       _emit(_aggregate(currentPage));
@@ -237,7 +238,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         unawaited(
           Future<void>.delayed(
             Duration.zero,
-            () => _onPageSnapshot(index, generation, currentPage),
+            () => _dispatchPageSnapshot(index, generation, currentPage),
           ),
         );
       }
@@ -261,6 +262,34 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
       if (!_manifest.completedIndexes.contains(index)) return index;
     }
     return null;
+  }
+
+  void _dispatchPageSnapshot(
+    int index,
+    int generation,
+    DownloadTransportSnapshot snapshot,
+  ) {
+    if (snapshot.status != DownloadTransportStatus.complete) {
+      unawaited(_onPageSnapshot(index, generation, snapshot));
+      return;
+    }
+
+    final previous = _pageCompletionTail;
+    final next = previous
+        .catchError((Object _, StackTrace __) {})
+        .then<void>((_) => _onPageSnapshot(index, generation, snapshot));
+    _pageCompletionTail = next.catchError((Object error, StackTrace _) {
+      if (_canceled || generation != _generation) return;
+      _emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.failed,
+          progress: current.progress,
+          failureCategory: DownloadFailureCategory.filesystem,
+          failureMessage: error.toString(),
+        ),
+      );
+    });
   }
 
   Future<void> _onPageSnapshot(
