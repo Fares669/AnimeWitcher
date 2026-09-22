@@ -31,9 +31,13 @@ const pages = <MangaPage>[
 ];
 
 final class _ReaderProvider extends AnimeWitcherProvider {
-  _ReaderProvider({this.emptyPages = false});
+  _ReaderProvider({
+    this.emptyPages = false,
+    this.deferredPages,
+  });
 
   final bool emptyPages;
+  final Completer<List<MangaPage>>? deferredPages;
   final List<String> requestedChapterIds = <String>[];
   final Map<String, Completer<void>> _requestWaiters =
       <String, Completer<void>>{};
@@ -92,6 +96,8 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     requestedChapterIds.add(chapter.id);
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
+    final deferred = deferredPages;
+    if (deferred != null) return deferred.future;
     return emptyPages ? const <MangaPage>[] : pages;
   }
 }
@@ -368,6 +374,57 @@ void main() {
     expect(progress.get('m1', 'c1-a')?.isRead, isTrue);
     expect(progress.get('m1', 'c1-b')?.isRead, isTrue);
     expect(progress.get('m1', 'c2'), isNull);
+  });
+
+  testWidgets('reader leaves loading state when chapter pages arrive', (
+    tester,
+  ) async {
+    final response = Completer<List<MangaPage>>();
+    final provider = _ReaderProvider(deferredPages: response);
+    const chapter = MangaChapter(
+      id: 'loading-c1',
+      mangaId: 'loading-m1',
+      url: 'https://example.test/chapter/loading-1',
+      name: 'Chapter loading',
+      number: 1,
+    );
+    final manga = MultimediaItem(
+      title: 'Loading Reader Manga',
+      url: 'https://animewitcher.com/manga/loading-m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _ReaderSettingsNotifier.new,
+          ),
+        ],
+        child: MaterialApp(
+          home: MangaReaderScreen(
+            manga: manga,
+            chapter: chapter,
+            chapters: const <MangaChapter>[chapter],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await provider.waitUntilRequested('loading-c1');
+    expect(find.byType(MangaPagedReader), findsNothing);
+
+    response.complete(pages);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(MangaPagedReader), findsOneWidget);
   });
 
   testWidgets('paged RTL reader reverses page direction', (tester) async {
