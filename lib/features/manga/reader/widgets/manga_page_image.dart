@@ -45,7 +45,6 @@ ScaleType mangaReaderMinimumScaleType(MangaReaderScaleType scaleType) =>
       MangaReaderScaleType.smartFit => ScaleType.smartFit,
     };
 
-@visibleForTesting
 ImageProvider<Object> mangaPageImageProvider(MangaPage page) {
   final uri = Uri.tryParse(page.imageUrl);
   return uri != null && uri.scheme == 'file'

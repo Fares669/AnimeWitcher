@@ -1,12 +1,9 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../shared/widgets/loading_indicator.dart';
 
-@visibleForTesting
 double mangaReaderPageLoadingExtent(Size viewport) => viewport.height * 0.8;
 
-@visibleForTesting
 double? mangaReaderChunkProgress(ImageChunkEvent? progress) {
   final total = progress?.expectedTotalBytes;
   if (progress == null || total == null || total <= 0) return null;

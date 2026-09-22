@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 
-@visibleForTesting
 List<List<int>> mangaReaderOrderedPreloadBatches({
   required int pageCount,
   required int initialPage,
