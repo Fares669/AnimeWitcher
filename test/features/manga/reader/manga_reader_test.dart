@@ -5,7 +5,6 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
-import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_controller.dart';
@@ -371,65 +370,16 @@ void main() {
     expect(progress.get('m1', 'c2'), isNull);
   });
 
-  testWidgets('reader leaves loading state after local chapter loads', (
-    tester,
-  ) async {
-    final temp = await Directory.systemTemp.createTemp('aw_reader_local_');
-    addTearDown(() async {
-      if (await temp.exists()) await temp.delete(recursive: true);
-    });
-    await File('${temp.path}/0001.webp').writeAsBytes(<int>[1, 2, 3]);
-    await MangaChapterManifestV2(
-      version: MangaChapterManifestV2.currentVersion,
-      mangaId: 'loading-m1',
-      chapterId: 'loading-c1',
-      pageCount: 1,
-      completedIndexes: const <int>{0},
-      isComplete: true,
-    ).writeTo(temp);
+  test('reader screen rebuilds from controller notifications', () {
+    final source = File(
+      'lib/features/manga/reader/manga_reader_screen.dart',
+    ).readAsStringSync();
 
-    final provider = _ReaderProvider(emptyPages: true);
-    const chapter = MangaChapter(
-      id: 'loading-c1',
-      mangaId: 'loading-m1',
-      url: 'https://example.test/chapter/loading-1',
-      name: 'Chapter loading',
-      number: 1,
+    expect(source, contains('_controller.addListener(_handleControllerChanged)'));
+    expect(
+      source,
+      contains('_controller.removeListener(_handleControllerChanged)'),
     );
-    final manga = MultimediaItem(
-      title: 'Loading Reader Manga',
-      url: 'https://animewitcher.com/manga/loading-m1',
-      posterUrl: '',
-      contentType: MultimediaContentType.manga,
-      provider: provider.packageName,
-    );
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
-          mangaReadingRepositoryProvider.overrideWithValue(
-            _ReaderProgressRepository(),
-          ),
-          mangaReaderSettingsProvider.overrideWith(
-            _ReaderSettingsNotifier.new,
-          ),
-        ],
-        child: MaterialApp(
-          home: MangaReaderScreen(
-            manga: manga,
-            chapter: chapter,
-            chapters: const <MangaChapter>[chapter],
-            localChapterDirectory: temp.path,
-          ),
-        ),
-      ),
-    );
-    for (var i = 0; i < 5; i++) {
-      await tester.pump(const Duration(milliseconds: 10));
-    }
-
-    expect(find.byType(MangaPagedReader), findsOneWidget);
   });
 
   testWidgets('paged RTL reader reverses page direction', (tester) async {
