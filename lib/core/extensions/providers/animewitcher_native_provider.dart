@@ -2978,20 +2978,129 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return List<MangaChapter>.unmodifiable(archiveChapters);
   }
 
+  MangaChapter? _matchingMangaSourceChapter(
+    List<MangaChapter> chapters,
+    MangaChapter target,
+  ) {
+    final targetNumber =
+        target.number ?? _firestoreMangaChapterNumber(target.name, target.id);
+    if (targetNumber != null) {
+      for (final chapter in chapters) {
+        final number = chapter.number;
+        if (number != null && (number - targetNumber).abs() < 0.000001) {
+          return chapter;
+        }
+      }
+    }
+
+    final targetId = target.id.trim().toLowerCase();
+    final targetName = target.name.trim().toLowerCase();
+    for (final chapter in chapters) {
+      if (targetId.isNotEmpty && chapter.id.trim().toLowerCase() == targetId) {
+        return chapter;
+      }
+      if (targetName.isNotEmpty &&
+          chapter.name.trim().toLowerCase() == targetName) {
+        return chapter;
+      }
+    }
+    return null;
+  }
+
+  Future<List<MangaPage>> _loadFreshMangaSourcePages(
+    String mangaUrl,
+    MangaChapter chapter,
+    String mangaId,
+  ) async {
+    final details = await getMangaDetails(mangaUrl);
+    final sourceUrl = details.syncData?['mangalekPageUrl']?.trim() ?? '';
+    if (sourceUrl.isEmpty) return const <MangaPage>[];
+
+    MangaChapter? sourceChapter;
+    try {
+      final html = await _mangaHtml(
+        sourceUrl,
+        acceptHtml: (html) => RegExp(
+          r'wp-manga-chapter',
+          caseSensitive: false,
+        ).hasMatch(html),
+      );
+      sourceChapter = _matchingMangaSourceChapter(
+        parseMangaLekChapters(
+          html: html,
+          mangaId: mangaId,
+          documentUrl: sourceUrl,
+        ),
+        chapter,
+      );
+    } catch (_) {
+      // The current source may have moved to the archive layout.
+    }
+
+    if (sourceChapter == null) {
+      try {
+        sourceChapter = _matchingMangaSourceChapter(
+          await _loadMangaArchiveChapters(
+            sourceUrl: sourceUrl,
+            mangaId: mangaId,
+          ),
+          chapter,
+        );
+      } catch (_) {
+        sourceChapter = null;
+      }
+    }
+    if (sourceChapter == null) return const <MangaPage>[];
+
+    try {
+      final chapterUrl = sourceChapter.url;
+      final html = await _mangaHtml(
+        chapterUrl,
+        referer: sourceUrl,
+        acceptHtml: (html) => RegExp(
+          r'page-break|reading-content|entry-content|post-content|td-post-content',
+          caseSensitive: false,
+        ).hasMatch(html),
+      );
+      return parseMangaLekPages(html: html, chapterUrl: chapterUrl);
+    } catch (_) {
+      return const <MangaPage>[];
+    }
+  }
+
   @override
   Future<List<MangaPage>> refreshMangaChapterPages(
     String mangaUrl,
     MangaChapter chapter,
-  ) {
+  ) async {
     final mangaId = chapter.mangaId.trim().isNotEmpty
         ? chapter.mangaId.trim()
         : _mangaIdFromUrl(mangaUrl);
     final chapterId = chapter.id.trim();
-    if (mangaId.isNotEmpty && chapterId.isNotEmpty) {
-      final key = '$mangaId|$chapterId';
-      _mangaPageCache.remove(key);
-      _mangaPageExpiresAt.remove(key);
+    if (mangaId.isEmpty || chapterId.isEmpty) {
+      return const <MangaPage>[];
     }
+
+    final key = '$mangaId|$chapterId';
+    _mangaPageCache.remove(key);
+    _mangaPageExpiresAt.remove(key);
+
+    // Download generations need a genuinely fresh source. Firestore page URLs
+    // can outlive the CDN authorization behind them, which otherwise creates
+    // a 403 -> retry -> new-generation loop at 0%. Resolve the current
+    // AnimeWitcher MangaLek pointer first, then fall back to Firestore if that
+    // source is unavailable.
+    final freshPages = await _loadFreshMangaSourcePages(
+      mangaUrl,
+      chapter,
+      mangaId,
+    );
+    if (freshPages.isNotEmpty) {
+      _mangaPageCache[key] = freshPages;
+      _mangaPageExpiresAt[key] = DateTime.now().add(_episodeDataTtl);
+      return List<MangaPage>.unmodifiable(freshPages);
+    }
+
     return getMangaChapterPages(mangaUrl, chapter);
   }
 
