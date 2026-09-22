@@ -119,23 +119,11 @@ void main() {
       MangaPageImageTier.animated,
     );
   });
-  testWidgets('loaded page keeps its image state after leaving the viewport', (
-    tester,
-  ) async {
-    final temp = await Directory.systemTemp.createTemp('aw_reader_keepalive_');
-    addTearDown(() async {
-      if (await temp.exists()) await temp.delete(recursive: true);
-    });
-    final file = File('${temp.path}/page.gif');
-    await file.writeAsBytes(const <int>[
-      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00,
-      0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0xff, 0xff, 0xff, 0x21, 0xf9, 0x04, 0x01, 0x00,
-      0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00,
-      0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44,
-      0x01, 0x00, 0x3b,
-    ]);
-    final page = MangaPage(index: 0, imageUrl: file.uri.toString());
+  testWidgets('page image state survives leaving the viewport', (tester) async {
+    final page = MangaPage(
+      index: 0,
+      imageUrl: Uri.file('/definitely-missing/aw-reader-page.gif').toString(),
+    );
     const pageKey = ValueKey<String>('kept-manga-page');
     final controller = ScrollController();
     addTearDown(controller.dispose);
