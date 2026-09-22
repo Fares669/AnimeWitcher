@@ -738,9 +738,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               Expanded(child: _buildMobileSearchField(context)),
               const SizedBox(width: 2),
               _buildMobileSearchActionGroup(context),
-              // Move 8pt of the original gap after the controls so the capsule
-              // sits closer to the field without shortening the search field.
-              const SizedBox(width: 8),
+              // Details pins its iOS toolbar 34pt from the trailing edge.
+              // AppBar already contributes 12pt of title spacing, so reserve
+              // the remaining 22pt here to put Search on the same coordinate.
+              const SizedBox(width: 22),
             ],
           ),
         ),
