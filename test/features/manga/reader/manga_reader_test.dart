@@ -22,6 +22,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 const pages = <MangaPage>[
@@ -109,6 +110,15 @@ final class _ReaderManager extends ExtensionManager {
 
   @override
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
+}
+
+final class _ReaderPathProvider extends PathProviderPlatform {
+  _ReaderPathProvider(this.temporaryPath);
+
+  final String temporaryPath;
+
+  @override
+  Future<String?> getTemporaryPath() async => temporaryPath;
 }
 
 final class _ReaderSettingsNotifier extends MangaReaderSettingsNotifier {
@@ -381,6 +391,13 @@ void main() {
   ) async {
     final response = Completer<List<MangaPage>>();
     final provider = _ReaderProvider(deferredPages: response);
+    final temp = await Directory.systemTemp.createTemp('aw_reader_screen_');
+    final originalPathProvider = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _ReaderPathProvider(temp.path);
+    addTearDown(() async {
+      PathProviderPlatform.instance = originalPathProvider;
+      if (await temp.exists()) await temp.delete(recursive: true);
+    });
     const chapter = MangaChapter(
       id: 'loading-c1',
       mangaId: 'loading-m1',
