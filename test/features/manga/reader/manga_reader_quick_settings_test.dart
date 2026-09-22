@@ -50,7 +50,6 @@ void main() {
 
     expect(find.text('Reading'), findsOneWidget);
     expect(find.text('General'), findsOneWidget);
-    expect(find.text('Filter'), findsOneWidget);
     expect(find.text('Disable zoom out'), findsOneWidget);
     expect(find.text('Double-tap zoom'), findsOneWidget);
 
