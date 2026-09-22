@@ -4,6 +4,7 @@ import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_read
 import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_zoom_surface.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_reader_load_scheduler.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_gesture_handler.dart';
@@ -22,6 +23,30 @@ const _pages = <MangaPage>[
 ];
 
 void main() {
+  test('preload amount two unlocks pages in ordered pairs', () {
+    final controller = MangaReaderLoadBatchController(
+      pageCount: 6,
+      initialPage: 0,
+      batchSize: 2,
+    );
+    addTearDown(controller.dispose);
+
+    expect(controller.unlockedPages, <int>{0, 1});
+    expect(controller.canLoad(2), isFalse);
+    expect(controller.canLoad(5), isFalse);
+
+    controller.markSettled(0);
+    expect(controller.canLoad(2), isFalse);
+    controller.markSettled(1);
+    expect(controller.unlockedPages, containsAll(<int>{0, 1, 2, 3}));
+    expect(controller.canLoad(4), isFalse);
+
+    controller.markSettled(2);
+    controller.markSettled(3);
+    expect(controller.canLoad(4), isTrue);
+    expect(controller.canLoad(5), isTrue);
+  });
+
   setUpAll(() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
   });

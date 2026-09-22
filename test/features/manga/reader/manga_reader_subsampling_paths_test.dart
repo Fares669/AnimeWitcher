@@ -4,6 +4,7 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/subsampling/subsampling_scale_image_view.dart' as ssiv;
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_reader_page_loading.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -25,6 +26,28 @@ void main() {
     expect(
       mangaReaderMinimumScaleType(MangaReaderScaleType.fitHeight),
       ssiv.ScaleType.fitHeight,
+    );
+  });
+
+  test('Mangayomi loading placeholder reserves eighty percent of viewport', () {
+    expect(mangaReaderPageLoadingExtent(const Size(400, 1000)), 800);
+  });
+
+  test('Mangayomi loading ring exposes downloaded byte progress', () {
+    expect(
+      mangaReaderChunkProgress(
+        const ImageChunkEvent(
+          cumulativeBytesLoaded: 50,
+          expectedTotalBytes: 200,
+        ),
+      ),
+      0.25,
+    );
+    expect(
+      mangaReaderChunkProgress(
+        const ImageChunkEvent(cumulativeBytesLoaded: 50),
+      ),
+      isNull,
     );
   });
 
