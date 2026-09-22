@@ -39,6 +39,21 @@ void main() {
     }
   });
 
+  test('reader settings source has no chapter swipe controls', () {
+    final source = File(
+      'lib/features/manga/reader/manga_reader_settings_screen.dart',
+    ).readAsStringSync();
+
+    for (final label in <String>[
+      'Chapter swipes',
+      'Swipe from start',
+      'Swipe from end',
+    ]) {
+      expect(source, isNot(contains(label)), reason: label);
+    }
+  });
+
+
   testWidgets('reader settings exposes Mangayomi reading and display controls', (
     tester,
   ) async {
@@ -76,8 +91,6 @@ void main() {
       'Show page number',
       'Auto-read duplicate chapters',
       'Reader hide threshold',
-      'Swipe from start',
-      'Swipe from end',
       'Flash color',
     ]) {
       await expectWhileScrolling(label);

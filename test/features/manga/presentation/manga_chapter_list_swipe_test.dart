@@ -7,6 +7,7 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/presentation/widgets/manga_chapter_list.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
