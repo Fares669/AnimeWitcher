@@ -58,6 +58,39 @@ void main() {
     expect(reusable, same(handle));
     expect(removed, 0);
   });
+
+  test('recovered paused manga child resumes before reuse', () async {
+    final handle = _PausedHandle('chapter_p0001', resumeAccepted: true);
+    var removed = 0;
+
+    final reusable = await reusableMangaPageHandleV2(
+      existing: handle,
+      destinationPath: 'unused.webp',
+      removeTracking: () async => removed++,
+    );
+
+    expect(reusable, same(handle));
+    expect(handle.resumeCalls, 1);
+    expect(handle.cancelCalls, 0);
+    expect(removed, 0);
+  });
+
+  test('unresumable paused manga child is replaced instead of staying parked', () async {
+    final handle = _PausedHandle('chapter_p0001', resumeAccepted: false);
+    var removed = 0;
+
+    final reusable = await reusableMangaPageHandleV2(
+      existing: handle,
+      destinationPath: 'unused.webp',
+      removeTracking: () async => removed++,
+    );
+
+    expect(reusable, isNull);
+    expect(handle.resumeCalls, 1);
+    expect(handle.cancelCalls, 1);
+    expect(removed, 1);
+  });
+
   test('manga page package tasks are silent child transfers', () async {
     final task = await packageMangaPageTaskForV2(
       const MangaChapterPageTaskV2(
@@ -104,6 +137,43 @@ final class _CompleteHandle implements DownloadTransportHandle {
   Future<bool> cancel() async => true;
 }
 
+
+
+final class _PausedHandle implements DownloadTransportHandle {
+  _PausedHandle(this.taskId, {required this.resumeAccepted});
+
+  @override
+  final String taskId;
+  final bool resumeAccepted;
+  int resumeCalls = 0;
+  int cancelCalls = 0;
+
+  @override
+  DownloadTransportSnapshot get current => DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.paused,
+        progress: 0.4,
+      );
+
+  @override
+  Stream<DownloadTransportSnapshot> get snapshots =>
+      const Stream<DownloadTransportSnapshot>.empty();
+
+  @override
+  Future<bool> pause() async => true;
+
+  @override
+  Future<bool> resume() async {
+    resumeCalls++;
+    return resumeAccepted;
+  }
+
+  @override
+  Future<bool> cancel() async {
+    cancelCalls++;
+    return true;
+  }
+}
 
 final class _MangaTestPathProvider extends PathProviderPlatform {
   @override
