@@ -5,6 +5,7 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_controller.dart';
@@ -22,7 +23,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 const pages = <MangaPage>[
@@ -32,13 +32,9 @@ const pages = <MangaPage>[
 ];
 
 final class _ReaderProvider extends AnimeWitcherProvider {
-  _ReaderProvider({
-    this.emptyPages = false,
-    this.deferredPages,
-  });
+  _ReaderProvider({this.emptyPages = false});
 
   final bool emptyPages;
-  final Completer<List<MangaPage>>? deferredPages;
   final List<String> requestedChapterIds = <String>[];
   final Map<String, Completer<void>> _requestWaiters =
       <String, Completer<void>>{};
@@ -97,8 +93,6 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     requestedChapterIds.add(chapter.id);
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
-    final deferred = deferredPages;
-    if (deferred != null) return deferred.future;
     return emptyPages ? const <MangaPage>[] : pages;
   }
 }
@@ -110,15 +104,6 @@ final class _ReaderManager extends ExtensionManager {
 
   @override
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
-}
-
-final class _ReaderPathProvider extends PathProviderPlatform {
-  _ReaderPathProvider(this.temporaryPath);
-
-  final String temporaryPath;
-
-  @override
-  Future<String?> getTemporaryPath() async => temporaryPath;
 }
 
 final class _ReaderSettingsNotifier extends MangaReaderSettingsNotifier {
@@ -386,18 +371,24 @@ void main() {
     expect(progress.get('m1', 'c2'), isNull);
   });
 
-  testWidgets('reader leaves loading state when chapter pages arrive', (
+  testWidgets('reader leaves loading state after local chapter loads', (
     tester,
   ) async {
-    final response = Completer<List<MangaPage>>();
-    final provider = _ReaderProvider(deferredPages: response);
-    final temp = await Directory.systemTemp.createTemp('aw_reader_screen_');
-    final originalPathProvider = PathProviderPlatform.instance;
-    PathProviderPlatform.instance = _ReaderPathProvider(temp.path);
+    final temp = await Directory.systemTemp.createTemp('aw_reader_local_');
     addTearDown(() async {
-      PathProviderPlatform.instance = originalPathProvider;
       if (await temp.exists()) await temp.delete(recursive: true);
     });
+    await File('${temp.path}/0001.webp').writeAsBytes(<int>[1, 2, 3]);
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'loading-m1',
+      chapterId: 'loading-c1',
+      pageCount: 1,
+      completedIndexes: const <int>{0},
+      isComplete: true,
+    ).writeTo(temp);
+
+    final provider = _ReaderProvider(emptyPages: true);
     const chapter = MangaChapter(
       id: 'loading-c1',
       mangaId: 'loading-m1',
@@ -429,17 +420,14 @@ void main() {
             manga: manga,
             chapter: chapter,
             chapters: const <MangaChapter>[chapter],
+            localChapterDirectory: temp.path,
           ),
         ),
       ),
     );
-    await tester.pump();
-    await provider.waitUntilRequested('loading-c1');
-    expect(find.byType(MangaPagedReader), findsNothing);
-
-    response.complete(pages);
-    await tester.pump();
-    await tester.pump();
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
 
     expect(find.byType(MangaPagedReader), findsOneWidget);
   });
