@@ -835,6 +835,72 @@ void main() {
       'https://mangalik.net/manga/manga-one/chapter-1/',
     );
   });
+
+  test('download refresh replaces stale Firestore page URLs with live source', () async {
+    final stub = _stubDio();
+    stub.dio.interceptors.insert(
+      0,
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (options.uri.host.contains('firestore') &&
+              options.uri.path.endsWith(
+                '/documents/manga_list/m1/chapters/c1/summary_pages/summery',
+              )) {
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data: <String, dynamic>{
+                  'fields': <String, dynamic>{
+                    'pages': <String, dynamic>{
+                      'arrayValue': <String, dynamic>{
+                        'values': <Map<String, dynamic>>[
+                          _mapField(<String, dynamic>{
+                            'image_url': _stringField(
+                              'https://cdn.example/stale.webp',
+                            ),
+                            'order': _intField(1),
+                          }),
+                        ],
+                      },
+                    },
+                  },
+                },
+              ),
+            );
+            return;
+          }
+          handler.next(options);
+        },
+      ),
+    );
+
+    final provider = _provider(stub.dio);
+    const chapter = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://animewitcher.com/manga/m1/chapters/c1',
+      name: 'الفصل 1',
+      number: 1,
+    );
+
+    final cached = await provider.getMangaChapterPages(
+      'https://animewitcher.com/manga/m1',
+      chapter,
+    );
+    final refreshed = await provider.refreshMangaChapterPages(
+      'https://animewitcher.com/manga/m1',
+      chapter,
+    );
+
+    expect(cached.single.imageUrl, 'https://cdn.example/stale.webp');
+    expect(refreshed.first.imageUrl, 'https://cdn.example/1.webp');
+    expect(
+      refreshed.first.headers['Referer'],
+      'https://mangalik.net/manga/manga-one/chapter-1/',
+    );
+  });
+
   test('refreshMangaChapterPages bypasses the cached CDN page list', () async {
     final stub = _stubDio();
     var chapterLoads = 0;
