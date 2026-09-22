@@ -5,9 +5,19 @@ import 'package:animewitcher/core/services/download_v2/background_downloader_gat
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  final originalPathProvider = PathProviderPlatform.instance;
+
+  setUp(() {
+    PathProviderPlatform.instance = _MangaTestPathProvider();
+  });
+
+  tearDown(() {
+    PathProviderPlatform.instance = originalPathProvider;
+  });
   test('production background gateway exposes manga chapter transport', () {
     final gateway = PackageBackgroundDownloaderGateway(
       initializePackage: () async {},
@@ -95,4 +105,10 @@ final class _CompleteHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> cancel() async => true;
+}
+
+
+final class _MangaTestPathProvider extends PathProviderPlatform {
+  @override
+  Future<String?> getTemporaryPath() async => Directory.systemTemp.path;
 }
