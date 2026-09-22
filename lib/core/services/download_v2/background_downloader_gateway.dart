@@ -289,23 +289,9 @@ final class PackageBackgroundDownloaderGateway
     if (reusable != null) return reusable;
 
     final prefs = _notificationPreferences();
-    await configurePackageNotificationsV2(_downloader, prefs);
-    final task = await packageTaskForV2(
-      DownloadTaskSpecV2(
-        taskId: page.taskId,
-        url: page.url,
-        destinationPath: page.destinationPath,
-        headers: page.headers,
-        allowPause: true,
-        retries: page.retries,
-        parallelChunks: 1,
-      ),
+    final task = await packageMangaPageTaskForV2(
+      page,
       userInitiated: prefs.running,
-      group: prefs.noneEnabled
-          ? kDownloadV2SilentPackageGroup
-          : kDownloadV2PackageGroup,
-      // Manga pages are never parallel/ranged tasks, including on iOS.
-      isIOS: false,
     );
     final transfer = await _downloader.transfers.start(task);
     return _handleFor(transfer);
@@ -788,6 +774,27 @@ Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
 /// A request greater than one maps to one [ParallelDownloadTask] descriptor.
 /// The production gateway may execute that descriptor through durable immutable
 /// ranges on iOS while preserving the same parent task identity.
+Future<DownloadTask> packageMangaPageTaskForV2(
+  MangaChapterPageTaskV2 page, {
+  required bool userInitiated,
+}) {
+  return packageTaskForV2(
+    DownloadTaskSpecV2(
+      taskId: page.taskId,
+      url: page.url,
+      destinationPath: page.destinationPath,
+      headers: page.headers,
+      allowPause: true,
+      retries: page.retries,
+      parallelChunks: 1,
+    ),
+    userInitiated: userInitiated,
+    group: kDownloadV2SilentPackageGroup,
+    // Manga page children are implementation details, never user notifications.
+    isIOS: false,
+  );
+}
+
 Future<DownloadTask> packageTaskForV2(
   DownloadTaskSpecV2 spec, {
   bool userInitiated = true,
