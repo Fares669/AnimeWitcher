@@ -265,6 +265,13 @@ abstract class AnimeWitcherProvider {
     return const <MangaPage>[];
   }
 
+  Future<List<MangaPage>> refreshMangaChapterPages(
+    String mangaUrl,
+    MangaChapter chapter,
+  ) {
+    return getMangaChapterPages(mangaUrl, chapter);
+  }
+
   Future<MangaLatestChapterPage> getLatestMangaPage({
     int offset = 0,
     int limit = 30,
