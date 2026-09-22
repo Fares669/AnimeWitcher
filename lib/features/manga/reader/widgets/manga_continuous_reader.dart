@@ -316,13 +316,16 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
         child: child,
       );
     }
-    return VisibilityDetector(
-      key: ValueKey<String>(
-        'manga-continuous-$primaryIndex-'
-        '${entry.parts.map((part) => '${part.pageIndex}:${part.slice.name}').join('-')}',
+    return KeepAlive(
+      keepAlive: true,
+      child: VisibilityDetector(
+        key: ValueKey<String>(
+          'manga-continuous-$primaryIndex-'
+          '${entry.parts.map((part) => '${part.pageIndex}:${part.slice.name}').join('-')}',
+        ),
+        onVisibilityChanged: (info) => _changed(primaryIndex, info),
+        child: child,
       ),
-      onVisibilityChanged: (info) => _changed(primaryIndex, info),
-      child: child,
     );
   }
 
@@ -366,6 +369,9 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
         scrollDirection: widget.scrollDirection,
         reverse: widget.reverse,
         itemCount: entries.length + (widget.trailingPage == null ? 0 : 1),
+        addAutomaticKeepAlives: false,
+        addRepaintBoundaries: false,
+        addSemanticIndexes: false,
         itemBuilder: (context, index) {
           if (index >= entries.length) return widget.trailingPage!;
           return _spread(context, entries[index]);
