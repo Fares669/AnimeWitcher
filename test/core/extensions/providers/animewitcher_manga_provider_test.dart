@@ -835,4 +835,55 @@ void main() {
       'https://mangalik.net/manga/manga-one/chapter-1/',
     );
   });
+  test('refreshMangaChapterPages bypasses the cached CDN page list', () async {
+    final stub = _stubDio();
+    var chapterLoads = 0;
+    stub.dio.interceptors.insert(
+      0,
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (options.uri.host == 'mangalik.net' &&
+              options.uri.path == '/manga/manga-one/chapter-1/') {
+            chapterLoads++;
+            handler.resolve(
+              Response<dynamic>(
+                requestOptions: options,
+                statusCode: 200,
+                data:
+                    '<div class="reading-content">'
+                    '<div class="page-break"><img data-src="https://cdn.example/fresh-' +
+                    chapterLoads.toString() +
+                    '.webp"></div></div>',
+              ),
+            );
+            return;
+          }
+          handler.next(options);
+        },
+      ),
+    );
+
+    final provider = _provider(stub.dio);
+    final chapters = await provider.getMangaChapters(
+      'https://animewitcher.com/manga/m1',
+    );
+    final first = await provider.getMangaChapterPages(
+      'https://animewitcher.com/manga/m1',
+      chapters.single,
+    );
+    final cached = await provider.getMangaChapterPages(
+      'https://animewitcher.com/manga/m1',
+      chapters.single,
+    );
+    final refreshed = await provider.refreshMangaChapterPages(
+      'https://animewitcher.com/manga/m1',
+      chapters.single,
+    );
+
+    expect(first.single.imageUrl, 'https://cdn.example/fresh-1.webp');
+    expect(cached.single.imageUrl, 'https://cdn.example/fresh-1.webp');
+    expect(refreshed.single.imageUrl, 'https://cdn.example/fresh-2.webp');
+    expect(chapterLoads, 2);
+  });
+
 }
