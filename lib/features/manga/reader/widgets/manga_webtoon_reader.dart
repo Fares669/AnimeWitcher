@@ -223,6 +223,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
                 (context, index) => _spread(context, spreads[index]),
                 childCount: start,
                 addAutomaticKeepAlives: false,
+                addRepaintBoundaries: false,
+                addSemanticIndexes: false,
               ),
             ),
           SliverList(
@@ -234,6 +236,8 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
               },
               childCount: spreads.length - start,
               addAutomaticKeepAlives: false,
+              addRepaintBoundaries: false,
+              addSemanticIndexes: false,
             ),
           ),
           if (widget.trailingPage != null)
