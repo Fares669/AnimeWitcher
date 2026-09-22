@@ -79,7 +79,8 @@ class MangaPageImage extends StatefulWidget {
   State<MangaPageImage> createState() => _MangaPageImageState();
 }
 
-class _MangaPageImageState extends State<MangaPageImage> {
+class _MangaPageImageState extends State<MangaPageImage>
+    with AutomaticKeepAliveClientMixin<MangaPageImage> {
   ImageStream? _sizeStream;
   ImageStreamListener? _sizeListener;
   Size? _imageSize;
@@ -220,7 +221,11 @@ class _MangaPageImageState extends State<MangaPageImage> {
   }
 
   @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
+    super.build(context);
     final uri = Uri.tryParse(widget.page.imageUrl);
     final localFile = uri != null && uri.scheme == 'file'
         ? File.fromUri(uri)
