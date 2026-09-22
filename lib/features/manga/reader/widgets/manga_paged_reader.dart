@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
@@ -5,7 +7,6 @@ import '../manga_reader_settings.dart';
 import 'manga_chapter_transition_page.dart';
 import 'manga_page_image.dart';
 import 'manga_reader_load_scheduler.dart';
-import 'manga_reader_page_loading.dart';
 import 'manga_zoomable_page.dart';
 
 class MangaPagedReader extends StatefulWidget {
@@ -54,7 +55,7 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
   late int _currentSpreadIndex;
   bool _onTrailingPage = false;
   bool _trailingAdvanceRequested = false;
-  MangaReaderLoadBatchController? _loadBatches;
+  int _preloadGeneration = 0;
 
   List<List<_MangaPageUnit>> get _spreads {
     if (!widget.doublePage) {
@@ -104,39 +105,38 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     _lastActualPage = _safeInitialPage;
     _currentSpreadIndex = _spreadForPage(_safeInitialPage);
     _controller = PageController(initialPage: _currentSpreadIndex);
-    _resetLoadBatches();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_preloadInOrderedBatches());
+    });
   }
 
   @override
   void dispose() {
-    _loadBatches?.removeListener(_onLoadBatchChanged);
-    _loadBatches?.dispose();
+    _preloadGeneration++;
     _controller.dispose();
     super.dispose();
   }
 
-  void _resetLoadBatches() {
-    _loadBatches?.removeListener(_onLoadBatchChanged);
-    _loadBatches?.dispose();
-    _loadBatches = MangaReaderLoadBatchController(
+  Future<void> _preloadInOrderedBatches() async {
+    if (widget.pageBuilder != null || widget.pages.isEmpty) return;
+    final generation = ++_preloadGeneration;
+    final batches = mangaReaderOrderedPreloadBatches(
       pageCount: widget.pages.length,
-      initialPage: widget.initialPage,
+      initialPage: _safeInitialPage,
       batchSize: widget.settings.pagePreloadAmount,
-    )..addListener(_onLoadBatchChanged);
-  }
-
-  void _onLoadBatchChanged() {
-    if (mounted) setState(() {});
-  }
-
-  @override
-  void didUpdateWidget(covariant MangaPagedReader oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.pages.length != widget.pages.length ||
-        oldWidget.initialPage != widget.initialPage ||
-        oldWidget.settings.pagePreloadAmount !=
-            widget.settings.pagePreloadAmount) {
-      _resetLoadBatches();
+    );
+    for (final batch in batches) {
+      if (!mounted || generation != _preloadGeneration) return;
+      await Future.wait(
+        batch.map((index) async {
+          final page = widget.pages[index];
+          final uri = Uri.tryParse(page.imageUrl);
+          if (uri?.scheme == 'file') return;
+          try {
+            await precacheImage(mangaPageImageProvider(page), context);
+          } catch (_) {}
+        }),
+      );
     }
   }
 
@@ -166,17 +166,12 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     final page = widget.pages[unit.pageIndex];
     final custom = widget.pageBuilder;
     if (custom != null) return custom(context, page);
-    final batches = _loadBatches;
-    if (batches != null && !batches.canLoad(unit.pageIndex)) {
-      return const MangaReaderPageLoadingPlaceholder();
-    }
     return _MangaPagedImage(
       page: page,
       settings: widget.settings,
       rtl: widget.rtl,
       slice: unit.slice,
       onImageSize: (size) => _handleImageSize(unit.pageIndex, size),
-      onLoadSettled: () => _loadBatches?.markSettled(unit.pageIndex),
       zoomable: zoomable,
       navigationController: navigationController,
     );
@@ -272,7 +267,6 @@ class _MangaPagedImage extends StatefulWidget {
     required this.rtl,
     required this.slice,
     required this.onImageSize,
-    required this.onLoadSettled,
     this.zoomable = true,
     this.navigationController,
   });
@@ -282,7 +276,6 @@ class _MangaPagedImage extends StatefulWidget {
   final bool rtl;
   final MangaReaderPageSlice slice;
   final ValueChanged<Size> onImageSize;
-  final VoidCallback onLoadSettled;
   final bool zoomable;
   final MangaZoomNavigationController? navigationController;
 
@@ -310,7 +303,6 @@ class _MangaPagedImageState extends State<_MangaPagedImage> {
         fit: BoxFit.contain,
         expand: true,
         onImageSize: _onImageSize,
-        onLoadSettled: widget.onLoadSettled,
       );
     } else {
       final halfWidth = size.width / 2;

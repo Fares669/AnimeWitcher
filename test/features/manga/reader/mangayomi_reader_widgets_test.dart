@@ -543,7 +543,7 @@ void main() {
         viewport: const Size(400, 300),
         axis: Axis.vertical,
       ),
-      1350,
+      1440,
     );
   });
 
@@ -572,7 +572,7 @@ void main() {
     final scroll = tester.widget<CustomScrollView>(
       find.byType(CustomScrollView),
     );
-    expect(scroll.scrollCacheExtent?.value, 1350);
+    expect(scroll.scrollCacheExtent?.value, 1440);
   });
 
   test('continuous reader routes loaded wide pages through split logic', () {

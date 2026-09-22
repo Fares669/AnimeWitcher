@@ -641,7 +641,7 @@ double mangaReaderPreloadCacheExtent({
   final mainAxisExtent = axis == Axis.horizontal
       ? viewport.width
       : viewport.height;
-  return settings.pagePreloadAmount.clamp(1, 3) * 1.5 * mainAxisExtent;
+  return settings.pagePreloadAmount.clamp(1, 20) * 0.8 * mainAxisExtent;
 }
 
 bool shouldUseMangaDoublePage({
