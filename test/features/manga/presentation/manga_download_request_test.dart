@@ -5,8 +5,18 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 void main() {
+  final originalPathProvider = PathProviderPlatform.instance;
+
+  setUp(() {
+    PathProviderPlatform.instance = _FakePathProviderPlatform('/tmp/Downloads');
+  });
+
+  tearDown(() {
+    PathProviderPlatform.instance = originalPathProvider;
+  });
   test('manga chapter request uses readable Downloads/manga folders', () async {
     final manga = MultimediaItem(
       title: 'Manga',
@@ -55,4 +65,13 @@ void main() {
     expect(normalized, contains(p.join('anime', 'ون بيس')));
     expect(normalized, isNot(contains(p.join('AnimeWitcher', 'Downloads'))));
   });
+}
+
+final class _FakePathProviderPlatform extends PathProviderPlatform {
+  _FakePathProviderPlatform(this.downloadsPath);
+
+  final String downloadsPath;
+
+  @override
+  Future<String?> getDownloadsPath() async => downloadsPath;
 }
