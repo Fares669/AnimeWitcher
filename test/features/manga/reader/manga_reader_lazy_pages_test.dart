@@ -201,7 +201,9 @@ void main() {
     );
 
     await tester.pumpWidget(reader(0));
-    await tester.pumpAndSettle();
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
     expect(find.byKey(firstImageKey), findsOneWidget);
 
     // This models MangaReaderScreen rebuilding after pageIndex advances.
@@ -251,7 +253,9 @@ void main() {
     );
 
     await tester.pumpWidget(reader(0));
-    await tester.pumpAndSettle();
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
     expect(find.byKey(firstImageKey), findsOneWidget);
 
     await tester.pumpWidget(reader(1));
