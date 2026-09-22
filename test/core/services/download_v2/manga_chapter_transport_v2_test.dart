@@ -157,6 +157,36 @@ void main() {
 
     expect(starter.startedPageIndexes, <int>[1]);
   });
+  test('duplicate page completion callbacks cannot corrupt the chapter manifest', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'aw_manga_duplicate_complete_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+
+    final starter = _FakePageStarter();
+    final transport = MangaChapterTransportV2(startPage: starter.start);
+    final handle = await transport.start(
+      MangaChapterTransportSpecV2(
+        taskId: 'chapter-parent',
+        mangaId: 'm1',
+        chapterId: '1',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
+        ],
+        retries: 2,
+      ),
+    );
+
+    await starter.completeTwice(0);
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
+
+    final manifest = await MangaChapterManifestV2.readFrom(temp);
+    expect(manifest, isNotNull);
+    expect(manifest!.isComplete, isTrue);
+    expect(manifest.completedIndexes, <int>{0});
+  });
+
 }
 
 Future<void> _waitForStatus(
@@ -231,6 +261,13 @@ final class _FakePageStarter {
     await Future<void>.delayed(Duration.zero);
   }
 
+  Future<void> completeTwice(int pageIndex) async {
+    final handle = handles[pageIndex]!;
+    await File(handle.destinationPath).writeAsBytes(<int>[1, 2, 3]);
+    handle.complete(times: 2);
+    await Future<void>.delayed(Duration.zero);
+  }
+
   Future<void> waitUntilStarted(int pageIndex) async {
     for (var attempt = 0; attempt < 100; attempt++) {
       if (handles.containsKey(pageIndex)) return;
@@ -276,7 +313,7 @@ final class _FakePageHandle implements DownloadTransportHandle {
   Stream<DownloadTransportSnapshot> get snapshots => _controller.stream;
 
 
-  void complete() {
+  void complete({int times = 1}) {
     _current = DownloadTransportSnapshot(
       taskId: taskId,
       status: DownloadTransportStatus.complete,
@@ -285,7 +322,9 @@ final class _FakePageHandle implements DownloadTransportHandle {
       totalBytes: 3,
     );
     onTerminal();
-    _controller.add(_current);
+    for (var index = 0; index < times; index++) {
+      _controller.add(_current);
+    }
   }
 
   @override
