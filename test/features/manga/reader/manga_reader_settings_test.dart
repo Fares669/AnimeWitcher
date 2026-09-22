@@ -39,11 +39,6 @@ void main() {
       keepScreenOn: false,
       webtoonSidePadding: 24,
       showPageGaps: false,
-      invertColors: true,
-      grayscale: true,
-      brightness: 0.15,
-      contrast: 1.25,
-      saturation: 0.8,
       navigationLayout: 3,
       splitWidePages: true,
       dualPageInvert: true,
@@ -77,8 +72,18 @@ void main() {
     expect(settings.toJson().containsKey('chapterSwipeEndAction'), isTrue);
     expect(settings.toJson().containsKey('readerHideThreshold'), isTrue);
     expect(settings.toJson().containsKey('flashColor'), isTrue);
-    expect(settings.toJson().containsKey('enableCustomColorFilter'), isTrue);
-    expect(settings.toJson().containsKey('colorFilterBlendMode'), isTrue);
+    for (final key in <String>[
+      'invertColors',
+      'grayscale',
+      'brightness',
+      'contrast',
+      'saturation',
+      'enableCustomColorFilter',
+      'customColorFilterArgb',
+      'colorFilterBlendMode',
+    ]) {
+      expect(settings.toJson().containsKey(key), isFalse, reason: key);
+    }
   });
 
   test('Mangayomi keeps reader mode, page mode and auto scroll per manga', () {
@@ -365,16 +370,5 @@ void main() {
     expect(centerTarget!.focalPoint, viewport.center(Offset.zero));
   });
 
-  test('reader color matrix changes when filters are enabled', () {
-    const settings = MangaReaderSettings(
-      invertColors: true,
-      grayscale: true,
-      brightness: 0.1,
-      contrast: 1.2,
-      saturation: 0.7,
-    );
 
-    expect(mangaReaderColorMatrix(settings), hasLength(20));
-    expect(mangaReaderColorMatrix(settings), isNot(equals(identityMangaReaderColorMatrix)));
-  });
 }

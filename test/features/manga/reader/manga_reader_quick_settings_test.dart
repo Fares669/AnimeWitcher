@@ -16,7 +16,7 @@ final class _QuickSettingsNotifier extends MangaReaderSettingsNotifier {
 }
 
 void main() {
-  testWidgets('quick settings mirrors Mangayomi three-tab surface', (
+  testWidgets('quick settings omits the removed color-filter surface', (
     tester,
   ) async {
     var autoScrollEnabled = false;
@@ -104,47 +104,12 @@ void main() {
     );
     expect(find.text('All reader settings'), findsOneWidget);
 
-    await tester.tap(find.text('Filter'));
-    await tester.pumpAndSettle();
-    expect(find.text('Invert colors'), findsOneWidget);
-    expect(find.text('Grayscale'), findsOneWidget);
-    expect(find.text('Brightness'), findsOneWidget);
-
-    final filterScrollable = find.descendant(
-      of: find.byType(ListView).hitTestable(),
-      matching: find.byType(Scrollable),
-    ).first;
-    await tester.scrollUntilVisible(
-      find.text('Custom color filter'),
-      240,
-      scrollable: filterScrollable,
-    );
-    expect(find.text('Custom color filter'), findsOneWidget);
-
-    final customFilterTile = find.ancestor(
-      of: find.text('Custom color filter'),
-      matching: find.byType(SwitchListTile),
-    );
-    expect(customFilterTile, findsOneWidget);
-    await tester.ensureVisible(customFilterTile);
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.descendant(
-        of: customFilterTile,
-        matching: find.byType(Switch),
-      ),
-    );
-    await tester.pump();
-    expect(find.text('R'), findsOneWidget);
-    expect(find.text('G'), findsOneWidget);
-    expect(find.text('B'), findsOneWidget);
-    expect(find.text('A'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('Blend mode'),
-      200,
-      scrollable: filterScrollable,
-    );
-    expect(find.text('Blend mode'), findsOneWidget);
+    expect(find.text('Filter'), findsNothing);
+    expect(find.text('Invert colors'), findsNothing);
+    expect(find.text('Grayscale'), findsNothing);
+    expect(find.text('Brightness'), findsNothing);
+    expect(find.text('Custom color filter'), findsNothing);
+    expect(find.text('Blend mode'), findsNothing);
   });
 
   testWidgets('paged quick settings exposes navigate-to-pan instead of webtoon zoom', (

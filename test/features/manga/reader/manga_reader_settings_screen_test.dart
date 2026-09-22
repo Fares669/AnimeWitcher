@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_screen.dart';
@@ -8,7 +10,6 @@ import 'package:flutter_test/flutter_test.dart';
 final class _ReaderSettingsNotifier extends MangaReaderSettingsNotifier {
   @override
   MangaReaderSettings build() => const MangaReaderSettings(
-    enableCustomColorFilter: true,
     flashOnPageChange: true,
   );
 
@@ -19,6 +20,25 @@ final class _ReaderSettingsNotifier extends MangaReaderSettingsNotifier {
 }
 
 void main() {
+  test('reader settings source has no color-filter controls', () {
+    final source = File(
+      'lib/features/manga/reader/manga_reader_settings_screen.dart',
+    ).readAsStringSync();
+
+    for (final label in <String>[
+      'Color filters',
+      'Invert colors',
+      'Grayscale',
+      'Custom color filter',
+      'Blend mode',
+      'Brightness',
+      'Contrast',
+      'Saturation',
+    ]) {
+      expect(source, isNot(contains(label)), reason: label);
+    }
+  });
+
   testWidgets('reader settings exposes Mangayomi reading and display controls', (
     tester,
   ) async {
@@ -56,9 +76,6 @@ void main() {
       'Show page number',
       'Auto-read duplicate chapters',
       'Reader hide threshold',
-      'Color filters',
-      'Custom color filter',
-      'Blend mode',
       'Swipe from start',
       'Swipe from end',
       'Flash color',

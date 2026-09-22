@@ -31,9 +31,10 @@ const pages = <MangaPage>[
 ];
 
 final class _ReaderProvider extends AnimeWitcherProvider {
-  _ReaderProvider({this.emptyPages = false});
+  _ReaderProvider({this.emptyPages = false, this.failPages = false});
 
   final bool emptyPages;
+  final bool failPages;
   final List<String> requestedChapterIds = <String>[];
   final Map<String, Completer<void>> _requestWaiters =
       <String, Completer<void>>{};
@@ -92,6 +93,7 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     requestedChapterIds.add(chapter.id);
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
+    if (failPages) throw StateError('reader page failure');
     return emptyPages ? const <MangaPage>[] : pages;
   }
 }
@@ -598,6 +600,24 @@ void main() {
       applePersistentGlassHeaderController.hide(staleHeader.owner);
     }
 
+    final detailsOwner = Object();
+    applePersistentGlassHeaderController.show(
+      ApplePersistentGlassHeaderConfig(
+        owner: detailsOwner,
+        onBack: () {},
+        trailingButtons: <AppleLiquidGlassToolbarButton>[
+          AppleLiquidGlassToolbarButton(
+            icon: Icons.favorite_border_rounded,
+            onPressed: () {},
+          ),
+          AppleLiquidGlassToolbarButton(
+            icon: Icons.bookmark_border_rounded,
+            onPressed: () {},
+          ),
+        ],
+      ),
+    );
+
     final provider = _ReaderProvider(emptyPages: true);
     const chapter = MangaChapter(
       id: 'c1',
@@ -643,14 +663,144 @@ void main() {
       expect(header!.route?.isCurrent, isTrue);
       expect(header.onBack, isNotNull);
       expect(header.trailingButtons, isEmpty);
+
+      await tester.tap(
+        find.byKey(
+          const ValueKey<String>('manga-reader-image-actions-gesture'),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      final hiddenHeader = applePersistentGlassHeaderController.value;
+      expect(hiddenHeader, isNotNull);
+      expect(hiddenHeader!.owner, isNot(same(detailsOwner)));
+      expect(hiddenHeader.onBack, isNull);
+      expect(hiddenHeader.trailingButtons, isEmpty);
     } finally {
       final header = applePersistentGlassHeaderController.value;
       if (header != null) {
         applePersistentGlassHeaderController.hide(header.owner);
       }
+      applePersistentGlassHeaderController.hide(detailsOwner);
       debugDefaultTargetPlatformOverride = null;
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
     }
   });
+
+  testWidgets('reader chrome paints through the top and bottom safe areas', (
+    tester,
+  ) async {
+    final provider = _ReaderProvider(emptyPages: true);
+    const chapter = MangaChapter(
+      id: 'safe-c1',
+      mangaId: 'safe-m1',
+      url: 'https://example.test/chapter/safe-1',
+      name: 'Chapter safe',
+      number: 1,
+    );
+    final manga = MultimediaItem(
+      title: 'Safe Reader Manga',
+      url: 'https://animewitcher.com/manga/safe-m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _ReaderSettingsNotifier.new,
+          ),
+        ],
+        child: MaterialApp(
+          home: MediaQuery(
+            data: const MediaQueryData(
+              size: Size(390, 844),
+              padding: EdgeInsets.only(top: 40, bottom: 30),
+            ),
+            child: MangaReaderScreen(
+              manga: manga,
+              chapter: chapter,
+              chapters: const <MangaChapter>[chapter],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final topChrome = find.byWidgetPredicate(
+      (widget) =>
+          widget is Material &&
+          widget.color == Colors.black.withValues(alpha: 0.82),
+    );
+    final bottomChrome = find.byWidgetPredicate(
+      (widget) =>
+          widget is Material &&
+          widget.color == Colors.black.withValues(alpha: 0.86),
+    );
+
+    expect(topChrome, findsOneWidget);
+    expect(bottomChrome, findsOneWidget);
+    expect(tester.getRect(topChrome).top, 0);
+    expect(tester.getRect(bottomChrome).bottom, 844);
+  });
+
+  testWidgets('reader retry button sits slightly right of center', (tester) async {
+    final provider = _ReaderProvider(failPages: true);
+    const chapter = MangaChapter(
+      id: 'retry-c1',
+      mangaId: 'retry-m1',
+      url: 'https://example.test/chapter/retry-1',
+      name: 'Chapter retry',
+      number: 1,
+    );
+    final manga = MultimediaItem(
+      title: 'Retry Reader Manga',
+      url: 'https://animewitcher.com/manga/retry-m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _ReaderSettingsNotifier.new,
+          ),
+        ],
+        child: MaterialApp(
+          home: MangaReaderScreen(
+            manga: manga,
+            chapter: chapter,
+            chapters: const <MangaChapter>[chapter],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final retry = find.byType(FilledButton);
+    expect(retry, findsOneWidget);
+    expect(tester.getRect(retry).center.dx, greaterThan(210));
+  });
+
 }
