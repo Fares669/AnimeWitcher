@@ -277,6 +277,10 @@ final class PackageBackgroundDownloaderGateway
     MangaChapterTransportSpecV2 spec,
   ) async {
     await initialize();
+    await configurePackageNotificationsV2(
+      _downloader,
+      _notificationPreferences(),
+    );
     final transport = MangaChapterTransportV2(
       startPage: _startMangaPageTaskV2,
     );
