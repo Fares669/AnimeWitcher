@@ -23,12 +23,12 @@ class MangaChapterRow extends StatelessWidget {
   final VoidCallback? onLongPress;
   final bool selected;
 
-  String get displayLabel {
+  String? get progressLabel {
     final state = progress;
     if (state == null || state.pageCount <= 0 || state.pagesRead <= 0) {
-      return chapter.name;
+      return null;
     }
-    return '${chapter.name} • ${state.pagesRead}/${state.pageCount}';
+    return '${state.pagesRead}/${state.pageCount}';
   }
 
   @override
@@ -68,12 +68,23 @@ class MangaChapterRow extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      Text(
-                        displayLabel,
+                      Text.rich(
+                        TextSpan(
+                          children: <InlineSpan>[
+                            TextSpan(
+                              text: chapter.name,
+                              style: TextStyle(color: foreground),
+                            ),
+                            if (progressLabel != null)
+                              TextSpan(
+                                text: ' • $progressLabel',
+                                style: TextStyle(color: secondary),
+                              ),
+                          ],
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.titleMedium?.copyWith(
-                          color: foreground,
                           fontWeight: isRead
                               ? FontWeight.w500
                               : FontWeight.w600,

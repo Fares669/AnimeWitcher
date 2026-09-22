@@ -2976,6 +2976,8 @@ class AnimeWitcherAccountService {
         'revision': revision,
       };
     });
+
+    _applyMangaWatchedCache(normalizedManga, ids, watched);
     if (profile == null || !isSignedIn) return;
 
     await _enqueueMangaWatchedWrite(
@@ -3061,7 +3063,14 @@ class AnimeWitcherAccountService {
       ),
     );
     if (!_isCurrentProfile(profile)) return;
+    _applyMangaWatchedCache(mangaId, chapterIds, watched);
+  }
 
+  void _applyMangaWatchedCache(
+    String mangaId,
+    Iterable<String> chapterIds,
+    bool watched,
+  ) {
     final values = Set<String>.from(
       _watchedMangaChapterCache[mangaId] ?? const <String>{},
     );

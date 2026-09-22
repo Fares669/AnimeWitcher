@@ -256,13 +256,8 @@ class MangaReaderController extends ChangeNotifier {
     return double.tryParse((match?.group(0) ?? '').replaceAll(',', '.'));
   }
 
-  bool get _shouldMarkCurrentChapterRead {
-    if (_pages.isEmpty) return false;
-    if (_mode.isContinuous) {
-      return (_pageIndex + 2) >= _pages.length - 1;
-    }
-    return (_pageIndex + 2) >= _pages.length;
-  }
+  bool get _shouldMarkCurrentChapterRead =>
+      _pages.isNotEmpty && _pageIndex >= _pages.length - 1;
 
   Future<void> _markDuplicateChaptersRead() async {
     final currentNumber = _recognizedChapterNumber(_chapter);
