@@ -45,7 +45,10 @@ void main() {
     );
     expect(
       mangaReaderChunkProgress(
-        const ImageChunkEvent(cumulativeBytesLoaded: 50),
+        const ImageChunkEvent(
+          cumulativeBytesLoaded: 50,
+          expectedTotalBytes: null,
+        ),
       ),
       isNull,
     );
