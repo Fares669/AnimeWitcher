@@ -352,6 +352,20 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
       return;
     }
 
+    if (snapshot.status == DownloadTransportStatus.missing) {
+      final aggregate = _aggregate(snapshot);
+      _emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.failed,
+          progress: aggregate.progress,
+          failureCategory: DownloadFailureCategory.sourceExpired,
+          failureMessage: 'Manga page source returned HTTP 404',
+        ),
+      );
+      return;
+    }
+
     if (snapshot.status == DownloadTransportStatus.failed ||
         snapshot.status == DownloadTransportStatus.canceled) {
       _emit(
