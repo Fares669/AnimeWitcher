@@ -991,17 +991,39 @@ class FirestoreRestClient {
     required dynamic value,
     required bool append,
     Map<String, dynamic> baseFields = const <String, dynamic>{},
+  }) {
+    return transformArrayFieldValues(
+      path,
+      idToken: idToken,
+      field: field,
+      values: <dynamic>[value],
+      append: append,
+      baseFields: baseFields,
+    );
+  }
+
+  Future<void> transformArrayFieldValues(
+    String path, {
+    required String idToken,
+    required String field,
+    required Iterable<dynamic> values,
+    required bool append,
+    Map<String, dynamic> baseFields = const <String, dynamic>{},
   }) async {
+    final encodedValues = values
+        .map(FirestoreValueCodec.encode)
+        .toList(growable: false);
+    if (encodedValues.isEmpty) return;
 
     final transform = <String, dynamic>{
       'fieldPath': field,
       if (append)
         'appendMissingElements': <String, dynamic>{
-          'values': <Map<String, dynamic>>[FirestoreValueCodec.encode(value)],
+          'values': encodedValues,
         }
       else
         'removeAllFromArray': <String, dynamic>{
-          'values': <Map<String, dynamic>>[FirestoreValueCodec.encode(value)],
+          'values': encodedValues,
         },
     };
     final Map<String, dynamic> write;
