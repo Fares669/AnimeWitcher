@@ -305,6 +305,11 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     }
 
     if (snapshot.status == DownloadTransportStatus.complete) {
+      // Package streams can repeat the same terminal callback. Once this page
+      // is durably checkpointed, a duplicate must not rewrite manifest.json
+      // and briefly remove the authoritative checkpoint.
+      if (_manifest.completedIndexes.contains(index)) return;
+
       final file = File(
         p.join(directory.path, _pageFileName(index, spec.pages[index])),
       );
