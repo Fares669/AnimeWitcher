@@ -68,7 +68,8 @@ void main() {
     expect(await repository.toggleRead('m1', 'c1'), isFalse);
     restored = repository.get('m1', 'c1');
     expect(restored!.isRead, isFalse);
-    expect(restored.pageCount, 12);
+    expect(restored.pageIndex, 0);
+    expect(restored.pageCount, 0);
   });
 
   test('markRead can create a read row for an unseen duplicate chapter', () async {

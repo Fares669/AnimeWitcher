@@ -154,20 +154,6 @@ final class _ReaderStorage extends StorageService {
 final class _RecordingReaderProgressRepository
     extends MangaReadingRepository {
   _RecordingReaderProgressRepository() : super(_ReaderStorage());
-
-  final Map<String, MangaReadingProgress> values =
-      <String, MangaReadingProgress>{};
-
-  String _key(String mangaId, String chapterId) => '$mangaId::$chapterId';
-
-  @override
-  MangaReadingProgress? get(String mangaId, String chapterId) =>
-      values[_key(mangaId, chapterId)];
-
-  @override
-  Future<void> save(MangaReadingProgress progress) async {
-    values[_key(progress.mangaId, progress.chapterId)] = progress;
-  }
 }
 
 final class _ReaderProgressRepository extends MangaReadingRepository {
