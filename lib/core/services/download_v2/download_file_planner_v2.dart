@@ -4,7 +4,9 @@ import 'package:dio/dio.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../domain/entity/manga.dart';
 import '../../domain/entity/multimedia_item.dart';
+import '../../utils/episode_label.dart';
 
 final class DownloadSourceMetadataV2 {
   const DownloadSourceMetadataV2({
@@ -101,43 +103,76 @@ Future<DownloadSourceMetadataV2?> probeDownloadSourceV2(
   }
 }
 
-/// Produces the final path expected by V2. iOS keeps an app-documents-relative
-/// path so it survives sandbox container relocation; all other platforms use
-/// an absolute destination.
+String _downloadFolderName(String value, {required String fallback}) {
+  final sanitized = sanitizeDownloadFileName(value);
+  return sanitized.isEmpty ? fallback : sanitized;
+}
+
+String _mangaChapterFolderName(MangaChapter chapter) {
+  final number = chapter.number;
+  if (number != null) {
+    final value = number == number.truncateToDouble()
+        ? number.toInt().toString()
+        : number.toString();
+    return _downloadFolderName('الفصل $value', fallback: 'فصل');
+  }
+  return _downloadFolderName(chapter.name, fallback: 'فصل');
+}
+
+Future<String> _downloadMediaDirectoryV2(
+  String mediaType,
+  List<String> segments,
+) async {
+  if (Platform.isIOS) {
+    return p.joinAll(<String>['Downloads', mediaType, ...segments]);
+  }
+  if (Platform.isAndroid) {
+    return p.joinAll(<String>[
+      '/storage/emulated/0/Download',
+      mediaType,
+      ...segments,
+    ]);
+  }
+
+  final downloads = await getDownloadsDirectory();
+  final root = downloads?.path ??
+      p.join((await getApplicationDocumentsDirectory()).path, 'Downloads');
+  return p.joinAll(<String>[root, mediaType, ...segments]);
+}
+
+/// Produces the final Anime path expected by V2. iOS keeps an
+/// app-documents-relative path so it survives sandbox container relocation;
+/// Android and desktop use their public Downloads directory.
 Future<String> downloadDestinationPathV2(
   MultimediaItem item, {
   Episode? episode,
   required String filename,
 }) async {
-  final sanitizedTitle = item.title.replaceAll(RegExp(r'[^\w\s-]'), '').trim();
-  var relativeDirectory = p.join(
-    'AnimeWitcher',
-    'Downloads',
-    sanitizedTitle.isEmpty ? 'Unknown' : sanitizedTitle,
-  );
+  final title = _downloadFolderName(item.title, fallback: 'Unknown');
+  var directory = await _downloadMediaDirectoryV2('anime', <String>[title]);
 
   if (episode != null && item.contentType != MultimediaContentType.movie) {
     final seasonCount = item.episodes?.map((e) => e.season).toSet().length ?? 0;
     if (seasonCount > 1) {
-      relativeDirectory = p.join(
-        relativeDirectory,
-        'Season ${episode.season}',
-      );
+      directory = p.join(directory, 'Season ${episode.season}');
     }
   }
 
-  if (Platform.isIOS) return p.join(relativeDirectory, filename);
-  if (Platform.isAndroid) {
-    return p.join(
-      '/storage/emulated/0/Download',
-      relativeDirectory,
-      filename,
-    );
-  }
+  return p.join(directory, filename);
+}
 
-  final dir =
-      await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
-  return p.join(dir.path, relativeDirectory, filename);
+/// Produces a readable chapter directory:
+/// Downloads/manga/<manga title>/<chapter label>.
+Future<String> mangaChapterDestinationDirectoryV2(
+  MultimediaItem manga,
+  MangaChapter chapter,
+) async {
+  final title = _downloadFolderName(manga.title, fallback: 'Manga');
+  final chapterFolder = _mangaChapterFolderName(chapter);
+  return _downloadMediaDirectoryV2(
+    'manga',
+    <String>[title, chapterFolder],
+  );
 }
 
 Future<String> absoluteDownloadDestinationPathV2(String destinationPath) async {

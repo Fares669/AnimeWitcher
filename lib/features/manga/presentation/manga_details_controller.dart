@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -8,6 +7,7 @@ import '../../../core/domain/entity/manga.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/services/download_v2/download_file_planner_v2.dart';
 import '../../../core/services/download_v2/download_manager_v2.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../core/services/download_v2/download_v2_models.dart';
@@ -16,11 +16,6 @@ import '../../../core/storage/storage_service.dart';
 import 'manga_details_state.dart';
 
 part 'manga_details_controller.g.dart';
-
-String _mangaPathSegment(String value) {
-  final encoded = base64Url.encode(utf8.encode(value.trim()));
-  return encoded.replaceAll('=', '');
-}
 
 MultimediaItem mergeMangaDetails({
   required MultimediaItem base,
@@ -63,10 +58,10 @@ MultimediaItem mergeMangaDetails({
   );
 }
 
-DownloadStartRequestV2 mangaChapterDownloadRequest(
+Future<DownloadStartRequestV2> mangaChapterDownloadRequest(
   MultimediaItem manga,
   MangaChapter chapter,
-) {
+) async {
   final mangaId =
       manga.syncData?['mangaId']?.trim().isNotEmpty == true
       ? manga.syncData!['mangaId']!.trim()
@@ -81,8 +76,7 @@ DownloadStartRequestV2 mangaChapterDownloadRequest(
     mangaId: mangaId,
     chapterId: chapterId,
   );
-  final destination =
-      'manga/${_mangaPathSegment(mangaId)}/${_mangaPathSegment(chapterId)}';
+  final destination = await mangaChapterDestinationDirectoryV2(manga, chapter);
 
   return DownloadStartRequestV2(
     logicalId: logicalId,
@@ -145,7 +139,7 @@ class MangaDetailsController extends _$MangaDetailsController {
     if (item == null) {
       throw StateError('Manga details are not loaded.');
     }
-    final request = mangaChapterDownloadRequest(item, chapter);
+    final request = await mangaChapterDownloadRequest(item, chapter);
     final snapshot = await ref.read(downloadManagerV2Provider).start(request);
     await ref.read(storageServiceProvider).saveDownloadMetadata(
       snapshot.taskId,
