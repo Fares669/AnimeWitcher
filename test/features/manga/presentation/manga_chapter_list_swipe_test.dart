@@ -114,18 +114,18 @@ void main() {
   ) async {
     const chapters = <MangaChapter>[
       MangaChapter(
-        id: 'c1',
-        mangaId: 'm1',
-        url: 'https://example.test/c1',
-        name: 'Chapter 1',
-        number: 1,
-      ),
-      MangaChapter(
         id: 'c2',
         mangaId: 'm1',
         url: 'https://example.test/c2',
         name: 'Chapter 2',
         number: 2,
+      ),
+      MangaChapter(
+        id: 'c1',
+        mangaId: 'm1',
+        url: 'https://example.test/c1',
+        name: 'Chapter 1',
+        number: 1,
       ),
     ];
 
