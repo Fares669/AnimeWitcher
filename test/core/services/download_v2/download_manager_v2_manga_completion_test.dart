@@ -107,7 +107,11 @@ void main() {
     );
 
     gateway.handle.complete();
-    await Future<void>.delayed(const Duration(milliseconds: 260));
+    for (var attempt = 0; attempt < 100; attempt++) {
+      final record = await store.get(logicalId);
+      if (record?.failureCategory == DownloadFailureCategory.integrity) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
 
     expect(await temp.exists(), isTrue);
     expect(await firstPage.exists(), isTrue);
