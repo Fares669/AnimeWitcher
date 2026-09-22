@@ -184,6 +184,13 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
       initialPage: _sessionInitialPage,
       batchSize: widget.settings.pagePreloadAmount,
     )..addListener(_onLoadBatchChanged);
+
+    // Re-seed a rebuilt scheduler with pages already completed in this reader
+    // session so a settings rebuild can never relock or stall them.
+    final settled = _settledPages.toList()..sort();
+    for (final pageIndex in settled) {
+      _loadBatches?.markSettled(pageIndex);
+    }
   }
 
   void _onLoadBatchChanged() {
