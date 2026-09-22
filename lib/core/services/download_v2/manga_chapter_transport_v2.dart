@@ -67,8 +67,35 @@ typedef MangaChapterDirectoryResolverV2 =
 
 Future<Directory> resolveMangaChapterDirectoryV2(String rawPath) async {
   if (p.isAbsolute(rawPath)) return Directory(rawPath);
-  final documents = await getApplicationDocumentsDirectory();
-  return Directory(p.join(documents.path, rawPath));
+
+  final normalized = p.normalize(rawPath);
+  final segments = p.split(normalized);
+  final isDownloadsPath =
+      segments.isNotEmpty && segments.first.toLowerCase() == 'downloads';
+  if (!isDownloadsPath) {
+    // Legacy Manga destinations stay where they were; only new downloads use
+    // the readable Downloads/manga/<title>/<chapter> layout.
+    final documents = await getApplicationDocumentsDirectory();
+    return Directory(p.join(documents.path, normalized));
+  }
+
+  if (Platform.isIOS) {
+    final documents = await getApplicationDocumentsDirectory();
+    return Directory(p.join(documents.path, normalized));
+  }
+
+  final insideDownloads = segments.length <= 1
+      ? ''
+      : p.joinAll(segments.skip(1));
+  if (Platform.isAndroid) {
+    return Directory(
+      p.join('/storage/emulated/0/Download', insideDownloads),
+    );
+  }
+
+  final downloads =
+      await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+  return Directory(p.join(downloads.path, insideDownloads));
 }
 
 final class MangaChapterTransportV2 {

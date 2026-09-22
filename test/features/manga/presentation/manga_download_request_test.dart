@@ -44,7 +44,7 @@ void main() {
     expect(request.sourceDescriptor['mangaUrl'], manga.url);
     expect(
       p.normalize(request.destinationPath),
-      endsWith(p.join('manga', 'Manga', 'الفصل 12.5')),
+      p.join('Downloads', 'manga', 'Manga', 'الفصل 12.5'),
     );
   });
 
