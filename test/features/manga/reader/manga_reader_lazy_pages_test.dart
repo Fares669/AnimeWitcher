@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_continuous_reader.dart';
@@ -161,6 +163,101 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(firstDisposed, isFalse);
+  });
+
+  testWidgets('progress rebuild never relocks loaded webtoon pages', (
+    tester,
+  ) async {
+    final temp = await Directory.systemTemp.createTemp('aw_reader_anchor_');
+    addTearDown(() => temp.delete(recursive: true));
+    const gif = <int>[
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00,
+      0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0xff, 0xff, 0xff, 0x21, 0xf9, 0x04, 0x01, 0x00,
+      0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44,
+      0x01, 0x00, 0x3b,
+    ];
+    final file0 = File('${temp.path}/0000.gif')..writeAsBytesSync(gif);
+    final file1 = File('${temp.path}/0001.gif')..writeAsBytesSync(gif);
+    final pages = <MangaPage>[
+      MangaPage(index: 0, imageUrl: file0.uri.toString()),
+      MangaPage(index: 1, imageUrl: file1.uri.toString()),
+    ];
+    final firstImageKey = ValueKey<String>(
+      'reader-local-${pages.first.imageUrl}-0',
+    );
+
+    Widget reader(int initialPage) => MaterialApp(
+      home: SizedBox(
+        height: 1200,
+        child: MangaWebtoonReader(
+          pages: pages,
+          initialPage: initialPage,
+          settings: const MangaReaderSettings(pagePreloadAmount: 1),
+          onPageChanged: (_) {},
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(reader(0));
+    await tester.pumpAndSettle();
+    expect(find.byKey(firstImageKey), findsOneWidget);
+
+    // This models MangaReaderScreen rebuilding after pageIndex advances.
+    await tester.pumpWidget(reader(1));
+    await tester.pump();
+
+    expect(find.byKey(firstImageKey), findsOneWidget);
+  });
+
+  testWidgets('progress rebuild never relocks loaded continuous pages', (
+    tester,
+  ) async {
+    final temp = await Directory.systemTemp.createTemp(
+      'aw_continuous_anchor_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+    const gif = <int>[
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00,
+      0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0xff, 0xff, 0xff, 0x21, 0xf9, 0x04, 0x01, 0x00,
+      0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44,
+      0x01, 0x00, 0x3b,
+    ];
+    final file0 = File('${temp.path}/0000.gif')..writeAsBytesSync(gif);
+    final file1 = File('${temp.path}/0001.gif')..writeAsBytesSync(gif);
+    final pages = <MangaPage>[
+      MangaPage(index: 0, imageUrl: file0.uri.toString()),
+      MangaPage(index: 1, imageUrl: file1.uri.toString()),
+    ];
+    final firstImageKey = ValueKey<String>(
+      'reader-local-${pages.first.imageUrl}-0',
+    );
+
+    Widget reader(int initialPage) => MaterialApp(
+      home: SizedBox(
+        height: 1200,
+        child: MangaContinuousReader(
+          pages: pages,
+          initialPage: initialPage,
+          scrollDirection: Axis.vertical,
+          reverse: false,
+          settings: const MangaReaderSettings(pagePreloadAmount: 1),
+          onPageChanged: (_) {},
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(reader(0));
+    await tester.pumpAndSettle();
+    expect(find.byKey(firstImageKey), findsOneWidget);
+
+    await tester.pumpWidget(reader(1));
+    await tester.pump();
+
+    expect(find.byKey(firstImageKey), findsOneWidget);
   });
 
 }
