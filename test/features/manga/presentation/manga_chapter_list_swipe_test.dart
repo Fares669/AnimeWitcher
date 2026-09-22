@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
@@ -229,6 +231,50 @@ void main() {
       tester.getTopLeft(find.text('Chapter 1')).dy,
       lessThan(tester.getTopLeft(find.text('Chapter 2')).dy),
     );
+  });
+
+  testWidgets('read selection closes immediately while cloud sync is pending', (
+    tester,
+  ) async {
+    final syncStarted = Completer<void>();
+    final releaseSync = Completer<void>();
+    final repository = MangaReadingRepository(
+      _MemoryStorage(),
+      syncReadStates: (_, __, ___) async {
+        if (!syncStarted.isCompleted) syncStarted.complete();
+        await releaseSync.future;
+      },
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          mangaReadingRepositoryProvider.overrideWithValue(repository),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(chapters: <MangaChapter>[chapter]),
+          ),
+        ),
+      ),
+    );
+
+    await tester.longPress(find.text('Chapter 1'));
+    await tester.pump();
+    expect(find.text('1 selected'), findsOneWidget);
+
+    await tester.tap(find.text('Read'));
+    await tester.pump();
+    await syncStarted.future;
+
+    expect(find.textContaining('selected'), findsNothing);
+    expect(repository.get('m1', 'c1')?.isRead, isTrue);
+
+    releaseSync.complete();
+    await tester.pumpAndSettle();
   });
 
 }
