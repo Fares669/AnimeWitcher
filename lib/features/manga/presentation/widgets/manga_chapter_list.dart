@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/domain/entity/manga.dart';
+import '../../../../core/providers/episode_sort_provider.dart';
 import '../../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../../core/storage/manga_reading_repository.dart';
 import '../../../../core/utils/download_time_remaining.dart';
@@ -30,12 +31,11 @@ class MangaChapterList extends ConsumerStatefulWidget {
 }
 
 class _MangaChapterListState extends ConsumerState<MangaChapterList> {
-  bool _ascending = false;
   final Set<String> _selectedChapterIds = <String>{};
 
   bool get _selecting => _selectedChapterIds.isNotEmpty;
 
-  Widget _sortButton(BuildContext context) {
+  Widget _sortButton(BuildContext context, bool ascending) {
     return SizedBox(
       height: 40,
       child: AppleLiquidGlassSurface(
@@ -52,11 +52,13 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           child: InkWell(
             key: const ValueKey<String>('manga-chapter-sort-toggle'),
             borderRadius: BorderRadius.circular(20),
-            onTap: () => setState(() => _ascending = !_ascending),
+            onTap: () => ref
+                .read(episodeSortAscendingProvider.notifier)
+                .setAscending(!ascending),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Icon(
-                _ascending
+                ascending
                     ? Icons.arrow_downward_rounded
                     : Icons.arrow_upward_rounded,
                 size: 22,
@@ -324,6 +326,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     final l10n = AppLocalizations.of(context);
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final ascending = ref.watch(episodeSortAscendingProvider);
 
     if (widget.chapters.isEmpty) {
       return Center(
@@ -333,9 +336,9 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       );
     }
 
-    final chapters = _ascending
-        ? widget.chapters.reversed.toList(growable: false)
-        : widget.chapters;
+    final chapters = ascending
+        ? widget.chapters
+        : widget.chapters.reversed.toList(growable: false);
 
     return Stack(
       children: <Widget>[
@@ -357,7 +360,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    _sortButton(context),
+                    _sortButton(context, ascending),
                   ],
                 ),
               ),

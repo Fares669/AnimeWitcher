@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
+import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/utils/download_time_remaining.dart';
@@ -16,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 final class _MemoryStorage extends StorageService {
   final Map<String, String> values = <String, String>{};
+  final Map<String, Object?> playerSettings = <String, Object?>{};
 
   @override
   String? getString(String key) => values[key];
@@ -27,6 +29,15 @@ final class _MemoryStorage extends StorageService {
     } else {
       values[key] = value;
     }
+  }
+
+  @override
+  T? getPlayerSetting<T>(String key, {T? defaultValue}) =>
+      (playerSettings[key] ?? defaultValue) as T?;
+
+  @override
+  Future<void> setPlayerSetting(String key, dynamic value) async {
+    playerSettings[key] = value;
   }
 }
 
@@ -70,6 +81,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
           mangaReadingRepositoryProvider.overrideWithValue(repository),
           mangaReaderSettingsProvider.overrideWith(
             () => _SwipeSettings(const MangaReaderSettings()),
@@ -105,6 +117,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
           mangaReadingRepositoryProvider.overrideWithValue(repository),
           mangaReaderSettingsProvider.overrideWith(
             () => _SwipeSettings(const MangaReaderSettings()),
@@ -146,6 +159,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
           mangaReadingRepositoryProvider.overrideWithValue(
             MangaReadingRepository(_MemoryStorage()),
           ),
@@ -203,6 +217,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
           mangaReadingRepositoryProvider.overrideWithValue(
             MangaReadingRepository(_MemoryStorage()),
           ),
@@ -217,19 +232,118 @@ void main() {
     );
 
     expect(find.text('Chapters'), findsOneWidget);
-    expect(find.byIcon(Icons.arrow_upward_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_downward_rounded), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Chapter 2')).dy,
       lessThan(tester.getTopLeft(find.text('Chapter 1')).dy),
     );
 
-    await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+    await tester.tap(find.byIcon(Icons.arrow_downward_rounded));
     await tester.pumpAndSettle();
 
-    expect(find.byIcon(Icons.arrow_downward_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_upward_rounded), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Chapter 1')).dy,
       lessThan(tester.getTopLeft(find.text('Chapter 2')).dy),
+    );
+  });
+
+  testWidgets('manga chapter labels prefix bare server chapter numbers', (
+    tester,
+  ) async {
+    const bareNameChapter = MangaChapter(
+      id: 'c201',
+      mangaId: 'm1',
+      url: 'https://example.test/c201',
+      name: '201',
+      number: 201,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(chapters: <MangaChapter>[bareNameChapter]),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('الفصل 201'), findsOneWidget);
+    expect(find.text('201'), findsNothing);
+  });
+
+  testWidgets('manga chapter sort follows and updates the shared anime setting', (
+    tester,
+  ) async {
+    final storage = _MemoryStorage()
+      ..playerSettings[episodeSortAscendingSettingKey] = false;
+    const chapters = <MangaChapter>[
+      MangaChapter(
+        id: 'c2',
+        mangaId: 'm1',
+        url: 'https://example.test/c2',
+        name: 'الفصل 2',
+        number: 2,
+      ),
+      MangaChapter(
+        id: 'c1',
+        mangaId: 'm1',
+        url: 'https://example.test/c1',
+        name: 'الفصل 1',
+        number: 1,
+      ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(storage),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Consumer(
+              builder: (context, ref, _) => Column(
+                children: <Widget>[
+                  Text('ascending:${ref.watch(episodeSortAscendingProvider)}'),
+                  Expanded(child: MangaChapterList(chapters: chapters)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('ascending:false'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('الفصل 1')).dy,
+      lessThan(tester.getTopLeft(find.text('الفصل 2')).dy),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('manga-chapter-sort-toggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('ascending:true'), findsOneWidget);
+    expect(storage.playerSettings[episodeSortAscendingSettingKey], isTrue);
+    expect(
+      tester.getTopLeft(find.text('الفصل 2')).dy,
+      lessThan(tester.getTopLeft(find.text('الفصل 1')).dy),
     );
   });
 
@@ -249,6 +363,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
           mangaReadingRepositoryProvider.overrideWithValue(repository),
           mangaReaderSettingsProvider.overrideWith(
             () => _SwipeSettings(const MangaReaderSettings()),

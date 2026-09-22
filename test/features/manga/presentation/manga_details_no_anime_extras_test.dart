@@ -2,6 +2,7 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_cover_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -111,6 +112,14 @@ final class _EmptyCustomCoverNotifier
   Map<String, String> build() => const <String, String>{};
 }
 
+final class _AscendingSortNotifier extends EpisodeSortAscendingNotifier {
+  @override
+  bool build() => true;
+
+  @override
+  void setAscending(bool value) => state = value;
+}
+
 final class _Manager extends ExtensionManager {
   _Manager(this.provider);
   final AnimeWitcherProvider provider;
@@ -144,6 +153,9 @@ void main() {
       ProviderScope(
         overrides: [
           extensionManagerProvider.overrideWith(() => _Manager(provider)),
+          episodeSortAscendingProvider.overrideWith(
+            _AscendingSortNotifier.new,
+          ),
           mangaReaderCustomCoversProvider.overrideWith(
             _EmptyCustomCoverNotifier.new,
           ),

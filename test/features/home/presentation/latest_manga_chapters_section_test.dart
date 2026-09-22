@@ -21,7 +21,7 @@ void main() {
         id: '201',
         mangaId: 'solo',
         url: 'chapter://201',
-        name: 'الفصل 201',
+        name: '201 مترجم',
         number: 201,
         publishedAt: DateTime(2026, 9, 19, 21),
       ),
@@ -41,11 +41,11 @@ void main() {
 
     expect(find.text('أحدث الفصول'), findsOneWidget);
     expect(find.text('Solo Leveling'), findsWidgets);
-    expect(find.text('الفصل 201'), findsOneWidget);
+    expect(find.text('الفصل 201 مترجم'), findsOneWidget);
 
     final card = tester.widget<MultimediaCard>(find.byType(MultimediaCard));
-    expect(card.episodeBadge, 'الفصل 201');
-    expect(card.subtitle, isNot('الفصل 201'));
+    expect(card.episodeBadge, 'الفصل 201 مترجم');
+    expect(card.subtitle, isNot('الفصل 201 مترجم'));
     expect(card.subtitle, contains('منذ'));
 
     await tester.tap(find.text('Solo Leveling').first);

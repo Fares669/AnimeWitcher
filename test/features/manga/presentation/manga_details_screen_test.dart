@@ -107,6 +107,7 @@ final class _MangaDetailsEmptyCoverNotifier
 
 final class _MangaDetailsReadingStorage extends StorageService {
   final Map<String, String> values = <String, String>{};
+  final Map<String, Object?> playerSettings = <String, Object?>{};
 
   @override
   String? getString(String key) => values[key];
@@ -118,6 +119,15 @@ final class _MangaDetailsReadingStorage extends StorageService {
     } else {
       values[key] = value;
     }
+  }
+
+  @override
+  T? getPlayerSetting<T>(String key, {T? defaultValue}) =>
+      (playerSettings[key] ?? defaultValue) as T?;
+
+  @override
+  Future<void> setPlayerSetting(String key, dynamic value) async {
+    playerSettings[key] = value;
   }
 
   @override
@@ -137,6 +147,7 @@ final class _Manager extends ExtensionManager {
 Widget _app(AnimeWitcherProvider provider) => ProviderScope(
   overrides: [
     extensionManagerProvider.overrideWith(() => _Manager(provider)),
+    storageServiceProvider.overrideWithValue(_MangaDetailsReadingStorage()),
     mangaReaderSettingsProvider.overrideWith(
       _MangaDetailsReaderSettingsNotifier.new,
     ),

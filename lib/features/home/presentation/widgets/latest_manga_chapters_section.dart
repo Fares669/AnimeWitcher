@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/utils/image_fallbacks.dart';
 import '../../../../core/utils/layout_constants.dart';
+import '../../../../core/utils/manga_chapter_label.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 import '../../../../shared/widgets/paged_rail.dart';
@@ -28,19 +29,6 @@ class LatestMangaChaptersSection extends StatefulWidget {
 class _LatestMangaChaptersSectionState
     extends State<LatestMangaChaptersSection> {
   final ScrollController _scrollController = ScrollController();
-
-  String _chapterBadge(MangaChapter chapter) {
-    final label = chapter.name.trim();
-    if (label.contains('الفصل')) return label;
-    final number = chapter.number;
-    if (number != null) {
-      final formatted = number == number.truncateToDouble()
-          ? number.toInt().toString()
-          : number.toString();
-      return 'الفصل $formatted';
-    }
-    return label.isEmpty ? 'الفصل' : 'الفصل $label';
-  }
 
   String _releaseTime(DateTime? publishedAt) {
     if (publishedAt == null) return '';
@@ -115,7 +103,7 @@ class _LatestMangaChaptersSectionState
                       label: manga.title,
                     ),
                     title: manga.title,
-                    episodeBadge: _chapterBadge(entry.chapter),
+                    episodeBadge: mangaChapterDisplayName(entry.chapter),
                     subtitle: _releaseTime(entry.chapter.publishedAt),
                     heroTag:
                         'latest_manga_${manga.url}_${entry.chapter.id}_$index',

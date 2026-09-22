@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/storage/manga_reading_repository.dart';
+import '../../../../core/utils/manga_chapter_label.dart';
 
 class MangaChapterRow extends StatelessWidget {
   const MangaChapterRow({
@@ -72,7 +73,7 @@ class MangaChapterRow extends StatelessWidget {
                         TextSpan(
                           children: <InlineSpan>[
                             TextSpan(
-                              text: chapter.name,
+                              text: mangaChapterDisplayName(chapter),
                               style: TextStyle(color: foreground),
                             ),
                             if (progressLabel != null)
