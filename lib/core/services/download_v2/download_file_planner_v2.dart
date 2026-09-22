@@ -149,15 +149,7 @@ Future<String> downloadDestinationPathV2(
   required String filename,
 }) async {
   final title = _downloadFolderName(item.title, fallback: 'Unknown');
-  var directory = await _downloadMediaDirectoryV2('anime', <String>[title]);
-
-  if (episode != null && item.contentType != MultimediaContentType.movie) {
-    final seasonCount = item.episodes?.map((e) => e.season).toSet().length ?? 0;
-    if (seasonCount > 1) {
-      directory = p.join(directory, 'Season ${episode.season}');
-    }
-  }
-
+  final directory = await _downloadMediaDirectoryV2('anime', <String>[title]);
   return p.join(directory, filename);
 }
 
