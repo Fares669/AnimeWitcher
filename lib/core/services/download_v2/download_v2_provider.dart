@@ -190,7 +190,7 @@ final class ProviderMangaChapterPageResolverV2
       throw StateError('Manga provider is unavailable: $providerId');
     }
 
-    return provider.getMangaChapterPages(
+    return provider.refreshMangaChapterPages(
       mangaUrl,
       MangaChapter(
         id: chapterId,
