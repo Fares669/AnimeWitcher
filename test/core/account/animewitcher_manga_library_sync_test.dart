@@ -121,6 +121,22 @@ final class _SecureStorage extends SecureTokenStorage {
   }
 }
 
+final class _ArrayTransform {
+  const _ArrayTransform({
+    required this.path,
+    required this.field,
+    required this.values,
+    required this.append,
+    required this.baseFields,
+  });
+
+  final String path;
+  final String field;
+  final List<dynamic> values;
+  final bool append;
+  final Map<String, dynamic> baseFields;
+}
+
 final class _Write {
   const _Write(this.path, this.fields, this.serverTimestampFields);
 
@@ -131,6 +147,7 @@ final class _Write {
 
 final class _Firestore extends FirestoreRestClient {
   final List<_Write> writes = <_Write>[];
+  final List<_ArrayTransform> arrayTransforms = <_ArrayTransform>[];
   final List<String> deletes = <String>[];
   final Map<String, List<FirestoreDocument>> collections =
       <String, List<FirestoreDocument>>{};
@@ -169,6 +186,26 @@ final class _Firestore extends FirestoreRestClient {
   }) async => List<FirestoreDocument>.from(
     collections[collectionPath] ?? const <FirestoreDocument>[],
   );
+
+  @override
+  Future<void> transformArrayFieldValues(
+    String path, {
+    required String idToken,
+    required String field,
+    required Iterable<dynamic> values,
+    required bool append,
+    Map<String, dynamic> baseFields = const <String, dynamic>{},
+  }) async {
+    arrayTransforms.add(
+      _ArrayTransform(
+        path: path,
+        field: field,
+        values: values.toList(growable: false),
+        append: append,
+        baseFields: Map<String, dynamic>.from(baseFields),
+      ),
+    );
+  }
 
   @override
   Future<List<FirestoreDocument>> listDocuments(
@@ -373,4 +410,65 @@ void main() {
     await service.syncAll();
     expect(storage.library, isEmpty);
   });
+  test('manga read selection uses APK chapters_watched array contract', () async {
+    final firestore = _Firestore();
+    final service = await _signedInService(firestore);
+
+    await service.setMangaChaptersWatched(
+      mangaId: 'm1',
+      chapterIds: const <String>['5', '6'],
+      watched: true,
+    );
+
+    final transform = firestore.arrayTransforms.single;
+    expect(transform.path, 'users/profile-1/chapters_watched/m1');
+    expect(transform.field, 'chapters_watched');
+    expect(transform.values, <String>['5', '6']);
+    expect(transform.append, isTrue);
+    expect(transform.baseFields['user_id'], 'profile-1');
+    expect(transform.baseFields['last_chapter_watched_id'], '6');
+    expect(service.isMangaChapterWatchedCached('m1', '5'), isTrue);
+    expect(service.isMangaChapterWatchedCached('m1', '6'), isTrue);
+  });
+
+  test('manga unread selection removes chapters without extra field writes', () async {
+    final firestore = _Firestore();
+    final service = await _signedInService(firestore);
+
+    await service.setMangaChaptersWatched(
+      mangaId: 'm1',
+      chapterIds: const <String>['5', '6'],
+      watched: false,
+    );
+
+    final transform = firestore.arrayTransforms.single;
+    expect(transform.path, 'users/profile-1/chapters_watched/m1');
+    expect(transform.field, 'chapters_watched');
+    expect(transform.values, <String>['5', '6']);
+    expect(transform.append, isFalse);
+    expect(transform.baseFields, isEmpty);
+  });
+
+  test('syncAll loads APK chapters_watched state for manga', () async {
+    final firestore = _Firestore();
+    firestore.collections['users/profile-1/chapters_watched'] =
+        <FirestoreDocument>[
+      _remote(
+        path: 'users/profile-1/chapters_watched/m1',
+        fields: <String, dynamic>{
+          'chapters_watched': <String>['12', '13'],
+          'last_chapter_watched_id': '13',
+          'user_id': 'profile-1',
+        },
+      ),
+    ];
+    final service = await _signedInService(firestore);
+
+    await service.syncAll();
+
+    expect(service.isMangaChapterWatchedCached('m1', '12'), isTrue);
+    expect(service.isMangaChapterWatchedCached('m1', '13'), isTrue);
+    expect(service.isMangaChapterWatchedCached('m1', '14'), isFalse);
+  });
+
 }

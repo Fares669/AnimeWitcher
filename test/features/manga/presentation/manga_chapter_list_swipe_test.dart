@@ -47,8 +47,19 @@ void main() {
     number: 1,
   );
 
-  testWidgets('Mangayomi start chapter swipe toggles bookmark', (tester) async {
+  testWidgets('chapter list shows page progress and has no swipe actions', (
+    tester,
+  ) async {
     final repository = MangaReadingRepository(_MemoryStorage());
+    await repository.save(
+      const MangaReadingProgress(
+        mangaId: 'm1',
+        chapterId: 'c1',
+        pageIndex: 4,
+        pageCount: 10,
+        updatedAt: 100,
+      ),
+    );
 
     await tester.pumpWidget(
       ProviderScope(
@@ -66,47 +77,56 @@ void main() {
       ),
     );
 
-    expect(find.byType(Dismissible), findsOneWidget);
-    await tester.drag(find.byType(Dismissible), const Offset(600, 0));
-    await tester.pumpAndSettle();
-
-    expect(repository.get('m1', 'c1')?.isBookmarked, isTrue);
-    expect(find.text('Chapter 1'), findsOneWidget);
+    expect(find.text('Chapter 1 • 5/10'), findsOneWidget);
+    expect(find.byType(Dismissible), findsNothing);
   });
 
-  testWidgets('Mangayomi end chapter swipe can trigger download', (tester) async {
-    MangaChapter? downloaded;
+  testWidgets('long press selects chapters and read actions update them', (
+    tester,
+  ) async {
+    final repository = MangaReadingRepository(_MemoryStorage());
+    const chapters = <MangaChapter>[
+      MangaChapter(
+        id: 'c2',
+        mangaId: 'm1',
+        url: 'https://example.test/c2',
+        name: 'Chapter 2',
+        number: 2,
+      ),
+      chapter,
+    ];
 
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          mangaReadingRepositoryProvider.overrideWithValue(
-            MangaReadingRepository(_MemoryStorage()),
-          ),
+          mangaReadingRepositoryProvider.overrideWithValue(repository),
           mangaReaderSettingsProvider.overrideWith(
-            () => _SwipeSettings(
-              const MangaReaderSettings(
-                chapterSwipeEndAction: MangaReaderChapterSwipeAction.download,
-              ),
-            ),
+            () => _SwipeSettings(const MangaReaderSettings()),
           ),
         ],
-        child: MaterialApp(
-          home: Scaffold(
-            body: MangaChapterList(
-              chapters: const <MangaChapter>[chapter],
-              onDownload: (value) => downloaded = value,
-            ),
-          ),
+        child: const MaterialApp(
+          home: Scaffold(body: MangaChapterList(chapters: chapters)),
         ),
       ),
     );
 
-    await tester.drag(find.byType(Dismissible), const Offset(-600, 0));
+    await tester.longPress(find.text('Chapter 2'));
+    await tester.pump();
+
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(find.text('Read'), findsOneWidget);
+    expect(find.text('Unread'), findsOneWidget);
+
+    await tester.tap(find.text('Chapter 1'));
+    await tester.pump();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    await tester.tap(find.text('Read'));
     await tester.pumpAndSettle();
 
-    expect(downloaded?.id, 'c1');
-    expect(find.text('Chapter 1'), findsOneWidget);
+    expect(repository.get('m1', 'c1')?.isRead, isTrue);
+    expect(repository.get('m1', 'c2')?.isRead, isTrue);
+    expect(find.textContaining('selected'), findsNothing);
   });
 
   testWidgets('chapter list mirrors episode heading and sort toggle', (

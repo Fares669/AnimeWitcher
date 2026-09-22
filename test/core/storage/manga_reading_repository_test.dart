@@ -101,4 +101,54 @@ void main() {
     expect(restored.isRead, isTrue);
     expect(restored.pageIndex, 9);
   });
+  test('cloud read state is visible without duplicating local storage', () {
+    final repository = MangaReadingRepository(
+      _MemoryStorage(),
+      isCloudRead: (mangaId, chapterId) =>
+          mangaId == 'm1' && chapterId == 'remote-read',
+    );
+
+    final restored = repository.get('m1', 'remote-read');
+
+    expect(restored, isNotNull);
+    expect(restored!.isRead, isTrue);
+    expect(restored.pageCount, 0);
+  });
+
+  test('batch read state syncs once and unread clears stale page progress', () async {
+    final calls = <({String mangaId, List<String> ids, bool read})>[];
+    final repository = MangaReadingRepository(
+      _MemoryStorage(),
+      syncReadStates: (mangaId, chapterIds, read) async {
+        calls.add((mangaId: mangaId, ids: chapterIds.toList(), read: read));
+      },
+    );
+    await repository.save(
+      const MangaReadingProgress(
+        mangaId: 'm1',
+        chapterId: 'c1',
+        pageIndex: 9,
+        pageCount: 10,
+        updatedAt: 100,
+        isRead: true,
+      ),
+    );
+    calls.clear();
+
+    await repository.setReadStates(
+      'm1',
+      const <String>['c1', 'c2'],
+      read: false,
+    );
+
+    expect(calls, hasLength(1));
+    expect(calls.single.mangaId, 'm1');
+    expect(calls.single.ids, <String>['c1', 'c2']);
+    expect(calls.single.read, isFalse);
+    final unread = repository.get('m1', 'c1')!;
+    expect(unread.isRead, isFalse);
+    expect(unread.pageCount, 0);
+    expect(unread.pageIndex, 0);
+  });
+
 }

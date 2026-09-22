@@ -65,6 +65,7 @@ jobs:
       - name: Downloads manga RED/GREEN tests
         run: |
           flutter test test/features/library/presentation/downloads_manga_test.dart \
+            test/features/library/presentation/completed_download_chapter_card_test.dart \
             test/features/library/presentation/manga_download_count_label_test.dart \
             test/features/manga/reader/manga_reader_offline_test.dart -r expanded
 
@@ -86,7 +87,9 @@ jobs:
       - name: Manga details RED/GREEN tests
         run: |
           flutter test test/features/manga/presentation/manga_details_screen_test.dart \
-            test/features/manga/presentation/manga_details_no_anime_extras_test.dart -r expanded
+            test/features/manga/presentation/manga_details_no_anime_extras_test.dart \
+            test/features/manga/presentation/manga_chapter_list_swipe_test.dart \
+            test/core/account/animewitcher_manga_library_sync_test.dart -r expanded
 
       - name: Manga reader RED/GREEN tests
         run: |
