@@ -131,12 +131,14 @@ void main() {
     starter.releaseFirst.complete();
     await starter.secondRequested.future;
 
+    final manifest = await _waitForManifestCompletedIndexes(
+      temp,
+      const <int>{0},
+    );
+
     expect(statuses, isNot(contains(DownloadTransportStatus.complete)));
     expect(handle.current.status, isNot(DownloadTransportStatus.complete));
-
-    final manifest = await MangaChapterManifestV2.readFrom(temp);
-    expect(manifest, isNotNull);
-    expect(manifest!.completedIndexes, <int>{0});
+    expect(manifest.completedIndexes, <int>{0});
     expect(manifest.isComplete, isFalse);
   });
 
@@ -261,6 +263,27 @@ void main() {
     expect(manifest.completedIndexes, <int>{0});
   });
 
+}
+
+Future<MangaChapterManifestV2> _waitForManifestCompletedIndexes(
+  Directory directory,
+  Set<int> expected,
+) async {
+  MangaChapterManifestV2? latest;
+  for (var attempt = 0; attempt < 500; attempt++) {
+    latest = await MangaChapterManifestV2.readFrom(directory);
+    final completed = latest?.completedIndexes;
+    if (completed != null &&
+        completed.length == expected.length &&
+        completed.containsAll(expected)) {
+      return latest!;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+  }
+  throw StateError(
+    'manifest did not persist completed pages $expected; '
+    'current=${latest?.completedIndexes}',
+  );
 }
 
 Future<void> _waitForStatus(
