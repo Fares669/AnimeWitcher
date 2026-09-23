@@ -358,6 +358,33 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     );
   }
 
+  Future<void> _openChapter(
+    MultimediaItem item,
+    MangaChapter chapter,
+    List<MangaChapter> chapters,
+  ) async {
+    List<DownloadItem> downloads;
+    try {
+      downloads = await ref.read(downloadsProvider.future);
+    } catch (_) {
+      downloads = const <DownloadItem>[];
+    }
+    if (!mounted) return;
+
+    final completedDownload = completedMangaChapterDownload(
+      downloads,
+      chapter,
+    );
+    MangaReaderRoute(
+      $extra: MangaReaderRouteExtra(
+        manga: item,
+        chapter: chapter,
+        chapters: chapters,
+        localChapterDirectory: completedDownload?.destinationPath,
+      ),
+    ).push<void>(context);
+  }
+
   Future<void> _copyMangaTitle(BuildContext context, String title) async {
     await Clipboard.setData(ClipboardData(text: title));
     await HapticFeedback.selectionClick();
@@ -477,21 +504,9 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
                       confirmAndRemoveDownload(context, ref, download),
                     ),
                     onOpen: widget.onOpenChapter ??
-                        (chapter) {
-                          final completedDownload = completedMangaChapterDownload(
-                            downloads,
-                            chapter,
-                          );
-                          MangaReaderRoute(
-                            $extra: MangaReaderRouteExtra(
-                              manga: item,
-                              chapter: chapter,
-                              chapters: chapters,
-                              localChapterDirectory:
-                                  completedDownload?.destinationPath,
-                            ),
-                          ).push<void>(context);
-                        },
+                        (chapter) => unawaited(
+                          _openChapter(item, chapter, chapters),
+                        ),
                     onDownload: widget.onDownloadChapter ??
                         (chapter) => unawaited(
                           ref
