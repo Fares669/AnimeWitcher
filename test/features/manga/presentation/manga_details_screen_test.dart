@@ -214,7 +214,7 @@ void main() {
     expect(provider.chaptersStartedBeforeDetailsFinished, isFalse);
   });
 
-  testWidgets('manga tabs do not steal the iOS back-swipe gesture', (
+  testWidgets('manga details keeps horizontal tab swiping enabled', (
     tester,
   ) async {
     await tester.pumpWidget(_app(_MangaProvider()));
@@ -225,7 +225,7 @@ void main() {
     );
 
     final tabView = tester.widget<TabBarView>(find.byType(TabBarView));
-    expect(tabView.physics, isA<NeverScrollableScrollPhysics>());
+    expect(tabView.physics, isNot(isA<NeverScrollableScrollPhysics>()));
   });
 
   testWidgets('long pressing manga title copies it like anime details', (
