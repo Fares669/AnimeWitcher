@@ -64,6 +64,30 @@ void main() {
     number: 1,
   );
 
+  testWidgets('chapter list uses one sliver scroll tree', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(chapters: <MangaChapter>[chapter]),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(CustomScrollView), findsOneWidget);
+    expect(find.byType(ListView), findsNothing);
+  });
+
   testWidgets('chapter list shows page progress and has no swipe actions', (
     tester,
   ) async {
