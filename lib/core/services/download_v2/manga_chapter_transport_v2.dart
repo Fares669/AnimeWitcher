@@ -181,6 +181,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   Future<void> _pageCompletionTail = Future<void>.value();
   bool _paused = false;
   bool _canceled = false;
+  bool _canceling = false;
   bool _scheduling = false;
   int _generation = 0;
 
@@ -205,7 +206,13 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   }
 
   void _scheduleAvailablePages() {
-    if (_scheduling || _paused || _canceled || _current.isFinal) return;
+    if (_scheduling ||
+        _paused ||
+        _canceled ||
+        _canceling ||
+        _current.isFinal) {
+      return;
+    }
     _scheduling = true;
     _fillAvailableSlots();
   }
@@ -214,6 +221,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     try {
       while (!_paused &&
           !_canceled &&
+          !_canceling &&
           !_current.isFinal &&
           _pageHandles.length + _startingIndexes.length <
               _pageConnectionLimit) {
@@ -335,7 +343,12 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     int generation,
     DownloadTransportSnapshot snapshot,
   ) async {
-    if (_canceled || generation != _generation || _current.isFinal) return;
+    if (_canceled ||
+        _canceling ||
+        generation != _generation ||
+        _current.isFinal) {
+      return;
+    }
 
     if (snapshot.status == DownloadTransportStatus.complete) {
       // Package streams can repeat a terminal callback. Once durably
@@ -394,10 +407,14 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     }
 
     if (snapshot.status == DownloadTransportStatus.canceled) {
-      _canceled = true;
-      _generation++;
-      await _cancelActivePages();
-      _emitAggregate(DownloadTransportStatus.canceled);
+      await _pageSubscriptions.remove(index)?.cancel();
+      _pageHandles.remove(index);
+      _emitAggregate(
+        _paused && _allPagesPaused()
+            ? DownloadTransportStatus.paused
+            : DownloadTransportStatus.running,
+      );
+      _scheduleAvailablePages();
       return;
     }
 
@@ -507,6 +524,18 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     await Future.wait(handles.map((handle) async => handle.cancel()));
   }
 
+  Future<void> _releasePageHandles() async {
+    final subscriptions =
+        List<StreamSubscription<DownloadTransportSnapshot>>.from(
+          _pageSubscriptions.values,
+        );
+    _pageSubscriptions.clear();
+    for (final subscription in subscriptions) {
+      await subscription.cancel();
+    }
+    _pageHandles.clear();
+  }
+
   void _emit(DownloadTransportSnapshot snapshot) {
     _current = snapshot;
     if (!_controller.isClosed) _controller.add(snapshot);
@@ -522,16 +551,33 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     final handles = _pageHandles.values
         .where((handle) => !handle.current.isFinal)
         .toList(growable: false);
+    final handlesToPause = handles
+        .where((handle) =>
+            handle.current.status != DownloadTransportStatus.paused)
+        .toList(growable: false);
     final results = await Future.wait<bool>(
-      handles.map((handle) {
-        if (handle.current.status == DownloadTransportStatus.paused) {
-          return Future<bool>.value(true);
-        }
-        return handle.pause();
-      }),
+      handlesToPause.map((handle) => handle.pause()),
     );
     if (results.any((accepted) => !accepted)) {
-      _paused = false;
+      final handlesToResume = <DownloadTransportHandle>[
+        for (var index = 0; index < results.length; index++)
+          if (results[index]) handlesToPause[index],
+      ];
+      final resumeResults = await Future.wait<bool>(
+        handlesToResume.map((handle) => handle.resume()),
+      );
+      final rolledBack = resumeResults.every((accepted) => accepted);
+      _paused = !rolledBack;
+      if (rolledBack) {
+        _emitAggregate(DownloadTransportStatus.running);
+        _scheduleAvailablePages();
+      } else {
+        _emitAggregate(
+          _allPagesPaused()
+              ? DownloadTransportStatus.paused
+              : DownloadTransportStatus.running,
+        );
+      }
       return false;
     }
     if (_allPagesPaused()) _emitAggregate(DownloadTransportStatus.paused);
@@ -563,11 +609,42 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   Future<bool> cancel() async {
     if (_canceled) return true;
     if (_current.isFinal) return false;
+    if (_canceling) return false;
+    _canceling = true;
+    await Future.wait(_startingPages.values.toList(growable: false));
+
+    final entries = _pageHandles.entries.toList(growable: false);
+    final results = await Future.wait<bool>(
+      entries.map((entry) async {
+        if (entry.value.current.isFinal) return true;
+        try {
+          return await entry.value.cancel();
+        } catch (_) {
+          return false;
+        }
+      }),
+    );
+    if (results.any((accepted) => !accepted)) {
+      _canceling = false;
+      for (final entry in _pageHandles.entries.toList(growable: false)) {
+        final current = entry.value.current;
+        if (current.isFinal ||
+            current.status == DownloadTransportStatus.missing) {
+          _dispatchPageSnapshot(entry.key, _generation, current);
+        }
+      }
+      if (!_current.isFinal && !_paused) {
+        _emitAggregate(DownloadTransportStatus.running);
+        _scheduleAvailablePages();
+      }
+      return false;
+    }
+
+    final progress = _aggregate(DownloadTransportStatus.canceled).progress;
     _canceled = true;
     _generation++;
-    await Future.wait(_startingPages.values.toList(growable: false));
-    final progress = _aggregate(DownloadTransportStatus.canceled).progress;
-    await _cancelActivePages();
+    _canceling = false;
+    await _releasePageHandles();
     _emitAggregate(DownloadTransportStatus.canceled, progress: progress);
     return true;
   }
