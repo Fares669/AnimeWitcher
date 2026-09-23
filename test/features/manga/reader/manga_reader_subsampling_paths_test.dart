@@ -191,6 +191,16 @@ void main() {
     },
   );
 
+  test('reader image failures emit the diagnostic network probe', () {
+    final source = File(
+      'lib/features/manga/reader/widgets/manga_page_image.dart',
+    ).readAsStringSync();
+
+    expect(source, contains("record('image.error'"));
+    expect(source, contains('mangaReaderDiagnostics.probeImage('));
+    expect(source, contains("record('image.loaded'"));
+  });
+
   test('continuous subsampling forwards image failures to reader refresh', () {
     final source = File(
       'lib/features/manga/reader/subsampling/manga_min_subsampling_image.dart',
