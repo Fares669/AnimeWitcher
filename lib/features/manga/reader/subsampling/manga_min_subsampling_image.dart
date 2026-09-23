@@ -18,6 +18,7 @@ class MangaMinSubsamplingImage extends StatelessWidget {
     this.sourceRect,
     required this.onImageLoaded,
     required this.onLoadSettled,
+    this.onImageError,
     required this.onRetry,
     required this.retryEpoch,
   });
@@ -30,6 +31,7 @@ class MangaMinSubsamplingImage extends StatelessWidget {
   final Rect? sourceRect;
   final void Function(int width, int height) onImageLoaded;
   final VoidCallback onLoadSettled;
+  final VoidCallback? onImageError;
   final VoidCallback onRetry;
   final int retryEpoch;
 
@@ -67,6 +69,7 @@ class MangaMinSubsamplingImage extends StatelessWidget {
       zoomEnabled: false,
       quickScaleEnabled: false,
       onImageLoaded: onImageLoaded,
+      onError: (_) => onImageError?.call(),
       loadStateChanged: (state) => switch (state.loadState) {
         LoadState.loading => MangaReaderPageLoadingPlaceholder(
           progress: mangaReaderChunkProgress(state.loadingProgress),
