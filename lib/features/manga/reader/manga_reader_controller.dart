@@ -162,12 +162,14 @@ class MangaReaderController extends ChangeNotifier {
       try {
         final fresh = await provider.refreshMangaChapterPages(manga.url, chapter);
         if (chapter.id != _chapter.id || fresh.isEmpty) return;
-        if (listEquals(
-          fresh.map((page) => page.imageUrl).toList(),
-          _pages.map((page) => page.imageUrl).toList(),
-        )) {
-          return;
-        }
+        final unchanged =
+            fresh.length == _pages.length &&
+            List<int>.generate(fresh.length, (index) => index).every(
+              (index) =>
+                  fresh[index].imageUrl == _pages[index].imageUrl &&
+                  mapEquals(fresh[index].headers, _pages[index].headers),
+            );
+        if (unchanged) return;
         _pages = fresh;
         _pageIndex = _pageIndex.clamp(0, fresh.length - 1).toInt();
         await _pageCache.put(_mangaId, chapter, fresh);
