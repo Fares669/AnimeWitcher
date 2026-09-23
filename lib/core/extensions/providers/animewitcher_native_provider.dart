@@ -3038,6 +3038,12 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   ) async {
     final details = await getMangaDetails(mangaUrl);
     final sourceUrl = details.syncData?['mangalekPageUrl']?.trim() ?? '';
+    mangaReaderDiagnostics.record('provider.mangalek.start', <String, Object?>{
+      'mangaId': mangaId,
+      'chapterId': chapter.id,
+      'hasSourceUrl': sourceUrl.isNotEmpty,
+      ...mangaReaderDiagnostics.urlFields('source', sourceUrl),
+    });
     if (sourceUrl.isEmpty) return const <MangaPage>[];
 
     MangaChapter? sourceChapter;
@@ -3049,28 +3055,54 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
           caseSensitive: false,
         ).hasMatch(html),
       );
-      sourceChapter = _matchingMangaSourceChapter(
-        parseMangaLekChapters(
-          html: html,
-          mangaId: mangaId,
-          documentUrl: sourceUrl,
-        ),
-        chapter,
+      final parsed = parseMangaLekChapters(
+        html: html,
+        mangaId: mangaId,
+        documentUrl: sourceUrl,
       );
-    } catch (_) {
+      sourceChapter = _matchingMangaSourceChapter(parsed, chapter);
+      mangaReaderDiagnostics.record('provider.mangalek.chapter_match', <String, Object?>{
+        'mangaId': mangaId,
+        'chapterId': chapter.id,
+        'layout': 'page_html',
+        'candidateCount': parsed.length,
+        'matched': sourceChapter != null,
+        if (sourceChapter != null)
+          ...mangaReaderDiagnostics.urlFields('matched', sourceChapter.url),
+      });
+    } catch (error) {
+      mangaReaderDiagnostics.record('provider.mangalek.chapter_match_error', <String, Object?>{
+        'mangaId': mangaId,
+        'chapterId': chapter.id,
+        'layout': 'page_html',
+        'errorType': error.runtimeType.toString(),
+      });
       // The current source may have moved to the archive layout.
     }
 
     if (sourceChapter == null) {
       try {
-        sourceChapter = _matchingMangaSourceChapter(
-          await _loadMangaArchiveChapters(
-            sourceUrl: sourceUrl,
-            mangaId: mangaId,
-          ),
-          chapter,
+        final archived = await _loadMangaArchiveChapters(
+          sourceUrl: sourceUrl,
+          mangaId: mangaId,
         );
-      } catch (_) {
+        sourceChapter = _matchingMangaSourceChapter(archived, chapter);
+        mangaReaderDiagnostics.record('provider.mangalek.chapter_match', <String, Object?>{
+          'mangaId': mangaId,
+          'chapterId': chapter.id,
+          'layout': 'archive',
+          'candidateCount': archived.length,
+          'matched': sourceChapter != null,
+          if (sourceChapter != null)
+            ...mangaReaderDiagnostics.urlFields('matched', sourceChapter.url),
+        });
+      } catch (error) {
+        mangaReaderDiagnostics.record('provider.mangalek.chapter_match_error', <String, Object?>{
+          'mangaId': mangaId,
+          'chapterId': chapter.id,
+          'layout': 'archive',
+          'errorType': error.runtimeType.toString(),
+        });
         sourceChapter = null;
       }
     }
@@ -3086,8 +3118,22 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
           caseSensitive: false,
         ).hasMatch(html),
       );
-      return parseMangaLekPages(html: html, chapterUrl: chapterUrl);
-    } catch (_) {
+      final pages = parseMangaLekPages(html: html, chapterUrl: chapterUrl);
+      mangaReaderDiagnostics.record('provider.mangalek.pages', <String, Object?>{
+        'mangaId': mangaId,
+        'chapterId': chapter.id,
+        'count': pages.length,
+        ...mangaReaderDiagnostics.urlFields('chapter', chapterUrl),
+        if (pages.isNotEmpty) ...mangaReaderDiagnostics.urlFields('first', pages.first.imageUrl),
+        if (pages.isNotEmpty) ...mangaReaderDiagnostics.headerFields('first', pages.first.headers),
+      });
+      return pages;
+    } catch (error) {
+      mangaReaderDiagnostics.record('provider.mangalek.pages_error', <String, Object?>{
+        'mangaId': mangaId,
+        'chapterId': chapter.id,
+        'errorType': error.runtimeType.toString(),
+      });
       return const <MangaPage>[];
     }
   }
@@ -3106,6 +3152,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     }
 
     final key = '$mangaId|$chapterId';
+    mangaReaderDiagnostics.record('provider.refresh.start', <String, Object?>{
+      'mangaId': mangaId,
+      'chapterId': chapterId,
+    });
     _mangaPageCache.remove(key);
     _mangaPageExpiresAt.remove(key);
 
@@ -3122,9 +3172,21 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (freshPages.isNotEmpty) {
       _mangaPageCache[key] = freshPages;
       _mangaPageExpiresAt[key] = DateTime.now().add(_episodeDataTtl);
+      mangaReaderDiagnostics.record('provider.refresh.result', <String, Object?>{
+        'mangaId': mangaId,
+        'chapterId': chapterId,
+        'source': 'mangalek',
+        'count': freshPages.length,
+        ...mangaReaderDiagnostics.urlFields('first', freshPages.first.imageUrl),
+        ...mangaReaderDiagnostics.headerFields('first', freshPages.first.headers),
+      });
       return List<MangaPage>.unmodifiable(freshPages);
     }
 
+    mangaReaderDiagnostics.record('provider.refresh.fallback_firestore', <String, Object?>{
+      'mangaId': mangaId,
+      'chapterId': chapterId,
+    });
     return getMangaChapterPages(mangaUrl, chapter);
   }
 
