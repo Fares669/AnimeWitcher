@@ -441,7 +441,6 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
           Expanded(
             child: TabBarView(
               controller: _tabs,
-              physics: const NeverScrollableScrollPhysics(),
               children: <Widget>[
                 _MangaDetailsTab(
                   item: item,
