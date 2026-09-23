@@ -854,18 +854,22 @@ final class DownloadManagerV2 {
     // samples arrive in a burst and used to create up to 16 parent snapshots,
     // diagnostic writes, and presentation updates in the same second.
     final now = _nowMillis();
-    final lastProjection = _lastNativeSpeedProjectionAtMillis[taskId];
-    if (lastProjection != null &&
-        now >= lastProjection &&
-        now - lastProjection < 1000) {
-      return;
+    if (bytesPerSecond > 0) {
+      final lastProjection = _lastNativeSpeedProjectionAtMillis[taskId];
+      if (lastProjection != null &&
+          now >= lastProjection &&
+          now - lastProjection < 1000) {
+        return;
+      }
+      _lastNativeSpeedProjectionAtMillis[taskId] = now;
+      _lastPositiveSpeedAtMillis[logicalId] = now;
+    } else {
+      // Zero is a state transition, not burst telemetry. Publish it
+      // immediately and let the next positive sample recover immediately too.
+      _lastNativeSpeedProjectionAtMillis.remove(taskId);
     }
-    _lastNativeSpeedProjectionAtMillis[taskId] = now;
 
     final speedMBps = bytesPerSecond / 1000000.0;
-    if (bytesPerSecond > 0) {
-      _lastPositiveSpeedAtMillis[logicalId] = now;
-    }
     final totalBytes = current.totalBytes;
     final transferredBytes = _presentationTransferredBytes(
       transferredBytes: current.transferredBytes,
