@@ -271,6 +271,15 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
+    if (status == TaskStatus.complete) {
+      return EpisodeActionChip(
+        tooltip: isArabic ? 'تم تنزيل الفصل' : 'Chapter downloaded',
+        onPressed: () {},
+        icon: Icons.download_done_rounded,
+        color: const Color(0xFF4CAF50),
+      );
+    }
+
     if (data != null && active) {
       if (status == TaskStatus.paused) {
         return EpisodeActionChip(
