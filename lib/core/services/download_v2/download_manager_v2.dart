@@ -1549,10 +1549,20 @@ final class DownloadManagerV2 {
     _recordDiagnostic(logicalId, snapshot);
 
     if (handle != null) {
-      await _settleObsoleteHandle(
-        handle,
-        cancelEvenIfFinal: false,
-      );
+      try {
+        await _settleObsoleteHandle(
+          handle,
+          cancelEvenIfFinal: false,
+        );
+      } catch (_) {
+        // A rejected cancel leaves the exact writer authoritative. Restore
+        // its durable record and projection instead of claiming it stopped.
+        await _store.put(record);
+        _rememberRecord(record);
+        _activateHandle(logicalId, handle);
+        await _publishRecords();
+        rethrow;
+      }
     }
     await _gateway.removeTracking(obsoleteTaskId);
     _handlesByTaskId.remove(obsoleteTaskId);

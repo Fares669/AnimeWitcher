@@ -558,6 +558,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     final results = await Future.wait<bool>(
       handlesToPause.map((handle) => handle.pause()),
     );
+    if (_current.isFinal) return false;
     if (results.any((accepted) => !accepted)) {
       final handlesToResume = <DownloadTransportHandle>[
         for (var index = 0; index < results.length; index++)
@@ -612,6 +613,10 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     if (_canceling) return false;
     _canceling = true;
     await Future.wait(_startingPages.values.toList(growable: false));
+    if (_current.isFinal) {
+      _canceling = false;
+      return false;
+    }
 
     final entries = _pageHandles.entries.toList(growable: false);
     final results = await Future.wait<bool>(
