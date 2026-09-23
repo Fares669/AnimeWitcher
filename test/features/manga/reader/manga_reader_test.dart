@@ -18,6 +18,7 @@ import 'package:animewitcher/features/manga/reader/widgets/manga_reader_image_ac
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_page_indicator.dart';
+import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -788,7 +789,8 @@ void main() {
         ],
         child: MaterialApp(
           locale: const Locale('ar'),
-          supportedLocales: const <Locale>[Locale('en'), Locale('ar')],
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: MangaReaderScreen(
             manga: manga,
             chapter: chapter,
