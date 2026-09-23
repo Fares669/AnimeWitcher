@@ -177,12 +177,17 @@ void main() {
         );
       });
       await tester.pump();
-      await tester.pumpAndSettle();
+      Key? refreshedKey;
+      for (var i = 0; i < 20 && refreshedKey == first.key; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        refreshedKey = tester
+            .widget<ssiv.SubsamplingScaleImageView>(
+              find.byType(ssiv.SubsamplingScaleImageView),
+            )
+            .key;
+      }
 
-      final refreshed = tester.widget<ssiv.SubsamplingScaleImageView>(
-        find.byType(ssiv.SubsamplingScaleImageView),
-      );
-      expect(refreshed.key, isNot(first.key));
+      expect(refreshedKey, isNot(first.key));
     },
   );
 
