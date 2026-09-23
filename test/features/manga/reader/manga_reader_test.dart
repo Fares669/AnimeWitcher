@@ -820,21 +820,27 @@ void main() {
     expect(find.byIcon(Icons.bookmark_border_rounded), findsNothing);
     expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
 
-    await tester.tap(find.byType(PopupMenuButton<MangaReaderMode>));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    final menuFinder = find.byType(PopupMenuButton<MangaReaderMode>);
+    final menu = tester.widget<PopupMenuButton<MangaReaderMode>>(menuFinder);
+    final entries = menu
+        .itemBuilder(tester.element(menuFinder))
+        .cast<PopupMenuItem<MangaReaderMode>>();
+    final labels = entries
+        .map((entry) => (entry.child as Text).data)
+        .toList(growable: false);
 
-    for (final label in <String>[
-      'عمودي',
-      'من اليسار لليمين',
-      'من اليمين لليسار',
-      'عمودي مستمر',
-      'ويب تون',
-      'أفقي مستمر',
-      'أفقي مستمر (RTL)',
-    ]) {
-      expect(find.text(label), findsOneWidget, reason: label);
-    }
+    expect(
+      labels,
+      <String>[
+        'عمودي',
+        'من اليسار لليمين',
+        'من اليمين لليسار',
+        'عمودي مستمر',
+        'ويب تون',
+        'أفقي مستمر',
+        'أفقي مستمر (RTL)',
+      ],
+    );
   });
 
   testWidgets('page indicator is a compact LTR dark pill at the bottom', (
