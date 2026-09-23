@@ -22,6 +22,8 @@ import '../../../shared/widgets/expandable_text.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/underline_segment_tabs.dart';
 import '../../details/presentation/widgets/details_rating_actions.dart';
+import '../../library/presentation/download_delete_confirmation.dart';
+import '../../library/presentation/downloads_provider.dart';
 import '../../library/presentation/library_auth.dart';
 import '../../library/presentation/library_provider.dart';
 import '../../settings/presentation/account_screen.dart';
@@ -411,6 +413,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     );
     final item = mangaDetailsItemWithCustomCover(baseItem, customCover);
     final chapterCount = state.chapters.asData?.value.length ?? 0;
+    final downloads = ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
 
     dynamic libraryNotifier;
     var isFavorite = false;
@@ -469,14 +472,26 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
                   ),
                   data: (chapters) => MangaChapterList(
                     chapters: chapters,
+                    downloads: downloads,
+                    onDeleteDownload: (download) => unawaited(
+                      confirmAndRemoveDownload(context, ref, download),
+                    ),
                     onOpen: widget.onOpenChapter ??
-                        (chapter) => MangaReaderRoute(
-                          $extra: MangaReaderRouteExtra(
-                            manga: item,
-                            chapter: chapter,
-                            chapters: chapters,
-                          ),
-                        ).push<void>(context),
+                        (chapter) {
+                          final completedDownload = completedMangaChapterDownload(
+                            downloads,
+                            chapter,
+                          );
+                          MangaReaderRoute(
+                            $extra: MangaReaderRouteExtra(
+                              manga: item,
+                              chapter: chapter,
+                              chapters: chapters,
+                              localChapterDirectory:
+                                  completedDownload?.destinationPath,
+                            ),
+                          ).push<void>(context);
+                        },
                     onDownload: widget.onDownloadChapter ??
                         (chapter) => unawaited(
                           ref
