@@ -32,9 +32,19 @@ const pages = <MangaPage>[
 ];
 
 final class _ReaderProvider extends AnimeWitcherProvider {
-  _ReaderProvider({this.emptyPages = false});
+  _ReaderProvider({
+    this.emptyPages = false,
+    this.initialPages = pages,
+    this.refreshedPages = const <MangaPage>[
+      MangaPage(index: 0, imageUrl: 'https://cdn.example/fresh.webp'),
+      MangaPage(index: 1, imageUrl: 'https://cdn.example/fresh-2.webp'),
+      MangaPage(index: 2, imageUrl: 'https://cdn.example/fresh-3.webp'),
+    ],
+  });
 
   final bool emptyPages;
+  final List<MangaPage> initialPages;
+  final List<MangaPage> refreshedPages;
   int refreshCalls = 0;
   final List<String> requestedChapterIds = <String>[];
   final Map<String, Completer<void>> _requestWaiters =
@@ -94,7 +104,7 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     requestedChapterIds.add(chapter.id);
     final waiter = _requestWaiters[chapter.id];
     if (waiter != null && !waiter.isCompleted) waiter.complete();
-    return emptyPages ? const <MangaPage>[] : pages;
+    return emptyPages ? const <MangaPage>[] : initialPages;
   }
 
   @override
@@ -103,11 +113,7 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     MangaChapter chapter,
   ) async {
     refreshCalls++;
-    return const <MangaPage>[
-      MangaPage(index: 0, imageUrl: 'https://cdn.example/fresh.webp'),
-      MangaPage(index: 1, imageUrl: 'https://cdn.example/fresh-2.webp'),
-      MangaPage(index: 2, imageUrl: 'https://cdn.example/fresh-3.webp'),
-    ];
+    return refreshedPages;
   }
 }
 
@@ -335,6 +341,64 @@ void main() {
     await controller.refreshFailedPage(controller.pages.first);
     expect(provider.refreshCalls, 1);
   });
+
+  test(
+    'failed reader image applies refreshed headers when the URL is unchanged',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'aw_reader_page_headers_',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      const stale = <MangaPage>[
+        MangaPage(index: 0, imageUrl: 'https://cdn.example/same.webp'),
+      ];
+      const fresh = <MangaPage>[
+        MangaPage(
+          index: 0,
+          imageUrl: 'https://cdn.example/same.webp',
+          headers: <String, String>{
+            'Referer': 'https://mangalik.net/manga/example/chapter-1/',
+          },
+        ),
+      ];
+      final provider = _ReaderProvider(
+        initialPages: stale,
+        refreshedPages: fresh,
+      );
+      const chapter = MangaChapter(
+        id: 'headers-c1',
+        mangaId: 'headers-m1',
+        url: 'https://animewitcher.com/manga/headers-m1/chapters/headers-c1',
+        name: 'Chapter 1',
+      );
+      final controller = MangaReaderController(
+        provider: provider,
+        progressRepository: _ReaderProgressRepository(),
+        manga: MultimediaItem(
+          title: 'Reader Manga',
+          url: 'https://animewitcher.com/manga/headers-m1',
+          posterUrl: '',
+          contentType: MultimediaContentType.manga,
+          provider: provider.packageName,
+        ),
+        chapter: chapter,
+        chapters: const <MangaChapter>[chapter],
+        pageCache: MangaReaderPageCache(cacheDirectory: temp),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.load();
+      expect(controller.pages.single.headers, isEmpty);
+
+      await controller.refreshFailedPage(controller.pages.single);
+
+      expect(provider.refreshCalls, 1);
+      expect(
+        controller.pages.single.headers['Referer'],
+        'https://mangalik.net/manga/example/chapter-1/',
+      );
+    },
+  );
 
   test('reader preloads the adjacent chapter after current chapter loads', () async {
     final temp = await Directory.systemTemp.createTemp('aw_reader_preload_');
