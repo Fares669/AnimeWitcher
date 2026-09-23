@@ -177,6 +177,7 @@ void main() {
         );
       });
       await tester.pump();
+      await tester.pumpAndSettle();
 
       final refreshed = tester.widget<ssiv.SubsamplingScaleImageView>(
         find.byType(ssiv.SubsamplingScaleImageView),
