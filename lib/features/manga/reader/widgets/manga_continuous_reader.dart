@@ -73,7 +73,7 @@ class MangaContinuousReader extends StatefulWidget {
   final bool doublePage;
   final ScrollController? controller;
   final MangaPageBuilder? pageBuilder;
-  final ValueChanged<MangaPage>? onPageImageError;
+  final Future<void> Function(MangaPage)? onPageImageError;
   final Widget? trailingPage;
   final VoidCallback? onTrailingAdvance;
 
