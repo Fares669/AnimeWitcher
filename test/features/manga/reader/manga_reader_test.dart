@@ -786,25 +786,9 @@ void main() {
             _ReaderSettingsNotifier.new,
           ),
         ],
-        child: const MaterialApp(
-          locale: Locale('ar'),
-          home: SizedBox.shrink(),
-        ),
-      ),
-    );
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
-          mangaReadingRepositoryProvider.overrideWithValue(
-            _ReaderProgressRepository(),
-          ),
-          mangaReaderSettingsProvider.overrideWith(
-            _ReaderSettingsNotifier.new,
-          ),
-        ],
         child: MaterialApp(
           locale: const Locale('ar'),
+          supportedLocales: const <Locale>[Locale('en'), Locale('ar')],
           home: MangaReaderScreen(
             manga: manga,
             chapter: chapter,
