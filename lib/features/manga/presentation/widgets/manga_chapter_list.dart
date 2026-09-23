@@ -12,6 +12,7 @@ import '../../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../details/presentation/widgets/details_hero_actions.dart';
 import '../../../details/presentation/widgets/episode_action_chip.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
+import '../../../library/presentation/downloads_provider.dart';
 import 'manga_chapter_row.dart';
 
 class MangaChapterList extends ConsumerStatefulWidget {
@@ -20,11 +21,15 @@ class MangaChapterList extends ConsumerStatefulWidget {
     required this.chapters,
     this.onOpen,
     this.onDownload,
+    this.downloads = const <DownloadItem>[],
+    this.onDeleteDownload,
   });
 
   final List<MangaChapter> chapters;
   final ValueChanged<MangaChapter>? onOpen;
   final ValueChanged<MangaChapter>? onDownload;
+  final List<DownloadItem> downloads;
+  final ValueChanged<DownloadItem>? onDeleteDownload;
 
   @override
   ConsumerState<MangaChapterList> createState() => _MangaChapterListState();
@@ -262,6 +267,10 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     }
     data ??= progressById[chapter.url];
 
+    final completedDownload = completedMangaChapterDownload(
+      widget.downloads,
+      chapter,
+    );
     final status = data?.status;
     final active =
         status == TaskStatus.running ||
@@ -271,12 +280,16 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
-    if (status == TaskStatus.complete) {
+    if (completedDownload != null || status == TaskStatus.complete) {
       return EpisodeActionChip(
-        tooltip: isArabic ? 'تم تنزيل الفصل' : 'Chapter downloaded',
-        onPressed: () {},
-        icon: Icons.download_done_rounded,
-        color: const Color(0xFF4CAF50),
+        tooltip:
+            AppLocalizations.of(context)?.mangaDeleteChapter ??
+            (isArabic ? 'حذف الفصل' : 'Delete chapter'),
+        onPressed: completedDownload != null && widget.onDeleteDownload != null
+            ? () => widget.onDeleteDownload!(completedDownload)
+            : () {},
+        icon: Icons.delete_outline_rounded,
+        color: Theme.of(context).colorScheme.error,
       );
     }
 
@@ -323,7 +336,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           AppLocalizations.of(context)?.mangaDownloadChapter ??
           (isArabic ? 'تنزيل الفصل' : 'Download chapter'),
       onPressed: () => widget.onDownload!(chapter),
-      icon: Icons.download_rounded,
+      icon: Icons.save_alt_rounded,
     );
   }
 
