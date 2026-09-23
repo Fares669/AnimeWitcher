@@ -55,7 +55,7 @@ void main() {
 
     final record = await store.get(logicalId);
     expect(record, isNotNull);
-    expect(record!.parallelChunks, 1);
+    expect(record!.parallelChunks, 16);
     expect(record.mediaKind, DownloadMediaKind.mangaChapter);
   });
 
@@ -110,7 +110,7 @@ void main() {
       final record = await store.get(item.logicalId);
       expect(record, isNotNull);
       expect(record!.awaitingAdmission, isFalse);
-      expect(record.parallelChunks, 1);
+      expect(record.parallelChunks, 16);
     }
   });
 

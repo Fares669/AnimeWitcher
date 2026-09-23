@@ -10,7 +10,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
-  test('manga chapter starts exactly one page writer at a time', () async {
+  test(
+    'manga chapter fills 16 page connections and reuses freed slots',
+    () async {
     final temp = await Directory.systemTemp.createTemp('aw_manga_transport_');
     addTearDown(() => temp.delete(recursive: true));
 
@@ -22,36 +24,71 @@ void main() {
         mangaId: 'm1',
         chapterId: '12.5',
         destinationDirectory: temp.path,
-        pages: const <MangaPage>[
-          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
-          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.webp'),
-          MangaPage(index: 2, imageUrl: 'https://cdn.test/2.webp'),
-          MangaPage(index: 3, imageUrl: 'https://cdn.test/3.webp'),
+        pages: <MangaPage>[
+          for (var index = 0; index < 20; index++)
+            MangaPage(index: index, imageUrl: 'https://cdn.test/$index.webp'),
         ],
         retries: 2,
       ),
     );
 
-    expect(starter.startedPageIndexes, <int>[0]);
-    expect(starter.maxActive, 1);
+    expect(starter.startedPageIndexes, List<int>.generate(16, (i) => i));
+    expect(starter.maxActive, 16);
 
-    for (var index = 0; index < 4; index++) {
+    for (var index = 0; index < 20; index++) {
       await starter.complete(index);
-      if (index + 1 < 4) {
-        await starter.waitUntilStarted(index + 1);
-      }
+      if (index == 0) await _waitUntilStartedCount(starter, 17);
     }
 
     await _waitForStatus(handle, DownloadTransportStatus.complete);
-    expect(starter.startedPageIndexes, <int>[0, 1, 2, 3]);
-    expect(starter.maxActive, 1);
+    expect(starter.startedPageIndexes, List<int>.generate(20, (i) => i));
+    expect(starter.maxActive, 16);
     expect(handle.current.status, DownloadTransportStatus.complete);
     expect(handle.current.progress, 1);
 
     final manifest = await MangaChapterManifestV2.readFrom(temp);
     expect(manifest, isNotNull);
-    expect(manifest!.completedIndexes, <int>{0, 1, 2, 3});
+    expect(
+      manifest!.completedIndexes,
+      Set<int>.from(List<int>.generate(20, (i) => i)),
+    );
     expect(manifest.isComplete, isTrue);
+    },
+  );
+
+  test('manga chapter starts only as many pages as it has', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'aw_manga_small_chapter_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+
+    final starter = _FakePageStarter();
+    final transport = MangaChapterTransportV2(startPage: starter.start);
+    final handle = await transport.start(
+      MangaChapterTransportSpecV2(
+        taskId: 'chapter-small',
+        mangaId: 'm1',
+        chapterId: '2',
+        destinationDirectory: temp.path,
+        pages: List<MangaPage>.generate(
+          10,
+          (index) => MangaPage(
+            index: index,
+            imageUrl: 'https://cdn.test/$index.webp',
+          ),
+        ),
+        retries: 2,
+      ),
+    );
+
+    await Future<void>.delayed(Duration.zero);
+    expect(starter.maxActive, 10);
+    expect(starter.startedPageIndexes, List<int>.generate(10, (i) => i));
+
+    for (var index = 0; index < 10; index++) {
+      await starter.complete(index);
+    }
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
   });
 
   test('completed child page never reports the whole chapter complete early', () async {
@@ -155,7 +192,7 @@ void main() {
       ),
     );
 
-    expect(starter.startedPageIndexes, <int>[1]);
+    expect(starter.startedPageIndexes, <int>[1, 2]);
   });
 
   test('manga page 404 requests a fresh chapter source', () async {
@@ -225,6 +262,16 @@ Future<void> _waitForStatus(
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }
   throw StateError('parent did not reach $status; current=${handle.current.status}');
+}
+
+Future<void> _waitUntilStartedCount(_FakePageStarter starter, int count) async {
+  for (var attempt = 0; attempt < 100; attempt++) {
+    if (starter.startedPageIndexes.length >= count) return;
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+  }
+  throw StateError(
+    'expected $count pages to start; started=${starter.startedPageIndexes}',
+  );
 }
 
 final class _DelayedAlreadyCompleteStarter {

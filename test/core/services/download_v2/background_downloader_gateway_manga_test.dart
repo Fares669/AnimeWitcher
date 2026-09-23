@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v2.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
@@ -91,23 +92,50 @@ void main() {
     expect(removed, 1);
   });
 
-  test('manga page package tasks are silent child transfers', () async {
-    final task = await packageMangaPageTaskForV2(
-      const MangaChapterPageTaskV2(
-        taskId: 'chapter_p0001',
-        pageIndex: 0,
-        url: 'https://cdn.test/0001.webp',
-        headers: <String, String>{'Referer': 'https://manga.test/'},
-        destinationPath: 'manga/test/0001.webp',
-        retries: 2,
-      ),
-      userInitiated: true,
-    );
+  test(
+    'manga page tasks share one running notification without page completions',
+    () async {
+      final firstPageTask = await packageMangaPageTaskForV2(
+        const MangaChapterPageTaskV2(
+          taskId: 'chapter_p0001',
+          pageIndex: 0,
+          url: 'https://cdn.test/0001.webp',
+          headers: <String, String>{'Referer': 'https://manga.test/'},
+          destinationPath: 'manga/test/0001.webp',
+          retries: 2,
+        ),
+        userInitiated: true,
+      );
+      final secondPageTask = await packageMangaPageTaskForV2(
+        const MangaChapterPageTaskV2(
+          taskId: 'chapter_p0002',
+          pageIndex: 1,
+          url: 'https://cdn.test/0002.webp',
+          headers: <String, String>{'Referer': 'https://manga.test/'},
+          destinationPath: 'manga/test/0002.webp',
+          retries: 2,
+        ),
+        userInitiated: true,
+      );
 
-    expect(task.group, kDownloadV2SilentPackageGroup);
-    expect(task.taskId, 'chapter_p0001');
-  });
-
+      expect(firstPageTask, isA<DownloadTask>());
+      expect(firstPageTask, isNot(isA<ParallelDownloadTask>()));
+      expect(firstPageTask.group, kDownloadV2SilentPackageGroup);
+      expect(firstPageTask.taskId, 'chapter_p0001');
+      expect(firstPageTask.notificationConfig, isNotNull);
+      expect(
+        firstPageTask.notificationConfig!.groupNotificationId,
+        'manga_chapter',
+      );
+      expect(firstPageTask.notificationConfig!.running, isNotNull);
+      expect(firstPageTask.notificationConfig!.complete, isNull);
+      expect(
+        secondPageTask.notificationConfig!.groupNotificationId,
+        'manga_chapter',
+      );
+      expect(secondPageTask.notificationConfig!.complete, isNull);
+    },
+  );
 }
 
 final class _CompleteHandle implements DownloadTransportHandle {

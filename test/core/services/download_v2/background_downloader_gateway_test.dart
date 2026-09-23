@@ -289,6 +289,10 @@ void main() {
       durableParallelProgressStatusV2(progress: 1, parentActive: false),
       DownloadTransportStatus.complete,
     );
+    expect(
+      durableParallelProgressStatusV2(progress: 1, parentActive: true),
+      DownloadTransportStatus.running,
+    );
   });
 
   test('completed durable parent rehydrates complete after manifest cleanup', () {
@@ -529,5 +533,4 @@ final class _FakeDownloadTransportHandle implements DownloadTransportHandle {
   @override
   Future<bool> cancel() async => true;
 }
-
 
