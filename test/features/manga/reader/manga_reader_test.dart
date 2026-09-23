@@ -17,6 +17,7 @@ import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.da
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_image_actions_sheet.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_reader_page_indicator.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -754,6 +755,124 @@ void main() {
       find.byType(PopupMenuButton<MangaReaderMode>),
     );
     expect(modeMenu.initialValue, MangaReaderMode.webtoon);
+  });
+
+  testWidgets('reader mode popup uses Arabic labels and top bar has no bookmark', (
+    tester,
+  ) async {
+    final provider = _ReaderProvider(emptyPages: true);
+    const chapter = MangaChapter(
+      id: 'c1',
+      mangaId: 'm1',
+      url: 'https://example.test/chapter/1',
+      name: 'الفصل 1',
+    );
+    final manga = MultimediaItem(
+      title: 'Reader Manga',
+      url: 'https://animewitcher.com/manga/m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _ReaderSettingsNotifier.new,
+          ),
+        ],
+        child: const MaterialApp(
+          locale: Locale('ar'),
+          home: SizedBox.shrink(),
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _ReaderSettingsNotifier.new,
+          ),
+        ],
+        child: MaterialApp(
+          locale: const Locale('ar'),
+          home: MangaReaderScreen(
+            manga: manga,
+            chapter: chapter,
+            chapters: const <MangaChapter>[chapter],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byIcon(Icons.bookmark_rounded), findsNothing);
+    expect(find.byIcon(Icons.bookmark_border_rounded), findsNothing);
+    expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
+
+    await tester.tap(find.byType(PopupMenuButton<MangaReaderMode>));
+    await tester.pumpAndSettle();
+
+    for (final label in <String>[
+      'عمودي',
+      'من اليسار لليمين',
+      'من اليمين لليسار',
+      'عمودي مستمر',
+      'ويب تون',
+      'أفقي مستمر',
+      'أفقي مستمر (RTL)',
+    ]) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+  });
+
+  testWidgets('page indicator is a compact LTR dark pill at the bottom', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Directionality(
+          textDirection: TextDirection.rtl,
+          child: Scaffold(
+            body: MangaReaderPageIndicator(
+              visible: true,
+              currentPage: 7,
+              totalPages: 24,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final label = tester.widget<Text>(find.text('7/24'));
+    expect(label.style?.fontSize, lessThanOrEqualTo(13));
+    expect(label.textAlign, TextAlign.center);
+
+    final directionality = tester.widget<Directionality>(
+      find.ancestor(
+        of: find.text('7/24'),
+        matching: find.byType(Directionality),
+      ).first,
+    );
+    expect(directionality.textDirection, TextDirection.ltr);
+
+    final container = tester.widget<Container>(
+      find.ancestor(
+        of: find.text('7/24'),
+        matching: find.byType(Container),
+      ).first,
+    );
+    expect(container.decoration, isA<BoxDecoration>());
   });
 
   testWidgets('reader uses Mangayomi navigation overlay widget', (tester) async {
