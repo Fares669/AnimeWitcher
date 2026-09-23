@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
@@ -140,7 +141,7 @@ void main() {
       final url = 'http://127.0.0.1:${server.port}/protected.gif';
       await DefaultCacheManager().putFile(
         url,
-        const <int>[0, 1, 2, 3],
+        Uint8List.fromList(const <int>[0, 1, 2, 3]),
         fileExtension: 'gif',
       );
       addTearDown(() => DefaultCacheManager().removeFile(url));
