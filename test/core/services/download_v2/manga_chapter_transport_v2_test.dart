@@ -123,6 +123,9 @@ void main() {
         maxConcurrentPages: 2,
       ),
     );
+    addTearDown(() async {
+      await handle.cancel();
+    });
 
     starter.handles[1]!.pauseAccepted = false;
 
@@ -154,6 +157,9 @@ void main() {
         maxConcurrentPages: 2,
       ),
     );
+    addTearDown(() async {
+      await handle.cancel();
+    });
 
     starter.handles[1]!.cancelAccepted = false;
 

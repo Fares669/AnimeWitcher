@@ -112,6 +112,36 @@ void main() {
       expect(gateway.startedSpecs, hasLength(1));
       expect(manager.snapshotFor(request.logicalId)?.taskId, firstTaskId);
     });
+
+    test('rejected user cancel restores the active download record', () async {
+      final store = InMemoryLogicalDownloadStoreV2();
+      final gateway = _Gateway();
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: gateway,
+        sourceResolver: StaticSourceResolverV2(),
+      );
+      addTearDown(manager.dispose);
+      final request = _request(
+        logicalId: _logicalId('user-cancel-failure'),
+        destinationPath: '/tmp/aw-v2-user-cancel-failure.mp4',
+      );
+
+      await manager.start(request);
+      final taskId = gateway.startedSpecs.single.taskId;
+      gateway.handleFor(taskId)!.cancelResult = false;
+
+      await expectLater(manager.cancel(request.logicalId), throwsStateError);
+
+      final record = await store.get(request.logicalId);
+      expect(record, isNotNull);
+      expect(record!.intent, DownloadUserIntent.active);
+      expect(record.taskId, taskId);
+      expect(manager.snapshotFor(request.logicalId)?.status,
+          DownloadTransportStatus.running);
+      expect(gateway.startedSpecs, hasLength(1));
+      expect(gateway.removedTracking, isNot(contains(taskId)));
+    });
   });
 }
 
