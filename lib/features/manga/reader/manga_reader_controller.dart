@@ -159,24 +159,33 @@ class MangaReaderController extends ChangeNotifier {
     _attemptedPageRefresh = true;
     final chapter = _chapter;
     final future = () async {
-      try {
-        final fresh = await provider.refreshMangaChapterPages(manga.url, chapter);
-        if (chapter.id != _chapter.id || fresh.isEmpty) return;
-        final unchanged =
-            fresh.length == _pages.length &&
-            List<int>.generate(fresh.length, (index) => index).every(
-              (index) =>
-                  fresh[index].imageUrl == _pages[index].imageUrl &&
-                  mapEquals(fresh[index].headers, _pages[index].headers),
-            );
-        if (unchanged) return;
-        _pages = fresh;
-        _pageIndex = _pageIndex.clamp(0, fresh.length - 1).toInt();
-        await _pageCache.put(_mangaId, chapter, fresh);
-        notifyListeners();
-      } catch (_) {
-        // Keep the current pages and let the reader offer its manual retry.
+      const maxAttempts = 3;
+      for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          final fresh = await provider.refreshMangaChapterPages(
+            manga.url,
+            chapter,
+          );
+          if (chapter.id != _chapter.id) return;
+          if (fresh.isEmpty) continue;
+          final unchanged =
+              fresh.length == _pages.length &&
+              List<int>.generate(fresh.length, (index) => index).every(
+                (index) =>
+                    fresh[index].imageUrl == _pages[index].imageUrl &&
+                    mapEquals(fresh[index].headers, _pages[index].headers),
+              );
+          if (unchanged) continue;
+          _pages = fresh;
+          _pageIndex = _pageIndex.clamp(0, fresh.length - 1).toInt();
+          await _pageCache.put(_mangaId, chapter, fresh);
+          notifyListeners();
+          return;
+        } catch (_) {
+          if (chapter.id != _chapter.id) return;
+        }
       }
+      // Keep the current pages only after exhausting the bounded source retry.
     }();
     _refreshingPages = future;
     _refreshingChapterId = chapter.id;
