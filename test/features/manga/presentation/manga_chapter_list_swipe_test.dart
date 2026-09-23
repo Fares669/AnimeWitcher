@@ -1,11 +1,14 @@
 import 'dart:async';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
+import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/core/utils/download_time_remaining.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
+import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/presentation/widgets/manga_chapter_list.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
@@ -291,6 +294,65 @@ void main() {
     expect(find.byIcon(Icons.delete_outline_rounded), findsOneWidget);
     expect(find.byIcon(Icons.download_done_rounded), findsNothing);
     expect(find.byIcon(Icons.save_alt_rounded), findsNothing);
+  });
+
+  testWidgets('completed chapter trash targets the matched V2 download', (
+    tester,
+  ) async {
+    final logicalId = logicalDownloadIdForMangaChapter(
+      mangaId: 'm1',
+      chapterId: 'c1',
+    ).value;
+    final completed = DownloadItem(
+      task: DownloadTask(
+        taskId: 'manga-c1',
+        url: chapter.url,
+        filename: 'chapter-c1',
+      ),
+      status: TaskStatus.complete,
+      progress: 1,
+      item: MultimediaItem(
+        title: 'Manga',
+        url: 'https://animewitcher.com/manga/m1',
+        posterUrl: '',
+        contentType: MultimediaContentType.manga,
+      ),
+      chapter: chapter,
+      mediaKind: DownloadMediaKind.mangaChapter,
+      logicalId: logicalId,
+      destinationPath: '/Downloads/manga/Manga/Chapter 1',
+      timestamp: 1,
+    );
+    DownloadItem? deleted;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(
+              chapters: const <MangaChapter>[chapter],
+              downloads: <DownloadItem>[completed],
+              onDownload: (_) {},
+              onDeleteDownload: (item) => deleted = item,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byIcon(Icons.delete_outline_rounded));
+    await tester.pump();
+
+    expect(deleted, same(completed));
   });
 
   testWidgets('chapter list mirrors episode heading and sort toggle', (
