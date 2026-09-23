@@ -240,6 +240,85 @@ void main() {
     }
   });
 
+  test('historical completion does not join a new iOS download session', () async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'start') {
+            return 'com.animewitcher.app.download.session';
+          }
+          return true;
+        });
+
+    final service = DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {},
+      forceAvailableForTesting: true,
+    );
+    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    final oldRecord = LogicalDownloadRecordV2(
+      schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: const DownloadLogicalId('episode-old'),
+      animeId: 'anime-1',
+      episodeKey: 'old',
+      variantKey: 'sub|1080p',
+      generation: 1,
+      taskId: 'aw_v2_episode_old_g1',
+      intent: DownloadUserIntent.active,
+      destinationPath: 'downloads/Old/Episode.mp4',
+      sourceDescriptor: const <String, Object?>{'providerId': 'provider'},
+      expectedBytes: 400,
+      completedAtMillis: 1,
+      updatedAtMillis: 1,
+    );
+    final currentRecord = LogicalDownloadRecordV2(
+      schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: const DownloadLogicalId('episode-current'),
+      animeId: 'anime-1',
+      episodeKey: 'current',
+      variantKey: 'sub|1080p',
+      generation: 1,
+      taskId: 'aw_v2_episode_current_g1',
+      intent: DownloadUserIntent.active,
+      destinationPath: 'downloads/Current/Episode.mp4',
+      sourceDescriptor: const <String, Object?>{'providerId': 'provider'},
+      expectedBytes: 400,
+      updatedAtMillis: 2,
+    );
+
+    try {
+      await observer.observe(
+        oldRecord,
+        const DownloadTransportSnapshot(
+          taskId: 'aw_v2_episode_old_g1',
+          status: DownloadTransportStatus.complete,
+          progress: 1,
+          transferredBytes: 400,
+          totalBytes: 400,
+        ),
+      );
+      await observer.observe(
+        currentRecord,
+        const DownloadTransportSnapshot(
+          taskId: 'aw_v2_episode_current_g1',
+          status: DownloadTransportStatus.running,
+          progress: 0.25,
+          transferredBytes: 100,
+          totalBytes: 400,
+          networkSpeedMBps: 2,
+        ),
+      );
+
+      final start = calls.singleWhere((call) => call.method == 'start');
+      final args = Map<String, Object?>.from(start.arguments as Map);
+      expect(args['batchTotal'], 1);
+      expect(args['completedCount'], 0);
+      expect(args['currentIndex'], 1);
+    } finally {
+      await observer.dispose();
+    }
+  });
+
   test('V2 checkpoints native range refill before Flutter can suspend', () async {
     final calls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
