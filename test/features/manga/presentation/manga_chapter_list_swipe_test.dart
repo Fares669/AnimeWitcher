@@ -194,6 +194,56 @@ void main() {
     expect(find.byIcon(Icons.download_rounded), findsNothing);
   });
 
+  testWidgets('completed chapter shows green downloaded icon', (
+    tester,
+  ) async {
+    final logicalId = logicalDownloadIdForMangaChapter(
+      mangaId: 'm1',
+      chapterId: 'c1',
+    ).value;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+          downloadProgressProvider.overrideWithValue(
+            <String, DownloadProgressData>{
+              logicalId: const DownloadProgressData(
+                taskId: 'task-c1',
+                progress: 1,
+                networkSpeed: 0,
+                timeRemaining: Duration.zero,
+                status: TaskStatus.complete,
+              ),
+            },
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(
+              chapters: const <MangaChapter>[chapter],
+              onDownload: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final iconFinder = find.byIcon(Icons.download_done_rounded);
+    expect(iconFinder, findsOneWidget);
+    expect(find.byIcon(Icons.download_rounded), findsNothing);
+    expect(
+      tester.widget<Icon>(iconFinder).color,
+      const Color(0xFF4CAF50),
+    );
+  });
+
   testWidgets('chapter list mirrors episode heading and sort toggle', (
     tester,
   ) async {
