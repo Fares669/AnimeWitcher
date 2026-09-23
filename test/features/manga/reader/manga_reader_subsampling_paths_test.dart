@@ -119,6 +119,62 @@ void main() {
       MangaPageImageTier.animated,
     );
   });
+  testWidgets(
+    'same network URL remounts subsampling when refreshed headers change',
+    (tester) async {
+      var page = const MangaPage(
+        index: 0,
+        imageUrl: 'https://example.test/protected.webp',
+      );
+      late StateSetter rebuild;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return MangaPageImage(
+                key: const ValueKey<String>('protected-page'),
+                page: page,
+                expand: true,
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final first = tester.widget<ssiv.SubsamplingScaleImageView>(
+        find.byType(ssiv.SubsamplingScaleImageView),
+      );
+
+      rebuild(() {
+        page = const MangaPage(
+          index: 0,
+          imageUrl: 'https://example.test/protected.webp',
+          headers: <String, String>{
+            'Referer': 'https://mangalik.net/manga/example/chapter-1/',
+          },
+        );
+      });
+      await tester.pump();
+
+      final refreshed = tester.widget<ssiv.SubsamplingScaleImageView>(
+        find.byType(ssiv.SubsamplingScaleImageView),
+      );
+      expect(refreshed.key, isNot(first.key));
+    },
+  );
+
+  test('continuous subsampling forwards image failures to reader refresh', () {
+    final source = File(
+      'lib/features/manga/reader/subsampling/manga_min_subsampling_image.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('final VoidCallback? onImageError;'));
+    expect(source, contains('onError: (_) => onImageError?.call()'));
+  });
+
   testWidgets('page image state survives leaving the viewport', (tester) async {
     final page = MangaPage(
       index: 0,
