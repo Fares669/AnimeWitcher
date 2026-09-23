@@ -3131,6 +3131,17 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       return firestorePages;
     }
 
+    final freshPages = await _loadFreshMangaSourcePages(
+      mangaUrl,
+      chapter,
+      mangaId,
+    );
+    if (freshPages.isNotEmpty) {
+      _mangaPageCache[key] = freshPages;
+      _mangaPageExpiresAt[key] = DateTime.now().add(_episodeDataTtl);
+      return List<MangaPage>.unmodifiable(freshPages);
+    }
+
     final chapterUrl = chapter.url.trim();
     final parsedChapterUri = safeTryParseUri(chapterUrl);
     if (parsedChapterUri == null ||
