@@ -351,37 +351,35 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
 
     return Stack(
       children: <Widget>[
-        Column(
-          children: <Widget>[
-            Padding(
+        CustomScrollView(
+          key: const PageStorageKey<String>('manga-chapter-list'),
+          slivers: <Widget>[
+            SliverPadding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-              child: SizedBox(
-                width: double.infinity,
-                child: Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 8,
-                  runSpacing: 12,
-                  children: <Widget>[
-                    Text(
-                      l10n?.chapters ?? (isArabic ? 'الفصول' : 'Chapters'),
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
+              sliver: SliverToBoxAdapter(
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 12,
+                    children: <Widget>[
+                      Text(
+                        l10n?.chapters ?? (isArabic ? 'الفصول' : 'Chapters'),
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                    _sortButton(context, ascending),
-                  ],
+                      _sortButton(context, ascending),
+                    ],
+                  ),
                 ),
               ),
             ),
-            Expanded(
-              child: ListView.separated(
-                padding: EdgeInsets.fromLTRB(
-                  12,
-                  0,
-                  12,
-                  _selecting ? 148 : 96,
-                ),
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              sliver: SliverList.separated(
                 itemCount: chapters.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (context, index) {
@@ -419,6 +417,9 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                 },
               ),
             ),
+            SliverToBoxAdapter(
+              child: SizedBox(height: _selecting ? 148 : 96),
+            ),
           ],
         ),
         if (_selecting)
@@ -431,4 +432,5 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       ],
     );
   }
+}
 }
