@@ -815,6 +815,74 @@ void main() {
     );
   });
 
+  test(
+    'reader falls back to MangaLek when Firestore chapter has no pages',
+    () async {
+      final stub = _stubDio();
+      stub.dio.interceptors.insert(
+        0,
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            if (options.uri.host.contains('firestore') &&
+                options.uri.path.endsWith(
+                  '/documents/manga_list/m1/chapters_summery/summery',
+                )) {
+              handler.resolve(
+                Response<dynamic>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: <String, dynamic>{
+                    'fields': <String, dynamic>{
+                      'chapters': <String, dynamic>{
+                        'arrayValue': <String, dynamic>{
+                          'values': <Map<String, dynamic>>[
+                            _mapField(<String, dynamic>{
+                              'doc_id': _stringField('c1'),
+                              'name': _stringField('الفصل 1'),
+                            }),
+                          ],
+                        },
+                      },
+                    },
+                  },
+                ),
+              );
+              return;
+            }
+            handler.next(options);
+          },
+        ),
+      );
+
+      final provider = _provider(stub.dio);
+      final chapter = (await provider.getMangaChapters(
+        'https://animewitcher.com/manga/m1',
+      )).single;
+
+      expect(
+        chapter.url,
+        'https://animewitcher.com/manga/m1/chapters/c1',
+      );
+
+      final pages = await provider.getMangaChapterPages(
+        'https://animewitcher.com/manga/m1',
+        chapter,
+      );
+
+      expect(
+        pages.map((page) => page.imageUrl),
+        <String>[
+          'https://cdn.example/1.webp',
+          'https://cdn.example/2.webp',
+        ],
+      );
+      expect(
+        pages.first.headers['Referer'],
+        'https://mangalik.net/manga/manga-one/chapter-1/',
+      );
+    },
+  );
+
   test('chapters and pages follow AnimeWitcher MangaLek pointer', () async {
     final stub = _stubDio();
     final provider = _provider(stub.dio);
