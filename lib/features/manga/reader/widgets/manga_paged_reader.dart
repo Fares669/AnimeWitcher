@@ -31,7 +31,7 @@ class MangaPagedReader extends StatefulWidget {
   final bool rtl;
   final ValueChanged<int> onPageChanged;
   final MangaPageBuilder? pageBuilder;
-  final ValueChanged<MangaPage>? onPageImageError;
+  final Future<void> Function(MangaPage)? onPageImageError;
   final Axis scrollDirection;
   final bool doublePage;
   final MangaReaderSettings settings;
