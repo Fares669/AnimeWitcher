@@ -485,6 +485,25 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     );
   }
 
+  String _readerModeLabel(BuildContext context, MangaReaderMode mode) {
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    return switch (mode) {
+      MangaReaderMode.vertical => isArabic ? 'عمودي' : 'Vertical',
+      MangaReaderMode.pagedLtr =>
+        isArabic ? 'من اليسار لليمين' : 'Left to right',
+      MangaReaderMode.pagedRtl =>
+        isArabic ? 'من اليمين لليسار' : 'Right to left',
+      MangaReaderMode.verticalContinuous =>
+        isArabic ? 'عمودي مستمر' : 'Vertical continuous',
+      MangaReaderMode.webtoon => isArabic ? 'ويب تون' : 'Webtoon',
+      MangaReaderMode.horizontalContinuous =>
+        isArabic ? 'أفقي مستمر' : 'Horizontal continuous',
+      MangaReaderMode.horizontalContinuousRtl =>
+        isArabic ? 'أفقي مستمر (RTL)' : 'Horizontal continuous (RTL)',
+    };
+  }
+
   Color _backgroundColor(BuildContext context, MangaReaderSettings settings) =>
       switch (settings.background) {
         MangaReaderBackground.black => Colors.black,
@@ -874,15 +893,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                   icon: const Icon(Icons.format_list_numbered_rounded),
                 ),
                 IconButton(
-                  tooltip: 'Bookmark',
-                  onPressed: _controller.toggleBookmark,
-                  icon: Icon(
-                    _controller.isBookmarked
-                        ? Icons.bookmark_rounded
-                        : Icons.bookmark_border_rounded,
-                  ),
-                ),
-                IconButton(
                   tooltip: 'Refresh',
                   onPressed: _controller.load,
                   icon: const Icon(Icons.refresh_rounded),
@@ -987,7 +997,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                       for (final mode in MangaReaderMode.values)
                         PopupMenuItem<MangaReaderMode>(
                           value: mode,
-                          child: Text(mode.name),
+                          child: Text(_readerModeLabel(context, mode)),
                         ),
                     ],
                     icon: const Icon(Icons.chrome_reader_mode_rounded),
@@ -1099,13 +1109,11 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
               _topBar(context),
               _bottomBar(context, settings),
               SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: MangaReaderPageIndicator(
-                    visible: !_controlsVisible && settings.showPageNumber,
-                    currentPage: _controller.pageIndex + 1,
-                    totalPages: _controller.pages.length,
-                  ),
+                minimum: const EdgeInsets.only(bottom: 4),
+                child: MangaReaderPageIndicator(
+                  visible: !_controlsVisible && settings.showPageNumber,
+                  currentPage: _controller.pageIndex + 1,
+                  totalPages: _controller.pages.length,
                 ),
               ),
               SafeArea(
