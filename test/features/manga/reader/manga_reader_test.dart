@@ -40,11 +40,13 @@ final class _ReaderProvider extends AnimeWitcherProvider {
       MangaPage(index: 1, imageUrl: 'https://cdn.example/fresh-2.webp'),
       MangaPage(index: 2, imageUrl: 'https://cdn.example/fresh-3.webp'),
     ],
+    this.refreshSequence,
   });
 
   final bool emptyPages;
   final List<MangaPage> initialPages;
   final List<MangaPage> refreshedPages;
+  final List<List<MangaPage>>? refreshSequence;
   int refreshCalls = 0;
   final List<String> requestedChapterIds = <String>[];
   final Map<String, Completer<void>> _requestWaiters =
@@ -113,6 +115,11 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     MangaChapter chapter,
   ) async {
     refreshCalls++;
+    final sequence = refreshSequence;
+    if (sequence != null && sequence.isNotEmpty) {
+      final index = (refreshCalls - 1).clamp(0, sequence.length - 1);
+      return sequence[index];
+    }
     return refreshedPages;
   }
 }
@@ -341,6 +348,67 @@ void main() {
     await controller.refreshFailedPage(controller.pages.first);
     expect(provider.refreshCalls, 1);
   });
+
+  test(
+    'failed reader image retries source refresh until the third attempt succeeds',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'aw_reader_page_retry_sequence_',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      const stale = <MangaPage>[
+        MangaPage(index: 0, imageUrl: 'https://cdn.example/stale.webp'),
+      ];
+      const fresh = <MangaPage>[
+        MangaPage(
+          index: 0,
+          imageUrl: 'https://cdn.example/stale.webp',
+          headers: <String, String>{
+            'Referer': 'https://mangalik.net/manga/example/chapter-1/',
+          },
+        ),
+      ];
+      final provider = _ReaderProvider(
+        initialPages: stale,
+        refreshedPages: fresh,
+        refreshSequence: const <List<MangaPage>>[
+          <MangaPage>[],
+          <MangaPage>[],
+          fresh,
+        ],
+      );
+      const chapter = MangaChapter(
+        id: 'retry-c1',
+        mangaId: 'retry-m1',
+        url: 'https://animewitcher.com/manga/retry-m1/chapters/retry-c1',
+        name: 'Chapter 1',
+      );
+      final controller = MangaReaderController(
+        provider: provider,
+        progressRepository: _ReaderProgressRepository(),
+        manga: MultimediaItem(
+          title: 'Reader Manga',
+          url: 'https://animewitcher.com/manga/retry-m1',
+          posterUrl: '',
+          contentType: MultimediaContentType.manga,
+          provider: provider.packageName,
+        ),
+        chapter: chapter,
+        chapters: const <MangaChapter>[chapter],
+        pageCache: MangaReaderPageCache(cacheDirectory: temp),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.load();
+      await controller.refreshFailedPage(controller.pages.single);
+
+      expect(provider.refreshCalls, 3);
+      expect(
+        controller.pages.single.headers['Referer'],
+        'https://mangalik.net/manga/example/chapter-1/',
+      );
+    },
+  );
 
   test(
     'failed reader image applies refreshed headers when the URL is unchanged',
