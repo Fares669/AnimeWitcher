@@ -84,6 +84,18 @@ class EpisodeCard extends HookConsumerWidget {
     this.showDescription = true,
   });
 
+  Future<void> _deleteCompletedDownload(
+    BuildContext context,
+    WidgetRef ref,
+    DownloadItem item,
+  ) async {
+    await confirmAndRemoveDownload(context, ref, item);
+    if (!context.mounted) return;
+    await ref
+        .read(downloadedFilesProvider.notifier)
+        .checkFile(parentItem, episode: episode);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context)!;
@@ -222,7 +234,7 @@ class EpisodeCard extends HookConsumerWidget {
 
     void triggerDownload() {
       if (completedDownload != null) {
-        unawaited(confirmAndRemoveDownload(context, ref, completedDownload));
+        unawaited(_deleteCompletedDownload(context, ref, completedDownload));
       } else if (downloadedFile != null) {
         DownloadManagementDialog.show(
           context,
@@ -588,7 +600,7 @@ class EpisodeCard extends HookConsumerWidget {
         icon: Icons.delete_outline_rounded,
         color: Theme.of(context).colorScheme.error,
         onPressed: () => unawaited(
-          confirmAndRemoveDownload(context, ref, completedDownload),
+          _deleteCompletedDownload(context, ref, completedDownload),
         ),
       );
     } else if (downloadedFile != null) {
