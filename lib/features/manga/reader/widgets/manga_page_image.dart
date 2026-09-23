@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -136,8 +137,7 @@ class _MangaPageImageState extends State<MangaPageImage>
       _imageSize = null;
       _loadSettledNotified = false;
       _errorReported = false;
-      _retryEpoch++;
-      _listenForImageSize();
+      unawaited(_retry());
     }
   }
 
