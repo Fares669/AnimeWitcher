@@ -816,6 +816,67 @@ void main() {
   });
 
   test(
+    'reader falls back to MangaLek when Firestore page lookup throws',
+    () async {
+      final stub = _stubDio();
+      stub.dio.interceptors.insert(
+        0,
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            if (options.uri.host.contains('firestore') &&
+                (options.uri.path.endsWith(
+                      '/documents/manga_list/m1/chapters/c1/summary_pages/summery',
+                    ) ||
+                    options.uri.path.endsWith(
+                      '/documents/manga_list/m1/chapters/c1:runQuery',
+                    ))) {
+              handler.reject(
+                DioException(
+                  requestOptions: options,
+                  response: Response<dynamic>(
+                    requestOptions: options,
+                    statusCode: 503,
+                    data: 'temporary firestore failure',
+                  ),
+                  type: DioExceptionType.badResponse,
+                ),
+              );
+              return;
+            }
+            handler.next(options);
+          },
+        ),
+      );
+
+      final provider = _provider(stub.dio);
+      const chapter = MangaChapter(
+        id: 'c1',
+        mangaId: 'm1',
+        url: 'https://animewitcher.com/manga/m1/chapters/c1',
+        name: 'الفصل 1',
+        number: 1,
+      );
+
+      final pages = await provider.getMangaChapterPages(
+        'https://animewitcher.com/manga/m1',
+        chapter,
+      );
+
+      expect(
+        pages.map((page) => page.imageUrl),
+        <String>[
+          'https://cdn.example/1.webp',
+          'https://cdn.example/2.webp',
+        ],
+      );
+      expect(
+        pages.first.headers['Referer'],
+        'https://mangalik.net/manga/manga-one/chapter-1/',
+      );
+    },
+  );
+
+  test(
     'reader falls back to MangaLek when Firestore chapter has no pages',
     () async {
       final stub = _stubDio();
