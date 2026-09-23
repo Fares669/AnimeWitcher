@@ -91,6 +91,7 @@ class _MangaPageImageState extends State<MangaPageImage>
   bool _loadSettledNotified = false;
   bool _errorReported = false;
   int _automaticRetryAttempts = 0;
+  bool _recoveringFromImageError = false;
   late ImageProvider<Object> _provider;
 
   @override
@@ -139,7 +140,9 @@ class _MangaPageImageState extends State<MangaPageImage>
       _loadSettledNotified = false;
       _errorReported = false;
       _automaticRetryAttempts = 0;
-      unawaited(_retry());
+      if (!_recoveringFromImageError) {
+        unawaited(_retry());
+      }
     }
   }
 
@@ -212,12 +215,14 @@ class _MangaPageImageState extends State<MangaPageImage>
   }
 
   Future<void> _recoverFromImageError() async {
-    if (_automaticRetryAttempts >= 3) return;
+    if (_automaticRetryAttempts >= 3 || _recoveringFromImageError) return;
     _automaticRetryAttempts++;
+    _recoveringFromImageError = true;
     try {
       await widget.onImageError?.call(widget.page);
-    } finally {
       if (mounted) await _retry();
+    } finally {
+      _recoveringFromImageError = false;
     }
   }
 
