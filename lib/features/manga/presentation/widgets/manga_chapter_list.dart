@@ -283,7 +283,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     if (completedDownload != null || status == TaskStatus.complete) {
       return EpisodeActionChip(
         tooltip:
-            AppLocalizations.of(context)?.mangaDeleteChapter ??
+            AppLocalizations.of(context)?.deleteDownload ??
             (isArabic ? 'حذف الفصل' : 'Delete chapter'),
         onPressed: completedDownload != null && widget.onDeleteDownload != null
             ? () => widget.onDeleteDownload!(completedDownload)
