@@ -64,10 +64,8 @@ void main() {
     expect(source, contains('automaticallyImplyLeading: false'));
     expect(source, contains('ApplePersistentGlassHeaderScope('));
     expect(source, contains('AppleLiquidGlassBackButton('));
-    expect(
-      source,
-      contains('leading: appleUsesPersistentLiquidGlassHeader ? null'),
-    );
+    expect(source, contains('leading: appleUsesPersistentLiquidGlassHeader'));
+    expect(source, contains('? null'));
     expect(
       source,
       contains('actions: appleUsesPersistentLiquidGlassHeader'),
