@@ -75,7 +75,7 @@ class MangaPageImage extends StatefulWidget {
   final MangaReaderSettings settings;
   final ValueChanged<Size>? onImageSize;
   final VoidCallback? onLoadSettled;
-  final ValueChanged<MangaPage>? onImageError;
+  final Future<void> Function(MangaPage)? onImageError;
   final Rect? sourceRect;
 
   @override
@@ -90,6 +90,7 @@ class _MangaPageImageState extends State<MangaPageImage>
   int _retryEpoch = 0;
   bool _loadSettledNotified = false;
   bool _errorReported = false;
+  int _automaticRetryAttempts = 0;
   late ImageProvider<Object> _provider;
 
   @override
@@ -137,6 +138,7 @@ class _MangaPageImageState extends State<MangaPageImage>
       _imageSize = null;
       _loadSettledNotified = false;
       _errorReported = false;
+      _automaticRetryAttempts = 0;
       unawaited(_retry());
     }
   }
@@ -205,8 +207,18 @@ class _MangaPageImageState extends State<MangaPageImage>
     if (_errorReported) return;
     _errorReported = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) widget.onImageError?.call(widget.page);
+      if (mounted) unawaited(_recoverFromImageError());
     });
+  }
+
+  Future<void> _recoverFromImageError() async {
+    if (_automaticRetryAttempts >= 3) return;
+    _automaticRetryAttempts++;
+    try {
+      await widget.onImageError?.call(widget.page);
+    } finally {
+      if (mounted) await _retry();
+    }
   }
 
   Widget _errorView(BuildContext context) {
@@ -260,6 +272,7 @@ class _MangaPageImageState extends State<MangaPageImage>
               imageSize: imageSize,
             );
       void loaded(int width, int height) {
+        _automaticRetryAttempts = 0;
         final size = Size(width.toDouble(), height.toDouble());
         if (!mounted || size == _imageSize) return;
         setState(() => _imageSize = size);
