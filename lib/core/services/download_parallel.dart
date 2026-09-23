@@ -82,6 +82,13 @@ int normalizeDownloadPartPreference(Object? raw) {
   return kDownloadPartChoices.contains(value) ? value! : kDownloadPartsAuto;
 }
 
+/// Manga chapters have no file-size probe before their page URLs are resolved.
+/// Auto therefore uses four page requests, while explicit settings stay exact.
+int mangaChapterPageConnectionsFromPreference(int preference) {
+  final normalized = normalizeDownloadPartPreference(preference);
+  return normalized == kDownloadPartsAuto ? 4 : normalized;
+}
+
 /// Pick the requested connection ceiling. Parallel mode is never attempted
 /// unless the origin proved byte-range support and exposed a trustworthy size.
 /// Auto stays size-aware so small episodes do not pay for 16 tiny requests.

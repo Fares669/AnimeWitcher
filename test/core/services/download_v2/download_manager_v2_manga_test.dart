@@ -52,6 +52,7 @@ void main() {
     expect(gateway.mangaSpecs, hasLength(1));
     expect(gateway.videoSpecs, isEmpty);
     expect(gateway.mangaSpecs.single.pages, hasLength(2));
+    expect(gateway.mangaSpecs.single.maxConcurrentPages, 16);
 
     final record = await store.get(logicalId);
     expect(record, isNotNull);
@@ -59,7 +60,7 @@ void main() {
     expect(record.mediaKind, DownloadMediaKind.mangaChapter);
   });
 
-  test('multiple manga chapters run concurrently with one connection each', () async {
+  test('multiple manga chapters keep configured page connection counts', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final gateway = _Gateway();
     final manager = DownloadManagerV2(

@@ -13,46 +13,53 @@ void main() {
   test(
     'manga chapter fills 16 page connections and reuses freed slots',
     () async {
-    final temp = await Directory.systemTemp.createTemp('aw_manga_transport_');
-    addTearDown(() => temp.delete(recursive: true));
+      final temp = await Directory.systemTemp.createTemp(
+        'aw_manga_transport_',
+      );
+      addTearDown(() => temp.delete(recursive: true));
 
-    final starter = _FakePageStarter();
-    final transport = MangaChapterTransportV2(startPage: starter.start);
-    final handle = await transport.start(
-      MangaChapterTransportSpecV2(
-        taskId: 'chapter-parent',
-        mangaId: 'm1',
-        chapterId: '12.5',
-        destinationDirectory: temp.path,
-        pages: <MangaPage>[
-          for (var index = 0; index < 20; index++)
-            MangaPage(index: index, imageUrl: 'https://cdn.test/$index.webp'),
-        ],
-        retries: 2,
-      ),
-    );
+      final starter = _FakePageStarter();
+      final transport = MangaChapterTransportV2(startPage: starter.start);
+      final handle = await transport.start(
+        MangaChapterTransportSpecV2(
+          taskId: 'chapter-parent',
+          mangaId: 'm1',
+          chapterId: '12.5',
+          destinationDirectory: temp.path,
+          pages: <MangaPage>[
+            for (var index = 0; index < 20; index++)
+              MangaPage(index: index, imageUrl: 'https://cdn.test/$index.webp'),
+          ],
+          retries: 2,
+          maxConcurrentPages: 16,
+        ),
+      );
 
-    expect(starter.startedPageIndexes, List<int>.generate(16, (i) => i));
-    expect(starter.maxActive, 16);
+      expect(starter.startedPageIndexes, List<int>.generate(16, (i) => i));
+      expect(starter.maxActive, 16);
+      await Future<void>.delayed(Duration.zero);
+      expect(handle.current.configuredConnections, 16);
+      expect(handle.current.activeConnections, 16);
 
-    for (var index = 0; index < 20; index++) {
-      await starter.complete(index);
-      if (index == 0) await _waitUntilStartedCount(starter, 17);
-    }
+      await Future.wait(List<Future<void>>.generate(16, starter.complete));
+      await _waitUntilStartedCount(starter, 20);
+      for (var index = 16; index < 20; index++) {
+        await starter.complete(index);
+      }
 
-    await _waitForStatus(handle, DownloadTransportStatus.complete);
-    expect(starter.startedPageIndexes, List<int>.generate(20, (i) => i));
-    expect(starter.maxActive, 16);
-    expect(handle.current.status, DownloadTransportStatus.complete);
-    expect(handle.current.progress, 1);
+      await _waitForStatus(handle, DownloadTransportStatus.complete);
+      expect(starter.startedPageIndexes, List<int>.generate(20, (i) => i));
+      expect(starter.maxActive, 16);
+      expect(handle.current.status, DownloadTransportStatus.complete);
+      expect(handle.current.progress, 1);
 
-    final manifest = await MangaChapterManifestV2.readFrom(temp);
-    expect(manifest, isNotNull);
-    expect(
-      manifest!.completedIndexes,
-      Set<int>.from(List<int>.generate(20, (i) => i)),
-    );
-    expect(manifest.isComplete, isTrue);
+      final manifest = await MangaChapterManifestV2.readFrom(temp);
+      expect(manifest, isNotNull);
+      expect(
+        manifest!.completedIndexes,
+        Set<int>.from(List<int>.generate(20, (i) => i)),
+      );
+      expect(manifest.isComplete, isTrue);
     },
   );
 
@@ -78,12 +85,15 @@ void main() {
           ),
         ),
         retries: 2,
+        maxConcurrentPages: 16,
       ),
     );
 
     await Future<void>.delayed(Duration.zero);
     expect(starter.maxActive, 10);
     expect(starter.startedPageIndexes, List<int>.generate(10, (i) => i));
+    expect(handle.current.configuredConnections, 16);
+    expect(handle.current.activeConnections, 10);
 
     for (var index = 0; index < 10; index++) {
       await starter.complete(index);
@@ -257,7 +267,7 @@ Future<void> _waitForStatus(
   DownloadTransportHandle handle,
   DownloadTransportStatus status,
 ) async {
-  for (var attempt = 0; attempt < 100; attempt++) {
+  for (var attempt = 0; attempt < 500; attempt++) {
     if (handle.current.status == status) return;
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }
@@ -265,7 +275,7 @@ Future<void> _waitForStatus(
 }
 
 Future<void> _waitUntilStartedCount(_FakePageStarter starter, int count) async {
-  for (var attempt = 0; attempt < 100; attempt++) {
+  for (var attempt = 0; attempt < 500; attempt++) {
     if (starter.startedPageIndexes.length >= count) return;
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }

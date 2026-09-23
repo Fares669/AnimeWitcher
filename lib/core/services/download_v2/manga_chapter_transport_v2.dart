@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
+import '../download_parallel.dart';
 import 'background_downloader_gateway.dart';
 import 'download_v2_models.dart';
 import 'manga_chapter_manifest_v2.dart';
@@ -17,11 +18,13 @@ final class MangaChapterTransportSpecV2 {
     required this.destinationDirectory,
     required this.pages,
     required this.retries,
+    this.maxConcurrentPages = 4,
   }) : assert(taskId != ''),
        assert(mangaId != ''),
        assert(chapterId != ''),
        assert(destinationDirectory != ''),
-       assert(retries >= 0);
+       assert(retries >= 0),
+       assert(maxConcurrentPages > 0);
 
   final String taskId;
   final String mangaId;
@@ -29,6 +32,7 @@ final class MangaChapterTransportSpecV2 {
   final String destinationDirectory;
   final List<MangaPage> pages;
   final int retries;
+  final int maxConcurrentPages;
 }
 
 final class MangaChapterPageTaskV2 {
@@ -113,7 +117,7 @@ final class MangaChapterTransportV2 {
     }
     manifest = manifest.copyWith(
       completedIndexes: verified,
-      isComplete: spec.pages.isNotEmpty && verified.length == spec.pages.length,
+      isComplete: verified.length == spec.pages.length,
     );
     await manifest.writeTo(directory);
 
@@ -156,6 +160,8 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
              ? DownloadTransportStatus.complete
              : DownloadTransportStatus.queued,
          progress: manifest.isComplete ? 1 : _baseProgress(manifest),
+         configuredConnections: _boundedPageConnections(spec.maxConcurrentPages),
+         activeConnections: 0,
        );
 
   final MangaChapterTransportSpecV2 spec;
@@ -163,16 +169,23 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   final MangaChapterPageStarterV2 startPage;
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast();
+  final Map<int, DownloadTransportHandle> _pageHandles =
+      <int, DownloadTransportHandle>{};
+  final Map<int, StreamSubscription<DownloadTransportSnapshot>>
+  _pageSubscriptions = <int, StreamSubscription<DownloadTransportSnapshot>>{};
+  final Set<int> _startingIndexes = <int>{};
+  final Map<int, Future<void>> _startingPages = <int, Future<void>>{};
 
   MangaChapterManifestV2 _manifest;
   DownloadTransportSnapshot _current;
-  DownloadTransportHandle? _pageHandle;
-  StreamSubscription<DownloadTransportSnapshot>? _pageSubscription;
   Future<void> _pageCompletionTail = Future<void>.value();
   bool _paused = false;
   bool _canceled = false;
-  bool _starting = false;
+  bool _scheduling = false;
   int _generation = 0;
+
+  int get _pageConnectionLimit =>
+      _boundedPageConnections(spec.maxConcurrentPages);
 
   @override
   String get taskId => spec.taskId;
@@ -188,27 +201,57 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
       _emit(_current);
       return;
     }
-    await _startNext();
+    _scheduleAvailablePages();
   }
 
-  Future<void> _startNext() async {
-    if (_starting || _paused || _canceled || _manifest.isComplete) return;
-    final index = _firstMissingIndex();
-    if (index == null) {
-      _manifest = _manifest.copyWith(isComplete: true);
-      await _manifest.writeTo(directory);
-      _emit(
-        DownloadTransportSnapshot(
-          taskId: taskId,
-          status: DownloadTransportStatus.complete,
-          progress: 1,
-        ),
-      );
-      return;
-    }
+  void _scheduleAvailablePages() {
+    if (_scheduling || _paused || _canceled || _current.isFinal) return;
+    _scheduling = true;
+    _fillAvailableSlots();
+  }
 
-    _starting = true;
-    final generation = ++_generation;
+  void _fillAvailableSlots() {
+    try {
+      while (!_paused &&
+          !_canceled &&
+          !_current.isFinal &&
+          _pageHandles.length + _startingIndexes.length <
+              _pageConnectionLimit) {
+        final index = _firstMissingIndex();
+        if (index == null) break;
+
+        _startingIndexes.add(index);
+        final start = _startPage(index, _generation);
+        _startingPages[index] = start;
+        unawaited(start);
+      }
+    } catch (error) {
+      if (!_current.isFinal) {
+        unawaited(
+          _fail(
+            category: DownloadFailureCategory.filesystem,
+            message: error.toString(),
+          ),
+        );
+      }
+    } finally {
+      _scheduling = false;
+    }
+  }
+
+  int? _firstMissingIndex() {
+    for (var index = 0; index < spec.pages.length; index++) {
+      if (_manifest.completedIndexes.contains(index) ||
+          _pageHandles.containsKey(index) ||
+          _startingIndexes.contains(index)) {
+        continue;
+      }
+      return index;
+    }
+    return null;
+  }
+
+  Future<void> _startPage(int index, int generation) async {
     try {
       final page = spec.pages[index];
       final pageTask = MangaChapterPageTaskV2(
@@ -223,17 +266,24 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         retries: spec.retries,
       );
       final handle = await startPage(pageTask);
-      if (_canceled || generation != _generation) {
+      _startingIndexes.remove(index);
+      _startingPages.remove(index);
+      if (_canceled || generation != _generation || _current.isFinal) {
         await handle.cancel();
         return;
       }
-      _pageHandle = handle;
-      await _pageSubscription?.cancel();
-      _pageSubscription = handle.snapshots.listen(
+
+      _pageHandles[index] = handle;
+      _pageSubscriptions[index] = handle.snapshots.listen(
         (snapshot) => _dispatchPageSnapshot(index, generation, snapshot),
       );
+      _emitAggregate(
+        _paused &&
+                handle.current.status == DownloadTransportStatus.paused
+            ? DownloadTransportStatus.paused
+            : DownloadTransportStatus.running,
+      );
       final currentPage = handle.current;
-      _emit(_aggregate(currentPage));
       if (currentPage.isFinal ||
           currentPage.status == DownloadTransportStatus.missing) {
         unawaited(
@@ -244,25 +294,15 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         );
       }
     } catch (error) {
-      _emit(
-        DownloadTransportSnapshot(
-          taskId: taskId,
-          status: DownloadTransportStatus.failed,
-          progress: current.progress,
-          failureCategory: DownloadFailureCategory.transport,
-          failureMessage: error.toString(),
-        ),
-      );
-    } finally {
-      _starting = false;
+      _startingIndexes.remove(index);
+      _startingPages.remove(index);
+      if (!_canceled && generation == _generation && !_current.isFinal) {
+        await _fail(
+          category: DownloadFailureCategory.transport,
+          message: error.toString(),
+        );
+      }
     }
-  }
-
-  int? _firstMissingIndex() {
-    for (var index = 0; index < spec.pages.length; index++) {
-      if (!_manifest.completedIndexes.contains(index)) return index;
-    }
-    return null;
   }
 
   void _dispatchPageSnapshot(
@@ -280,14 +320,11 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         .catchError((Object _, StackTrace __) {})
         .then<void>((_) => _onPageSnapshot(index, generation, snapshot));
     _pageCompletionTail = next.catchError((Object error, StackTrace _) {
-      if (_canceled || generation != _generation) return;
-      _emit(
-        DownloadTransportSnapshot(
-          taskId: taskId,
-          status: DownloadTransportStatus.failed,
-          progress: current.progress,
-          failureCategory: DownloadFailureCategory.filesystem,
-          failureMessage: error.toString(),
+      if (_canceled || generation != _generation || _current.isFinal) return;
+      unawaited(
+        _fail(
+          category: DownloadFailureCategory.filesystem,
+          message: error.toString(),
         ),
       );
     });
@@ -298,29 +335,24 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     int generation,
     DownloadTransportSnapshot snapshot,
   ) async {
-    if (_canceled || generation != _generation) return;
+    if (_canceled || generation != _generation || _current.isFinal) return;
 
     if (snapshot.status == DownloadTransportStatus.complete) {
-      // Package streams can repeat the same terminal callback. Once this page
-      // is durably checkpointed, a duplicate must not rewrite manifest.json
-      // and briefly remove the authoritative checkpoint.
+      // Package streams can repeat a terminal callback. Once durably
+      // checkpointed, a duplicate must not rewrite the manifest.
       if (_manifest.completedIndexes.contains(index)) return;
 
       final file = File(
         p.join(directory.path, _pageFileName(index, spec.pages[index])),
       );
       if (!await file.exists() || await file.length() <= 0) {
-        _emit(
-          DownloadTransportSnapshot(
-            taskId: taskId,
-            status: DownloadTransportStatus.failed,
-            progress: current.progress,
-            failureCategory: DownloadFailureCategory.integrity,
-            failureMessage: 'Manga page file is missing or empty',
-          ),
+        await _fail(
+          category: DownloadFailureCategory.integrity,
+          message: 'Manga page file is missing or empty',
         );
         return;
       }
+      if (_canceled || generation != _generation || _current.isFinal) return;
 
       final completed = Set<int>.from(_manifest.completedIndexes)..add(index);
       _manifest = _manifest.copyWith(
@@ -328,103 +360,151 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         isComplete: completed.length == spec.pages.length,
       );
       await _manifest.writeTo(directory);
-      await _pageSubscription?.cancel();
-      _pageSubscription = null;
-      _pageHandle = null;
+      if (_canceled || generation != _generation || _current.isFinal) return;
+      await _pageSubscriptions.remove(index)?.cancel();
+      _pageHandles.remove(index);
 
       if (_manifest.isComplete) {
-        _emit(
-          DownloadTransportSnapshot(
-            taskId: taskId,
-            status: DownloadTransportStatus.complete,
-            progress: 1,
-          ),
+        _emitAggregate(DownloadTransportStatus.complete, progress: 1);
+      } else {
+        _emitAggregate(
+          _paused
+              ? DownloadTransportStatus.paused
+              : DownloadTransportStatus.running,
         );
-      } else if (!_paused) {
-        _emit(
-          DownloadTransportSnapshot(
-            taskId: taskId,
-            status: DownloadTransportStatus.queued,
-            progress: _baseProgress(_manifest),
-          ),
-        );
-        await _startNext();
+        _scheduleAvailablePages();
       }
       return;
     }
 
     if (snapshot.status == DownloadTransportStatus.missing) {
-      final aggregate = _aggregate(snapshot);
-      _emit(
-        DownloadTransportSnapshot(
-          taskId: taskId,
-          status: DownloadTransportStatus.failed,
-          progress: aggregate.progress,
-          failureCategory: DownloadFailureCategory.sourceExpired,
-          failureMessage: 'Manga page source returned HTTP 404',
-        ),
+      await _fail(
+        category: DownloadFailureCategory.sourceExpired,
+        message: 'Manga page source returned HTTP 404',
       );
       return;
     }
 
-    if (snapshot.status == DownloadTransportStatus.failed ||
-        snapshot.status == DownloadTransportStatus.canceled) {
-      _emit(
-        DownloadTransportSnapshot(
-          taskId: taskId,
-          status: snapshot.status,
-          progress: _aggregate(snapshot).progress,
-          failureCategory: snapshot.failureCategory,
-          failureMessage: snapshot.failureMessage,
-        ),
+    if (snapshot.status == DownloadTransportStatus.failed) {
+      await _fail(
+        category: snapshot.failureCategory ?? DownloadFailureCategory.transport,
+        message: snapshot.failureMessage,
       );
       return;
     }
 
-    if (snapshot.status == DownloadTransportStatus.paused) {
-      _emit(
-        DownloadTransportSnapshot(
-          taskId: taskId,
-          status: DownloadTransportStatus.paused,
-          progress: _aggregate(snapshot).progress,
-        ),
-      );
+    if (snapshot.status == DownloadTransportStatus.canceled) {
+      _canceled = true;
+      _generation++;
+      await _cancelActivePages();
+      _emitAggregate(DownloadTransportStatus.canceled);
       return;
     }
 
-    _emit(_aggregate(snapshot));
-  }
-
-  DownloadTransportSnapshot _aggregate(DownloadTransportSnapshot page) {
-    final pageCount = spec.pages.length;
-    final completed = _manifest.completedIndexes.length;
-    final progress = pageCount == 0
-        ? 1.0
-        : ((completed + page.progress.clamp(0.0, 1.0)) / pageCount)
-              .clamp(0.0, 1.0)
-              .toDouble();
-    final parentStatus =
-        page.status == DownloadTransportStatus.complete && !_manifest.isComplete
-        ? DownloadTransportStatus.running
-        : page.status;
-    return DownloadTransportSnapshot(
-      taskId: taskId,
-      status: parentStatus,
-      progress: progress,
-      networkSpeedMBps: page.networkSpeedMBps,
-      timeRemaining: page.timeRemaining,
-      configuredConnections: 1,
-      activeConnections: page.status == DownloadTransportStatus.running ? 1 : 0,
-      failureCategory: page.failureCategory,
-      failureMessage: page.failureMessage,
+    _emitAggregate(
+      _paused && _allPagesPaused()
+          ? DownloadTransportStatus.paused
+          : DownloadTransportStatus.running,
     );
   }
+
+  Future<void> _fail({
+    required DownloadFailureCategory category,
+    required String? message,
+  }) async {
+    if (_current.isFinal) return;
+    final aggregate = _aggregate(DownloadTransportStatus.failed);
+    _emit(
+      DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.failed,
+        progress: aggregate.progress,
+        configuredConnections: _pageConnectionLimit,
+        activeConnections: aggregate.activeConnections,
+        failureCategory: category,
+        failureMessage: message,
+      ),
+    );
+    await _cancelActivePages();
+  }
+
+  DownloadTransportSnapshot _aggregate(
+    DownloadTransportStatus status, {
+    double? progress,
+  }) {
+    final pageCount = spec.pages.length;
+    var completedProgress = _manifest.completedIndexes.length.toDouble();
+    var activeConnections = _startingIndexes.length;
+    var networkSpeed = 0.0;
+    var hasNetworkSpeed = false;
+    Duration? timeRemaining;
+
+    for (final handle in _pageHandles.values) {
+      final page = handle.current;
+      completedProgress += page.progress.clamp(0.0, 1.0).toDouble();
+      if (page.status == DownloadTransportStatus.running) activeConnections++;
+      if (page.networkSpeedMBps >= 0) {
+        networkSpeed += page.networkSpeedMBps;
+        hasNetworkSpeed = true;
+      }
+      if (page.timeRemaining > (timeRemaining ?? Duration.zero)) {
+        timeRemaining = page.timeRemaining;
+      }
+    }
+
+    final aggregateProgress = progress ??
+        (pageCount == 0
+            ? 1.0
+            : (completedProgress / pageCount).clamp(0.0, 1.0).toDouble());
+    return DownloadTransportSnapshot(
+      taskId: taskId,
+      status: status,
+      progress: aggregateProgress,
+      networkSpeedMBps: hasNetworkSpeed ? networkSpeed : -1,
+      timeRemaining: timeRemaining ?? Duration.zero,
+      configuredConnections: _pageConnectionLimit,
+      activeConnections: activeConnections,
+    );
+  }
+
+  void _emitAggregate(
+    DownloadTransportStatus status, {
+    double? progress,
+  }) {
+    _emit(_aggregate(status, progress: progress));
+  }
+
+  static int _boundedPageConnections(int value) =>
+      value.clamp(kDownloadPartsMin, kDownloadPartsMax).toInt();
 
   static double _baseProgress(MangaChapterManifestV2 manifest) {
     if (manifest.pageCount <= 0) return manifest.isComplete ? 1 : 0;
     return (manifest.completedIndexes.length / manifest.pageCount)
         .clamp(0.0, 1.0)
         .toDouble();
+  }
+
+  bool _allPagesPaused() =>
+      _startingIndexes.isEmpty &&
+      _pageHandles.values.every(
+        (handle) =>
+            handle.current.isFinal ||
+            handle.current.status == DownloadTransportStatus.paused,
+      );
+
+  Future<void> _cancelActivePages() async {
+    final subscriptions =
+        List<StreamSubscription<DownloadTransportSnapshot>>.from(
+          _pageSubscriptions.values,
+        );
+    _pageSubscriptions.clear();
+    for (final subscription in subscriptions) {
+      await subscription.cancel();
+    }
+
+    final handles = List<DownloadTransportHandle>.from(_pageHandles.values);
+    _pageHandles.clear();
+    await Future.wait(handles.map((handle) async => handle.cancel()));
   }
 
   void _emit(DownloadTransportSnapshot snapshot) {
@@ -436,51 +516,59 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   Future<bool> pause() async {
     if (_current.isFinal) return false;
     _paused = true;
-    final handle = _pageHandle;
-    if (handle == null) {
-      _emit(
-        DownloadTransportSnapshot(
-          taskId: taskId,
-          status: DownloadTransportStatus.paused,
-          progress: current.progress,
-        ),
-      );
-      return true;
+    await Future.wait(_startingPages.values.toList(growable: false));
+    if (_current.isFinal) return false;
+
+    final handles = _pageHandles.values
+        .where((handle) => !handle.current.isFinal)
+        .toList(growable: false);
+    final results = await Future.wait(
+      handles.map(
+        (handle) async =>
+            handle.current.status == DownloadTransportStatus.paused
+            ? true
+            : handle.pause(),
+      ),
+    );
+    if (results.any((accepted) => !accepted)) {
+      _paused = false;
+      return false;
     }
-    final accepted = await handle.pause();
-    if (!accepted) _paused = false;
-    return accepted;
+    if (_allPagesPaused()) _emitAggregate(DownloadTransportStatus.paused);
+    return true;
   }
 
   @override
   Future<bool> resume() async {
-    if (_canceled || _manifest.isComplete) return false;
+    if (_canceled || _current.isFinal) return false;
     _paused = false;
-    final handle = _pageHandle;
-    if (handle != null &&
-        handle.current.status == DownloadTransportStatus.paused) {
-      return handle.resume();
+    final handles = _pageHandles.values
+        .where((handle) =>
+            handle.current.status == DownloadTransportStatus.paused)
+        .toList(growable: false);
+    final results = await Future.wait(
+      handles.map((handle) async => handle.resume()),
+    );
+    if (results.any((accepted) => !accepted)) {
+      _paused = true;
+      return false;
     }
-    await _startNext();
+
+    if (handles.isEmpty) _emitAggregate(DownloadTransportStatus.running);
+    _scheduleAvailablePages();
     return true;
   }
 
   @override
   Future<bool> cancel() async {
     if (_canceled) return true;
+    if (_current.isFinal) return false;
     _canceled = true;
     _generation++;
-    await _pageSubscription?.cancel();
-    _pageSubscription = null;
-    final accepted = await _pageHandle?.cancel() ?? true;
-    _pageHandle = null;
-    _emit(
-      DownloadTransportSnapshot(
-        taskId: taskId,
-        status: DownloadTransportStatus.canceled,
-        progress: current.progress,
-      ),
-    );
-    return accepted;
+    await Future.wait(_startingPages.values.toList(growable: false));
+    final progress = _aggregate(DownloadTransportStatus.canceled).progress;
+    await _cancelActivePages();
+    _emitAggregate(DownloadTransportStatus.canceled, progress: progress);
+    return true;
   }
 }

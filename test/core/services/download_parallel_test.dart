@@ -13,6 +13,12 @@ void main() {
       expect(normalizeDownloadPartPreference(99), 0);
     });
 
+    test('Manga Auto uses four requests and preserves explicit widths', () {
+      expect(mangaChapterPageConnectionsFromPreference(0), 4);
+      expect(mangaChapterPageConnectionsFromPreference(1), 1);
+      expect(mangaChapterPageConnectionsFromPreference(16), 16);
+    });
+
     test('never splits without proven Range support and size', () {
       expect(
         selectAdaptiveDownloadParts(

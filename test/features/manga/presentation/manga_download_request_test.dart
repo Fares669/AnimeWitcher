@@ -40,6 +40,12 @@ void main() {
     expect(request.mediaId, 'm1');
     expect(request.unitKey, '12.5');
     expect(request.parallelChunks, 4);
+    final manualRequest = await mangaChapterDownloadRequest(
+      manga,
+      chapter,
+      parallelChunks: 16,
+    );
+    expect(manualRequest.parallelChunks, 16);
     expect(request.sourceDescriptor['chapterUrl'], chapter.url);
     expect(request.sourceDescriptor['mangaUrl'], manga.url);
     expect(

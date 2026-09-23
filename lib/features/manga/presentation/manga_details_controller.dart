@@ -7,6 +7,7 @@ import '../../../core/domain/entity/manga.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
+import '../../../core/services/download_parallel.dart';
 import '../../../core/services/download_v2/download_file_planner_v2.dart';
 import '../../../core/services/download_v2/download_manager_v2.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
@@ -60,8 +61,9 @@ MultimediaItem mergeMangaDetails({
 
 Future<DownloadStartRequestV2> mangaChapterDownloadRequest(
   MultimediaItem manga,
-  MangaChapter chapter,
-) async {
+  MangaChapter chapter, {
+  int parallelChunks = 4,
+}) async {
   final mangaId =
       manga.syncData?['mangaId']?.trim().isNotEmpty == true
       ? manga.syncData!['mangaId']!.trim()
@@ -96,8 +98,9 @@ Future<DownloadStartRequestV2> mangaChapterDownloadRequest(
     },
     allowPause: true,
     retries: 2,
-    // Domain invariant: Manga never consumes Anime multipart settings.
-    parallelChunks: 1,
+    parallelChunks: parallelChunks
+        .clamp(kDownloadPartsMin, kDownloadPartsMax)
+        .toInt(),
   );
 }
 
@@ -139,8 +142,14 @@ class MangaDetailsController extends _$MangaDetailsController {
     if (item == null) {
       throw StateError('Manga details are not loaded.');
     }
-    final request = await mangaChapterDownloadRequest(item, chapter);
     final storage = ref.read(storageServiceProvider);
+    final request = await mangaChapterDownloadRequest(
+      item,
+      chapter,
+      parallelChunks: mangaChapterPageConnectionsFromPreference(
+        storage.getDownloadParallelParts(),
+      ),
+    );
     await storage.saveDownloadMetadata(
       request.logicalId.value,
       item,

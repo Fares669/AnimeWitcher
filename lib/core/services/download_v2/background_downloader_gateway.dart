@@ -309,6 +309,7 @@ final class PackageBackgroundDownloaderGateway
     final task = await packageMangaPageTaskForV2(
       page,
       userInitiated: prefs.running,
+      showRunningNotification: prefs.running,
     );
     final transfer = await _downloader.transfers.start(task);
     return _handleFor(transfer);
@@ -806,7 +807,9 @@ Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
 Future<DownloadTask> packageMangaPageTaskForV2(
   MangaChapterPageTaskV2 page, {
   required bool userInitiated,
+  bool showRunningNotification = true,
 }) {
+  final parentId = page.taskId.replaceFirst(RegExp(r'_p\d{4,}$'), '');
   return packageTaskForV2(
     DownloadTaskSpecV2(
       taskId: page.taskId,
@@ -819,6 +822,15 @@ Future<DownloadTask> packageMangaPageTaskForV2(
     ),
     userInitiated: userInitiated,
     group: kDownloadV2SilentPackageGroup,
+    notificationConfig: TaskNotificationConfig(
+      running: showRunningNotification
+          ? const TaskNotification(
+              'Downloading manga chapter',
+              'Pages are downloading',
+            )
+          : null,
+      groupNotificationId: 'manga_$parentId',
+    ),
     // Manga page children are implementation details, never user notifications.
     isIOS: false,
   );
@@ -829,6 +841,7 @@ Future<DownloadTask> packageTaskForV2(
   bool userInitiated = true,
   String group = kDownloadV2PackageGroup,
   bool? isIOS,
+  TaskNotificationConfig? notificationConfig,
 }) async {
   final (baseDirectory, directory, filename) = await _destinationFor(
     spec.destinationPath,
@@ -857,6 +870,7 @@ Future<DownloadTask> packageTaskForV2(
       updates: Updates.statusAndProgress,
       retries: spec.retries,
       allowPause: spec.allowPause,
+      notificationConfig: notificationConfig,
     );
   }
 
@@ -873,6 +887,7 @@ Future<DownloadTask> packageTaskForV2(
     updates: Updates.statusAndProgress,
     retries: spec.retries,
     allowPause: spec.allowPause,
+    notificationConfig: notificationConfig,
   );
 }
 
@@ -1050,7 +1065,7 @@ DownloadTransportStatus durableParallelProgressStatusV2({
   required double progress,
   required bool parentActive,
 }) {
-  if (progress >= 1) return DownloadTransportStatus.complete;
+  if (progress >= 1 && !parentActive) return DownloadTransportStatus.complete;
   return parentActive
       ? DownloadTransportStatus.running
       : DownloadTransportStatus.paused;

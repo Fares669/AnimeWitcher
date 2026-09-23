@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../download_concurrency.dart';
+import '../download_parallel.dart';
 import 'background_downloader_gateway.dart';
 import 'download_continued_processing_v2.dart';
 import 'download_integrity_verifier_v2.dart';
@@ -516,6 +517,7 @@ final class DownloadManagerV2 {
       DownloadTransportSnapshot? settledPause;
       final readiness = _parallelPauseReadiness;
       final waitsForParallelChildren =
+          record.mediaKind != DownloadMediaKind.mangaChapter &&
           record.parallelChunks > 1 &&
           readiness != null &&
           handle is! SelfSettlingParallelDownloadTransportHandleV2;
@@ -636,6 +638,7 @@ final class DownloadManagerV2 {
       if (handle != null &&
           handle.current.status == DownloadTransportStatus.paused) {
         if (Platform.isIOS &&
+            record.mediaKind != DownloadMediaKind.mangaChapter &&
             record.parallelChunks > 1 &&
             handle is! SelfSettlingParallelDownloadTransportHandleV2) {
           throw StateError(
@@ -678,7 +681,8 @@ final class DownloadManagerV2 {
             }
 
             final readiness = _parallelPauseReadiness;
-            if (record.parallelChunks > 1 &&
+            if (record.mediaKind != DownloadMediaKind.mangaChapter &&
+                record.parallelChunks > 1 &&
                 readiness != null &&
                 handle is! SelfSettlingParallelDownloadTransportHandleV2) {
               final ready = await readiness.waitUntilReady(
@@ -740,7 +744,9 @@ final class DownloadManagerV2 {
                 final waitingRecord = record.copyWith(
                   intent: DownloadUserIntent.active,
                   awaitingAdmission: true,
-                  parallelChunks: 1,
+                  parallelChunks: mangaChapterPageConnectionsFromPreference(
+                    request.parallelChunks,
+                  ),
                   clearFailure: true,
                   updatedAtMillis: _nowMillis(),
                 );
@@ -751,7 +757,10 @@ final class DownloadManagerV2 {
                   taskId: waitingRecord.taskId,
                   status: DownloadTransportStatus.queued,
                   progress: _snapshots[logicalId]?.progress ?? 0,
-                  configuredConnections: 1,
+                  configuredConnections:
+                      mangaChapterPageConnectionsFromPreference(
+                        request.parallelChunks,
+                      ),
                   activeConnections: 0,
                 );
                 _snapshots[logicalId] = queued;
@@ -980,7 +989,7 @@ final class DownloadManagerV2 {
     final taskId = taskIdForGeneration(request.logicalId, generation);
     final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
     final parallelChunks = isManga
-        ? 1
+        ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
         : effectivePackageParallelChunksV2(request.parallelChunks);
     final queuedRecord = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
@@ -1011,7 +1020,7 @@ final class DownloadManagerV2 {
       progress: 0,
       totalBytes: request.expectedBytes,
       transferredBytes: request.expectedBytes == null ? null : 0,
-      configuredConnections: isManga ? 1 : null,
+      configuredConnections: isManga ? parallelChunks : null,
       activeConnections: isManga ? 0 : null,
     );
     _snapshots[request.logicalId] = queued;
@@ -1139,13 +1148,15 @@ final class DownloadManagerV2 {
     if (existing != null) {
       if (existing.current.status == DownloadTransportStatus.paused) {
         if (Platform.isIOS &&
+            record.mediaKind != DownloadMediaKind.mangaChapter &&
             record.parallelChunks > 1 &&
             existing is! SelfSettlingParallelDownloadTransportHandleV2) {
           await _preservePausedResumeFailure(record, existing);
           return;
         }
         final readiness = _parallelPauseReadiness;
-        if (record.parallelChunks > 1 &&
+        if (record.mediaKind != DownloadMediaKind.mangaChapter &&
+            record.parallelChunks > 1 &&
             readiness != null &&
             existing is! SelfSettlingParallelDownloadTransportHandleV2) {
           final ready = await readiness.waitUntilReady(
@@ -1209,7 +1220,7 @@ final class DownloadManagerV2 {
     final admitted = record.copyWith(
       awaitingAdmission: false,
       parallelChunks: isManga
-          ? 1
+          ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
           : effectivePackageParallelChunksV2(record.parallelChunks),
       expectedBytes: source?.expectedBytes ?? record.expectedBytes,
       clearFailure: true,
@@ -1251,7 +1262,9 @@ final class DownloadManagerV2 {
     final admitted = record.copyWith(
       intent: DownloadUserIntent.active,
       awaitingAdmission: false,
-      parallelChunks: 1,
+      parallelChunks: mangaChapterPageConnectionsFromPreference(
+        request.parallelChunks,
+      ),
       clearFailure: true,
       updatedAtMillis: _nowMillis(),
     );
@@ -1263,7 +1276,7 @@ final class DownloadManagerV2 {
       taskId: admitted.taskId,
       status: DownloadTransportStatus.queued,
       progress: _snapshots[admitted.logicalId]?.progress ?? 0,
-      configuredConnections: 1,
+      configuredConnections: admitted.parallelChunks,
       activeConnections: 0,
     );
     _snapshots[admitted.logicalId] = queued;
@@ -1272,7 +1285,7 @@ final class DownloadManagerV2 {
     final handle = await _startTransportForRequest(
       request: request,
       taskId: admitted.taskId,
-      parallelChunks: 1,
+      parallelChunks: admitted.parallelChunks,
       expectedBytes: admitted.expectedBytes,
     );
     _activateHandle(admitted.logicalId, handle);
@@ -1302,6 +1315,9 @@ final class DownloadManagerV2 {
           destinationDirectory: request.destinationPath,
           pages: pages,
           retries: request.retries,
+          maxConcurrentPages: mangaChapterPageConnectionsFromPreference(
+            parallelChunks,
+          ),
         ),
       );
     }
@@ -1371,7 +1387,7 @@ final class DownloadManagerV2 {
     final updatedAtMillis = _nowMillis();
     final expectedBytes = source?.expectedBytes ?? request.expectedBytes;
     final parallelChunks = isManga
-        ? 1
+        ? mangaChapterPageConnectionsFromPreference(request.parallelChunks)
         : effectivePackageParallelChunksV2(request.parallelChunks);
 
     final nextRecord = LogicalDownloadRecordV2(
@@ -1817,6 +1833,7 @@ final class DownloadManagerV2 {
         lastPositiveSpeedAt != null &&
         _nowMillis() - lastPositiveSpeedAt < 3000;
     if (record != null &&
+        record.mediaKind != DownloadMediaKind.mangaChapter &&
         record.parallelChunks > 1 &&
         (snapshot.networkSpeedMBps < 0 || freshZeroHandoff) &&
         current != null &&
