@@ -136,6 +136,7 @@ class _MangaPageImageState extends State<MangaPageImage>
       _imageSize = null;
       _loadSettledNotified = false;
       _errorReported = false;
+      _retryEpoch++;
       _listenForImageSize();
     }
   }
@@ -200,14 +201,17 @@ class _MangaPageImageState extends State<MangaPageImage>
     _listenForImageSize();
   }
 
+  void _reportImageError() {
+    if (_errorReported) return;
+    _errorReported = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onImageError?.call(widget.page);
+    });
+  }
+
   Widget _errorView(BuildContext context) {
     _scheduleLoadSettled();
-    if (!_errorReported) {
-      _errorReported = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) widget.onImageError?.call(widget.page);
-      });
-    }
+    _reportImageError();
     return SizedBox(
     height: mangaReaderPageLoadingExtent(MediaQuery.sizeOf(context)),
     child: Center(
@@ -302,6 +306,7 @@ class _MangaPageImageState extends State<MangaPageImage>
           sourceRect: widget.sourceRect,
           onImageLoaded: loaded,
           onLoadSettled: _notifyLoadSettled,
+          onImageError: _reportImageError,
           onRetry: () {
             _retry();
           },
