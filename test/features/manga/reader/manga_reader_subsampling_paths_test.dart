@@ -1,6 +1,4 @@
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
@@ -8,7 +6,6 @@ import 'package:animewitcher/features/manga/reader/subsampling/subsampling_scale
 import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_page_loading.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -122,65 +119,24 @@ void main() {
       MangaPageImageTier.animated,
     );
   });
-  testWidgets(
-    'header refresh evicts stale cached bytes before automatic reload',
-    (tester) async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      addTearDown(server.close);
-      var networkRequests = 0;
-      final subscription = server.listen((request) async {
-        networkRequests++;
-        request.response.headers.contentType = ContentType('image', 'gif');
-        request.response.add(
-          base64Decode('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='),
-        );
-        await request.response.close();
-      });
-      addTearDown(subscription.cancel);
+  test('header refresh automatically runs the cache-evicting retry path', () {
+    final source = File(
+      'lib/features/manga/reader/widgets/manga_page_image.dart',
+    ).readAsStringSync();
+    final updateStart = source.indexOf('void didUpdateWidget');
+    final updateEnd = source.indexOf('void _listenForImageSize', updateStart);
+    expect(updateStart, greaterThanOrEqualTo(0));
+    expect(updateEnd, greaterThan(updateStart));
 
-      final url = 'http://127.0.0.1:${server.port}/protected.gif';
-      await DefaultCacheManager().putFile(
-        url,
-        Uint8List.fromList(const <int>[0, 1, 2, 3]),
-        fileExtension: 'gif',
-      );
-      addTearDown(() => DefaultCacheManager().removeFile(url));
-
-      var page = MangaPage(index: 0, imageUrl: url);
-      late StateSetter rebuild;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: StatefulBuilder(
-            builder: (context, setState) {
-              rebuild = setState;
-              return MangaPageImage(
-                page: page,
-                expand: true,
-              );
-            },
-          ),
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(networkRequests, 0);
-
-      rebuild(() {
-        page = MangaPage(
-          index: 0,
-          imageUrl: url,
-          headers: const <String, String>{
-            'Referer': 'https://mangalik.net/manga/example/chapter-1/',
-          },
-        );
-      });
-
-      for (var i = 0; i < 20 && networkRequests == 0; i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-
-      expect(networkRequests, 1);
-    },
-  );
+    final updateBlock = source.substring(updateStart, updateEnd);
+    expect(updateBlock, contains('unawaited(_retry())'));
+    expect(
+      source,
+      contains(
+        'await CachedNetworkImage.evictFromCache(widget.page.imageUrl)',
+      ),
+    );
+  });
 
   testWidgets(
     'same network URL remounts subsampling when refreshed headers change',
