@@ -87,6 +87,63 @@ bool downloadsPointAtSameTarget(DownloadItem a, DownloadItem b) {
   return fileA.isNotEmpty && fileA == fileB;
 }
 
+DownloadItem? completedMangaChapterDownload(
+  List<DownloadItem> downloads,
+  MangaChapter chapter,
+) {
+  final mangaId = chapter.mangaId.trim();
+  final chapterId = chapter.id.trim();
+  final logicalId = mangaId.isNotEmpty && chapterId.isNotEmpty
+      ? logicalDownloadIdForMangaChapter(
+          mangaId: mangaId,
+          chapterId: chapterId,
+        ).value
+      : null;
+  final chapterUrl = chapter.url.trim();
+
+  for (final item in downloads) {
+    if (item.status != TaskStatus.complete ||
+        item.mediaKind != DownloadMediaKind.mangaChapter) {
+      continue;
+    }
+    if (logicalId != null && item.logicalId?.trim() == logicalId) return item;
+    final downloadedChapter = item.chapter;
+    if (downloadedChapter != null &&
+        downloadedChapter.mangaId.trim() == mangaId &&
+        downloadedChapter.id.trim() == chapterId) {
+      return item;
+    }
+    if (chapterUrl.isNotEmpty &&
+        (item.trackingUrl.trim() == chapterUrl ||
+            downloadedChapter?.url.trim() == chapterUrl)) {
+      return item;
+    }
+  }
+  return null;
+}
+
+DownloadItem? completedEpisodeDownload(
+  List<DownloadItem> downloads,
+  MultimediaItem parentItem,
+  Episode episode,
+) {
+  final parentUrl = parentItem.url.trim();
+  final episodeUrl = episode.url.trim();
+  for (final item in downloads) {
+    if (item.status != TaskStatus.complete ||
+        item.mediaKind != DownloadMediaKind.videoEpisode) {
+      continue;
+    }
+    if (parentUrl.isNotEmpty && item.item.url.trim() != parentUrl) continue;
+    if (episodeUrl.isNotEmpty &&
+        (item.trackingUrl.trim() == episodeUrl ||
+            item.episode?.url.trim() == episodeUrl)) {
+      return item;
+    }
+  }
+  return null;
+}
+
 int _statusRank(TaskStatus status) {
   switch (status) {
     case TaskStatus.running:
