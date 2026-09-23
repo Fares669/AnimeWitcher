@@ -686,9 +686,8 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     onContinue: _controller.canNext ? _openNextChapter : null,
   );
 
-  void _onPageImageError(MangaPage page) {
-    unawaited(_controller.refreshFailedPage(page));
-  }
+  Future<void> _onPageImageError(MangaPage page) =>
+      _controller.refreshFailedPage(page);
 
   Widget _readerBody(
     BuildContext context,
