@@ -290,7 +290,7 @@ class _MangaPagedImage extends StatefulWidget {
   });
 
   final MangaPage page;
-  final ValueChanged<MangaPage>? onImageError;
+  final Future<void> Function(MangaPage)? onImageError;
   final MangaReaderSettings settings;
   final bool rtl;
   final MangaReaderPageSlice slice;
