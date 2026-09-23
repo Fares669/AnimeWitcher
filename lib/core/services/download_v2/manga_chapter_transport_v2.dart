@@ -522,13 +522,13 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     final handles = _pageHandles.values
         .where((handle) => !handle.current.isFinal)
         .toList(growable: false);
-    final results = await Future.wait(
-      handles.map(
-        (handle) async =>
-            handle.current.status == DownloadTransportStatus.paused
-            ? true
-            : handle.pause(),
-      ),
+    final results = await Future.wait<bool>(
+      handles.map((handle) {
+        if (handle.current.status == DownloadTransportStatus.paused) {
+          return Future<bool>.value(true);
+        }
+        return handle.pause();
+      }),
     );
     if (results.any((accepted) => !accepted)) {
       _paused = false;
