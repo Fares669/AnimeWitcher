@@ -140,7 +140,7 @@ void main() {
       expect(manager.snapshotFor(request.logicalId)?.status,
           DownloadTransportStatus.running);
       expect(gateway.startedSpecs, hasLength(1));
-      expect(gateway.removedTracking, isNot(contains(taskId)));
+      expect(gateway.handleFor(taskId), isNotNull);
     });
   });
 }
