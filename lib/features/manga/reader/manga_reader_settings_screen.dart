@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../shared/widgets/apple_liquid_glass.dart';
+
 import 'manga_reader_settings.dart';
 import 'manga_reader_settings_provider.dart';
 
@@ -94,16 +96,50 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
     final notifier = ref.read(mangaReaderSettingsProvider.notifier);
     final update = notifier.update;
 
+    final colors = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(_t(context, 'Manga Reader', 'قارئ المانجا')),
-        actions: <Widget>[
-          IconButton(
-            tooltip: _t(context, 'Reset', 'إعادة ضبط'),
-            onPressed: notifier.reset,
-            icon: const Icon(Icons.restart_alt_rounded),
+        automaticallyImplyLeading: false,
+        leadingWidth: appleUsesPersistentLiquidGlassHeader ? 0 : 64,
+        leading: appleUsesPersistentLiquidGlassHeader
+            ? null
+            : Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: AppleLiquidGlassBackButton(
+                  size: 46,
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+              ),
+        title: Directionality(
+          textDirection: TextDirection.ltr,
+          child: ApplePersistentGlassHeaderScope(
+            enabled: Navigator.of(context).canPop(),
+            onBack: () => Navigator.of(context).maybePop(),
+            backForegroundColor: colors.onSurface,
+            backFallbackColor: colors.surfaceContainerHigh,
+            trailingButtons: <AppleLiquidGlassToolbarButton>[
+              AppleLiquidGlassToolbarButton(
+                icon: Icons.restart_alt_rounded,
+                tooltip: _t(context, 'Reset', 'إعادة ضبط'),
+                onPressed: notifier.reset,
+              ),
+            ],
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Text(_t(context, 'Manga Reader', 'قارئ المانجا')),
+            ),
           ),
-        ],
+        ),
+        actions: appleUsesPersistentLiquidGlassHeader
+            ? const <Widget>[]
+            : <Widget>[
+                IconButton(
+                  tooltip: _t(context, 'Reset', 'إعادة ضبط'),
+                  onPressed: notifier.reset,
+                  icon: const Icon(Icons.restart_alt_rounded),
+                ),
+              ],
       ),
       body: ListView(
         padding: const EdgeInsets.only(bottom: 96),
