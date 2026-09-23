@@ -54,6 +54,26 @@ void main() {
   });
 
 
+  test('reader settings keeps back left and reset right without duplicate iOS back', () {
+    final source = File(
+      'lib/features/manga/reader/manga_reader_settings_screen.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('Directionality('));
+    expect(source, contains('textDirection: TextDirection.ltr'));
+    expect(source, contains('automaticallyImplyLeading: false'));
+    expect(source, contains('ApplePersistentGlassHeaderScope('));
+    expect(source, contains('AppleLiquidGlassBackButton('));
+    expect(
+      source,
+      contains('leading: appleUsesPersistentLiquidGlassHeader ? null'),
+    );
+    expect(
+      source,
+      contains('actions: appleUsesPersistentLiquidGlassHeader'),
+    );
+  });
+
   testWidgets('reader settings exposes Mangayomi reading and display controls', (
     tester,
   ) async {
