@@ -99,8 +99,12 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
     final colors = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: AppBar(
+            automaticallyImplyLeading: false,
         leadingWidth: appleUsesPersistentLiquidGlassHeader ? 0 : 64,
         leading: appleUsesPersistentLiquidGlassHeader
             ? null
@@ -131,15 +135,17 @@ class MangaReaderSettingsScreen extends ConsumerWidget {
             ),
           ),
         ),
-        actions: appleUsesPersistentLiquidGlassHeader
-            ? const <Widget>[]
-            : <Widget>[
-                IconButton(
-                  tooltip: _t(context, 'Reset', 'إعادة ضبط'),
-                  onPressed: notifier.reset,
-                  icon: const Icon(Icons.restart_alt_rounded),
-                ),
-              ],
+            actions: appleUsesPersistentLiquidGlassHeader
+                ? const <Widget>[]
+                : <Widget>[
+                    IconButton(
+                      tooltip: _t(context, 'Reset', 'إعادة ضبط'),
+                      onPressed: notifier.reset,
+                      icon: const Icon(Icons.restart_alt_rounded),
+                    ),
+                  ],
+          ),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.only(bottom: 96),
