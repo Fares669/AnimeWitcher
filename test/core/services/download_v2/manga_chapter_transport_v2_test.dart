@@ -101,6 +101,69 @@ void main() {
     await _waitForStatus(handle, DownloadTransportStatus.complete);
   });
 
+  test('failed page pause resumes pages that already paused', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'aw_manga_partial_pause_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+
+    final starter = _FakePageStarter();
+    final transport = MangaChapterTransportV2(startPage: starter.start);
+    final handle = await transport.start(
+      MangaChapterTransportSpecV2(
+        taskId: 'chapter-pause-rollback',
+        mangaId: 'm1',
+        chapterId: '3',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.webp'),
+        ],
+        retries: 2,
+        maxConcurrentPages: 2,
+      ),
+    );
+
+    starter.handles[1]!.pauseAccepted = false;
+
+    expect(await handle.pause(), isFalse);
+    expect(starter.handles[0]!.current.status, DownloadTransportStatus.running);
+    expect(starter.handles[0]!.resumeCalls, 1);
+    expect(handle.current.status, DownloadTransportStatus.running);
+  });
+
+  test('rejected page cancellation does not cancel the whole chapter', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'aw_manga_partial_cancel_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+
+    final starter = _FakePageStarter();
+    final transport = MangaChapterTransportV2(startPage: starter.start);
+    final handle = await transport.start(
+      MangaChapterTransportSpecV2(
+        taskId: 'chapter-cancel-rollback',
+        mangaId: 'm1',
+        chapterId: '4',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.webp'),
+        ],
+        retries: 2,
+        maxConcurrentPages: 2,
+      ),
+    );
+
+    starter.handles[1]!.cancelAccepted = false;
+
+    expect(await handle.cancel(), isFalse);
+    expect(handle.current.status, isNot(DownloadTransportStatus.canceled));
+    await _waitUntilStartedCount(starter, 3);
+    expect(starter.startedPageIndexes, <int>[0, 1, 0]);
+    expect(starter.handles[1]!.current.status, DownloadTransportStatus.running);
+  });
+
   test('completed child page never reports the whole chapter complete early', () async {
     final temp = await Directory.systemTemp.createTemp('aw_manga_child_complete_');
     addTearDown(() => temp.delete(recursive: true));
@@ -130,15 +193,14 @@ void main() {
     await starter.firstRequested.future;
     starter.releaseFirst.complete();
     await starter.secondRequested.future;
-
-    final manifest = await _waitForManifestCompletedIndexes(
-      temp,
-      const <int>{0},
-    );
+    await _waitUntilManifestContains(temp, 0);
 
     expect(statuses, isNot(contains(DownloadTransportStatus.complete)));
     expect(handle.current.status, isNot(DownloadTransportStatus.complete));
-    expect(manifest.completedIndexes, <int>{0});
+
+    final manifest = await MangaChapterManifestV2.readFrom(temp);
+    expect(manifest, isNotNull);
+    expect(manifest!.completedIndexes, <int>{0});
     expect(manifest.isComplete, isFalse);
   });
 
@@ -265,27 +327,6 @@ void main() {
 
 }
 
-Future<MangaChapterManifestV2> _waitForManifestCompletedIndexes(
-  Directory directory,
-  Set<int> expected,
-) async {
-  MangaChapterManifestV2? latest;
-  for (var attempt = 0; attempt < 500; attempt++) {
-    latest = await MangaChapterManifestV2.readFrom(directory);
-    final completed = latest?.completedIndexes;
-    if (completed != null &&
-        completed.length == expected.length &&
-        completed.containsAll(expected)) {
-      return latest!;
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 2));
-  }
-  throw StateError(
-    'manifest did not persist completed pages $expected; '
-    'current=${latest?.completedIndexes}',
-  );
-}
-
 Future<void> _waitForStatus(
   DownloadTransportHandle handle,
   DownloadTransportStatus status,
@@ -305,6 +346,15 @@ Future<void> _waitUntilStartedCount(_FakePageStarter starter, int count) async {
   throw StateError(
     'expected $count pages to start; started=${starter.startedPageIndexes}',
   );
+}
+
+Future<void> _waitUntilManifestContains(Directory directory, int index) async {
+  for (var attempt = 0; attempt < 500; attempt++) {
+    final manifest = await MangaChapterManifestV2.readFrom(directory);
+    if (manifest?.completedIndexes.contains(index) == true) return;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  throw StateError('manifest did not record completed page $index');
 }
 
 final class _DelayedAlreadyCompleteStarter {
@@ -397,6 +447,10 @@ final class _FakePageHandle implements DownloadTransportHandle {
   final int pageIndex;
   final void Function() onTerminal;
   final String destinationPath;
+  bool pauseAccepted = true;
+  bool resumeAccepted = true;
+  bool cancelAccepted = true;
+  int resumeCalls = 0;
 
   DownloadTransportSnapshot _current = const DownloadTransportSnapshot(
     taskId: 'placeholder',
@@ -445,14 +499,34 @@ final class _FakePageHandle implements DownloadTransportHandle {
   }
 
   @override
-  Future<bool> pause() async => true;
+  Future<bool> pause() async {
+    if (!pauseAccepted) return false;
+    _setStatus(DownloadTransportStatus.paused);
+    return true;
+  }
 
   @override
-  Future<bool> resume() async => true;
+  Future<bool> resume() async {
+    resumeCalls++;
+    if (!resumeAccepted) return false;
+    _setStatus(DownloadTransportStatus.running);
+    return true;
+  }
 
   @override
   Future<bool> cancel() async {
+    if (!cancelAccepted) return false;
+    _setStatus(DownloadTransportStatus.canceled);
     onTerminal();
     return true;
+  }
+
+  void _setStatus(DownloadTransportStatus status) {
+    _current = DownloadTransportSnapshot(
+      taskId: taskId,
+      status: status,
+      progress: current.progress,
+    );
+    _controller.add(_current);
   }
 }
