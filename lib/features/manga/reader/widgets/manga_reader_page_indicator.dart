@@ -19,19 +19,24 @@ class MangaReaderPageIndicator extends StatelessWidget {
     if (!visible || totalPages <= 0) return const SizedBox.shrink();
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Text(
-        '$currentPage / $totalPages',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 20,
-          shadows: <Shadow>[
-            Shadow(offset: Offset(-1, -1), blurRadius: 1),
-            Shadow(offset: Offset(1, -1), blurRadius: 1),
-            Shadow(offset: Offset(1, 1), blurRadius: 1),
-            Shadow(offset: Offset(-1, 1), blurRadius: 1),
-          ],
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.68),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Text(
+            '$currentPage/$totalPages',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+          ),
         ),
-        textAlign: TextAlign.center,
       ),
     );
   }
