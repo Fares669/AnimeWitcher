@@ -821,7 +821,8 @@ void main() {
     expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
 
     await tester.tap(find.byType(PopupMenuButton<MangaReaderMode>));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
 
     for (final label in <String>[
       'عمودي',
