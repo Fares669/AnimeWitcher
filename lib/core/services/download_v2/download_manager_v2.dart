@@ -134,6 +134,7 @@ final class DownloadManagerV2 {
       <DownloadLogicalId>{};
   final Map<DownloadLogicalId, int> _lastPositiveSpeedAtMillis =
       <DownloadLogicalId, int>{};
+  final Map<String, int> _lastNativeSpeedProjectionAtMillis = <String, int>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
       StreamController<List<LogicalDownloadRecordV2>>.broadcast();
 
@@ -849,9 +850,21 @@ final class DownloadManagerV2 {
     final current = _snapshots[logicalId];
     if (current == null || current.taskId != taskId || current.isFinal) return;
 
+    // Native emits one speed sample per live child. With 16 connections those
+    // samples arrive in a burst and used to create up to 16 parent snapshots,
+    // diagnostic writes, and presentation updates in the same second.
+    final now = _nowMillis();
+    final lastProjection = _lastNativeSpeedProjectionAtMillis[taskId];
+    if (lastProjection != null &&
+        now >= lastProjection &&
+        now - lastProjection < 1000) {
+      return;
+    }
+    _lastNativeSpeedProjectionAtMillis[taskId] = now;
+
     final speedMBps = bytesPerSecond / 1000000.0;
     if (bytesPerSecond > 0) {
-      _lastPositiveSpeedAtMillis[logicalId] = _nowMillis();
+      _lastPositiveSpeedAtMillis[logicalId] = now;
     }
     final totalBytes = current.totalBytes;
     final transferredBytes = _presentationTransferredBytes(
@@ -1795,6 +1808,9 @@ final class DownloadManagerV2 {
     DownloadTransportSnapshot snapshot,
   ) {
     if (_currentTaskIds[logicalId] != snapshot.taskId) return;
+    if (snapshot.isFinal) {
+      _lastNativeSpeedProjectionAtMillis.remove(snapshot.taskId);
+    }
 
     if (snapshot.status == DownloadTransportStatus.complete) {
       _scheduleCompletionVerification(logicalId, snapshot);
@@ -2112,6 +2128,7 @@ final class DownloadManagerV2 {
     }
     _recordsByLogicalId.clear();
     _lastPositiveSpeedAtMillis.clear();
+    _lastNativeSpeedProjectionAtMillis.clear();
     await _recordChanges.close();
   }
 }

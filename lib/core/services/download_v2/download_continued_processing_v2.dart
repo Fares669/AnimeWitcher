@@ -283,7 +283,10 @@ final class IosDownloadContinuedProcessingObserverV2
         _sessionMembers.add(logicalId);
         _outstanding[logicalId] = entry;
       case DownloadTransportStatus.complete:
-        _sessionMembers.add(logicalId);
+        // Startup replays durable completed records through presentation
+        // observers. A terminal record that was never active in this observer's
+        // current session must not inflate the iOS "N of N" batch count.
+        if (!_sessionMembers.contains(logicalId)) return;
         _completedMembers.add(logicalId);
         _outstanding.remove(logicalId);
       case DownloadTransportStatus.paused:
