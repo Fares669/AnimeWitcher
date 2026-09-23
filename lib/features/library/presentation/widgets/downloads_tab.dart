@@ -20,6 +20,7 @@ import '../../../../core/utils/layout_constants.dart';
 import '../../../details/presentation/downloaded_file_provider.dart';
 import '../../../details/presentation/playback_launcher.dart';
 import '../download_progress_v2_provider.dart';
+import '../download_delete_confirmation.dart';
 import '../downloads_provider.dart';
 import '../download_unit_count_label.dart';
 import 'completed_download_chapter_card.dart';
@@ -403,7 +404,7 @@ class _GroupedDownloadTile extends ConsumerWidget {
                           orderedItems,
                         ),
                         onDelete: () =>
-                            _confirmDelete(context, ref, download, l10n),
+                            unawaited(confirmAndRemoveDownload(context, ref, download)),
                       )
                     : CompletedDownloadEpisodeCard(
                         key: ValueKey(download.id),
@@ -411,7 +412,7 @@ class _GroupedDownloadTile extends ConsumerWidget {
                         onPlay: () =>
                             _playLocalFile(context, ref, download, l10n),
                         onDelete: () =>
-                            _confirmDelete(context, ref, download, l10n),
+                            unawaited(confirmAndRemoveDownload(context, ref, download)),
                       ),
               ),
               if (!isLast)
@@ -481,34 +482,6 @@ class _GroupedDownloadTile extends ConsumerWidget {
             ),
       );
     }
-  }
-
-  void _confirmDelete(
-    BuildContext context,
-    WidgetRef ref,
-    DownloadItem item,
-    AppLocalizations l10n,
-  ) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(l10n.deleteDownload),
-        content: Text(l10n.confirmDeleteDownload),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(l10n.cancel),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              ref.read(downloadsProvider.notifier).removeDownload(item);
-            },
-            child: Text(l10n.delete, style: const TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
   }
 
   void _confirmDeleteAll(BuildContext context, WidgetRef ref) {
