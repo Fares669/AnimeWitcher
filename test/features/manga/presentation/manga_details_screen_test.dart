@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
@@ -212,6 +214,18 @@ void main() {
     expect(provider.detailsCalls, 1);
     expect(provider.chaptersCalls, 1);
     expect(provider.chaptersStartedBeforeDetailsFinished, isFalse);
+  });
+
+  test('completed chapter opens the same local directory as Downloads', () {
+    final source = File(
+      'lib/features/manga/presentation/manga_details_screen.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('completedMangaChapterDownload'));
+    expect(
+      source,
+      contains('localChapterDirectory: completedDownload?.destinationPath'),
+    );
   });
 
   testWidgets('manga details keeps horizontal tab swiping enabled', (
