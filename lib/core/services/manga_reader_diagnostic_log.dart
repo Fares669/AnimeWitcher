@@ -12,6 +12,25 @@ const bool mangaReaderDiagnosticsEnabled = bool.fromEnvironment(
 final MangaReaderDiagnosticLog mangaReaderDiagnostics =
     MangaReaderDiagnosticLog();
 
+
+String mangaReaderDiagnosticErrorClass(String message) {
+  final text = message.toLowerCase();
+  if (text.contains('403')) return 'http_403';
+  if (text.contains('401')) return 'http_401';
+  if (text.contains('404')) return 'http_404';
+  if (text.contains('429')) return 'http_429';
+  if (text.contains('500') || text.contains('502') || text.contains('503')) {
+    return 'http_5xx';
+  }
+  if (text.contains('handshake')) return 'tls_handshake';
+  if (text.contains('socket')) return 'socket';
+  if (text.contains('timeout')) return 'timeout';
+  if (text.contains('codec') || text.contains('decode')) return 'decode';
+  if (text.contains('format')) return 'format';
+  if (text.contains('certificate')) return 'certificate';
+  return 'other';
+}
+
 final class MangaReaderDiagnosticLog {
   MangaReaderDiagnosticLog();
 
