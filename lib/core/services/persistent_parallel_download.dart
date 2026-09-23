@@ -2452,8 +2452,6 @@ class PersistentParallelDownload {
                         try {
                           if (!await _pumpSession(session)) {
                             _scheduleCoordinatorRecovery(session);
-                          } else {
-                            await _persist(session);
                           }
                         } catch (_) {
                           // One slow/failing session must not head-of-line block
