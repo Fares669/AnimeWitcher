@@ -117,7 +117,10 @@ void main() {
       final before = jsonDecode(await manifest.readAsString()) as Map;
 
       for (var sample = 0; sample < 5; sample++) {
-        expect(coordinator.nativeBackgroundPlans().single.candidates, isNotEmpty);
+        expect(
+          coordinator.nativeBackgroundPlans().single.candidates,
+          isNotEmpty,
+        );
         coordinator.releaseNativeBackgroundOffers();
       }
       await Future<void>.delayed(const Duration(milliseconds: 100));
