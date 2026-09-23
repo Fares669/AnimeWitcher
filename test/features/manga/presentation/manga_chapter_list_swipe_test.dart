@@ -172,6 +172,35 @@ void main() {
     expect(find.textContaining('selected'), findsNothing);
   });
 
+  testWidgets('idle chapter uses the same download icon as anime episodes', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_MemoryStorage()),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(_MemoryStorage()),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            () => _SwipeSettings(const MangaReaderSettings()),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: MangaChapterList(
+              chapters: const <MangaChapter>[chapter],
+              onDownload: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byIcon(Icons.save_alt_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.download_rounded), findsNothing);
+  });
+
   testWidgets('downloading chapter replaces download button with progress ring', (
     tester,
   ) async {
@@ -215,10 +244,10 @@ void main() {
 
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(find.text('42%'), findsOneWidget);
-    expect(find.byIcon(Icons.download_rounded), findsNothing);
+    expect(find.byIcon(Icons.save_alt_rounded), findsNothing);
   });
 
-  testWidgets('completed chapter shows green downloaded icon', (
+  testWidgets('completed chapter shows the completed-download delete action', (
     tester,
   ) async {
     final logicalId = logicalDownloadIdForMangaChapter(
@@ -259,13 +288,9 @@ void main() {
       ),
     );
 
-    final iconFinder = find.byIcon(Icons.download_done_rounded);
-    expect(iconFinder, findsOneWidget);
-    expect(find.byIcon(Icons.download_rounded), findsNothing);
-    expect(
-      tester.widget<Icon>(iconFinder).color,
-      const Color(0xFF4CAF50),
-    );
+    expect(find.byIcon(Icons.delete_outline_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.download_done_rounded), findsNothing);
+    expect(find.byIcon(Icons.save_alt_rounded), findsNothing);
   });
 
   testWidgets('chapter list mirrors episode heading and sort toggle', (
