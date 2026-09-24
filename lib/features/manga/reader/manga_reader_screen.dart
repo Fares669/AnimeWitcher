@@ -374,15 +374,17 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     return invert ? previous : next;
   }
 
+  void _toggleControls() {
+    setState(() => _controlsVisible = !_controlsVisible);
+  }
+
   void _handleTapZone(
     TapUpDetails details,
     Size size,
     MangaReaderSettings settings,
   ) {
-    if (!settings.usePageTapZones || settings.navigationLayout == 5) {
-      setState(() => _controlsVisible = !_controlsVisible);
-      return;
-    }
+    if (!settings.usePageTapZones || settings.navigationLayout == 5) return;
+
     final x = size.width <= 0 ? 0.5 : details.localPosition.dx / size.width;
     final y = size.height <= 0 ? 0.5 : details.localPosition.dy / size.height;
     final previous = _horizontalPrevious(settings);
@@ -402,24 +404,16 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
           previous();
         } else if (y > .75 && x > 2 / 3) {
           next();
-        } else {
-          setState(() => _controlsVisible = !_controlsVisible);
         }
       case 2:
-        if (y < .25) {
-          setState(() => _controlsVisible = !_controlsVisible);
-        } else if (x < .5) {
-          previous();
-        } else {
-          next();
+        if (y >= .25) {
+          x < .5 ? previous() : next();
         }
       case 3:
         if (x < 1 / 7) {
           previous();
         } else if (x > 6 / 7) {
           next();
-        } else {
-          setState(() => _controlsVisible = !_controlsVisible);
         }
       case 4:
         x < .5 ? previous() : next();
@@ -432,8 +426,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
           previous();
         } else if (x > 2 / 3) {
           next();
-        } else {
-          setState(() => _controlsVisible = !_controlsVisible);
         }
     }
   }
@@ -1079,7 +1071,9 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                     Size(constraints.maxWidth, constraints.maxHeight),
                     settings,
                   ),
-                  onLongPress: _showImageActions,
+                  onDoubleTap: _toggleControls,
+                  onLongPress: _toggleControls,
+                  onSecondaryTap: _showImageActions,
                   child: _readerBody(context, settings),
                 ),
               ),
@@ -1098,13 +1092,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
               ),
               _topBar(context),
               _bottomBar(context, settings),
-              SafeArea(
-                minimum: const EdgeInsets.only(bottom: 4),
-                child: MangaReaderPageIndicator(
-                  visible: !_controlsVisible && settings.showPageNumber,
-                  currentPage: _controller.pageIndex + 1,
-                  totalPages: _controller.pages.length,
-                ),
+              MangaReaderPageIndicator(
+                visible: !_controlsVisible && settings.showPageNumber,
+                currentPage: _controller.pageIndex + 1,
+                totalPages: _controller.pages.length,
               ),
               SafeArea(
                 child: MangaReaderAutoScrollButton(

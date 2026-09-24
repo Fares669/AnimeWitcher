@@ -763,7 +763,11 @@ void main() {
 
     final indicator = find.text('1/3');
     expect(indicator, findsOneWidget);
-    expect(tester.getRect(indicator).bottom, 844);
+    final pill = find.ancestor(
+      of: indicator,
+      matching: find.byType(Container),
+    ).first;
+    expect(tester.getRect(pill).bottom, 844);
   });
 
   testWidgets('reader uses Mangayomi navigation overlay widget', (tester) async {
