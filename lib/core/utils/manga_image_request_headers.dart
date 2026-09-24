@@ -4,6 +4,8 @@ const String mangaImageUserAgent =
     'Chrome/131.0.0.0 Safari/537.36';
 
 Map<String, String> mangaImageRequestHeaders(Map<String, String> headers) {
-  if (headers.containsKey('User-Agent')) return headers;
+  if (headers.keys.any((key) => key.toLowerCase() == 'user-agent')) {
+    return headers;
+  }
   return <String, String>{...headers, 'User-Agent': mangaImageUserAgent};
 }
