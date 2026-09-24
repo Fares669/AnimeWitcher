@@ -1085,9 +1085,6 @@ void main() {
     );
   });
 
-}
-
-
   test('reader image failures are manual retry only and manga diagnostics are removed', () {
     final pageImageSource = File(
       'lib/features/manga/reader/widgets/manga_page_image.dart',
@@ -1108,3 +1105,4 @@ void main() {
       isFalse,
     );
   });
+}
