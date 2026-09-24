@@ -57,7 +57,11 @@ void main() {
     );
 
     gateway.handle.complete();
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    for (var attempt = 0; attempt < 100; attempt++) {
+      final record = await store.get(logicalId);
+      if (record?.completedAtMillis != null) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
 
     expect(await manager.hasCompletedDownload(logicalId), isTrue);
     final record = await store.get(logicalId);
