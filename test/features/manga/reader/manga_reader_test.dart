@@ -457,7 +457,7 @@ void main() {
     expect(scroll.scrollDirection, Axis.vertical);
   });
 
-  testWidgets('reader exposes Mangayomi image action long-press handler', (
+  testWidgets('reader chrome uses double-tap and long-press gestures', (
     tester,
   ) async {
     final provider = _ReaderProvider(emptyPages: true);
@@ -504,7 +504,9 @@ void main() {
     );
     expect(actionsGesture, findsOneWidget);
     final gesture = tester.widget<GestureDetector>(actionsGesture);
+    expect(gesture.onDoubleTap, isNotNull);
     expect(gesture.onLongPress, isNotNull);
+    expect(gesture.onSecondaryTap, isNotNull);
   });
 
   testWidgets('Mangayomi image action sheet wires all actions', (tester) async {
@@ -694,6 +696,68 @@ void main() {
     expect(container.decoration, isA<BoxDecoration>());
   });
 
+  testWidgets('hidden reader page indicator touches the bottom screen edge', (
+    tester,
+  ) async {
+    final provider = _ReaderProvider();
+    const chapter = MangaChapter(
+      id: 'indicator-c1',
+      mangaId: 'indicator-m1',
+      url: 'https://example.test/chapter/indicator-1',
+      name: 'Chapter indicator',
+      number: 1,
+    );
+    final manga = MultimediaItem(
+      title: 'Indicator Reader Manga',
+      url: 'https://animewitcher.com/manga/indicator-m1',
+      posterUrl: '',
+      contentType: MultimediaContentType.manga,
+      provider: provider.packageName,
+    );
+
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
+          mangaReadingRepositoryProvider.overrideWithValue(
+            _ReaderProgressRepository(),
+          ),
+          mangaReaderSettingsProvider.overrideWith(
+            _ReaderSettingsNotifier.new,
+          ),
+        ],
+        child: MaterialApp(
+          home: MediaQuery(
+            data: const MediaQueryData(
+              size: Size(390, 844),
+              padding: EdgeInsets.only(top: 40, bottom: 30),
+            ),
+            child: MangaReaderScreen(
+              manga: manga,
+              chapter: chapter,
+              chapters: const <MangaChapter>[chapter],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final readerGesture = find.byKey(
+      const ValueKey<String>('manga-reader-image-actions-gesture'),
+    );
+    await tester.doubleTap(readerGesture);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    final indicator = find.text('1/3');
+    expect(indicator, findsOneWidget);
+    expect(tester.getRect(indicator).bottom, 844);
+  });
+
   testWidgets('reader uses Mangayomi navigation overlay widget', (tester) async {
     final provider = _ReaderProvider(emptyPages: true);
     const chapter = MangaChapter(
@@ -808,19 +872,43 @@ void main() {
       expect(header.onBack, isNotNull);
       expect(header.trailingButtons, isEmpty);
 
-      await tester.tap(
-        find.byKey(
-          const ValueKey<String>('manga-reader-image-actions-gesture'),
-        ),
+      final readerGesture = find.byKey(
+        const ValueKey<String>('manga-reader-image-actions-gesture'),
       );
+
+      await tester.tap(readerGesture);
       await tester.pump();
       await tester.pump();
 
-      final hiddenHeader = applePersistentGlassHeaderController.value;
-      expect(hiddenHeader, isNotNull);
-      expect(hiddenHeader!.owner, isNot(same(detailsOwner)));
-      expect(hiddenHeader.onBack, isNull);
-      expect(hiddenHeader.trailingButtons, isEmpty);
+      final afterSingleTap = applePersistentGlassHeaderController.value;
+      expect(afterSingleTap, isNotNull);
+      expect(afterSingleTap!.onBack, isNotNull);
+
+      await tester.doubleTap(readerGesture);
+      await tester.pump();
+      await tester.pump();
+
+      final hiddenByDoubleTap = applePersistentGlassHeaderController.value;
+      expect(hiddenByDoubleTap, isNotNull);
+      expect(hiddenByDoubleTap!.owner, isNot(same(detailsOwner)));
+      expect(hiddenByDoubleTap.onBack, isNull);
+      expect(hiddenByDoubleTap.trailingButtons, isEmpty);
+
+      await tester.doubleTap(readerGesture);
+      await tester.pump();
+      await tester.pump();
+
+      final visibleAgain = applePersistentGlassHeaderController.value;
+      expect(visibleAgain, isNotNull);
+      expect(visibleAgain!.onBack, isNotNull);
+
+      await tester.longPress(readerGesture);
+      await tester.pump();
+      await tester.pump();
+
+      final hiddenByLongPress = applePersistentGlassHeaderController.value;
+      expect(hiddenByLongPress, isNotNull);
+      expect(hiddenByLongPress!.onBack, isNull);
     } finally {
       final header = applePersistentGlassHeaderController.value;
       if (header != null) {
