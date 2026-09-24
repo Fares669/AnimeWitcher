@@ -757,8 +757,12 @@ void main() {
     final readerGesture = find.byKey(
       const ValueKey<String>('manga-reader-image-actions-gesture'),
     );
-    await _doubleTap(tester, readerGesture);
-    await tester.pump();
+    final pagedReader = tester.widget<MangaPagedReader>(
+      find.byType(MangaPagedReader),
+    );
+    expect(pagedReader.onDoubleTap, isNotNull);
+
+    await tester.longPress(readerGesture);
     await tester.pump(const Duration(milliseconds: 350));
 
     final indicator = find.text('1/3');
