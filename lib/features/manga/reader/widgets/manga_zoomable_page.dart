@@ -34,6 +34,7 @@ class MangaZoomablePage extends StatefulWidget {
     this.maxScale = 4,
     this.doubleTapScale = 2.5,
     this.settings = const MangaReaderSettings(),
+    this.onDoubleTap,
     this.continuous = false,
     this.contentSize,
     this.rtl = false,
@@ -46,6 +47,7 @@ class MangaZoomablePage extends StatefulWidget {
   final double maxScale;
   final double doubleTapScale;
   final MangaReaderSettings settings;
+  final VoidCallback? onDoubleTap;
   final bool continuous;
   final Size? contentSize;
   final bool rtl;
@@ -228,8 +230,10 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     final maxScale = widget.continuous ? 5.0 : widget.maxScale;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onDoubleTapDown: (details) => _doubleTapDetails = details,
-      onDoubleTap: _handleDoubleTap,
+      onDoubleTapDown: widget.onDoubleTap == null
+          ? (details) => _doubleTapDetails = details
+          : null,
+      onDoubleTap: widget.onDoubleTap ?? _handleDoubleTap,
       child: InteractiveViewer(
         transformationController: _controller,
         minScale: minScale,

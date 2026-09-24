@@ -61,6 +61,7 @@ class MangaContinuousReader extends StatefulWidget {
     this.pageBuilder,
     this.trailingPage,
     this.onTrailingAdvance,
+    this.onDoubleTap,
   });
 
   final List<MangaPage> pages;
@@ -74,6 +75,7 @@ class MangaContinuousReader extends StatefulWidget {
   final MangaPageBuilder? pageBuilder;
   final Widget? trailingPage;
   final VoidCallback? onTrailingAdvance;
+  final VoidCallback? onDoubleTap;
 
   @override
   State<MangaContinuousReader> createState() => _MangaContinuousReaderState();
@@ -397,6 +399,7 @@ class _MangaContinuousReaderState extends State<MangaContinuousReader> {
       scrollController: _controller,
       scrollDirection: widget.scrollDirection,
       settings: widget.settings,
+      onDoubleTap: widget.onDoubleTap,
       child: NotificationListener<OverscrollNotification>(
         onNotification: _handleOverscroll,
         child: scrollable,

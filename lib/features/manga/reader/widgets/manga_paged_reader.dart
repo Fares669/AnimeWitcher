@@ -23,6 +23,7 @@ class MangaPagedReader extends StatefulWidget {
     this.trailingPage,
     this.onTrailingAdvance,
     this.navigationController,
+    this.onDoubleTap,
   });
 
   final List<MangaPage> pages;
@@ -36,6 +37,7 @@ class MangaPagedReader extends StatefulWidget {
   final Widget? trailingPage;
   final VoidCallback? onTrailingAdvance;
   final MangaZoomNavigationController? navigationController;
+  final VoidCallback? onDoubleTap;
 
   @override
   State<MangaPagedReader> createState() => _MangaPagedReaderState();
@@ -188,6 +190,7 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       onImageSize: (size) => _handleImageSize(unit.pageIndex, size),
       zoomable: zoomable,
       navigationController: navigationController,
+      onDoubleTap: widget.onDoubleTap,
     );
   }
 
@@ -210,6 +213,7 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       settings: widget.settings,
       navigationController: navigationController,
       rtl: widget.rtl,
+      onDoubleTap: widget.onDoubleTap,
       child: Row(
         textDirection: widget.rtl ? TextDirection.rtl : TextDirection.ltr,
         children: <Widget>[
@@ -283,6 +287,7 @@ class _MangaPagedImage extends StatefulWidget {
     required this.onImageSize,
     this.zoomable = true,
     this.navigationController,
+    this.onDoubleTap,
   });
 
   final MangaPage page;
@@ -292,6 +297,7 @@ class _MangaPagedImage extends StatefulWidget {
   final ValueChanged<Size> onImageSize;
   final bool zoomable;
   final MangaZoomNavigationController? navigationController;
+  final VoidCallback? onDoubleTap;
 
   @override
   State<_MangaPagedImage> createState() => _MangaPagedImageState();
@@ -357,6 +363,7 @@ class _MangaPagedImageState extends State<_MangaPagedImage> {
       contentSize: contentSize,
       rtl: widget.rtl,
       navigationController: widget.navigationController,
+      onDoubleTap: widget.onDoubleTap,
       child: image,
     );
   }

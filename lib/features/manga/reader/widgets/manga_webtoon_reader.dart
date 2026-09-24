@@ -22,6 +22,7 @@ class MangaWebtoonReader extends StatefulWidget {
     this.controller,
     this.trailingPage,
     this.onTrailingAdvance,
+    this.onDoubleTap,
   });
 
   final List<MangaPage> pages;
@@ -33,6 +34,7 @@ class MangaWebtoonReader extends StatefulWidget {
   final ScrollController? controller;
   final Widget? trailingPage;
   final VoidCallback? onTrailingAdvance;
+  final VoidCallback? onDoubleTap;
 
   @override
   State<MangaWebtoonReader> createState() => _MangaWebtoonReaderState();
@@ -265,6 +267,7 @@ class _MangaWebtoonReaderState extends State<MangaWebtoonReader> {
       scrollController: _controller,
       scrollDirection: Axis.vertical,
       settings: widget.settings,
+      onDoubleTap: widget.onDoubleTap,
       child: NotificationListener<OverscrollNotification>(
         onNotification: _handleOverscroll,
         child: scrollable,

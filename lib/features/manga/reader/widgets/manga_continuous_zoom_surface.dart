@@ -40,12 +40,14 @@ class MangaContinuousZoomSurface extends StatefulWidget {
     required this.scrollController,
     required this.scrollDirection,
     required this.settings,
+    this.onDoubleTap,
   });
 
   final Widget child;
   final ScrollController scrollController;
   final Axis scrollDirection;
   final MangaReaderSettings settings;
+  final VoidCallback? onDoubleTap;
 
   @override
   State<MangaContinuousZoomSurface> createState() =>
@@ -330,6 +332,12 @@ class _MangaContinuousZoomSurfaceState
   }
 
   void _toggleScale() {
+    final onDoubleTap = widget.onDoubleTap;
+    if (onDoubleTap != null) {
+      _isQuickScaling = false;
+      onDoubleTap();
+      return;
+    }
     if (!widget.settings.webtoonDoubleTapZoomEnabled || !mounted) return;
     if (_zoomAnimationController.isAnimating) return;
     _isQuickScaling = false;
@@ -356,7 +364,8 @@ class _MangaContinuousZoomSurfaceState
               ..onEnd = _handleScaleEnd;
           },
         ),
-        if (widget.settings.webtoonDoubleTapZoomEnabled)
+        if (widget.onDoubleTap != null ||
+            widget.settings.webtoonDoubleTapZoomEnabled)
           DoubleTapGestureRecognizer:
               GestureRecognizerFactoryWithHandlers<
                   DoubleTapGestureRecognizer>(
