@@ -1,28 +1,18 @@
-# Changelogs - v2.7.6
+# AnimeWitcher 1.6.0
 
-### ✨ *New Features & Enhancements*
+## الجديد
 
-#### 🎬 Media Player & Subtitle Enhancements (PR #75 by @arranoust & PR #81 by @likhithkrishna1103)
-- **Player Control Toggles** – Added customizable visibility toggles for player control buttons in player settings.
-- **Cache Management** – Added dedicated setting to clear image and video cache.
-- **Hotstar-Style Subtitles** – Replaced custom subtitle view with configurable Hotstar-style subtitle rendering and improved subtitle parsing robustness.
+- **إضافة المانجا والمانهوا:** تقدر تبحث عنها، تفتح صفحة التفاصيل، تشوف الفصول وتضيفها للمكتبة.
+- **قارئ مانجا جديد بالكامل:** يدعم القراءة العمودية، الصفحات، Webtoon، اليمين لليسار واليسار لليمين، التكبير، الصفحتين معًا، والتحميل المسبق.
+- **تنزيل فصول المانجا:** تقدر تنزل الفصول وتقرأها بدون إنترنت، مع عرضها وإدارتها من صفحة التنزيلات.
+- **بحث ومكتبة أفضل:** صار تقدر تتنقل بين الأنمي والمانجا بشكل أوضح، مع مزامنة عناصر المانجا وحالة القراءة.
+- **مدير تنزيلات V2:** تحسين كبير للاستكمال بعد إغلاق التطبيق أو انقطاع الشبكة، الاتصالات المتعددة، الإيقاف والاستئناف، والتنزيل بالخلفية على iOS.
+- **Live Activity على iOS:** تحسين تحديث تقدم التنزيل والبيانات أثناء وجود التطبيق بالخلفية.
+- **Anime4K على أجهزة Apple:** تحسينات على الأداء والألوان والتكامل مع المشغل.
+- **تحسينات للقارئ:** إظهار القوائم بالضغط مرتين أو الضغط المطول، ووضع عداد الصفحات أسفل الشاشة.
+- **إصلاحات وثبات:** إصلاحات كثيرة للتنزيلات، التنقل، المكتبة والقارئ، مع إزالة مدير التنزيل القديم V1 والأجزاء القديمة المرتبطة به.
 
-#### 📱 iOS Experience & Download Management (PR #84 by @Fares669)
-- **iOS Live Activity & Background Downloads** – Integrated Live Activity for active downloads and iOS background task processing to ensure download tasks continue reliably when the app is backgrounded.
-- **Detailed Download Progress** – Real-time download percentage and transferred file size indicators with improved label positioning.
+## ملاحظات
 
-#### 📑 Episode Selection & Watch History (PR #84 by @Fares669)
-- **Multi-Episode Selection & Watched States** – Easily select multiple episodes to batch-mark as watched or unwatched.
-- **Offline Watch History Sync** – Automatically sync playback of downloaded offline episodes with your episode watch history.
-- **Improved Action Bar** – Replaced episode selection SnackBar with a dedicated bottom action bar and compact buttons.
-- **Quick Copy Title** – Long press on any media title to quickly copy it to clipboard.
-
-#### ⚙️ Poster Customization & Extension Settings (PR #74 by @arranoust & PR #84 by @Fares669)
-- **Poster Title Positioning** – Added customizable title placement options (top, bottom, overlay) for multimedia poster cards.
-- **Redesigned Extension Settings** – New dedicated plugin settings screen supporting conditional and script-defined plugin parameters, dynamic loading, and improved runtime cache handling.
-- 
----
-
-### 🐞 *Bug Fixes & System Stability*
-- 🛠️ Fixed SnackBar contrast and theme colors across settings and download screens.
-- 🛠️ Fixed extension settings runtime cache handling and plugin provider initialization.
+- إصدار iOS المرفق غير موقّع ويحتاج تثبيت بالطريقة المناسبة لجهازك.
+- ملفات Windows وmacOS وAndroid وiOS يتم بناؤها من نفس الإصدار.
