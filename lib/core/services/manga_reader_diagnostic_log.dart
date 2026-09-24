@@ -139,6 +139,10 @@ final class MangaReaderDiagnosticLog {
       for (final entry in headers.entries) {
         request.headers.set(entry.key, entry.value);
       }
+      final sentUserAgent =
+          request.headers.value(HttpHeaders.userAgentHeader) ??
+          client.userAgent ??
+          '';
       final response = await request.close().timeout(const Duration(seconds: 12));
       final location = response.headers.value(HttpHeaders.locationHeader) ?? '';
       final contentType = response.headers.contentType?.mimeType ?? '';
