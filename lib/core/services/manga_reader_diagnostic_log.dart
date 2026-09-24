@@ -149,7 +149,7 @@ final class MangaReaderDiagnosticLog {
         'status': response.statusCode,
         'contentType': contentType,
         'contentLength': contentLength,
-        'probeUserAgent': client.userAgent ?? '',
+        'probeUserAgent': request.headers.value(HttpHeaders.userAgentHeader) ?? '',
         ...urlFields('url', url),
         ...urlFields('redirect', location),
         ...headerFields('request', headers),
