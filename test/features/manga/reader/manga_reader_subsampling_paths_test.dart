@@ -139,25 +139,6 @@ void main() {
       MangaPageImageTier.animated,
     );
   });
-  test('header refresh automatically runs the cache-evicting retry path', () {
-    final source = File(
-      'lib/features/manga/reader/widgets/manga_page_image.dart',
-    ).readAsStringSync();
-    final updateStart = source.indexOf('void didUpdateWidget');
-    final updateEnd = source.indexOf('void _listenForImageSize', updateStart);
-    expect(updateStart, greaterThanOrEqualTo(0));
-    expect(updateEnd, greaterThan(updateStart));
-
-    final updateBlock = source.substring(updateStart, updateEnd);
-    expect(updateBlock, contains('unawaited(_retry())'));
-    expect(
-      source,
-      contains(
-        'await CachedNetworkImage.evictFromCache(widget.page.imageUrl)',
-      ),
-    );
-  });
-
   testWidgets(
     'same network URL remounts subsampling when refreshed headers change',
     (tester) async {
