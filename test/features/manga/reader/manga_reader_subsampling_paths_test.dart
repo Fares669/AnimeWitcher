@@ -77,6 +77,22 @@ void main() {
     expect(userAgents.single, isNot(contains('Dart/')));
   });
 
+  test('image request headers preserve a source user agent case-insensitively', () {
+    const page = MangaPage(
+      index: 0,
+      imageUrl: 'https://example.test/protected.webp',
+      headers: <String, String>{'user-agent': 'Custom/1.0'},
+    );
+
+    final provider = mangaPageImageProvider(page) as CachedNetworkImageProvider;
+    final userAgents = provider.headers!.entries
+        .where((entry) => entry.key.toLowerCase() == 'user-agent')
+        .map((entry) => entry.value)
+        .toList();
+
+    expect(userAgents, <String>['Custom/1.0']);
+  });
+
   test('network continuous images route to Mangayomi min subsampling', () {
     const page = MangaPage(
       index: 0,
