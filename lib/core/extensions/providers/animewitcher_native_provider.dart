@@ -11,7 +11,6 @@ import '../../network/bounded_batch_scheduler.dart';
 import '../../network/next_airing_timeout.dart';
 import '../../network/stale_connection_retry.dart';
 import '../../storage/settings_repository.dart';
-import '../../services/manga_reader_diagnostic_log.dart';
 import '../../utils/storyblok_image.dart';
 import '../../utils/episode_label.dart';
 import '../../utils/artwork_host_fallback.dart';
@@ -2894,10 +2893,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     String mangaId,
     String chapterId,
   ) async {
-    mangaReaderDiagnostics.record('provider.firestore.start', <String, Object?>{
-      'mangaId': mangaId,
-      'chapterId': chapterId,
-    });
     // v1.4.9 first checks:
     // manga_list/{manga}/chapters/{chapter}/summary_pages/summery.pages
     // and falls back to the chapter's pages subcollection.
@@ -2905,19 +2900,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       'manga_list/$mangaId/chapters/$chapterId/summary_pages/summery',
     );
     final summaryPages = _list(summary['pages']);
-    mangaReaderDiagnostics.record('provider.firestore.summary', <String, Object?>{
-      'mangaId': mangaId,
-      'chapterId': chapterId,
-      'rawCount': summaryPages.length,
-    });
     if (summaryPages.isNotEmpty) {
       final pages = _mapFirestoreMangaPages(summaryPages);
-      mangaReaderDiagnostics.record('provider.firestore.summary.mapped', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapterId,
-        'count': pages.length,
-        if (pages.isNotEmpty) ...mangaReaderDiagnostics.urlFields('first', pages.first.imageUrl),
-      });
       if (pages.isNotEmpty) return pages;
     }
 
@@ -2930,13 +2914,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       parent: 'manga_list/$mangaId/chapters/$chapterId',
     );
     final pages = _mapFirestoreMangaPages(rows);
-    mangaReaderDiagnostics.record('provider.firestore.collection', <String, Object?>{
-      'mangaId': mangaId,
-      'chapterId': chapterId,
-      'rawCount': rows.length,
-      'count': pages.length,
-      if (pages.isNotEmpty) ...mangaReaderDiagnostics.urlFields('first', pages.first.imageUrl),
-    });
     return pages;
   }
 
@@ -3038,12 +3015,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
   ) async {
     final details = await getMangaDetails(mangaUrl);
     final sourceUrl = details.syncData?['mangalekPageUrl']?.trim() ?? '';
-    mangaReaderDiagnostics.record('provider.mangalek.start', <String, Object?>{
-      'mangaId': mangaId,
-      'chapterId': chapter.id,
-      'hasSourceUrl': sourceUrl.isNotEmpty,
-      ...mangaReaderDiagnostics.urlFields('source', sourceUrl),
-    });
     if (sourceUrl.isEmpty) return const <MangaPage>[];
 
     MangaChapter? sourceChapter;
@@ -3061,22 +3032,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         documentUrl: sourceUrl,
       );
       sourceChapter = _matchingMangaSourceChapter(parsed, chapter);
-      mangaReaderDiagnostics.record('provider.mangalek.chapter_match', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapter.id,
-        'layout': 'page_html',
-        'candidateCount': parsed.length,
-        'matched': sourceChapter != null,
-        if (sourceChapter != null)
-          ...mangaReaderDiagnostics.urlFields('matched', sourceChapter.url),
-      });
-    } catch (error) {
-      mangaReaderDiagnostics.record('provider.mangalek.chapter_match_error', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapter.id,
-        'layout': 'page_html',
-        'errorType': error.runtimeType.toString(),
-      });
+    } catch (_) {
       // The current source may have moved to the archive layout.
     }
 
@@ -3087,22 +3043,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
           mangaId: mangaId,
         );
         sourceChapter = _matchingMangaSourceChapter(archived, chapter);
-        mangaReaderDiagnostics.record('provider.mangalek.chapter_match', <String, Object?>{
-          'mangaId': mangaId,
-          'chapterId': chapter.id,
-          'layout': 'archive',
-          'candidateCount': archived.length,
-          'matched': sourceChapter != null,
-          if (sourceChapter != null)
-            ...mangaReaderDiagnostics.urlFields('matched', sourceChapter.url),
-        });
-      } catch (error) {
-        mangaReaderDiagnostics.record('provider.mangalek.chapter_match_error', <String, Object?>{
-          'mangaId': mangaId,
-          'chapterId': chapter.id,
-          'layout': 'archive',
-          'errorType': error.runtimeType.toString(),
-        });
+      } catch (_) {
         sourceChapter = null;
       }
     }
@@ -3119,21 +3060,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         ).hasMatch(html),
       );
       final pages = parseMangaLekPages(html: html, chapterUrl: chapterUrl);
-      mangaReaderDiagnostics.record('provider.mangalek.pages', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapter.id,
-        'count': pages.length,
-        ...mangaReaderDiagnostics.urlFields('chapter', chapterUrl),
-        if (pages.isNotEmpty) ...mangaReaderDiagnostics.urlFields('first', pages.first.imageUrl),
-        if (pages.isNotEmpty) ...mangaReaderDiagnostics.headerFields('first', pages.first.headers),
-      });
       return pages;
-    } catch (error) {
-      mangaReaderDiagnostics.record('provider.mangalek.pages_error', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapter.id,
-        'errorType': error.runtimeType.toString(),
-      });
+    } catch (_) {
       return const <MangaPage>[];
     }
   }
@@ -3152,10 +3080,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     }
 
     final key = '$mangaId|$chapterId';
-    mangaReaderDiagnostics.record('provider.refresh.start', <String, Object?>{
-      'mangaId': mangaId,
-      'chapterId': chapterId,
-    });
     _mangaPageCache.remove(key);
     _mangaPageExpiresAt.remove(key);
 
@@ -3172,21 +3096,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (freshPages.isNotEmpty) {
       _mangaPageCache[key] = freshPages;
       _mangaPageExpiresAt[key] = DateTime.now().add(_episodeDataTtl);
-      mangaReaderDiagnostics.record('provider.refresh.result', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapterId,
-        'source': 'mangalek',
-        'count': freshPages.length,
-        ...mangaReaderDiagnostics.urlFields('first', freshPages.first.imageUrl),
-        ...mangaReaderDiagnostics.headerFields('first', freshPages.first.headers),
-      });
       return List<MangaPage>.unmodifiable(freshPages);
     }
 
-    mangaReaderDiagnostics.record('provider.refresh.fallback_firestore', <String, Object?>{
-      'mangaId': mangaId,
-      'chapterId': chapterId,
-    });
     return getMangaChapterPages(mangaUrl, chapter);
   }
 
@@ -3199,13 +3111,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         ? chapter.mangaId.trim()
         : _mangaIdFromUrl(mangaUrl);
     final chapterId = chapter.id.trim();
-    mangaReaderDiagnostics.record('provider.pages.start', <String, Object?>{
-      'mangaId': mangaId,
-      'chapterId': chapterId,
-      ...mangaReaderDiagnostics.urlFields('chapter', chapter.url),
-    });
     if (mangaId.isEmpty || chapterId.isEmpty) {
-      mangaReaderDiagnostics.record('provider.pages.invalid_identity');
       return const <MangaPage>[];
     }
 
@@ -3213,14 +3119,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final cached = _mangaPageCache[key];
     if (cached != null &&
         _mangaPageExpiresAt[key]?.isAfter(DateTime.now()) == true) {
-      mangaReaderDiagnostics.record('provider.pages.result', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapterId,
-        'source': 'provider_memory_cache',
-        'count': cached.length,
-        if (cached.isNotEmpty) ...mangaReaderDiagnostics.urlFields('first', cached.first.imageUrl),
-        if (cached.isNotEmpty) ...mangaReaderDiagnostics.headerFields('first', cached.first.headers),
-      });
       return List<MangaPage>.unmodifiable(cached);
     }
 
@@ -3228,14 +3126,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (firestorePages.isNotEmpty) {
       _mangaPageCache[key] = firestorePages;
       _mangaPageExpiresAt[key] = DateTime.now().add(_episodeDataTtl);
-      mangaReaderDiagnostics.record('provider.pages.result', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapterId,
-        'source': 'firestore',
-        'count': firestorePages.length,
-        ...mangaReaderDiagnostics.urlFields('first', firestorePages.first.imageUrl),
-        ...mangaReaderDiagnostics.headerFields('first', firestorePages.first.headers),
-      });
       return firestorePages;
     }
 
@@ -3247,14 +3137,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (freshPages.isNotEmpty) {
       _mangaPageCache[key] = freshPages;
       _mangaPageExpiresAt[key] = DateTime.now().add(_episodeDataTtl);
-      mangaReaderDiagnostics.record('provider.pages.result', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapterId,
-        'source': 'mangalek_fallback',
-        'count': freshPages.length,
-        ...mangaReaderDiagnostics.urlFields('first', freshPages.first.imageUrl),
-        ...mangaReaderDiagnostics.headerFields('first', freshPages.first.headers),
-      });
       return List<MangaPage>.unmodifiable(freshPages);
     }
 
@@ -3265,13 +3147,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
             parsedChapterUri.scheme != 'http') ||
         parsedChapterUri.host.isEmpty ||
         parsedChapterUri.host == 'animewitcher.com') {
-      mangaReaderDiagnostics.record('provider.pages.result', <String, Object?>{
-        'mangaId': mangaId,
-        'chapterId': chapterId,
-        'source': 'empty',
-        'count': 0,
-        'reason': 'internal_chapter_url',
-      });
       return const <MangaPage>[];
     }
 
@@ -3288,14 +3163,6 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final pages = parseMangaLekPages(html: html, chapterUrl: chapterUrl);
     _mangaPageCache[key] = pages;
     _mangaPageExpiresAt[key] = DateTime.now().add(_episodeDataTtl);
-    mangaReaderDiagnostics.record('provider.pages.result', <String, Object?>{
-      'mangaId': mangaId,
-      'chapterId': chapterId,
-      'source': 'direct_external_chapter',
-      'count': pages.length,
-      if (pages.isNotEmpty) ...mangaReaderDiagnostics.urlFields('first', pages.first.imageUrl),
-      if (pages.isNotEmpty) ...mangaReaderDiagnostics.headerFields('first', pages.first.headers),
-    });
     return List<MangaPage>.unmodifiable(pages);
   }
 

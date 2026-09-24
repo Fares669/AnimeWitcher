@@ -211,36 +211,6 @@ void main() {
     },
   );
 
-  test('reader image failures emit the diagnostic network probe', () {
-    final source = File(
-      'lib/features/manga/reader/widgets/manga_page_image.dart',
-    ).readAsStringSync();
-    final diagnosticsSource = File(
-      'lib/core/services/manga_reader_diagnostic_log.dart',
-    ).readAsStringSync();
-
-    expect(source, contains("record('image.error'"));
-    expect(source, contains('mangaReaderDiagnostics.probeImage('));
-    expect(source, contains("record('image.loaded'"));
-    expect(
-      diagnosticsSource,
-      contains('request.headers.value(HttpHeaders.userAgentHeader)'),
-    );
-    expect(
-      diagnosticsSource,
-      isNot(contains("'probeUserAgent': client.userAgent")),
-    );
-  });
-
-  test('continuous subsampling forwards image failures to reader refresh', () {
-    final source = File(
-      'lib/features/manga/reader/subsampling/manga_min_subsampling_image.dart',
-    ).readAsStringSync();
-
-    expect(source, contains('final VoidCallback? onImageError;'));
-    expect(source, contains('onError: (_) => onImageError?.call()'));
-  });
-
   testWidgets('page image state survives leaving the viewport', (tester) async {
     final page = MangaPage(
       index: 0,

@@ -17,7 +17,6 @@ class MangaPagedReader extends StatefulWidget {
     required this.rtl,
     required this.onPageChanged,
     this.pageBuilder,
-    this.onPageImageError,
     this.scrollDirection = Axis.horizontal,
     this.doublePage = false,
     this.settings = const MangaReaderSettings(),
@@ -31,7 +30,6 @@ class MangaPagedReader extends StatefulWidget {
   final bool rtl;
   final ValueChanged<int> onPageChanged;
   final MangaPageBuilder? pageBuilder;
-  final Future<void> Function(MangaPage)? onPageImageError;
   final Axis scrollDirection;
   final bool doublePage;
   final MangaReaderSettings settings;
@@ -184,7 +182,6 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     if (custom != null) return custom(context, page);
     return _MangaPagedImage(
       page: page,
-      onImageError: widget.onPageImageError,
       settings: widget.settings,
       rtl: widget.rtl,
       slice: unit.slice,
@@ -280,7 +277,6 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
 class _MangaPagedImage extends StatefulWidget {
   const _MangaPagedImage({
     required this.page,
-    this.onImageError,
     required this.settings,
     required this.rtl,
     required this.slice,
@@ -290,7 +286,6 @@ class _MangaPagedImage extends StatefulWidget {
   });
 
   final MangaPage page;
-  final Future<void> Function(MangaPage)? onImageError;
   final MangaReaderSettings settings;
   final bool rtl;
   final MangaReaderPageSlice slice;
@@ -318,7 +313,6 @@ class _MangaPagedImageState extends State<_MangaPagedImage> {
     if (!isSlice) {
       image = MangaPageImage(
         page: widget.page,
-        onImageError: widget.onImageError,
         settings: widget.settings,
         fit: BoxFit.contain,
         expand: true,
@@ -344,8 +338,7 @@ class _MangaPagedImageState extends State<_MangaPagedImage> {
                   height: size.height,
                   child: MangaPageImage(
                     page: widget.page,
-                    onImageError: widget.onImageError,
-                    settings: widget.settings,
+                                settings: widget.settings,
                     fit: BoxFit.fill,
                     expand: true,
                     onImageSize: _onImageSize,

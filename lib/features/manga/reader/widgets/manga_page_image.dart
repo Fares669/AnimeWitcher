@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -6,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
-import '../../../../core/services/manga_reader_diagnostic_log.dart';
 import '../../../../core/utils/manga_image_request_headers.dart';
 import '../manga_reader_settings.dart';
 import 'manga_reader_page_loading.dart';
@@ -67,7 +65,6 @@ class MangaPageImage extends StatefulWidget {
     this.settings = const MangaReaderSettings(),
     this.onImageSize,
     this.onLoadSettled,
-    this.onImageError,
     this.sourceRect,
   });
 
@@ -77,7 +74,6 @@ class MangaPageImage extends StatefulWidget {
   final MangaReaderSettings settings;
   final ValueChanged<Size>? onImageSize;
   final VoidCallback? onLoadSettled;
-  final Future<void> Function(MangaPage)? onImageError;
   final Rect? sourceRect;
 
   @override
@@ -91,25 +87,12 @@ class _MangaPageImageState extends State<MangaPageImage>
   Size? _imageSize;
   int _retryEpoch = 0;
   bool _loadSettledNotified = false;
-  bool _errorReported = false;
-  int _automaticRetryAttempts = 0;
-  bool _recoveringFromImageError = false;
   late ImageProvider<Object> _provider;
 
   @override
   void initState() {
     super.initState();
     _provider = _createImageProvider(widget.page);
-    mangaReaderDiagnostics.record('image.mount', <String, Object?>{
-      'pageIndex': widget.page.index,
-      'expand': widget.expand,
-      'tier': mangaPageImageTier(
-        page: widget.page,
-        expand: widget.expand,
-      ).name,
-      ...mangaReaderDiagnostics.urlFields('url', widget.page.imageUrl),
-      ...mangaReaderDiagnostics.headerFields('page', widget.page.headers),
-    });
   }
 
   BoxFit get _fit => widget.fit ?? switch (widget.settings.scaleType) {
@@ -147,22 +130,11 @@ class _MangaPageImageState extends State<MangaPageImage>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.page.imageUrl != widget.page.imageUrl ||
         !mapEquals(oldWidget.page.headers, widget.page.headers)) {
-      mangaReaderDiagnostics.record('image.source_updated', <String, Object?>{
-        'pageIndex': widget.page.index,
-        'urlChanged': oldWidget.page.imageUrl != widget.page.imageUrl,
-        'headersChanged':
-            !mapEquals(oldWidget.page.headers, widget.page.headers),
-        ...mangaReaderDiagnostics.urlFields('url', widget.page.imageUrl),
-        ...mangaReaderDiagnostics.headerFields('page', widget.page.headers),
-      });
       _provider = _createImageProvider(widget.page);
       _imageSize = null;
       _loadSettledNotified = false;
-      _errorReported = false;
-      _automaticRetryAttempts = 0;
-      if (!_recoveringFromImageError) {
-        unawaited(_retry());
-      }
+      _retryEpoch++;
+      _listenForImageSize();
     }
   }
 
@@ -212,13 +184,6 @@ class _MangaPageImageState extends State<MangaPageImage>
   }
 
   Future<void> _retry() async {
-    mangaReaderDiagnostics.record('image.retry.start', <String, Object?>{
-      'pageIndex': widget.page.index,
-      'retryEpoch': _retryEpoch,
-      'automaticAttempt': _automaticRetryAttempts,
-      ...mangaReaderDiagnostics.urlFields('url', widget.page.imageUrl),
-      ...mangaReaderDiagnostics.headerFields('page', widget.page.headers),
-    });
     final uri = Uri.tryParse(widget.page.imageUrl);
     if (uri == null || uri.scheme != 'file') {
       await CachedNetworkImage.evictFromCache(widget.page.imageUrl);
@@ -227,67 +192,14 @@ class _MangaPageImageState extends State<MangaPageImage>
     setState(() {
       _imageSize = null;
       _loadSettledNotified = false;
-      _errorReported = false;
       _retryEpoch++;
     });
     _listenForImageSize();
-    mangaReaderDiagnostics.record('image.retry.remounted', <String, Object?>{
-      'pageIndex': widget.page.index,
-      'retryEpoch': _retryEpoch,
-    });
   }
 
-  void _reportImageError() {
-    if (_errorReported) return;
-    _errorReported = true;
-    mangaReaderDiagnostics.record('image.error', <String, Object?>{
-      'pageIndex': widget.page.index,
-      'retryEpoch': _retryEpoch,
-      'automaticAttempt': _automaticRetryAttempts,
-      'tier': mangaPageImageTier(
-        page: widget.page,
-        expand: widget.expand,
-      ).name,
-      ...mangaReaderDiagnostics.urlFields('url', widget.page.imageUrl),
-      ...mangaReaderDiagnostics.headerFields('page', widget.page.headers),
-    });
-    unawaited(
-      mangaReaderDiagnostics.probeImage(
-        url: widget.page.imageUrl,
-        headers: mangaImageRequestHeaders(widget.page.headers),
-        pageIndex: widget.page.index,
-        reason: 'renderer_error',
-      ),
-    );
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_recoverFromImageError());
-    });
-  }
-
-  Future<void> _recoverFromImageError() async {
-    if (_automaticRetryAttempts >= 3 || _recoveringFromImageError) return;
-    _automaticRetryAttempts++;
-    _recoveringFromImageError = true;
-    mangaReaderDiagnostics.record('image.recovery.start', <String, Object?>{
-      'pageIndex': widget.page.index,
-      'automaticAttempt': _automaticRetryAttempts,
-    });
-    try {
-      await widget.onImageError?.call(widget.page);
-      if (mounted) await _retry();
-    } finally {
-      mangaReaderDiagnostics.record('image.recovery.end', <String, Object?>{
-        'pageIndex': widget.page.index,
-        'automaticAttempt': _automaticRetryAttempts,
-        'mounted': mounted,
-      });
-      _recoveringFromImageError = false;
-    }
-  }
 
   Widget _errorView(BuildContext context) {
     _scheduleLoadSettled();
-    _reportImageError();
     return SizedBox(
     height: mangaReaderPageLoadingExtent(MediaQuery.sizeOf(context)),
     child: Center(
@@ -336,19 +248,6 @@ class _MangaPageImageState extends State<MangaPageImage>
               imageSize: imageSize,
             );
       void loaded(int width, int height) {
-        mangaReaderDiagnostics.record('image.loaded', <String, Object?>{
-          'pageIndex': widget.page.index,
-          'width': width,
-          'height': height,
-          'retryEpoch': _retryEpoch,
-          'tier': mangaPageImageTier(
-            page: widget.page,
-            expand: widget.expand,
-          ).name,
-          ...mangaReaderDiagnostics.urlFields('url', widget.page.imageUrl),
-          ...mangaReaderDiagnostics.headerFields('page', widget.page.headers),
-        });
-        _automaticRetryAttempts = 0;
         final size = Size(width.toDouble(), height.toDouble());
         if (!mounted || size == _imageSize) return;
         setState(() => _imageSize = size);
@@ -375,19 +274,6 @@ class _MangaPageImageState extends State<MangaPageImage>
           zoomEnabled: false,
           quickScaleEnabled: false,
           onImageLoaded: loaded,
-          onError: (message) {
-            mangaReaderDiagnostics.record('subsampling.error', <String, Object?>{
-              'pageIndex': widget.page.index,
-              'errorClass': mangaReaderDiagnosticErrorClass(message),
-              ...mangaReaderDiagnostics.urlFields('url', widget.page.imageUrl),
-            });
-          },
-          onTileError: (message) {
-            mangaReaderDiagnostics.record('subsampling.tile_error', <String, Object?>{
-              'pageIndex': widget.page.index,
-              'errorClass': mangaReaderDiagnosticErrorClass(message),
-            });
-          },
           loadStateChanged: (state) => switch (state.loadState) {
             LoadState.loading => MangaReaderPageLoadingPlaceholder(
               progress: mangaReaderChunkProgress(state.loadingProgress),
@@ -408,7 +294,6 @@ class _MangaPageImageState extends State<MangaPageImage>
           sourceRect: widget.sourceRect,
           onImageLoaded: loaded,
           onLoadSettled: _notifyLoadSettled,
-          onImageError: _reportImageError,
           onRetry: () {
             _retry();
           },

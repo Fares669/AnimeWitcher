@@ -9,7 +9,6 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/services/download_v2/manga_chapter_manifest_v2.dart';
 import '../../../core/services/download_v2/manga_chapter_transport_v2.dart';
-import '../../../core/services/manga_reader_diagnostic_log.dart';
 import '../../../core/storage/manga_reading_repository.dart';
 import 'manga_reader_page_cache.dart';
 import 'manga_reader_settings.dart';
@@ -52,9 +51,6 @@ class MangaReaderController extends ChangeNotifier {
   final Set<String> _preloadingChapterIds = <String>{};
   bool _autoReadDuplicateChapters = false;
   String? _lastLoadChapterId;
-  bool _attemptedPageRefresh = false;
-  Future<void>? _refreshingPages;
-  String? _refreshingChapterId;
 
   static MangaReaderMode preferredModeFor(MultimediaItem item) {
     final type = (item.catalogType ?? '').trim().toLowerCase();
@@ -99,16 +95,8 @@ class MangaReaderController extends ChangeNotifier {
   Future<void> load() async {
     _progressTimer?.cancel();
     final chapterId = _chapter.id;
-    mangaReaderDiagnostics.record('reader.load.start', <String, Object?>{
-      'mangaId': _mangaId,
-      'chapterId': chapterId,
-      'hasLocalDirectory':
-          (localChapterDirectory?.trim().isNotEmpty ?? false),
-      ...mangaReaderDiagnostics.urlFields('chapter', _chapter.url),
-    });
     final forceSourceReload = _lastLoadChapterId == chapterId;
     _lastLoadChapterId = chapterId;
-    _attemptedPageRefresh = false;
     _loading = true;
     _error = null;
     _pages = const <MangaPage>[];
@@ -135,26 +123,6 @@ class MangaReaderController extends ChangeNotifier {
       final pages = localPages.isNotEmpty
           ? localPages
           : preloaded ?? cached ?? remote ?? const <MangaPage>[];
-      final source = localPages.isNotEmpty
-          ? 'local'
-          : preloaded != null
-          ? 'adjacent_preload'
-          : cached != null
-          ? 'reader_page_cache'
-          : remote != null
-          ? 'provider_remote'
-          : 'empty';
-      mangaReaderDiagnostics.record('reader.load.source', <String, Object?>{
-        'mangaId': _mangaId,
-        'chapterId': chapterId,
-        'source': source,
-        'forceSourceReload': forceSourceReload,
-        'count': pages.length,
-        if (pages.isNotEmpty)
-          ...mangaReaderDiagnostics.urlFields('first', pages.first.imageUrl),
-        if (pages.isNotEmpty)
-          ...mangaReaderDiagnostics.headerFields('first', pages.first.headers),
-      });
       if (remote != null && remote.isNotEmpty) {
         await _pageCache.put(_mangaId, _chapter, remote);
       }
@@ -167,114 +135,12 @@ class MangaReaderController extends ChangeNotifier {
       notifyListeners();
       unawaited(_preloadAdjacentChapters());
     } catch (error) {
-      mangaReaderDiagnostics.record('reader.load.error', <String, Object?>{
-        'mangaId': _mangaId,
-        'chapterId': chapterId,
-        'errorType': error.runtimeType.toString(),
-      });
       _loading = false;
       _error = error;
       notifyListeners();
     }
   }
 
-
-  Future<void> refreshFailedPage(MangaPage failedPage) async {
-    mangaReaderDiagnostics.record('reader.refresh_failed_page.start', <String, Object?>{
-      'mangaId': _mangaId,
-      'chapterId': _chapter.id,
-      'pageIndex': failedPage.index,
-      ...mangaReaderDiagnostics.urlFields('page', failedPage.imageUrl),
-      ...mangaReaderDiagnostics.headerFields('page', failedPage.headers),
-    });
-    if (failedPage.imageUrl.startsWith('file:') ||
-        !_pages.any((page) => page.imageUrl == failedPage.imageUrl)) {
-      return;
-    }
-    final activeRefresh = _refreshingPages;
-    if (_refreshingChapterId == _chapter.id && activeRefresh != null) {
-      return activeRefresh;
-    }
-    if (_attemptedPageRefresh) return;
-    _attemptedPageRefresh = true;
-    final chapter = _chapter;
-    final future = () async {
-      const maxAttempts = 3;
-      for (var attempt = 0; attempt < maxAttempts; attempt++) {
-        mangaReaderDiagnostics.record('reader.refresh_failed_page.attempt', <String, Object?>{
-          'mangaId': _mangaId,
-          'chapterId': chapter.id,
-          'attempt': attempt + 1,
-        });
-        try {
-          final fresh = await provider.refreshMangaChapterPages(
-            manga.url,
-            chapter,
-          );
-          if (chapter.id != _chapter.id) return;
-          if (fresh.isEmpty) {
-            mangaReaderDiagnostics.record('reader.refresh_failed_page.result', <String, Object?>{
-              'mangaId': _mangaId,
-              'chapterId': chapter.id,
-              'attempt': attempt + 1,
-              'result': 'empty',
-            });
-            continue;
-          }
-          final unchanged =
-              fresh.length == _pages.length &&
-              List<int>.generate(fresh.length, (index) => index).every(
-                (index) =>
-                    fresh[index].imageUrl == _pages[index].imageUrl &&
-                    mapEquals(fresh[index].headers, _pages[index].headers),
-              );
-          if (unchanged) {
-            mangaReaderDiagnostics.record('reader.refresh_failed_page.result', <String, Object?>{
-              'mangaId': _mangaId,
-              'chapterId': chapter.id,
-              'attempt': attempt + 1,
-              'result': 'unchanged',
-              'count': fresh.length,
-            });
-            continue;
-          }
-          mangaReaderDiagnostics.record('reader.refresh_failed_page.result', <String, Object?>{
-            'mangaId': _mangaId,
-            'chapterId': chapter.id,
-            'attempt': attempt + 1,
-            'result': 'updated',
-            'count': fresh.length,
-            ...mangaReaderDiagnostics.urlFields('first', fresh.first.imageUrl),
-            ...mangaReaderDiagnostics.headerFields('first', fresh.first.headers),
-          });
-          _pages = fresh;
-          _pageIndex = _pageIndex.clamp(0, fresh.length - 1).toInt();
-          await _pageCache.put(_mangaId, chapter, fresh);
-          notifyListeners();
-          return;
-        } catch (error) {
-          mangaReaderDiagnostics.record('reader.refresh_failed_page.error', <String, Object?>{
-            'mangaId': _mangaId,
-            'chapterId': chapter.id,
-            'attempt': attempt + 1,
-            'errorType': error.runtimeType.toString(),
-          });
-          if (chapter.id != _chapter.id) return;
-        }
-      }
-      // Keep the current pages only after exhausting the bounded source retry.
-    }();
-    _refreshingPages = future;
-    _refreshingChapterId = chapter.id;
-    try {
-      await future;
-    } finally {
-      if (identical(_refreshingPages, future)) {
-        _refreshingPages = null;
-        _refreshingChapterId = null;
-      }
-    }
-  }
 
   Future<void> _preloadAdjacentChapters() async {
     final index = currentChapterIndex;
