@@ -33,6 +33,14 @@ const pages = <MangaPage>[
   MangaPage(index: 2, imageUrl: 'http://127.0.0.1:1/3.webp'),
 ];
 
+Future<void> _doubleTap(WidgetTester tester, Finder finder) async {
+  final position = tester.getCenter(finder);
+  await tester.tapAt(position);
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.tapAt(position);
+  await tester.pump();
+}
+
 final class _ReaderProvider extends AnimeWitcherProvider {
   _ReaderProvider({this.emptyPages = false});
 
@@ -749,7 +757,7 @@ void main() {
     final readerGesture = find.byKey(
       const ValueKey<String>('manga-reader-image-actions-gesture'),
     );
-    await tester.doubleTap(readerGesture);
+    await _doubleTap(tester, readerGesture);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
@@ -884,7 +892,7 @@ void main() {
       expect(afterSingleTap, isNotNull);
       expect(afterSingleTap!.onBack, isNotNull);
 
-      await tester.doubleTap(readerGesture);
+      await _doubleTap(tester, readerGesture);
       await tester.pump();
       await tester.pump();
 
@@ -894,7 +902,7 @@ void main() {
       expect(hiddenByDoubleTap.onBack, isNull);
       expect(hiddenByDoubleTap.trailingButtons, isEmpty);
 
-      await tester.doubleTap(readerGesture);
+      await _doubleTap(tester, readerGesture);
       await tester.pump();
       await tester.pump();
 
