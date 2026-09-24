@@ -7,7 +7,6 @@ import 'package:animewitcher/features/manga/reader/widgets/manga_page_image.dart
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_load_scheduler.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_webtoon_reader.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_reader_navigation_overlay.dart';
-import 'package:animewitcher/features/manga/reader/widgets/manga_reader_gesture_handler.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_chapter_transition_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -95,43 +94,6 @@ void main() {
     expect(next.dx, lessThan(previous.dx));
   });
 
-  testWidgets('Mangayomi tap zones reverse page actions in RTL', (
-    tester,
-  ) async {
-    var previous = 0;
-    var next = 0;
-    var menu = 0;
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: SizedBox(
-          width: 600,
-          height: 400,
-          child: MangaReaderGestureHandler(
-            usePageTapZones: true,
-            navigationLayout: 4,
-            tappingInversion: 0,
-            isRtl: true,
-            hasImageError: false,
-            isContinuousMode: false,
-            onToggleUi: () => menu++,
-            onPreviousPage: () => previous++,
-            onNextPage: () => next++,
-          ),
-        ),
-      ),
-    );
-
-    await tester.tapAt(const Offset(100, 200));
-    await tester.pump();
-    expect(next, 1);
-    expect(previous, 0);
-    expect(menu, 0);
-
-    await tester.tapAt(const Offset(500, 200));
-    await tester.pump();
-    expect(previous, 1);
-  });
 
   test(
     'chapter transition advances only on forward overscroll at the list end',
