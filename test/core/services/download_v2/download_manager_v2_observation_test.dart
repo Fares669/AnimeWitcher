@@ -324,6 +324,83 @@ void main() {
     );
   });
 
+  test('reused active start republishes records for presentation refresh', () async {
+    final id = logicalDownloadIdFor(
+      animeId: 'anime:reuse',
+      episodeKey: '12',
+      variantKey: 'sub:1080p',
+    );
+    final taskId = taskIdForGeneration(id, 1);
+    final store = InMemoryLogicalDownloadStoreV2();
+    await store.put(
+      _record(
+        id: id,
+        destinationPath: 'downloads/reused-active.mp4',
+        expectedBytes: 100,
+        parallelChunks: 16,
+      ),
+    );
+    final handle = _Handle(
+      taskId,
+      initial: DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: .25,
+        transferredBytes: 25,
+        totalBytes: 100,
+        configuredConnections: 16,
+        activeConnections: 16,
+      ),
+    );
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: _Gateway(rehydrated: <DownloadTransportHandle>[handle]),
+      sourceResolver: StaticSourceResolverV2(expectedBytes: 100),
+    );
+    addTearDown(manager.dispose);
+
+    await manager.initialize();
+
+    final emissions = <List<LogicalDownloadRecordV2>>[];
+    final subscription = manager.records.listen(emissions.add);
+    addTearDown(subscription.cancel);
+
+    for (var i = 0; i < 20 && emissions.isEmpty; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(emissions, isNotEmpty);
+    final baseline = emissions.length;
+
+    await manager.start(
+      DownloadStartRequestV2(
+        logicalId: id,
+        animeId: 'anime:reuse',
+        episodeKey: '12',
+        variantKey: 'sub:1080p',
+        destinationPath: 'downloads/reused-active.mp4',
+        sourceDescriptor: const <String, Object?>{
+          'providerId': 'provider.example',
+        },
+        expectedBytes: 100,
+        allowPause: true,
+        retries: 2,
+        parallelChunks: 16,
+      ),
+    );
+
+    for (var i = 0; i < 20 && emissions.length == baseline; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+
+    expect(
+      emissions.length,
+      greaterThan(baseline),
+      reason:
+          'a user start that reuses an active transport must still publish '
+          'records so Downloads can reload newly written presentation metadata',
+    );
+  });
+
   test('startup recreation preserves five-part application policy', () async {
     final id = logicalDownloadIdFor(
       animeId: 'anime:1',
