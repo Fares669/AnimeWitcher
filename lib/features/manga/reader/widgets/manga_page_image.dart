@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/services/manga_reader_diagnostic_log.dart';
-import '../../../../core/utils/manga_image_request_headers.dart';
 import '../manga_reader_settings.dart';
 import 'manga_reader_page_loading.dart';
 import '../subsampling/manga_min_subsampling_image.dart';
@@ -54,7 +53,7 @@ ImageProvider<Object> mangaPageImageProvider(MangaPage page) {
       ? FileImage(File.fromUri(uri))
       : CachedNetworkImageProvider(
           page.imageUrl,
-          headers: mangaImageRequestHeaders(page.headers),
+          headers: page.headers,
         );
 }
 
@@ -254,7 +253,7 @@ class _MangaPageImageState extends State<MangaPageImage>
     unawaited(
       mangaReaderDiagnostics.probeImage(
         url: widget.page.imageUrl,
-        headers: mangaImageRequestHeaders(widget.page.headers),
+        headers: widget.page.headers,
         pageIndex: widget.page.index,
         reason: 'renderer_error',
       ),
@@ -432,7 +431,7 @@ class _MangaPageImageState extends State<MangaPageImage>
           'reader-network-${widget.page.imageUrl}-$_retryEpoch',
         ),
         imageUrl: widget.page.imageUrl,
-        httpHeaders: mangaImageRequestHeaders(widget.page.headers),
+        httpHeaders: widget.page.headers,
         width: double.infinity,
         height: widget.expand ? double.infinity : null,
         fit: _fit,

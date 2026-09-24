@@ -67,7 +67,7 @@ void main() {
     );
     final provider = mangaPageImageProvider(page);
     expect(provider, isA<CachedNetworkImageProvider>());
-    final headers = (provider as CachedNetworkImageProvider).headers;
+    final headers = (provider as CachedNetworkImageProvider).headers!;
     expect(headers['Referer'], page.headers['Referer']);
     final userAgents = headers.entries
         .where((entry) => entry.key.toLowerCase() == 'user-agent')
