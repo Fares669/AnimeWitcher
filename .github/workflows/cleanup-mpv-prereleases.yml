@@ -1,0 +1,30 @@
+name: Cleanup MPV prereleases
+
+on:
+  push:
+    branches:
+      - feat/manga-manhwa
+    paths:
+      - .github/workflows/cleanup-mpv-prereleases.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete temporary MPV prereleases and tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tags < <(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100"               --jq '.[] | select(.prerelease == true and (.tag_name | startswith("mpv-v0.41.0"))) | .tag_name'
+          )
+          echo "Found ${#tags[@]} MPV prereleases"
+          for tag in "${tags[@]}"; do
+            echo "Deleting $tag"
+            gh release delete "$tag" --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes
+          done
