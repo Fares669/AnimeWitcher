@@ -36,9 +36,9 @@ const pages = <MangaPage>[
 Future<void> _doubleTap(WidgetTester tester, Finder finder) async {
   final position = tester.getCenter(finder);
   await tester.tapAt(position);
-  await tester.pump(const Duration(milliseconds: 50));
+  await tester.pump(const Duration(milliseconds: 60));
   await tester.tapAt(position);
-  await tester.pump();
+  await tester.pumpAndSettle();
 }
 
 final class _ReaderProvider extends AnimeWitcherProvider {
