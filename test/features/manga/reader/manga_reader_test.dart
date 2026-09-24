@@ -38,7 +38,7 @@ Future<void> _doubleTap(WidgetTester tester, Finder finder) async {
   await tester.tapAt(position);
   await tester.pump(const Duration(milliseconds: 60));
   await tester.tapAt(position);
-  await tester.pumpAndSettle();
+  await tester.pump(const Duration(milliseconds: 350));
 }
 
 final class _ReaderProvider extends AnimeWitcherProvider {
