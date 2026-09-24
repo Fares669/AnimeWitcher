@@ -464,6 +464,10 @@ final class DownloadManagerV2 {
               );
           _snapshots[request.logicalId] = queued;
           _recordDiagnostic(request.logicalId, queued);
+          // A user start may refresh presentation metadata without changing
+          // the durable logical record. Republish so Downloads reloads that
+          // metadata immediately instead of waiting for a restart/safety scan.
+          await _publishRecords();
           _scheduleAdmissionPromotion();
           return queued;
         }
@@ -471,6 +475,10 @@ final class DownloadManagerV2 {
         final existing = await _exactHandle(currentRecord.taskId);
         if (existing != null && _isRecoverable(existing.current)) {
           _activateHandle(request.logicalId, existing);
+          // The transport can be reused while the launcher has just written
+          // fresh display metadata. Publish the unchanged record so the
+          // presentation layer observes that metadata write immediately.
+          await _publishRecords();
           return existing.current;
         }
       }
