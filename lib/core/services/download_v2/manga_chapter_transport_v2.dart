@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../domain/entity/manga.dart';
+import '../../utils/manga_image_request_headers.dart';
 import '../download_parallel.dart';
 import 'background_downloader_gateway.dart';
 import 'download_v2_models.dart';
@@ -266,7 +267,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         taskId: '${taskId}_p${(index + 1).toString().padLeft(4, '0')}',
         pageIndex: index,
         url: page.imageUrl,
-        headers: page.headers,
+        headers: mangaImageRequestHeaders(page.headers),
         destinationPath: p.join(
           directory.path,
           _pageFileName(index, page),
