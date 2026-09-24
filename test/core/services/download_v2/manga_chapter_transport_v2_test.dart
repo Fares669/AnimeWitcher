@@ -101,6 +101,48 @@ void main() {
     await _waitForStatus(handle, DownloadTransportStatus.complete);
   });
 
+  test('manga page downloads use compatible image request headers', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'aw_manga_image_headers_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+
+    final starter = _FakePageStarter();
+    final transport = MangaChapterTransportV2(startPage: starter.start);
+    await transport.start(
+      MangaChapterTransportSpecV2(
+        taskId: 'chapter-headers',
+        mangaId: 'm1',
+        chapterId: '18',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(
+            index: 0,
+            imageUrl: 'https://tempsolo.mangalik.net/chapter/1.jpg',
+            headers: <String, String>{
+              'Referer': 'https://mangalik.net/manga/example/18/',
+            },
+          ),
+        ],
+        retries: 2,
+        maxConcurrentPages: 1,
+      ),
+    );
+
+    await starter.waitUntilStarted(0);
+    final headers = starter.startedTasks.single.headers;
+    expect(
+      headers['Referer'],
+      'https://mangalik.net/manga/example/18/',
+    );
+    final userAgents = headers.entries
+        .where((entry) => entry.key.toLowerCase() == 'user-agent')
+        .map((entry) => entry.value)
+        .toList();
+    expect(userAgents, hasLength(1));
+    expect(userAgents.single, isNot(contains('Dart/')));
+  });
+
   test('failed page pause resumes pages that already paused', () async {
     final temp = await Directory.systemTemp.createTemp(
       'aw_manga_partial_pause_',
@@ -397,6 +439,7 @@ final class _DelayedAlreadyCompleteStarter {
 
 final class _FakePageStarter {
   final List<int> startedPageIndexes = <int>[];
+  final List<MangaChapterPageTaskV2> startedTasks = <MangaChapterPageTaskV2>[];
   final Map<int, _FakePageHandle> handles = <int, _FakePageHandle>{};
   int active = 0;
   int maxActive = 0;
@@ -405,6 +448,7 @@ final class _FakePageStarter {
     MangaChapterPageTaskV2 task,
   ) async {
     startedPageIndexes.add(task.pageIndex);
+    startedTasks.add(task);
     active++;
     if (active > maxActive) maxActive = active;
     final handle = _FakePageHandle(

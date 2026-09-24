@@ -67,10 +67,14 @@ void main() {
     );
     final provider = mangaPageImageProvider(page);
     expect(provider, isA<CachedNetworkImageProvider>());
-    expect(
-      (provider as CachedNetworkImageProvider).headers,
-      page.headers,
-    );
+    final headers = (provider as CachedNetworkImageProvider).headers;
+    expect(headers['Referer'], page.headers['Referer']);
+    final userAgents = headers.entries
+        .where((entry) => entry.key.toLowerCase() == 'user-agent')
+        .map((entry) => entry.value)
+        .toList();
+    expect(userAgents, hasLength(1));
+    expect(userAgents.single, isNot(contains('Dart/')));
   });
 
   test('network continuous images route to Mangayomi min subsampling', () {
