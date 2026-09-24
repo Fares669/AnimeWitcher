@@ -751,6 +751,7 @@ void main() {
         ),
       ),
     );
+    await provider.waitUntilRequested('indicator-c1');
     await tester.pump();
     await tester.pump();
 
