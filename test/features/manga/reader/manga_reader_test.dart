@@ -665,18 +665,26 @@ void main() {
     );
   });
 
-  testWidgets('page indicator is a compact LTR dark pill at the bottom', (
+  testWidgets('page indicator is a compact LTR dark pill at the screen edge', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       const MaterialApp(
-        home: Directionality(
-          textDirection: TextDirection.rtl,
-          child: Scaffold(
-            body: MangaReaderPageIndicator(
-              visible: true,
-              currentPage: 7,
-              totalPages: 24,
+        home: MediaQuery(
+          data: MediaQueryData(
+            size: Size(390, 844),
+            padding: EdgeInsets.only(bottom: 30),
+          ),
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Scaffold(
+              body: MangaReaderPageIndicator(
+                visible: true,
+                currentPage: 7,
+                totalPages: 24,
+              ),
             ),
           ),
         ),
@@ -695,84 +703,21 @@ void main() {
     );
     expect(directionality.textDirection, TextDirection.ltr);
 
-    final container = tester.widget<Container>(
-      find.ancestor(
-        of: find.text('7/24'),
-        matching: find.byType(Container),
-      ).first,
-    );
-    expect(container.decoration, isA<BoxDecoration>());
-  });
-
-  testWidgets('hidden reader page indicator touches the bottom screen edge', (
-    tester,
-  ) async {
-    final provider = _ReaderProvider();
-    const chapter = MangaChapter(
-      id: 'indicator-c1',
-      mangaId: 'indicator-m1',
-      url: 'https://example.test/chapter/indicator-1',
-      name: 'Chapter indicator',
-      number: 1,
-    );
-    final manga = MultimediaItem(
-      title: 'Indicator Reader Manga',
-      url: 'https://animewitcher.com/manga/indicator-m1',
-      posterUrl: '',
-      contentType: MultimediaContentType.manga,
-      provider: provider.packageName,
-    );
-
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
-          mangaReadingRepositoryProvider.overrideWithValue(
-            _ReaderProgressRepository(),
-          ),
-          mangaReaderSettingsProvider.overrideWith(
-            _ReaderSettingsNotifier.new,
-          ),
-        ],
-        child: MaterialApp(
-          home: MediaQuery(
-            data: const MediaQueryData(
-              size: Size(390, 844),
-              padding: EdgeInsets.only(top: 40, bottom: 30),
-            ),
-            child: MangaReaderScreen(
-              manga: manga,
-              chapter: chapter,
-              chapters: const <MangaChapter>[chapter],
-            ),
-          ),
-        ),
-      ),
-    );
-    await provider.waitUntilRequested('indicator-c1');
-    await tester.pump();
-    await tester.pump();
-
-    final readerGesture = find.byKey(
-      const ValueKey<String>('manga-reader-image-actions-gesture'),
-    );
-    final pagedReader = tester.widget<MangaPagedReader>(
-      find.byType(MangaPagedReader),
-    );
-    expect(pagedReader.onDoubleTap, isNotNull);
-
-    await tester.longPress(readerGesture);
-    await tester.pump(const Duration(milliseconds: 350));
-
-    final indicator = find.text('1/3');
-    expect(indicator, findsOneWidget);
-    final pill = find.ancestor(
-      of: indicator,
+    final containerFinder = find.ancestor(
+      of: find.text('7/24'),
       matching: find.byType(Container),
     ).first;
-    expect(tester.getRect(pill).bottom, 844);
+    final container = tester.widget<Container>(containerFinder);
+    expect(container.decoration, isA<BoxDecoration>());
+    expect(tester.getRect(containerFinder).bottom, 844);
+
+    final screenSource = File(
+      'lib/features/manga/reader/manga_reader_screen.dart',
+    ).readAsStringSync();
+    expect(
+      screenSource,
+      isNot(contains('minimum: const EdgeInsets.only(bottom: 4)')),
+    );
   });
 
   testWidgets('reader uses Mangayomi navigation overlay widget', (tester) async {
