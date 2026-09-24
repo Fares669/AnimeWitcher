@@ -1086,3 +1086,25 @@ void main() {
   });
 
 }
+
+
+  test('reader image failures are manual retry only and manga diagnostics are removed', () {
+    final pageImageSource = File(
+      'lib/features/manga/reader/widgets/manga_page_image.dart',
+    ).readAsStringSync();
+    final controllerSource = File(
+      'lib/features/manga/reader/manga_reader_controller.dart',
+    ).readAsStringSync();
+    final providerSource = File(
+      'lib/core/extensions/providers/animewitcher_native_provider.dart',
+    ).readAsStringSync();
+
+    expect(pageImageSource, isNot(contains('_recoverFromImageError')));
+    expect(pageImageSource, isNot(contains('onImageError')));
+    expect(controllerSource, isNot(contains('refreshFailedPage')));
+    expect(providerSource, isNot(contains('mangaReaderDiagnostics')));
+    expect(
+      File('lib/core/services/manga_reader_diagnostic_log.dart').existsSync(),
+      isFalse,
+    );
+  });
