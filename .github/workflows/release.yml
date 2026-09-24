@@ -24,10 +24,11 @@ on:
         default: true
         type: boolean
 
-permissions:
-  contents: write
   push:
     branches: [main]
+
+permissions:
+  contents: write
 
 jobs:
   version:
