@@ -159,9 +159,9 @@ void main() {
     expect(starts, hasLength(1));
     expect(
       starts.single.headers['Range'],
-      'bytes=0-1048575',
+      'bytes=0-4194303',
       reason:
-          'a one-connection iOS download still needs small immutable '
+          'a one-connection iOS download still uses bounded immutable '
           'checkpoints so Pause and process recreation never depend on '
           'URLSession resumeData for one giant file',
     );
