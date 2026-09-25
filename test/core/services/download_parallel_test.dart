@@ -149,6 +149,7 @@ void main() {
         32,
       );
       expect(kDownloadWorkUnitsMax, 128);
+      expect(kDownloadLegacyWorkUnitsMax, 512);
     });
 
     test('large episodes keep the durable work queue bounded', () {
