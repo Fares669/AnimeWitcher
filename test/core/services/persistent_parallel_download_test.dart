@@ -208,6 +208,35 @@ void main() {
   });
 
   test(
+    'disk fallback probes only native-owned ranges',
+    () async {
+      await coordinator.dispose();
+      coordinator = create(
+        diskProgressPollInterval: const Duration(milliseconds: 10),
+      );
+
+      expect(await coordinator.start(parent, 100), isTrue);
+      expect(starts.length, 1);
+
+      final queuedFile = File(
+        '${directory.path}${Platform.pathSeparator}video.mp4.parts'
+        '${Platform.pathSeparator}1.part',
+      );
+      await queuedFile.parent.create(recursive: true);
+      await queuedFile.writeAsBytes(List<int>.filled(10, 3), flush: true);
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(
+        coordinator.progressFor(parent.taskId),
+        0,
+        reason:
+            'an unlaunched range has no writer and cannot change during an '
+            'active session, so polling it only adds filesystem work',
+      );
+    },
+  );
+
+  test(
     'visible part bytes wake a parent when native callbacks are missing',
     () async {
       await coordinator.dispose();
