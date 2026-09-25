@@ -1763,11 +1763,22 @@ class PersistentParallelDownload {
 
     // Exact child completion is already durable in both the part file and the
     // package TaskRecord. While a parent is actively transferring, coalesce
-    // manifest updates instead of fsyncing the full checkpoint once per tiny
-    // Range. Restore revalidates exact part files before launching anything, so
-    // a process loss inside this short window cannot re-download completed data.
+    // manifest updates instead of fsyncing the full checkpoint once per Range.
+    // Restore revalidates exact part files before launching anything, so a
+    // process loss inside this short window cannot re-download completed data.
     if (allComplete || !session.active) {
-      await _persist(session);
+      try {
+        await _persist(session);
+      } on FileSystemException catch (error) {
+        if (!_isInsufficientStorageError(error)) rethrow;
+        final target = File(await session.task.filePath());
+        await _handleAssemblyStorageFailure(
+          session,
+          File('${target.path}.assembling'),
+          error: error,
+        );
+        return;
+      }
     } else {
       _scheduleProgressPersist(session);
     }
@@ -1776,7 +1787,6 @@ class PersistentParallelDownload {
       await _assemble(session);
     } else {
       _scheduleAggregateProgress(session);
-      _schedulePumpAll();
       _notifyPausedDrainSettled(session);
     }
   }
@@ -2650,7 +2660,6 @@ class PersistentParallelDownload {
         await _status(session, TaskStatus.running);
       }
       _scheduleAggregateProgress(session);
-      _schedulePumpAll();
     });
   }
 
@@ -2798,7 +2807,6 @@ class PersistentParallelDownload {
             if (session.active) {
               _scheduleAggregateProgress(session);
             }
-            _schedulePumpAll();
             return;
           }
 
@@ -2859,26 +2867,7 @@ class PersistentParallelDownload {
               TaskRecord(part.task, TaskStatus.complete, 1, part.size),
             );
             onPartProgress(session.task.taskId, part.task.taskId, 1);
-            try {
-              await _persist(session);
-            } on FileSystemException catch (error) {
-              if (!_isInsufficientStorageError(error)) rethrow;
-              final target = File(await session.task.filePath());
-              await _handleAssemblyStorageFailure(
-                session,
-                File('${target.path}.assembling'),
-                error: error,
-              );
-              return;
-            }
-            _notifyPausedDrainSettled(session);
-            if (session.active &&
-                session.parts.every((child) => child.complete)) {
-              await _assemble(session);
-            } else {
-              _scheduleAggregateProgress(session);
-              _schedulePumpAll();
-            }
+            await _afterAdoptedPart(session);
             return;
           }
 
@@ -2887,8 +2876,9 @@ class PersistentParallelDownload {
             _activeConnectionIds.add(part.task.taskId);
             _markConnectionReady(session, part);
             _armTailStallWatch(session, part);
-            await _status(session, TaskStatus.running);
-            _schedulePumpAll();
+            if (!session.parentRunningReported) {
+              await _status(session, TaskStatus.running);
+            }
             return;
           }
 
