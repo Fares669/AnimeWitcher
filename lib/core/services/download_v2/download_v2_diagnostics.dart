@@ -220,13 +220,15 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
           file,
           utf8.encode(encoded).length,
         );
-        final event = body['event'];
         await file.writeAsString(
           encoded,
           mode: FileMode.append,
-          flush:
-              event != 'parallel.heartbeat' &&
-              event != 'parallel.checkpoint',
+          // Diagnostics must never turn high-frequency progress into an fsync
+          // workload on the same device that is writing video ranges. The file
+          // is still closed after each append; only terminal logical snapshots
+          // force storage synchronization so crash reports keep their final
+          // state without stalling normal download/UI work.
+          flush: _shouldFlushDiagnosticRecord(body),
         );
         _lastError = null;
       } catch (error) {
@@ -270,6 +272,14 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
 
   /// Testing/support hook for callers that need the append queue settled.
   Future<void> flush() => _tail;
+}
+
+
+bool _shouldFlushDiagnosticRecord(Map<String, Object?> body) {
+  if (body['recordType'] != 'snapshot') return false;
+  final status = body['status'];
+  if (status is! String) return false;
+  return status != 'queued' && status != 'running' && status != 'held';
 }
 
 const Set<String> _transportFieldAllowlist = <String>{
