@@ -19,10 +19,11 @@ import '../utils/download_resume.dart';
 const Duration kParallelProgressCoalesceDelay = Duration(seconds: 1);
 
 /// Progress manifests are durable recovery checkpoints, not a telemetry bus.
-/// Persist at most once per second while bytes are flowing; exact completion,
-/// pause and cancel boundaries still persist synchronously. This prevents 5-16
-/// child callbacks from creating a serialized fsync backlog that starves the
-/// parent progress stream.
+/// Persist live-byte hints at a low cadence while bytes are flowing; exact
+/// pause/cancel boundaries and the final all-parts-complete boundary still
+/// persist synchronously. Individual child completions are already durable in
+/// their part file + TaskRecord and are coalesced here so 5-16 workers cannot
+/// create a serialized fsync backlog that starves the parent progress stream.
 const Duration kParallelProgressPersistInterval = Duration(seconds: 2);
 
 /// Keep a small reserve beyond the remaining staging allocation so assembly
