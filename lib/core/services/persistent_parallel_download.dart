@@ -1787,6 +1787,11 @@ class PersistentParallelDownload {
       await _assemble(session);
     } else {
       _scheduleAggregateProgress(session);
+      // Most adoption paths release a connection (which already schedules a
+      // pump), but stalled-tail recycling can clear native ownership directly.
+      // Keep this completion-boundary wake-up so that rare path cannot strand
+      // queued tail work. This is not a steady-progress callback.
+      _schedulePumpAll();
       _notifyPausedDrainSettled(session);
     }
   }
