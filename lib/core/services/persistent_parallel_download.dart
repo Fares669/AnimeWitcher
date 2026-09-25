@@ -968,7 +968,7 @@ class PersistentParallelDownload {
               ),
             )
             .toList(growable: false);
-        if (parts.length > kDownloadWorkUnitsMax ||
+        if (parts.length > kDownloadLegacyWorkUnitsMax ||
             parts.any((part) => part.from < 0 || part.to < part.from) ||
             !_validRestoredLayout(parts, declaredTotalBytes)) {
           continue;
