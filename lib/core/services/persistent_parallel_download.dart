@@ -2867,7 +2867,36 @@ class PersistentParallelDownload {
               TaskRecord(part.task, TaskStatus.complete, 1, part.size),
             );
             onPartProgress(session.task.taskId, part.task.taskId, 1);
-            await _afterAdoptedPart(session);
+
+            final allComplete = session.parts.every(
+              (child) => child.complete,
+            );
+            if (session.active && !allComplete) {
+              // The child file + TaskRecord already make this Range durable.
+              // Fold intermediate completion into the normal checkpoint timer
+              // instead of fsyncing the full manifest once per child.
+              _scheduleProgressPersist(session);
+            } else {
+              try {
+                await _persist(session);
+              } on FileSystemException catch (error) {
+                if (!_isInsufficientStorageError(error)) rethrow;
+                final target = File(await session.task.filePath());
+                await _handleAssemblyStorageFailure(
+                  session,
+                  File('${target.path}.assembling'),
+                  error: error,
+                );
+                return;
+              }
+            }
+
+            _notifyPausedDrainSettled(session);
+            if (session.active && allComplete) {
+              await _assemble(session);
+            } else if (session.active) {
+              _scheduleAggregateProgress(session);
+            }
             return;
           }
 
