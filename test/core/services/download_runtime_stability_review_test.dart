@@ -161,6 +161,32 @@ void main() {
         expect(source, contains('_cancelPendingUpdate();'));
       },
     );
+    test('steady multipart progress does not rescan the scheduler', () {
+      final source = File('lib/core/services/persistent_parallel_download.dart')
+          .readAsStringSync();
+
+      final nativeStart = source.indexOf('Future<void> handleNativeChunkUpdate');
+      final nativeEnd = source.indexOf('bool handleUpdate(', nativeStart);
+      expect(nativeStart, greaterThanOrEqualTo(0));
+      expect(nativeEnd, greaterThan(nativeStart));
+      expect(
+        source.substring(nativeStart, nativeEnd),
+        isNot(contains('_schedulePumpAll();')),
+      );
+
+      final progressStart = source.indexOf('if (update is TaskProgressUpdate');
+      final progressEnd = source.indexOf(
+        'if (update is! TaskStatusUpdate) return;',
+        progressStart,
+      );
+      expect(progressStart, greaterThanOrEqualTo(0));
+      expect(progressEnd, greaterThan(progressStart));
+      expect(
+        source.substring(progressStart, progressEnd),
+        isNot(contains('_schedulePumpAll();')),
+      );
+    });
+
     test('pause intent fences a queued multipart slow-start pump', () {
       final source = File('lib/core/services/persistent_parallel_download.dart')
           .readAsStringSync();
