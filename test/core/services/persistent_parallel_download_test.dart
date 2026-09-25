@@ -167,6 +167,33 @@ void main() {
     );
   });
 
+  test('fresh child launches do not rewrite an unchanged manifest', () async {
+    expect(await coordinator.start(parent, 100), isTrue);
+    await waitUntil(() => starts.isNotEmpty);
+
+    final manifest = File('${await parent.filePath()}.parts/manifest.json');
+    Map<String, dynamic> snapshot() =>
+        jsonDecode(manifest.readAsStringSync()) as Map<String, dynamic>;
+
+    expect(
+      snapshot()['checkpointSequence'],
+      2,
+      reason:
+          'fresh start writes the initial layout and one generation fence; '
+          'launching an already-fenced child must not fsync the same manifest',
+    );
+
+    await markRunning(<DownloadTask>[starts.first]);
+    await waitUntil(() => starts.length >= 3);
+    expect(
+      snapshot()['checkpointSequence'],
+      2,
+      reason:
+          'slow-start expansion must reuse the attempt metadata persisted '
+          'before native IO instead of rewriting the whole manifest per child',
+    );
+  });
+
   test('five parts cover each byte once', () async {
     expect(await coordinator.start(parent, 23), isTrue);
     await expandFreshTo(5);
