@@ -151,6 +151,21 @@ void main() {
       expect(kDownloadWorkUnitsMax, 128);
     });
 
+    test('large episodes keep the durable work queue bounded', () {
+      const mib = 1024 * 1024;
+      expect(
+        selectDownloadWorkUnitCount(
+          connections: 16,
+          totalBytes: 752 * mib,
+        ),
+        128,
+        reason:
+            'connection parallelism stays at sixteen while the immutable '
+            'checkpoint queue must not fan out to hundreds of 1 MiB tasks',
+      );
+      expect(kDownloadCheckpointTargetBytes, 4 * mib);
+    });
+
     test('tail work never creates tiny extra ranges', () {
       const mib = 1024 * 1024;
       expect(
