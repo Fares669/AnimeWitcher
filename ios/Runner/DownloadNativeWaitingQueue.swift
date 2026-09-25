@@ -1922,6 +1922,7 @@ enum DownloadNativeWaitingQueue {
     var aggregateWritten: Int64 = 0
     var aggregateSpeed = 0.0
     var shouldUpdateNativeOverlay = false
+    var shouldBridgeToDart = false
 
     lock.lock()
     let speed: Double
@@ -1979,34 +1980,58 @@ enum DownloadNativeWaitingQueue {
     if shouldUpdateNativeOverlay {
       lastV2ParallelOverlayTimes[parentId] = now
     }
+
+    // background_downloader already delivers child progress to Dart while the
+    // app is active. This native bridge exists for iOS-specific speed/pause
+    // observation, so do not mirror every URLSession callback through
+    // NotificationCenter -> main queue -> Flutter MethodChannel. Preserve every
+    // status/completion transition, and sample foreground progress at most once
+    // per child per second. In background, the native overlay is updated below
+    // without waking a suspended Flutter isolate for progress-only telemetry.
+    if completed || statusOrdinal != nil {
+      shouldBridgeToDart = true
+      if completed {
+        lastChunkBridgeTimes[task.taskId] = nil
+      } else {
+        lastChunkBridgeTimes[task.taskId] = now
+      }
+    } else if !appIsBackground {
+      let lastBridge = lastChunkBridgeTimes[task.taskId] ?? 0
+      if now - lastBridge >= chunkBridgeInterval {
+        lastChunkBridgeTimes[task.taskId] = now
+        shouldBridgeToDart = true
+      }
+    }
     lock.unlock()
 
-    var values: [String: Any] = [
-      "parentTaskId": parentId,
-      "chunkTaskId": task.taskId,
-      "completed": completed,
-    ]
-    if let normalized {
-      values["progress"] = normalized
-    }
-    if let statusOrdinal {
-      values["status"] = statusOrdinal
-    }
-    if written >= 0 {
-      values["writtenBytes"] = written
-    }
-    if expected > 0 {
-      values["expectedBytes"] = expected
-    }
-    if speed > 0, speed.isFinite {
-      values["speedBytesPerSecond"] = speed
-    }
+    if shouldBridgeToDart {
+      var values: [String: Any] = [
+        "parentTaskId": parentId,
+        "chunkTaskId": task.taskId,
+        "completed": completed,
+      ]
+      if let normalized {
+        values["progress"] = normalized
+      }
+      if let statusOrdinal {
+        values["status"] = statusOrdinal
+      }
+      if written >= 0 {
+        values["writtenBytes"] = written
+      }
+      if expected > 0 {
+        values["expectedBytes"] = expected
+      }
+      if speed > 0, speed.isFinite {
+        values["speedBytesPerSecond"] = speed
+      }
 
-    NotificationCenter.default.post(
-      name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
-      object: nil,
-      userInfo: values
-    )
+      NotificationCenter.default.post(
+        name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
+        object: nil,
+        userInfo: values
+      )
+    }
 
     // Dart owns foreground presentation. During iOS background URLSession
     // wake-ups the Flutter isolate can be suspended, so update the already
@@ -2065,16 +2090,18 @@ enum DownloadNativeWaitingQueue {
 
         // Unlike a missing speed field, explicit zero means this child has
         // produced no bytes for the stale interval.
-        NotificationCenter.default.post(
-          name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
-          object: nil,
-          userInfo: [
-            "parentTaskId": parentId,
-            "chunkTaskId": childId,
-            "completed": false,
-            "speedBytesPerSecond": 0.0,
-          ]
-        )
+        if isAppInForeground() {
+          NotificationCenter.default.post(
+            name: Notification.Name("AnimeWitcherBackgroundDownloaderChunkUpdate"),
+            object: nil,
+            userInfo: [
+              "parentTaskId": parentId,
+              "chunkTaskId": childId,
+              "completed": false,
+              "speedBytesPerSecond": 0.0,
+            ]
+          )
+        }
 
         if !isAppInForeground() {
           runOnMainActor {
