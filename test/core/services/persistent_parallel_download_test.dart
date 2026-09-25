@@ -190,6 +190,44 @@ void main() {
     );
   });
 
+  test('intermediate child completion does not fsync the full manifest', () async {
+    expect(await coordinator.start(parent, 100), isTrue);
+    await expandFreshTo(5);
+
+    final manifest = File('${await parent.filePath()}.parts/manifest.json');
+    Map<String, dynamic> snapshot() =>
+        jsonDecode(manifest.readAsStringSync()) as Map<String, dynamic>;
+    final sequenceBeforeCompletion =
+        (snapshot()['checkpointSequence'] as num).toInt();
+
+    final first = starts.first;
+    await completePart(first, List<int>.filled(20, 7));
+    await waitUntil(
+      () => records[first.taskId]?.status == TaskStatus.complete,
+    );
+
+    expect(
+      snapshot()['checkpointSequence'],
+      sequenceBeforeCompletion,
+      reason:
+          'the complete part file and TaskRecord are already durable; '
+          'intermediate children should join the coalesced manifest checkpoint',
+    );
+  });
+
+  test('slow-start child running callbacks publish parent running once', () async {
+    expect(await coordinator.start(parent, 23), isTrue);
+    await expandFreshTo(5);
+
+    expect(
+      statuses.where((status) => status == TaskStatus.running),
+      hasLength(1),
+      reason:
+          'child readiness must not fan out duplicate parent status writes '
+          'or UI notifications',
+    );
+  });
+
   test('five parts cover each byte once', () async {
     expect(await coordinator.start(parent, 23), isTrue);
     await expandFreshTo(5);
