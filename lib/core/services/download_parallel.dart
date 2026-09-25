@@ -34,6 +34,12 @@ int effectiveDownloadPartsForPlatform({
 /// checkpoints still bound worst-case re-fetch after a process loss while a
 /// 128-unit ceiling keeps coordinator cost proportional to a small work queue.
 const int kDownloadWorkUnitsMax = 128;
+
+/// Existing V2 manifests created before the performance fix may contain up to
+/// 512 immutable ranges. New transfers never create that many, but restore must
+/// continue accepting them so an upgrade cannot discard already-downloaded
+/// checkpoint files.
+const int kDownloadLegacyWorkUnitsMax = 512;
 const int kDownloadCheckpointTargetBytes = 4 * 1024 * 1024;
 const int kDownloadTailBalanceMinUnitBytes = 512 * 1024;
 
