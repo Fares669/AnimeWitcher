@@ -467,6 +467,12 @@ void main() {
       await tester.longPress(visibleRow);
       await tester.pumpAndSettle();
       expect(find.text('تم تحديد 1'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('manga-selection-bottom-bar')),
+        findsOneWidget,
+      );
+      final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
+      expect(scaffold.bottomNavigationBar, isNotNull);
 
       await tester.drag(page, const Offset(0, -400));
       await tester.pumpAndSettle();
