@@ -33,6 +33,11 @@ jobs:
           merge_status=$?
           set -e
 
+          # git merge has fully returned here; a failed recursive merge can
+          # leave a stale index lock on hosted runners, so clear only that
+          # transient lock before resolving the recorded conflict entries.
+          rm -f .git/index.lock
+
           if [ "$merge_status" -ne 0 ]; then
             while IFS= read -r path; do
               [ -n "$path" ] || continue
