@@ -1135,7 +1135,8 @@ class AnimeWitcherPlayerControlsState
 
   /// "1080p · PD": a source's quality and server, as the picker names them.
   static String _sourceLabel(StreamResult stream) => [
-    streamSourceQualityLabel(stream),
+    if ((stream.quality ?? '').trim().isNotEmpty)
+      streamSourceQualityLabel(stream),
     if (stream.source.trim().isNotEmpty) stream.source.trim(),
   ].join(' · ');
 

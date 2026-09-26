@@ -156,6 +156,30 @@ void main() {
     expect(find.byIcon(Icons.visibility_outlined), findsNothing);
   });
 
+  testWidgets('hidden spoiler comment uses the same flame icon', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      _app(
+        service: _FakeAccountService(
+          comments: <AnimeWitcherComment>[
+            _comment(id: 'spoiler', text: 'حرق', spoiler: true),
+          ],
+        ),
+        home: const AnimeWitcherCommentsScreen(target: _target),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('تعليق يحتوي على حرق — إظهار'), findsOneWidget);
+    expect(
+      find.byIcon(Icons.local_fire_department_rounded),
+      findsNWidgets(2),
+    );
+    expect(find.byIcon(Icons.visibility_off_rounded), findsNothing);
+  });
+
   testWidgets('comment edit dialog keeps تعديل التعليق and spoiler checkbox', (
     tester,
   ) async {

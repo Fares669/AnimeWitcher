@@ -926,9 +926,7 @@ class _AnimeWitcherCommentsScreenState
                       tooltip: isArabic ? 'يحتوي على حرق' : 'Contains spoiler',
                       onPressed: () => setState(() => _spoiler = !_spoiler),
                       icon: Icon(
-                        _spoiler
-                            ? Icons.local_fire_department_rounded
-                            : Icons.local_fire_department_rounded,
+                        Icons.local_fire_department_rounded,
                         color:
                             _spoiler ? colors.primary : colors.onSurfaceVariant,
                       ),
