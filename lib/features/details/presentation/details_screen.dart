@@ -650,7 +650,11 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       });
       return;
     }
-    if (_loadingUserRating || _loadedUserRatingAnimeId == animeId) return;
+    if (_loadingUserRating ||
+        (_loadedUserRatingAnimeId == animeId &&
+            _loadedUserRatingSignedIn == service.isSignedIn)) {
+      return;
+    }
 
     setState(() => _loadingUserRating = true);
     try {
