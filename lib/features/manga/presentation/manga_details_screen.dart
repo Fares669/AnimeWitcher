@@ -13,6 +13,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/storage/library_category.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/image_fallbacks.dart';
 import '../../../core/storage/manga_reading_repository.dart';
 import '../../../core/utils/localized_text.dart';
@@ -81,6 +82,10 @@ class MangaDetailsScreen extends ConsumerStatefulWidget {
 
 class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
   static const String _removeLibraryAction = '__remove_from_library__';
+
+  int? _userRating;
+  bool _loadingUserRating = false;
+  String? _loadedUserRatingMangaId;
 
   @override
   void initState() {
@@ -231,6 +236,46 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
     ];
   }
 
+  Future<void> _loadUserRatingFor(MultimediaItem item) async {
+    final service = ref.read(animeWitcherAccountServiceProvider);
+    final mangaId = animeWitcherMangaIdFromItem(item);
+    if (mangaId.isEmpty || !service.isSignedIn) {
+      if (!mounted) return;
+      setState(() {
+        _userRating = null;
+        _loadingUserRating = false;
+        _loadedUserRatingMangaId = mangaId;
+      });
+      return;
+    }
+    if (_loadingUserRating || _loadedUserRatingMangaId == mangaId) return;
+
+    setState(() => _loadingUserRating = true);
+    try {
+      final rating = await service.loadMangaUserRating(mangaId);
+      if (!mounted) return;
+      setState(() {
+        _userRating = rating;
+        _loadedUserRatingMangaId = mangaId;
+        _loadingUserRating = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadedUserRatingMangaId = mangaId;
+        _loadingUserRating = false;
+      });
+    }
+  }
+
+  void _ensureUserRatingLoaded(MultimediaItem item) {
+    final mangaId = animeWitcherMangaIdFromItem(item);
+    if (_loadingUserRating || _loadedUserRatingMangaId == mangaId) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadUserRatingFor(item);
+    });
+  }
+
   Future<bool> _ensureSignedInForLibrary(BuildContext context) async {
     if (ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
       return true;
@@ -267,22 +312,31 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
 
     final mangaId = animeWitcherMangaIdFromItem(item);
     if (mangaId.isEmpty) return;
-    int initial = 0;
-    try {
-      initial = await service.loadMangaUserRating(mangaId) ?? 0;
-    } catch (_) {}
+    if (_loadedUserRatingMangaId != mangaId) {
+      await _loadUserRatingFor(item);
+    }
     if (!mounted) return;
 
     final selected = await showAnimeRatingDialog(
       context,
-      initialRating: initial,
+      initialRating: _userRating ?? 0,
     );
     if (selected == null) return;
     try {
       if (selected == 0) {
         await service.clearMangaUserRating(mangaId);
+        if (!mounted) return;
+        setState(() {
+          _userRating = null;
+          _loadedUserRatingMangaId = mangaId;
+        });
       } else {
-        await service.saveMangaUserRating(mangaId, selected);
+        final saved = await service.saveMangaUserRating(mangaId, selected);
+        if (!mounted) return;
+        setState(() {
+          _userRating = saved;
+          _loadedUserRatingMangaId = mangaId;
+        });
       }
     } catch (_) {
       ref
@@ -535,10 +589,15 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
           ),
         ),
         DetailsHeroIconButton(
-          icon: Icons.star_outline_rounded,
+          icon: (_userRating ?? 0) > 0
+              ? Icons.star_rounded
+              : Icons.star_outline_rounded,
           tooltip: appText(context, english: 'Rate this', arabic: 'قيّم'),
-          foregroundColor: colors.onSurface,
+          foregroundColor: (_userRating ?? 0) > 0
+              ? AppTheme.animeWitcherAccent
+              : colors.onSurface,
           fallbackColor: fallback,
+          ratingCaption: _userRating == null ? null : '${_userRating!}/10',
           onPressed: () => _rateManga(item),
         ),
         DetailsHeroIconButton(
@@ -759,6 +818,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
       ),
     );
     final item = mangaDetailsItemWithCustomCover(baseItem, customCover);
+    _ensureUserRatingLoaded(item);
     final downloads =
         ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
 
