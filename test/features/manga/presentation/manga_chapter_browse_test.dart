@@ -191,19 +191,49 @@ void main() {
       );
     });
 
-    testWidgets('to current brings the next chapter back on screen', (
+    testWidgets('chapter tools do not expose a current-chapter shortcut', (
       tester,
     ) async {
       await tester.pumpWidget(_app(await _readUpTo(9)));
 
-      await tester.tap(
+      expect(
         find.byKey(const ValueKey<String>('manga-chapter-to-current')),
+        findsNothing,
       );
-      await tester.pumpAndSettle();
+    });
 
-      // Nine read: chapter 10 is next, far down a newest-first list.
-      expect(find.text('Chapter 10'), findsOneWidget);
-      expect(tester.getRect(find.text('Chapter 10')).top, lessThan(600));
+    testWidgets('the current chapter is not tinted differently', (tester) async {
+      final repository = await _readUpTo(9);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            storageServiceProvider.overrideWithValue(_Storage()),
+            mangaReadingRepositoryProvider.overrideWithValue(repository),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: MangaChapterList(
+                chapters: <MangaChapter>[
+                  for (var n = 12; n >= 1; n--) _chapter(n),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final row = find.byKey(
+        const ValueKey<String>('manga-chapter-row-c10'),
+      );
+      expect(row, findsOneWidget);
+      final container = tester.widget<AnimatedContainer>(
+        find.descendant(
+          of: row,
+          matching: find.byType(AnimatedContainer),
+        ),
+      );
+      final decoration = container.decoration! as BoxDecoration;
+      expect(decoration.color, Colors.transparent);
     });
   });
 
