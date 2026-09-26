@@ -662,7 +662,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
 
     final showHighlight = _focused || _hovered;
     final ring = _focused && widget.isTv;
-    const accent = HotstarPlayerStyle.accent;
+    final accent = Theme.of(context).colorScheme.primary;
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final rowDirection = isArabic ? TextDirection.rtl : TextDirection.ltr;
@@ -696,6 +696,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
               margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               decoration: _panelRowDecoration(
+                accent: accent,
                 focusedOnTv: ring,
                 selected: widget.isCurrent,
                 hovered: showHighlight,
@@ -1048,11 +1049,11 @@ class _EmptyHint extends StatelessWidget {
 }
 
 BoxDecoration _panelRowDecoration({
+  required Color accent,
   required bool focusedOnTv,
   required bool selected,
   required bool hovered,
 }) {
-  const accent = HotstarPlayerStyle.accent;
   final Color bg;
   if (focusedOnTv) {
     bg = accent.withValues(alpha: 0.30);

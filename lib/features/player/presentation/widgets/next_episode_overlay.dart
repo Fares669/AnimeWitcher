@@ -702,11 +702,11 @@ class _PlayNowButtonState extends State<_PlayNowButton>
           duration: const Duration(milliseconds: 150),
           height: isCompact ? 40 : null,
           decoration: BoxDecoration(
-            color: HotstarPlayerStyle.accent,
+            color: Theme.of(context).colorScheme.primary,
             boxShadow: _isActive
                 ? [
                     BoxShadow(
-                      color: HotstarPlayerStyle.accent.withValues(alpha: 0.5),
+                      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
                       blurRadius: 16,
                       spreadRadius: 1,
                     ),

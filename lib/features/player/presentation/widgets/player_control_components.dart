@@ -385,9 +385,9 @@ class _PlayerIconButtonState extends State<PlayerIconButton> {
     if (widget.foregroundColor != null) {
       iconColor = widget.foregroundColor!;
     } else if (_hovered) {
-      iconColor = HotstarPlayerStyle.accent;
+      iconColor = Theme.of(context).colorScheme.primary;
     } else if (widget.highlight) {
-      iconColor = HotstarPlayerStyle.accent;
+      iconColor = Theme.of(context).colorScheme.primary;
     } else {
       iconColor = Colors.white;
     }
@@ -460,7 +460,7 @@ class _PlayerActionButtonState extends State<PlayerActionButton> {
   Widget build(BuildContext context) {
     final showBg = (widget.highlight || _focused || _pressed) && !_hovered;
     final color = (widget.highlight || _hovered || _focused || _pressed)
-        ? HotstarPlayerStyle.accent
+        ? Theme.of(context).colorScheme.primary
         : Colors.white;
     final showTvFocusRing = widget.isTv && _focused;
 
@@ -506,16 +506,16 @@ class _PlayerActionButtonState extends State<PlayerActionButton> {
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
                   color: showBg
-                      ? HotstarPlayerStyle.accent.withValues(alpha: 0.16)
+                      ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.16)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
                   border: showTvFocusRing
-                      ? Border.all(color: HotstarPlayerStyle.accent, width: 2)
+                      ? Border.all(color: Theme.of(context).colorScheme.primary, width: 2)
                       : null,
                   boxShadow: showTvFocusRing
                       ? [
                           BoxShadow(
-                            color: HotstarPlayerStyle.accent.withValues(
+                            color: Theme.of(context).colorScheme.primary.withValues(
                               alpha: 0.2,
                             ),
                             blurRadius: 8,

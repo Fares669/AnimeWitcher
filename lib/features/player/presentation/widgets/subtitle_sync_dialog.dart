@@ -527,8 +527,10 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
 
   Widget _buildLeftPanel() {
     if (_loadingCues) {
-      return const Center(
-        child: CircularProgressIndicator(color: HotstarPlayerStyle.accent),
+      return Center(
+        child: CircularProgressIndicator(
+          color: Theme.of(context).colorScheme.primary,
+        ),
       );
     }
 
@@ -702,7 +704,7 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
                                     ),
                                     focusedBorder: UnderlineInputBorder(
                                       borderSide: BorderSide(
-                                        color: HotstarPlayerStyle.accent,
+                                        color: Theme.of(context).colorScheme.primary,
                                       ),
                                     ),
                                   ),
@@ -766,7 +768,7 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
                   autofocus: true, // Receives initial focus when opening dialog
                   onPressed: _applyAndDismiss,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: HotstarPlayerStyle.accent,
+                    backgroundColor: Theme.of(context).colorScheme.primary,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(
@@ -949,8 +951,8 @@ class SubtitleCueRow extends StatelessWidget {
                           value: val,
                           minHeight: 4,
                           backgroundColor: Colors.white12,
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                            HotstarPlayerStyle.accent,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Theme.of(context).colorScheme.primary,
                           ),
                         );
                       },
