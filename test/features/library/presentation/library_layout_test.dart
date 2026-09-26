@@ -360,6 +360,13 @@ void main() {
     await tester.tap(find.descendant(of: row, matching: find.text('عرض الكل')));
     await tester.pumpAndSettle();
     expect(find.byType(LibraryListPage), findsOneWidget);
+    final back = find.byIcon(Icons.arrow_back_ios_new_rounded);
+    expect(back, findsOneWidget);
+    expect(
+      tester.getCenter(back).dx,
+      lessThan(tester.view.physicalSize.width / 2),
+      reason: 'library list Back must live on the physical left even in Arabic',
+    );
     final grid = tester.widget<GridView>(find.byType(GridView));
     expect(grid.childrenDelegate.estimatedChildCount, 12);
     await tester.pump(const Duration(milliseconds: 100));
