@@ -10,6 +10,7 @@ import '../../../../core/storage/library_repository.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 import '../../../../shared/widgets/app_side_menu.dart';
+import '../../../../shared/widgets/app_back_button.dart';
 import '../../../home/presentation/widgets/home_section_header.dart';
 import '../../../../shared/widgets/underline_segment_tabs.dart';
 import '../../../characters/presentation/characters_screen.dart';
@@ -682,8 +683,24 @@ class LibraryListPage extends ConsumerWidget {
       libraryItemsFor(repository, category, kind),
       sort,
     );
+    final titleDirection = _arabic(context)
+        ? TextDirection.rtl
+        : TextDirection.ltr;
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: AppBar(
+            automaticallyImplyLeading: false,
+            leading: const AppBackButton(),
+            title: Directionality(
+              textDirection: titleDirection,
+              child: Text(title),
+            ),
+          ),
+        ),
+      ),
       body: items.isEmpty
           ? LibraryEmptyState(mediaKind: kind)
           : LibraryItemsGrid(items: items, heroPrefix: 'lib_page'),
