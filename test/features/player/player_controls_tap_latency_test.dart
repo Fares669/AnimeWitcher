@@ -14,6 +14,19 @@ void main() {
     expect(source, contains('_isSecondTap('));
   });
 
+  test('watched episode thumbnail follows the active theme accent', () {
+    final source = File(
+      'lib/features/player/presentation/widgets/player_side_panel.dart',
+    ).readAsStringSync();
+    final start = source.indexOf('class _EpisodeThumbnail');
+    final end = source.indexOf('class _ThumbPlaceholder', start);
+    final thumbnail = source.substring(start, end);
+
+    expect(thumbnail, contains('Theme.of(context).colorScheme.primary'));
+    expect(thumbnail, contains('if (isWatched || hasProgress)'));
+    expect(thumbnail, contains('value: isWatched ? 1.0 : progress'));
+  });
+
   test('the bottom bar paints its own scrim', () {
     final source = File(
       'lib/features/player/presentation/widgets/player_control_components.dart',
