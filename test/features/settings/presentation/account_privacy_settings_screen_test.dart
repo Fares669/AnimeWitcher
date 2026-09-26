@@ -2,6 +2,7 @@ import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/features/settings/presentation/account_privacy_settings_screen.dart';
 import 'package:animewitcher/shared/widgets/app_back_button.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
