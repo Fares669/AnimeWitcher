@@ -52,6 +52,7 @@ jobs:
         run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
   ios-v2-build:
+    if: false # temporary guard: user requested no iOS build for this UI iteration
     name: Build iOS V2 and retain log
     runs-on: macos-latest
     steps:

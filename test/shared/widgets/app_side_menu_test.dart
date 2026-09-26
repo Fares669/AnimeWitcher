@@ -163,10 +163,15 @@ void main() {
       const ValueKey<String>('app-side-menu-account-banner'),
     );
     expect(banner, findsOneWidget);
-    expect(tester.getRect(banner).height, greaterThanOrEqualTo(64));
+    expect(tester.getRect(banner).height, greaterThanOrEqualTo(128));
 
     final avatar = find.byKey(const ValueKey<String>('account-avatar-button'));
-    expect(tester.getRect(avatar).width, greaterThan(44));
+    expect(tester.getRect(avatar).width, greaterThanOrEqualTo(68));
+
+    final name = tester.widget<Text>(
+      find.descendant(of: banner, matching: find.text('Viewer')),
+    );
+    expect(name.style?.fontSize, greaterThanOrEqualTo(20));
 
     final cover = tester.widget<Image>(
       find.byKey(const ValueKey<String>('app-side-menu-account-cover')),
