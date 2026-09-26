@@ -39,7 +39,11 @@ jobs:
           rm -f .git/index.lock
 
           if [ "$merge_status" -ne 0 ]; then
-            while IFS= read -r path; do
+            # Finish the read-only index scan before starting checkout/rm
+            # mutations; running git diff in process substitution can overlap
+            # the first mutation and contend on .git/index.lock.
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            for path in "${conflicts[@]}"; do
               [ -n "$path" ] || continue
               case "$path" in
                 ios/Runner/DownloadNativeWaitingQueue.swift|lib/core/services/download_parallel.dart|lib/core/services/persistent_parallel_download.dart|lib/core/services/download_v2/*|test/core/services/download_parallel_test.dart|test/core/services/download_runtime_stability_review_test.dart|test/core/services/download_v2/download_v2_native_parallel_metrics_test.dart|test/core/services/persistent_parallel_download_test.dart)
@@ -50,7 +54,7 @@ jobs:
                   ;;
               esac
               git add -A -- "$path" 2>/dev/null || true
-            done < <(git diff --name-only --diff-filter=U)
+            done
           fi
 
           # PR251 is the authority for the download engine under test.
