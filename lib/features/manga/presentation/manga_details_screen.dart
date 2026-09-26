@@ -237,8 +237,26 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
     ];
   }
 
+  AnimeWitcherAccountService? _accountServiceOrNull() {
+    try {
+      return ref.read(animeWitcherAccountServiceProvider);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _loadUserRatingFor(MultimediaItem item) async {
-    final service = ref.read(animeWitcherAccountServiceProvider);
+    final service = _accountServiceOrNull();
+    if (service == null) {
+      if (!mounted) return;
+      setState(() {
+        _userRating = null;
+        _loadingUserRating = false;
+        _loadedUserRatingMangaId = animeWitcherMangaIdFromItem(item);
+        _loadedUserRatingSignedIn = false;
+      });
+      return;
+    }
     final mangaId = animeWitcherMangaIdFromItem(item);
     if (mangaId.isEmpty || !service.isSignedIn) {
       if (!mounted) return;
@@ -278,7 +296,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
 
   void _ensureUserRatingLoaded(MultimediaItem item) {
     final mangaId = animeWitcherMangaIdFromItem(item);
-    final signedIn = ref.read(animeWitcherAccountServiceProvider).isSignedIn;
+    final signedIn = _accountServiceOrNull()?.isSignedIn ?? false;
     if (_loadingUserRating ||
         (_loadedUserRatingMangaId == mangaId &&
             _loadedUserRatingSignedIn == signedIn)) {
@@ -311,8 +329,8 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
   }
 
   Future<void> _rateManga(MultimediaItem item) async {
-    final service = ref.read(animeWitcherAccountServiceProvider);
-    if (!service.isSignedIn) {
+    final service = _accountServiceOrNull();
+    if (service == null || !service.isSignedIn) {
       ref
           .read(notificationServiceProvider)
           .showInfo(
