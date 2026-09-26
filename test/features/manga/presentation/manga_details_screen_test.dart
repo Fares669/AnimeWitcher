@@ -414,6 +414,77 @@ void main() {
     },
   );
   testWidgets(
+    'chapter sort control shares the chapters heading row',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(_app(_MangaProvider()));
+      await _pumpUntil(
+        tester,
+        () => find.text('الفصول (1)').evaluate().isNotEmpty,
+        reason: 'the chapters heading did not appear',
+      );
+
+      final page = find.byType(Scrollable).first;
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey<String>('manga-chapter-sort-toggle')),
+        200,
+        scrollable: page,
+      );
+      final titleCenter = tester.getCenter(find.text('الفصول (1)'));
+      final sortCenter = tester.getCenter(
+        find.byKey(const ValueKey<String>('manga-chapter-sort-toggle')),
+      );
+      expect((titleCenter.dy - sortCenter.dy).abs(), lessThan(12));
+    },
+  );
+
+  testWidgets(
+    'chapter selection controls stay pinned while the manga page scrolls',
+    (tester) async {
+      _usePhoneWindow(tester);
+      await tester.pumpWidget(_app(_MangaProvider(chapterCount: 200)));
+      await _pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey<String>('manga-details-wide'))
+            .evaluate()
+            .isNotEmpty,
+        reason: 'the manga page did not appear',
+      );
+
+      final page = find.byType(Scrollable).first;
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey<String>('manga-chapter-row-200')),
+        200,
+        scrollable: page,
+      );
+      await tester.longPress(
+        find.byKey(const ValueKey<String>('manga-chapter-row-200')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('تم تحديد 1'), findsOneWidget);
+
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey<String>('manga-chapter-row-150')),
+        300,
+        scrollable: page,
+      );
+      await tester.pumpAndSettle();
+
+      final selectionLabel = find.text('تم تحديد 1');
+      expect(selectionLabel, findsOneWidget);
+      expect(
+        tester.getCenter(selectionLabel).dy,
+        greaterThan(tester.view.physicalSize.height * 0.75),
+      );
+    },
+  );
+
+  testWidgets(
     'a long manga on a wide window builds only the chapters in view',
     (tester) async {
       tester.view.physicalSize = const Size(1400, 900);
