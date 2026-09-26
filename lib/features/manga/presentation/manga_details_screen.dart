@@ -85,6 +85,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
 
   int? _userRating;
   bool _loadingUserRating = false;
+  bool _loadedUserRatingSignedIn = false;
   String? _loadedUserRatingMangaId;
 
   @override
@@ -245,6 +246,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
         _userRating = null;
         _loadingUserRating = false;
         _loadedUserRatingMangaId = mangaId;
+        _loadedUserRatingSignedIn = service.isSignedIn;
       });
       return;
     }
@@ -257,12 +259,14 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
       setState(() {
         _userRating = rating;
         _loadedUserRatingMangaId = mangaId;
+        _loadedUserRatingSignedIn = true;
         _loadingUserRating = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _loadedUserRatingMangaId = mangaId;
+        _loadedUserRatingSignedIn = service.isSignedIn;
         _loadingUserRating = false;
       });
     }
@@ -270,7 +274,12 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
 
   void _ensureUserRatingLoaded(MultimediaItem item) {
     final mangaId = animeWitcherMangaIdFromItem(item);
-    if (_loadingUserRating || _loadedUserRatingMangaId == mangaId) return;
+    final signedIn = ref.read(animeWitcherAccountServiceProvider).isSignedIn;
+    if (_loadingUserRating ||
+        (_loadedUserRatingMangaId == mangaId &&
+            _loadedUserRatingSignedIn == signedIn)) {
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _loadUserRatingFor(item);
     });
@@ -312,7 +321,8 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
 
     final mangaId = animeWitcherMangaIdFromItem(item);
     if (mangaId.isEmpty) return;
-    if (_loadedUserRatingMangaId != mangaId) {
+    if (_loadedUserRatingMangaId != mangaId ||
+        !_loadedUserRatingSignedIn) {
       await _loadUserRatingFor(item);
     }
     if (!mounted) return;
@@ -329,6 +339,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
         setState(() {
           _userRating = null;
           _loadedUserRatingMangaId = mangaId;
+          _loadedUserRatingSignedIn = true;
         });
       } else {
         final saved = await service.saveMangaUserRating(mangaId, selected);
