@@ -356,6 +356,27 @@ class AppTheme {
               : p.surfaceHighest,
         ),
       ),
+      sliderTheme: base.sliderTheme.copyWith(
+        activeTrackColor: p.accent,
+        inactiveTrackColor: p.accent.withValues(alpha: 0.24),
+        thumbColor: p.accent,
+        overlayColor: p.accent.withValues(alpha: 0.12),
+      ),
+      splashColor: p.accent.withValues(alpha: 0.10),
+      hoverColor: p.accent.withValues(alpha: 0.06),
+      highlightColor: p.accent.withValues(alpha: 0.05),
+      focusColor: p.accent.withValues(alpha: 0.12),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: p.accent,
+        selectionColor: p.accent.withValues(alpha: 0.30),
+        selectionHandleColor: p.accent,
+      ),
+      inputDecorationTheme: base.inputDecorationTheme.copyWith(
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: p.accent, width: 2),
+        ),
+      ),
     );
   }
 

@@ -650,6 +650,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       },
       behavior: HitTestBehavior.opaque,
       child: SearchGlassSurface(
+        focusNode: _focusNode,
         child: ValueListenableBuilder<TextEditingValue>(
           valueListenable: _controller,
           builder: (context, value, child) {

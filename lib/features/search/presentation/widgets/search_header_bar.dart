@@ -99,6 +99,7 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                       behavior: HitTestBehavior.opaque,
                       onTap: () => widget.searchFocusNode.requestFocus(),
                       child: SearchGlassSurface(
+                        focusNode: widget.searchFocusNode,
                         child: ValueListenableBuilder<TextEditingValue>(
                           valueListenable: widget.textController,
                           builder: (context, value, child) {
