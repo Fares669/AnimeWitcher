@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 
@@ -107,9 +108,20 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
     final bottom = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.title),
-        actions: const <Widget>[WindowControlsGap()],
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: AppBar(
+            automaticallyImplyLeading: false,
+            leading: const AppBackButton(),
+            title: Directionality(
+              textDirection: _arabic ? TextDirection.rtl : TextDirection.ltr,
+              child: Text(widget.title),
+            ),
+            actions: const <Widget>[WindowControlsGap()],
+          ),
+        ),
       ),
       body: RefreshIndicator(
         onRefresh: _reload,
