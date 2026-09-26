@@ -1,4 +1,5 @@
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_back_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -75,20 +76,28 @@ class _AnimeWitcherPrivacySettingsScreenState
   Widget build(BuildContext context) {
     final isArabic = Localizations.localeOf(context).languageCode == 'ar';
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        leading: !appleUsesPersistentLiquidGlassHeader &&
-                Navigator.of(context).canPop()
-            ? const AppleLiquidGlassBackButton()
-            : null,
-        title: ApplePersistentGlassHeaderScope(
-          enabled: Navigator.of(context).canPop(),
-          onBack: () => Navigator.of(context).maybePop(),
-          child: Text(
-            appText(
-              context,
-              english: 'Privacy and content',
-              arabic: 'الخصوصية والمحتوى',
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: AppBar(
+            automaticallyImplyLeading: false,
+            leading: Navigator.of(context).canPop()
+                ? const AppBackButton()
+                : null,
+            title: Directionality(
+              textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+              child: ApplePersistentGlassHeaderScope(
+                enabled: Navigator.of(context).canPop(),
+                onBack: () => Navigator.of(context).maybePop(),
+                child: Text(
+                  appText(
+                    context,
+                    english: 'Privacy and content',
+                    arabic: 'الخصوصية والمحتوى',
+                  ),
+                ),
+              ),
             ),
           ),
         ),
