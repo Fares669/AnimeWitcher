@@ -10,24 +10,28 @@ void main() {
     expect(container.read(searchDomainProvider), SearchDomain.anime);
   });
 
-  test('characters expose only the domain control', () {
+  test('characters and all have nothing to filter', () {
+    expect(
+      SearchDomain.all.capabilities,
+      const SearchDomainCapabilities(showSort: false, showFilter: false),
+    );
     expect(
       SearchDomain.characters.capabilities,
       const SearchDomainCapabilities(showSort: false, showFilter: false),
     );
   });
 
-  test('manga hides unsupported sort and filter controls', () {
+  test('manga filters and sorts, in the app', () {
     expect(
       SearchDomain.manga.capabilities,
-      const SearchDomainCapabilities(showSort: false, showFilter: false),
+      const SearchDomainCapabilities(showSort: true, showFilter: true),
     );
   });
 
-  test('animation hides unsupported sort and filter controls', () {
+  test('animation filters and sorts through the anime catalog', () {
     expect(
       SearchDomain.animation.capabilities,
-      const SearchDomainCapabilities(showSort: false, showFilter: false),
+      const SearchDomainCapabilities(showSort: true, showFilter: true),
     );
   });
 }

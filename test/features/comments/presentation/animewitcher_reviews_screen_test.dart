@@ -13,6 +13,8 @@ import 'package:animewitcher/features/comments/presentation/animewitcher_comment
 import 'package:animewitcher/features/comments/presentation/animewitcher_my_comments_screen.dart';
 import 'package:animewitcher/features/comments/presentation/widgets/animewitcher_comment_sort_control.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/animated_sort_menu_button.dart';
+import 'package:animewitcher/shared/widgets/app_back_button.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -199,14 +201,13 @@ void _expectSharedDetailsSortControl(
   expect(find.byKey(kAnimeWitcherCommentSortControlKey), findsOneWidget);
   expect(find.byKey(kMyCommentsSortButtonKey), findsOneWidget);
 
-  final button = tester.widget<AppleNativeMenuButton>(
-    find.byType(AppleNativeMenuButton),
+  final button = tester.widget<AnimatedSortMenuButton>(
+    find.byType(AnimatedSortMenuButton),
   );
   expect(button.size, AnimeWitcherCommentSortControl.size);
-  expect(button.width, AnimeWitcherCommentSortControl.width);
-  expect(button.systemImage, AnimeWitcherCommentSortControl.systemImage);
   expect(button.fallbackIcon, AnimeWitcherCommentSortControl.fallbackIcon);
-  expect(button.accessibilityLabel, tooltip);
+  expect(button.tooltip, tooltip);
+  expect(button.selectedValue, isNotEmpty);
 }
 
 void _expectAccountSortHeader(
@@ -216,14 +217,14 @@ void _expectAccountSortHeader(
 }) {
   expect(find.text(title), findsOneWidget);
   _expectSharedDetailsSortControl(tester, tooltip: sortTooltip);
-  expect(find.byType(AppleLiquidGlassBackButton), findsOneWidget);
+  expect(find.byType(AppBackButton), findsOneWidget);
   expect(find.byIcon(Icons.sort_rounded), findsNothing);
 
   final titleRect = tester.getRect(find.byKey(kMyCommentsTitleKey));
   final sortRect = tester.getRect(
     find.byKey(kAnimeWitcherCommentSortControlKey),
   );
-  final backRect = tester.getRect(find.byType(AppleLiquidGlassBackButton));
+  final backRect = tester.getRect(find.byType(AppBackButton));
 
   expect(
     backRect.center.dx,
@@ -321,7 +322,7 @@ void main() {
   });
 
   testWidgets(
-    'my reviews header places liquid-glass sort to the right of the title',
+    'my reviews header places animated sort to the right of the title',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(390, 844));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -347,7 +348,7 @@ void main() {
   );
 
   testWidgets(
-    'my comments header places liquid-glass sort to the right of the title',
+    'my comments header places animated sort to the right of the title',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(390, 844));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -408,7 +409,7 @@ void main() {
       debugWindowControlsInsetOverride = 0;
       addTearDown(() => debugWindowControlsInsetOverride = null);
 
-      Future<AppleNativeMenuButton> pumpAndRead(Widget home) async {
+      Future<AnimatedSortMenuButton> pumpAndRead(Widget home) async {
         await tester.pumpWidget(
           _app(
             service: _FakeAccountService(
@@ -421,8 +422,8 @@ void main() {
         await tester.pump(const Duration(milliseconds: 50));
         expect(find.byType(AnimeWitcherCommentSortControl), findsOneWidget);
         expect(find.byKey(kAnimeWitcherCommentSortControlKey), findsOneWidget);
-        return tester.widget<AppleNativeMenuButton>(
-          find.byType(AppleNativeMenuButton),
+        return tester.widget<AnimatedSortMenuButton>(
+          find.byType(AnimatedSortMenuButton),
         );
       }
 
@@ -436,18 +437,17 @@ void main() {
         const AnimeWitcherMyCommentsScreen(),
       );
 
-      for (final button in <AppleNativeMenuButton>[
+      for (final button in <AnimatedSortMenuButton>[
         details,
         myReviews,
         myComments,
       ]) {
         expect(button.size, AnimeWitcherCommentSortControl.size);
-        expect(button.width, AnimeWitcherCommentSortControl.width);
-        expect(button.systemImage, AnimeWitcherCommentSortControl.systemImage);
         expect(
           button.fallbackIcon,
           AnimeWitcherCommentSortControl.fallbackIcon,
         );
+        expect(button.selectedValue, isNotEmpty);
       }
     },
   );

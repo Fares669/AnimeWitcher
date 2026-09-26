@@ -56,6 +56,18 @@ class Library extends _$Library {
     refresh(category: category);
   }
 
+  /// Picks [category] of the [mediaKind] half at once, as the side list does.
+  Future<void> select(
+    LibraryMediaKind mediaKind,
+    LibraryCategory category,
+  ) async {
+    await ref
+        .read(storageServiceProvider)
+        .setString('library_media_kind', mediaKind.storageKey);
+    await ref.read(libraryRepositoryProvider).setSelectedCategory(category);
+    refresh(category: category, mediaKind: mediaKind);
+  }
+
   Future<void> selectMediaKind(LibraryMediaKind mediaKind) async {
     await ref
         .read(storageServiceProvider)

@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io' as io;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:dio/dio.dart';
+
 import '../../../../core/account/account_providers.dart';
 import '../../../../core/account/animewitcher_character_models.dart';
 import '../../../../core/extensions/extension_manager.dart';
@@ -493,7 +495,10 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
         offset: offset,
         limit: pageSize,
       ),
-      SearchDomain.characters => Future<ProviderMediaPage>.value(
+      // Characters have a page type of their own, and "all" is assembled
+      // from the others by _loadEverything.
+      SearchDomain.characters ||
+      SearchDomain.all => Future<ProviderMediaPage>.value(
         const ProviderMediaPage(
           items: <MultimediaItem>[],
           nextOffset: 0,
@@ -527,6 +532,56 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     return provider.getCharactersPage(page: page);
   }
 
+  /// The first page of each category at once, for [SearchDomain.all]: one
+  /// result group per category that found something, named after it, and
+  /// the characters beside them. A category that fails is left out rather
+  /// than failing the rest; only when every one fails is it an error. There
+  /// is no next page — each group links to its own category for more.
+  Future<SearchAggregateState> _loadEverything(
+    AnimeWitcherProvider provider,
+  ) async {
+    const media = <SearchDomain>[
+      SearchDomain.anime,
+      SearchDomain.animation,
+      SearchDomain.manga,
+    ];
+    Future<ProviderMediaPage?> mediaPage(SearchDomain domain) =>
+        _loadPage(provider, 0, domain).then<ProviderMediaPage?>(
+          (page) => page,
+          onError: (Object e) {
+            debugPrint('[SEARCH ALL] ${domain.name} failed: $e');
+            return null;
+          },
+        );
+    final characterPage = _loadCharacterPage(provider, 0)
+        .then<AnimeWitcherCharacterPage?>(
+          (page) => page,
+          onError: (Object e) {
+            debugPrint('[SEARCH ALL] characters failed: $e');
+            return null;
+          },
+        );
+    final pages = await Future.wait(media.map(mediaPage));
+    final characters = await characterPage;
+
+    if (pages.every((page) => page == null) && characters == null) {
+      throw StateError('Every search category failed.');
+    }
+    return SearchAggregateState(
+      results: <ProviderSearchResult>[
+        for (var i = 0; i < media.length; i++)
+          if (pages[i]?.items.isNotEmpty ?? false)
+            ProviderSearchResult(
+              providerId: media[i].name,
+              providerName: media[i].name,
+              results: pages[i]!.items,
+            ),
+      ],
+      characters: characters?.items ?? const <AnimeWitcherCharacterHit>[],
+      isLoading: false,
+    );
+  }
+
   Future<void> _reload({bool clearExisting = false}) async {
     final generation = ++_generation;
     final requestDomain = _domain;
@@ -548,6 +603,13 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
     }
 
     try {
+      if (requestDomain == SearchDomain.all) {
+        final everything = await _loadEverything(provider);
+        if (generation != _generation || requestDomain != _domain) return;
+        state = everything;
+        return;
+      }
+
       if (requestDomain == SearchDomain.characters) {
         final page = await _loadCharacterPage(provider, 0);
         if (generation != _generation || requestDomain != _domain) return;

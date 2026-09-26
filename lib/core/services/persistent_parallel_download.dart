@@ -19,11 +19,12 @@ import '../utils/download_resume.dart';
 const Duration kParallelProgressCoalesceDelay = Duration(seconds: 1);
 
 /// Progress manifests are durable recovery checkpoints, not a telemetry bus.
-/// Persist at most once per second while bytes are flowing; exact completion,
-/// pause and cancel boundaries still persist synchronously. This prevents 5-16
-/// child callbacks from creating a serialized fsync backlog that starves the
-/// parent progress stream.
-const Duration kParallelProgressPersistInterval = Duration(seconds: 1);
+/// Persist live-byte hints at a low cadence while bytes are flowing; exact
+/// pause/cancel boundaries and the final all-parts-complete boundary still
+/// persist synchronously. Individual child completions are already durable in
+/// their part file + TaskRecord and are coalesced here so 5-16 workers cannot
+/// create a serialized fsync backlog that starves the parent progress stream.
+const Duration kParallelProgressPersistInterval = Duration(seconds: 2);
 
 /// Keep a small reserve beyond the remaining staging allocation so assembly
 /// does not consume the filesystem down to its last metadata blocks.
@@ -655,13 +656,7 @@ class PersistentParallelDownload {
     final session = _children[childTaskId];
     if (session == null || session.deleted) return false;
     return session.serialize(() async {
-      _DownloadPart? match;
-      for (final part in session.parts) {
-        if (part.task.taskId == childTaskId) {
-          match = part;
-          break;
-        }
-      }
+      final match = session.partsByTaskId[childTaskId];
       if (match == null) return false;
       if (!match.sourceValidationRequired) return true;
       match.sourceValidationRequired = false;
@@ -890,9 +885,15 @@ class PersistentParallelDownload {
     );
   }
 
-  void _preparePartAttempt(_ParallelSession session, _DownloadPart part) {
+  bool _preparePartAttempt(_ParallelSession session, _DownloadPart part) {
+    final previousGeneration = part.attemptGeneration;
     if (part.attemptGeneration <= 0) part.attemptGeneration = 1;
-    _refreshPartAttemptMetadata(session, part);
+    final metadata = _partAttemptMetadata(session, part);
+    final metadataChanged = part.task.metaData != metadata;
+    if (metadataChanged) {
+      part.task = part.task.copyWith(metaData: metadata);
+    }
+    return previousGeneration != part.attemptGeneration || metadataChanged;
   }
 
   void _invalidatePartAttempt(_ParallelSession session, _DownloadPart part) {
@@ -967,7 +968,7 @@ class PersistentParallelDownload {
               ),
             )
             .toList(growable: false);
-        if (parts.length > kDownloadWorkUnitsMax ||
+        if (parts.length > kDownloadLegacyWorkUnitsMax ||
             parts.any((part) => part.from < 0 || part.to < part.from) ||
             !_validRestoredLayout(parts, declaredTotalBytes)) {
           continue;
@@ -1588,8 +1589,10 @@ class PersistentParallelDownload {
 
         // Give every native enqueue a durable attempt token. Retried/resumed
         // workers keep the same taskId/Range but never the same generation.
-        _preparePartAttempt(session, part);
-        await _persist(session);
+        final attemptCheckpointChanged = _preparePartAttempt(session, part);
+        if (attemptCheckpointChanged) {
+          await _persist(session);
+        }
 
         // Parallel session pumps can consume capacity while this pump awaits
         // record/manifest IO. Revalidate immediately before the synchronous
@@ -1756,11 +1759,38 @@ class PersistentParallelDownload {
   }
 
   Future<void> _afterAdoptedPart(_ParallelSession session) async {
-    await _persist(session);
-    if (session.parts.every((child) => child.complete)) {
+    final allComplete = session.parts.every((child) => child.complete);
+
+    // Exact child completion is already durable in both the part file and the
+    // package TaskRecord. While a parent is actively transferring, coalesce
+    // manifest updates instead of fsyncing the full checkpoint once per Range.
+    // Restore revalidates exact part files before launching anything, so a
+    // process loss inside this short window cannot re-download completed data.
+    if (allComplete || !session.active) {
+      try {
+        await _persist(session);
+      } on FileSystemException catch (error) {
+        if (!_isInsufficientStorageError(error)) rethrow;
+        final target = File(await session.task.filePath());
+        await _handleAssemblyStorageFailure(
+          session,
+          File('${target.path}.assembling'),
+          error: error,
+        );
+        return;
+      }
+    } else {
+      _scheduleProgressPersist(session);
+    }
+
+    if (allComplete) {
       await _assemble(session);
     } else {
       _scheduleAggregateProgress(session);
+      // Most adoption paths release a connection (which already schedules a
+      // pump), but stalled-tail recycling can clear native ownership directly.
+      // Keep this completion-boundary wake-up so that rare path cannot strand
+      // queued tail work. This is not a steady-progress callback.
       _schedulePumpAll();
       _notifyPausedDrainSettled(session);
     }
@@ -2050,7 +2080,11 @@ class PersistentParallelDownload {
     var changed = false;
 
     for (final part in session.parts) {
-      if (part.complete) continue;
+      // Only a native-owned child can change while the parent is active.
+      // Unlaunched ranges are immutable on disk and are reconciled explicitly
+      // during start/restore, so probing them every second only multiplies file
+      // system calls by the total queued work-unit count.
+      if (part.complete || !part.launched) continue;
       try {
         final file = File(await part.task.filePath());
         if (!await file.exists()) continue;
@@ -2518,13 +2552,7 @@ class PersistentParallelDownload {
         return;
       }
 
-      _DownloadPart? part;
-      for (final candidate in session.parts) {
-        if (candidate.task.taskId == chunkTaskId) {
-          part = candidate;
-          break;
-        }
-      }
+      final part = session.partsByTaskId[chunkTaskId];
       if (part == null || part.complete) return;
       // Native background refill tasks are created from a pre-fenced child
       // definition while Dart can be asleep. Adopt that ownership only when
@@ -2637,7 +2665,6 @@ class PersistentParallelDownload {
         await _status(session, TaskStatus.running);
       }
       _scheduleAggregateProgress(session);
-      _schedulePumpAll();
     });
   }
 
@@ -2655,9 +2682,8 @@ class PersistentParallelDownload {
               session.deleted ||
               !identical(_sessions[session.task.taskId], session))
             return;
-          final part = session.parts.firstWhere(
-            (part) => part.task.taskId == update.task.taskId,
-          );
+          final part = session.partsByTaskId[update.task.taskId];
+          if (part == null) return;
           final callbackAttempt = _taskAttemptGeneration(update.task);
           if (callbackAttempt != null &&
               part.attemptGeneration > 0 &&
@@ -2786,7 +2812,6 @@ class PersistentParallelDownload {
             if (session.active) {
               _scheduleAggregateProgress(session);
             }
-            _schedulePumpAll();
             return;
           }
 
@@ -2847,25 +2872,35 @@ class PersistentParallelDownload {
               TaskRecord(part.task, TaskStatus.complete, 1, part.size),
             );
             onPartProgress(session.task.taskId, part.task.taskId, 1);
-            try {
-              await _persist(session);
-            } on FileSystemException catch (error) {
-              if (!_isInsufficientStorageError(error)) rethrow;
-              final target = File(await session.task.filePath());
-              await _handleAssemblyStorageFailure(
-                session,
-                File('${target.path}.assembling'),
-                error: error,
-              );
-              return;
-            }
-            _notifyPausedDrainSettled(session);
-            if (session.active &&
-                session.parts.every((child) => child.complete)) {
-              await _assemble(session);
+
+            final allComplete = session.parts.every(
+              (child) => child.complete,
+            );
+            if (session.active && !allComplete) {
+              // The child file + TaskRecord already make this Range durable.
+              // Fold intermediate completion into the normal checkpoint timer
+              // instead of fsyncing the full manifest once per child.
+              _scheduleProgressPersist(session);
             } else {
+              try {
+                await _persist(session);
+              } on FileSystemException catch (error) {
+                if (!_isInsufficientStorageError(error)) rethrow;
+                final target = File(await session.task.filePath());
+                await _handleAssemblyStorageFailure(
+                  session,
+                  File('${target.path}.assembling'),
+                  error: error,
+                );
+                return;
+              }
+            }
+
+            _notifyPausedDrainSettled(session);
+            if (session.active && allComplete) {
+              await _assemble(session);
+            } else if (session.active) {
               _scheduleAggregateProgress(session);
-              _schedulePumpAll();
             }
             return;
           }
@@ -2875,8 +2910,9 @@ class PersistentParallelDownload {
             _activeConnectionIds.add(part.task.taskId);
             _markConnectionReady(session, part);
             _armTailStallWatch(session, part);
-            await _status(session, TaskStatus.running);
-            _schedulePumpAll();
+            if (!session.parentRunningReported) {
+              await _status(session, TaskStatus.running);
+            }
             return;
           }
 
@@ -3759,11 +3795,14 @@ class _ParallelSession {
     this.parts, {
     this.generation = 0,
     this.resourceValidator,
-  });
+  }) : partsByTaskId = <String, _DownloadPart>{
+         for (final part in parts) part.task.taskId: part,
+       };
 
   ParallelDownloadTask task;
   final File manifest;
   final List<_DownloadPart> parts;
+  final Map<String, _DownloadPart> partsByTaskId;
   bool active = false;
   // Synchronous intent fence: true from the instant pause() is requested until
   // an explicit start/resume begins a new generation.

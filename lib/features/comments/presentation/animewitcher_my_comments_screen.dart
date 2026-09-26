@@ -726,7 +726,7 @@ class _AnimeWitcherMyCommentsScreenState
                             ),
                           if (!_isReviews && comment.spoiler)
                             _statusChip(
-                              Icons.visibility_off_rounded,
+                              Icons.local_fire_department_rounded,
                               _isArabic ? 'حرق' : 'Spoiler',
                               colors.errorContainer,
                               colors.onErrorContainer,

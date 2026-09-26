@@ -11,6 +11,7 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_controller.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_page_cache.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_screen.dart';
+import 'package:animewitcher/features/manga/reader/widgets/manga_reader_settings_panel.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/widgets/manga_paged_reader.dart';
@@ -105,8 +106,6 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     if (waiter != null && !waiter.isCompleted) waiter.complete();
     return emptyPages ? const <MangaPage>[] : pages;
   }
-
-
 }
 
 final class _ReaderManager extends ExtensionManager {
@@ -123,12 +122,19 @@ final class _ReaderSettingsNotifier extends MangaReaderSettingsNotifier {
   MangaReaderSettings build() => const MangaReaderSettings();
 }
 
-final class _OverlayReaderSettingsNotifier
-    extends MangaReaderSettingsNotifier {
+/// Keeps what the reader saves in memory, for reading back.
+final class _MemoryReaderSettingsNotifier extends MangaReaderSettingsNotifier {
   @override
-  MangaReaderSettings build() => const MangaReaderSettings(
-    showNavigationOverlayOnStart: true,
-  );
+  MangaReaderSettings build() => const MangaReaderSettings();
+
+  @override
+  Future<void> setSettings(MangaReaderSettings value) async => state = value;
+}
+
+final class _OverlayReaderSettingsNotifier extends MangaReaderSettingsNotifier {
+  @override
+  MangaReaderSettings build() =>
+      const MangaReaderSettings(showNavigationOverlayOnStart: true);
 }
 
 final class _PerMangaReaderSettingsNotifier
@@ -141,7 +147,6 @@ final class _PerMangaReaderSettingsNotifier
     },
   );
 }
-
 
 final class _ReaderStorage extends StorageService {
   final Map<String, String> values = <String, String>{};
@@ -164,8 +169,7 @@ final class _ReaderStorage extends StorageService {
   }
 }
 
-final class _RecordingReaderProgressRepository
-    extends MangaReadingRepository {
+final class _RecordingReaderProgressRepository extends MangaReadingRepository {
   _RecordingReaderProgressRepository() : super(_ReaderStorage());
 }
 
@@ -184,18 +188,15 @@ void main() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
   });
   test('reader exposes webtoon, paged LTR and paged RTL modes', () {
-    expect(
-      MangaReaderMode.values,
-      <MangaReaderMode>[
-        MangaReaderMode.vertical,
-        MangaReaderMode.pagedLtr,
-        MangaReaderMode.pagedRtl,
-        MangaReaderMode.verticalContinuous,
-        MangaReaderMode.webtoon,
-        MangaReaderMode.horizontalContinuous,
-        MangaReaderMode.horizontalContinuousRtl,
-      ],
-    );
+    expect(MangaReaderMode.values, <MangaReaderMode>[
+      MangaReaderMode.vertical,
+      MangaReaderMode.pagedLtr,
+      MangaReaderMode.pagedRtl,
+      MangaReaderMode.verticalContinuous,
+      MangaReaderMode.webtoon,
+      MangaReaderMode.horizontalContinuous,
+      MangaReaderMode.horizontalContinuousRtl,
+    ]);
   });
 
   test('reader reuses Mangayomi chapter page-list disk cache', () async {
@@ -243,183 +244,198 @@ void main() {
     await second.load();
 
     expect(provider.requestedChapterIds, <String>['cache-c1']);
-    expect(second.pages.map((page) => page.imageUrl), pages.map((page) => page.imageUrl));
-  });
-
-  test('reader refresh bypasses cached page URLs and refetches source', () async {
-    final temp = await Directory.systemTemp.createTemp('aw_reader_refresh_');
-    addTearDown(() => temp.delete(recursive: true));
-
-    final provider = _ReaderProvider();
-    const chapter = MangaChapter(
-      id: 'refresh-c1',
-      mangaId: 'refresh-m1',
-      url: 'https://example.test/chapter/refresh-1',
-      name: 'Chapter refresh',
-      number: 1,
-    );
-    final manga = MultimediaItem(
-      title: 'Refresh Reader Manga',
-      url: 'https://animewitcher.com/manga/refresh-m1',
-      posterUrl: '',
-      contentType: MultimediaContentType.manga,
-      provider: provider.packageName,
-    );
-    final controller = MangaReaderController(
-      provider: provider,
-      progressRepository: _ReaderProgressRepository(),
-      manga: manga,
-      chapter: chapter,
-      chapters: const <MangaChapter>[chapter],
-      pageCache: MangaReaderPageCache(cacheDirectory: temp),
-    );
-    addTearDown(controller.dispose);
-
-    await controller.load();
-    expect(provider.requestedChapterIds, <String>['refresh-c1']);
-
-    await controller.load();
-
     expect(
-      provider.requestedChapterIds,
-      <String>['refresh-c1', 'refresh-c1'],
+      second.pages.map((page) => page.imageUrl),
+      pages.map((page) => page.imageUrl),
     );
   });
+
+  test(
+    'reader refresh bypasses cached page URLs and refetches source',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('aw_reader_refresh_');
+      addTearDown(() => temp.delete(recursive: true));
+
+      final provider = _ReaderProvider();
+      const chapter = MangaChapter(
+        id: 'refresh-c1',
+        mangaId: 'refresh-m1',
+        url: 'https://example.test/chapter/refresh-1',
+        name: 'Chapter refresh',
+        number: 1,
+      );
+      final manga = MultimediaItem(
+        title: 'Refresh Reader Manga',
+        url: 'https://animewitcher.com/manga/refresh-m1',
+        posterUrl: '',
+        contentType: MultimediaContentType.manga,
+        provider: provider.packageName,
+      );
+      final controller = MangaReaderController(
+        provider: provider,
+        progressRepository: _ReaderProgressRepository(),
+        manga: manga,
+        chapter: chapter,
+        chapters: const <MangaChapter>[chapter],
+        pageCache: MangaReaderPageCache(cacheDirectory: temp),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.load();
+      expect(provider.requestedChapterIds, <String>['refresh-c1']);
+
+      await controller.load();
+
+      expect(provider.requestedChapterIds, <String>[
+        'refresh-c1',
+        'refresh-c1',
+      ]);
+    },
+  );
 
   test('expired chapter page lists are reloaded on next open', () async {
     final temp = await Directory.systemTemp.createTemp('aw_reader_expired_');
     addTearDown(() => temp.delete(recursive: true));
     final cache = MangaReaderPageCache(cacheDirectory: temp);
     const chapter = MangaChapter(
-      id: 'expired-c1', mangaId: 'expired-m1',
-      url: 'https://example.test/chapter/expired-1', name: 'Chapter 1',
+      id: 'expired-c1',
+      mangaId: 'expired-m1',
+      url: 'https://example.test/chapter/expired-1',
+      name: 'Chapter 1',
     );
     await cache.put('expired-m1', chapter, const <MangaPage>[
       MangaPage(index: 0, imageUrl: 'https://cdn.example/expired.webp'),
     ]);
     final file = (await temp.list().first) as File;
     final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    data['timestamp'] = DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch;
+    data['timestamp'] = DateTime.now()
+        .subtract(const Duration(days: 1))
+        .millisecondsSinceEpoch;
     await file.writeAsString(jsonEncode(data));
     expect(await cache.get('expired-m1', chapter), isNull);
   });
 
-  test('reader preloads the adjacent chapter after current chapter loads', () async {
-    final temp = await Directory.systemTemp.createTemp('aw_reader_preload_');
-    addTearDown(() => temp.delete(recursive: true));
-    final provider = _ReaderProvider();
-    const first = MangaChapter(
-      id: 'c1',
-      mangaId: 'm1',
-      url: 'https://example.test/chapter/1',
-      name: 'Chapter 1',
-      number: 1,
-    );
-    const second = MangaChapter(
-      id: 'c2',
-      mangaId: 'm1',
-      url: 'https://example.test/chapter/2',
-      name: 'Chapter 2',
-      number: 2,
-    );
-    final manga = MultimediaItem(
-      title: 'Reader Manga',
-      url: 'https://animewitcher.com/manga/m1',
-      posterUrl: '',
-      contentType: MultimediaContentType.manga,
-      provider: provider.packageName,
-    );
-    final controller = MangaReaderController(
-      provider: provider,
-      progressRepository: _ReaderProgressRepository(),
-      manga: manga,
-      chapter: first,
-      chapters: const <MangaChapter>[first, second],
-      pageCache: MangaReaderPageCache(cacheDirectory: temp),
-    );
-    addTearDown(controller.dispose);
+  test(
+    'reader preloads the adjacent chapter after current chapter loads',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('aw_reader_preload_');
+      addTearDown(() => temp.delete(recursive: true));
+      final provider = _ReaderProvider();
+      const first = MangaChapter(
+        id: 'c1',
+        mangaId: 'm1',
+        url: 'https://example.test/chapter/1',
+        name: 'Chapter 1',
+        number: 1,
+      );
+      const second = MangaChapter(
+        id: 'c2',
+        mangaId: 'm1',
+        url: 'https://example.test/chapter/2',
+        name: 'Chapter 2',
+        number: 2,
+      );
+      final manga = MultimediaItem(
+        title: 'Reader Manga',
+        url: 'https://animewitcher.com/manga/m1',
+        posterUrl: '',
+        contentType: MultimediaContentType.manga,
+        provider: provider.packageName,
+      );
+      final controller = MangaReaderController(
+        provider: provider,
+        progressRepository: _ReaderProgressRepository(),
+        manga: manga,
+        chapter: first,
+        chapters: const <MangaChapter>[first, second],
+        pageCache: MangaReaderPageCache(cacheDirectory: temp),
+      );
+      addTearDown(controller.dispose);
 
-    await controller.load();
-    await provider.waitUntilRequested('c2');
+      await controller.load();
+      await provider.waitUntilRequested('c2');
 
-    expect(provider.requestedChapterIds, containsAll(<String>['c1', 'c2']));
-  });
+      expect(provider.requestedChapterIds, containsAll(<String>['c1', 'c2']));
+    },
+  );
 
   test('Mangayomi chapter read action toggles read and unread', () async {
     final progress = _RecordingReaderProgressRepository();
 
-    expect(
-      await progress.toggleRead('m1', 'c1', pageCount: 12),
-      isTrue,
-    );
+    expect(await progress.toggleRead('m1', 'c1', pageCount: 12), isTrue);
     expect(progress.get('m1', 'c1')?.isRead, isTrue);
 
     expect(await progress.toggleRead('m1', 'c1'), isFalse);
     expect(progress.get('m1', 'c1')?.isRead, isFalse);
   });
 
-  test('auto-read duplicate chapters follows Mangayomi reader completion', () async {
-    final provider = _ReaderProvider();
-    final progress = _RecordingReaderProgressRepository();
-    const first = MangaChapter(
-      id: 'c1-a',
-      mangaId: 'm1',
-      url: 'https://example.test/chapter/1-a',
-      name: 'Chapter 1',
-      number: 1,
-    );
-    const duplicate = MangaChapter(
-      id: 'c1-b',
-      mangaId: 'm1',
-      url: 'https://example.test/chapter/1-b',
-      name: 'Chapter 1 duplicate',
-      number: 1,
-    );
-    const second = MangaChapter(
-      id: 'c2',
-      mangaId: 'm1',
-      url: 'https://example.test/chapter/2',
-      name: 'Chapter 2',
-      number: 2,
-    );
-    final manga = MultimediaItem(
-      title: 'Reader Manga',
-      url: 'https://animewitcher.com/manga/m1',
-      posterUrl: '',
-      contentType: MultimediaContentType.manga,
-      provider: provider.packageName,
-    );
-    final controller = MangaReaderController(
-      provider: provider,
-      progressRepository: progress,
-      manga: manga,
-      chapter: first,
-      chapters: const <MangaChapter>[first, duplicate, second],
-      initialMode: MangaReaderMode.pagedRtl,
-    );
-    addTearDown(controller.dispose);
+  test(
+    'auto-read duplicate chapters follows Mangayomi reader completion',
+    () async {
+      final provider = _ReaderProvider();
+      final progress = _RecordingReaderProgressRepository();
+      const first = MangaChapter(
+        id: 'c1-a',
+        mangaId: 'm1',
+        url: 'https://example.test/chapter/1-a',
+        name: 'Chapter 1',
+        number: 1,
+      );
+      const duplicate = MangaChapter(
+        id: 'c1-b',
+        mangaId: 'm1',
+        url: 'https://example.test/chapter/1-b',
+        name: 'Chapter 1 duplicate',
+        number: 1,
+      );
+      const second = MangaChapter(
+        id: 'c2',
+        mangaId: 'm1',
+        url: 'https://example.test/chapter/2',
+        name: 'Chapter 2',
+        number: 2,
+      );
+      final manga = MultimediaItem(
+        title: 'Reader Manga',
+        url: 'https://animewitcher.com/manga/m1',
+        posterUrl: '',
+        contentType: MultimediaContentType.manga,
+        provider: provider.packageName,
+      );
+      final controller = MangaReaderController(
+        provider: provider,
+        progressRepository: progress,
+        manga: manga,
+        chapter: first,
+        chapters: const <MangaChapter>[first, duplicate, second],
+        initialMode: MangaReaderMode.pagedRtl,
+      );
+      addTearDown(controller.dispose);
 
-    await controller.load();
-    controller.setPageIndex(1, autoReadDuplicateChapters: true);
-    await controller.flushProgress();
+      await controller.load();
+      controller.setPageIndex(1, autoReadDuplicateChapters: true);
+      await controller.flushProgress();
 
-    expect(progress.get('m1', 'c1-a')?.isRead, isFalse);
-    expect(progress.get('m1', 'c1-b'), isNull);
+      expect(progress.get('m1', 'c1-a')?.isRead, isFalse);
+      expect(progress.get('m1', 'c1-b'), isNull);
 
-    controller.setPageIndex(2, autoReadDuplicateChapters: true);
-    await controller.flushProgress();
+      controller.setPageIndex(2, autoReadDuplicateChapters: true);
+      await controller.flushProgress();
 
-    expect(progress.get('m1', 'c1-a')?.isRead, isTrue);
-    expect(progress.get('m1', 'c1-b')?.isRead, isTrue);
-    expect(progress.get('m1', 'c2'), isNull);
-  });
+      expect(progress.get('m1', 'c1-a')?.isRead, isTrue);
+      expect(progress.get('m1', 'c1-b')?.isRead, isTrue);
+      expect(progress.get('m1', 'c2'), isNull);
+    },
+  );
 
   test('reader screen rebuilds from controller notifications', () {
-    final source = File(
-      'lib/features/manga/reader/manga_reader_screen.dart',
-    ).readAsStringSync();
+    final source = File('lib/features/manga/reader/manga_reader_screen.dart')
+        .readAsStringSync();
 
-    expect(source, contains('_controller.addListener(_handleControllerChanged)'));
+    expect(
+      source,
+      contains('_controller.addListener(_handleControllerChanged)'),
+    );
     expect(
       source,
       contains('_controller.removeListener(_handleControllerChanged)'),
@@ -451,10 +467,8 @@ void main() {
           pages: pages,
           initialPage: 0,
           onPageChanged: (_) {},
-          pageBuilder: (_, page) => SizedBox(
-            height: 300,
-            child: Text('page-${page.index}'),
-          ),
+          pageBuilder: (_, page) =>
+              SizedBox(height: 300, child: Text('page-${page.index}')),
         ),
       ),
     );
@@ -491,9 +505,7 @@ void main() {
           mangaReadingRepositoryProvider.overrideWithValue(
             _ReaderProgressRepository(),
           ),
-          mangaReaderSettingsProvider.overrideWith(
-            _ReaderSettingsNotifier.new,
-          ),
+          mangaReaderSettingsProvider.overrideWith(_ReaderSettingsNotifier.new),
         ],
         child: MaterialApp(
           locale: const Locale('en'),
@@ -549,7 +561,9 @@ void main() {
     expect(save, 1);
   });
 
-  testWidgets('reader uses the Mangayomi per-manga reading mode', (tester) async {
+  testWidgets('reader uses the Mangayomi per-manga reading mode', (
+    tester,
+  ) async {
     final provider = _ReaderProvider();
     const chapter = MangaChapter(
       id: 'c1',
@@ -588,82 +602,104 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    final modeMenu = tester.widget<PopupMenuButton<MangaReaderMode>>(
-      find.byType(PopupMenuButton<MangaReaderMode>),
+    // The one settings button opens the panel, which starts on this manga's
+    // own mode rather than the default.
+    await tester.tap(
+      find.byKey(const ValueKey<String>('manga-reader-settings-button')),
     );
-    expect(modeMenu.initialValue, MangaReaderMode.webtoon);
+    await tester.pump();
+    final panel = tester.widget<MangaReaderSettingsPanel>(
+      find.byType(MangaReaderSettingsPanel),
+    );
+    expect(panel.mode, MangaReaderMode.webtoon);
   });
 
-  testWidgets('reader mode popup uses Arabic labels and top bar has no bookmark', (
-    tester,
-  ) async {
-    final provider = _ReaderProvider(emptyPages: true);
-    const chapter = MangaChapter(
-      id: 'c1',
-      mangaId: 'm1',
-      url: 'https://example.test/chapter/1',
-      name: 'الفصل 1',
-    );
-    final manga = MultimediaItem(
-      title: 'Reader Manga',
-      url: 'https://animewitcher.com/manga/m1',
-      posterUrl: '',
-      contentType: MultimediaContentType.manga,
-      provider: provider.packageName,
-    );
+  testWidgets(
+    'reader settings panel uses Arabic labels and top bar has no bookmark',
+    (tester) async {
+      final provider = _ReaderProvider(emptyPages: true);
+      const chapter = MangaChapter(
+        id: 'c1',
+        mangaId: 'm1',
+        url: 'https://example.test/chapter/1',
+        name: 'الفصل 1',
+      );
+      final manga = MultimediaItem(
+        title: 'Reader Manga',
+        url: 'https://animewitcher.com/manga/m1',
+        posterUrl: '',
+        contentType: MultimediaContentType.manga,
+        provider: provider.packageName,
+      );
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
-          mangaReadingRepositoryProvider.overrideWithValue(
-            _ReaderProgressRepository(),
-          ),
-          mangaReaderSettingsProvider.overrideWith(
-            _ReaderSettingsNotifier.new,
-          ),
-        ],
-        child: MaterialApp(
-          locale: const Locale('ar'),
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: MangaReaderScreen(
-            manga: manga,
-            chapter: chapter,
-            chapters: const <MangaChapter>[chapter],
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            extensionManagerProvider.overrideWith(
+              () => _ReaderManager(provider),
+            ),
+            mangaReadingRepositoryProvider.overrideWithValue(
+              _ReaderProgressRepository(),
+            ),
+            mangaReaderSettingsProvider.overrideWith(
+              _ReaderSettingsNotifier.new,
+            ),
+          ],
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: MangaReaderScreen(
+              manga: manga,
+              chapter: chapter,
+              chapters: const <MangaChapter>[chapter],
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pump();
-    await tester.pump();
+      );
+      await tester.pump();
+      await tester.pump();
 
-    expect(find.byIcon(Icons.bookmark_rounded), findsNothing);
-    expect(find.byIcon(Icons.bookmark_border_rounded), findsNothing);
-    expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.bookmark_rounded), findsNothing);
+      expect(find.byIcon(Icons.bookmark_border_rounded), findsNothing);
+      expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
 
-    final menuFinder = find.byType(PopupMenuButton<MangaReaderMode>);
-    final menu = tester.widget<PopupMenuButton<MangaReaderMode>>(menuFinder);
-    final entries = menu
-        .itemBuilder(tester.element(menuFinder))
-        .cast<PopupMenuItem<MangaReaderMode>>();
-    final labels = entries
-        .map((entry) => (entry.child as Text).data)
-        .toList(growable: false);
+      // The mode's name shows for a moment as the reader opens; let it go.
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump(const Duration(milliseconds: 300));
 
-    expect(
-      labels,
-      <String>[
-        'عمودي',
-        'من اليسار لليمين',
-        'من اليمين لليسار',
-        'عمودي مستمر',
-        'ويب تون',
-        'أفقي مستمر',
-        'أفقي مستمر (RTL)',
-      ],
-    );
-  });
+      // The reading modes live in the settings panel now, in Arabic.
+      await tester.tap(
+        find.byKey(const ValueKey<String>('manga-reader-settings-button')),
+      );
+      await tester.pump();
+      // The tab and the heading under it.
+      expect(find.text('وضع القراءة'), findsNWidgets(2));
+      expect(
+        find.byKey(const ValueKey<String>('manga-reader-choice-mode-default')),
+        findsOneWidget,
+      );
+      // Each mode under the name the reader has always given it.
+      for (final (mode, label) in <(String, String)>[
+        ('vertical', 'عمودي'),
+        ('pagedLtr', 'من اليسار لليمين'),
+        ('pagedRtl', 'من اليمين لليسار'),
+        ('verticalContinuous', 'عمودي مستمر'),
+        ('webtoon', 'ويب تون'),
+        ('horizontalContinuous', 'أفقي مستمر'),
+        ('horizontalContinuousRtl', 'أفقي مستمر (RTL)'),
+      ]) {
+        expect(
+          find.descendant(
+            of: find.byKey(ValueKey<String>('manga-reader-choice-mode-$mode')),
+            matching: find.text(label),
+          ),
+          findsOneWidget,
+          reason: label,
+        );
+      }
+    },
+  );
 
   testWidgets('page indicator is a compact LTR dark pill at the screen edge', (
     tester,
@@ -696,17 +732,18 @@ void main() {
     expect(label.textAlign, TextAlign.center);
 
     final directionality = tester.widget<Directionality>(
-      find.ancestor(
-        of: find.text('7/24'),
-        matching: find.byType(Directionality),
-      ).first,
+      find
+          .ancestor(
+            of: find.text('7/24'),
+            matching: find.byType(Directionality),
+          )
+          .first,
     );
     expect(directionality.textDirection, TextDirection.ltr);
 
-    final containerFinder = find.ancestor(
-      of: find.text('7/24'),
-      matching: find.byType(Container),
-    ).first;
+    final containerFinder = find
+        .ancestor(of: find.text('7/24'), matching: find.byType(Container))
+        .first;
     final container = tester.widget<Container>(containerFinder);
     expect(container.decoration, isA<BoxDecoration>());
     expect(tester.getRect(containerFinder).bottom, 844);
@@ -720,7 +757,9 @@ void main() {
     );
   });
 
-  testWidgets('reader uses Mangayomi navigation overlay widget', (tester) async {
+  testWidgets('reader uses Mangayomi navigation overlay widget', (
+    tester,
+  ) async {
     final provider = _ReaderProvider(emptyPages: true);
     const chapter = MangaChapter(
       id: 'c1',
@@ -761,128 +800,6 @@ void main() {
     expect(find.byType(MangaReaderNavigationOverlay), findsOneWidget);
   });
 
-  testWidgets('reader owns the persistent iOS header without details actions', (
-    tester,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    final staleHeader = applePersistentGlassHeaderController.value;
-    if (staleHeader != null) {
-      applePersistentGlassHeaderController.hide(staleHeader.owner);
-    }
-
-    final detailsOwner = Object();
-    applePersistentGlassHeaderController.show(
-      ApplePersistentGlassHeaderConfig(
-        owner: detailsOwner,
-        onBack: () {},
-        trailingButtons: <AppleLiquidGlassToolbarButton>[
-          AppleLiquidGlassToolbarButton(
-            icon: Icons.favorite_border_rounded,
-            onPressed: () {},
-          ),
-          AppleLiquidGlassToolbarButton(
-            icon: Icons.bookmark_border_rounded,
-            onPressed: () {},
-          ),
-        ],
-      ),
-    );
-
-    final provider = _ReaderProvider(emptyPages: true);
-    const chapter = MangaChapter(
-      id: 'c1',
-      mangaId: 'm1',
-      url: 'https://example.test/chapter/1',
-      name: 'الفصل 1',
-      number: 1,
-    );
-    final manga = MultimediaItem(
-      title: 'Reader Manga',
-      url: 'https://animewitcher.com/manga/m1',
-      posterUrl: '',
-      contentType: MultimediaContentType.manga,
-      provider: provider.packageName,
-    );
-
-    try {
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            extensionManagerProvider.overrideWith(() => _ReaderManager(provider)),
-            mangaReadingRepositoryProvider.overrideWithValue(
-              _ReaderProgressRepository(),
-            ),
-            mangaReaderSettingsProvider.overrideWith(
-              _ReaderSettingsNotifier.new,
-            ),
-          ],
-          child: MaterialApp(
-            home: MangaReaderScreen(
-              manga: manga,
-              chapter: chapter,
-              chapters: const <MangaChapter>[chapter],
-            ),
-          ),
-        ),
-      );
-      await tester.pump();
-      await tester.pump();
-
-      final header = applePersistentGlassHeaderController.value;
-      expect(header, isNotNull);
-      expect(header!.route?.isCurrent, isTrue);
-      expect(header.onBack, isNotNull);
-      expect(header.trailingButtons, isEmpty);
-
-      final readerGesture = find.byKey(
-        const ValueKey<String>('manga-reader-image-actions-gesture'),
-      );
-
-      await tester.tap(readerGesture);
-      await tester.pump();
-      await tester.pump();
-
-      final afterSingleTap = applePersistentGlassHeaderController.value;
-      expect(afterSingleTap, isNotNull);
-      expect(afterSingleTap!.onBack, isNotNull);
-
-      await _doubleTap(tester, readerGesture);
-      await tester.pump();
-      await tester.pump();
-
-      final hiddenByDoubleTap = applePersistentGlassHeaderController.value;
-      expect(hiddenByDoubleTap, isNotNull);
-      expect(hiddenByDoubleTap!.owner, isNot(same(detailsOwner)));
-      expect(hiddenByDoubleTap.onBack, isNull);
-      expect(hiddenByDoubleTap.trailingButtons, isEmpty);
-
-      await _doubleTap(tester, readerGesture);
-      await tester.pump();
-      await tester.pump();
-
-      final visibleAgain = applePersistentGlassHeaderController.value;
-      expect(visibleAgain, isNotNull);
-      expect(visibleAgain!.onBack, isNotNull);
-
-      await tester.longPress(readerGesture);
-      await tester.pump();
-      await tester.pump();
-
-      final hiddenByLongPress = applePersistentGlassHeaderController.value;
-      expect(hiddenByLongPress, isNotNull);
-      expect(hiddenByLongPress!.onBack, isNull);
-    } finally {
-      final header = applePersistentGlassHeaderController.value;
-      if (header != null) {
-        applePersistentGlassHeaderController.hide(header.owner);
-      }
-      applePersistentGlassHeaderController.hide(detailsOwner);
-      debugDefaultTargetPlatformOverride = null;
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump();
-    }
-  });
-
   testWidgets('reader chrome paints through the top and bottom safe areas', (
     tester,
   ) async {
@@ -911,9 +828,7 @@ void main() {
           mangaReadingRepositoryProvider.overrideWithValue(
             _ReaderProgressRepository(),
           ),
-          mangaReaderSettingsProvider.overrideWith(
-            _ReaderSettingsNotifier.new,
-          ),
+          mangaReaderSettingsProvider.overrideWith(_ReaderSettingsNotifier.new),
         ],
         child: MaterialApp(
           home: MediaQuery(
@@ -933,32 +848,27 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    final topChrome = find.byWidgetPredicate(
-      (widget) =>
-          widget is Material &&
-          widget.color == Colors.black.withValues(alpha: 0.82),
+    // The bars take the theme's colours now; they are found by name.
+    final topChrome = find.byKey(
+      const ValueKey<String>('manga-reader-top-chrome'),
     );
-    final bottomChrome = find.byWidgetPredicate(
-      (widget) =>
-          widget is Material &&
-          widget.color == Colors.black.withValues(alpha: 0.86),
+    final bottomChrome = find.byKey(
+      const ValueKey<String>('manga-reader-page-bar'),
     );
 
     expect(topChrome, findsOneWidget);
     expect(bottomChrome, findsOneWidget);
-    expect(tester.getRect(topChrome).top, 0);
-    expect(tester.getRect(bottomChrome).bottom, 844);
+    // Floating, inside the safe areas: clear of the status bar and the
+    // gesture bar rather than running under them.
+    expect(tester.getRect(topChrome).top, greaterThanOrEqualTo(40));
+    expect(tester.getRect(bottomChrome).bottom, lessThanOrEqualTo(844 - 30));
   });
 
   test('reader retry button sits slightly right of center', () {
-    final source = File(
-      'lib/features/manga/reader/manga_reader_screen.dart',
-    ).readAsStringSync();
+    final source = File('lib/features/manga/reader/manga_reader_screen.dart')
+        .readAsStringSync();
 
-    expect(
-      source,
-      contains("offset: const Offset(20, 0)"),
-    );
+    expect(source, contains("offset: const Offset(20, 0)"));
   });
 
   test('reader image failures are manual retry only and manga diagnostics are removed', () {
@@ -980,5 +890,183 @@ void main() {
       File('lib/core/services/manga_reader_diagnostic_log.dart').existsSync(),
       isFalse,
     );
+  });
+
+  group('Mihon bar', () {
+    Future<ProviderContainer> pumpReader(WidgetTester tester) async {
+      final provider = _ReaderProvider(emptyPages: true);
+      const chapter = MangaChapter(
+        id: 'c1',
+        mangaId: 'm1',
+        url: 'https://example.test/chapter/1',
+        name: 'الفصل 1',
+      );
+      final manga = MultimediaItem(
+        title: 'Reader Manga',
+        url: 'https://animewitcher.com/manga/m1',
+        posterUrl: '',
+        contentType: MultimediaContentType.manga,
+        provider: provider.packageName,
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            extensionManagerProvider.overrideWith(
+              () => _ReaderManager(provider),
+            ),
+            mangaReadingRepositoryProvider.overrideWithValue(
+              _ReaderProgressRepository(),
+            ),
+            mangaReaderSettingsProvider.overrideWith(
+              _MemoryReaderSettingsNotifier.new,
+            ),
+          ],
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: MangaReaderScreen(
+              manga: manga,
+              chapter: chapter,
+              chapters: const <MangaChapter>[chapter],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      return ProviderScope.containerOf(
+        tester.element(find.byType(MangaReaderScreen)),
+      );
+    }
+
+    testWidgets('names the reading mode as the reader opens', (tester) async {
+      await pumpReader(tester);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey<String>('manga-reader-toast')),
+          matching: find.text('عمودي'),
+        ),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        find.byKey(const ValueKey<String>('manga-reader-toast')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('chapter buttons around the page slider, tools below', (
+      tester,
+    ) async {
+      final container = await pumpReader(tester);
+      for (final key in <String>[
+        'manga-reader-previous-chapter',
+        'manga-reader-page-pill',
+        'manga-reader-next-chapter',
+        'manga-reader-bar-mode',
+        'manga-reader-bar-rotate',
+        'manga-reader-bar-crop',
+        'manga-reader-settings-button',
+      ]) {
+        expect(find.byKey(ValueKey<String>(key)), findsOneWidget, reason: key);
+      }
+
+      await tester.tap(
+        find.byKey(const ValueKey<String>('manga-reader-bar-crop')),
+      );
+      await tester.pump();
+      expect(container.read(mangaReaderSettingsProvider).cropBorders, isTrue);
+
+      // The screen's turning, for this manga, named as it changes.
+      await tester.tap(
+        find.byKey(const ValueKey<String>('manga-reader-bar-rotate')),
+      );
+      await tester.pump();
+      expect(
+        container.read(mangaReaderSettingsProvider).orientationForManga('m1'),
+        MangaReaderOrientation.portrait,
+      );
+      expect(find.text('الشاشة طولية'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey<String>('manga-reader-bar-mode')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(
+        find.byKey(const ValueKey<String>('manga-reader-bar-mode-webtoon')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(
+        container.read(mangaReaderSettingsProvider).modeForManga('m1'),
+        MangaReaderMode.webtoon,
+      );
+    });
+
+    testWidgets('scrolling the settings sheet keeps it open', (tester) async {
+      await pumpReader(tester);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.tap(
+        find.byKey(const ValueKey<String>('manga-reader-settings-button')),
+      );
+      await tester.pump();
+      final sheet = find.byKey(
+        const ValueKey<String>('manga-reader-settings-panel'),
+      );
+      expect(sheet, findsOneWidget);
+
+      await tester.drag(
+        find.descendant(of: sheet, matching: find.byType(Scrollable)).first,
+        const Offset(0, -300),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(sheet, findsOneWidget);
+    });
+
+    testWidgets('a computer has no rotate button', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        await pumpReader(tester);
+        expect(
+          find.byKey(const ValueKey<String>('manga-reader-bar-rotate')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey<String>('manga-reader-bar-crop')),
+          findsOneWidget,
+        );
+        await tester.pump(const Duration(seconds: 3));
+        // Nor the phone's options: system bars, keeping awake, long taps.
+        await tester.tap(
+          find.byKey(const ValueKey<String>('manga-reader-settings-button')),
+        );
+        await tester.pump();
+        await tester.tap(
+          find.byKey(const ValueKey<String>('manga-reader-panel-tab-general')),
+        );
+        await tester.pump();
+        for (final key in <String>[
+          'fullscreen',
+          'keep-on',
+          'long-tap-actions',
+        ]) {
+          expect(
+            find.byKey(ValueKey<String>('manga-reader-switch-$key')),
+            findsNothing,
+            reason: key,
+          );
+        }
+        expect(
+          find.byKey(const ValueKey<String>('manga-reader-switch-page-number')),
+          findsOneWidget,
+        );
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
   });
 }

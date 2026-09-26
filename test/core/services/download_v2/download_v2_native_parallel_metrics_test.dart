@@ -101,6 +101,33 @@ void main() {
   });
 
 
+  test('iOS V2 child progress is throttled before the Flutter bridge', () {
+    final source = File(
+      'ios/Runner/DownloadNativeWaitingQueue.swift',
+    ).readAsStringSync();
+    final start = source.indexOf(
+      'private static func postV2ParallelChunkMetric',
+    );
+    final end = source.indexOf(
+      'private static func handleSupportedPluginStatus',
+      start,
+    );
+    expect(start, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(start));
+
+    final v2Bridge = source.substring(start, end);
+    expect(v2Bridge, contains('var shouldBridgeToDart = false'));
+    expect(v2Bridge, contains('now - lastBridge >= chunkBridgeInterval'));
+    expect(v2Bridge, contains('else if !appIsBackground'));
+    expect(v2Bridge, contains('if shouldBridgeToDart'));
+    expect(
+      v2Bridge,
+      contains('if completed || statusOrdinal != nil'),
+      reason: 'pause/completion transitions must never be sampled away',
+    );
+  });
+
+
   test('V2 persists generation-fenced native refill plans before suspension', () {
     final gateway = File(
       'lib/core/services/download_v2/background_downloader_gateway.dart',

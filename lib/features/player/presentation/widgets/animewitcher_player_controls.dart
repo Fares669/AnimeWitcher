@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart' show kDoubleTapSlop, kDoubleTapTimeout;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:go_router/go_router.dart';
@@ -16,6 +17,7 @@ import '../../../../l10n/generated/app_localizations.dart';
 import '../player_controller.dart';
 import '../player_shortcuts.dart';
 import '../../../details/presentation/playback_launcher.dart';
+import '../../../details/presentation/source_picker.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
@@ -30,6 +32,7 @@ import 'player_side_panel.dart';
 import 'player_bottom_sheets.dart';
 import 'player_osd_overlay.dart';
 import 'skip_segment_overlay.dart';
+import 'player_settings_panel.dart';
 import 'hotstar_player_style.dart';
 import '../player_platform_service.dart';
 import '../player_pip.dart';
@@ -117,6 +120,9 @@ class AnimeWitcherPlayerControlsState
   /// showing and the button looked dead.
   int _resizeMode = 0;
 
+  /// Whether the desktop ⚙ panel (picture and speed) is open.
+  bool _settingsOpen = false;
+
   static const List<BoxFit> _resizeModes = <BoxFit>[
     BoxFit.contain,
     BoxFit.cover,
@@ -139,6 +145,30 @@ class AnimeWitcherPlayerControlsState
 
   late final PlayerPlatformService _platformService;
   Offset? _tapPosition;
+
+  /// Double taps are told apart by hand. A double-tap recognizer holds every
+  /// tap under it for the double-tap timeout to see whether a second comes,
+  /// which made each button, and each tap on the picture, answer about a
+  /// third of a second late.
+  DateTime? _lastTapAt;
+  Offset? _lastTapPoint;
+  bool _visibleBeforeTap = false;
+
+  /// True, and forgets the first, when [details] completes a double tap.
+  bool _isSecondTap(TapUpDetails details) {
+    final now = DateTime.now();
+    final last = _lastTapAt;
+    final point = _lastTapPoint;
+    final second =
+        last != null &&
+        point != null &&
+        now.difference(last) <= kDoubleTapTimeout &&
+        (details.globalPosition - point).distance <= kDoubleTapSlop;
+    _lastTapAt = second ? null : now;
+    _lastTapPoint = second ? null : details.globalPosition;
+    return second;
+  }
+
   Duration _animDuration = HotstarPlayerStyle.controlFadeDuration;
   bool _isFullscreen = false;
   bool get isFullscreen => _isFullscreen;
@@ -658,7 +688,7 @@ class AnimeWitcherPlayerControlsState
   }
 
   void _toggleVisibility() {
-    _animDuration = const Duration(milliseconds: 300);
+    _animDuration = HotstarPlayerStyle.controlFadeDuration;
     setState(() {
       _isVisible = !_isVisible;
     });
@@ -965,6 +995,220 @@ class AnimeWitcherPlayerControlsState
     onUserInteraction();
   }
 
+  /// Opens or closes the desktop ⚙ panel — its button, and the S key.
+  void toggleSettingsPanel() {
+    setState(() => _settingsOpen = !_settingsOpen);
+    if (_settingsOpen) {
+      // Held open while a choice is being made, not hidden mid-click.
+      _cancelHideTimer();
+    } else {
+      onUserInteraction();
+    }
+  }
+
+  /// Sets the picture size to one of the modes directly, as the ⚙ panel
+  /// does, rather than stepping through them.
+  void setResizeMode(int index) {
+    if (index < 0 || index >= _resizeModes.length) return;
+    setState(() => _resizeMode = index);
+    widget.onResize?.call(_resizeModes[index]);
+  }
+
+  Widget _buildSettingsPanel({
+    required bool supportsPlaybackSpeed,
+    required double playbackSpeed,
+    required double maxPlaybackSpeed,
+  }) {
+    final l10n = AppLocalizations.of(context)!;
+    final playerSettings =
+        ref.watch(playerSettingsProvider).asData?.value ??
+        const PlayerSettings();
+    return PlayerSettingsPanel(
+      showAnime4k:
+          playerSettings.anime4kEnabled &&
+          playerSettings.showAnime4kButton &&
+          _anime4kSupported(),
+      anime4kMode: playerSettings.anime4kMode,
+      onAnime4kMode: (mode) async {
+        await ref.read(playerSettingsProvider.notifier).setAnime4kMode(mode);
+        await ref.read(playerControllerProvider.notifier).applyAnime4kShaders();
+      },
+      showResize: playerSettings.showResize,
+      resizeIndex: _resizeMode,
+      resizeLabels: [l10n.fit, l10n.zoom, l10n.stretch],
+      onResize: setResizeMode,
+      showSpeed: supportsPlaybackSpeed && playerSettings.showPlaybackSpeed,
+      speed: playbackSpeed,
+      maxSpeed: maxPlaybackSpeed,
+      onSpeed: (speed) => ref
+          .read(playerControllerProvider.notifier)
+          .setPlaybackSpeed(speed, persist: true),
+      qualityLabel: _currentQualityLabel(),
+      loadQualityChoices: _loadQualityChoices,
+    );
+  }
+
+  /// A desktop button with its keyboard key under it.
+  Widget _withKeyHint(Widget button, String keyName, {bool enabled = true}) =>
+      enabled && _showKeyHints
+      ? Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [button, PlayerKeyHint(keyName)],
+        )
+      : button;
+
+  /// Whether the desktop bar draws each button's key under it; switched off
+  /// in "player controls" for a cleaner bar.
+  bool get _showKeyHints =>
+      ref.watch(
+        playerSettingsProvider.select((s) => s.asData?.value.showKeyHints),
+      ) ??
+      true;
+
+  /// The right end of the bar: picture-in-picture and rotate on a phone or
+  /// tablet, then episodes (E), ⚙ (S) and, on a desktop, fullscreen (F).
+  /// Speed, Anime4K and the picture size are in the ⚙ panel, which is there
+  /// only when it has something in it. Key names show on a desktop only.
+  List<Widget> _compactActions(
+    List<PlayerChromeAction> chromeActions,
+    AppLocalizations l10n, {
+    required bool keyHints,
+  }) {
+    final hasPanel = PlayerSettingsPanel.hasContent(
+      showAnime4k: chromeActions.contains(PlayerChromeAction.anime4k),
+      showResize: chromeActions.contains(PlayerChromeAction.resize),
+      showSpeed: chromeActions.contains(PlayerChromeAction.playbackSpeed),
+      hasQuality: ref.read(playerControllerProvider).currentStream != null,
+    );
+    return [
+      if (chromeActions.contains(PlayerChromeAction.pip))
+        PlayerIconButton(
+          key: const ValueKey<String>('playerPipButton'),
+          icon: LucideIcons.pictureInPicture2200,
+          tooltip: l10n.pip,
+          onPressed: () => unawaited(_enterPip()),
+        ),
+      if (chromeActions.contains(PlayerChromeAction.rotate))
+        PlayerIconButton(
+          icon: LucideIcons.rotateCw200,
+          iconBuilder: (color, size) =>
+              RotateScreenIcon(size: size, color: color),
+          tooltip: l10n.rotate,
+          onPressed: _toggleOrientation,
+        ),
+      if (chromeActions.contains(PlayerChromeAction.episodes))
+        _withKeyHint(
+          PlayerIconButton(
+            icon: LucideIcons.listVideo200,
+            tooltip: l10n.episodes,
+            onPressed: openEpisodesPanel,
+          ),
+          'E',
+          enabled: keyHints,
+        ),
+      if (hasPanel)
+        _withKeyHint(
+          PlayerIconButton(
+            key: const ValueKey<String>('playerSettingsButton'),
+            icon: LucideIcons.settings200,
+            tooltip: appText(context, english: 'Settings', arabic: 'الإعدادات'),
+            onPressed: toggleSettingsPanel,
+            highlight: _settingsOpen,
+          ),
+          'S',
+          enabled: keyHints,
+        ),
+      if (chromeActions.contains(PlayerChromeAction.desktopFullscreen))
+        _withKeyHint(
+          PlayerIconButton(
+            icon: _isFullscreen
+                ? LucideIcons.minimize200
+                : LucideIcons.maximize200,
+            tooltip: _isFullscreen ? l10n.windowed : l10n.fullscreen,
+            onPressed: toggleFullscreen,
+          ),
+          'F',
+          enabled: keyHints,
+        ),
+    ];
+  }
+
+  /// "1080p · PD": a source's quality and server, as the picker names them.
+  static String _sourceLabel(StreamResult stream) => [
+    if ((stream.quality ?? '').trim().isNotEmpty)
+      streamSourceQualityLabel(stream),
+    if (stream.source.trim().isNotEmpty) stream.source.trim(),
+  ].join(' · ');
+
+  /// The quality number alone ("1080" from "1080p"), for telling which
+  /// listed source is the one playing: the list holds server links, the
+  /// player the stream each resolved to, so their URLs never match.
+  static String _qualityDigits(String? quality) =>
+      (quality ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+
+  String? _currentQualityLabel() {
+    final current = ref.watch(
+      playerControllerProvider.select((s) => s.currentStream),
+    );
+    if (current == null) return null;
+    final label = _sourceLabel(current);
+    return label.isEmpty ? '—' : label;
+  }
+
+  /// Every source the episode has, fetched when the quality list opens —
+  /// each quality from each server, as the picker before playback lists
+  /// them. Choosing one switches to it and keeps the position.
+  Future<List<PlayerPanelChoice>> _loadQualityChoices() async {
+    final controller = ref.read(playerControllerProvider.notifier);
+    final current = ref.read(playerControllerProvider).currentStream;
+    List<StreamResult> sources;
+    try {
+      sources = await controller.episodeSources();
+    } catch (_) {
+      sources = const <StreamResult>[];
+    }
+    return [
+      for (final group in groupStreamSourcesByQuality(sources))
+        for (final source in group.sources)
+          PlayerPanelChoice(
+            label: source.source.trim().isEmpty ? '—' : source.source.trim(),
+            sectionLabel: group.qualityLabel,
+            selected:
+                current != null &&
+                current.source.trim() == source.source.trim() &&
+                _qualityDigits(current.quality) ==
+                    _qualityDigits(source.quality),
+            onTap: () async {
+              final ok = await controller.switchToSource(source);
+              if (!ok && mounted) {
+                ref
+                    .read(playerGestureHandlerProvider.notifier)
+                    .showToast(
+                      appText(
+                        context,
+                        english: 'This source could not be played',
+                        arabic: 'تعذر تشغيل هذا المصدر',
+                      ),
+                      LucideIcons.circleAlert200,
+                    );
+              }
+            },
+          ),
+    ];
+  }
+
+  bool _anime4kSupported() => anime4kAvailableOn(
+    isNativePlatform:
+        Platform.isMacOS ||
+        Platform.isWindows ||
+        Platform.isLinux ||
+        Platform.isAndroid ||
+        Platform.isIOS,
+    usingAdaptiveBackend: ref.watch(
+      playerControllerProvider.select((s) => s.useExoPlayer),
+    ),
+  );
+
   void cycleResize() {
     setState(() {
       _resizeMode = (_resizeMode + 1) % _resizeModes.length;
@@ -1078,6 +1322,7 @@ class AnimeWitcherPlayerControlsState
                 LucideIcons.chevronsLeft200,
                 color: Colors.white,
                 size: 34,
+                shadows: HotstarPlayerStyle.glyphShadows,
               ),
             Text(
               label,
@@ -1086,6 +1331,7 @@ class AnimeWitcherPlayerControlsState
                 fontWeight: FontWeight.w700,
                 fontSize: 28,
                 fontFeatures: [FontFeature.tabularFigures()],
+                shadows: HotstarPlayerStyle.glyphShadows,
               ),
             ),
             if (!_isSeekingLeft)
@@ -1093,6 +1339,7 @@ class AnimeWitcherPlayerControlsState
                 LucideIcons.chevronsRight200,
                 color: Colors.white,
                 size: 34,
+                shadows: HotstarPlayerStyle.glyphShadows,
               ),
           ],
         ),
@@ -1191,6 +1438,11 @@ class AnimeWitcherPlayerControlsState
     final uiPhase = ref.watch(
       playerControllerProvider.select((s) => s.uiPhase),
     );
+    final showSeekButtons =
+        ref.watch(
+          playerSettingsProvider.select((s) => s.asData?.value.showSeekButtons),
+        ) ??
+        true;
     final seekDuration =
         ref.watch(
           playerSettingsProvider.select((s) => s.asData?.value.seekDuration),
@@ -1241,14 +1493,24 @@ class AnimeWitcherPlayerControlsState
         onHorizontalDragStart: _handleHorizontalDragStart,
         onHorizontalDragUpdate: _handleHorizontalDragUpdate,
         onHorizontalDragEnd: _handleHorizontalDragEnd,
-        onDoubleTapDown: (d) => _tapPosition = d.globalPosition,
-        onDoubleTap: _handleDoubleTap,
         onLongPressStart: (_) => _startTouchSpeedHold(),
         onLongPressEnd: (_) => _endTouchSpeedHold(),
         onLongPressCancel: _endTouchSpeedHold,
         child: GestureDetector(
-          onTap: () {
+          onTapUp: (details) {
             if (_panelOpen) return; // the panel's scrim owns dismiss taps
+            if (_isSecondTap(details)) {
+              // The first tap already showed or hid the controls at once;
+              // put them back as they were, then seek or go fullscreen.
+              if (_isVisible != _visibleBeforeTap && !_isLocked) {
+                setState(() => _isVisible = _visibleBeforeTap);
+                widget.onVisibilityChanged?.call(_isVisible);
+              }
+              _tapPosition = details.globalPosition;
+              unawaited(_handleDoubleTap());
+              return;
+            }
+            _visibleBeforeTap = _isVisible;
             final gestureState = ref.read(playerGestureHandlerProvider);
             if (gestureState.showOSD) {
               ref.read(playerGestureHandlerProvider.notifier).dismissOSD();
@@ -1304,17 +1566,19 @@ class AnimeWitcherPlayerControlsState
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              PlayerSeekButton(
-                                forward: false,
-                                seconds: seekDuration,
-                                tooltip: appText(
-                                  context,
-                                  english: 'Rewind ${seekDuration}s',
-                                  arabic: 'إرجاع $seekDuration ثوانٍ',
+                              if (showSeekButtons) ...[
+                                PlayerSeekButton(
+                                  forward: false,
+                                  seconds: seekDuration,
+                                  tooltip: appText(
+                                    context,
+                                    english: 'Rewind ${seekDuration}s',
+                                    arabic: 'إرجاع $seekDuration ثوانٍ',
+                                  ),
+                                  onPressed: () => triggerSeek(true),
                                 ),
-                                onPressed: () => triggerSeek(true),
-                              ),
-                              const SizedBox(width: 28),
+                                const SizedBox(width: 28),
+                              ],
                               PlayerPlayPauseButton(
                                 player: widget.player,
                                 videoViewController: widget.videoViewController,
@@ -1323,17 +1587,19 @@ class AnimeWitcherPlayerControlsState
                                 size: 82,
                                 onPressed: _togglePlay,
                               ),
-                              const SizedBox(width: 28),
-                              PlayerSeekButton(
-                                forward: true,
-                                seconds: seekDuration,
-                                tooltip: appText(
-                                  context,
-                                  english: 'Forward ${seekDuration}s',
-                                  arabic: 'تقديم $seekDuration ثوانٍ',
+                              if (showSeekButtons) ...[
+                                const SizedBox(width: 28),
+                                PlayerSeekButton(
+                                  forward: true,
+                                  seconds: seekDuration,
+                                  tooltip: appText(
+                                    context,
+                                    english: 'Forward ${seekDuration}s',
+                                    arabic: 'تقديم $seekDuration ثوانٍ',
+                                  ),
+                                  onPressed: () => triggerSeek(false),
                                 ),
-                                onPressed: () => triggerSeek(false),
-                              ),
+                              ],
                             ],
                           ),
                         ),
@@ -1398,30 +1664,71 @@ class AnimeWitcherPlayerControlsState
                     isPlaying: _isPlaying,
                   ),
 
+                // Desktop ⚙ panel: picture and speed choices, above the bar
+                // at its right end. A click anywhere else closes it.
+                if (_settingsOpen && !_isLocked) ...[
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () => setState(() => _settingsOpen = false),
+                    ),
+                  ),
+                  Positioned(
+                    right: 20,
+                    // Above the bar: a phone's bar is much shorter.
+                    bottom: MediaQuery.sizeOf(context).shortestSide < 600
+                        ? 92
+                        : HotstarPlayerStyle.bottomChromeHeight + 8,
+                    child: _buildSettingsPanel(
+                      supportsPlaybackSpeed: supportsPlaybackSpeed,
+                      playbackSpeed: playbackSpeed,
+                      maxPlaybackSpeed: maxPlaybackSpeed,
+                    ),
+                  ),
+                ],
+
                 // Skip Segment Overlay (Skip Intro / Skip Recap / Skip Outro)
                 // Suppressed while the next-episode prompt is active.
+                // Hidden, not removed, while the ⚙ panel is open: both sit at
+                // the bottom right. Taking it out of the tree lost track of the
+                // segment it was in, and closing the panel left the button gone
+                // for the rest of the opening. The overlay places itself with
+                // a Positioned, so it keeps a Stack of its own to sit in:
+                // wrapped directly, release builds paint the grey error box
+                // over the whole player and it swallows every tap.
                 if (!showNextEpOverlay && skipSegments.isNotEmpty)
-                  SkipSegmentOverlay(
-                    focusNode: _skipFocusNode,
-                    onActiveSegmentChanged: (active) {
-                      if (mounted) {
-                        setState(() {
-                          _isSkipActive = active;
-                        });
-                      }
-                    },
-                    player: widget.player,
-                    videoViewController: widget.videoViewController,
-                    skipSegments: skipSegments,
-                    isTv: _isTv,
-                    controlsVisible: _isVisible,
-                    onFocusReturned: () {
-                      if (_isVisible) {
-                        _playFocusNode.requestFocus();
-                      } else {
-                        _returnFocusToRoot();
-                      }
-                    },
+                  Positioned.fill(
+                    child: Visibility(
+                      visible: !_settingsOpen,
+                      maintainState: true,
+                      maintainAnimation: true,
+                      child: Stack(
+                        children: [
+                          SkipSegmentOverlay(
+                            focusNode: _skipFocusNode,
+                            onActiveSegmentChanged: (active) {
+                              if (mounted) {
+                                setState(() {
+                                  _isSkipActive = active;
+                                });
+                              }
+                            },
+                            player: widget.player,
+                            videoViewController: widget.videoViewController,
+                            skipSegments: skipSegments,
+                            isTv: _isTv,
+                            controlsVisible: _isVisible,
+                            onFocusReturned: () {
+                              if (_isVisible) {
+                                _playFocusNode.requestFocus();
+                              } else {
+                                _returnFocusToRoot();
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
 
                 // Episodes side drawer (series only) â same shell as the
@@ -1566,23 +1873,34 @@ class AnimeWitcherPlayerControlsState
     // gets just a speaker+slider volume control here â its seek trio is
     // centered separately below (mouse-only interaction, so desktop only).
     final leading = <Widget>[
-      if (isDesktop) const PlayerVolumeControl(),
-      if (isTouch) ...[
-        PlayerIconButton(
-          icon: _isLocked ? LucideIcons.lock200 : LucideIcons.lockOpen200,
-          tooltip: _isLocked ? l10n.unlock : l10n.lock,
-          onPressed: _toggleLock,
-          isTv: _isTv,
-          highlight: _isLocked,
+      if (isDesktop)
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const PlayerVolumeControl(),
+            if (_showKeyHints) ...const [
+              SizedBox(width: 6),
+              PlayerKeyHint('M'),
+            ],
+          ],
         ),
-        if (isSeries && hasPreviousEpisode)
+      if (isTouch) ...[
+        if (playerSettings.showLock || _isLocked)
+          PlayerIconButton(
+            icon: _isLocked ? LucideIcons.lock200 : LucideIcons.lockOpen200,
+            tooltip: _isLocked ? l10n.unlock : l10n.lock,
+            onPressed: _toggleLock,
+            isTv: _isTv,
+            highlight: _isLocked,
+          ),
+        if (isSeries && hasPreviousEpisode && playerSettings.showEpisodeNav)
           PlayerIconButton(
             icon: LucideIcons.chevronsLeft200,
             tooltip: appText(context, english: 'Previous', arabic: 'السابق'),
             onPressed: () => unawaited(_playPreviousEpisodeWithSourcePicker()),
             isTv: _isTv,
           ),
-        if (isSeries && hasNextEpisode)
+        if (isSeries && hasNextEpisode && playerSettings.showEpisodeNav)
           PlayerIconButton(
             icon: LucideIcons.chevronsRight200,
             tooltip: l10n.next,
@@ -1590,51 +1908,53 @@ class AnimeWitcherPlayerControlsState
             isTv: _isTv,
           ),
       ] else if (_isTv) ...[
-        if (isSeries && hasPreviousEpisode)
+        if (isSeries && hasPreviousEpisode && playerSettings.showEpisodeNav)
           PlayerIconButton(
             icon: LucideIcons.chevronsLeft200,
             tooltip: appText(context, english: 'Previous', arabic: 'السابق'),
             onPressed: () => unawaited(_playPreviousEpisodeWithSourcePicker()),
             isTv: _isTv,
           ),
-        PlayerIconButton(
-          icon: LucideIcons.rotateCcw200,
-          iconSize: transportGlyph,
-          iconBuilder: (color, size) => SeekIcon(
-            forward: false,
-            seconds: playerSettings.seekDuration,
-            size: size,
-            color: color,
+        if (playerSettings.showSeekButtons)
+          PlayerIconButton(
+            icon: LucideIcons.rotateCcw200,
+            iconSize: transportGlyph,
+            iconBuilder: (color, size) => SeekIcon(
+              forward: false,
+              seconds: playerSettings.seekDuration,
+              size: size,
+              color: color,
+            ),
+            tooltip: appText(
+              context,
+              english: 'Rewind ${playerSettings.seekDuration}s',
+              arabic: 'إرجاع ${playerSettings.seekDuration} ثوانٍ',
+            ),
+            // The same call the arrow keys make, so pressing the button
+            // raises the cumulative signed seek mark and the ripple with it.
+            onPressed: () => triggerSeek(true),
+            isTv: _isTv,
           ),
-          tooltip: appText(
-            context,
-            english: 'Rewind ${playerSettings.seekDuration}s',
-            arabic: 'إرجاع ${playerSettings.seekDuration} ثوانٍ',
-          ),
-          // The same call the arrow keys make, so pressing the button
-          // raises the cumulative signed seek mark and the ripple with it.
-          onPressed: () => triggerSeek(true),
-          isTv: _isTv,
-        ),
         playPause,
-        PlayerIconButton(
-          icon: LucideIcons.rotateCw200,
-          iconSize: transportGlyph,
-          iconBuilder: (color, size) => SeekIcon(
-            forward: true,
-            seconds: playerSettings.seekDuration,
-            size: size,
-            color: color,
+        if (playerSettings.showSeekButtons)
+          PlayerIconButton(
+            icon: LucideIcons.rotateCw200,
+            iconSize: transportGlyph,
+            iconBuilder: (color, size) => SeekIcon(
+              forward: true,
+              seconds: playerSettings.seekDuration,
+              size: size,
+              color: color,
+            ),
+            tooltip: appText(
+              context,
+              english: 'Forward ${playerSettings.seekDuration}s',
+              arabic: 'تقديم ${playerSettings.seekDuration} ثوانٍ',
+            ),
+            onPressed: () => triggerSeek(false),
+            isTv: _isTv,
           ),
-          tooltip: appText(
-            context,
-            english: 'Forward ${playerSettings.seekDuration}s',
-            arabic: 'تقديم ${playerSettings.seekDuration} ثوانٍ',
-          ),
-          onPressed: () => triggerSeek(false),
-          isTv: _isTv,
-        ),
-        if (isSeries && hasNextEpisode)
+        if (isSeries && hasNextEpisode && playerSettings.showEpisodeNav)
           PlayerIconButton(
             icon: LucideIcons.chevronsRight200,
             tooltip: l10n.next,
@@ -1652,37 +1972,45 @@ class AnimeWitcherPlayerControlsState
         : Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              PlayerIconButton(
-                icon: LucideIcons.rotateCcw200,
-                iconBuilder: (color, size) => SeekIcon(
-                  forward: false,
-                  seconds: playerSettings.seekDuration,
-                  size: size,
-                  color: color,
+              if (playerSettings.showSeekButtons)
+                _withKeyHint(
+                  PlayerIconButton(
+                    icon: LucideIcons.rotateCcw200,
+                    iconBuilder: (color, size) => SeekIcon(
+                      forward: false,
+                      seconds: playerSettings.seekDuration,
+                      size: size,
+                      color: color,
+                    ),
+                    tooltip: appText(
+                      context,
+                      english: 'Rewind ${playerSettings.seekDuration}s',
+                      arabic: 'إرجاع ${playerSettings.seekDuration} ثوانٍ',
+                    ),
+                    onPressed: () => triggerSeek(true),
+                  ),
+                  '←',
                 ),
-                tooltip: appText(
-                  context,
-                  english: 'Rewind ${playerSettings.seekDuration}s',
-                  arabic: 'إرجاع ${playerSettings.seekDuration} ثوانٍ',
+              _withKeyHint(playPause, 'Space'),
+              if (playerSettings.showSeekButtons)
+                _withKeyHint(
+                  PlayerIconButton(
+                    icon: LucideIcons.rotateCw200,
+                    iconBuilder: (color, size) => SeekIcon(
+                      forward: true,
+                      seconds: playerSettings.seekDuration,
+                      size: size,
+                      color: color,
+                    ),
+                    tooltip: appText(
+                      context,
+                      english: 'Forward ${playerSettings.seekDuration}s',
+                      arabic: 'تقديم ${playerSettings.seekDuration} ثوانٍ',
+                    ),
+                    onPressed: () => triggerSeek(false),
+                  ),
+                  '→',
                 ),
-                onPressed: () => triggerSeek(true),
-              ),
-              playPause,
-              PlayerIconButton(
-                icon: LucideIcons.rotateCw200,
-                iconBuilder: (color, size) => SeekIcon(
-                  forward: true,
-                  seconds: playerSettings.seekDuration,
-                  size: size,
-                  color: color,
-                ),
-                tooltip: appText(
-                  context,
-                  english: 'Forward ${playerSettings.seekDuration}s',
-                  arabic: 'تقديم ${playerSettings.seekDuration} ثوانٍ',
-                ),
-                onPressed: () => triggerSeek(false),
-              ),
             ],
           );
 
@@ -1704,10 +2032,11 @@ class AnimeWitcherPlayerControlsState
       showEpisodes: playerSettings.showEpisodes,
       hasEpisodePicker: hasEpisodePicker,
       showResize: playerSettings.showResize,
-      isDesktop: isDesktop,
+      isDesktop: isDesktop && playerSettings.showFullscreen,
       // The button follows the feature, not the mode. Choosing "off"
       // from its own list must not retire the control that chose it.
-      anime4kOn: playerSettings.anime4kEnabled,
+      anime4kOn:
+          playerSettings.anime4kEnabled && playerSettings.showAnime4kButton,
       anime4kSupported: anime4kAvailableOn(
         isNativePlatform: isDesktop || Platform.isAndroid || Platform.isIOS,
         usingAdaptiveBackend: ref.watch(
@@ -1862,7 +2191,18 @@ class AnimeWitcherPlayerControlsState
                     ),
                     leading: leading,
                     center: center,
-                    actions: actions,
+                    // A desktop keeps episodes, ⚙ and fullscreen on the bar;
+                    // speed, Anime4K and size live in the ⚙ panel.
+                    // Desktop, phone and tablet share one bar: episodes, the
+                    // ⚙ panel and the window or screen controls. TV keeps its
+                    // own row, built for a remote.
+                    actions: _isTv
+                        ? actions
+                        : _compactActions(
+                            chromeActions,
+                            l10n,
+                            keyHints: isDesktop,
+                          ),
                   ),
                 ),
               ],
@@ -1878,9 +2218,10 @@ class AnimeWitcherPlayerControlsState
   /// (which would toggle visibility or fire brightness/volume swipes). Deeper
   /// widgets (slider, buttons) still win the gesture arena.
   Widget _absorbGestures(Widget child) {
+    // No double tap here: it would hold every button in the bars for the
+    // double-tap timeout before its press went through.
     return GestureDetector(
       onTap: () {},
-      onDoubleTap: () {},
       onVerticalDragStart: (_) {},
       onHorizontalDragStart: (_) {},
       child: child,
@@ -1889,7 +2230,11 @@ class AnimeWitcherPlayerControlsState
 
   Widget _buildLoadingUI({required String title, String? episodeLabel}) {
     return GestureDetector(
-      onDoubleTap: _handleDoubleTap,
+      onTapUp: (details) {
+        if (!_isSecondTap(details)) return;
+        _tapPosition = details.globalPosition;
+        unawaited(_handleDoubleTap());
+      },
       behavior: HitTestBehavior.translucent,
       child: Stack(
         fit: StackFit.expand,

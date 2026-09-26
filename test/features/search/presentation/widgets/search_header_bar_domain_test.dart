@@ -1,4 +1,3 @@
-import 'package:animewitcher/features/search/presentation/search_domain.dart';
 import 'package:animewitcher/features/search/presentation/search_provider.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_header_bar.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -15,20 +14,21 @@ final class _IdleSearchNotifier extends PagedSearchNotifier {
 }
 
 void main() {
-  testWidgets('iOS three-action glass matches details safe-area trailing coordinate', (
+  testWidgets('iOS puts the search actions where every platform does', (
     tester,
   ) async {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       SystemChannels.platform_views,
       (_) async => null,
     );
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     await tester.binding.setSurfaceSize(const Size(428, 300));
 
     final controller = TextEditingController();
     final searchFocus = FocusNode();
     final clearFocus = FocusNode();
-    try {
+    Future<Rect> actionsOn(TargetPlatform platform) async {
+      debugDefaultTargetPlatformOverride = platform;
+      await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -64,8 +64,6 @@ void main() {
                   sortTooltip: 'Sort',
                   activeFilterCount: 0,
                   isFilterLoading: false,
-                  domain: SearchDomain.anime,
-                  onDomainSelected: (_) {},
                   showSort: true,
                   showFilter: true,
                 ),
@@ -75,11 +73,17 @@ void main() {
         ),
       );
       await tester.pump();
-
-      final actionRect = tester.getRect(
+      return tester.getRect(
         find.byKey(const ValueKey('search-action-capsule')),
       );
-      expect(428 - actionRect.right, 59 + 34);
+    }
+
+    try {
+      // The native glass header iOS once lined up with is retired: iOS lays
+      // the bar out as every other platform does.
+      final ios = await actionsOn(TargetPlatform.iOS);
+      final android = await actionsOn(TargetPlatform.android);
+      expect(ios, android);
     } finally {
       controller.dispose();
       searchFocus.dispose();
@@ -93,57 +97,56 @@ void main() {
     }
   });
 
-  testWidgets('character search header keeps only the domain action', (
-    tester,
-  ) async {
-    final controller = TextEditingController();
-    final searchFocus = FocusNode();
-    final clearFocus = FocusNode();
-    addTearDown(controller.dispose);
-    addTearDown(searchFocus.dispose);
-    addTearDown(clearFocus.dispose);
+  testWidgets(
+    'character search header keeps only the filter action, which picks the category',
+    (tester) async {
+      final controller = TextEditingController();
+      final searchFocus = FocusNode();
+      final clearFocus = FocusNode();
+      addTearDown(controller.dispose);
+      addTearDown(searchFocus.dispose);
+      addTearDown(clearFocus.dispose);
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          searchPagedResultsProvider.overrideWith(_IdleSearchNotifier.new),
-        ],
-        child: MaterialApp(
-          locale: const Locale('ar'),
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: Scaffold(
-            body: SearchHeaderBar(
-              textController: controller,
-              searchFocusNode: searchFocus,
-              clearButtonFocusNode: clearFocus,
-              onSubmitted: (_) {},
-              onChanged: (_) {},
-              onShowFilters: () {},
-              onSortSelected: (_) {},
-              sortValue: 'favorites',
-              sortItems: const <AppleNativeMenuItem>[
-                AppleNativeMenuItem(value: 'favorites', label: 'Favorites'),
-              ],
-              sortIcon: Icons.star_rounded,
-              sortSystemImage: 'star.fill',
-              sortTooltip: 'Sort',
-              activeFilterCount: 2,
-              isFilterLoading: false,
-              domain: SearchDomain.characters,
-              onDomainSelected: (_) {},
-              showSort: false,
-              showFilter: false,
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            searchPagedResultsProvider.overrideWith(_IdleSearchNotifier.new),
+          ],
+          child: MaterialApp(
+            locale: const Locale('ar'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+              body: SearchHeaderBar(
+                textController: controller,
+                searchFocusNode: searchFocus,
+                clearButtonFocusNode: clearFocus,
+                onSubmitted: (_) {},
+                onChanged: (_) {},
+                onShowFilters: () {},
+                onSortSelected: (_) {},
+                sortValue: 'favorites',
+                sortItems: const <AppleNativeMenuItem>[
+                  AppleNativeMenuItem(value: 'favorites', label: 'Favorites'),
+                ],
+                sortIcon: Icons.star_rounded,
+                sortSystemImage: 'star.fill',
+                sortTooltip: 'Sort',
+                activeFilterCount: 2,
+                isFilterLoading: false,
+                showSort: false,
+                showFilter: true,
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
 
-    await tester.pump();
+      await tester.pump();
 
-    expect(find.byTooltip('Search domain'), findsOneWidget);
-    expect(find.byTooltip('Sort'), findsNothing);
-    expect(find.byTooltip('الفلاتر'), findsNothing);
-  });
+      expect(find.byTooltip('Search domain'), findsNothing);
+      expect(find.byTooltip('Sort'), findsNothing);
+      expect(find.byTooltip('الفلاتر'), findsOneWidget);
+    },
+  );
 }

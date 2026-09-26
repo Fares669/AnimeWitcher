@@ -1,4 +1,5 @@
 import 'more_sidebar_shell.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -10,21 +11,78 @@ import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/catalog_ltr.dart';
+import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 import '../../library/presentation/history_provider.dart';
+import '../../library/presentation/library_lists.dart';
 import '../../../core/utils/window_controls_inset.dart';
 
-class RecentWatchedScreen extends ConsumerStatefulWidget {
+class RecentWatchedScreen extends StatelessWidget {
   const RecentWatchedScreen({super.key});
 
   @override
-  ConsumerState<RecentWatchedScreen> createState() =>
-      _RecentWatchedScreenState();
+  Widget build(BuildContext context) {
+    final isArabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    return Scaffold(
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: AppBar(
+            automaticallyImplyLeading: false,
+            centerTitle: false,
+            titleSpacing: 16,
+            // Leave the window's caption buttons their corner; the
+            // title is aligned to that same edge in Arabic.
+            actions: const <Widget>[WindowControlsGap()],
+            title: ApplePersistentGlassHeaderScope(
+              enabled:
+                  !MorePaneScope.of(context) && Navigator.of(context).canPop(),
+              onBack: () => Navigator.of(context).pop(),
+              child: Align(
+                alignment: isArabic
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
+                child: Directionality(
+                  textDirection: isArabic
+                      ? TextDirection.rtl
+                      : TextDirection.ltr,
+                  child: Text(isArabic ? 'آخر المشاهدات' : 'Recently watched'),
+                ),
+              ),
+            ),
+            leading:
+                appleUsesPersistentLiquidGlassHeader ||
+                    MorePaneScope.of(context)
+                ? null
+                : AppleLiquidGlassBackButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+            elevation: 0,
+          ),
+        ),
+      ),
+      body: const RecentWatchedBody(),
+    );
+  }
 }
 
-class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
+/// The watch history as a poster grid, latest first, synced from the
+/// account when it opens. Long press takes a title off it. The library's
+/// "آخر المشاهدات" and the full page both show this.
+class RecentWatchedBody extends ConsumerStatefulWidget {
+  const RecentWatchedBody({super.key, this.sort = LibrarySort.added});
+
+  /// The library filter's order; "latest added" here is latest watched.
+  final LibrarySort sort;
+
+  @override
+  ConsumerState<RecentWatchedBody> createState() => _RecentWatchedBodyState();
+}
+
+class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
   bool _initialSyncRunning = true;
 
   bool _isArabic(BuildContext context) =>
@@ -50,8 +108,10 @@ class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
   @override
   Widget build(BuildContext context) {
     final isArabic = _isArabic(context);
-    final history = ref.watch(watchHistoryProvider).toList(growable: false)
-      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    final history = sortLibraryHistory(
+      ref.watch(watchHistoryProvider),
+      widget.sort,
+    );
 
     Widget body;
     if (_initialSyncRunning && history.isEmpty) {
@@ -96,47 +156,7 @@ class _RecentWatchedScreenState extends ConsumerState<RecentWatchedScreen> {
       );
     }
 
-    return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            // Leave the window's caption buttons their corner; the
-            // title is aligned to that same edge in Arabic.
-            actions: const <Widget>[WindowControlsGap()],
-            title: ApplePersistentGlassHeaderScope(
-              enabled:
-                  !MorePaneScope.of(context) && Navigator.of(context).canPop(),
-              onBack: () => Navigator.of(context).pop(),
-              child: Align(
-                alignment: isArabic
-                    ? Alignment.centerRight
-                    : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  child: Text(isArabic ? 'آخر المشاهدات' : 'Recently watched'),
-                ),
-              ),
-            ),
-            leading:
-                appleUsesPersistentLiquidGlassHeader ||
-                    MorePaneScope.of(context)
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-            elevation: 0,
-          ),
-        ),
-      ),
-      body: body,
-    );
+    return body;
   }
 }
 
@@ -149,7 +169,7 @@ class _RecentWatchedGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDesktop = context.isDesktop;
-    return CatalogLtr(
+    return CatalogDirection(
       child: GridView.builder(
         padding: EdgeInsets.fromLTRB(
           MultimediaCardLayout.catalogGridHorizontalPadding(context),

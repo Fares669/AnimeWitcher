@@ -48,13 +48,29 @@ class TilingEngine {
     int sampleSize = fullImageSampleSize;
 
     while (true) {
-      final tile = Tile(
-        sRect: ui.Rect.fromLTRB(0, 0, sWidth.toDouble(), sHeight.toDouble()),
-        sampleSize: sampleSize,
-      );
-
-      tile.visible = (sampleSize == fullImageSampleSize);
-      tileMap[sampleSize] = [tile];
+      // A grid of tiles, none decoding to more than the maximum tile size.
+      // One tile for the whole image made a tall webtoon page — 800 by
+      // 15,000 pixels — a single texture taller than the graphics card
+      // takes, and the page stayed black in the long-strip modes.
+      final tileWidth = maxTileWidth * sampleSize;
+      final tileHeight = maxTileHeight * sampleSize;
+      final tiles = <Tile>[];
+      for (var top = 0.0; top < sHeight; top += tileHeight) {
+        for (var left = 0.0; left < sWidth; left += tileWidth) {
+          tiles.add(
+            Tile(
+              sRect: ui.Rect.fromLTRB(
+                left,
+                top,
+                (left + tileWidth).clamp(0, sWidth).toDouble(),
+                (top + tileHeight).clamp(0, sHeight).toDouble(),
+              ),
+              sampleSize: sampleSize,
+            )..visible = sampleSize == fullImageSampleSize,
+          );
+        }
+      }
+      tileMap[sampleSize] = tiles;
 
       if (sampleSize == 1) {
         break;

@@ -148,7 +148,23 @@ void main() {
         selectDownloadWorkUnitCount(connections: 16, totalBytes: 16 * mib),
         32,
       );
-      expect(kDownloadWorkUnitsMax, 512);
+      expect(kDownloadWorkUnitsMax, 128);
+      expect(kDownloadLegacyWorkUnitsMax, 512);
+    });
+
+    test('large episodes keep the durable work queue bounded', () {
+      const mib = 1024 * 1024;
+      expect(
+        selectDownloadWorkUnitCount(
+          connections: 16,
+          totalBytes: 752 * mib,
+        ),
+        128,
+        reason:
+            'connection parallelism stays at sixteen while the immutable '
+            'checkpoint queue must not fan out to hundreds of 1 MiB tasks',
+      );
+      expect(kDownloadCheckpointTargetBytes, 4 * mib);
     });
 
     test('tail work never creates tiny extra ranges', () {
@@ -159,9 +175,9 @@ void main() {
       );
       expect(
         selectDownloadWorkUnitCount(connections: 1, totalBytes: 2 * 1024 * mib),
-        512,
+        128,
         reason:
-            'one native writer still needs bounded durable checkpoints; '
+            'one native writer still needs a bounded durable work queue; '
             'connection count and checkpoint count are separate concerns',
       );
     });

@@ -5,11 +5,14 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:crypto/crypto.dart';
+
 import '../subsampling_image_utils.dart';
 
 import 'coordinate_transformer.dart';
@@ -623,6 +626,11 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
 
   Future<void> _loadFromProvider({bool evictCache = false}) async {
     _cancelImageStream();
+    // Start from no tiles. The page only reports itself loaded when a tile
+    // finishes decoding, so tiles kept from before — on a retry — would
+    // leave it on its loading spinner for good.
+    _tilingEngine.dispose();
+    _tilingEngine = TilingEngine();
 
     if (mounted) {
       setState(() {
@@ -684,7 +692,21 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
       }
     } catch (_) {}
 
-    // 3. Fast path: Network/Cached-based providers (CustomExtendedNetworkImageProvider)
+    // 3. The app's network pages: the file the cache manager downloaded,
+    // as it came. Read straight from disk, a page shown before comes back
+    // at once — the stream path below decodes the whole page and writes a
+    // PNG copy of it before a single tile can be drawn.
+    if (provider is CachedNetworkImageProvider) {
+      final path = await _cachedNetworkFile(provider);
+      if (!mounted) return;
+      if (path != null) {
+        _resolvedFilePath = path;
+        await _initImage();
+        return;
+      }
+    }
+
+    // 3b. Fast path: Network/Cached-based providers (CustomExtendedNetworkImageProvider)
     String? networkUrl;
     String? cacheFolderName;
     try {
@@ -784,6 +806,51 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
         });
       }
     }
+  }
+
+  /// Where each network page's file was found, so a page opened again —
+  /// after a mode change, a resize, a new chapter and back — skips even the
+  /// cache lookup.
+  static final Map<String, String> _networkFiles = <String, String>{};
+
+  /// The downloaded file for [provider], fetched into the cache first when
+  /// it is not there yet, or null if it cannot be had.
+  Future<String?> _cachedNetworkFile(
+    CachedNetworkImageProvider provider,
+  ) async {
+    final key = provider.cacheKey ?? provider.url;
+    final known = _networkFiles[key];
+    if (known != null && File(known).existsSync()) return known;
+    final manager = provider.cacheManager ?? DefaultCacheManager();
+    try {
+      final cached = await manager.getFileFromCache(key);
+      if (cached != null && cached.file.existsSync()) {
+        return _networkFiles[key] = cached.file.path;
+      }
+      await for (final response in manager.getFileStream(
+        provider.url,
+        key: key,
+        headers: provider.headers,
+        withProgress: true,
+      )) {
+        if (!mounted) return null;
+        if (response is DownloadProgress) {
+          setState(
+            () => _loadingProgress = ImageChunkEvent(
+              cumulativeBytesLoaded: response.downloaded,
+              expectedTotalBytes: response.totalSize,
+            ),
+          );
+        } else if (response is FileInfo) {
+          return _networkFiles[key] = response.file.path;
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('SubsamplingScaleImageView: cache manager failed: $e');
+      }
+    }
+    return null;
   }
 
   SubsamplingImageState _makeImageState() => SubsamplingImageState(
@@ -1230,7 +1297,12 @@ class _SubsamplingScaleImageViewState extends State<SubsamplingScaleImageView>
       cropBorders: widget.cropBorders,
     );
     ffiImageDecoder.decodeRegionAsync(params, cancelToken: tile).then((result) {
-      if (result == null) return;
+      if (result == null) {
+        // No decoder to ask: free the tile so the next refresh asks again,
+        // rather than it waiting on a decode that never comes.
+        tile.loading = false;
+        return;
+      }
       if (result.pointerAddress != null) {
         final int left = fileRect.left.toInt();
         final int top = fileRect.top.toInt();

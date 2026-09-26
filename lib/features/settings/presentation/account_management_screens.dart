@@ -9,7 +9,7 @@ import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_models.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/localized_text.dart';
-import '../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import 'account_image_crop_screen.dart';
 import 'account_ui_helpers.dart';
 
@@ -58,21 +58,11 @@ class _AnimeWitcherProfileEditScreenState
   Widget build(BuildContext context) {
     final busy = _saving || _preparingImage;
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        leading: !appleUsesPersistentLiquidGlassHeader
-            ? const AppleLiquidGlassBackButton()
-            : null,
-        title: ApplePersistentGlassHeaderScope(
-          enabled: true,
-          onBack: () => Navigator.of(context).maybePop(),
-          child: Text(
-            appText(
-              context,
-              english: 'Edit profile',
-              arabic: 'تعديل الملف الشخصي',
-            ),
-          ),
+      appBar: AppPageAppBar(
+        title: appText(
+          context,
+          english: 'Edit profile',
+          arabic: 'تعديل الملف الشخصي',
         ),
       ),
       body: Center(
@@ -771,17 +761,7 @@ class _AccountFormScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        leading: !appleUsesPersistentLiquidGlassHeader
-            ? const AppleLiquidGlassBackButton()
-            : null,
-        title: ApplePersistentGlassHeaderScope(
-          enabled: true,
-          onBack: () => Navigator.of(context).maybePop(),
-          child: Text(title),
-        ),
-      ),
+      appBar: AppPageAppBar(title: title),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 620),

@@ -48,10 +48,6 @@
 </p>
 
 <p align="center">
-  <img src="screenshots/desktop/details.png" width="800" />
-</p>
-
-<p align="center">
   <img src="screenshots/desktop/settings.png" width="800" />
 </p>
 

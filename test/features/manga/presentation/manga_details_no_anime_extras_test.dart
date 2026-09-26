@@ -2,7 +2,10 @@ import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/services/artwork_fallback_service.dart';
+import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
+import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_cover_provider.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -10,6 +13,20 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../../../support/memory_storage_service.dart';
+
+/// Answers every artwork lookup at once with nothing, so a page that asks
+/// for a manga's banner leaves no batch timer behind and makes no request.
+final class _NoArtwork extends ArtworkFallbackService {
+  _NoArtwork() : super(Dio(), StorageService());
+
+  @override
+  Future<({String? cover, String? banner})> mangaArtwork({
+    int? malId,
+    String title = '',
+  }) async => (cover: null, banner: null);
+}
 
 final class _CountingProvider extends AnimeWitcherProvider {
   int animeDetailsCalls = 0;
@@ -106,8 +123,7 @@ final class _CountingProvider extends AnimeWitcherProvider {
   }
 }
 
-final class _EmptyCustomCoverNotifier
-    extends MangaReaderCustomCoversNotifier {
+final class _EmptyCustomCoverNotifier extends MangaReaderCustomCoversNotifier {
   @override
   Map<String, String> build() => const <String, String>{};
 }
@@ -153,11 +169,15 @@ void main() {
       ProviderScope(
         overrides: [
           extensionManagerProvider.overrideWith(() => _Manager(provider)),
-          episodeSortAscendingProvider.overrideWith(
-            _AscendingSortNotifier.new,
-          ),
+          artworkFallbackServiceProvider.overrideWithValue(_NoArtwork()),
+          episodeSortAscendingProvider.overrideWith(_AscendingSortNotifier.new),
           mangaReaderCustomCoversProvider.overrideWith(
             _EmptyCustomCoverNotifier.new,
+          ),
+          // A wide window names the chapter to read next as soon as the
+          // page opens, which reads reading progress.
+          mangaReadingRepositoryProvider.overrideWithValue(
+            MangaReadingRepository(MemoryStorageService()),
           ),
         ],
         child: MaterialApp(

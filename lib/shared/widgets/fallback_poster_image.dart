@@ -21,6 +21,7 @@ class FallbackPosterImage extends ConsumerStatefulWidget {
     required this.malId,
     this.title,
     this.preferBanner = false,
+    this.manga = false,
     required this.placeholder,
     required this.errorWidget,
     this.fit = BoxFit.cover,
@@ -50,6 +51,11 @@ class FallbackPosterImage extends ConsumerStatefulWidget {
   /// no banner.
   final bool preferBanner;
 
+  /// Looks the artwork up as a manga. MyAnimeList numbers manga and anime
+  /// separately, so a manga's id asked about as an anime finds the wrong
+  /// picture or none. A manga can also look its banner up by title.
+  final bool manga;
+
   final WidgetBuilder placeholder;
   final WidgetBuilder errorWidget;
   final BoxFit fit;
@@ -70,6 +76,24 @@ class FallbackPosterImage extends ConsumerStatefulWidget {
 
 class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
   String? _fallbackUrl;
+
+  /// Anime look elsewhere only when the viewer turned that on. A manga
+  /// always may: much of its artwork sits on MyAnimeList's CDN, which some
+  /// networks cannot reach, and the switch lives in the anime settings where
+  /// a manga reader would not think to look. It still only looks once the
+  /// catalog's picture has failed, or when there is none to show.
+  /// The lookup, where there is one. A card drawn outside the app's own
+  /// provider scope (a test, a preview) has none, and simply keeps the
+  /// catalog's picture rather than failing to build.
+  ArtworkFallbackService? _service() {
+    try {
+      return ref.read(artworkFallbackServiceProvider);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool get _lookupAllowed => artworkFallbackEnabled.value || widget.manga;
   bool _primaryFailed = false;
   bool _lookedUp = false;
 
@@ -93,7 +117,7 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
   /// on screen and blank, so the cards they are looking at have to answer for
   /// themselves rather than wait to be scrolled away and back.
   void _onSwitchChanged() {
-    if (!mounted) return;
+    if (!mounted || widget.manga) return;
     if (!artworkFallbackEnabled.value) {
       // Back to the catalog's own artwork, and anything found while the
       // lookup was on is dropped so the two states cannot be told apart.
@@ -126,7 +150,8 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
     super.didUpdateWidget(old);
     if (old.imageUrl != widget.imageUrl ||
         old.malId != widget.malId ||
-        old.title != widget.title) {
+        old.title != widget.title ||
+        old.manga != widget.manga) {
       _fallbackUrl = null;
       _primaryFailed = false;
       _lookedUp = false;
@@ -138,12 +163,22 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
   /// A title already resolved for another card is known synchronously, so its
   /// poster is used from the first frame instead of failing once more first.
   void _adoptCachedFallback() {
-    if (!artworkFallbackEnabled.value) return;
-    final service = ref.read(artworkFallbackServiceProvider);
+    if (!_lookupAllowed) return;
+    final service = _service();
+    if (service == null) return;
     final malId = widget.malId;
     final title = widget.title?.trim() ?? '';
 
     String? cached;
+    if (widget.manga) {
+      if (!service.hasResolvedManga(malId, title)) return;
+      _lookedUp = true;
+      final art = service.cachedManga(malId, title);
+      cached = widget.preferBanner ? art?.banner : art?.cover;
+      if (cached == null || cached.isEmpty) return;
+      _fallbackUrl = cached;
+      return;
+    }
     if (widget.preferBanner) {
       if (malId != null && malId > 0 && service.hasResolvedBanner(malId)) {
         cached = service.cachedBanner(malId);
@@ -169,7 +204,7 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
   /// known to be unreachable. Waiting for that request to time out is the
   /// difference between a poster appearing at once and appearing late.
   void _resolveWhenNothingToShow() {
-    if (!artworkFallbackEnabled.value || _fallbackUrl != null) return;
+    if (!_lookupAllowed || _fallbackUrl != null) return;
     final url = widget.imageUrl.trim();
     final doomed =
         url.isEmpty || (malArtworkUnreachable.value && isMalArtworkUrl(url));
@@ -180,13 +215,19 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
   }
 
   Future<void> _resolveFallback() async {
-    if (!artworkFallbackEnabled.value || _lookedUp) return;
-    final service = ref.read(artworkFallbackServiceProvider);
+    if (!_lookupAllowed || _lookedUp) return;
+    final service = _service();
+    if (service == null) return;
     final malId = widget.malId;
     final title = widget.title?.trim() ?? '';
 
     final String? url;
-    if (widget.preferBanner) {
+    if (widget.manga) {
+      if ((malId == null || malId <= 0) && title.isEmpty) return;
+      _lookedUp = true;
+      final art = await service.mangaArtwork(malId: malId, title: title);
+      url = widget.preferBanner ? art.banner : art.cover;
+    } else if (widget.preferBanner) {
       if (malId == null || malId <= 0) return;
       _lookedUp = true;
       url = await service.bannerFor(malId);

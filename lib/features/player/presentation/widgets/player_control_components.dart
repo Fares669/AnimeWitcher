@@ -1,10 +1,11 @@
-
 import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_back_button.dart';
 import 'package:flutter/services.dart';
+
 import '../../../../shared/widgets/custom_widgets.dart';
 import 'hotstar_player_style.dart';
 
@@ -145,25 +146,11 @@ class PlayerTopBar extends StatelessWidget {
           padding: EdgeInsets.fromLTRB(leftPadding, 4, rightPadding, 14),
           child: Row(
             children: [
-              if (appleUsesPersistentLiquidGlassHeader)
-                // Preserve the title's original clearance while the actual
-                // back control lives in the route-independent overlay.
-                const SizedBox(width: 60)
-              else ...[
-                // The glyph alone, with no pill behind it: the top scrim
-                // already separates it from the picture, and a blurred disc
-                // over artwork read as a smudge.
-                PlayerIconButton(
-                  icon: LucideIcons.chevronLeft200,
-                  tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                  onPressed: onBack,
-                  isTv: isTv,
-                  focusNode: backFocusNode,
-                  iconSize: isTv ? 34 : 30,
-                  foregroundColor: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 12),
-              ],
+              AppBackButton(
+                onPressed: onBack,
+                focusNode: backFocusNode,
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -177,6 +164,7 @@ class PlayerTopBar extends StatelessWidget {
                         color: HotstarPlayerStyle.primaryText,
                         fontSize: isTv ? 22 : 18,
                         fontWeight: FontWeight.w700,
+                        shadows: HotstarPlayerStyle.glyphShadows,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -190,6 +178,7 @@ class PlayerTopBar extends StatelessWidget {
                           fontSize: isTv ? 16 : 13,
                           fontWeight: FontWeight.w500,
                           height: 1.25,
+                          shadows: HotstarPlayerStyle.glyphShadows,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -284,15 +273,22 @@ class PlayerBottomBar extends StatelessWidget {
     final double rightPadding = isTv
         ? edge
         : (padding.right > edge ? padding.right : edge);
-    return SafeArea(
-      left: false,
-      right: false,
-      top: false,
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(leftPadding, 2, rightPadding, 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [progressBar, _buildRow()],
+    // Its own scrim, dark at the foot, so the white controls are never
+    // lost against a bright frame.
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: HotstarPlayerStyle.bottomGradient,
+      ),
+      child: SafeArea(
+        left: false,
+        right: false,
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(leftPadding, 18, rightPadding, 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [progressBar, _buildRow()],
+          ),
         ),
       ),
     );
@@ -389,9 +385,9 @@ class _PlayerIconButtonState extends State<PlayerIconButton> {
     if (widget.foregroundColor != null) {
       iconColor = widget.foregroundColor!;
     } else if (_hovered) {
-      iconColor = HotstarPlayerStyle.accent;
+      iconColor = Theme.of(context).colorScheme.primary;
     } else if (widget.highlight) {
-      iconColor = HotstarPlayerStyle.accent;
+      iconColor = Theme.of(context).colorScheme.primary;
     } else {
       iconColor = Colors.white;
     }
@@ -411,7 +407,12 @@ class _PlayerIconButtonState extends State<PlayerIconButton> {
             height: box,
             child: widget.iconBuilder != null
                 ? widget.iconBuilder!(iconColor, glyph)
-                : Icon(widget.icon, color: iconColor, size: glyph),
+                : Icon(
+                    widget.icon,
+                    color: iconColor,
+                    size: glyph,
+                    shadows: HotstarPlayerStyle.glyphShadows,
+                  ),
           ),
         ),
       ),
@@ -459,7 +460,7 @@ class _PlayerActionButtonState extends State<PlayerActionButton> {
   Widget build(BuildContext context) {
     final showBg = (widget.highlight || _focused || _pressed) && !_hovered;
     final color = (widget.highlight || _hovered || _focused || _pressed)
-        ? HotstarPlayerStyle.accent
+        ? Theme.of(context).colorScheme.primary
         : Colors.white;
     final showTvFocusRing = widget.isTv && _focused;
 
@@ -505,16 +506,16 @@ class _PlayerActionButtonState extends State<PlayerActionButton> {
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
                   color: showBg
-                      ? HotstarPlayerStyle.accent.withValues(alpha: 0.16)
+                      ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.16)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
                   border: showTvFocusRing
-                      ? Border.all(color: HotstarPlayerStyle.accent, width: 2)
+                      ? Border.all(color: Theme.of(context).colorScheme.primary, width: 2)
                       : null,
                   boxShadow: showTvFocusRing
                       ? [
                           BoxShadow(
-                            color: HotstarPlayerStyle.accent.withValues(
+                            color: Theme.of(context).colorScheme.primary.withValues(
                               alpha: 0.2,
                             ),
                             blurRadius: 8,
@@ -525,7 +526,12 @@ class _PlayerActionButtonState extends State<PlayerActionButton> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(widget.icon, color: color, size: 20),
+                    Icon(
+                      widget.icon,
+                      color: color,
+                      size: 20,
+                      shadows: HotstarPlayerStyle.glyphShadows,
+                    ),
                     const SizedBox(width: 6),
                     Text(
                       widget.label,
@@ -533,6 +539,7 @@ class _PlayerActionButtonState extends State<PlayerActionButton> {
                         color: color,
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
+                        shadows: HotstarPlayerStyle.glyphShadows,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,

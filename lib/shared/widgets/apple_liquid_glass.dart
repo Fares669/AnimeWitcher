@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show PlatformViewHitTestBehavior;
 import 'package:flutter/services.dart';
 
+import 'app_back_button.dart';
+
 const _appleLiquidGlassViewType = 'com.animewitcher.app/liquid_glass';
 const _appleNativeGlassButtonViewType =
     'com.animewitcher.app/native_glass_button';
@@ -17,8 +19,10 @@ const _appleNativeSearchFieldViewType =
 const _appleNativeMenuButtonViewType =
     'com.animewitcher.app/native_menu_button';
 
-bool get _usesNativeAppleLiquidGlass =>
-    !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+/// Off everywhere: iOS draws the same plain controls as every other
+/// platform. The native glass buttons, and the header overlay that carried
+/// them across pages, are retired.
+bool get _usesNativeAppleLiquidGlass => false;
 
 /// True on iOS where AnimeWitcher hosts the native Liquid Glass controls.
 /// Screens use this to hand their header actions to the persistent overlay
@@ -614,16 +618,9 @@ class AppleLiquidGlassSurface extends StatelessWidget {
         ),
         child: child,
       );
-      if (!fallbackBlur) {
-        return ClipRRect(borderRadius: borderRadius, child: surface);
-      }
-      return ClipRRect(
-        borderRadius: borderRadius,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: surface,
-        ),
-      );
+      // No blur behind it any more: a plain fill, as the rest of the app's
+      // controls are drawn.
+      return ClipRRect(borderRadius: borderRadius, child: surface);
     }
 
     final cornerRadius = borderRadius.topLeft.x;
@@ -671,56 +668,13 @@ class AppleLiquidGlassBackButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    // Every navigation back affordance follows the active theme accent.
-    // Callers may still customize the glass fallback surface independently.
-    final effectiveForeground = colors.primary;
-    final effectiveFallback = fallbackColor ?? colors.surfaceContainerHigh;
-    final radius = BorderRadius.circular(size / 2);
-
-    final effectiveOnPressed =
-        onPressed ?? () => Navigator.of(context).maybePop();
-    final effectiveTooltip =
-        tooltip ?? MaterialLocalizations.of(context).backButtonTooltip;
-
-    if (_usesNativeAppleLiquidGlass) {
-      return Center(
-        child: _AppleNativeGlassIconButton(
-          systemName: 'chevron.left',
-          onPressed: effectiveOnPressed,
-          size: size,
-          color: effectiveForeground,
-          accessibilityLabel: effectiveTooltip,
-        ),
-      );
-    }
-
-    return Center(
-      child: SizedBox.square(
-        dimension: size,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: effectiveFallback,
-            borderRadius: radius,
-            border: Border.all(
-              color: colors.outlineVariant.withValues(alpha: 0.28),
-            ),
-          ),
-          child: IconButton(
-            tooltip: effectiveTooltip,
-            onPressed: effectiveOnPressed,
-            style: IconButton.styleFrom(
-              backgroundColor: Colors.transparent,
-              foregroundColor: effectiveForeground,
-              padding: EdgeInsets.zero,
-            ),
-            icon: const Icon(
-              Icons.arrow_back_rounded,
-              textDirection: TextDirection.ltr,
-            ),
-          ),
-        ),
-      ),
+    // Compatibility wrapper for older call sites. Liquid Glass back chrome is
+    // retired; all routes now draw the same plain physical-left affordance.
+    return AppBackButton(
+      onPressed: onPressed,
+      size: size,
+      color: foregroundColor,
+      tooltip: tooltip,
     );
   }
 }

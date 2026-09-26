@@ -5,6 +5,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/storage/episode_watch_repository.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:animewitcher/core/utils/episode_order.dart';
@@ -13,10 +14,12 @@ import 'package:animewitcher/shared/widgets/custom_widgets.dart';
 import 'package:animewitcher/shared/widgets/paged_rail.dart';
 
 import '../details_controller.dart';
+import '../../../library/presentation/downloads_provider.dart';
 
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 
 import 'episode_card.dart';
+import 'episode_browse.dart';
 import 'episode_search.dart';
 import 'episode_view_mode.dart';
 import 'details_hero_actions.dart';
@@ -514,12 +517,42 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
           .toList();
     }
 
-    // Episode list UI v2: show every filtered episode without range batching.
-    final displayedEpisodes = episodesInDisplayOrder(
+    final orderedEpisodes = episodesInDisplayOrder(
       episodes,
       ascending: detailsState.isAscending,
     );
+    // Read the way the episode cards read them, so the filter agrees with
+    // what each card says.
+    ref.watch(episodeWatchRevisionProvider);
+    final watchRepository = ref.watch(episodeWatchRepositoryProvider);
+    final downloads =
+        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
 
+    return ListenableBuilder(
+      listenable: episodeBrowseListenable,
+      builder: (context, _) {
+        final displayedEpisodes = browseEpisodesFor(
+          parentItem: parentItem,
+          ordered: orderedEpisodes,
+          watchRepository: watchRepository,
+          downloads: downloads,
+        );
+        return _buildSliverEpisodes(
+          context,
+          allEpisodes: orderedEpisodes,
+          displayedEpisodes: displayedEpisodes,
+          selectionActive: detailsState.selectedEpisodeKeys.isNotEmpty,
+        );
+      },
+    );
+  }
+
+  Widget _buildSliverEpisodes(
+    BuildContext context, {
+    required List<Episode> allEpisodes,
+    required List<Episode> displayedEpisodes,
+    required bool selectionActive,
+  }) {
     return SliverMainAxisGroup(
       slivers: [
         SliverToBoxAdapter(
@@ -542,6 +575,14 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
             ),
           ),
         ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: LayoutConstants.spacingMd),
+            child: EpisodeBrowseBar(episodes: allEpisodes),
+          ),
+        ),
+        if (displayedEpisodes.isEmpty)
+          const SliverToBoxAdapter(child: EpisodeBrowseEmpty()),
         SliverEpisodeCardGrid(
           children: [
             for (final ep in displayedEpisodes)
@@ -550,10 +591,16 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
                   key: ValueKey(ep.url),
                   episode: ep,
                   parentItem: parentItem,
+                  // Rows on the page, as the PC and tablet list has them: no
+                  // panel round each one, only the current or chosen
+                  // episode filled.
+                  plain: true,
                 ),
               ),
           ],
         ),
+        if (selectionActive)
+          const SliverToBoxAdapter(child: SizedBox(height: 132)),
       ],
     );
   }
@@ -912,13 +959,27 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
       episodes,
       ascending: detailsState.isAscending,
     );
+    ref.watch(episodeWatchRevisionProvider);
+    final watchRepository = ref.watch(episodeWatchRepositoryProvider);
+    final downloads =
+        ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
 
-    return ValueListenableBuilder<String>(
-      valueListenable: episodeSearchQuery,
-      builder: (context, query, _) {
+    return ListenableBuilder(
+      listenable: Listenable.merge(<Listenable>[
+        episodeSearchQuery,
+        episodeBrowseListenable,
+      ]),
+      builder: (context, _) {
+        final query = episodeSearchQuery.value;
+        final browsed = browseEpisodesFor(
+          parentItem: parentItem,
+          ordered: orderedEpisodes,
+          watchRepository: watchRepository,
+          downloads: downloads,
+        );
         final displayedEpisodes = query.trim().isEmpty
-            ? orderedEpisodes
-            : orderedEpisodes
+            ? browsed
+            : browsed
                   .where(
                     (episode) => episodeMatchesQuery(
                       number: episode.episode,
@@ -927,7 +988,13 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
                     ),
                   )
                   .toList(growable: false);
-        return _buildEpisodesSection(context, displayedEpisodes, query);
+        return _buildEpisodesSection(
+          context,
+          displayedEpisodes,
+          query,
+          allEpisodes: orderedEpisodes,
+          selectionActive: detailsState.selectedEpisodeKeys.isNotEmpty,
+        );
       },
     );
   }
@@ -935,8 +1002,10 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
   Widget _buildEpisodesSection(
     BuildContext context,
     List<Episode> displayedEpisodes,
-    String query,
-  ) {
+    String query, {
+    required List<Episode> allEpisodes,
+    required bool selectionActive,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -967,7 +1036,13 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
             ],
           ),
         ),
-        if (displayedEpisodes.isEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: LayoutConstants.spacingMd),
+          child: EpisodeBrowseBar(episodes: allEpisodes),
+        ),
+        if (displayedEpisodes.isEmpty && query.trim().isEmpty)
+          const EpisodeBrowseEmpty()
+        else if (displayedEpisodes.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(
               vertical: LayoutConstants.spacingLg,
@@ -1092,6 +1167,7 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
               );
             },
           ),
+        if (selectionActive) const SizedBox(height: 132),
       ],
     );
   }

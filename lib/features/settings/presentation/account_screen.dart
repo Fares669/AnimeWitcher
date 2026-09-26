@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
@@ -16,7 +16,6 @@ import 'account_management_screens.dart';
 import 'account_privacy_settings_screen.dart';
 import 'account_ui_helpers.dart';
 import 'widgets/settings_widgets.dart';
-import '../../../core/utils/window_controls_inset.dart';
 
 enum _AccountFormMode { signIn, createAccount }
 
@@ -54,8 +53,6 @@ class _AnimeWitcherAccountScreenState
     final configured = AnimeWitcherAccountConfig.firebaseConfigured;
     final busy = _submitting || account.isLoading || !configured;
     final canPop = Navigator.of(context).canPop();
-    final isRtl = Directionality.of(context) == TextDirection.rtl;
-    final showFlutterBack = !appleUsesPersistentLiquidGlassHeader && canPop;
     final asyncError = account.when<Object?>(
       data: (_) => null,
       error: (error, _) => error,
@@ -63,36 +60,13 @@ class _AnimeWitcherAccountScreenState
     );
 
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        // This bar follows the app's language rather than being pinned
-        // left-to-right, so in Arabic the title starts at the right edge —
-        // the corner the window paints its caption buttons over. The room
-        // for them belongs in the slot that sits there, which is the leading
-        // one while the language reads right to left.
-        leadingWidth: isRtl ? windowControlsTrailingInset : null,
-        leading: isRtl
-            ? const SizedBox.shrink()
-            : (showFlutterBack ? const AppleLiquidGlassBackButton() : null),
-        actions: showFlutterBack && isRtl
-            ? const <Widget>[
-                Padding(
-                  padding: EdgeInsets.only(left: 8),
-                  child: AppleLiquidGlassBackButton(),
-                ),
-              ]
-            : const <Widget>[],
-        title: ApplePersistentGlassHeaderScope(
-          enabled: canPop,
-          onBack: () => Navigator.of(context).maybePop(),
-          child: Text(
-            appText(
-              context,
-              english: 'AnimeWitcher account',
-              arabic: 'حساب AnimeWitcher',
-            ),
-          ),
+      appBar: AppPageAppBar(
+        title: appText(
+          context,
+          english: 'AnimeWitcher account',
+          arabic: 'حساب AnimeWitcher',
         ),
+        canPop: canPop,
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {

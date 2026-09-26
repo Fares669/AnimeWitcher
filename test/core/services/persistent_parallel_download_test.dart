@@ -159,11 +159,72 @@ void main() {
     expect(starts, hasLength(1));
     expect(
       starts.single.headers['Range'],
-      'bytes=0-1048575',
+      'bytes=0-4194303',
       reason:
-          'a one-connection iOS download still needs small immutable '
+          'a one-connection iOS download still uses bounded immutable '
           'checkpoints so Pause and process recreation never depend on '
           'URLSession resumeData for one giant file',
+    );
+  });
+
+  test('fresh child launches do not rewrite an unchanged manifest', () async {
+    expect(await coordinator.start(parent, 100), isTrue);
+    await waitUntil(() => starts.isNotEmpty);
+
+    final manifest = File('${await parent.filePath()}.parts/manifest.json');
+    Map<String, dynamic> snapshot() =>
+        jsonDecode(manifest.readAsStringSync()) as Map<String, dynamic>;
+
+    final sequenceBeforeExpansion =
+        (snapshot()['checkpointSequence'] as num).toInt();
+    expect(sequenceBeforeExpansion, greaterThan(0));
+
+    await markRunning(<DownloadTask>[starts.first]);
+    await waitUntil(() => starts.length >= 3);
+    expect(
+      snapshot()['checkpointSequence'],
+      sequenceBeforeExpansion,
+      reason:
+          'slow-start expansion must reuse the attempt metadata persisted '
+          'before native IO instead of rewriting the whole manifest per child',
+    );
+  });
+
+  test('intermediate child completion does not fsync the full manifest', () async {
+    expect(await coordinator.start(parent, 100), isTrue);
+    await expandFreshTo(5);
+
+    final manifest = File('${await parent.filePath()}.parts/manifest.json');
+    Map<String, dynamic> snapshot() =>
+        jsonDecode(manifest.readAsStringSync()) as Map<String, dynamic>;
+    final sequenceBeforeCompletion =
+        (snapshot()['checkpointSequence'] as num).toInt();
+
+    final first = starts.first;
+    await completePart(first, List<int>.filled(20, 7));
+    await waitUntil(
+      () => records[first.taskId]?.status == TaskStatus.complete,
+    );
+
+    expect(
+      snapshot()['checkpointSequence'],
+      sequenceBeforeCompletion,
+      reason:
+          'the complete part file and TaskRecord are already durable; '
+          'intermediate children should join the coalesced manifest checkpoint',
+    );
+  });
+
+  test('slow-start child running callbacks publish parent running once', () async {
+    expect(await coordinator.start(parent, 23), isTrue);
+    await expandFreshTo(5);
+
+    expect(
+      statuses.where((status) => status == TaskStatus.running),
+      hasLength(1),
+      reason:
+          'child readiness must not fan out duplicate parent status writes '
+          'or UI notifications',
     );
   });
 
@@ -179,6 +240,35 @@ void main() {
     ]);
     expect(starts.map((task) => task.taskId).toSet().length, 5);
   });
+
+  test(
+    'disk fallback probes only native-owned ranges',
+    () async {
+      await coordinator.dispose();
+      coordinator = create(
+        diskProgressPollInterval: const Duration(milliseconds: 10),
+      );
+
+      expect(await coordinator.start(parent, 100), isTrue);
+      expect(starts.length, 1);
+
+      final queuedFile = File(
+        '${directory.path}${Platform.pathSeparator}video.mp4.parts'
+        '${Platform.pathSeparator}1.part',
+      );
+      await queuedFile.parent.create(recursive: true);
+      await queuedFile.writeAsBytes(List<int>.filled(10, 3), flush: true);
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(
+        coordinator.progressFor(parent.taskId),
+        0,
+        reason:
+            'an unlaunched range has no writer and cannot change during an '
+            'active session, so polling it only adds filesystem work',
+      );
+    },
+  );
 
   test(
     'visible part bytes wake a parent when native callbacks are missing',

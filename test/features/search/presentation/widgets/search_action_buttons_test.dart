@@ -1,4 +1,3 @@
-import 'package:animewitcher/features/search/presentation/search_domain.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_action_buttons.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:flutter/material.dart';
@@ -9,7 +8,7 @@ import 'package:animewitcher/features/search/presentation/widgets/search_glass_s
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('iOS renders domain sort and filter in one glass capsule', (
+  testWidgets('iOS draws sort and filter as plain buttons, no native glass', (
     tester,
   ) async {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -23,8 +22,6 @@ void main() {
           home: Scaffold(
             appBar: AppBar(
               title: SearchActionButtons(
-                domain: SearchDomain.anime,
-                onDomainSelected: (_) {},
                 sortValue: 'name_asc',
                 sortItems: const <AppleNativeMenuItem>[
                   AppleNativeMenuItem(
@@ -48,29 +45,10 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.byType(UiKitView), findsOneWidget);
-      expect(find.byType(AppleLiquidGlassActionGroup), findsOneWidget);
-      final glass = tester.widget<UiKitView>(find.byType(UiKitView));
-      expect(glass.viewType, 'com.animewitcher.app/native_toolbar');
-      expect(
-        tester.getSize(find.byKey(const ValueKey('search-action-capsule'))).width,
-        SearchActionButtons.groupWidthForHeight(
-          SearchGlassSurface.height,
-          visibleControls: 3,
-        ),
-      );
-      final group = tester.widget<AppleLiquidGlassActionGroup>(
-        find.byType(AppleLiquidGlassActionGroup),
-      );
-      final buttons = group.children.cast<AppleLiquidGlassToolbarButton>().toList();
-      expect(buttons, hasLength(3));
-      expect(buttons.map((button) => button.tooltip), <String?>[
-        'Search domain',
-        'Sort',
-        'Filters',
-      ]);
-      expect(buttons.first.menuItems, hasLength(4));
-      expect(buttons.first.selectedMenuValue, 'anime');
+      // The native glass is retired: iOS draws what every platform does.
+      expect(find.byType(UiKitView), findsNothing);
+      expect(find.byTooltip('Sort'), findsOneWidget);
+      expect(find.byTooltip('Filters'), findsOneWidget);
       expect(find.text('3'), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
@@ -83,7 +61,7 @@ void main() {
     }
   });
 
-  testWidgets('search and actions align with a yellow count in a blue theme', (
+  testWidgets('search and actions align with a theme-colored count badge', (
     tester,
   ) async {
     final controller = TextEditingController();
@@ -132,16 +110,18 @@ void main() {
     expect(actions.height, field.height);
     expect(actions.top, field.top);
     expect(actions.left - field.right, 10);
-    expect(find.byType(AppleLiquidGlassSurface), findsNWidgets(2));
+    // The field is a plain filled pill now, like the library's; only the
+    // action capsule is glass.
+    expect(find.byType(AppleLiquidGlassSurface), findsOneWidget);
     expect(find.text('2'), findsOneWidget);
+    final theme = Theme.of(tester.element(find.byType(SearchActionButtons)));
     final badgeBox = tester.widget<Container>(find.descendant(
       of: find.byType(SearchFilterBadge), matching: find.byType(Container),
     ));
     final decoration = badgeBox.decoration! as BoxDecoration;
-    expect(decoration.color, SearchFilterBadge.backgroundColor);
+    expect(decoration.color, theme.colorScheme.primary);
     expect(decoration.shape, BoxShape.circle);
     final icon = tester.widget<Icon>(find.byIcon(Icons.arrow_upward_rounded));
-    final theme = Theme.of(tester.element(find.byType(SearchActionButtons)));
     expect(icon.color, theme.colorScheme.primary);
 
     await tester.enterText(find.byType(TextField), 'Anime');
@@ -322,55 +302,4 @@ void main() {
     final arrow = tester.element(find.byIcon(Icons.arrow_upward_rounded));
     expect(IconTheme.of(arrow).opacity ?? 1.0, 1.0);
   });
-
-
-  testWidgets('characters collapse actions to the domain control only', (
-    tester,
-  ) async {
-    SearchDomain? selected;
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          appBar: AppBar(
-            leading: SearchActionButtons(
-              domain: SearchDomain.characters,
-              onDomainSelected: (value) => selected = value,
-              showSort: false,
-              showFilter: false,
-              sortValue: 'favorites',
-              sortItems: const <AppleNativeMenuItem>[
-                AppleNativeMenuItem(value: 'favorites', label: 'Favorites'),
-              ],
-              onSortSelected: (_) {},
-              onFilterPressed: () {},
-              sortTooltip: 'Sort',
-              filterTooltip: 'Filters',
-              sortIcon: Icons.star_rounded,
-              sortSystemImage: 'star.fill',
-              height: 48,
-            ),
-          ),
-        ),
-      ),
-    );
-
-    await tester.pump();
-
-    expect(find.byTooltip('Search domain'), findsOneWidget);
-    expect(find.byTooltip('Sort'), findsNothing);
-    expect(find.byTooltip('Filters'), findsNothing);
-    expect(
-      tester.getSize(find.byKey(const ValueKey('search-action-capsule'))).width,
-      48,
-    );
-
-    await tester.tap(find.byTooltip('Search domain'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Manga'));
-    await tester.pumpAndSettle();
-
-    expect(selected, SearchDomain.manga);
-  });
-
 }

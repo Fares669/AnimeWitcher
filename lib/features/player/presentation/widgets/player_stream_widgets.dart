@@ -1390,9 +1390,10 @@ class _SeekBarState extends State<_SeekBar> {
                               width: thumbWidth,
                               height: thumbHeight,
                               decoration: BoxDecoration(
-                                color: Colors.white.withValues(
-                                  alpha: thumbOpacity,
-                                ),
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: thumbOpacity),
                                 borderRadius: BorderRadius.circular(
                                   thumbRadius,
                                 ),
@@ -1466,7 +1467,7 @@ class _SeekBarState extends State<_SeekBar> {
             child: Container(
               color: interval.isSkipSegment
                   ? HotstarPlayerStyle.skipSegment
-                  : Colors.white,
+                  : Theme.of(context).colorScheme.primary,
             ),
           ),
         ),
@@ -1506,6 +1507,7 @@ class _VolumeTrack extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
     final filled = (_width * fraction).clamp(0.0, _width);
     final breakStop = fraction <= 0
         ? 0.0
@@ -1556,12 +1558,12 @@ class _VolumeTrack extends StatelessWidget {
                 height: _height,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(999),
-                  color: boosting ? null : Colors.white.withValues(alpha: 0.92),
+                  color: boosting ? null : accent.withValues(alpha: 0.92),
                   gradient: boosting
                       ? LinearGradient(
                           stops: <double>[breakStop, breakStop, 1],
                           colors: <Color>[
-                            Colors.white.withValues(alpha: 0.92),
+                            accent.withValues(alpha: 0.92),
                             const Color(0xFFF97316),
                             boostColor,
                           ],
@@ -1576,7 +1578,7 @@ class _VolumeTrack extends StatelessWidget {
                 width: _thumb,
                 height: _thumb,
                 decoration: BoxDecoration(
-                  color: boosting ? boostColor : Colors.white,
+                  color: boosting ? boostColor : accent,
                   shape: BoxShape.circle,
                   boxShadow: const [
                     BoxShadow(

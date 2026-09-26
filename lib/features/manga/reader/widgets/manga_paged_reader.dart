@@ -77,9 +77,9 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     }
 
     return mangaReaderPageSpreads(
-      pageCount: widget.pages.length,
-      singleFirst: widget.settings.doublePageSingleFirstPage,
-    )
+          pageCount: widget.pages.length,
+          singleFirst: widget.settings.doublePageSingleFirstPage,
+        )
         .map(
           (spread) => <_MangaPageUnit>[
             for (final index in spread)
@@ -191,6 +191,7 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       zoomable: zoomable,
       navigationController: navigationController,
       onDoubleTap: widget.onDoubleTap,
+      onWheelPage: _wheelTurn,
     );
   }
 
@@ -214,6 +215,7 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
       navigationController: navigationController,
       rtl: widget.rtl,
       onDoubleTap: widget.onDoubleTap,
+      onWheelPage: _wheelTurn,
       child: Row(
         textDirection: widget.rtl ? TextDirection.rtl : TextDirection.ltr,
         children: <Widget>[
@@ -222,6 +224,19 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
         ],
       ),
     );
+  }
+
+  /// A mouse wheel over a page turns it, one page per flick.
+  void _wheelTurn(bool forward) {
+    if (!_controller.hasClients) return;
+    final duration = widget.settings.animatePageTransitions
+        ? const Duration(milliseconds: 220)
+        : const Duration(milliseconds: 1);
+    if (forward) {
+      _controller.nextPage(duration: duration, curve: Curves.easeOutCubic);
+    } else {
+      _controller.previousPage(duration: duration, curve: Curves.easeOutCubic);
+    }
   }
 
   bool _handleOverscroll(OverscrollNotification notification) {
@@ -246,34 +261,34 @@ class _MangaPagedReaderState extends State<MangaPagedReader> {
     return NotificationListener<OverscrollNotification>(
       onNotification: _handleOverscroll,
       child: PageView.builder(
-      controller: _controller,
-      scrollDirection: widget.scrollDirection,
-      reverse: widget.rtl && widget.scrollDirection == Axis.horizontal,
-      allowImplicitScrolling: true,
-      physics: widget.settings.animatePageTransitions
-          ? null
-          : const PageScrollPhysics(),
-      itemCount: spreads.length + (widget.trailingPage == null ? 0 : 1),
-      onPageChanged: (spreadIndex) {
-        if (spreadIndex >= spreads.length) {
-          setState(() => _onTrailingPage = true);
-          return;
-        }
-        final units = spreads[spreadIndex];
-        final actual = units.isEmpty ? 0 : units.first.pageIndex;
-        setState(() {
-          _currentSpreadIndex = spreadIndex;
-          _onTrailingPage = false;
-          _trailingAdvanceRequested = false;
-        });
-        _lastActualPage = actual;
-        widget.onPageChanged(actual);
-      },
-      itemBuilder: (context, index) {
-        if (index >= spreads.length) return widget.trailingPage!;
-        return _spread(context, spreads[index], index);
-      },
-    ),
+        controller: _controller,
+        scrollDirection: widget.scrollDirection,
+        reverse: widget.rtl && widget.scrollDirection == Axis.horizontal,
+        allowImplicitScrolling: true,
+        physics: widget.settings.animatePageTransitions
+            ? null
+            : const PageScrollPhysics(),
+        itemCount: spreads.length + (widget.trailingPage == null ? 0 : 1),
+        onPageChanged: (spreadIndex) {
+          if (spreadIndex >= spreads.length) {
+            setState(() => _onTrailingPage = true);
+            return;
+          }
+          final units = spreads[spreadIndex];
+          final actual = units.isEmpty ? 0 : units.first.pageIndex;
+          setState(() {
+            _currentSpreadIndex = spreadIndex;
+            _onTrailingPage = false;
+            _trailingAdvanceRequested = false;
+          });
+          _lastActualPage = actual;
+          widget.onPageChanged(actual);
+        },
+        itemBuilder: (context, index) {
+          if (index >= spreads.length) return widget.trailingPage!;
+          return _spread(context, spreads[index], index);
+        },
+      ),
     );
   }
 }
@@ -288,6 +303,7 @@ class _MangaPagedImage extends StatefulWidget {
     this.zoomable = true,
     this.navigationController,
     this.onDoubleTap,
+    this.onWheelPage,
   });
 
   final MangaPage page;
@@ -298,6 +314,7 @@ class _MangaPagedImage extends StatefulWidget {
   final bool zoomable;
   final MangaZoomNavigationController? navigationController;
   final VoidCallback? onDoubleTap;
+  final ValueChanged<bool>? onWheelPage;
 
   @override
   State<_MangaPagedImage> createState() => _MangaPagedImageState();
@@ -344,7 +361,7 @@ class _MangaPagedImageState extends State<_MangaPagedImage> {
                   height: size.height,
                   child: MangaPageImage(
                     page: widget.page,
-                                settings: widget.settings,
+                    settings: widget.settings,
                     fit: BoxFit.fill,
                     expand: true,
                     onImageSize: _onImageSize,
@@ -364,6 +381,7 @@ class _MangaPagedImageState extends State<_MangaPagedImage> {
       rtl: widget.rtl,
       navigationController: widget.navigationController,
       onDoubleTap: widget.onDoubleTap,
+      onWheelPage: widget.onWheelPage,
       child: image,
     );
   }

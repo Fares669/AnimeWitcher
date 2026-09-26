@@ -1,8 +1,13 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
+import 'package:animewitcher/shared/widgets/app_side_menu.dart';
+import 'package:animewitcher/core/navigation/taskbar_destination.dart';
+
+import '../../settings/presentation/general_settings_provider.dart';
+
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:animewitcher/core/navigation/taskbar_destination.dart';
+import 'package:animewitcher/core/navigation/app_layout_style.dart';
 
 import 'home_provider.dart';
 import 'home_section_titles.dart';
@@ -118,9 +123,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         baseUrl + '/watch/' + Uri.encodeComponent(animeId),
       );
       if (!context.mounted) return;
-      DetailsRoute(
-        $extra: DetailsRouteExtra(item: details),
-      ).push<void>(context);
+      DetailsRoute($extra: DetailsRouteExtra(item: details))
+          .push<void>(context);
     } catch (_) {
       // The article remains usable even if its linked anime is unavailable.
     }
@@ -153,7 +157,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final homeDataAsync = ref.watch(homeDataProvider);
     final continueWatching = ref.watch(continueWatchingProvider);
     final profile = ref.watch(deviceProfileProvider).asData?.value;
-    final isWidescreen = profile?.isTv == true ||
+    final isWidescreen =
+        profile?.isTv == true ||
         context.isTv ||
         profile?.isLargeScreen == true ||
         context.isTabletOrLarger;
@@ -161,12 +166,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final scaffold = AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
-        backgroundColor: Colors.black,
-        body: _buildBody(
-          context,
-          homeDataAsync,
-          continueWatching,
-          isWidescreen: isWidescreen,
+        // The theme's page colour, so the amber theme reaches home too.
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: _buildBody(
+                context,
+                homeDataAsync,
+                continueWatching,
+                isWidescreen: isWidescreen,
+              ),
+            ),
+            // The side menu's button, over the artwork in the corner the
+            // menu comes from; nothing in the other layouts.
+            Positioned(
+              top: MediaQuery.viewPaddingOf(context).top + 8,
+              left: 12,
+              child: const AppSideMenuButton(overArtwork: true),
+            ),
+          ],
         ),
       ),
     );
@@ -187,6 +206,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     AnimeWitcherProvider provider,
   ) {
     final entries = visibleHomeRailEntries(data).toList(growable: false);
+    final mangaHasOwnTab = ref.watch(mangaHasOwnTabProvider);
     var newsAfterIndex = entries.indexWhere(
       (entry) => isMostWatchedAnimationSectionTitle(entry.key),
     );
@@ -232,15 +252,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             limit: provider.viewAllPageSize,
           ),
           onTap: (item) {
-            DetailsRoute(
-              $extra: DetailsRouteExtra(item: item),
-            ).push<void>(context);
+            DetailsRoute($extra: DetailsRouteExtra(item: item))
+                .push<void>(context);
           },
           heroTagPrefix: 'home',
           forcePortrait: isLatestAddedSectionTitle(entry.key),
         ),
       );
-      if (latestManga.isNotEmpty && _isNewEpisodesSectionTitle(entry.key)) {
+      // With manga on a tab of its own, its new chapters live there.
+      if (latestManga.isNotEmpty &&
+          !mangaHasOwnTab &&
+          _isNewEpisodesSectionTitle(entry.key)) {
         sections.add(
           LatestMangaChaptersSection(
             title: AppLocalizations.of(context)!.latestChapters,
@@ -286,6 +308,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       );
     }
 
+    // On a desktop every layout — dock, side rail, top bar — carries a news
+    // button of its own, so home leaves the news row out rather than showing
+    // it twice. Phones keep the row.
+    final newsHasItsOwnButton = appLayoutsAvailable(context);
+    List<NewsItem> newsFor(List<NewsItem> news) =>
+        newsHasItsOwnButton ? const <NewsItem>[] : news;
+
     final activeProvider = ref.watch(activeProviderProvider);
     if (activeProvider == null) {
       return _buildNoProviderState(context, l10n, isWidescreen: isWidescreen);
@@ -310,63 +339,63 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       ),
       HomeOffline() => _buildErrorState(context, ref),
       HomeError() => _buildErrorState(context, ref),
-      HomeSuccess(:final data, :final news, :final latestManga) => _withGradientEdgeHint(
-        MouseDragRefreshIndicator(
-          onRefresh: () async {
-            await Future.wait<void>([
-              ref.read(continueWatchingProvider.notifier).refreshFromServer(),
-              ref.read(homeDataProvider.notifier).fetch(keepCurrent: true),
-            ]);
-          },
-          child: CustomScrollView(
-            controller: _scrollController,
-            slivers: [
-              if (homeHeroMovies(data) != null)
-                SliverToBoxAdapter(
-                  child: HomeHeroCarousel(
-                    movies: homeHeroMovies(data)!,
-                    scrollController: _scrollController,
-                    onTap: (item) {
-                      DetailsRoute(
-                        $extra: DetailsRouteExtra(item: item),
-                      ).push<void>(context);
-                    },
+      HomeSuccess(:final data, news: final homeNews, :final latestManga) =>
+        _withGradientEdgeHint(
+          MouseDragRefreshIndicator(
+            onRefresh: () async {
+              await Future.wait<void>([
+                ref.read(continueWatchingProvider.notifier).refreshFromServer(),
+                ref.read(homeDataProvider.notifier).fetch(keepCurrent: true),
+              ]);
+            },
+            child: CustomScrollView(
+              controller: _scrollController,
+              slivers: [
+                if (homeHeroMovies(data) != null)
+                  SliverToBoxAdapter(
+                    child: HomeHeroCarousel(
+                      movies: homeHeroMovies(data)!,
+                      scrollController: _scrollController,
+                      onTap: (item) {
+                        DetailsRoute($extra: DetailsRouteExtra(item: item))
+                            .push<void>(context);
+                      },
+                    ),
+                  )
+                else if (!isWidescreen)
+                  // Keep content below the status area when no banner is present.
+                  SliverPadding(
+                    padding: EdgeInsets.only(
+                      top: MediaQuery.viewPaddingOf(context).top,
+                    ),
                   ),
-                )
-              else if (!isWidescreen)
-                // Keep content below the status area when no banner is present.
-                SliverPadding(
-                  padding: EdgeInsets.only(
-                    top: MediaQuery.viewPaddingOf(context).top,
+
+                if (continueWatching.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: ContinueWatchingSection(
+                      title: l10n.continueWatching,
+                      items: continueWatching,
+                      topPadding: isWidescreen ? 0 : null,
+                    ),
+                  ),
+
+                SliverList(
+                  delegate: SliverChildListDelegate(
+                    _buildProviderSectionsWithNews(
+                      context,
+                      data,
+                      newsFor(homeNews),
+                      latestManga,
+                      activeProvider,
+                    ),
                   ),
                 ),
 
-              if (continueWatching.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: ContinueWatchingSection(
-                    title: l10n.continueWatching,
-                    items: continueWatching,
-                    topPadding: isWidescreen ? 0 : null,
-                  ),
-                ),
-
-              SliverList(
-                delegate: SliverChildListDelegate(
-                  _buildProviderSectionsWithNews(
-                    context,
-                    data,
-                    news,
-                    latestManga,
-                    activeProvider,
-                  ),
-                ),
-              ),
-
-              const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
-            ],
+                const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
+              ],
+            ),
           ),
         ),
-      ),
     };
   }
 

@@ -1,10 +1,12 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import 'widgets/download_log_dialog.dart';
 
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -29,8 +31,29 @@ import 'cache_provider.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
 
+import '../../../core/navigation/app_layout_style.dart';
+import '../../details/presentation/widgets/details_seasons_bar.dart';
+import '../../details/presentation/widgets/seasons_bar_style_picker.dart';
+import '../../../shared/widgets/app_layout_picker.dart';
 import '../../player/data/anime4k.dart';
 import 'widgets/anime4k_dialog.dart';
+
+/// Turns Anime4K on or off from its row. Turning it on with no shaders yet
+/// opens the dialog, which is where they are downloaded; turning it on with
+/// no model chosen picks A, the general-purpose one.
+Future<void> _setAnime4k(BuildContext context, WidgetRef ref, bool on) async {
+  final notifier = ref.read(playerSettingsProvider.notifier);
+  final settings =
+      ref.read(playerSettingsProvider).asData?.value ?? const PlayerSettings();
+  await notifier.setAnime4kEnabled(on);
+  if (!on) return;
+  if (settings.anime4kMode == Anime4kMode.off) {
+    await notifier.setAnime4kMode(Anime4kMode.a);
+  }
+  if (settings.anime4kShaderDirectory.trim().isEmpty && context.mounted) {
+    showAnime4kDialog(context, ref);
+  }
+}
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -42,7 +65,6 @@ class SettingsScreen extends ConsumerWidget {
     final isWidescreen = isTv || context.isTabletOrLarger;
     final canPop = Navigator.of(context).canPop();
     final isRtl = Directionality.of(context) == TextDirection.rtl;
-    final showFlutterBack = !appleUsesPersistentLiquidGlassHeader && canPop;
 
     if (isWidescreen) {
       return Scaffold(
@@ -90,25 +112,7 @@ class SettingsScreen extends ConsumerWidget {
     // Mobile layout
     final l10n = AppLocalizations.of(context)!;
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        leading: showFlutterBack && !isRtl
-            ? const AppleLiquidGlassBackButton()
-            : null,
-        title: ApplePersistentGlassHeaderScope(
-          enabled: canPop,
-          onBack: () => Navigator.of(context).maybePop(),
-          child: Text(l10n.settings),
-        ),
-        actions: showFlutterBack && isRtl
-            ? const <Widget>[
-                Padding(
-                  padding: EdgeInsets.only(left: 8),
-                  child: AppleLiquidGlassBackButton(),
-                ),
-              ]
-            : const <Widget>[],
-      ),
+      appBar: AppPageAppBar(title: l10n.settings, canPop: canPop),
       body: _buildSettingsList(context, ref, isTv),
     );
   }
@@ -131,6 +135,11 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
+  /// Marks the reader group, whose one row opens a screen of its own. A pane
+  /// wide enough to show a group alone shows that screen's options in it
+  /// instead, rather than a link to them.
+  static const readerGroupKey = ValueKey<String>('settings-reader-group');
+
   /// Every group on this screen, in order, for a shell that lists them
   /// separately. Public so the More sidebar can offer each one by name.
   List<Widget> settingsSections(
@@ -151,7 +160,6 @@ class SettingsScreen extends ConsumerWidget {
     bool isTv,
   ) {
     final versionAsync = ref.watch(appVersionProvider);
-    final themeMode = ref.watch(appThemeModeProvider);
     final generalSettings = ref.watch(generalSettingsProvider);
     final animeDataSettings = ref.watch(animeDataSourceSettingsProvider);
 
@@ -171,10 +179,25 @@ class SettingsScreen extends ConsumerWidget {
           SettingsTile(
             icon: Icons.dark_mode_rounded,
             title: l10n.appTheme,
-            subtitle: themeMode == ThemeMode.system
-                ? l10n.system
-                : (themeMode == ThemeMode.dark ? l10n.dark : l10n.light),
-            onTap: () => showThemeDialog(context, ref, themeMode),
+            // Picked on the row, each theme with its colour, no dialog in
+            // between.
+            trailing: const SizedBox.shrink(),
+            below: SettingsChoices<AppThemeStyle>(
+              values: AppThemeStyle.values,
+              selected: ref.watch(appThemeStyleProvider),
+              label: (style) => style.label(arabic: isArabic),
+              swatch: (style) => style.swatch,
+              onSelected: (style) =>
+                  ref.read(appThemeStyleProvider.notifier).select(style),
+            ),
+          ),
+          SettingsTile(
+            icon: Icons.view_carousel_rounded,
+            title: isArabic ? 'شريط المواسم' : 'Seasons bar',
+            subtitle: ref
+                .watch(seasonsBarStyleProvider)
+                .label(arabic: isArabic),
+            onTap: () => showSeasonsBarStylePicker(context, ref),
           ),
           SettingsTile(
             icon: Icons.home_rounded,
@@ -190,6 +213,29 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
           SettingsTile(
+            key: const ValueKey<String>('settings-manga-tab'),
+            icon: Icons.menu_book_rounded,
+            title: isArabic ? 'قسم المانجا منفصل' : 'Manga as its own tab',
+            subtitle: isArabic
+                ? 'المانجا في الشريط بقسم خاص بدل الصفحة الرئيسية'
+                : 'Manga gets a tab in the bar instead of rows on home',
+            trailing: Switch(
+              value: !generalSettings.hiddenTaskbarItems.contains(
+                TaskbarDestination.manga.id,
+              ),
+              onChanged: (show) => ref
+                  .read(generalSettingsProvider.notifier)
+                  .setMangaTab(show),
+            ),
+            onTap: () => ref
+                .read(generalSettingsProvider.notifier)
+                .setMangaTab(
+                  generalSettings.hiddenTaskbarItems.contains(
+                    TaskbarDestination.manga.id,
+                  ),
+                ),
+          ),
+          SettingsTile(
             icon: Icons.dashboard_customize_rounded,
             title: isArabic ? 'تخصيص شريط المهام' : 'Customize taskbar',
             subtitle: isArabic
@@ -201,8 +247,18 @@ class SettingsScreen extends ConsumerWidget {
               generalSettings.taskbarOrder,
               generalSettings.hiddenTaskbarItems,
             ),
-            isLast: true,
+            isLast: !appLayoutsAvailable(context),
           ),
+          if (appLayoutsAvailable(context))
+            SettingsTile(
+              icon: Icons.view_quilt_rounded,
+              title: isArabic ? 'شكل التطبيق' : 'App layout',
+              subtitle:
+                  (ref.watch(appLayoutStyleProvider) ?? AppLayoutStyle.dock)
+                      .label(arabic: isArabic),
+              onTap: () => showAppLayoutPicker(context, ref),
+              isLast: true,
+            ),
         ],
       ),
       const SizedBox(height: LayoutConstants.spacingLg),
@@ -419,11 +475,31 @@ class SettingsScreen extends ConsumerWidget {
             SettingsTile(
               icon: Icons.auto_awesome_rounded,
               title: 'Anime4K',
-              subtitle: !playerSettings.anime4kEnabled
-                  ? appText(context, english: 'Off', arabic: 'إيقاف')
-                  : '${playerSettings.anime4kMode.label} '
-                        '(${playerSettings.anime4kQuality.suffix})',
+              subtitle: appText(
+                context,
+                english: 'Upscales anime as it plays',
+                arabic: 'يرفع جودة الأنمي أثناء التشغيل',
+              ),
+              // On and off on the row, and the model under it once on. The
+              // dialog keeps the rest: the shader download and the size.
+              trailing: Switch(
+                value: playerSettings.anime4kEnabled,
+                onChanged: (on) => _setAnime4k(context, ref, on),
+              ),
               onTap: () => showAnime4kDialog(context, ref),
+              below: !playerSettings.anime4kEnabled
+                  ? null
+                  : SettingsChoices<Anime4kMode>(
+                      values: [
+                        for (final mode in Anime4kMode.values)
+                          if (mode != Anime4kMode.off) mode,
+                      ],
+                      selected: playerSettings.anime4kMode,
+                      label: (mode) => mode.label,
+                      onSelected: (mode) => ref
+                          .read(playerSettingsProvider.notifier)
+                          .setAnime4kMode(mode),
+                    ),
             ),
           SettingsTile(
             icon: Icons.tune_rounded,
@@ -436,6 +512,7 @@ class SettingsScreen extends ConsumerWidget {
       ),
       const SizedBox(height: LayoutConstants.spacingLg),
       SettingsGroup(
+        key: SettingsScreen.readerGroupKey,
         title: appText(context, english: 'Reader', arabic: 'القارئ'),
         children: [
           SettingsTile(

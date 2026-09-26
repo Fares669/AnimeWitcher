@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_back_button.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
@@ -8,7 +9,7 @@ import 'package:animewitcher/features/details/presentation/details_screen.dart';
 import '../../../core/utils/image_utils.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
-import '../../../shared/widgets/catalog_ltr.dart';
+import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 
@@ -261,11 +262,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
             ),
             leading: appleUsesPersistentLiquidGlassHeader
                 ? null
-                : IconButton(
-                    tooltip: MaterialLocalizations.of(
-                      context,
-                    ).backButtonTooltip,
-                    icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                : AppBackButton(
                     onPressed: () => Navigator.of(context).maybePop(),
                   ),
             elevation: 0,
@@ -298,7 +295,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                   ],
                 ),
               )
-            : CatalogLtr(
+            : CatalogDirection(
                 child: GridView.builder(
                   controller: _scrollController,
                   physics: const AlwaysScrollableScrollPhysics(),

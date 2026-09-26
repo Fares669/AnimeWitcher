@@ -25,12 +25,22 @@ int effectiveDownloadPartsForPlatform({
 /// Gopeed lets an idle connection steal half of a slow connection's remaining
 /// range. Native URLSession/background_downloader children cannot safely change
 /// their Range header after launch, so AnimeWitcher uses immutable checkpoint
-/// ranges instead. Connection count stays capped at [kDownloadPartsMax], while
-/// large files may have many queued checkpoints. This makes a completed Range a
-/// small durable recovery unit instead of making one native task own tens or
-/// hundreds of megabytes that iOS may discard on process termination.
-const int kDownloadWorkUnitsMax = 512;
-const int kDownloadCheckpointTargetBytes = 1024 * 1024;
+/// ranges instead. Connection count stays capped at [kDownloadPartsMax].
+///
+/// Keep the queued recovery map deliberately bounded. The old 1 MiB / 512-unit
+/// policy created hundreds of short-lived DownloadTasks for a single episode,
+/// amplifying manifest serialization, package database traffic and platform
+/// channel callbacks enough to contend with Flutter's UI isolate. Four MiB
+/// checkpoints still bound worst-case re-fetch after a process loss while a
+/// 128-unit ceiling keeps coordinator cost proportional to a small work queue.
+const int kDownloadWorkUnitsMax = 128;
+
+/// Existing V2 manifests created before the performance fix may contain up to
+/// 512 immutable ranges. New transfers never create that many, but restore must
+/// continue accepting them so an upgrade cannot discard already-downloaded
+/// checkpoint files.
+const int kDownloadLegacyWorkUnitsMax = 512;
+const int kDownloadCheckpointTargetBytes = 4 * 1024 * 1024;
 const int kDownloadTailBalanceMinUnitBytes = 512 * 1024;
 
 const List<int> kDownloadPartChoices = <int>[

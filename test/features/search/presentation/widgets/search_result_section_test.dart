@@ -1,7 +1,7 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_result_section.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
-import 'package:animewitcher/shared/widgets/catalog_ltr.dart';
+import 'package:animewitcher/shared/widgets/catalog_direction.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:animewitcher/shared/widgets/shimmer_placeholder.dart';
 import 'package:flutter/material.dart';
@@ -29,7 +29,7 @@ void main() {
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: AppLocalizations.supportedLocales,
             home: Scaffold(
-              body: CatalogLtr(
+              body: CatalogDirection(
                 child: CustomScrollView(
                   slivers: [
                     SearchResultSection(
@@ -63,7 +63,7 @@ void main() {
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
           home: Scaffold(
-            body: CatalogLtr(
+            body: CatalogDirection(
               child: CustomScrollView(
                 slivers: [
                   SearchResultSection(
@@ -84,7 +84,7 @@ void main() {
     expect(find.byType(ShimmerPlaceholder), findsWidgets);
   });
 
-  testWidgets('search result cards fill left to right in Arabic', (
+  testWidgets('search result cards fill right to left in Arabic', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(390, 800);
@@ -99,7 +99,7 @@ void main() {
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
           home: Scaffold(
-            body: CatalogLtr(
+            body: CatalogDirection(
               child: CustomScrollView(
                 slivers: [
                   SearchResultSection(
@@ -140,6 +140,6 @@ void main() {
     final third = tester.getTopLeft(
       find.byKey(const ValueKey('https://example.test/third')),
     );
-    expect(first.dx, lessThan(third.dx));
+    expect(first.dx, greaterThan(third.dx));
   });
 }

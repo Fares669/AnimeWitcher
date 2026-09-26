@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/animated_sort_menu_button.dart';
 import '../../../../core/utils/window_controls_inset.dart';
 
 /// Shared key for the details comments/reviews trailing sort control.
@@ -31,7 +32,7 @@ class AnimeWitcherCommentSortControl extends StatelessWidget {
   static const double size = 46;
 
   /// Details comments/reviews non-iOS control width.
-  static const double width = 72;
+  static const double width = size;
 
   /// Matches the persistent back button's physical leading inset on iOS.
   /// Keeping both controls 8pt from their respective edges mirrors their
@@ -82,16 +83,19 @@ class AnimeWitcherCommentSortControl extends StatelessWidget {
         value: AnimeWitcherCommentSort.newest.name,
         label: labelFor(AnimeWitcherCommentSort.newest, isArabic),
         systemImage: systemImageFor(AnimeWitcherCommentSort.newest),
+        icon: fallbackIconFor(AnimeWitcherCommentSort.newest),
       ),
       AppleNativeMenuItem(
         value: AnimeWitcherCommentSort.oldest.name,
         label: labelFor(AnimeWitcherCommentSort.oldest, isArabic),
         systemImage: systemImageFor(AnimeWitcherCommentSort.oldest),
+        icon: fallbackIconFor(AnimeWitcherCommentSort.oldest),
       ),
       AppleNativeMenuItem(
         value: AnimeWitcherCommentSort.mostLiked.name,
         label: labelFor(AnimeWitcherCommentSort.mostLiked, isArabic),
         systemImage: systemImageFor(AnimeWitcherCommentSort.mostLiked),
+        icon: fallbackIconFor(AnimeWitcherCommentSort.mostLiked),
       ),
     ];
   }
@@ -153,16 +157,24 @@ class AnimeWitcherCommentSortControl extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AppleNativeMenuButton(
-      accessibilityLabel: tooltip,
-      systemImage: systemImage,
-      fallbackIcon: fallbackIcon,
-      size: size,
+    final selected = AnimeWitcherCommentSort.values.firstWhere(
+      (value) => value.name == selectedValue,
+      orElse: () => AnimeWitcherCommentSort.commentsDefault,
+    );
+    return SizedBox(
       width: width,
-      tintColor: Theme.of(context).colorScheme.primary,
-      selectedValue: selectedValue,
-      items: items,
-      onSelected: onSelected,
+      height: size,
+      child: AnimatedSortMenuButton(
+        tooltip: tooltip,
+        selectedValue: selectedValue,
+        items: items,
+        onSelected: onSelected,
+        icon: fallbackIconFor(selected),
+        systemImage: systemImageFor(selected),
+        tintColor: Theme.of(context).colorScheme.primary,
+        size: size,
+        fallbackIcon: fallbackIcon,
+      ),
     );
   }
 }

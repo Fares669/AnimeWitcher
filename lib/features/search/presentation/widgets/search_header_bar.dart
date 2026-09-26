@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+
 import '../search_domain.dart';
 import '../search_provider.dart';
 import '../search_text_direction.dart';
@@ -28,8 +29,6 @@ class SearchHeaderBar extends ConsumerStatefulWidget {
   final String sortTooltip;
   final int activeFilterCount;
   final bool isFilterLoading;
-  final SearchDomain domain;
-  final ValueChanged<SearchDomain> onDomainSelected;
   final bool showSort;
   final bool showFilter;
   final bool isCompact;
@@ -50,8 +49,6 @@ class SearchHeaderBar extends ConsumerStatefulWidget {
     required this.sortTooltip,
     required this.activeFilterCount,
     required this.isFilterLoading,
-    required this.domain,
-    required this.onDomainSelected,
     required this.showSort,
     required this.showFilter,
     this.isCompact = false,
@@ -66,16 +63,21 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
-    final searchResults = ref.watch(searchPagedResultsProvider);
+    // Only whether a search is running: watching the whole results state
+    // rebuilt the bar with every page of results that came in.
+    final searching = ref.watch(
+      searchPagedResultsProvider.select((state) => state.isLoading),
+    );
     final isCompact = widget.isCompact;
     final isDark = theme.brightness == Brightness.dark;
     // The same wording the home bar uses, so the two read as one control.
-    final searchHint = l10n.searchHint;
+    // Names what is being searched, so a manga search does not read as an
+    // anime one.
+    final searchHint = searchDomainHint(context, ref.watch(searchDomainProvider));
 
     final actionWidth = SearchActionButtons.groupWidthForHeight(
       SearchGlassSurface.height,
-      visibleControls:
-          1 + (widget.showSort ? 1 : 0) + (widget.showFilter ? 1 : 0),
+      visibleControls: (widget.showSort ? 1 : 0) + (widget.showFilter ? 1 : 0),
     );
     return Padding(
       padding: EdgeInsets.symmetric(
@@ -97,10 +99,11 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                       behavior: HitTestBehavior.opaque,
                       onTap: () => widget.searchFocusNode.requestFocus(),
                       child: SearchGlassSurface(
+                        focusNode: widget.searchFocusNode,
                         child: ValueListenableBuilder<TextEditingValue>(
                           valueListenable: widget.textController,
                           builder: (context, value, child) {
-                            final isSearching = searchResults.isLoading;
+                            final isSearching = searching;
 
                             // Empty and idle, the field carries the same keyboard
                             // hint the home bar shows, so the two read as one control.
@@ -265,8 +268,6 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                   if (!isCompact) ...[
                     const SizedBox(width: 4),
                     SearchActionButtons(
-                      domain: widget.domain,
-                      onDomainSelected: widget.onDomainSelected,
                       showSort: widget.showSort,
                       showFilter: widget.showFilter,
                       filterCount: widget.showFilter

@@ -72,10 +72,11 @@ void main() {
     expect(settings.toJson().containsKey('chapterSwipeEndAction'), isTrue);
     expect(settings.toJson().containsKey('readerHideThreshold'), isTrue);
     expect(settings.toJson().containsKey('flashColor'), isTrue);
+    // Mangayomi's per-page colour settings stay gone; the filter the reader
+    // has now is Mihon's, drawn once over the page (see the Mihon features
+    // test).
     for (final key in <String>[
       'invertColors',
-      'grayscale',
-      'brightness',
       'contrast',
       'saturation',
       'enableCustomColorFilter',

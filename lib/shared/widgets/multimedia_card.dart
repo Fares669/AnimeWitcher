@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+
 import '../../core/domain/entity/multimedia_item.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/artwork_quality.dart';
@@ -179,6 +180,9 @@ class MultimediaCard extends StatelessWidget {
   /// that other services do not index.
   final String lookupTitle;
 
+  /// Looks replacement artwork up as a manga rather than an anime.
+  final bool manga;
+
   const MultimediaCard({
     super.key,
     required this.imageUrl,
@@ -197,6 +201,7 @@ class MultimediaCard extends StatelessWidget {
     this.posterBadge,
     this.malId,
     this.lookupTitle = '',
+    this.manga = false,
   });
 
   MultimediaCard.fromItem({
@@ -213,6 +218,7 @@ class MultimediaCard extends StatelessWidget {
   }) : imageUrl = AppImageFallbacks.poster(item.posterUrl, label: item.title),
        malId = item.artworkLookupMalId,
        lookupTitle = item.artworkLookupTitle,
+       manga = item.contentType == MultimediaContentType.manga,
        title = item.title,
        episodeBadge = item.episodeBadge,
        subtitle = multimediaCardSubtitle(item),
@@ -344,6 +350,7 @@ class MultimediaCard extends StatelessWidget {
       imageUrl: imageUrl,
       malId: malId,
       title: lookupTitle.isNotEmpty ? lookupTitle : title,
+      manga: manga,
       fit: BoxFit.cover,
       width: double.infinity,
       height: double.infinity,

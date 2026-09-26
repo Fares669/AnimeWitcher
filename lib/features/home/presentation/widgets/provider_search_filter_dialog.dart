@@ -6,14 +6,52 @@ import '../../../../core/extensions/base_provider.dart';
 import '../../../../core/utils/layout_constants.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
 
+/// One of the main categories the sheet can switch between, such as anime
+/// or manga, shown in its header.
+class ProviderSearchFilterCategory {
+  final String value;
+  final String label;
+  final IconData icon;
+
+  /// Said where the tabs would be when this category has nothing to
+  /// filter by; null says just that.
+  final String? noFiltersNote;
+
+  const ProviderSearchFilterCategory({
+    required this.value,
+    required this.label,
+    required this.icon,
+    this.noFiltersNote,
+  });
+}
+
 class ProviderSearchFilterDialog extends StatefulWidget {
   final ProviderSearchFilterOptions options;
   final ProviderSearchFilters initialValue;
+
+  /// The main categories, picked in the header. Without them the sheet
+  /// filters the one list it was opened for.
+  final List<ProviderSearchFilterCategory> categories;
+
+  /// Which of [categories] [options] belongs to.
+  final String? category;
+
+  /// The filters a category offers, loaded when it is picked. A category
+  /// with none shows a note instead of the tabs.
+  final Future<ProviderSearchFilterOptions> Function(String category)?
+  optionsFor;
+
+  /// Told the chosen category when Apply is pressed.
+  final ValueChanged<String>? onCategoryApplied;
 
   const ProviderSearchFilterDialog({
     super.key,
     required this.options,
     required this.initialValue,
+    this.categories = const <ProviderSearchFilterCategory>[],
+    this.category,
+    this.optionsFor,
+    this.onCategoryApplied,
   });
 
   @override
@@ -30,6 +68,9 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
   late Set<String> _years;
   late Set<String> _seasons;
   late Set<String> _genres;
+  String? _category;
+  final Map<String, Future<ProviderSearchFilterOptions>> _optionsByCategory =
+      {};
 
   bool get _isArabic =>
       Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
@@ -49,6 +90,29 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
     _years = {...widget.initialValue.years};
     _seasons = {...widget.initialValue.seasons};
     _genres = {...widget.initialValue.genres};
+    _category = widget.category;
+    if (_category != null) {
+      _optionsByCategory[_category!] = Future.value(widget.options);
+    }
+  }
+
+  Future<ProviderSearchFilterOptions> _optionsOf(String category) =>
+      _optionsByCategory.putIfAbsent(
+        category,
+        () =>
+            widget.optionsFor?.call(category) ??
+            Future.value(const ProviderSearchFilterOptions()),
+      );
+
+  void _pickCategory(String category) {
+    if (category == _category) return;
+    setState(() => _category = category);
+  }
+
+  void _apply() {
+    final category = _category;
+    if (category != null) widget.onCategoryApplied?.call(category);
+    Navigator.of(context).pop(_value);
   }
 
   @override
@@ -86,15 +150,26 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
     });
   }
 
-  ProviderSearchFilters get _value => ProviderSearchFilters(
-    statuses: {..._statuses},
-    types: {..._types},
-    ageRatings: {..._ageRatings},
-    years: {..._years},
-    seasons: {..._seasons},
-    genres: {..._genres},
-    sort: widget.initialValue.sort,
-  );
+  /// The filters of the category on screen, once they have loaded.
+  ProviderSearchFilterOptions? _shownOptions;
+
+  /// What is chosen, kept to what the category on screen offers: choices
+  /// carried over from another category (an anime type, say, on manga)
+  /// would otherwise filter out everything while showing nowhere.
+  ProviderSearchFilters get _value {
+    final options = _shownOptions;
+    Set<String> keep(Set<String> chosen, List<String>? offered) =>
+        offered == null ? {...chosen} : chosen.where(offered.contains).toSet();
+    return ProviderSearchFilters(
+      statuses: keep(_statuses, options?.statuses),
+      types: keep(_types, options?.types),
+      ageRatings: keep(_ageRatings, options?.ageRatings),
+      years: keep(_years, options?.years),
+      seasons: keep(_seasons, options?.seasons),
+      genres: keep(_genres, options?.genres),
+      sort: widget.initialValue.sort,
+    );
+  }
 
   List<_FilterTabSpec> get _tabs => [
     _FilterTabSpec(
@@ -124,12 +199,15 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
     ),
   ];
 
-  List<Widget> _optionViews({required bool compactLandscape}) {
+  List<Widget> _optionViews(
+    ProviderSearchFilterOptions options, {
+    required bool compactLandscape,
+  }) {
     final genreColumns = compactLandscape ? 5 : 3;
     final pairColumns = compactLandscape ? 4 : 2;
     return [
       _MultiSelectGrid(
-        values: widget.options.genres,
+        values: options.genres,
         selected: _genres,
         onToggle: (value) => _toggle(_genres, value),
         crossAxisCount: genreColumns,
@@ -137,8 +215,8 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
         dense: compactLandscape,
       ),
       _SeasonYearGrid(
-        seasons: widget.options.seasons,
-        years: widget.options.years,
+        seasons: options.seasons,
+        years: options.years,
         selectedSeasons: _seasons,
         selectedYears: _years,
         onSeasonToggle: _toggleSeason,
@@ -147,21 +225,21 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
         dense: compactLandscape,
       ),
       _MultiSelectGrid(
-        values: widget.options.ageRatings,
+        values: options.ageRatings,
         selected: _ageRatings,
         onToggle: (value) => _toggle(_ageRatings, value),
         crossAxisCount: pairColumns,
         dense: compactLandscape,
       ),
       _MultiSelectGrid(
-        values: widget.options.types,
+        values: options.types,
         selected: _types,
         onToggle: (value) => _toggle(_types, value),
         crossAxisCount: pairColumns,
         dense: compactLandscape,
       ),
       _MultiSelectGrid(
-        values: widget.options.statuses,
+        values: options.statuses,
         selected: _statuses,
         onToggle: (value) => _toggle(_statuses, value),
         crossAxisCount: pairColumns,
@@ -178,7 +256,8 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
         compact ? 12 : 20,
         compact ? 8 : 20,
         compact ? 4 : 8,
-        compact ? 8 : 20,
+        // Closer to the category row when there is one beneath it.
+        widget.categories.isEmpty ? (compact ? 8 : 20) : (compact ? 4 : 12),
       ),
       child: Row(
         children: [
@@ -224,6 +303,65 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
                 : VisualDensity.standard,
           ),
         ],
+      ),
+    );
+  }
+
+  /// The main categories as a row of pills; scrolls when the sheet is too
+  /// narrow to hold them all.
+  Widget _categoryStrip(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return SingleChildScrollView(
+      key: const ValueKey<String>('filterCategoryStrip'),
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final category in widget.categories)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 6),
+              child: _CategoryPill(
+                key: ValueKey<String>('filterCategory-${category.value}'),
+                category: category,
+                selected: category.value == _category,
+                accent: colors.primary,
+                onTap: () => _pickCategory(category.value),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// A category with nothing to filter says so where the tabs would be.
+  Widget _noFiltersNote(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    String? note;
+    for (final category in widget.categories) {
+      if (category.value == _category) note = category.noFiltersNote;
+    }
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.filter_alt_off_outlined,
+              size: 40,
+              color: colors.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              note ??
+                  (_isArabic
+                      ? 'لا توجد فلاتر لهذا القسم'
+                      : 'This section has no filters'),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: colors.onSurfaceVariant),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -281,9 +419,7 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _seasonRequiresYear
-                      ? null
-                      : () => Navigator.of(context).pop(_value),
+                  onPressed: _seasonRequiresYear ? null : _apply,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: colors.primary,
                     foregroundColor: colors.onPrimary,
@@ -373,32 +509,131 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
             ),
             child: Material(
               color: Colors.transparent,
-              child: Column(
-                children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(color: theme.dividerColor),
+              child: FutureBuilder<ProviderSearchFilterOptions>(
+                // Picking a category loads its filters once; the tabs wait
+                // for them rather than showing the last category's.
+                key: ValueKey<String?>(_category),
+                future: _category == null
+                    ? Future.value(widget.options)
+                    : _optionsOf(_category!),
+                initialData: _category == null || _category == widget.category
+                    ? widget.options
+                    : null,
+                builder: (context, snapshot) {
+                  final options = snapshot.data;
+                  if (options != null) _shownOptions = options;
+                  final loading =
+                      options == null &&
+                      snapshot.connectionState != ConnectionState.done;
+                  final hasFilters = options != null && !options.isEmpty;
+                  return Column(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(color: theme.dividerColor),
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            _header(context, compact: isHandsetLandscape),
+                            // The main category, under the title and above
+                            // the tabs it decides.
+                            if (widget.categories.isNotEmpty)
+                              Padding(
+                                padding: EdgeInsets.fromLTRB(
+                                  isHandsetLandscape ? 12 : 20,
+                                  0,
+                                  isHandsetLandscape ? 12 : 20,
+                                  isHandsetLandscape ? 6 : 12,
+                                ),
+                                child: _categoryStrip(context),
+                              ),
+                            if (hasFilters)
+                              _horizontalTabs(
+                                context,
+                                spread: isHandsetLandscape,
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
-                    child: Column(
-                      children: [
-                        _header(context, compact: isHandsetLandscape),
-                        _horizontalTabs(context, spread: isHandsetLandscape),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: TabBarView(
-                      controller: _tabController,
-                      children: _optionViews(
-                        compactLandscape: isHandsetLandscape,
+                      Expanded(
+                        child: loading
+                            ? const Center(child: CircularProgressIndicator())
+                            : hasFilters
+                            ? TabBarView(
+                                controller: _tabController,
+                                children: _optionViews(
+                                  options,
+                                  compactLandscape: isHandsetLandscape,
+                                ),
+                              )
+                            : _noFiltersNote(context),
                       ),
-                    ),
-                  ),
-                  _footer(context, compact: isHandsetLandscape),
-                ],
+                      _footer(context, compact: isHandsetLandscape),
+                    ],
+                  );
+                },
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CategoryPill extends StatelessWidget {
+  final ProviderSearchFilterCategory category;
+  final bool selected;
+  final Color accent;
+  final VoidCallback onTap;
+
+  const _CategoryPill({
+    super.key,
+    required this.category,
+    required this.selected,
+    required this.accent,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final foreground = selected ? accent : colors.onSurfaceVariant;
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: Material(
+        color: selected
+            ? accent.withValues(alpha: 0.16)
+            : colors.onSurface.withValues(alpha: 0.05),
+        shape: StadiumBorder(
+          side: BorderSide(
+            color: selected
+                ? accent.withValues(alpha: 0.55)
+                : colors.onSurfaceVariant.withValues(alpha: 0.14),
+          ),
+        ),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(category.icon, size: 16, color: foreground),
+                const SizedBox(width: 6),
+                Text(
+                  category.label,
+                  style: TextStyle(
+                    color: foreground,
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
           ),
         ),

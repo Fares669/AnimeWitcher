@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+
 import '../../../../core/account/account_providers.dart';
 import '../../../../core/extensions/extension_manager.dart';
 import '../../../../core/storage/storage_service.dart';
@@ -70,45 +71,67 @@ class HomeData extends _$HomeData {
       return;
     }
 
+    // News and the new manga chapters are asked for alongside the anime
+    // rows, but the page does not wait for them: it shows as soon as its own
+    // rows are in, and the other two join it when they land. Held back, the
+    // page opened only when the slowest of the three answered.
+    final news = _orNull(() => activeProvider.getHomeNewsPage(limit: 10));
+    final manga = _orNull(() => activeProvider.getLatestMangaPage(limit: 20));
+    final previous = state is HomeSuccess ? state as HomeSuccess : null;
+
     try {
-      final results = await Future.wait<dynamic>([
-        activeProvider.getHome(),
-        () async {
-          try {
-            return await activeProvider.getHomeNewsPage(limit: 10);
-          } catch (_) {
-            return const ProviderNewsPage(
-              items: <NewsItem>[],
-              nextOffset: 0,
-              hasMore: false,
-            );
-          }
-        }(),
-        () async {
-          try {
-            return await activeProvider.getLatestMangaPage(limit: 20);
-          } catch (_) {
-            return const MangaLatestChapterPage(
-              items: <MangaLatestChapter>[],
-              nextOffset: 0,
-              hasMore: false,
-            );
-          }
-        }(),
-      ]);
+      final items = await activeProvider.getHome();
       if (generation != _fetchGeneration) return;
-      final items = results[0] as Map<String, List<MultimediaItem>>;
-      final newsPage = results[1] as ProviderNewsPage;
-      final latestManga = results[2] as MangaLatestChapterPage;
       state = HomeSuccess(
         items,
-        news: newsPage.items,
-        latestManga: latestManga.items,
+        news: previous?.news ?? const <NewsItem>[],
+        latestManga: previous?.latestManga ?? const <MangaLatestChapter>[],
       );
     } catch (e) {
       if (generation != _fetchGeneration) return;
       if (preserveCurrent) return;
       state = HomeError(e.toString());
+      return;
+    }
+
+    // A failed side request keeps what the page already shows.
+    unawaited(
+      news.then((page) {
+        final current = state;
+        if (page == null ||
+            generation != _fetchGeneration ||
+            current is! HomeSuccess) {
+          return;
+        }
+        state = HomeSuccess(
+          current.data,
+          news: page.items,
+          latestManga: current.latestManga,
+        );
+      }),
+    );
+    unawaited(
+      manga.then((page) {
+        final current = state;
+        if (page == null ||
+            generation != _fetchGeneration ||
+            current is! HomeSuccess) {
+          return;
+        }
+        state = HomeSuccess(
+          current.data,
+          news: current.news,
+          latestManga: page.items,
+        );
+      }),
+    );
+  }
+
+  static Future<T?> _orNull<T>(Future<T> Function() request) async {
+    try {
+      return await request();
+    } catch (_) {
+      return null;
     }
   }
 }

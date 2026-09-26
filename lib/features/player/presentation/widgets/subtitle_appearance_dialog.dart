@@ -36,14 +36,14 @@ class DpadSettingCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: isFocused
-                    ? HotstarPlayerStyle.accent
+                    ? Theme.of(context).colorScheme.primary
                     : Colors.transparent,
                 width: 1.5,
               ),
               boxShadow: isFocused
                   ? [
                       BoxShadow(
-                        color: HotstarPlayerStyle.accent.withValues(
+                        color: Theme.of(context).colorScheme.primary.withValues(
                           alpha: 0.15,
                         ),
                         blurRadius: 8,
@@ -158,13 +158,13 @@ class _DpadSliderState extends State<DpadSlider> {
                         ),
                         decoration: BoxDecoration(
                           color: _isFocused
-                              ? HotstarPlayerStyle.accent
+                              ? Theme.of(context).colorScheme.primary
                               : const Color(0xFF202130),
                           borderRadius: BorderRadius.circular(12),
                           boxShadow: _isFocused
                               ? [
                                   BoxShadow(
-                                    color: HotstarPlayerStyle.accent.withValues(
+                                    color: Theme.of(context).colorScheme.primary.withValues(
                                       alpha: 0.3,
                                     ),
                                     blurRadius: 6,
@@ -186,7 +186,7 @@ class _DpadSliderState extends State<DpadSlider> {
                         size: const Size(10, 5),
                         painter: _CaretPainter(
                           color: _isFocused
-                              ? HotstarPlayerStyle.accent
+                              ? Theme.of(context).colorScheme.primary
                               : const Color(0xFF202130),
                         ),
                       ),
@@ -197,13 +197,13 @@ class _DpadSliderState extends State<DpadSlider> {
             ),
             SliderTheme(
               data: SliderThemeData(
-                activeTrackColor: HotstarPlayerStyle.accent,
+                activeTrackColor: Theme.of(context).colorScheme.primary,
                 inactiveTrackColor: Colors.grey.shade800,
                 thumbColor: _isFocused
                     ? Colors.white
-                    : HotstarPlayerStyle.accent,
-                overlayColor: HotstarPlayerStyle.accent.withValues(alpha: 0.12),
-                valueIndicatorColor: HotstarPlayerStyle.accent,
+                    : Theme.of(context).colorScheme.primary,
+                overlayColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                valueIndicatorColor: Theme.of(context).colorScheme.primary,
                 trackHeight: 4,
                 thumbShape: RoundSliderThumbShape(
                   enabledThumbRadius: _isFocused ? 8 : 6,
@@ -296,7 +296,7 @@ class DpadColorCircle extends StatelessWidget {
               shape: BoxShape.circle,
               border: Border.all(
                 color: isSelected
-                    ? HotstarPlayerStyle.accent
+                    ? Theme.of(context).colorScheme.primary
                     : (isFocused ? Colors.white : Colors.grey.shade700),
                 width: isSelected ? 2.5 : (isFocused ? 2.0 : 1.0),
               ),
@@ -347,15 +347,15 @@ class DpadButton extends StatelessWidget {
       onSelect: onPressed,
       builder: (context, isFocused, child) {
         final baseColor = isPrimary
-            ? HotstarPlayerStyle.accent
+            ? Theme.of(context).colorScheme.primary
             : Colors.transparent;
         final focusedColor = isPrimary
             ? Colors.white
-            : HotstarPlayerStyle.accent.withValues(alpha: 0.2);
+            : Theme.of(context).colorScheme.primary.withValues(alpha: 0.2);
         final textColor = isPrimary
             ? (isFocused ? Colors.black : Colors.white)
             : (isFocused
-                  ? HotstarPlayerStyle.accent
+                  ? Theme.of(context).colorScheme.primary
                   : HotstarPlayerStyle.secondaryText);
 
         return Material(
@@ -371,14 +371,14 @@ class DpadButton extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: isFocused
-                      ? HotstarPlayerStyle.accent
+                      ? Theme.of(context).colorScheme.primary
                       : (isPrimary ? Colors.transparent : Colors.grey.shade800),
                   width: 1.5,
                 ),
                 boxShadow: isFocused
                     ? [
                         BoxShadow(
-                          color: HotstarPlayerStyle.accent.withValues(
+                          color: Theme.of(context).colorScheme.primary.withValues(
                             alpha: 0.3,
                           ),
                           blurRadius: 8,
@@ -698,8 +698,8 @@ class _SubtitleAppearanceDialogState
       padding: const EdgeInsets.only(top: 16, bottom: 8),
       child: Text(
         title,
-        style: const TextStyle(
-          color: HotstarPlayerStyle.accent,
+        style: TextStyle(
+          color: Theme.of(context).colorScheme.primary,
           fontSize: 14,
           fontWeight: FontWeight.bold,
           letterSpacing: 1.1,
@@ -945,20 +945,20 @@ class _SubtitleAppearanceDialogState
                 children: [
                   Text(
                     currentValueText,
-                    style: const TextStyle(
-                      color: HotstarPlayerStyle.accent,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
                       fontWeight: FontWeight.w600,
                       fontSize: 14,
                     ),
                   ),
                   const SizedBox(width: 8),
                   if (isLoading)
-                    const SizedBox(
+                    SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(
                         strokeWidth: 1.5,
-                        color: HotstarPlayerStyle.accent,
+                        color: Theme.of(context).colorScheme.primary,
                       ),
                     )
                   else
@@ -1025,7 +1025,7 @@ class _SubtitleAppearanceDialogState
                     style: TextStyle(color: HotstarPlayerStyle.primaryText),
                   ),
                   selected: _localSettings.subFixedTextSize == null,
-                  selectedColor: HotstarPlayerStyle.accent,
+                  selectedColor: Theme.of(context).colorScheme.primary,
                   onTap: () {
                     setState(() {
                       _localSettings = _localSettings.copyWith(
@@ -1045,7 +1045,7 @@ class _SubtitleAppearanceDialogState
                       ),
                     ),
                     selected: _localSettings.subFixedTextSize == val,
-                    selectedColor: HotstarPlayerStyle.accent,
+                    selectedColor: Theme.of(context).colorScheme.primary,
                     onTap: () {
                       setState(() {
                         _localSettings = _localSettings.copyWith(
@@ -1118,7 +1118,7 @@ class _SubtitleAppearanceDialogState
                       ),
                     ),
                     selected: isSelected,
-                    selectedColor: HotstarPlayerStyle.accent,
+                    selectedColor: Theme.of(context).colorScheme.primary,
                     onTap: () {
                       setState(() {
                         _localSettings = _localSettings.copyWith(
@@ -1141,7 +1141,7 @@ class _SubtitleAppearanceDialogState
                     style: TextStyle(color: HotstarPlayerStyle.primaryText),
                   ),
                   selected: _localSettings.subTypefaceFilePath != null,
-                  selectedColor: HotstarPlayerStyle.accent,
+                  selectedColor: Theme.of(context).colorScheme.primary,
                   onTap: () async {
                     Navigator.of(context).pop();
                     await _pickCustomFont();
@@ -1204,7 +1204,7 @@ class _SubtitleAppearanceDialogState
             Switch(
               value: _localSettings.subBold,
               activeThumbColor: Colors.white,
-              activeTrackColor: HotstarPlayerStyle.accent,
+              activeTrackColor: Theme.of(context).colorScheme.primary,
               inactiveThumbColor: Colors.grey.shade400,
               inactiveTrackColor: Colors.grey.shade800,
               onChanged: (val) {
@@ -1251,7 +1251,7 @@ class _SubtitleAppearanceDialogState
             Switch(
               value: _localSettings.subItalic,
               activeThumbColor: Colors.white,
-              activeTrackColor: HotstarPlayerStyle.accent,
+              activeTrackColor: Theme.of(context).colorScheme.primary,
               inactiveThumbColor: Colors.grey.shade400,
               inactiveTrackColor: Colors.grey.shade800,
               onChanged: (val) {
@@ -1318,7 +1318,7 @@ class _SubtitleAppearanceDialogState
                     ),
                   ),
                   selected: _localSettings.subEdgeType == i,
-                  selectedColor: HotstarPlayerStyle.accent,
+                  selectedColor: Theme.of(context).colorScheme.primary,
                   onTap: () {
                     setState(() {
                       _localSettings = _localSettings.copyWith(subEdgeType: i);
@@ -1392,7 +1392,7 @@ class _SubtitleAppearanceDialogState
                 Switch(
                   value: _localSettings.subEdgeSize != null,
                   activeThumbColor: Colors.white,
-                  activeTrackColor: HotstarPlayerStyle.accent,
+                  activeTrackColor: Theme.of(context).colorScheme.primary,
                   inactiveThumbColor: Colors.grey.shade400,
                   inactiveTrackColor: Colors.grey.shade800,
                   onChanged: (val) {
@@ -1525,7 +1525,7 @@ class _SubtitleAppearanceDialogState
                     style: TextStyle(color: HotstarPlayerStyle.primaryText),
                   ),
                   selected: _localSettings.subBackgroundRadius == null,
-                  selectedColor: HotstarPlayerStyle.accent,
+                  selectedColor: Theme.of(context).colorScheme.primary,
                   onTap: () {
                     setState(() {
                       _localSettings = _localSettings.copyWith(
@@ -1545,7 +1545,7 @@ class _SubtitleAppearanceDialogState
                       ),
                     ),
                     selected: _localSettings.subBackgroundRadius == val,
-                    selectedColor: HotstarPlayerStyle.accent,
+                    selectedColor: Theme.of(context).colorScheme.primary,
                     onTap: () {
                       setState(() {
                         _localSettings = _localSettings.copyWith(
@@ -1668,7 +1668,7 @@ class _SubtitleAppearanceDialogState
                     style: TextStyle(color: HotstarPlayerStyle.primaryText),
                   ),
                   selected: _localSettings.subAlignment == null,
-                  selectedColor: HotstarPlayerStyle.accent,
+                  selectedColor: Theme.of(context).colorScheme.primary,
                   onTap: () {
                     setState(() {
                       _localSettings = _localSettings.copyWith(
@@ -1687,7 +1687,7 @@ class _SubtitleAppearanceDialogState
                       ),
                     ),
                     selected: _localSettings.subAlignment == item.$1,
-                    selectedColor: HotstarPlayerStyle.accent,
+                    selectedColor: Theme.of(context).colorScheme.primary,
                     onTap: () {
                       setState(() {
                         _localSettings = _localSettings.copyWith(
@@ -1754,7 +1754,7 @@ class _SubtitleAppearanceDialogState
             Switch(
               value: _localSettings.subRemoveBloat,
               activeThumbColor: Colors.white,
-              activeTrackColor: HotstarPlayerStyle.accent,
+              activeTrackColor: Theme.of(context).colorScheme.primary,
               inactiveThumbColor: Colors.grey.shade400,
               inactiveTrackColor: Colors.grey.shade800,
               onChanged: (val) {
@@ -1801,7 +1801,7 @@ class _SubtitleAppearanceDialogState
             Switch(
               value: _localSettings.subRemoveCaptions,
               activeThumbColor: Colors.white,
-              activeTrackColor: HotstarPlayerStyle.accent,
+              activeTrackColor: Theme.of(context).colorScheme.primary,
               inactiveThumbColor: Colors.grey.shade400,
               inactiveTrackColor: Colors.grey.shade800,
               onChanged: (val) {
@@ -1850,7 +1850,7 @@ class _SubtitleAppearanceDialogState
             Switch(
               value: _localSettings.subUpperCase,
               activeThumbColor: Colors.white,
-              activeTrackColor: HotstarPlayerStyle.accent,
+              activeTrackColor: Theme.of(context).colorScheme.primary,
               inactiveThumbColor: Colors.grey.shade400,
               inactiveTrackColor: Colors.grey.shade800,
               onChanged: (val) {

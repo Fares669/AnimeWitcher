@@ -16,11 +16,7 @@ typedef MangaPageBuilder = Widget Function(
   MangaPage page,
 );
 
-enum MangaPageImageTier {
-  pagedSubsampling,
-  continuousSubsampling,
-  animated,
-}
+enum MangaPageImageTier { pagedSubsampling, continuousSubsampling, animated }
 
 @visibleForTesting
 MangaPageImageTier mangaPageImageTier({
@@ -95,14 +91,22 @@ class _MangaPageImageState extends State<MangaPageImage>
     _provider = _createImageProvider(widget.page);
   }
 
-  BoxFit get _fit => widget.fit ?? switch (widget.settings.scaleType) {
-    MangaReaderScaleType.fitScreen => BoxFit.contain,
-    MangaReaderScaleType.stretch => BoxFit.fill,
-    MangaReaderScaleType.fitWidth => BoxFit.fitWidth,
-    MangaReaderScaleType.fitHeight => BoxFit.fitHeight,
-    MangaReaderScaleType.originalSize => BoxFit.none,
-    MangaReaderScaleType.smartFit => BoxFit.contain,
-  };
+  // A strip — webtoon, the continuous modes — is always as wide as the
+  // screen, as in Mihon: the scale types are for pages turned one at a time.
+  // Original size in a strip left a narrow page floating in the middle of a
+  // band sized for a full-width one, with thousands of pixels of black above.
+  BoxFit get _fit =>
+      widget.fit ??
+      (!widget.expand
+          ? BoxFit.fitWidth
+          : switch (widget.settings.scaleType) {
+              MangaReaderScaleType.fitScreen => BoxFit.contain,
+              MangaReaderScaleType.stretch => BoxFit.fill,
+              MangaReaderScaleType.fitWidth => BoxFit.fitWidth,
+              MangaReaderScaleType.fitHeight => BoxFit.fitHeight,
+              MangaReaderScaleType.originalSize => BoxFit.none,
+              MangaReaderScaleType.smartFit => BoxFit.contain,
+            });
 
   bool get _useSubsampling =>
       mangaPageImageTier(page: widget.page, expand: widget.expand) !=
@@ -117,7 +121,6 @@ class _MangaPageImageState extends State<MangaPageImage>
     final uri = Uri.tryParse(widget.page.imageUrl);
     return uri != null && uri.scheme == 'file' ? File.fromUri(uri).path : null;
   }
-
 
   @override
   void didChangeDependencies() {
@@ -197,30 +200,30 @@ class _MangaPageImageState extends State<MangaPageImage>
     _listenForImageSize();
   }
 
-
   Widget _errorView(BuildContext context) {
     _scheduleLoadSettled();
     return SizedBox(
-    height: mangaReaderPageLoadingExtent(MediaQuery.sizeOf(context)),
-    child: Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          const Icon(Icons.broken_image_outlined, size: 42),
-          const SizedBox(height: 10),
-          FilledButton.tonalIcon(
-            onPressed: _retry,
-            icon: const Icon(Icons.refresh_rounded),
-            label: Text(
-              Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
-                  ? 'إعادة المحاولة'
-                  : 'Retry',
+      height: mangaReaderPageLoadingExtent(MediaQuery.sizeOf(context)),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Icon(Icons.broken_image_outlined, size: 42),
+            const SizedBox(height: 10),
+            FilledButton.tonalIcon(
+              onPressed: _retry,
+              icon: const Icon(Icons.refresh_rounded),
+              label: Text(
+                Localizations.localeOf(context).languageCode.toLowerCase() ==
+                        'ar'
+                    ? 'إعادة المحاولة'
+                    : 'Retry',
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-  );
+    );
   }
 
   @override
@@ -287,9 +290,7 @@ class _MangaPageImageState extends State<MangaPageImage>
           image: _imageProvider,
           resolvedFilePath: _resolvedFilePath,
           settings: widget.settings,
-          minimumScaleType: mangaReaderMinimumScaleType(
-            widget.settings.scaleType,
-          ),
+          minimumScaleType: ScaleType.fitWidth,
           rotation: quarterTurns * 90,
           sourceRect: widget.sourceRect,
           onImageLoaded: loaded,

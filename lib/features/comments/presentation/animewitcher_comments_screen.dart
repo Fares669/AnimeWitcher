@@ -819,7 +819,7 @@ class _AnimeWitcherCommentsScreenState
                   onPressed: () {
                     setState(() => _revealedSpoilers.add(comment.path));
                   },
-                  icon: const Icon(Icons.visibility_off_rounded),
+                  icon: const Icon(Icons.local_fire_department_rounded),
                   label: Text(
                     isArabic
                         ? 'تعليق يحتوي على حرق — إظهار'
@@ -906,6 +906,17 @@ class _AnimeWitcherCommentsScreenState
                           borderRadius: BorderRadius.circular(20),
                           borderSide: BorderSide.none,
                         ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide(
+                            color: colors.primary,
+                            width: 1.5,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -915,9 +926,7 @@ class _AnimeWitcherCommentsScreenState
                       tooltip: isArabic ? 'يحتوي على حرق' : 'Contains spoiler',
                       onPressed: () => setState(() => _spoiler = !_spoiler),
                       icon: Icon(
-                        _spoiler
-                            ? Icons.visibility_off_rounded
-                            : Icons.visibility_outlined,
+                        Icons.local_fire_department_rounded,
                         color:
                             _spoiler ? colors.primary : colors.onSurfaceVariant,
                       ),

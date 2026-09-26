@@ -1,4 +1,5 @@
 import '../../more/presentation/more_sidebar_shell.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -14,7 +15,7 @@ import '../../../core/utils/request_generation.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
-import '../../../shared/widgets/catalog_ltr.dart';
+import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../shared/widgets/underline_segment_tabs.dart';
@@ -25,7 +26,19 @@ import 'character_details_screen.dart';
 import '../../../core/utils/window_controls_inset.dart';
 
 class CharactersScreen extends ConsumerStatefulWidget {
-  const CharactersScreen({super.key});
+  const CharactersScreen({
+    super.key,
+    this.favoritesOnly = false,
+    this.embedded = false,
+  });
+
+  /// Only the favourite characters, as the library shows them: no search
+  /// and no catalogue.
+  final bool favoritesOnly;
+
+  /// The grid alone, with no page or bar around it, for the library's pane
+  /// on PC and tablet. Only with [favoritesOnly].
+  final bool embedded;
 
   @override
   ConsumerState<CharactersScreen> createState() => _CharactersScreenState();
@@ -69,7 +82,7 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     _catalogController.addListener(_onCatalogScroll);
     _favoritesController.addListener(_onFavoritesScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_loadCatalog(reset: true));
+      if (!widget.favoritesOnly) unawaited(_loadCatalog(reset: true));
       unawaited(_loadFavorites(reset: true));
     });
   }
@@ -319,6 +332,12 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
       unawaited(_loadFavorites(reset: true));
     });
     final isArabic = _isArabic(context);
+    if (widget.favoritesOnly && widget.embedded) {
+      return _buildFavoritesTab(isArabic);
+    }
+    final title = widget.favoritesOnly
+        ? (isArabic ? 'الشخصيات المفضلة' : 'Favorite characters')
+        : (isArabic ? 'الشخصيات' : 'Characters');
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(kToolbarHeight),
@@ -343,7 +362,7 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
                   textDirection: isArabic
                       ? TextDirection.rtl
                       : TextDirection.ltr,
-                  child: Text(isArabic ? 'الشخصيات' : 'Characters'),
+                  child: Text(title),
                 ),
               ),
             ),
@@ -358,55 +377,57 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
           ),
         ),
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: _CharacterSearchBar(
-              controller: _searchController,
-              focusNode: _searchFocusNode,
-              searching: _searching,
-              hintText: isArabic
-                  ? 'من الذي ترغب بالبحث عنه؟'
-                  : 'Who do you want to search for?',
-              onChanged: _onSearchChanged,
-              onSubmitted: (value) {
-                _searchDebounceTimer?.cancel();
-                unawaited(_applySearch(value));
-              },
-              onClear: () {
-                _searchController.clear();
-                _searchDebounceTimer?.cancel();
-                unawaited(_applySearch(''));
-                _searchFocusNode.requestFocus();
-              },
-            ),
-          ),
-          FilterStyleTabBar(
-            controller: _tabController,
-            isScrollable: false,
-            tabs: [
-              FilterStyleTab(
-                label: isArabic ? 'الشخصيات' : 'Characters',
-                icon: Icons.groups_rounded,
-              ),
-              FilterStyleTab(
-                label: isArabic ? 'المفضلة' : 'Favorites',
-                icon: Icons.favorite_rounded,
-              ),
-            ],
-          ),
-          Expanded(
-            child: TabBarView(
-              controller: _tabController,
+      body: widget.favoritesOnly
+          ? _buildFavoritesTab(isArabic)
+          : Column(
               children: [
-                _buildCatalogTab(isArabic),
-                _buildFavoritesTab(isArabic),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: _CharacterSearchBar(
+                    controller: _searchController,
+                    focusNode: _searchFocusNode,
+                    searching: _searching,
+                    hintText: isArabic
+                        ? 'من الذي ترغب بالبحث عنه؟'
+                        : 'Who do you want to search for?',
+                    onChanged: _onSearchChanged,
+                    onSubmitted: (value) {
+                      _searchDebounceTimer?.cancel();
+                      unawaited(_applySearch(value));
+                    },
+                    onClear: () {
+                      _searchController.clear();
+                      _searchDebounceTimer?.cancel();
+                      unawaited(_applySearch(''));
+                      _searchFocusNode.requestFocus();
+                    },
+                  ),
+                ),
+                FilterStyleTabBar(
+                  controller: _tabController,
+                  isScrollable: false,
+                  tabs: [
+                    FilterStyleTab(
+                      label: isArabic ? 'الشخصيات' : 'Characters',
+                      icon: Icons.groups_rounded,
+                    ),
+                    FilterStyleTab(
+                      label: isArabic ? 'المفضلة' : 'Favorites',
+                      icon: Icons.favorite_rounded,
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildCatalogTab(isArabic),
+                      _buildFavoritesTab(isArabic),
+                    ],
+                  ),
+                ),
               ],
             ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -436,7 +457,7 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     final extra = _catalogLoading && _activeQuery.isEmpty ? 1 : 0;
     return MouseDragRefreshIndicator(
       onRefresh: _refreshVisible,
-      child: CatalogLtr(
+      child: CatalogDirection(
         child: GridView.builder(
           controller: _catalogController,
           physics: const AlwaysScrollableScrollPhysics(),
@@ -527,7 +548,7 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     final extra = _favoritesLoading ? 1 : 0;
     return MouseDragRefreshIndicator(
       onRefresh: () => _loadFavorites(reset: true),
-      child: CatalogLtr(
+      child: CatalogDirection(
         child: GridView.builder(
           controller: _favoritesController,
           physics: const AlwaysScrollableScrollPhysics(),

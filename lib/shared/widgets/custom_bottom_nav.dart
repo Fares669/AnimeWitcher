@@ -6,24 +6,35 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/account_avatar_button.dart';
 
 class CustomBottomNavBar extends StatelessWidget {
   final int currentBranchIndex;
   final List<TaskbarDestination> destinations;
   final ValueChanged<TaskbarDestination> onTap;
 
+  /// A news button after the page tabs — on a desktop, where the news has a
+  /// button of its own instead of a row on home. Null leaves it out.
+  final VoidCallback? onNews;
+
+  /// The account picture at the end, where the news button is shown too.
+  /// Null leaves it out.
+  final VoidCallback? onAccount;
+
   const CustomBottomNavBar({
     super.key,
     required this.currentBranchIndex,
     required this.destinations,
     required this.onTap,
+    this.onNews,
+    this.onAccount,
   });
 
   static const double height = 64;
 
-  static bool get usesNativeAppleTabBar =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+  /// Off: iOS has the same bar as every other platform, not the native
+  /// glass tab bar.
+  static bool get usesNativeAppleTabBar => false;
 
   static double nativeAppleHeight(BuildContext context) =>
       49 + MediaQuery.viewPaddingOf(context).bottom;
@@ -48,7 +59,12 @@ class CustomBottomNavBar extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    final count = destinations.length;
+    // The news and account cells count, so the highlight lands on the right
+    // tab.
+    final count =
+        destinations.length +
+        (onNews == null ? 0 : 1) +
+        (onAccount == null ? 0 : 1);
     final selectedIndex = destinations.indexWhere(
       (destination) => destination.branchIndex == currentBranchIndex,
     );
@@ -85,13 +101,32 @@ class CustomBottomNavBar extends StatelessWidget {
       for (final destination in destinations)
         Expanded(
           child: _NavTabCell(
-            destination: destination,
+            icon: destination.icon,
+            selectedIcon: destination.selectedIcon,
             label: destination.label(localizations),
             isSelected: destination.branchIndex == currentBranchIndex,
             onTap: () {
               HapticFeedback.selectionClick();
               onTap(destination);
             },
+          ),
+        ),
+      if (onNews case final openNews?)
+        Expanded(
+          child: _NavTabCell(
+            icon: Icons.newspaper_rounded,
+            selectedIcon: Icons.newspaper_rounded,
+            label: localizations.localeName.toLowerCase().startsWith('ar')
+                ? 'الأخبار'
+                : 'News',
+            isSelected: false,
+            onTap: openNews,
+          ),
+        ),
+      if (onAccount case final openAccount?)
+        Expanded(
+          child: Center(
+            child: AccountAvatarButton(onTap: openAccount, size: 34),
           ),
         ),
     ];
@@ -105,10 +140,35 @@ class CustomBottomNavBar extends StatelessWidget {
           child: SizedBox(
             width: fullWidth,
             height: height,
-            child: defaultTargetPlatform == TargetPlatform.iOS
-                ? AppleLiquidGlassSurface(
-                    borderRadius: BorderRadius.circular(height / 2),
-                    interactive: true,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(height / 2),
+                // Same hairline the home search bar carries, so the two
+                // floating controls read as one family.
+                border: Border.all(
+                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.12),
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(height / 2),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                  child: Container(
+                    height: height,
+                    // Matches the home search bar's fill. It sits over
+                    // artwork, so it leans on the blur behind it rather
+                    // than on being opaque.
+                    color: colorScheme.surfaceContainerHighest.withValues(
+                      alpha: 0.5,
+                    ),
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
@@ -116,51 +176,10 @@ class CustomBottomNavBar extends StatelessWidget {
                         Row(children: tabs),
                       ],
                     ),
-                  )
-                : Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(height / 2),
-                      // Same hairline the home search bar carries, so the two
-                      // floating controls read as one family.
-                      border: Border.all(
-                        color: colorScheme.onSurfaceVariant.withValues(
-                          alpha: 0.12,
-                        ),
-                        width: 1,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(
-                            alpha: isDark ? 0.35 : 0.12,
-                          ),
-                          blurRadius: 24,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(height / 2),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                        child: Container(
-                          height: height,
-                          // Matches the home search bar's fill. It sits over
-                          // artwork, so it leans on the blur behind it rather
-                          // than on being opaque.
-                          color: colorScheme.surfaceContainerHighest.withValues(
-                            alpha: 0.5,
-                          ),
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              highlight,
-                              Row(children: tabs),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
                   ),
+                ),
+              ),
+            ),
           ),
         );
       },
@@ -169,13 +188,15 @@ class CustomBottomNavBar extends StatelessWidget {
 }
 
 class _NavTabCell extends StatefulWidget {
-  final TaskbarDestination destination;
+  final IconData icon;
+  final IconData selectedIcon;
   final String label;
   final bool isSelected;
   final VoidCallback onTap;
 
   const _NavTabCell({
-    required this.destination,
+    required this.icon,
+    required this.selectedIcon,
     required this.label,
     required this.isSelected,
     required this.onTap,
@@ -222,9 +243,7 @@ class _NavTabCellState extends State<_NavTabCell> {
               onTap: widget.onTap,
               child: Center(
                 child: Icon(
-                  widget.isSelected
-                      ? widget.destination.selectedIcon
-                      : widget.destination.icon,
+                  widget.isSelected ? widget.selectedIcon : widget.icon,
                   color: widget.isSelected
                       ? colorScheme.primary
                       : colorScheme.onSurfaceVariant,
@@ -254,6 +273,7 @@ String _appleTabSymbol(
       selected ? 'arrow.down.circle.fill' : 'arrow.down.circle',
     TaskbarDestination.settings =>
       selected ? 'ellipsis.circle.fill' : 'ellipsis.circle',
+    TaskbarDestination.manga => selected ? 'book.fill' : 'book',
   };
 }
 

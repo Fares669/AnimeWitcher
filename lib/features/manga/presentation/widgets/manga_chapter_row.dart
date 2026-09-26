@@ -35,33 +35,47 @@ class MangaChapterRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final isRead = progress?.isRead == true;
-    final foreground = theme.colorScheme.onSurface.withValues(
-      alpha: isRead ? 0.52 : 1,
-    );
-    final secondary = theme.colorScheme.onSurfaceVariant.withValues(
+    final accent = colors.primary;
+    final foreground = colors.onSurface.withValues(alpha: isRead ? 0.52 : 1);
+    final secondary = colors.onSurfaceVariant.withValues(
       alpha: isRead ? 0.45 : 0.72,
     );
+    final state = progress;
+    final partRead =
+        state != null &&
+        !state.isRead &&
+        state.pageCount > 0 &&
+        state.pagesRead > 0;
 
     return Directionality(
       textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
-        color: selected
-            ? theme.colorScheme.primary.withValues(alpha: 0.15)
-            : Colors.transparent,
+        decoration: BoxDecoration(
+          color: selected
+              ? accent.withValues(alpha: 0.15)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
         child: InkWell(
+          borderRadius: BorderRadius.circular(10),
           onTap: onTap,
           onLongPress: onLongPress,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             child: Row(
               children: <Widget>[
+                // The name already carries the number, so the leading place
+                // is the book: a second number beside it read as a repeat.
                 Icon(
-                  selected ? Icons.check_circle_rounded : Icons.menu_book_rounded,
-                  color: selected ? theme.colorScheme.primary : foreground,
+                  selected
+                      ? Icons.check_circle_rounded
+                      : Icons.menu_book_rounded,
+                  color: selected ? accent : foreground,
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -97,6 +111,26 @@ class MangaChapterRow extends StatelessWidget {
                           publishedLabel!,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: secondary,
+                          ),
+                        ),
+                      ],
+                      if (partRead) ...<Widget>[
+                        const SizedBox(height: 6),
+                        SizedBox(
+                          width: 140,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(2),
+                            child: LinearProgressIndicator(
+                              key: const ValueKey<String>(
+                                'manga-chapter-current-progress',
+                              ),
+                              value: state.pagesRead / state.pageCount,
+                              minHeight: 3,
+                              color: accent,
+                              backgroundColor: colors.onSurface.withValues(
+                                alpha: 0.12,
+                              ),
+                            ),
                           ),
                         ),
                       ],

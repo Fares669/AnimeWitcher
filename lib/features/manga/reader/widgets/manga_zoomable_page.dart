@@ -1,4 +1,8 @@
+import 'dart:math' as math;
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../manga_reader_settings.dart';
 
@@ -38,6 +42,7 @@ class MangaZoomablePage extends StatefulWidget {
     this.continuous = false,
     this.contentSize,
     this.rtl = false,
+    this.onWheelPage,
   });
 
   final Widget child;
@@ -52,6 +57,12 @@ class MangaZoomablePage extends StatefulWidget {
   final Size? contentSize;
   final bool rtl;
 
+  /// Turns the page for a mouse wheel: forward for a scroll down. A wheel
+  /// over a page scrolls it when zoomed in and turns it otherwise; only
+  /// Ctrl held with the wheel zooms, as in a browser or an image viewer.
+  /// Null leaves the wheel to the zoom, as before.
+  final ValueChanged<bool>? onWheelPage;
+
   @override
   State<MangaZoomablePage> createState() => _MangaZoomablePageState();
 }
@@ -65,34 +76,35 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
   TapDownDetails? _doubleTapDetails;
   bool _panEnabled = false;
   bool _landscapeZoomApplied = false;
+  Duration? _lastWheelTurn;
 
   @override
   void initState() {
     super.initState();
     _ownsController = widget.transformationController == null;
-    _controller =
-        widget.transformationController ?? TransformationController();
-    _animationController = AnimationController(
-      vsync: this,
-      duration: _animationDuration,
-    )..addListener(() {
-        final animation = _animation;
-        if (animation != null) _controller.value = animation.value;
-      });
+    _controller = widget.transformationController ?? TransformationController();
+    _animationController =
+        AnimationController(vsync: this, duration: _animationDuration)
+          ..addListener(() {
+            final animation = _animation;
+            if (animation != null) _controller.value = animation.value;
+          });
     _controller.addListener(_onTransformChanged);
     widget.navigationController?._attach(this);
     _onTransformChanged();
   }
 
-  Duration get _animationDuration =>
-      mangaReaderDoubleTapAnimationDuration(
-        widget.settings.doubleTapAnimationSpeed,
-      );
+  Duration get _animationDuration => mangaReaderDoubleTapAnimationDuration(
+    widget.settings.doubleTapAnimationSpeed,
+  );
 
   @override
   void didUpdateWidget(covariant MangaZoomablePage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.navigationController, widget.navigationController)) {
+    if (!identical(
+      oldWidget.navigationController,
+      widget.navigationController,
+    )) {
       oldWidget.navigationController?._detach(this);
       widget.navigationController?._attach(this);
     }
@@ -106,10 +118,7 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     }
   }
 
-  Matrix4 _zoomMatrix({
-    required double scale,
-    required Offset focalPoint,
-  }) {
+  Matrix4 _zoomMatrix({required double scale, required Offset focalPoint}) {
     final matrix = Matrix4.identity();
     matrix
       ..setEntry(0, 0, scale)
@@ -142,7 +151,6 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     });
   }
 
-
   @override
   void dispose() {
     widget.navigationController?._detach(this);
@@ -165,19 +173,21 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
       _controller.value = target;
       return;
     }
-    _animation = Matrix4Tween(
-      begin: Matrix4.copy(_controller.value),
-      end: target,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOutCubic,
-    ));
+    _animation =
+        Matrix4Tween(
+          begin: Matrix4.copy(_controller.value),
+          end: target,
+        ).animate(
+          CurvedAnimation(
+            parent: _animationController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
     _animationController.forward(from: 0);
   }
 
   void _handleDoubleTap() {
-    if (widget.continuous &&
-        !widget.settings.webtoonDoubleTapZoomEnabled) {
+    if (widget.continuous && !widget.settings.webtoonDoubleTapZoomEnabled) {
       return;
     }
     final currentScale = _controller.value.getMaxScaleOnAxis();
@@ -190,9 +200,7 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     final targetScale = widget.doubleTapScale
         .clamp(widget.minScale, widget.maxScale)
         .toDouble();
-    _animate(
-      _zoomMatrix(scale: targetScale, focalPoint: position),
-    );
+    _animate(_zoomMatrix(scale: targetScale, focalPoint: position));
   }
 
   bool _tryPan({required bool forward, required bool rtl}) {
@@ -221,6 +229,60 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
     return true;
   }
 
+  /// Ctrl+wheel: zoom about the mouse, within the page's own limits.
+  void _wheelZoom(PointerScrollEvent event) {
+    final delta = event.scrollDelta.dy;
+    if (delta == 0) return;
+    final current = _controller.value.getMaxScaleOnAxis();
+    final minScale = widget.continuous && !widget.settings.webtoonDisableZoomOut
+        ? 0.5
+        : widget.minScale;
+    final maxScale = widget.continuous ? 5.0 : widget.maxScale;
+    final target = (current * math.exp(-delta / 200))
+        .clamp(minScale, maxScale)
+        .toDouble();
+    if ((target - current).abs() < 0.001) return;
+    if (target <= 1.01 && minScale >= 1) {
+      _controller.value = Matrix4.identity();
+      return;
+    }
+    final factor = target / current;
+    final focal = event.localPosition;
+    _controller.value = Matrix4.copy(_controller.value)
+      ..translateByDouble(focal.dx, focal.dy, 0, 1)
+      ..scaleByDouble(factor, factor, 1, 1)
+      ..translateByDouble(-focal.dx, -focal.dy, 0, 1);
+  }
+
+  /// A plain wheel: scroll a zoomed page, then turn to the next or previous  /// one at its edge. One turn per flick: a wheel sends a burst of events.
+  void _handleWheel(PointerScrollEvent event) {
+    final delta = event.scrollDelta.dy != 0
+        ? event.scrollDelta.dy
+        : event.scrollDelta.dx;
+    if (delta == 0) return;
+    final forward = delta > 0;
+    final scale = _controller.value.getMaxScaleOnAxis();
+    final viewport = context.size;
+    if (scale > 1.01 && viewport != null) {
+      final translation = _controller.value.getTranslation();
+      final minY = viewport.height - viewport.height * scale;
+      final targetY = (translation.y - delta).clamp(minY, 0.0).toDouble();
+      if ((targetY - translation.y).abs() > 0.5) {
+        _controller.value = Matrix4.copy(_controller.value)
+          ..setTranslationRaw(translation.x, targetY, translation.z);
+        return;
+      }
+    }
+    // Timed by the events themselves, which a burst from one flick shares.
+    final stamp = event.timeStamp;
+    final last = _lastWheelTurn;
+    if (last != null && stamp - last < const Duration(milliseconds: 280)) {
+      return;
+    }
+    _lastWheelTurn = stamp;
+    widget.onWheelPage?.call(forward);
+  }
+
   @override
   Widget build(BuildContext context) {
     _scheduleLandscapeZoom();
@@ -240,7 +302,29 @@ class _MangaZoomablePageState extends State<MangaZoomablePage>
         maxScale: maxScale,
         panEnabled: _panEnabled,
         scaleEnabled: true,
-        child: widget.child,
+        // The viewer's own wheel zoom is off where the wheel turns pages:
+        // left on, it zoomed as well as turning. Ctrl+wheel zooms below.
+        scaleFactor: widget.onWheelPage == null
+            ? kDefaultMouseScrollToScaleFactor
+            : double.infinity,
+        // Inside the viewer, so it hears the wheel before the viewer does
+        // and can keep a plain wheel from zooming.
+        child: widget.onWheelPage == null
+            ? widget.child
+            : Listener(
+                onPointerSignal: (event) {
+                  if (event is! PointerScrollEvent) return;
+                  final keys = HardwareKeyboard.instance;
+                  final zoom = keys.isControlPressed || keys.isMetaPressed;
+                  GestureBinding.instance.pointerSignalResolver.register(
+                    event,
+                    (resolved) => zoom
+                        ? _wheelZoom(resolved as PointerScrollEvent)
+                        : _handleWheel(resolved as PointerScrollEvent),
+                  );
+                },
+                child: widget.child,
+              ),
       ),
     );
   }

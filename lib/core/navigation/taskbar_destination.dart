@@ -6,7 +6,11 @@ enum TaskbarDestination {
   search,
   library,
   downloads,
-  settings;
+  settings,
+
+  /// Manga as a tab of its own. Hidden until the viewer turns it on; while
+  /// it is on, manga moves off the home page onto it.
+  manga;
 
   String get id => name;
 
@@ -16,6 +20,8 @@ enum TaskbarDestination {
     TaskbarDestination.library => 2,
     TaskbarDestination.downloads => 3,
     TaskbarDestination.settings => 4,
+    // After the others, so no existing tab changes its branch.
+    TaskbarDestination.manga => 5,
   };
 
   String get route => switch (this) {
@@ -24,6 +30,7 @@ enum TaskbarDestination {
     TaskbarDestination.library => '/library',
     TaskbarDestination.downloads => '/downloads',
     TaskbarDestination.settings => '/settings',
+    TaskbarDestination.manga => '/manga',
   };
 
   IconData get icon => switch (this) {
@@ -32,6 +39,7 @@ enum TaskbarDestination {
     TaskbarDestination.library => Icons.video_library_outlined,
     TaskbarDestination.downloads => Icons.download_for_offline_outlined,
     TaskbarDestination.settings => Icons.more_horiz_rounded,
+    TaskbarDestination.manga => Icons.menu_book_outlined,
   };
 
   IconData get selectedIcon => switch (this) {
@@ -40,6 +48,7 @@ enum TaskbarDestination {
     TaskbarDestination.library => Icons.video_library,
     TaskbarDestination.downloads => Icons.download_for_offline_rounded,
     TaskbarDestination.settings => Icons.more_horiz_rounded,
+    TaskbarDestination.manga => Icons.menu_book_rounded,
   };
 
   String label(AppLocalizations l10n) => switch (this) {
@@ -49,12 +58,15 @@ enum TaskbarDestination {
     TaskbarDestination.downloads => l10n.downloads,
     TaskbarDestination.settings =>
       l10n.localeName.toLowerCase().startsWith('ar') ? 'المزيد' : 'More',
+    TaskbarDestination.manga =>
+      l10n.localeName.toLowerCase().startsWith('ar') ? 'المانجا' : 'Manga',
   };
 }
 
 const List<String> defaultTaskbarOrderIds = <String>[
   'home',
   'search',
+  'manga',
   'library',
   'downloads',
   'settings',
