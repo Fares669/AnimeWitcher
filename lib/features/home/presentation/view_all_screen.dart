@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_back_button.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
@@ -261,11 +262,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
             ),
             leading: appleUsesPersistentLiquidGlassHeader
                 ? null
-                : IconButton(
-                    tooltip: MaterialLocalizations.of(
-                      context,
-                    ).backButtonTooltip,
-                    icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                : AppBackButton(
                     onPressed: () => Navigator.of(context).maybePop(),
                   ),
             elevation: 0,
