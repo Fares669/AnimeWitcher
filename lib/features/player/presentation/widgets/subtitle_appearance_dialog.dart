@@ -698,7 +698,7 @@ class _SubtitleAppearanceDialogState
       padding: const EdgeInsets.only(top: 16, bottom: 8),
       child: Text(
         title,
-        style: const TextStyle(
+        style: TextStyle(
           color: Theme.of(context).colorScheme.primary,
           fontSize: 14,
           fontWeight: FontWeight.bold,
@@ -945,7 +945,7 @@ class _SubtitleAppearanceDialogState
                 children: [
                   Text(
                     currentValueText,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Theme.of(context).colorScheme.primary,
                       fontWeight: FontWeight.w600,
                       fontSize: 14,

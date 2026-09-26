@@ -69,7 +69,7 @@ class PlayerBottomSheets {
                 child: Theme(
                   data: Theme.of(context).copyWith(
                     brightness: Brightness.dark,
-                    colorScheme: const ColorScheme.dark(
+                    colorScheme: ColorScheme.dark(
                       primary: Theme.of(context).colorScheme.primary,
                       surface: HotstarPlayerStyle.background,
                       onSurface: HotstarPlayerStyle.primaryText,
