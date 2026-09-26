@@ -135,7 +135,7 @@ Future<void> _openOwnEditor(WidgetTester tester) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('comments composer still has the spoiler eye next to send', (
+  testWidgets('comments composer uses a flame for spoiler next to send', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
@@ -152,7 +152,8 @@ void main() {
     expect(find.text('التعليقات'), findsOneWidget);
     expect(find.byTooltip('نشر'), findsOneWidget);
     expect(find.byTooltip('يحتوي على حرق'), findsOneWidget);
-    expect(find.byIcon(Icons.visibility_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.local_fire_department_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.visibility_outlined), findsNothing);
   });
 
   testWidgets('comment edit dialog keeps تعديل التعليق and spoiler checkbox', (

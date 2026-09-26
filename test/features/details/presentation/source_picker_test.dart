@@ -82,6 +82,26 @@ void main() {
     });
   });
 
+  test('groups sources by quality exactly as the picker displays them', () {
+    final groups = groupStreamSourcesByQuality(const <StreamResult>[
+      StreamResult(url: 'mf-1080', source: 'MF2', quality: '1080'),
+      StreamResult(url: 'pd-720', source: 'PD', quality: '720p'),
+      StreamResult(url: 'st-1080', source: 'ST', quality: '1080p'),
+      StreamResult(url: 'pd-1080', source: 'PD', quality: '1080'),
+      StreamResult(url: 'sf-480', source: 'SF', quality: '480'),
+    ]);
+
+    expect(groups.map((group) => group.qualityLabel), <String>[
+      '1080p',
+      '720p',
+      '480p',
+    ]);
+    expect(
+      groups.first.sources.map((source) => source.source),
+      <String>['PD', 'MF2', 'ST'],
+    );
+  });
+
   testWidgets('shows a loading state in the sheet until servers arrive', (
     tester,
   ) async {
