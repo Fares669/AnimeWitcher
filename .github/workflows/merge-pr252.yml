@@ -1,0 +1,63 @@
+name: Merge PR252 into PR251 branch
+
+on:
+  push:
+    branches: [fix/download-manager-performance-v2]
+    paths:
+      - .github/merge-pr252-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/download-manager-performance-v2
+          fetch-depth: 0
+
+      - name: Merge PR 252 while preserving current download core
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add pr252 https://github.com/9vsv6/AnimeWitcher.git
+          git fetch --no-tags pr252 feature/app-layouts-reader-library
+
+          set +e
+          git merge --no-ff --no-commit -X theirs FETCH_HEAD
+          merge_status=$?
+          set -e
+
+          if [ "$merge_status" -ne 0 ]; then
+            while IFS= read -r path; do
+              [ -n "$path" ] || continue
+              case "$path" in
+                ios/Runner/DownloadNativeWaitingQueue.swift|lib/core/services/download_parallel.dart|lib/core/services/persistent_parallel_download.dart|lib/core/services/download_v2/*|test/core/services/download_parallel_test.dart|test/core/services/download_runtime_stability_review_test.dart|test/core/services/download_v2/download_v2_native_parallel_metrics_test.dart|test/core/services/persistent_parallel_download_test.dart)
+                  git checkout --ours -- "$path" 2>/dev/null || git rm -f -- "$path"
+                  ;;
+                *)
+                  git checkout --theirs -- "$path" 2>/dev/null || git rm -f -- "$path"
+                  ;;
+              esac
+              git add -A -- "$path" 2>/dev/null || true
+            done < <(git diff --name-only --diff-filter=U)
+          fi
+
+          # PR251 is the authority for the download engine under test.
+          git checkout HEAD --             ios/Runner/DownloadNativeWaitingQueue.swift             lib/core/services/download_parallel.dart             lib/core/services/persistent_parallel_download.dart             lib/core/services/download_v2             test/core/services/download_parallel_test.dart             test/core/services/download_runtime_stability_review_test.dart             test/core/services/download_v2/download_v2_native_parallel_metrics_test.dart             test/core/services/persistent_parallel_download_test.dart
+
+          rm -f .github/workflows/merge-pr252.yml .github/merge-pr252-trigger
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "Nothing to merge"
+            exit 0
+          fi
+
+          git commit -m "Merge PR #252 into PR #251 branch"
+          git push origin HEAD:fix/download-manager-performance-v2
