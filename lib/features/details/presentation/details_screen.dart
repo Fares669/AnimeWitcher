@@ -10,6 +10,7 @@ import '../../home/presentation/view_all_screen.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/account/animewitcher_comment_models.dart';
+import '../../../core/account/animewitcher_account_service.dart';
 import '../../characters/presentation/anime_characters_screen.dart';
 import '../../characters/presentation/character_details_screen.dart';
 import 'related_anime_screen.dart';
@@ -637,8 +638,26 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     });
   }
 
+  AnimeWitcherAccountService? _accountServiceOrNull() {
+    try {
+      return ref.read(animeWitcherAccountServiceProvider);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _loadUserRatingFor(MultimediaItem item) async {
-    final service = ref.read(animeWitcherAccountServiceProvider);
+    final service = _accountServiceOrNull();
+    if (service == null) {
+      if (!mounted) return;
+      setState(() {
+        _userRating = null;
+        _loadingUserRating = false;
+        _loadedUserRatingAnimeId = animeWitcherAnimeIdFromItem(item);
+        _loadedUserRatingSignedIn = false;
+      });
+      return;
+    }
     final animeId = animeWitcherAnimeIdFromItem(item);
     if (animeId.isEmpty || !service.isSignedIn) {
       if (!mounted) return;
@@ -678,7 +697,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   void _ensureUserRatingLoaded(MultimediaItem item) {
     final animeId = animeWitcherAnimeIdFromItem(item);
-    final signedIn = ref.read(animeWitcherAccountServiceProvider).isSignedIn;
+    final signedIn = _accountServiceOrNull()?.isSignedIn ?? false;
     if (_loadingUserRating ||
         (_loadedUserRatingAnimeId == animeId &&
             _loadedUserRatingSignedIn == signedIn)) {
@@ -707,7 +726,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       _userRating = outcome.rating;
       _loadedUserRatingAnimeId = animeWitcherAnimeIdFromItem(item);
       _loadedUserRatingSignedIn =
-          ref.read(animeWitcherAccountServiceProvider).isSignedIn;
+          _accountServiceOrNull()?.isSignedIn ?? false;
     });
   }
 
