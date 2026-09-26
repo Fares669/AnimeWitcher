@@ -89,6 +89,38 @@ void main() {
         palette.accent,
         reason: '${style.name}: selected chip label',
       );
+      expect(
+        theme.sliderTheme.activeTrackColor,
+        palette.accent,
+        reason: '${style.name}: slider track',
+      );
+      expect(
+        theme.sliderTheme.thumbColor,
+        palette.accent,
+        reason: '${style.name}: slider thumb',
+      );
+      expect(
+        theme.textSelectionTheme.cursorColor,
+        palette.accent,
+        reason: '${style.name}: text caret',
+      );
+      expect(
+        theme.splashColor,
+        palette.accent.withValues(alpha: 0.10),
+        reason: '${style.name}: press splash',
+      );
+      expect(
+        theme.focusColor,
+        palette.accent.withValues(alpha: 0.12),
+        reason: '${style.name}: focus overlay',
+      );
+      expect(
+        (theme.inputDecorationTheme.focusedBorder as OutlineInputBorder)
+            .borderSide
+            .color,
+        palette.accent,
+        reason: '${style.name}: focused input outline',
+      );
     }
   });
 

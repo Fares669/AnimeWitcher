@@ -953,7 +953,7 @@ class _SubtitleAppearanceDialogState
                   ),
                   const SizedBox(width: 8),
                   if (isLoading)
-                    const SizedBox(
+                    SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(

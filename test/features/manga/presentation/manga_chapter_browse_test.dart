@@ -202,6 +202,28 @@ void main() {
       );
     });
 
+    testWidgets('selection clears when another route opens', (tester) async {
+      await tester.pumpWidget(_app(await _readUpTo(0)));
+
+      await tester.longPress(
+        find.byKey(const ValueKey<String>('manga-chapter-row-c120')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('1 selected'), findsOneWidget);
+
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      navigator.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('next route')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      navigator.pop();
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 selected'), findsNothing);
+    });
+
     testWidgets('the current chapter is not tinted differently', (tester) async {
       final repository = await _readUpTo(9);
       await tester.pumpWidget(

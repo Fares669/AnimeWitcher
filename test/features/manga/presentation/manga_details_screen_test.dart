@@ -462,6 +462,8 @@ void main() {
         200,
         scrollable: page,
       );
+      await tester.drag(page, const Offset(0, -220));
+      await tester.pumpAndSettle();
       final visibleRow = find.byType(MangaChapterRow).first;
       expect(visibleRow, findsOneWidget);
       await tester.longPress(visibleRow);
