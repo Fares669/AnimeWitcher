@@ -458,21 +458,17 @@ void main() {
 
       final page = find.byType(Scrollable).first;
       await tester.scrollUntilVisible(
-        find.byKey(const ValueKey<String>('manga-chapter-row-200')),
+        find.byKey(const ValueKey<String>('manga-chapter-range-menu')),
         200,
         scrollable: page,
       );
-      await tester.longPress(
-        find.byKey(const ValueKey<String>('manga-chapter-row-200')),
-      );
+      final visibleRow = find.byType(MangaChapterRow).first;
+      expect(visibleRow, findsOneWidget);
+      await tester.longPress(visibleRow);
       await tester.pumpAndSettle();
       expect(find.text('تم تحديد 1'), findsOneWidget);
 
-      await tester.scrollUntilVisible(
-        find.byKey(const ValueKey<String>('manga-chapter-row-150')),
-        300,
-        scrollable: page,
-      );
+      await tester.drag(page, const Offset(0, -400));
       await tester.pumpAndSettle();
 
       final selectionLabel = find.text('تم تحديد 1');
