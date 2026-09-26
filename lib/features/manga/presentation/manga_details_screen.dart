@@ -250,7 +250,11 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
       });
       return;
     }
-    if (_loadingUserRating || _loadedUserRatingMangaId == mangaId) return;
+    if (_loadingUserRating ||
+        (_loadedUserRatingMangaId == mangaId &&
+            _loadedUserRatingSignedIn == service.isSignedIn)) {
+      return;
+    }
 
     setState(() => _loadingUserRating = true);
     try {
@@ -347,6 +351,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
         setState(() {
           _userRating = saved;
           _loadedUserRatingMangaId = mangaId;
+          _loadedUserRatingSignedIn = true;
         });
       }
     } catch (_) {
