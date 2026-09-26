@@ -208,6 +208,7 @@ class DetailsHeroIconButton extends StatelessWidget {
     required this.onPressed,
     this.foregroundColor,
     this.fallbackColor,
+    this.ratingCaption,
   });
 
   final IconData icon;
@@ -215,6 +216,10 @@ class DetailsHeroIconButton extends StatelessWidget {
   final VoidCallback onPressed;
   final Color? foregroundColor;
   final Color? fallbackColor;
+
+  /// Optional compact score drawn directly under the star inside the same
+  /// round action, e.g. 8/10. Other hero actions remain icon-only.
+  final String? ratingCaption;
 
   @override
   Widget build(BuildContext context) {
@@ -237,11 +242,33 @@ class DetailsHeroIconButton extends StatelessWidget {
             onTap: onPressed,
             child: SizedBox.square(
               dimension: kDetailsHeroActionHeight,
-              child: Icon(
-                icon,
-                size: 21,
-                color: foregroundColor ?? colors.onSurface,
-              ),
+              child: ratingCaption == null
+                  ? Icon(
+                      icon,
+                      size: 21,
+                      color: foregroundColor ?? colors.onSurface,
+                    )
+                  : Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          icon,
+                          size: 19,
+                          color: foregroundColor ?? colors.onSurface,
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          ratingCaption!,
+                          textDirection: TextDirection.ltr,
+                          style: TextStyle(
+                            color: foregroundColor ?? colors.onSurface,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            height: 1,
+                          ),
+                        ),
+                      ],
+                    ),
             ),
           ),
         ),
