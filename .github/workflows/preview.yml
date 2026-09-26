@@ -107,7 +107,7 @@ jobs:
 
   ios:
     name: iOS Build (Unsigned)
-    if: false # temporary verification guard: user requested no iOS build
+    if: ${{ github.event_name == 'push' || github.event.inputs.build_ios == 'true' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
