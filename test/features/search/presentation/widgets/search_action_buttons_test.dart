@@ -114,6 +114,7 @@ void main() {
     // action capsule is glass.
     expect(find.byType(AppleLiquidGlassSurface), findsOneWidget);
     expect(find.text('2'), findsOneWidget);
+    final theme = Theme.of(tester.element(find.byType(SearchActionButtons)));
     final badgeBox = tester.widget<Container>(find.descendant(
       of: find.byType(SearchFilterBadge), matching: find.byType(Container),
     ));
@@ -121,7 +122,6 @@ void main() {
     expect(decoration.color, theme.colorScheme.primary);
     expect(decoration.shape, BoxShape.circle);
     final icon = tester.widget<Icon>(find.byIcon(Icons.arrow_upward_rounded));
-    final theme = Theme.of(tester.element(find.byType(SearchActionButtons)));
     expect(icon.color, theme.colorScheme.primary);
 
     await tester.enterText(find.byType(TextField), 'Anime');
