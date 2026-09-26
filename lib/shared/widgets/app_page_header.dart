@@ -34,18 +34,24 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
             ? const AppBackButton()
             : null,
         actions: const <Widget>[WindowControlsGap()],
-        title: ApplePersistentGlassHeaderScope(
-          enabled: canPop,
-          onBack: () => Navigator.of(context).maybePop(),
-          child: Align(
-            alignment:
-                isArabic ? Alignment.centerRight : Alignment.centerLeft,
-            child: Directionality(
-              textDirection:
-                  isArabic ? TextDirection.rtl : TextDirection.ltr,
-              child: Text(
-                title,
-                style: const TextStyle(fontWeight: FontWeight.bold),
+        title: LayoutBuilder(
+          builder: (context, constraints) => SizedBox(
+            width: constraints.maxWidth,
+            child: ApplePersistentGlassHeaderScope(
+              enabled: canPop,
+              onBack: () => Navigator.of(context).maybePop(),
+              child: Align(
+                alignment:
+                    isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                child: Directionality(
+                  textDirection:
+                      isArabic ? TextDirection.rtl : TextDirection.ltr,
+                  child: Text(
+                    title,
+                    textAlign: isArabic ? TextAlign.right : TextAlign.left,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
               ),
             ),
           ),
