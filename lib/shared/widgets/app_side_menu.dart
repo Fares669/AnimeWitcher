@@ -419,32 +419,27 @@ class AppSideMenuPanel extends ConsumerWidget {
                           'app-side-menu-account-banner',
                         ),
                         borderRadius: BorderRadius.circular(16),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(minHeight: 72),
+                        child: SizedBox(
+                          height: 72,
                           child: Stack(
-                            fit: StackFit.passthrough,
+                            fit: StackFit.expand,
                             children: [
                               ColoredBox(
                                 color: colors.surfaceContainerHighest,
-                                child: const SizedBox.expand(),
                               ),
                               if (cover.isNotEmpty)
-                                Positioned.fill(
-                                  child: Image.network(
-                                    cover,
-                                    key: const ValueKey<String>(
-                                      'app-side-menu-account-cover',
-                                    ),
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (_, _, _) =>
-                                        const SizedBox.shrink(),
+                                Image.network(
+                                  cover,
+                                  key: const ValueKey<String>(
+                                    'app-side-menu-account-cover',
                                   ),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) =>
+                                      const SizedBox.shrink(),
                                 ),
                               if (cover.isNotEmpty)
-                                Positioned.fill(
-                                  child: ColoredBox(
-                                    color: Colors.black.withValues(alpha: 0.38),
-                                  ),
+                                ColoredBox(
+                                  color: Colors.black.withValues(alpha: 0.38),
                                 ),
                               Padding(
                                 padding: const EdgeInsets.symmetric(
