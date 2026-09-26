@@ -176,6 +176,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   final GlobalKey _extraTabsKey = GlobalKey();
   int? _userRating;
   bool _loadingUserRating = false;
+  bool _loadedUserRatingSignedIn = false;
   String? _loadedUserRatingAnimeId;
 
   static const String _removeLibraryAction = '__remove_from_library__';
@@ -645,6 +646,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         _userRating = null;
         _loadingUserRating = false;
         _loadedUserRatingAnimeId = animeId;
+        _loadedUserRatingSignedIn = service.isSignedIn;
       });
       return;
     }
@@ -657,12 +659,14 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       setState(() {
         _userRating = rating;
         _loadedUserRatingAnimeId = animeId;
+        _loadedUserRatingSignedIn = true;
         _loadingUserRating = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _loadedUserRatingAnimeId = animeId;
+        _loadedUserRatingSignedIn = service.isSignedIn;
         _loadingUserRating = false;
       });
     }
@@ -670,13 +674,24 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
   void _ensureUserRatingLoaded(MultimediaItem item) {
     final animeId = animeWitcherAnimeIdFromItem(item);
-    if (_loadingUserRating || _loadedUserRatingAnimeId == animeId) return;
+    final signedIn = ref.read(animeWitcherAccountServiceProvider).isSignedIn;
+    if (_loadingUserRating ||
+        (_loadedUserRatingAnimeId == animeId &&
+            _loadedUserRatingSignedIn == signedIn)) {
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _loadUserRatingFor(item);
     });
   }
 
   Future<void> _rateAnimeFromHero(MultimediaItem item) async {
+    final animeId = animeWitcherAnimeIdFromItem(item);
+    if (_loadedUserRatingAnimeId != animeId ||
+        !_loadedUserRatingSignedIn) {
+      await _loadUserRatingFor(item);
+    }
+    if (!mounted) return;
     final outcome = await openAnimeRatingDialog(
       context,
       ref,
@@ -687,6 +702,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     setState(() {
       _userRating = outcome.rating;
       _loadedUserRatingAnimeId = animeWitcherAnimeIdFromItem(item);
+      _loadedUserRatingSignedIn =
+          ref.read(animeWitcherAccountServiceProvider).isSignedIn;
     });
   }
 
