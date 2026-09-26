@@ -376,13 +376,13 @@ class AppSideMenuPanel extends ConsumerWidget {
         ?.value
         .profile;
     final userName = profile?.userName?.trim() ?? '';
-    final email = profile?.email?.trim() ?? '';
+    final cover = profile?.coverUrl?.trim() ?? '';
     final title = profile == null
         ? (arabic ? 'تسجيل الدخول' : 'Sign in')
-        : (userName.isNotEmpty ? userName : email);
+        : (userName.isNotEmpty ? userName : 'AnimeWitcher');
     final subtitle = profile == null
         ? (arabic ? 'مزامنة القوائم والتقدم' : 'Sync your lists and progress')
-        : (userName.isNotEmpty ? email : '');
+        : '';
 
     return Material(
       key: const ValueKey<String>('app-side-menu'),
@@ -414,42 +414,89 @@ class AppSideMenuPanel extends ConsumerWidget {
                       key: const ValueKey<String>('app-side-menu-account'),
                       borderRadius: BorderRadius.circular(16),
                       onTap: onAccount,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 6,
+                      child: ClipRRect(
+                        key: const ValueKey<String>(
+                          'app-side-menu-account-banner',
                         ),
-                        child: Row(
-                          children: [
-                            AccountAvatarButton(onTap: onAccount, size: 44),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.titleSmall?.copyWith(
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  if (subtitle.isNotEmpty)
-                                    Text(
-                                      subtitle,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: theme.textTheme.bodySmall
-                                          ?.copyWith(
-                                            color: colors.onSurfaceVariant,
-                                          ),
-                                    ),
-                                ],
+                        borderRadius: BorderRadius.circular(16),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(minHeight: 72),
+                          child: Stack(
+                            fit: StackFit.passthrough,
+                            children: [
+                              ColoredBox(
+                                color: colors.surfaceContainerHighest,
+                                child: const SizedBox.expand(),
                               ),
-                            ),
-                          ],
+                              if (cover.isNotEmpty)
+                                Positioned.fill(
+                                  child: Image.network(
+                                    cover,
+                                    key: const ValueKey<String>(
+                                      'app-side-menu-account-cover',
+                                    ),
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) =>
+                                        const SizedBox.shrink(),
+                                  ),
+                                ),
+                              if (cover.isNotEmpty)
+                                Positioned.fill(
+                                  child: ColoredBox(
+                                    color: Colors.black.withValues(alpha: 0.38),
+                                  ),
+                                ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 8,
+                                ),
+                                child: Row(
+                                  children: [
+                                    AccountAvatarButton(
+                                      onTap: onAccount,
+                                      size: 54,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            title,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: theme.textTheme.titleMedium
+                                                ?.copyWith(
+                                                  color: cover.isNotEmpty
+                                                      ? Colors.white
+                                                      : colors.onSurface,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                          ),
+                                          if (subtitle.isNotEmpty)
+                                            Text(
+                                              subtitle,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: theme.textTheme.bodySmall
+                                                  ?.copyWith(
+                                                    color: cover.isNotEmpty
+                                                        ? Colors.white70
+                                                        : colors
+                                                              .onSurfaceVariant,
+                                                  ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),

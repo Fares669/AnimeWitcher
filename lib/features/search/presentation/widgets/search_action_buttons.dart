@@ -242,15 +242,14 @@ class _ActionIcon extends StatelessWidget {
   }
 }
 
-/// Always yellow, including when the user chooses another theme accent.
 class SearchFilterBadge extends StatelessWidget {
   const SearchFilterBadge({super.key, required this.count});
 
   final int count;
-  static const Color backgroundColor = Color(0xFFEEC60A);
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
     return Semantics(
       label: '$count',
       child: Container(
@@ -259,16 +258,19 @@ class SearchFilterBadge extends StatelessWidget {
         alignment: Alignment.center,
         padding: const EdgeInsets.all(2),
         decoration: BoxDecoration(
-          color: backgroundColor,
+          color: colors.primary,
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.black, width: 1.5),
+          border: Border.all(
+            color: colors.onPrimary.withValues(alpha: 0.72),
+            width: 1.5,
+          ),
         ),
         child: FittedBox(
           fit: BoxFit.scaleDown,
           child: Text(
             count > 99 ? '99+' : '$count',
-            style: const TextStyle(
-              color: Colors.black,
+            style: TextStyle(
+              color: colors.onPrimary,
               fontSize: 10,
               fontWeight: FontWeight.w800,
               height: 1,
