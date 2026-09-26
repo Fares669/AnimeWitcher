@@ -17,6 +17,7 @@ import '../../../../l10n/generated/app_localizations.dart';
 import '../player_controller.dart';
 import '../player_shortcuts.dart';
 import '../../../details/presentation/playback_launcher.dart';
+import '../../../details/presentation/source_picker.dart';
 import '../../../../core/services/notification_service.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
@@ -1134,7 +1135,7 @@ class AnimeWitcherPlayerControlsState
 
   /// "1080p · PD": a source's quality and server, as the picker names them.
   static String _sourceLabel(StreamResult stream) => [
-    if ((stream.quality ?? '').trim().isNotEmpty) stream.quality!.trim(),
+    streamSourceQualityLabel(stream),
     if (stream.source.trim().isNotEmpty) stream.source.trim(),
   ].join(' · ');
 
@@ -1166,29 +1167,32 @@ class AnimeWitcherPlayerControlsState
       sources = const <StreamResult>[];
     }
     return [
-      for (final source in sources)
-        PlayerPanelChoice(
-          label: _sourceLabel(source),
-          selected:
-              current != null &&
-              current.source.trim() == source.source.trim() &&
-              _qualityDigits(current.quality) == _qualityDigits(source.quality),
-          onTap: () async {
-            final ok = await controller.switchToSource(source);
-            if (!ok && mounted) {
-              ref
-                  .read(playerGestureHandlerProvider.notifier)
-                  .showToast(
-                    appText(
-                      context,
-                      english: 'This source could not be played',
-                      arabic: 'تعذر تشغيل هذا المصدر',
-                    ),
-                    LucideIcons.circleAlert200,
-                  );
-            }
-          },
-        ),
+      for (final group in groupStreamSourcesByQuality(sources))
+        for (final source in group.sources)
+          PlayerPanelChoice(
+            label: source.source.trim().isEmpty ? '—' : source.source.trim(),
+            sectionLabel: group.qualityLabel,
+            selected:
+                current != null &&
+                current.source.trim() == source.source.trim() &&
+                _qualityDigits(current.quality) ==
+                    _qualityDigits(source.quality),
+            onTap: () async {
+              final ok = await controller.switchToSource(source);
+              if (!ok && mounted) {
+                ref
+                    .read(playerGestureHandlerProvider.notifier)
+                    .showToast(
+                      appText(
+                        context,
+                        english: 'This source could not be played',
+                        arabic: 'تعذر تشغيل هذا المصدر',
+                      ),
+                      LucideIcons.circleAlert200,
+                    );
+              }
+            },
+          ),
     ];
   }
 

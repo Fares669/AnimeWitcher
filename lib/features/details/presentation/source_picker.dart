@@ -196,6 +196,19 @@ class _SourcePickerMessage extends StatelessWidget {
 }
 
 List<_SourcePickerRow> _buildSourcePickerRows(List<StreamResult> sources) {
+  return <_SourcePickerRow>[
+    for (final group in groupStreamSourcesByQuality(sources)) ...[
+      _SourcePickerRow.heading(group.qualityLabel),
+      for (final source in group.sources) _SourcePickerRow.source(source),
+    ],
+  ];
+}
+
+/// Groups sources exactly as both source pickers display them: highest quality
+/// first, then preferred servers inside each quality.
+List<StreamSourceQualityGroup> groupStreamSourcesByQuality(
+  List<StreamResult> sources,
+) {
   final entries = <_SourcePickerEntry>[
     for (var i = 0; i < sources.length; i++)
       _SourcePickerEntry(
@@ -223,16 +236,32 @@ List<_SourcePickerRow> _buildSourcePickerRows(List<StreamResult> sources) {
     return a.originalIndex.compareTo(b.originalIndex);
   });
 
-  final rows = <_SourcePickerRow>[];
-  String? currentQuality;
+  final grouped = <String, List<StreamResult>>{};
   for (final entry in entries) {
-    if (entry.qualityLabel != currentQuality) {
-      currentQuality = entry.qualityLabel;
-      rows.add(_SourcePickerRow.heading(currentQuality));
-    }
-    rows.add(_SourcePickerRow.source(entry.source));
+    grouped.putIfAbsent(entry.qualityLabel, () => <StreamResult>[]).add(
+      entry.source,
+    );
   }
-  return rows;
+  return <StreamSourceQualityGroup>[
+    for (final entry in grouped.entries)
+      StreamSourceQualityGroup(
+        qualityLabel: entry.key,
+        sources: entry.value,
+      ),
+  ];
+}
+
+String streamSourceQualityLabel(StreamResult source) =>
+    _qualityLabel(source.quality);
+
+class StreamSourceQualityGroup {
+  const StreamSourceQualityGroup({
+    required this.qualityLabel,
+    required this.sources,
+  });
+
+  final String qualityLabel;
+  final List<StreamResult> sources;
 }
 
 int _serverPriority(String source) {
@@ -245,6 +274,9 @@ int _serverPriority(String source) {
   }
   if (normalized.startsWith('ST') || normalized.contains('STREAMTAPE')) {
     return 2;
+  }
+  if (normalized.startsWith('SF')) {
+    return 3;
   }
   return 10;
 }

@@ -74,11 +74,13 @@ class PlayerPanelChoice {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.sectionLabel,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final String? sectionLabel;
 }
 
 class _PlayerSettingsPanelState extends State<PlayerSettingsPanel> {
@@ -327,11 +329,29 @@ extension on _PlayerSettingsPanelState {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            for (final choice in list)
+            for (var index = 0; index < list.length; index++) ...[
+              if (list[index].sectionLabel != null &&
+                  (index == 0 ||
+                      list[index - 1].sectionLabel !=
+                          list[index].sectionLabel))
+                Padding(
+                  padding: EdgeInsets.only(
+                    top: index == 0 ? 2 : 12,
+                    bottom: 4,
+                  ),
+                  child: Text(
+                    list[index].sectionLabel!,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
               InkWell(
                 borderRadius: BorderRadius.circular(8),
                 onTap: () {
-                  choice.onTap();
+                  list[index].onTap();
                   _back();
                 },
                 child: Padding(
@@ -341,24 +361,37 @@ extension on _PlayerSettingsPanelState {
                   ),
                   child: Row(
                     children: [
+                      if (list[index].sectionLabel != null) ...[
+                        Icon(
+                          Icons.play_circle_outline_rounded,
+                          color: list[index].selected
+                              ? accent
+                              : Colors.white70,
+                          size: 24,
+                        ),
+                        const SizedBox(width: 10),
+                      ],
                       Expanded(
                         child: Text(
-                          choice.label,
+                          list[index].label,
                           style: TextStyle(
-                            color: choice.selected ? accent : Colors.white,
+                            color: list[index].selected
+                                ? accent
+                                : Colors.white,
                             fontSize: 13,
-                            fontWeight: choice.selected
+                            fontWeight: list[index].selected
                                 ? FontWeight.w700
                                 : FontWeight.w500,
                           ),
                         ),
                       ),
-                      if (choice.selected)
+                      if (list[index].selected)
                         Icon(Icons.check_rounded, color: accent, size: 18),
                     ],
                   ),
                 ),
               ),
+            ],
           ],
         ),
       ),
