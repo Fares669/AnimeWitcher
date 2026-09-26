@@ -14,6 +14,7 @@ import '../../../core/storage/manga_reading_repository.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import 'manga_reader_controller.dart';
 import 'manga_reader_keyboard_handler.dart';
@@ -1035,23 +1036,24 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
               Flexible(
-                child: _pill(
-                  context,
-                  key: const ValueKey<String>('manga-reader-top-chrome'),
-                  child: Row(
-                    textDirection: TextDirection.ltr,
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      if (!appleUsesPersistentLiquidGlassHeader)
-                        IconButton(
-                          onPressed: () => Navigator.of(context).maybePop(),
-                          icon: const Icon(Icons.arrow_back_rounded),
-                        )
-                      else
-                        const SizedBox(width: 56, height: 48),
-                      Flexible(
+                child: Row(
+                  textDirection: TextDirection.ltr,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    AppBackButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      color: colors.onSurface,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: _pill(
+                        context,
+                        key: const ValueKey<String>('manga-reader-top-chrome'),
                         child: Padding(
-                          padding: const EdgeInsets.only(right: 18),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 7,
+                          ),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1079,8 +1081,8 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                           ),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(width: 12),
