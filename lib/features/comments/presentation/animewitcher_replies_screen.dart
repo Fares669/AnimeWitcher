@@ -639,6 +639,17 @@ class _AnimeWitcherRepliesScreenState
                           borderRadius: BorderRadius.circular(20),
                           borderSide: BorderSide.none,
                         ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide(
+                            color: colors.primary,
+                            width: 1.5,
+                          ),
+                        ),
                       ),
                     ),
                   ),

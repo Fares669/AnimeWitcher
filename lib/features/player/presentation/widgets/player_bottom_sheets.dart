@@ -70,13 +70,13 @@ class PlayerBottomSheets {
                   data: Theme.of(context).copyWith(
                     brightness: Brightness.dark,
                     colorScheme: const ColorScheme.dark(
-                      primary: HotstarPlayerStyle.accent,
+                      primary: Theme.of(context).colorScheme.primary,
                       surface: HotstarPlayerStyle.background,
                       onSurface: HotstarPlayerStyle.primaryText,
                     ),
                     chipTheme: ChipThemeData(
                       backgroundColor: Colors.white.withValues(alpha: 0.06),
-                      selectedColor: HotstarPlayerStyle.accent.withValues(
+                      selectedColor: Theme.of(context).colorScheme.primary.withValues(
                         alpha: 0.22,
                       ),
                       disabledColor: Colors.white.withValues(alpha: 0.04),
@@ -144,12 +144,15 @@ class PlayerBottomSheets {
                               child: SliderTheme(
                                 data: SliderThemeData(
                                   trackHeight: isCompact ? 10 : 18,
-                                  activeTrackColor: Colors.white,
-                                  inactiveTrackColor: Colors.white.withValues(
-                                    alpha: 0.08,
-                                  ),
-                                  thumbColor: Colors.white,
-                                  overlayColor: HotstarPlayerStyle.accent
+                                  activeTrackColor:
+                                      Theme.of(context).colorScheme.primary,
+                                  inactiveTrackColor: Theme.of(context)
+                                      .colorScheme
+                                      .primary
+                                      .withValues(alpha: 0.20),
+                                  thumbColor:
+                                      Theme.of(context).colorScheme.primary,
+                                  overlayColor: Theme.of(context).colorScheme.primary
                                       .withValues(alpha: 0.12),
                                   thumbShape: const RoundSliderThumbShape(
                                     enabledThumbRadius: 4,
@@ -265,21 +268,21 @@ class _SpeedPresetChipState extends State<_SpeedPresetChip> {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: widget.isSelected
-                  ? HotstarPlayerStyle.accent.withValues(alpha: 0.22)
+                  ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.22)
                   : (showHighlight
                         ? Colors.white.withValues(alpha: 0.12)
                         : Colors.white.withValues(alpha: 0.06)),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: _isFocused
-                    ? HotstarPlayerStyle.accent
+                    ? Theme.of(context).colorScheme.primary
                     : Colors.transparent,
                 width: 1.5,
               ),
               boxShadow: _isFocused
                   ? [
                       BoxShadow(
-                        color: HotstarPlayerStyle.accent.withValues(
+                        color: Theme.of(context).colorScheme.primary.withValues(
                           alpha: 0.25,
                         ),
                         blurRadius: 8,
@@ -339,14 +342,14 @@ class _SpeedStepButtonState extends State<_SpeedStepButton> {
           color: HotstarPlayerStyle.primaryText,
           style: IconButton.styleFrom(
             backgroundColor: _isFocused
-                ? HotstarPlayerStyle.accent.withValues(alpha: 0.22)
+                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.22)
                 : Colors.white.withValues(alpha: 0.06),
             fixedSize: Size(widget.compact ? 42 : 56, widget.compact ? 42 : 56),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(widget.compact ? 10 : 14),
               side: BorderSide(
                 color: _isFocused
-                    ? HotstarPlayerStyle.accent
+                    ? Theme.of(context).colorScheme.primary
                     : Colors.transparent,
                 width: 1.5,
               ),
