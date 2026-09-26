@@ -17,16 +17,22 @@ void main() {
       MaterialApp(
         locale: const Locale('ar'),
         home: Builder(
-          builder: (context) => Navigator(
-            onGenerateRoute: (_) => MaterialPageRoute<void>(
-              builder: (_) => const AnimeWitcherPrivacySettingsScreen(
-                initialSettings: AnimeWitcherPrivacySettings(),
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => const AnimeWitcherPrivacySettingsScreen(
+                    initialSettings: AnimeWitcherPrivacySettings(),
+                  ),
+                ),
               ),
+              child: const Text('open'),
             ),
           ),
         ),
       ),
     );
+    await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
 
     final title = find.text('الخصوصية والمحتوى');
@@ -39,8 +45,6 @@ void main() {
 
   testWidgets('privacy toggles use themed Material switches on iOS', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
-
     const accent = Color(0xFF8A5CFF);
     await tester.pumpWidget(
       MaterialApp(
@@ -68,5 +72,6 @@ void main() {
 
     expect(find.byType(Switch), findsNWidgets(4));
     expect(find.byType(CupertinoSwitch), findsNothing);
+    debugDefaultTargetPlatformOverride = null;
   });
 }
