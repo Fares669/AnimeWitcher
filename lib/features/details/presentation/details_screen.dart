@@ -17,6 +17,7 @@ import '../../comments/presentation/animewitcher_comments_screen.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../core/utils/image_fallbacks.dart';
 import '../../../core/utils/resume_episode.dart';
+import '../../../core/theme/app_theme.dart';
 import 'details_item_merge.dart';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -173,6 +174,9 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     with TickerProviderStateMixin {
   bool _didTriggerAutoPlay = false;
   final GlobalKey _extraTabsKey = GlobalKey();
+  int? _userRating;
+  bool _loadingUserRating = false;
+  String? _loadedUserRatingAnimeId;
 
   static const String _removeLibraryAction = '__remove_from_library__';
 
@@ -331,15 +335,16 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         // Each on its own rather than sharing a capsule: they do unrelated
         // things, and a viewer reaching for one is not choosing from a set.
         DetailsHeroIconButton(
-          icon: Icons.star_outline_rounded,
+          icon: (_userRating ?? 0) > 0
+              ? Icons.star_rounded
+              : Icons.star_outline_rounded,
           tooltip: appText(context, english: 'Rate this', arabic: 'قيّم'),
-          foregroundColor: foregroundColor,
+          foregroundColor: (_userRating ?? 0) > 0
+              ? AppTheme.animeWitcherAccent
+              : foregroundColor,
           fallbackColor: fallbackColor,
-          onPressed: () => openAnimeRatingDialog(
-            context,
-            ref,
-            ratings: AnimeDetailsRatings.fromItem(item),
-          ),
+          ratingCaption: _userRating == null ? null : '${_userRating!}/10',
+          onPressed: () async => _rateAnimeFromHero(item),
         ),
         DetailsHeroIconButton(
           icon: Icons.rate_review_outlined,
@@ -631,6 +636,60 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     });
   }
 
+  Future<void> _loadUserRatingFor(MultimediaItem item) async {
+    final service = ref.read(animeWitcherAccountServiceProvider);
+    final animeId = animeWitcherAnimeIdFromItem(item);
+    if (animeId.isEmpty || !service.isSignedIn) {
+      if (!mounted) return;
+      setState(() {
+        _userRating = null;
+        _loadingUserRating = false;
+        _loadedUserRatingAnimeId = animeId;
+      });
+      return;
+    }
+    if (_loadingUserRating || _loadedUserRatingAnimeId == animeId) return;
+
+    setState(() => _loadingUserRating = true);
+    try {
+      final rating = await service.loadAnimeUserRating(animeId);
+      if (!mounted) return;
+      setState(() {
+        _userRating = rating;
+        _loadedUserRatingAnimeId = animeId;
+        _loadingUserRating = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadedUserRatingAnimeId = animeId;
+        _loadingUserRating = false;
+      });
+    }
+  }
+
+  void _ensureUserRatingLoaded(MultimediaItem item) {
+    final animeId = animeWitcherAnimeIdFromItem(item);
+    if (_loadingUserRating || _loadedUserRatingAnimeId == animeId) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadUserRatingFor(item);
+    });
+  }
+
+  Future<void> _rateAnimeFromHero(MultimediaItem item) async {
+    final outcome = await openAnimeRatingDialog(
+      context,
+      ref,
+      ratings: AnimeDetailsRatings.fromItem(item),
+      initialRating: _userRating ?? 0,
+    );
+    if (!mounted || !outcome.changed) return;
+    setState(() {
+      _userRating = outcome.rating;
+      _loadedUserRatingAnimeId = animeWitcherAnimeIdFromItem(item);
+    });
+  }
+
   Future<void> _refreshDetails() {
     return ref
         .read(detailsControllerProvider(widget.item.url).notifier)
@@ -759,6 +818,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       incoming: currentItem ?? details ?? widget.item,
       episodes: episodesAsync.asData?.value,
     );
+    _ensureUserRatingLoaded(item);
     final selectedEpisodeCount = ref.watch(
       detailsControllerProvider(widget.item.url)
           .select((state) => state.selectedEpisodeKeys.length),
