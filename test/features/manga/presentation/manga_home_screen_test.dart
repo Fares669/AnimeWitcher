@@ -163,6 +163,14 @@ void main() {
 
     expect(find.byType(MangaViewAllScreen<MultimediaItem>), findsOneWidget);
     expect(find.text('Popular 0'), findsWidgets);
+    expect(
+      tester.getCenter(find.text('الأكثر قراءة')).dx,
+      greaterThan(tester.view.physicalSize.width / 2),
+    );
+    expect(
+      tester.getCenter(find.text('Popular 0').first).dx,
+      greaterThan(tester.view.physicalSize.width / 2),
+    );
     expect(source.popularCalls, greaterThan(1));
     await tester.pump(const Duration(milliseconds: 100));
   });
@@ -178,6 +186,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Fresh Chapter Manga'), findsWidgets);
+    expect(
+      tester.getCenter(find.text('فصول جديدة')).dx,
+      greaterThan(tester.view.physicalSize.width / 2),
+    );
     await tester.pump(const Duration(milliseconds: 100));
   });
 }
