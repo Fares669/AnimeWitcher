@@ -39,8 +39,11 @@ void main() {
     final back = find.byType(AppBackButton);
     expect(title, findsOneWidget);
     expect(back, findsOneWidget);
-    expect(tester.getCenter(title).dx, greaterThan(230));
-    expect(tester.getCenter(back).dx, lessThan(80));
+    final titleRect = tester.getRect(title);
+    final backRect = tester.getRect(back);
+    expect(titleRect.center.dx, greaterThan(tester.view.physicalSize.width / 2));
+    expect(backRect.center.dx, lessThan(80));
+    expect(titleRect.left, greaterThan(backRect.right));
   });
 
   testWidgets('privacy toggles use themed Material switches on iOS', (tester) async {
