@@ -114,18 +114,29 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
           textDirection: TextDirection.ltr,
           child: AppBar(
             automaticallyImplyLeading: false,
+            centerTitle: false,
+            titleSpacing: 16,
             leading: const AppBackButton(),
-            title: Directionality(
-              textDirection: _arabic ? TextDirection.rtl : TextDirection.ltr,
-              child: Text(widget.title),
+            title: Align(
+              alignment: _arabic
+                  ? Alignment.centerRight
+                  : Alignment.centerLeft,
+              child: Directionality(
+                textDirection: _arabic
+                    ? TextDirection.rtl
+                    : TextDirection.ltr,
+                child: Text(widget.title),
+              ),
             ),
             actions: const <Widget>[WindowControlsGap()],
           ),
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: CustomScrollView(
+      body: Directionality(
+        textDirection: _arabic ? TextDirection.rtl : TextDirection.ltr,
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: CustomScrollView(
           controller: _scroll,
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: <Widget>[
@@ -160,7 +171,8 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
                       ),
                     ),
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );

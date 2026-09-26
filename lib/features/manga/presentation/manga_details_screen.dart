@@ -788,10 +788,18 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
           key: const ValueKey<String>('manga-details-wide'),
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            Text(
-              chapterTitle,
-              style: Theme.of(context).textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.bold),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    chapterTitle,
+                    style: Theme.of(context).textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const MangaChapterSortButton(),
+              ],
             ),
             const SizedBox(height: 12),
           ],

@@ -333,6 +333,18 @@ class AppTheme {
         backgroundColor: p.background,
         surfaceTintColor: Colors.transparent,
       ),
+      popupMenuTheme: _popupMenuTheme(scheme),
+      menuTheme: _menuTheme(scheme),
+      chipTheme: base.chipTheme.copyWith(
+        backgroundColor: p.surface,
+        selectedColor: p.accent.withValues(alpha: 0.18),
+        secondarySelectedColor: p.accent.withValues(alpha: 0.18),
+        secondaryLabelStyle: TextStyle(
+          color: p.accent,
+          fontWeight: FontWeight.w600,
+        ),
+        checkmarkColor: p.accent,
+      ),
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith(
           (states) =>

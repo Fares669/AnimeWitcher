@@ -14,8 +14,6 @@ class MangaChapterRow extends StatelessWidget {
     this.onTap,
     this.onLongPress,
     this.selected = false,
-    this.current = false,
-    this.highlighted = false,
   });
 
   final MangaChapter chapter;
@@ -25,12 +23,6 @@ class MangaChapterRow extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final bool selected;
-
-  /// The chapter the reader is up to: tinted, with how far into it they are.
-  final bool current;
-
-  /// The chapter "go to" just landed on, outlined so the eye finds it.
-  final bool highlighted;
 
   String? get progressLabel {
     final state = progress;
@@ -46,17 +38,14 @@ class MangaChapterRow extends StatelessWidget {
     final colors = theme.colorScheme;
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final isRead = progress?.isRead == true && !current;
+    final isRead = progress?.isRead == true;
     final accent = colors.primary;
-    final foreground = current
-        ? accent
-        : colors.onSurface.withValues(alpha: isRead ? 0.52 : 1);
+    final foreground = colors.onSurface.withValues(alpha: isRead ? 0.52 : 1);
     final secondary = colors.onSurfaceVariant.withValues(
       alpha: isRead ? 0.45 : 0.72,
     );
     final state = progress;
     final partRead =
-        current &&
         state != null &&
         !state.isRead &&
         state.pageCount > 0 &&
@@ -69,14 +58,8 @@ class MangaChapterRow extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected
               ? accent.withValues(alpha: 0.15)
-              : current
-              ? accent.withValues(alpha: 0.10)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: highlighted ? accent : Colors.transparent,
-            width: 1.5,
-          ),
         ),
         child: InkWell(
           borderRadius: BorderRadius.circular(10),

@@ -1,6 +1,5 @@
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/domain/entity/manga.dart';
@@ -14,9 +13,49 @@ import '../../../details/presentation/widgets/details_hero_actions.dart';
 import '../../../details/presentation/widgets/episode_action_chip.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
 import '../../../library/presentation/downloads_provider.dart';
-import '../manga_resume_chapter.dart';
 import 'manga_chapter_browse.dart';
 import 'manga_chapter_row.dart';
+
+class MangaChapterSortButton extends ConsumerWidget {
+  const MangaChapterSortButton({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ascending = ref.watch(episodeSortAscendingProvider);
+    return SizedBox(
+      height: 40,
+      child: AppleLiquidGlassSurface(
+        borderRadius: BorderRadius.circular(20),
+        interactive: true,
+        fallbackColor: kDetailsHeroGlassFallback,
+        fallbackBorder: BorderSide(
+          color: Theme.of(context).colorScheme.onSurfaceVariant
+              .withValues(alpha: 0.12),
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            key: const ValueKey<String>('manga-chapter-sort-toggle'),
+            borderRadius: BorderRadius.circular(20),
+            onTap: () => ref
+                .read(episodeSortAscendingProvider.notifier)
+                .setAscending(!ascending),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Icon(
+                ascending
+                    ? Icons.arrow_downward_rounded
+                    : Icons.arrow_upward_rounded,
+                size: 22,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class MangaChapterList extends ConsumerStatefulWidget {
   const MangaChapterList({
@@ -51,23 +90,10 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   /// The range menu's pick; null shows every chapter, which is the default.
   int? _rangeIndex;
   MangaChapterFilter _filter = MangaChapterFilter.all;
-
-  /// The chapter "go to" or "current" last landed on, outlined in the list.
-  String? _targetId;
   String _query = '';
   final TextEditingController _goToController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final GlobalKey _targetKey = GlobalKey();
-
-  /// The rows as last laid out, for scrolling to one not built yet.
-  List<MangaChapter> _visible = const <MangaChapter>[];
-
-  /// Roughly one row's height, to bring an unbuilt row near the screen
-  /// before scrolling it exactly into place.
-  static const double _approxRowExtent = 72;
-
-  /// The toolbar above the rows, when embedded in a page's scroll.
-  final GlobalKey _headKey = GlobalKey();
+  OverlayEntry? _selectionOverlay;
 
   bool get _selecting => _selectedChapterIds.isNotEmpty;
 
@@ -76,128 +102,15 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
 
   @override
   void dispose() {
+    _selectionOverlay?.remove();
     _goToController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
-  /// Puts [chapter] on screen and outlines it. The range stays unless the
-  /// chapter is outside it, and a filter that hides it is cleared.
-  void _reveal(MangaChapter chapter) {
-    final ranges = mangaChapterRanges(widget.chapters);
-    final range = _rangeIndex;
-    _goToController.clear();
-    setState(() {
-      _query = '';
-      _filter = MangaChapterFilter.all;
-      if (range != null &&
-          (range >= ranges.length ||
-              !ranges[range].any((c) => c.id == chapter.id))) {
-        _rangeIndex = null;
-      }
-      _targetId = chapter.id;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTarget());
-  }
-
-  void _scrollToTarget({int attempt = 0}) {
-    if (!mounted) return;
-    final target = _targetKey.currentContext;
-    if (target != null) {
-      Scrollable.ensureVisible(
-        target,
-        alignment: 0.3,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOutCubic,
-      );
-      return;
-    }
-    // A long list builds only the rows near the screen: work out from the
-    // rows that are built where the target must be, jump there, and place
-    // it exactly once it exists. A second pass corrects rows that are not
-    // all the same height.
-    if (attempt >= 3) return;
-    final index = _visible.indexWhere((c) => c.id == _targetId);
-    if (index < 0) return;
-    final built = _builtRows();
-    ScrollPosition? position;
-    double? offset;
-    if (built.isNotEmpty) {
-      final first = built.first;
-      final last = built.last;
-      final extent = last.index > first.index
-          ? (last.offset - first.offset) / (last.index - first.index)
-          : _approxRowExtent;
-      position = first.position;
-      offset = first.offset + (index - first.index) * extent;
-    } else if (widget.embedded) {
-      // Inside the page's own scroll, with no row built yet: the rows
-      // start below the toolbar, wherever the page has put it.
-      final headContext = _headKey.currentContext;
-      final head = headContext?.findRenderObject();
-      if (head is! RenderBox || !head.attached) return;
-      final viewport = RenderAbstractViewport.maybeOf(head);
-      position = Scrollable.maybeOf(headContext!)?.position;
-      if (viewport == null) return;
-      offset =
-          viewport.getOffsetToReveal(head, 0).offset +
-          head.size.height +
-          index * _approxRowExtent;
-    } else if (_scrollController.hasClients) {
-      position = _scrollController.position;
-      offset = index * _approxRowExtent;
-    }
-    if (position == null || offset == null) return;
-    position.jumpTo(
-      offset.clamp(position.minScrollExtent, position.maxScrollExtent),
-    );
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _scrollToTarget(attempt: attempt + 1),
-    );
-  }
-
-  /// The rows built right now, in list order, each with where its scroll
-  /// puts it at the top of the screen.
-  List<({int index, double offset, ScrollPosition position})> _builtRows() {
-    final indexOf = <String, int>{
-      for (var i = 0; i < _visible.length; i++) _visible[i].id: i,
-    };
-    final rows = <({int index, double offset, ScrollPosition position})>[];
-    void visit(Element element) {
-      final widget = element.widget;
-      if (widget is MangaChapterRow) {
-        final index = indexOf[widget.chapter.id];
-        final box = element.renderObject;
-        final position = Scrollable.maybeOf(element)?.position;
-        if (index != null &&
-            box is RenderBox &&
-            box.attached &&
-            position != null) {
-          final viewport = RenderAbstractViewport.maybeOf(box);
-          if (viewport != null) {
-            rows.add((
-              index: index,
-              offset: viewport.getOffsetToReveal(box, 0).offset,
-              position: position,
-            ));
-          }
-        }
-        return;
-      }
-      element.visitChildren(visit);
-    }
-
-    (context as Element).visitChildren(visit);
-    rows.sort((a, b) => a.index.compareTo(b.index));
-    return rows;
-  }
-
   /// The search narrows the list as it is typed, as the anime episode
   /// search does, rather than jumping to one chapter.
-  void _search(String raw) => setState(() {
-    _query = raw;
-    _targetId = null;
-  });
+  void _search(String raw) => setState(() => _query = raw);
 
   DownloadProgressData? _progressFor(
     MangaChapter chapter,
@@ -239,10 +152,8 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       key: const ValueKey<String>('manga-chapter-range-menu'),
       tooltip: _isArabic ? 'نطاق الفصول' : 'Chapter range',
       initialValue: range ?? -1,
-      onSelected: (value) => setState(() {
-        _rangeIndex = value < 0 ? null : value;
-        _targetId = null;
-      }),
+      onSelected: (value) =>
+          setState(() => _rangeIndex = value < 0 ? null : value),
       itemBuilder: (_) => <PopupMenuEntry<int>>[
         PopupMenuItem<int>(value: -1, child: Text(all)),
         for (var i = 0; i < ranges.length; i++)
@@ -278,7 +189,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         height: 40,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: kDetailsHeroGlassFallback,
+          color: colors.surfaceContainerHigh,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: colors.onSurfaceVariant.withValues(alpha: 0.16),
@@ -367,16 +278,11 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
             label: Text(entry.value),
             selected: _filter == entry.key,
             showCheckmark: false,
-            onSelected: (_) => setState(() {
-              _filter = entry.key;
-              _targetId = null;
-            }),
+            onSelected: (_) => setState(() => _filter = entry.key),
             labelStyle: TextStyle(
               fontSize: 13,
               color: _filter == entry.key ? colors.primary : colors.onSurface,
             ),
-            selectedColor: colors.primary.withValues(alpha: 0.16),
-            backgroundColor: kDetailsHeroGlassFallback,
             side: BorderSide(
               color: _filter == entry.key
                   ? colors.primary
@@ -388,14 +294,11 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     );
   }
 
-  /// Range, go-to, back to the current chapter, then the filters: every
-  /// chapter is two steps away at most, however many there are.
+  /// Range and search tools, with reading-state filters below them.
   Widget _toolbar(
     BuildContext context, {
     required List<List<MangaChapter>> ranges,
     required MangaReadingRepository repository,
-    required MangaChapter? current,
-    Widget? trailing,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -407,16 +310,6 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           children: <Widget>[
             if (ranges.length > 1) _rangeMenu(context, ranges, repository),
             _goToField(context),
-            if (current != null)
-              TextButton.icon(
-                key: const ValueKey<String>('manga-chapter-to-current'),
-                onPressed: () => _reveal(current),
-                icon: const Icon(Icons.my_location_rounded, size: 18),
-                label: Text(
-                  _isArabic ? 'إلى الفصل الحالي' : 'To current chapter',
-                ),
-              ),
-            if (trailing != null) trailing,
           ],
         ),
         const SizedBox(height: 10),
@@ -425,39 +318,28 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     );
   }
 
-  Widget _sortButton(BuildContext context, bool ascending) {
-    return SizedBox(
-      height: 40,
-      child: AppleLiquidGlassSurface(
-        borderRadius: BorderRadius.circular(20),
-        interactive: true,
-        fallbackColor: kDetailsHeroGlassFallback,
-        fallbackBorder: BorderSide(
-          color: Theme.of(context).colorScheme.onSurfaceVariant
-              .withValues(alpha: 0.12),
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            key: const ValueKey<String>('manga-chapter-sort-toggle'),
-            borderRadius: BorderRadius.circular(20),
-            onTap: () => ref
-                .read(episodeSortAscendingProvider.notifier)
-                .setAscending(!ascending),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Icon(
-                ascending
-                    ? Icons.arrow_downward_rounded
-                    : Icons.arrow_upward_rounded,
-                size: 22,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ),
+  void _syncSelectionOverlay() {
+    if (!widget.embedded || !mounted) return;
+    if (!_selecting) {
+      _selectionOverlay?.remove();
+      _selectionOverlay = null;
+      return;
+    }
+    final existing = _selectionOverlay;
+    if (existing != null) {
+      existing.markNeedsBuild();
+      return;
+    }
+    final entry = OverlayEntry(
+      builder: (overlayContext) => Positioned(
+        left: 0,
+        right: 0,
+        bottom: 0,
+        child: _selectionBar(overlayContext),
       ),
     );
+    _selectionOverlay = entry;
+    Overlay.of(context).insert(entry);
   }
 
   void _toggleSelection(MangaChapter chapter) {
@@ -466,15 +348,27 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         _selectedChapterIds.remove(chapter.id);
       }
     });
+    _syncSelectionOverlay();
   }
 
   void _beginSelection(MangaChapter chapter) {
     setState(() => _selectedChapterIds.add(chapter.id));
+    _syncSelectionOverlay();
   }
 
   void _clearSelection() {
     if (!_selecting) return;
     setState(_selectedChapterIds.clear);
+    _syncSelectionOverlay();
+  }
+
+  void _selectAll() {
+    setState(() {
+      _selectedChapterIds
+        ..clear()
+        ..addAll(widget.chapters.map((chapter) => chapter.id));
+    });
+    _syncSelectionOverlay();
   }
 
   Future<void> _setSelectedRead(bool read) async {
@@ -608,13 +502,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                         tooltip: isArabic
                             ? 'تحديد جميع الفصول'
                             : 'Select all chapters',
-                        onPressed: () => setState(() {
-                          _selectedChapterIds
-                            ..clear()
-                            ..addAll(
-                              widget.chapters.map((chapter) => chapter.id),
-                            );
-                        }),
+                        onPressed: _selectAll,
                         icon: const Icon(Icons.select_all_rounded),
                         style: IconButton.styleFrom(
                           minimumSize: const Size(48, 48),
@@ -766,18 +654,6 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           };
         })
         .toList(growable: false);
-    _visible = chapters;
-
-    // The chapter the reader is up to, marked in the list once they have
-    // started; before that the button still leads to the first one.
-    final resume = mangaResumeTarget(
-      widget.chapters,
-      (chapter) => repository.get(chapter.mangaId, chapter.id),
-    );
-    final currentId = resume == null || resume.kind == MangaResumeKind.start
-        ? null
-        : resume.chapter.id;
-
     Widget emptyNote() => Padding(
       padding: const EdgeInsets.symmetric(vertical: 32),
       child: Center(
@@ -798,14 +674,11 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           : '${publishedAt.year.toString().padLeft(4, '0')}-'
                 '${publishedAt.month.toString().padLeft(2, '0')}-'
                 '${publishedAt.day.toString().padLeft(2, '0')}';
-      final isTarget = chapter.id == _targetId;
-      final rowWidget = MangaChapterRow(
+      return MangaChapterRow(
         key: ValueKey<String>('manga-chapter-row-${chapter.id}'),
         chapter: chapter,
         progress: repository.get(chapter.mangaId, chapter.id),
         publishedLabel: publishedLabel,
-        current: chapter.id == currentId,
-        highlighted: isTarget,
         selected: _selectedChapterIds.contains(chapter.id),
         action: _selecting
             ? null
@@ -819,18 +692,12 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           }
         },
       );
-      // Only the outlined row carries the key "go to" scrolls by.
-      return isTarget
-          ? KeyedSubtree(key: _targetKey, child: rowWidget)
-          : rowWidget;
     }
 
     final toolbar = _toolbar(
       context,
       ranges: ranges,
       repository: repository,
-      current: resume?.chapter,
-      trailing: widget.embedded ? _sortButton(context, ascending) : null,
     );
 
     if (widget.embedded) {
@@ -842,10 +709,9 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         slivers: <Widget>[
           SliverToBoxAdapter(
             child: Column(
-              key: _headKey,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                if (_selecting) _selectionBar(context) else toolbar,
+                toolbar,
                 const SizedBox(height: 8),
               ],
             ),
@@ -856,6 +722,8 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (context, index) => row(chapters[index]),
           ),
+          if (_selecting)
+            const SliverToBoxAdapter(child: SizedBox(height: 132)),
         ],
       );
     }
@@ -882,7 +750,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
                         style: Theme.of(context).textTheme.titleLarge
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
-                      _sortButton(context, ascending),
+                      const MangaChapterSortButton(),
                     ],
                   ),
                 ),
