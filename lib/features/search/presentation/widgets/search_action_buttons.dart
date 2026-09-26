@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../search_domain.dart';
 import 'search_glass_surface.dart';
 
 import '../../../../shared/widgets/apple_liquid_glass.dart';
-import '../../../../l10n/generated/app_localizations.dart';
 
 /// Sort + filter controls.
 ///
@@ -171,99 +169,6 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
                     ],
                   ),
                 ),
-        ),
-      ),
-    );
-  }
-
-  List<AppleNativeMenuItem> _domainItems(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    return <AppleNativeMenuItem>[
-      AppleNativeMenuItem(
-        value: 'anime',
-        label: l10n?.searchDomainAnime ?? (isArabic ? 'أنمي' : 'Anime'),
-        systemImage: 'play.rectangle.fill',
-        icon: Icons.movie_rounded,
-      ),
-      AppleNativeMenuItem(
-        value: 'animation',
-        label: l10n?.searchDomainAnimation ?? (isArabic ? 'انميشن' : 'Animation'),
-        systemImage: 'sparkles.tv',
-        icon: Icons.animation_rounded,
-      ),
-      AppleNativeMenuItem(
-        value: 'manga',
-        label: l10n?.searchDomainManga ?? (isArabic ? 'مانجا' : 'Manga'),
-        systemImage: 'book.closed.fill',
-        icon: Icons.menu_book_rounded,
-      ),
-      AppleNativeMenuItem(
-        value: 'characters',
-        label: l10n?.searchDomainCharacters ?? (isArabic ? 'شخصيات' : 'Characters'),
-        systemImage: 'person.2.fill',
-        icon: Icons.groups_rounded,
-      ),
-    ];
-  }
-
-  IconData _domainIcon(SearchDomain domain) => switch (domain) {
-    SearchDomain.anime => Icons.movie_rounded,
-    SearchDomain.animation => Icons.animation_rounded,
-    SearchDomain.manga => Icons.menu_book_rounded,
-    SearchDomain.characters => Icons.groups_rounded,
-  };
-
-  String _domainSystemImage(SearchDomain domain) => switch (domain) {
-    SearchDomain.anime => 'play.rectangle.fill',
-    SearchDomain.animation => 'sparkles.tv',
-    SearchDomain.manga => 'book.closed.fill',
-    SearchDomain.characters => 'person.2.fill',
-  };
-
-  void _onDomainMenuSelected(String value) {
-    final selected = SearchDomain.values.where(
-      (domain) => domain.name == value,
-    );
-    if (selected.isEmpty) return;
-    widget.onDomainSelected?.call(selected.first);
-  }
-
-  Widget _buildDomainControl(Color tint) {
-    final domain = widget.domain!;
-    return Builder(
-      builder: (context) => PopupMenuButton<String>(
-        tooltip: widget.domainTooltip,
-        padding: EdgeInsets.zero,
-        offset: const Offset(0, 8),
-        color: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        shadowColor: Colors.transparent,
-        elevation: 0,
-        shape: const RoundedRectangleBorder(),
-        itemBuilder: (menuContext) => <PopupMenuEntry<String>>[
-          PopupMenuItem<String>(
-            enabled: false,
-            padding: EdgeInsets.zero,
-            child: BlurredMenuPanel(
-              items: _domainItems(context),
-              selectedValue: domain.name,
-              tint: tint,
-              fallbackIcon: _domainIcon(domain),
-              onPick: (value) {
-                Navigator.of(menuContext).pop();
-                _onDomainMenuSelected(value);
-              },
-            ),
-          ),
-        ],
-        child: SizedBox(
-          width: widget.height,
-          height: widget.height,
-          child: Center(
-            child: Icon(_domainIcon(domain), size: 22, color: tint),
-          ),
         ),
       ),
     );
