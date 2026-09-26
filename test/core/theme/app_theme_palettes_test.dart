@@ -58,6 +58,40 @@ void main() {
     }
   });
 
+  test('tinted component surfaces and selection colors follow the palette', () {
+    for (final style in AppThemeStyle.values) {
+      final palette = AppTheme.paletteFor(style);
+      if (palette == null) continue;
+      final theme = AppTheme.darkThemeFor(style, null);
+
+      expect(
+        theme.popupMenuTheme.color,
+        palette.surfaceHighest,
+        reason: '${style.name}: popup surface',
+      );
+      expect(
+        theme.menuTheme.style?.backgroundColor?.resolve(<WidgetState>{}),
+        palette.surfaceHighest,
+        reason: '${style.name}: menu surface',
+      );
+      expect(
+        theme.chipTheme.backgroundColor,
+        palette.surface,
+        reason: '${style.name}: chip surface',
+      );
+      expect(
+        theme.chipTheme.selectedColor,
+        palette.accent.withValues(alpha: 0.18),
+        reason: '${style.name}: selected chip',
+      );
+      expect(
+        theme.chipTheme.secondaryLabelStyle?.color,
+        palette.accent,
+        reason: '${style.name}: selected chip label',
+      );
+    }
+  });
+
   test('AMOLED is true black', () {
     expect(AppTheme.amoledPalette.background, const Color(0xFF000000));
   });
