@@ -3,6 +3,7 @@ import 'dart:ui' show FontFeature;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_back_button.dart';
 import 'package:flutter/services.dart';
 
 import '../../../../shared/widgets/custom_widgets.dart';
@@ -145,25 +146,11 @@ class PlayerTopBar extends StatelessWidget {
           padding: EdgeInsets.fromLTRB(leftPadding, 4, rightPadding, 14),
           child: Row(
             children: [
-              if (appleUsesPersistentLiquidGlassHeader)
-                // Preserve the title's original clearance while the actual
-                // back control lives in the route-independent overlay.
-                const SizedBox(width: 60)
-              else ...[
-                // The glyph alone, with no pill behind it: the top scrim
-                // already separates it from the picture, and a blurred disc
-                // over artwork read as a smudge.
-                PlayerIconButton(
-                  icon: LucideIcons.chevronLeft200,
-                  tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                  onPressed: onBack,
-                  isTv: isTv,
-                  focusNode: backFocusNode,
-                  iconSize: isTv ? 34 : 30,
-                  foregroundColor: Theme.of(context).colorScheme.primary,
-                ),
-                const SizedBox(width: 12),
-              ],
+              AppBackButton(
+                onPressed: onBack,
+                focusNode: backFocusNode,
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
