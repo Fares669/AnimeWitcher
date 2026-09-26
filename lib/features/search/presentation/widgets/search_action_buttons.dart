@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'search_glass_surface.dart';
 
 import '../../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../../shared/widgets/animated_sort_menu_button.dart';
 
 /// Sort + filter controls.
 ///
@@ -55,20 +56,7 @@ class SearchActionButtons extends StatefulWidget {
 }
 
 class _SearchActionButtonsState extends State<SearchActionButtons> {
-  static const _hideDuration = Duration(milliseconds: 160);
   static const _showDuration = Duration(milliseconds: 200);
-
-  bool _sortMenuOpen = false;
-
-  void _setSortMenuOpen(bool open) {
-    if (!mounted || _sortMenuOpen == open) return;
-    setState(() => _sortMenuOpen = open);
-  }
-
-  void _onSortSelected(String value) {
-    _setSortMenuOpen(false);
-    widget.onSortSelected(value);
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -86,7 +74,17 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
         ? SearchFilterBadge(count: widget.filterCount)
         : null;
     final fallbackControls = <Widget>[
-      if (widget.showSort) _buildSortControl(tint),
+      if (widget.showSort)
+        AnimatedSortMenuButton(
+          tooltip: widget.sortTooltip,
+          selectedValue: widget.sortValue,
+          items: widget.sortItems,
+          onSelected: widget.onSortSelected,
+          icon: widget.sortIcon,
+          systemImage: widget.sortSystemImage,
+          tintColor: tint,
+          size: height,
+        ),
       if (widget.showFilter)
         _ActionIcon(
           tooltip: widget.filterTooltip,
@@ -118,17 +116,15 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
                       captureGestures: true,
                       children: <Widget>[
                         if (widget.showSort)
-                          AppleLiquidGlassToolbarButton(
+                          AnimatedSortMenuButton(
+                            tooltip: widget.sortTooltip,
+                            selectedValue: widget.sortValue,
+                            items: widget.sortItems,
+                            onSelected: widget.onSortSelected,
                             icon: widget.sortIcon,
                             systemImage: widget.sortSystemImage,
-                            tooltip: widget.sortTooltip,
-                            color: tint,
-                            menuTintColor: tint,
-                            menuItems: widget.sortItems,
-                            selectedMenuValue: widget.sortValue,
-                            onMenuSelected: widget.onSortSelected,
-                            onPressed: () {},
-                            width: height,
+                            tintColor: tint,
+                            size: height,
                           ),
                         if (widget.showFilter)
                           AppleLiquidGlassToolbarButton(
@@ -174,117 +170,7 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
     );
   }
 
-  String? _sortTextGlyph(String? systemImage) {
-    return switch (systemImage) {
-      'animewitcher.abc' => 'ABC',
-      'animewitcher.zyx' => 'ZYX',
-      _ => null,
-    };
-  }
 
-  Widget _buildSortGlyph(
-    Color tint, {
-    required IconData icon,
-    required String? systemImage,
-    double iconSize = 22,
-    double textSize = 15,
-  }) {
-    final textGlyph = _sortTextGlyph(systemImage);
-    if (textGlyph != null) {
-      return Directionality(
-        textDirection: TextDirection.ltr,
-        child: Text(
-          textGlyph,
-          maxLines: 1,
-          style: TextStyle(
-            color: tint,
-            fontSize: textSize,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.3,
-            height: 1,
-          ),
-        ),
-      );
-    }
-    return Icon(icon, size: iconSize, color: tint);
-  }
-
-  Widget _buildSortIcon(Color tint) {
-    final visible = !_sortMenuOpen;
-    return AnimatedOpacity(
-      opacity: visible ? 1 : 0,
-      duration: visible ? _showDuration : _hideDuration,
-      curve: visible ? Curves.easeOutCubic : Curves.easeInCubic,
-      child: AnimatedScale(
-        scale: visible ? 1 : 0.88,
-        duration: visible ? _showDuration : _hideDuration,
-        curve: visible ? Curves.easeOutBack : Curves.easeInCubic,
-        child: AnimatedSlide(
-          offset: visible ? Offset.zero : const Offset(0, -0.18),
-          duration: visible ? _showDuration : _hideDuration,
-          curve: visible ? Curves.easeOutCubic : Curves.easeInCubic,
-          child: _buildSortGlyph(
-            tint,
-            icon: widget.sortIcon,
-            systemImage: widget.sortSystemImage,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSortControl(Color tint) {
-    final height = widget.height;
-    final sortIcon = _buildSortIcon(tint);
-
-    // The menu carries its own blurred surface rather than the flat one a
-    // popup paints, so it matches the taskbar and the search capsule. The
-    // button still hosts it, which keeps the anchoring and dismissal that
-    // come with a popup; only what is drawn changes.
-    return PopupMenuButton<String>(
-      tooltip: widget.sortTooltip,
-      padding: EdgeInsets.zero,
-      offset: const Offset(0, 8),
-      color: Colors.transparent,
-      surfaceTintColor: Colors.transparent,
-      shadowColor: Colors.transparent,
-      elevation: 0,
-      shape: const RoundedRectangleBorder(),
-      onOpened: () => _setSortMenuOpen(true),
-      onCanceled: () => _setSortMenuOpen(false),
-      itemBuilder: (menuContext) => [
-        PopupMenuItem<String>(
-          enabled: false,
-          padding: EdgeInsets.zero,
-          child: BlurredMenuPanel(
-            items: widget.sortItems,
-            selectedValue: widget.sortValue,
-            tint: tint,
-            fallbackIcon: Icons.swap_vert_rounded,
-            // Some sort orders are spelled out as letters rather than drawn
-            // as icons, so the row asks for its own glyph.
-            leadingBuilder: (item, color) => _buildSortGlyph(
-              color,
-              icon: item.icon ?? Icons.swap_vert_rounded,
-              systemImage: item.systemImage,
-              iconSize: 18,
-              textSize: 11.5,
-            ),
-            onPick: (value) {
-              Navigator.of(menuContext).pop();
-              _setSortMenuOpen(false);
-              _onSortSelected(value);
-            },
-          ),
-        ),
-      ],
-      child: SizedBox(
-        width: height,
-        height: height,
-        child: Center(child: sortIcon),
-      ),
-    );
-  }
 }
 
 class _ActionIcon extends StatelessWidget {
