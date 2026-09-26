@@ -691,7 +691,7 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
                                     fontSize: 20,
                                     fontWeight: FontWeight.bold,
                                   ),
-                                  decoration: const InputDecoration(
+                                  decoration: InputDecoration(
                                     hintText: "1000 ms",
                                     hintStyle: TextStyle(color: Colors.white30),
                                     contentPadding: EdgeInsets.symmetric(
