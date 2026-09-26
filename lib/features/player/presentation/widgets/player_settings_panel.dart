@@ -385,7 +385,8 @@ extension on _PlayerSettingsPanelState {
                           ),
                         ),
                       ),
-                      if (list[index].selected)
+                      if (list[index].selected &&
+                          list[index].sectionLabel == null)
                         Icon(Icons.check_rounded, color: accent, size: 18),
                     ],
                   ),

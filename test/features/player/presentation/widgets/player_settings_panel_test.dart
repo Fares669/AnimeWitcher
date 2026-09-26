@@ -59,5 +59,6 @@ void main() {
     expect(find.text('720p'), findsOneWidget);
     expect(find.text('MF2'), findsOneWidget);
     expect(find.byIcon(Icons.play_circle_outline_rounded), findsNWidgets(3));
+    expect(find.byIcon(Icons.check_rounded), findsNothing);
   });
 }
