@@ -894,6 +894,7 @@ class _EpisodeThumbnail extends StatelessWidget {
     final hasPoster = posterUrl != null && posterUrl!.isNotEmpty;
     final hasProgress = !isWatched && progress > 0.02 && progress < 0.98;
     final watchedLabel = AppLocalizations.of(context)!.watched.toUpperCase();
+    final accent = Theme.of(context).colorScheme.primary;
     return RepaintBoundary(
       child: ClipRRect(
         borderRadius: BorderRadius.circular(6),
@@ -949,7 +950,7 @@ class _EpisodeThumbnail extends StatelessWidget {
                       vertical: 2,
                     ),
                     decoration: BoxDecoration(
-                      color: HotstarPlayerStyle.accent.withValues(alpha: 0.94),
+                      color: accent.withValues(alpha: 0.94),
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
@@ -964,16 +965,14 @@ class _EpisodeThumbnail extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (hasProgress)
+              if (isWatched || hasProgress)
                 Align(
                   alignment: Alignment.bottomCenter,
                   child: LinearProgressIndicator(
-                    value: progress,
+                    value: isWatched ? 1.0 : progress,
                     minHeight: 3,
                     backgroundColor: Colors.white24,
-                    valueColor: const AlwaysStoppedAnimation<Color>(
-                      HotstarPlayerStyle.accent,
-                    ),
+                    valueColor: AlwaysStoppedAnimation<Color>(accent),
                   ),
                 ),
             ],
