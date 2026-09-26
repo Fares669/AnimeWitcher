@@ -420,7 +420,7 @@ class AppSideMenuPanel extends ConsumerWidget {
                         ),
                         borderRadius: BorderRadius.circular(16),
                         child: SizedBox(
-                          height: 72,
+                          height: 132,
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
@@ -450,7 +450,7 @@ class AppSideMenuPanel extends ConsumerWidget {
                                   children: [
                                     AccountAvatarButton(
                                       onTap: onAccount,
-                                      size: 54,
+                                      size: 72,
                                     ),
                                     const SizedBox(width: 12),
                                     Expanded(
@@ -463,11 +463,12 @@ class AppSideMenuPanel extends ConsumerWidget {
                                             title,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
-                                            style: theme.textTheme.titleMedium
+                                            style: theme.textTheme.titleLarge
                                                 ?.copyWith(
                                                   color: cover.isNotEmpty
                                                       ? Colors.white
                                                       : colors.onSurface,
+                                                  fontSize: 22,
                                                   fontWeight: FontWeight.w800,
                                                 ),
                                           ),
