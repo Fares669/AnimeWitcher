@@ -14,6 +14,23 @@ final class _SignedOutAccount extends AnimeWitcherAccountController {
   }
 }
 
+final class _SignedInAccount extends AnimeWitcherAccountController {
+  @override
+  Future<AnimeWitcherAccountSnapshot> build() async {
+    return const AnimeWitcherAccountSnapshot(
+      profile: AnimeWitcherProfile(
+        documentId: 'profile-1',
+        uid: 'user-1',
+        signInMethod: AnimeWitcherSignInMethod.email,
+        email: 'viewer@example.test',
+        userName: 'Viewer',
+        photoUrl: 'https://example.test/avatar.jpg',
+        coverUrl: 'https://example.test/banner.jpg',
+      ),
+    );
+  }
+}
+
 const _destinations = <TaskbarDestination>[
   TaskbarDestination.home,
   TaskbarDestination.search,
@@ -29,7 +46,7 @@ final class _Harness {
   bool canOpen = true;
 }
 
-Future<_Harness> _pump(WidgetTester tester) async {
+Future<_Harness> _pump(WidgetTester tester, {bool signedIn = false}) async {
   final harness = _Harness();
   tester.view.physicalSize = const Size(400, 860);
   tester.view.devicePixelRatio = 1;
@@ -39,7 +56,7 @@ Future<_Harness> _pump(WidgetTester tester) async {
     ProviderScope(
       overrides: [
         animeWitcherAccountControllerProvider.overrideWith(
-          _SignedOutAccount.new,
+          signedIn ? _SignedInAccount.new : _SignedOutAccount.new,
         ),
       ],
       child: MaterialApp(
@@ -130,6 +147,31 @@ void main() {
         tester.getCenter(find.byKey(const ValueKey('app-side-menu-home'))).dy,
       ),
     );
+  });
+
+  testWidgets('signed-in menu uses banner, larger avatar, and no email', (
+    tester,
+  ) async {
+    await _pump(tester, signedIn: true);
+    await tester.tap(find.byKey(const ValueKey('app-side-menu-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Viewer'), findsOneWidget);
+    expect(find.text('viewer@example.test'), findsNothing);
+
+    final banner = find.byKey(
+      const ValueKey<String>('app-side-menu-account-banner'),
+    );
+    expect(banner, findsOneWidget);
+    expect(tester.getRect(banner).height, greaterThanOrEqualTo(64));
+
+    final avatar = find.byKey(const ValueKey<String>('account-avatar-button'));
+    expect(tester.getRect(avatar).width, greaterThan(44));
+
+    final cover = tester.widget<Image>(
+      find.byKey(const ValueKey<String>('app-side-menu-account-cover')),
+    );
+    expect((cover.image as NetworkImage).url, 'https://example.test/banner.jpg');
   });
 
   testWidgets('✕, a tap on the page and the back button all close it', (

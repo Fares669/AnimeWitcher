@@ -61,7 +61,7 @@ void main() {
     }
   });
 
-  testWidgets('search and actions align with a yellow count in a blue theme', (
+  testWidgets('search and actions align with a theme-colored count badge', (
     tester,
   ) async {
     final controller = TextEditingController();
@@ -118,7 +118,7 @@ void main() {
       of: find.byType(SearchFilterBadge), matching: find.byType(Container),
     ));
     final decoration = badgeBox.decoration! as BoxDecoration;
-    expect(decoration.color, SearchFilterBadge.backgroundColor);
+    expect(decoration.color, theme.colorScheme.primary);
     expect(decoration.shape, BoxShape.circle);
     final icon = tester.widget<Icon>(find.byIcon(Icons.arrow_upward_rounded));
     final theme = Theme.of(tester.element(find.byType(SearchActionButtons)));
