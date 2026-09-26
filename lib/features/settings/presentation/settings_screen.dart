@@ -6,6 +6,7 @@ import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 import 'widgets/download_log_dialog.dart';
 
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -64,7 +65,6 @@ class SettingsScreen extends ConsumerWidget {
     final isWidescreen = isTv || context.isTabletOrLarger;
     final canPop = Navigator.of(context).canPop();
     final isRtl = Directionality.of(context) == TextDirection.rtl;
-    final showFlutterBack = !appleUsesPersistentLiquidGlassHeader && canPop;
 
     if (isWidescreen) {
       return Scaffold(
@@ -112,25 +112,7 @@ class SettingsScreen extends ConsumerWidget {
     // Mobile layout
     final l10n = AppLocalizations.of(context)!;
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        leading: showFlutterBack && !isRtl
-            ? const AppleLiquidGlassBackButton()
-            : null,
-        title: ApplePersistentGlassHeaderScope(
-          enabled: canPop,
-          onBack: () => Navigator.of(context).maybePop(),
-          child: Text(l10n.settings),
-        ),
-        actions: showFlutterBack && isRtl
-            ? const <Widget>[
-                Padding(
-                  padding: EdgeInsets.only(left: 8),
-                  child: AppleLiquidGlassBackButton(),
-                ),
-              ]
-            : const <Widget>[],
-      ),
+      appBar: AppPageAppBar(title: l10n.settings, canPop: canPop),
       body: _buildSettingsList(context, ref, isTv),
     );
   }

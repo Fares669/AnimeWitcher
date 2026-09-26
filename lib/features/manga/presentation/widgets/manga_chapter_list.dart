@@ -66,6 +66,7 @@ class MangaChapterList extends ConsumerStatefulWidget {
     this.downloads = const <DownloadItem>[],
     this.onDeleteDownload,
     this.embedded = false,
+    this.onSelectionBarChanged,
   });
 
   final List<MangaChapter> chapters;
@@ -73,6 +74,7 @@ class MangaChapterList extends ConsumerStatefulWidget {
   final ValueChanged<MangaChapter>? onDownload;
   final List<DownloadItem> downloads;
   final ValueChanged<DownloadItem>? onDeleteDownload;
+  final ValueChanged<Widget?>? onSelectionBarChanged;
 
   /// Laid out as part of a longer page that does the scrolling — the wide
   /// details layout, where the chapters follow the synopsis the way the
@@ -93,7 +95,6 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   String _query = '';
   final TextEditingController _goToController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  OverlayEntry? _selectionOverlay;
   Animation<double>? _routeSecondaryAnimation;
   AnimationStatusListener? _routeStatusListener;
 
@@ -131,7 +132,6 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     if (listener != null) {
       _routeSecondaryAnimation?.removeStatusListener(listener);
     }
-    _selectionOverlay?.remove();
     _goToController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -347,28 +347,11 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     );
   }
 
-  void _syncSelectionOverlay() {
+  void _syncSelectionSurface() {
     if (!widget.embedded || !mounted) return;
-    if (!_selecting) {
-      _selectionOverlay?.remove();
-      _selectionOverlay = null;
-      return;
-    }
-    final existing = _selectionOverlay;
-    if (existing != null) {
-      existing.markNeedsBuild();
-      return;
-    }
-    final entry = OverlayEntry(
-      builder: (overlayContext) => Positioned(
-        left: 0,
-        right: 0,
-        bottom: 0,
-        child: _selectionBar(overlayContext),
-      ),
+    widget.onSelectionBarChanged?.call(
+      _selecting ? _selectionBar(context) : null,
     );
-    _selectionOverlay = entry;
-    Overlay.of(context).insert(entry);
   }
 
   void _toggleSelection(MangaChapter chapter) {
@@ -377,18 +360,18 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         _selectedChapterIds.remove(chapter.id);
       }
     });
-    _syncSelectionOverlay();
+    _syncSelectionSurface();
   }
 
   void _beginSelection(MangaChapter chapter) {
     setState(() => _selectedChapterIds.add(chapter.id));
-    _syncSelectionOverlay();
+    _syncSelectionSurface();
   }
 
   void _clearSelection() {
     if (!_selecting) return;
     setState(_selectedChapterIds.clear);
-    _syncSelectionOverlay();
+    _syncSelectionSurface();
   }
 
   void _selectAll() {
@@ -397,7 +380,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         ..clear()
         ..addAll(widget.chapters.map((chapter) => chapter.id));
     });
-    _syncSelectionOverlay();
+    _syncSelectionSurface();
   }
 
   Future<void> _setSelectedRead(bool read) async {
@@ -472,7 +455,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
           ),
           clipBehavior: Clip.antiAlias,
           child: SizedBox(
-            height: 112,
+            height: 120,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: Column(
@@ -751,8 +734,6 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (context, index) => row(chapters[index]),
           ),
-          if (_selecting)
-            const SliverToBoxAdapter(child: SizedBox(height: 132)),
         ],
       );
     }

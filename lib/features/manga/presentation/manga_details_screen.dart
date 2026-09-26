@@ -88,6 +88,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
   bool _loadingUserRating = false;
   bool _loadedUserRatingSignedIn = false;
   String? _loadedUserRatingMangaId;
+  Widget? _chapterSelectionBar;
 
   @override
   void initState() {
@@ -761,6 +762,12 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: _wideAppBar(context),
+      bottomNavigationBar: _chapterSelectionBar == null
+          ? null
+          : KeyedSubtree(
+              key: const ValueKey<String>('manga-selection-bottom-bar'),
+              child: _chapterSelectionBar!,
+            ),
       body: DetailsDesktopHero(
         displayItem: item,
         details: state.details.asData?.value,
@@ -822,6 +829,10 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen> {
             data: (chapters) => MangaChapterList(
               embedded: true,
               chapters: chapters,
+              onSelectionBarChanged: (bar) {
+                if (!mounted || identical(_chapterSelectionBar, bar)) return;
+                setState(() => _chapterSelectionBar = bar);
+              },
               downloads: downloads,
               onDeleteDownload: (download) =>
                   unawaited(confirmAndRemoveDownload(context, ref, download)),

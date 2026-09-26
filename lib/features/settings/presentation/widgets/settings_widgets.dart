@@ -307,7 +307,12 @@ class _SettingsTileState extends State<SettingsTile> {
                     trailing: _showsValuePill
                         ? _ValuePill(text: widget.subtitle!)
                         : widget.trailing ??
-                              const Icon(Icons.chevron_right_rounded, size: 20),
+                              Icon(
+                                Directionality.of(context) == TextDirection.rtl
+                                    ? Icons.chevron_left_rounded
+                                    : Icons.chevron_right_rounded,
+                                size: 20,
+                              ),
                     onTap: widget.onTap,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),

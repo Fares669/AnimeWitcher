@@ -1,5 +1,4 @@
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
-import 'package:animewitcher/shared/widgets/app_back_button.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -76,31 +75,13 @@ class _AnimeWitcherPrivacySettingsScreenState
   Widget build(BuildContext context) {
     final isArabic = Localizations.localeOf(context).languageCode == 'ar';
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            leading: Navigator.of(context).canPop()
-                ? const AppBackButton()
-                : null,
-            title: Directionality(
-              textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
-              child: ApplePersistentGlassHeaderScope(
-                enabled: Navigator.of(context).canPop(),
-                onBack: () => Navigator.of(context).maybePop(),
-                child: Text(
-                  appText(
-                    context,
-                    english: 'Privacy and content',
-                    arabic: 'الخصوصية والمحتوى',
-                  ),
-                ),
-              ),
-            ),
-          ),
+      appBar: AppPageAppBar(
+        title: appText(
+          context,
+          english: 'Privacy and content',
+          arabic: 'الخصوصية والمحتوى',
         ),
+        canPop: Navigator.of(context).canPop(),
       ),
       body: ListView(
         padding: const EdgeInsets.only(bottom: 100),
@@ -269,7 +250,7 @@ class _PreferenceTile extends StatelessWidget {
       subtitle: subtitle,
       isLast: isLast,
       onTap: enabled ? () => onChanged(!value) : null,
-      trailing: Switch.adaptive(
+      trailing: Switch(
         value: value,
         onChanged: enabled ? onChanged : null,
       ),
