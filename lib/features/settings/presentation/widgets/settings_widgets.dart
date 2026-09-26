@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
+
 import '../../../../core/utils/layout_constants.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
 
-/// A run of settings in one panel, under a quiet heading.
+/// A run of settings under a quiet heading, each setting a rounded tile of
+/// its own with a little space between them.
 ///
-/// The same shape on the phone and the desktop: a small grey label naming the
-/// group, then its settings as rows of one panel rather than a stack of
-/// separate cards — eight cards down a page is eight objects to take in
-/// before a word has been read, where one panel is a list.
+/// The tiles carry their controls on the row — a switch, a value, a row of
+/// choices underneath — so most settings change where they are read rather
+/// than behind a dialog.
 class SettingsGroup extends StatelessWidget {
   final String title;
   final List<Widget> children;
@@ -18,53 +19,111 @@ class SettingsGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: LayoutConstants.spacingMd,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (title.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                4,
+                LayoutConstants.spacingLg,
+                4,
+                LayoutConstants.spacingSm,
+              ),
+              child: Text(
+                title,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: colors.onSurfaceVariant.withValues(alpha: 0.75),
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.4,
+                ),
+              ),
+            ),
+          ...children,
+        ],
+      ),
+    );
+  }
+}
+
+/// The colour of a settings tile: a step up from the page, taken from the
+/// theme so each theme draws its own.
+Color settingsTileColor(ColorScheme colors) =>
+    Color.alphaBlend(colors.onSurface.withValues(alpha: 0.06), colors.surface);
+
+/// A row of pill choices under a setting, one of them chosen — for settings
+/// with a handful of values, picked where they are read.
+class SettingsChoices<T> extends StatelessWidget {
+  const SettingsChoices({
+    super.key,
+    required this.values,
+    required this.selected,
+    required this.label,
+    required this.onSelected,
+    this.swatch,
+  });
+
+  final List<T> values;
+  final T selected;
+  final String Function(T value) label;
+  final ValueChanged<T> onSelected;
+
+  /// A colour shown as a dot before each choice's name, as the themes have.
+  final Color Function(T value)? swatch;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
       children: [
-        if (title.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              LayoutConstants.spacingMd,
-              LayoutConstants.spacingLg,
-              LayoutConstants.spacingMd,
-              LayoutConstants.spacingXs,
+        for (final value in values)
+          ChoiceChip(
+            avatar: swatch == null
+                ? null
+                : _SwatchDot(color: swatch!(value), ring: colors.onSurface),
+            label: Text(label(value)),
+            selected: value == selected,
+            onSelected: (_) => onSelected(value),
+            showCheckmark: false,
+            backgroundColor: colors.onSurface.withValues(alpha: 0.08),
+            selectedColor: colors.primary,
+            labelStyle: TextStyle(
+              color: value == selected ? colors.onPrimary : colors.onSurface,
+              fontWeight: FontWeight.w700,
             ),
-            child: Text(
-              title,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: colors.onSurfaceVariant.withValues(alpha: 0.75),
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.8,
-              ),
+            side: BorderSide.none,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(99),
             ),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           ),
-        Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: LayoutConstants.spacingMd,
-          ),
-          child: DecoratedBox(
-            // A neutral grey, mixed from the page rather than taken from
-            // surfaceContainerHighest: the scheme is seeded from the app's
-            // amber, so that token carries a brown tint the mock did not.
-            decoration: BoxDecoration(
-              color: Color.alphaBlend(
-                colors.onSurface.withValues(alpha: 0.06),
-                colors.surface,
-              ),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: colors.onSurface.withValues(alpha: 0.1),
-              ),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(18),
-              child: Column(children: children),
-            ),
-          ),
-        ),
       ],
     );
   }
+}
+
+class _SwatchDot extends StatelessWidget {
+  const _SwatchDot({required this.color, required this.ring});
+
+  final Color color;
+  final Color ring;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 16,
+    height: 16,
+    decoration: BoxDecoration(
+      color: color,
+      shape: BoxShape.circle,
+      border: Border.all(color: ring.withValues(alpha: 0.35)),
+    ),
+  );
 }
 
 class SettingsTile extends StatefulWidget {
@@ -78,6 +137,10 @@ class SettingsTile extends StatefulWidget {
   final bool isBeta;
   final FocusNode? focusNode;
 
+  /// Shown under the row inside the same tile: a row of choices, say, so a
+  /// setting with a few values is picked where it is read.
+  final Widget? below;
+
   const SettingsTile({
     super.key,
     required this.icon,
@@ -89,6 +152,7 @@ class SettingsTile extends StatefulWidget {
     this.isLast = false,
     this.isBeta = false,
     this.focusNode,
+    this.below,
   });
 
   @override
@@ -118,140 +182,148 @@ class _SettingsTileState extends State<SettingsTile> {
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
     final onSurface = Theme.of(context).colorScheme.onSurface;
-    return Column(
-      children: [
-        Focus(
-          // Passive observer — we want the inner ListTile's InkWell to remain
-          // the actual focus target (it's what handles onTap when OK is
-          // pressed). hasFocus on this node reflects "any descendant focused"
-          // so onFocusChange still fires when the tile is reached.
-          focusNode: widget.focusNode,
-          canRequestFocus: false,
-          skipTraversal: true,
-          onFocusChange: (f) {
-            setState(() => _isFocused = f);
-            if (f) {
-              // Center the focused setting row in the viewport.
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                final ctx = FocusManager.instance.primaryFocus?.context;
-                final ro = ctx?.findRenderObject();
-                if (ctx != null && ctx.mounted && ro != null) {
-                  Scrollable.maybeOf(ctx)?.position.ensureVisible(
-                    ro,
-                    alignment: 0.5,
-                    duration: const Duration(milliseconds: 380),
-                    curve: Curves.fastOutSlowIn,
-                  );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: settingsTileColor(Theme.of(context).colorScheme),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Focus(
+              // Passive observer — we want the inner ListTile's InkWell to remain
+              // the actual focus target (it's what handles onTap when OK is
+              // pressed). hasFocus on this node reflects "any descendant focused"
+              // so onFocusChange still fires when the tile is reached.
+              focusNode: widget.focusNode,
+              canRequestFocus: false,
+              skipTraversal: true,
+              onFocusChange: (f) {
+                setState(() => _isFocused = f);
+                if (f) {
+                  // Center the focused setting row in the viewport.
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    final ctx = FocusManager.instance.primaryFocus?.context;
+                    final ro = ctx?.findRenderObject();
+                    if (ctx != null && ctx.mounted && ro != null) {
+                      Scrollable.maybeOf(ctx)?.position.ensureVisible(
+                        ro,
+                        alignment: 0.5,
+                        duration: const Duration(milliseconds: 380),
+                        curve: Curves.fastOutSlowIn,
+                      );
+                    }
+                  });
                 }
-              });
-            }
-          },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              color: _isFocused
-                  ? primary.withValues(alpha: 0.22)
-                  : Colors.transparent,
-              border: Border.all(
-                color: _isFocused ? primary : Colors.transparent,
-                width: 2,
-              ),
-            ),
-            child: Material(
-              type: MaterialType.transparency,
-              child: ListTile(
-                focusColor: Colors.transparent,
-                hoverColor: primary.withValues(alpha: 0.10),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: LayoutConstants.spacingMd,
-                  vertical: LayoutConstants.spacingXs,
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  color: _isFocused
+                      ? primary.withValues(alpha: 0.22)
+                      : Colors.transparent,
+                  border: Border.all(
+                    color: _isFocused ? primary : Colors.transparent,
+                    width: 2,
+                  ),
                 ),
-                leading:
-                    widget.leading ??
-                    SizedBox.square(
-                      dimension: 24,
-                      child: Icon(widget.icon, color: primary, size: 21),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: ListTile(
+                    focusColor: Colors.transparent,
+                    hoverColor: primary.withValues(alpha: 0.10),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: LayoutConstants.spacingMd,
+                      vertical: LayoutConstants.spacingXs,
                     ),
-                minLeadingWidth: 24,
-                title: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        widget.title,
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: onSurface,
+                    leading:
+                        widget.leading ??
+                        SizedBox.square(
+                          dimension: 24,
+                          child: Icon(widget.icon, color: primary, size: 21),
                         ),
-                      ),
-                    ),
-                    if (widget.isBeta) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 4,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.primary.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          appText(context, english: 'BETA', arabic: 'تجريبي'),
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.primary,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
+                    minLeadingWidth: 24,
+                    title: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            widget.title,
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: onSurface,
+                                ),
                           ),
                         ),
-                      ),
-                    ],
-                  ],
-                ),
-                subtitle: _showsValuePill
-                    ? null
-                    : widget.subtitle != null
-                    ? Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(
-                          widget.subtitle!,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                                height: 1.35,
+                        if (widget.isBeta) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primary
+                                  .withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              appText(
+                                context,
+                                english: 'BETA',
+                                arabic: 'تجريبي',
                               ),
-                        ),
-                      )
-                    : null,
-                trailing: _showsValuePill
-                    ? _ValuePill(text: widget.subtitle!)
-                    : widget.trailing ??
-                          const Icon(Icons.chevron_right_rounded, size: 20),
-                onTap: widget.onTap,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    subtitle: _showsValuePill
+                        ? null
+                        : widget.subtitle != null
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              widget.subtitle!,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                    height: 1.35,
+                                  ),
+                            ),
+                          )
+                        : null,
+                    trailing: _showsValuePill
+                        ? _ValuePill(text: widget.subtitle!)
+                        : widget.trailing ??
+                              const Icon(Icons.chevron_right_rounded, size: 20),
+                    onTap: widget.onTap,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
+            if (widget.below case final below?)
+              Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(56, 0, 16, 14),
+                child: below,
+              ),
+          ],
         ),
-        if (!widget.isLast && !_isFocused)
-          // Starting where the text starts, so the glyphs read as one column
-          // rather than each row as a box of its own.
-          Divider(
-            height: 1,
-            indent: 56,
-            endIndent: LayoutConstants.spacingMd,
-            color: Theme.of(
-              context,
-            ).colorScheme.onSurface.withValues(alpha: 0.1),
-          ),
-      ],
+      ),
     );
   }
 }
@@ -276,9 +348,8 @@ class _ValuePill extends StatelessWidget {
         text,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: colors.onSurface.withValues(alpha: 0.85),
-        ),
+        style: Theme.of(context).textTheme.bodySmall
+            ?.copyWith(color: colors.onSurface.withValues(alpha: 0.85)),
       ),
     );
   }

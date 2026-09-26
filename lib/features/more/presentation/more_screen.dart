@@ -1,20 +1,68 @@
 import 'package:flutter/material.dart';
+import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/account/account_providers.dart';
+import '../../../core/navigation/app_layout_style.dart';
+import '../../../core/theme/theme_provider.dart';
+import '../../../core/utils/responsive_breakpoints.dart';
+import '../../../shared/widgets/live_previews.dart';
+import '../../details/presentation/widgets/details_seasons_bar.dart';
+import '../../manga/reader/manga_reader_settings_screen.dart';
 import '../../../core/account/animewitcher_account_models.dart';
-import '../../characters/presentation/characters_screen.dart';
 import '../../settings/presentation/account_screen.dart';
 import '../../settings/presentation/settings_screen.dart';
 import '../../settings/presentation/widgets/settings_widgets.dart';
 import 'broadcast_schedule_screen.dart';
 import 'coming_soon_screen.dart';
 import 'global_statistics_screen.dart';
-import 'recent_watched_screen.dart';
 import 'seasons_screen.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/layout_constants.dart';
 import 'more_sidebar_shell.dart';
+
+/// The pages the phone's More tab held, as rows of the side menu that took
+/// its place: the account heads the menu already, so these are the rest.
+List<AppSideMenuEntry> phoneMoreMenuEntries(BuildContext context) {
+  final isArabic =
+      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+  void open(Widget page) => Navigator.of(
+    context,
+    rootNavigator: true,
+  ).push(MaterialPageRoute<void>(builder: (_) => page));
+  return <AppSideMenuEntry>[
+    AppSideMenuEntry(
+      id: 'coming-soon',
+      icon: Icons.upcoming_rounded,
+      label: isArabic ? 'القادم قريبًا' : 'Coming soon',
+      onTap: () => open(const ComingSoonScreen()),
+    ),
+    AppSideMenuEntry(
+      id: 'global-statistics',
+      icon: Icons.query_stats_rounded,
+      label: isArabic ? 'الإحصائيات العالمية' : 'Global statistics',
+      onTap: () => open(const GlobalStatisticsScreen()),
+    ),
+    AppSideMenuEntry(
+      id: 'seasons',
+      icon: Icons.calendar_month_rounded,
+      label: isArabic ? 'المواسم' : 'Seasons',
+      onTap: () => open(const SeasonsScreen()),
+    ),
+    AppSideMenuEntry(
+      id: 'broadcast-schedule',
+      icon: Icons.calendar_view_week_rounded,
+      label: isArabic ? 'جدول البث' : 'Broadcast schedule',
+      onTap: () => open(const BroadcastScheduleScreen()),
+    ),
+    AppSideMenuEntry(
+      id: 'settings',
+      icon: Icons.settings_rounded,
+      label: isArabic ? 'الإعدادات' : 'Settings',
+      onTap: () => open(const SettingsScreen()),
+    ),
+  ];
+}
 
 class MoreScreen extends ConsumerWidget {
   const MoreScreen({super.key});
@@ -28,6 +76,9 @@ class MoreScreen extends ConsumerWidget {
     const icons = <IconData>[
       Icons.tune_rounded,
       Icons.play_circle_outline_rounded,
+      // The reader group, which arrived after this list was written and
+      // shifted every icon below it one row down.
+      Icons.chrome_reader_mode_rounded,
       Icons.download_rounded,
       Icons.image_outlined,
       Icons.storage_rounded,
@@ -118,21 +169,6 @@ class MoreScreen extends ConsumerWidget {
               ],
             ),
             MoreDestinationGroup(
-              heading: moreHeadingWatching(context),
-              items: <MoreDestination>[
-                MoreDestination(
-                  icon: Icons.history_rounded,
-                  label: isArabic ? 'آخر المشاهدات' : 'Recently watched',
-                  builder: (_) => const RecentWatchedScreen(),
-                ),
-                MoreDestination(
-                  icon: Icons.groups_rounded,
-                  label: isArabic ? 'الشخصيات' : 'Characters',
-                  builder: (_) => const CharactersScreen(),
-                ),
-              ],
-            ),
-            MoreDestinationGroup(
               heading: moreHeadingBrowse(context),
               items: <MoreDestination>[
                 MoreDestination(
@@ -172,8 +208,14 @@ class MoreScreen extends ConsumerWidget {
 
     return Scaffold(
       // No title: the window's caption buttons are painted over this same
-      // corner, and the two collided. The bar stays for its spacing.
-      appBar: AppBar(centerTitle: false),
+      // corner, and the two collided. The bar stays for its spacing, and
+      // holds the side menu's button when that layout is on.
+      appBar: AppBar(
+        centerTitle: false,
+        actions: const <Widget>[
+          AppSideMenuButton(padding: EdgeInsetsDirectional.only(end: 12)),
+        ],
+      ),
       body: ListView(
         padding: EdgeInsets.fromLTRB(16, 12, 16, bottomPadding),
         children: [
@@ -222,30 +264,6 @@ class MoreScreen extends ConsumerWidget {
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const AnimeWitcherAccountScreen(),
-                  ),
-                ),
-              ),
-              _MoreTile(
-                icon: Icons.history_rounded,
-                title: isArabic ? 'آخر المشاهدات' : 'Recently watched',
-                subtitle: isArabic
-                    ? 'آخر الأنميات والأفلام التي شاهدتها'
-                    : 'Anime and movies you watched recently',
-                onTap: () => Navigator.of(context, rootNavigator: true).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const RecentWatchedScreen(),
-                  ),
-                ),
-              ),
-              _MoreTile(
-                icon: Icons.groups_rounded,
-                title: isArabic ? 'الشخصيات' : 'Characters',
-                subtitle: isArabic
-                    ? 'تصفح الشخصيات وابحث عنها وأدر المفضلة'
-                    : 'Browse, search, and favorite characters',
-                onTap: () => Navigator.of(context, rootNavigator: true).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const CharactersScreen(),
                   ),
                 ),
               ),
@@ -421,9 +439,8 @@ class _MoreTile extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                      style: Theme.of(context).textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -448,6 +465,36 @@ class _MoreTile extends StatelessWidget {
   }
 }
 
+/// The reader group as the pane shows it: every reader option under the
+/// group's title, on the card the other settings sit on, where the phone's
+/// list has one row that opens them on a screen of their own.
+class _ReaderGroupInline extends StatelessWidget {
+  const _ReaderGroupInline({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return SettingsGroup(
+      title: title,
+      children: [
+        // A Material rather than a coloured box, so the rows' ink shows.
+        Material(
+          key: const ValueKey<String>('settings-reader-inline'),
+          color: settingsTileColor(colors),
+          borderRadius: BorderRadius.circular(14),
+          clipBehavior: Clip.antiAlias,
+          child: const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: MangaReaderSettingsOptions(showReset: true),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _SettingsGroupPane extends ConsumerWidget {
   const _SettingsGroupPane({required this.index});
 
@@ -464,21 +511,89 @@ class _SettingsGroupPane extends ConsumerWidget {
     // Settings rows are a label at one end and its value at the other. Left
     // to fill a 1600-point pane they put the two on opposite sides of the
     // desk, so they keep to the shared reading measure.
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: LayoutConstants.contentMaxWidth,
+    final list = ConstrainedBox(
+      constraints: const BoxConstraints(
+        maxWidth: LayoutConstants.contentMaxWidth,
+      ),
+      child: ListView(
+        padding: EdgeInsets.fromLTRB(
+          8,
+          16,
+          8,
+          MediaQuery.viewPaddingOf(context).bottom + 96,
         ),
-        child: ListView(
-          padding: EdgeInsets.fromLTRB(
-            8,
-            16,
-            8,
-            MediaQuery.viewPaddingOf(context).bottom + 96,
-          ),
-          children: [groups[index]],
-        ),
+        children: [
+          if (groups[index].key == SettingsScreen.readerGroupKey)
+            _ReaderGroupInline(title: groups[index].title)
+          else
+            groups[index],
+        ],
       ),
     );
+
+    final previews = _previewsFor(context, ref, index);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // The preview sits beside the settings only where both fit; a
+        // narrower pane keeps the list alone rather than squeezing it.
+        if (previews.isEmpty || constraints.maxWidth < 900) {
+          return Center(child: list);
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Align(alignment: Alignment.topCenter, child: list),
+            ),
+            SizedBox(
+              width: (constraints.maxWidth * 0.36).clamp(320.0, 520.0),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 20, 24, 24),
+                child: Column(
+                  children: [
+                    for (final preview in previews) Expanded(child: preview),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Pictures of what this group changes, drawn from the saved settings so
+  /// they move as the rows beside them are changed: home and an anime page
+  /// for the general group. The player is pictured in the first-launch setup
+  /// only; its group, like the others, keeps the full width here.
+  List<Widget> _previewsFor(BuildContext context, WidgetRef ref, int index) {
+    final arabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final caption = arabic ? 'معاينة مباشرة' : 'Live preview';
+    final theme = ref.watch(appThemeStyleProvider);
+    switch (index) {
+      case 0:
+        final layout = effectiveAppLayout(
+          stored: ref.watch(appLayoutStyleProvider),
+          isDesktopPlatform: appLayoutsAvailable(context),
+        );
+        return [
+          LivePreviewFrame(
+            followTheme: true,
+            caption: '$caption · ${arabic ? 'الرئيسية' : 'Home'}',
+            child: HomeLayoutPreview(layout: layout, theme: theme),
+          ),
+          LivePreviewFrame(
+            followTheme: true,
+            caption: arabic ? 'صفحة الأنمي' : 'Anime page',
+            child: SeasonsBarPagePreview(
+              style: ref.watch(seasonsBarStyleProvider),
+              theme: theme,
+            ),
+          ),
+        ];
+      default:
+        return const <Widget>[];
+    }
   }
 }

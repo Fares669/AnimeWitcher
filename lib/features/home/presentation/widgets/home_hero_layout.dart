@@ -36,7 +36,7 @@ class HomeHeroFrame extends ConsumerWidget {
         : size.width * 9 / 16;
 
     return ColoredBox(
-      color: Colors.black,
+      color: Theme.of(context).scaffoldBackgroundColor,
       child: Padding(
         padding: EdgeInsets.only(top: topGap),
         child: SizedBox(

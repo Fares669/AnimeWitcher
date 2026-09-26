@@ -9,6 +9,7 @@ import '../../features/library/presentation/downloads_screen.dart';
 import '../../features/more/presentation/more_screen.dart';
 import '../../features/details/presentation/details_screen.dart';
 import '../../features/manga/presentation/manga_details_screen.dart';
+import '../../features/manga/presentation/manga_home_screen.dart';
 import '../../features/manga/reader/manga_reader_screen.dart';
 import '../../features/player/presentation/player_screen.dart';
 import '../../features/home/presentation/view_all_screen.dart';
@@ -42,6 +43,12 @@ part 'app_router.g.dart';
     TypedStatefulShellBranch<SettingsBranchData>(
       routes: <TypedRoute<RouteData>>[
         TypedGoRoute<SettingsRoute>(path: '/settings'),
+      ],
+    ),
+    // Last, so the branches before it keep their numbers.
+    TypedStatefulShellBranch<MangaBranchData>(
+      routes: <TypedRoute<RouteData>>[
+        TypedGoRoute<MangaHomeRoute>(path: '/manga'),
       ],
     ),
   ],
@@ -113,6 +120,17 @@ class SettingsRoute extends GoRouteData with $SettingsRoute {
   @override
   Widget build(BuildContext context, GoRouterState state) =>
       const MoreScreen();
+}
+
+class MangaBranchData extends StatefulShellBranchData {
+  const MangaBranchData();
+}
+
+class MangaHomeRoute extends GoRouteData with $MangaHomeRoute {
+  const MangaHomeRoute();
+  @override
+  Widget build(BuildContext context, GoRouterState state) =>
+      const MangaHomeScreen();
 }
 
 // --- Typed Extras ---

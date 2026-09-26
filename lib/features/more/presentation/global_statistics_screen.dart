@@ -14,7 +14,7 @@ import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/catalog_ltr.dart';
+import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 import '../../../core/utils/window_controls_inset.dart';
@@ -404,7 +404,7 @@ class _RankingGrid extends StatelessWidget {
     final hasFooter = loadingMore || loadMoreError;
     return MouseDragRefreshIndicator(
       onRefresh: onRefresh,
-      child: CatalogLtr(
+      child: CatalogDirection(
         child: GridView.builder(
           key: PageStorageKey<String>('global-ranking-${ranking.queryType}'),
           controller: controller,

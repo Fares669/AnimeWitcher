@@ -7,6 +7,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import '../../../home/presentation/widgets/home_section_header.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../../../core/account/account_providers.dart';
@@ -194,13 +195,8 @@ class _DetailsCommentsPreviewState
                 ),
               ),
               const Spacer(),
-              TextButton.icon(
-                onPressed: _openAll,
-                icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
-                label: Text(
-                  appText(context, english: 'See all', arabic: 'عرض الكل'),
-                ),
-              ),
+              // The same pill as home's rows.
+              HomeViewAllButton(onTap: _openAll),
             ],
           ),
           const SizedBox(height: 12),

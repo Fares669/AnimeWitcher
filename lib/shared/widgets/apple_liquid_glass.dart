@@ -17,8 +17,10 @@ const _appleNativeSearchFieldViewType =
 const _appleNativeMenuButtonViewType =
     'com.animewitcher.app/native_menu_button';
 
-bool get _usesNativeAppleLiquidGlass =>
-    !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+/// Off everywhere: iOS draws the same plain controls as every other
+/// platform. The native glass buttons, and the header overlay that carried
+/// them across pages, are retired.
+bool get _usesNativeAppleLiquidGlass => false;
 
 /// True on iOS where AnimeWitcher hosts the native Liquid Glass controls.
 /// Screens use this to hand their header actions to the persistent overlay
@@ -614,16 +616,9 @@ class AppleLiquidGlassSurface extends StatelessWidget {
         ),
         child: child,
       );
-      if (!fallbackBlur) {
-        return ClipRRect(borderRadius: borderRadius, child: surface);
-      }
-      return ClipRRect(
-        borderRadius: borderRadius,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: surface,
-        ),
-      );
+      // No blur behind it any more: a plain fill, as the rest of the app's
+      // controls are drawn.
+      return ClipRRect(borderRadius: borderRadius, child: surface);
     }
 
     final cornerRadius = borderRadius.topLeft.x;

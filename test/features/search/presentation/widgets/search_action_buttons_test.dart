@@ -9,7 +9,7 @@ import 'package:animewitcher/features/search/presentation/widgets/search_glass_s
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('iOS renders domain sort and filter in one glass capsule', (
+  testWidgets('iOS draws sort and filter as plain buttons, no native glass', (
     tester,
   ) async {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -48,29 +48,10 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.byType(UiKitView), findsOneWidget);
-      expect(find.byType(AppleLiquidGlassActionGroup), findsOneWidget);
-      final glass = tester.widget<UiKitView>(find.byType(UiKitView));
-      expect(glass.viewType, 'com.animewitcher.app/native_toolbar');
-      expect(
-        tester.getSize(find.byKey(const ValueKey('search-action-capsule'))).width,
-        SearchActionButtons.groupWidthForHeight(
-          SearchGlassSurface.height,
-          visibleControls: 3,
-        ),
-      );
-      final group = tester.widget<AppleLiquidGlassActionGroup>(
-        find.byType(AppleLiquidGlassActionGroup),
-      );
-      final buttons = group.children.cast<AppleLiquidGlassToolbarButton>().toList();
-      expect(buttons, hasLength(3));
-      expect(buttons.map((button) => button.tooltip), <String?>[
-        'Search domain',
-        'Sort',
-        'Filters',
-      ]);
-      expect(buttons.first.menuItems, hasLength(4));
-      expect(buttons.first.selectedMenuValue, 'anime');
+      // The native glass is retired: iOS draws what every platform does.
+      expect(find.byType(UiKitView), findsNothing);
+      expect(find.byTooltip('Sort'), findsOneWidget);
+      expect(find.byTooltip('Filters'), findsOneWidget);
       expect(find.text('3'), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
@@ -132,7 +113,9 @@ void main() {
     expect(actions.height, field.height);
     expect(actions.top, field.top);
     expect(actions.left - field.right, 10);
-    expect(find.byType(AppleLiquidGlassSurface), findsNWidgets(2));
+    // The field is a plain filled pill now, like the library's; only the
+    // action capsule is glass.
+    expect(find.byType(AppleLiquidGlassSurface), findsOneWidget);
     expect(find.text('2'), findsOneWidget);
     final badgeBox = tester.widget<Container>(find.descendant(
       of: find.byType(SearchFilterBadge), matching: find.byType(Container),

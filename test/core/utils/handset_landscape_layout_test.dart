@@ -11,7 +11,7 @@ import 'package:animewitcher/features/home/presentation/widgets/provider_search_
 import 'package:animewitcher/features/search/presentation/widgets/search_result_section.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
-import 'package:animewitcher/shared/widgets/catalog_ltr.dart';
+import 'package:animewitcher/shared/widgets/catalog_direction.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -83,8 +83,8 @@ ThemeData _darkTheme() {
   );
 }
 
-Widget _app({required Widget child, bool catalogLtr = false}) {
-  final body = catalogLtr ? CatalogLtr(child: child) : child;
+Widget _app({required Widget child, bool catalogDirection = false}) {
+  final body = catalogDirection ? CatalogDirection(child: child) : child;
   return ProviderScope(
     child: MaterialApp(
       locale: const Locale('ar'),
@@ -128,7 +128,7 @@ void main() {
 
     await tester.pumpWidget(
       _app(
-        catalogLtr: true,
+        catalogDirection: true,
         child: RepaintBoundary(
           key: const ValueKey('search-landscape-grid-shot'),
           child: CustomScrollView(
@@ -152,7 +152,7 @@ void main() {
     ];
     for (var i = 1; i < 7; i++) {
       expect((rects[i].top - rects[0].top).abs(), lessThan(1));
-      expect(rects[i].left, greaterThan(rects[i - 1].left));
+      expect(rects[i].left, lessThan(rects[i - 1].left));
     }
     expect(rects[7].top, greaterThan(rects[0].bottom - 1));
     expect(rects[0].width, lessThan(800 / 6));
@@ -172,7 +172,7 @@ void main() {
 
     await tester.pumpWidget(
       _app(
-        catalogLtr: true,
+        catalogDirection: true,
         child: CustomScrollView(
           slivers: [
             SearchResultSection(

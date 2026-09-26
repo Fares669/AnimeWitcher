@@ -24,6 +24,13 @@ class HotstarPlayerStyle {
   static const Color focus = Color(0x66EEC60A);
   static const Color liveRed = Color(0xFFE53935);
 
+  /// Under every icon and label drawn straight over the picture, so white
+  /// controls still read over a bright scene.
+  static const List<Shadow> glyphShadows = <Shadow>[
+    Shadow(color: Color(0xB3000000), blurRadius: 8),
+    Shadow(color: Color(0x66000000), blurRadius: 2),
+  ];
+
   /// Marker on the scrubber for skip segments (intro / recap / outro). A warm
   /// amber so it reads clearly against the blue progress and grey track.
   static const Color skipSegment = AppTheme.animeWitcherAccent;

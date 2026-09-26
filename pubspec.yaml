@@ -97,3 +97,16 @@ flutter:
   generate: true
   assets:
     - assets/images/
+
+  # The app's typeface, every weight it draws (licence: OFL.txt beside them).
+  fonts:
+    - family: Readex Pro
+      fonts:
+        - asset: assets/fonts/readex_pro/ReadexPro-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/readex_pro/ReadexPro-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/readex_pro/ReadexPro-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/readex_pro/ReadexPro-Bold.ttf
+          weight: 700

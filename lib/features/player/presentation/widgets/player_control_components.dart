@@ -1,10 +1,10 @@
-
 import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:flutter/services.dart';
+
 import '../../../../shared/widgets/custom_widgets.dart';
 import 'hotstar_player_style.dart';
 
@@ -177,6 +177,7 @@ class PlayerTopBar extends StatelessWidget {
                         color: HotstarPlayerStyle.primaryText,
                         fontSize: isTv ? 22 : 18,
                         fontWeight: FontWeight.w700,
+                        shadows: HotstarPlayerStyle.glyphShadows,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -190,6 +191,7 @@ class PlayerTopBar extends StatelessWidget {
                           fontSize: isTv ? 16 : 13,
                           fontWeight: FontWeight.w500,
                           height: 1.25,
+                          shadows: HotstarPlayerStyle.glyphShadows,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -284,15 +286,22 @@ class PlayerBottomBar extends StatelessWidget {
     final double rightPadding = isTv
         ? edge
         : (padding.right > edge ? padding.right : edge);
-    return SafeArea(
-      left: false,
-      right: false,
-      top: false,
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(leftPadding, 2, rightPadding, 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [progressBar, _buildRow()],
+    // Its own scrim, dark at the foot, so the white controls are never
+    // lost against a bright frame.
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: HotstarPlayerStyle.bottomGradient,
+      ),
+      child: SafeArea(
+        left: false,
+        right: false,
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(leftPadding, 18, rightPadding, 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [progressBar, _buildRow()],
+          ),
         ),
       ),
     );
@@ -411,7 +420,12 @@ class _PlayerIconButtonState extends State<PlayerIconButton> {
             height: box,
             child: widget.iconBuilder != null
                 ? widget.iconBuilder!(iconColor, glyph)
-                : Icon(widget.icon, color: iconColor, size: glyph),
+                : Icon(
+                    widget.icon,
+                    color: iconColor,
+                    size: glyph,
+                    shadows: HotstarPlayerStyle.glyphShadows,
+                  ),
           ),
         ),
       ),
@@ -525,7 +539,12 @@ class _PlayerActionButtonState extends State<PlayerActionButton> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(widget.icon, color: color, size: 20),
+                    Icon(
+                      widget.icon,
+                      color: color,
+                      size: 20,
+                      shadows: HotstarPlayerStyle.glyphShadows,
+                    ),
                     const SizedBox(width: 6),
                     Text(
                       widget.label,
@@ -533,6 +552,7 @@ class _PlayerActionButtonState extends State<PlayerActionButton> {
                         color: color,
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
+                        shadows: HotstarPlayerStyle.glyphShadows,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,

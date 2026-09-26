@@ -73,7 +73,7 @@ Widget _app({required Widget home, required Key shotKey}) {
 }
 
 void main() {
-  testWidgets('more screen links to the characters experience', (tester) async {
+  testWidgets('the characters page left More; its favourites are in the library', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.runAsync(_loadWalkthroughFonts);
@@ -86,8 +86,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('الشخصيات'), findsOneWidget);
-    expect(find.text('تصفح الشخصيات وابحث عنها وأدر المفضلة'), findsOneWidget);
+    expect(find.text('الشخصيات'), findsNothing);
+    expect(find.text('تصفح الشخصيات وابحث عنها وأدر المفضلة'), findsNothing);
 
     await tester.runAsync(
       () => _writeShot(

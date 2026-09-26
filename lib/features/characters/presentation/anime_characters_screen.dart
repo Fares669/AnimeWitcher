@@ -11,7 +11,7 @@ import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
-import '../../../shared/widgets/catalog_ltr.dart';
+import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import 'character_card.dart';
 import 'character_details_screen.dart';
@@ -160,7 +160,7 @@ class _AnimeCharactersScreenState
                     )
                   : MouseDragRefreshIndicator(
                       onRefresh: _load,
-                      child: CatalogLtr(
+                      child: CatalogDirection(
                         child: GridView.builder(
                           physics: const AlwaysScrollableScrollPhysics(),
                           padding: EdgeInsets.fromLTRB(

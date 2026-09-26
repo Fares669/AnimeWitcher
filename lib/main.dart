@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_displaymode/flutter_displaymode.dart';
+import 'package:flutter/gestures.dart' show kDoubleTapSlop, kDoubleTapTimeout;
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:flutter/services.dart'; // LogicalKeyboardKey, KeyDownEvent
@@ -38,7 +39,6 @@ import 'core/providers/device_info_provider.dart';
 import 'shared/widgets/loading_indicator.dart';
 import 'features/settings/presentation/general_settings_provider.dart';
 import 'core/account/account_providers.dart';
-import 'core/widgets/welcome_dialog.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -299,7 +299,8 @@ class _MyAppState extends ConsumerState<MyApp>
             }),
       );
       _checkAppUpdates();
-      _maybeShowWelcomeDialog();
+      // The first-launch welcome (theme, skipping, sign-in) is part of the
+      // setup screen AppScaffold opens, so it is not shown separately here.
     });
   }
 
@@ -408,17 +409,6 @@ class _MyAppState extends ConsumerState<MyApp>
     }
   }
 
-  Future<void> _maybeShowWelcomeDialog() async {
-    if (!mounted) return;
-    final navContext = ref
-        .read(appRouterProvider)
-        .routerDelegate
-        .navigatorKey
-        .currentContext;
-    if (navContext == null || !navContext.mounted) return;
-    await maybeShowWelcomeDialog(navContext, ref);
-  }
-
   Future<void> _toggleFullscreen() async {
     if (!(Platform.isMacOS || Platform.isWindows)) return;
     try {
@@ -435,7 +425,7 @@ class _MyAppState extends ConsumerState<MyApp>
     // blocking the first frame. Local library/history remain immediately
     // available while the async provider performs its merge in the background.
     ref.watch(animeWitcherAccountControllerProvider);
-    final themeMode = ref.watch(appThemeModeProvider);
+    final themeStyle = ref.watch(appThemeStyleProvider);
     final appRouter = ref.watch(appRouterProvider);
     final locale = ref.watch(localeProvider);
     final profileAsync = ref.watch(deviceProfileProvider);
@@ -477,11 +467,13 @@ class _MyAppState extends ConsumerState<MyApp>
           scrollBehavior: const MaterialScrollBehavior().copyWith(
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           ),
-          themeMode: themeMode,
+          // The chosen theme decides both the mode and which dark theme is
+          // drawn; there is no longer a system-following choice.
+          themeMode: themeStyle.themeMode,
           theme: lightDynamic != null
               ? AppTheme.createLightTheme(lightDynamic)
               : AppTheme.createLightTheme(null),
-          darkTheme: AppTheme.createDarkTheme(darkScheme),
+          darkTheme: AppTheme.darkThemeFor(themeStyle, darkScheme),
           routerConfig: appRouter,
           locale: locale,
           localizationsDelegates: const [
@@ -859,12 +851,15 @@ class _CustomTitleBarState extends State<CustomTitleBar> with WindowListener {
             right: 0,
             top: 0,
             bottom: 0,
-            child: GestureDetector(
+            // A double click maximises. It is counted from the raw pointer
+            // events: a tap or double-tap recognizer here joins the gesture
+            // arena ahead of everything under this strip, so the back
+            // button and the top bar's buttons either waited on it or, with
+            // a plain tap recognizer, never got their clicks at all.
+            child: Listener(
               behavior: HitTestBehavior.translucent,
-              onPanStart: (_) {
-                windowManager.startDragging();
-              },
-              onDoubleTap: () async {
+              onPointerUp: (event) async {
+                if (!_titleBarDoubleClick.isSecond(event.position)) return;
                 final isMax = await windowManager.isMaximized();
                 if (isMax) {
                   await windowManager.unmaximize();
@@ -872,6 +867,12 @@ class _CustomTitleBarState extends State<CustomTitleBar> with WindowListener {
                   await windowManager.maximize();
                 }
               },
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onPanStart: (_) {
+                  windowManager.startDragging();
+                },
+              ),
             ),
           ),
           // Right-side window controls (minimize, maximize/restore, close).
@@ -1071,5 +1072,28 @@ class _CloseButtonState extends State<_CloseButton> {
         ),
       ),
     );
+  }
+}
+
+final _titleBarDoubleClick = _DoubleClick();
+
+/// Two clicks close together in time and place, recognised without a
+/// double-tap recognizer and the delay it puts on every single click.
+class _DoubleClick {
+  DateTime? _last;
+  Offset? _point;
+
+  bool isSecond(Offset position) {
+    final now = DateTime.now();
+    final last = _last;
+    final point = _point;
+    final second =
+        last != null &&
+        point != null &&
+        now.difference(last) <= kDoubleTapTimeout &&
+        (position - point).distance <= kDoubleTapSlop;
+    _last = second ? null : now;
+    _point = second ? null : position;
+    return second;
   }
 }

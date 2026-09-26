@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/core/utils/image_fallbacks.dart';
@@ -83,12 +84,22 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
           children: [
             Directionality(
               textDirection: TextDirection.rtl,
-              child: FilterStyleTabBar(
-                controller: _tabs,
-                isScrollable: false,
-                tabs: [
-                  FilterStyleTab(label: l10n.downloads),
-                  FilterStyleTab(label: l10n.downloadsTabCompleted),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilterStyleTabBar(
+                      controller: _tabs,
+                      isScrollable: false,
+                      tabs: [
+                        FilterStyleTab(label: l10n.downloads),
+                        FilterStyleTab(label: l10n.downloadsTabCompleted),
+                      ],
+                    ),
+                  ),
+                  // The side menu's button, in the corner it comes from.
+                  const AppSideMenuButton(
+                    padding: EdgeInsetsDirectional.only(start: 4, end: 12),
+                  ),
                 ],
               ),
             ),

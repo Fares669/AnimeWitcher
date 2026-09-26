@@ -1,9 +1,11 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:video_view/video_view.dart' as vv;
+
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../skip/data/skip_service.dart';
 import '../player_controller.dart';
@@ -216,7 +218,7 @@ class _SkipSegmentOverlayState extends ConsumerState<SkipSegmentOverlay> {
           );
         },
         child: activeSegment != null
-            ? _SkipPill(
+            ? SkipPill(
                 key: ValueKey('skip_${activeSegment.type.name}'),
                 label: _labelForType(
                   activeSegment.type,
@@ -234,8 +236,9 @@ class _SkipSegmentOverlayState extends ConsumerState<SkipSegmentOverlay> {
   }
 }
 
-/// The actual pill-shaped skip button.
-class _SkipPill extends StatelessWidget {
+/// The actual pill-shaped skip button. Public so the first-launch setup can
+/// show the real one in its player preview.
+class SkipPill extends StatelessWidget {
   final String label;
   final FocusNode focusNode;
   final bool isTv;
@@ -243,7 +246,7 @@ class _SkipPill extends StatelessWidget {
   final bool controlsVisible;
   final VoidCallback onPressed;
 
-  const _SkipPill({
+  const SkipPill({
     super.key,
     required this.label,
     required this.focusNode,

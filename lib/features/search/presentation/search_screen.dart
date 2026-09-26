@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:animewitcher/features/home/presentation/widgets/home_section_header.dart';
+import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
+
+import '../../../core/account/animewitcher_character_models.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/providers/device_info_provider.dart';
 import '../../../core/router/app_router.dart';
@@ -21,7 +25,7 @@ import 'widgets/search_result_section.dart';
 import 'widgets/search_header_bar.dart';
 import 'widgets/search_sort_dialog.dart';
 import 'widgets/bouncy_entry_animation.dart';
-import '../../../shared/widgets/catalog_ltr.dart';
+import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/multimedia_card.dart';
@@ -29,7 +33,7 @@ import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/recoverable_network_state.dart';
 
 import 'package:animewitcher/core/utils/localized_text.dart';
-import 'package:animewitcher/core/services/notification_service.dart';
+
 import '../data/recent_searches.dart';
 import 'widgets/recent_searches_view.dart';
 
@@ -183,27 +187,40 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     setState(() => _isLoadingProviderFilters = true);
     ProviderSearchFilters? selected;
+    SearchDomain? pickedDomain;
     try {
-      final domain = ref.read(searchDomainProvider);
-      if (!domain.capabilities.showFilter) return;
-      final options = switch (domain) {
-        SearchDomain.anime => await providers.first.getSearchFilterOptions(),
-        SearchDomain.manga =>
-          await providers.first.getMangaSearchFilterOptions(),
-        SearchDomain.animation ||
-        SearchDomain.characters => const ProviderSearchFilterOptions(),
-      };
-      if (!mounted) return;
-      if (options.isEmpty) {
-        ref
-            .read(notificationServiceProvider)
-            .showInfo(
-              Localizations.localeOf(context).languageCode == 'ar'
-                  ? 'لا توجد فلاتر متاحة'
-                  : 'No filters available',
-            );
-        return;
+      final provider = providers.first;
+      // All, anime, animation, manga and characters are the sheet's main
+      // categories; only the ones that can be filtered bring their tabs.
+      Future<ProviderSearchFilterOptions> optionsFor(SearchDomain domain) {
+        if (!domain.capabilities.showFilter) {
+          return Future.value(const ProviderSearchFilterOptions());
+        }
+        return switch (domain) {
+          SearchDomain.anime => provider.getSearchFilterOptions(),
+          // The anime filters, less the tag every animation result has.
+          SearchDomain.animation => provider.getSearchFilterOptions().then(
+            (options) => ProviderSearchFilterOptions(
+              statuses: options.statuses,
+              types: options.types,
+              ageRatings: options.ageRatings,
+              years: options.years,
+              seasons: options.seasons,
+              genres: options.genres
+                  .where((genre) => genre != 'انميشن')
+                  .toList(growable: false),
+            ),
+          ),
+          SearchDomain.manga => provider.getMangaSearchFilterOptions(),
+          SearchDomain.all || SearchDomain.characters => Future.value(
+            const ProviderSearchFilterOptions(),
+          ),
+        };
       }
+
+      final domain = ref.read(searchDomainProvider);
+      final options = await optionsFor(domain);
+      if (!mounted) return;
 
       // Use the exact same filter surface as the Home page so both entry
       // points have identical tabs, spacing, selection behavior, and glass.
@@ -212,6 +229,32 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         builder: (dialogContext) => ProviderSearchFilterDialog(
           options: options,
           initialValue: ref.read(searchProviderFiltersProvider),
+          categories: [
+            for (final value in SearchDomain.values)
+              ProviderSearchFilterCategory(
+                value: value.name,
+                label: searchDomainLabel(dialogContext, value),
+                icon: searchDomainIcon(value),
+                noFiltersNote: switch (value) {
+                  SearchDomain.all => appText(
+                    dialogContext,
+                    english: 'All searches every section at once. Pick anime, animation or manga to filter one of them.',
+                    arabic: 'الكل يبحث في كل الأقسام معًا. اختر أنمي أو انميشن أو مانجا لتصفية قسم منها.',
+                  ),
+                  SearchDomain.characters => appText(
+                    dialogContext,
+                    english:
+                        'Characters are found by name: type one in search.',
+                    arabic: 'الشخصيات يُبحث عنها بالاسم: اكتب اسمًا في البحث.',
+                  ),
+                  _ => null,
+                },
+              ),
+          ],
+          category: domain.name,
+          optionsFor: (name) => optionsFor(SearchDomain.values.byName(name)),
+          onCategoryApplied: (name) =>
+              pickedDomain = SearchDomain.values.byName(name),
         ),
       );
     } finally {
@@ -219,6 +262,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     }
 
     if (!mounted || selected == null) return;
+    if (pickedDomain != null) _selectSearchDomain(pickedDomain!);
     _resetResultsScrollPosition();
     ref.read(searchProviderFiltersProvider.notifier).set(selected);
     ref.read(searchFilterProvider.notifier).set(SearchFilter.content);
@@ -440,8 +484,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               ),
             // Focus Spotlight (Stage Lighting - Soft fanning semi-circle)
             Positioned(
-              top:
-                  76, // Anchored immediately below the search bar (24 top padding + 52 height)
+              top: 76, // Anchored immediately below the search bar (24 top padding + 52 height)
               left: 0,
               right: 0,
               height: 250,
@@ -456,8 +499,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         width: 900, // Broader fanning footprint
                         decoration: BoxDecoration(
                           gradient: RadialGradient(
-                            center: Alignment
-                                .topCenter, // Fanning downward from the bottom edge of the search bar
+                            center: Alignment.topCenter, // Fanning downward from the bottom edge of the search bar
                             radius: 1.3,
                             colors: [
                               spotlightColor.withValues(
@@ -529,14 +571,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     sortTooltip:
                         '${appText(context, english: 'Sort by', arabic: 'الترتيب حسب')}: '
                         '${SearchSortOption.fromValue(ref.watch(searchProviderFiltersProvider).sort).label(context)}',
-                    activeFilterCount: ref
-                        .watch(searchProviderFiltersProvider)
-                        .count,
+                    activeFilterCount: domainCapabilities.showFilter
+                        ? ref.watch(searchProviderFiltersProvider).count
+                        : 0,
                     isFilterLoading: _isLoadingProviderFilters,
-                    domain: domain,
-                    onDomainSelected: _selectSearchDomain,
                     showSort: domainCapabilities.showSort,
-                    showFilter: domainCapabilities.showFilter,
+                    // Always there: the filter sheet is also where the category is
+                    // picked, anime or manga, so every category needs a way in.
+                    showFilter: true,
                     onSubmitted: _submitSearch,
                     onChanged: (val) {
                       ref
@@ -563,10 +605,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final capabilities = domain.capabilities;
 
     return SearchActionButtons(
-      domain: domain,
-      onDomainSelected: _selectSearchDomain,
       showSort: capabilities.showSort,
-      showFilter: capabilities.showFilter,
+      // The sheet also picks the category, so it is always there.
+      showFilter: true,
       filterCount: capabilities.showFilter ? activeFilters.count : 0,
       isFilterLoading: _isLoadingProviderFilters,
       sortValue: activeFilters.sort,
@@ -591,8 +632,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final theme = Theme.of(context);
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final searchPlaceholder = isArabic ? 'Search...' : l10n.searchHint;
-    final searchResultsState = ref.watch(searchPagedResultsProvider);
+    final searchPlaceholder = searchDomainHint(
+      context,
+      ref.watch(searchDomainProvider),
+    );
+    // Only whether a search is running: watching the whole results state
+    // rebuilt the field with every page of results that came in.
+    final searching = ref.watch(
+      searchPagedResultsProvider.select((state) => state.isLoading),
+    );
 
     return GestureDetector(
       onTap: () {
@@ -605,7 +653,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         child: ValueListenableBuilder<TextEditingValue>(
           valueListenable: _controller,
           builder: (context, value, child) {
-            final isSearching = searchResultsState.isLoading;
+            final isSearching = searching;
 
             Widget? suffix;
             if (isSearching) {
@@ -735,6 +783,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           textDirection: TextDirection.ltr,
           child: Row(
             children: [
+              // The side menu's button, in the corner the menu comes from.
+              const AppSideMenuButton(padding: EdgeInsets.only(right: 8)),
               Expanded(child: _buildMobileSearchField(context)),
               const SizedBox(width: 2),
               _buildMobileSearchActionGroup(context),
@@ -774,9 +824,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final hasSuggestionContent =
         suggestionState.isLoading || suggestionState.suggestions.isNotEmpty;
     final showSuggestions =
-        domain == SearchDomain.anime &&
-        typedLongEnough &&
-        hasSuggestionContent;
+        domain == SearchDomain.anime && typedLongEnough && hasSuggestionContent;
 
     // Only the results scroll, so every other state is simply held clear of
     // the floating controls rather than passing under them.
@@ -823,76 +871,25 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       }
 
       return RepaintBoundary(
-        child: CatalogLtr(
+        child: CatalogDirection(
           child: CustomScrollView(
             controller: _resultsScrollController,
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               SliverToBoxAdapter(child: SizedBox(height: topInset)),
-              SliverPadding(
-                padding: EdgeInsets.fromLTRB(
-                  MultimediaCardLayout.catalogGridHorizontalPadding(context),
-                  10,
-                  MultimediaCardLayout.catalogGridHorizontalPadding(context),
-                  100,
-                ),
-                sliver: SliverGrid(
-                  gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-                    context,
-                    maxCrossAxisExtent: 140,
-                    childAspectRatio:
-                        MultimediaCardLayout.characterGridAspectRatio,
-                    crossAxisSpacing:
-                        MultimediaCardLayout.catalogGridCrossAxisSpacing(
-                          context,
-                          fallback: 12,
-                        ),
-                    mainAxisSpacing:
-                        MultimediaCardLayout.catalogGridMainAxisSpacing(
-                          context,
-                          fallback: 14,
-                        ),
-                    handsetPortraitCrossAxisCount:
-                        MultimediaCardLayout.handsetPortraitGridColumns,
-                    horizontalPadding:
-                        MultimediaCardLayout.catalogGridHorizontalPadding(
-                          context,
-                        ),
-                  ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      if (index >= state.characters.length) {
-                        return const AnimePosterShimmer();
-                      }
-                      final character = state.characters[index];
-                      return CharacterPosterCard(
-                        key: ValueKey('search-character-${character.id}'),
-                        character: character,
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => CharacterDetailsScreen(
-                                characterId: character.id,
-                                initialName: character.name,
-                                initialImageUrl: character.imageUrl,
-                              ),
-                            ),
-                          );
-                        },
-                      );
-                    },
-                    childCount:
-                        state.characters.length +
-                        (state.isLoadingMore
-                            ? MultimediaCardLayout.handsetPortraitGridColumns
-                            : 0),
-                  ),
-                ),
+              _characterGrid(
+                context,
+                state.characters,
+                loadingMore: state.isLoadingMore,
               ),
             ],
           ),
         ),
       );
+    }
+
+    if (domain == SearchDomain.all) {
+      return _buildAllBody(context, state, topInset: topInset);
     }
 
     final allResults = state.results.expand((entry) => entry.results).toList();
@@ -912,7 +909,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     }
 
     return RepaintBoundary(
-      child: CatalogLtr(
+      child: CatalogDirection(
         child: CustomScrollView(
           controller: _resultsScrollController,
           physics: const AlwaysScrollableScrollPhysics(),
@@ -931,6 +928,170 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               ),
             const SliverToBoxAdapter(child: SizedBox(height: 100)),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// How many of each category "all" shows before its "see all" button:
+  /// a few full rows at the grid's own width, so no section ends on a
+  /// half-filled line.
+  int _allSectionLimit(BuildContext context) {
+    final isLarge =
+        ResponsiveBreakpoints.isDesktopPlatform() || context.isTabletOrLarger;
+    if (!isLarge) {
+      final columns = context.isHandsetLandscape
+          ? ResponsiveBreakpoints.handsetLandscapeAnimeColumns
+          : MultimediaCardLayout.handsetPortraitGridColumns;
+      return columns * 2;
+    }
+    final size = MediaQuery.sizeOf(context);
+    if (size.width > size.height) {
+      return ResponsiveBreakpoints.desktopLandscapeColumnsForViewport(context) *
+          2;
+    }
+    // An upright tablet shows a sliding rail, which any count fills.
+    return 12;
+  }
+
+  /// Every category at once: each one that found something under its name,
+  /// a few of its results, and a button into that category for the rest.
+  Widget _buildAllBody(
+    BuildContext context,
+    SearchAggregateState state, {
+    required double topInset,
+  }) {
+    final hasAny =
+        state.characters.isNotEmpty ||
+        state.results.any((entry) => entry.results.isNotEmpty);
+    Widget clearOfHeader(Widget child) => Padding(
+      padding: EdgeInsets.only(top: topInset),
+      child: child,
+    );
+    if (!hasAny && state.isLoading) {
+      return clearOfHeader(_buildLoadingIndicator(context));
+    }
+    if (!hasAny && state.errorMessage != null) {
+      return clearOfHeader(
+        RecoverableNetworkState(
+          onRetry: _retrySearch,
+          onOpenDownloads: () => const DownloadsRoute().go(context),
+        ),
+      );
+    }
+    if (!hasAny) return clearOfHeader(_buildEmptyState(context));
+
+    final limit = _allSectionLimit(context);
+    // The results are laid out left to right, the way posters read; the
+    // headings keep the language's own direction.
+    final textDirection = Directionality.of(context);
+    Widget heading(SearchDomain domain) => SliverToBoxAdapter(
+      child: Directionality(
+        textDirection: textDirection,
+        child: _AllSearchHeading(
+          key: ValueKey<String>('search-all-heading-${domain.name}'),
+          label: searchDomainLabel(context, domain),
+          icon: searchDomainIcon(domain),
+          onSeeAll: () => _selectSearchDomain(domain),
+        ),
+      ),
+    );
+
+    return RepaintBoundary(
+      child: CatalogDirection(
+        child: CustomScrollView(
+          controller: _resultsScrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(child: SizedBox(height: topInset)),
+            for (var index = 0; index < state.results.length; index++) ...[
+              heading(
+                SearchDomain.values.byName(state.results[index].providerId),
+              ),
+              SearchResultSection(
+                key: ValueKey('search-all-${state.results[index].providerId}'),
+                providerName: state.results[index].providerName,
+                providerId: state.results[index].providerId,
+                results: state.results[index].results
+                    .take(limit)
+                    .toList(growable: false),
+                isLoadingMore: false,
+                firstCardFocusNode: index == 0 ? _firstResultFocusNode : null,
+              ),
+            ],
+            if (state.characters.isNotEmpty) ...[
+              heading(SearchDomain.characters),
+              _characterGrid(
+                context,
+                state.characters.take(limit).toList(growable: false),
+                loadingMore: false,
+              ),
+            ],
+            const SliverToBoxAdapter(child: SizedBox(height: 100)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _characterGrid(
+    BuildContext context,
+    List<AnimeWitcherCharacterHit> characters, {
+    required bool loadingMore,
+  }) {
+    return SliverPadding(
+      padding: EdgeInsets.fromLTRB(
+        MultimediaCardLayout.catalogGridHorizontalPadding(context),
+        10,
+        MultimediaCardLayout.catalogGridHorizontalPadding(context),
+        100,
+      ),
+      sliver: SliverGrid(
+        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+          context,
+          maxCrossAxisExtent: 140,
+          childAspectRatio: MultimediaCardLayout.characterGridAspectRatio,
+          crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
+            context,
+            fallback: 12,
+          ),
+          mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
+            context,
+            fallback: 14,
+          ),
+          handsetPortraitCrossAxisCount:
+              MultimediaCardLayout.handsetPortraitGridColumns,
+          horizontalPadding: MultimediaCardLayout.catalogGridHorizontalPadding(
+            context,
+          ),
+        ),
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            if (index >= characters.length) {
+              return const AnimePosterShimmer();
+            }
+            final character = characters[index];
+            return CharacterPosterCard(
+              key: ValueKey('search-character-${character.id}'),
+              character: character,
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => CharacterDetailsScreen(
+                      characterId: character.id,
+                      initialName: character.name,
+                      initialImageUrl: character.imageUrl,
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+          childCount:
+              characters.length +
+              (loadingMore
+                  ? MultimediaCardLayout.handsetPortraitGridColumns
+                  : 0),
         ),
       ),
     );
@@ -1000,8 +1161,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           onSelected: _submitSearch,
           onRemoved: (value) =>
               ref.read(recentSearchesProvider.notifier).remove(value),
-          onClearAll: () =>
-              ref.read(recentSearchesProvider.notifier).clear(),
+          onClearAll: () => ref.read(recentSearchesProvider.notifier).clear(),
         );
       }
       return Center(
@@ -1011,9 +1171,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             Icon(
               Icons.movie_filter_rounded,
               size: 64,
-              color: Theme.of(
-                context,
-              ).colorScheme.onSurfaceVariant.withValues(alpha: 0.65),
+              color: Theme.of(context).colorScheme.onSurfaceVariant
+                  .withValues(alpha: 0.65),
             ),
             const SizedBox(height: LayoutConstants.spacingMd),
             Text(
@@ -1038,9 +1197,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           english: 'No Results Found',
           arabic: 'لم يتم العثور على نتائج',
         ),
-        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
+        style: Theme.of(context).textTheme.bodyLarge
+            ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
       ),
     );
   }
@@ -1399,6 +1557,53 @@ class _SuggestionCardState extends State<_SuggestionCard> {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The name of one category in the "all" results, with a way into the
+/// whole of it.
+class _AllSearchHeading extends StatelessWidget {
+  const _AllSearchHeading({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.onSeeAll,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onSeeAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        MultimediaCardLayout.catalogGridHorizontalPadding(context),
+        20,
+        MultimediaCardLayout.catalogGridHorizontalPadding(context),
+        0,
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 22, color: colors.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          // The same pill as home's rows.
+          HomeViewAllButton(onTap: onSeeAll),
         ],
       ),
     );

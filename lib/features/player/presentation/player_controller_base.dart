@@ -2349,6 +2349,35 @@ class PlayerController extends Notifier<PlayerState> {
     return false;
   }
 
+  /// Every source this episode has — each quality from each server — as the
+  /// picker before playback lists them, so the player's quality menu can
+  /// offer them all rather than only the one that is playing. Shares the
+  /// picker's fetch, so opening it twice does not ask twice.
+  Future<List<StreamResult>> episodeSources() async {
+    final provider = _resolveProvider();
+    final url = currentEpisodeUrl;
+    if (provider == null || url == null || url.isEmpty) {
+      return const <StreamResult>[];
+    }
+    return ref.read(streamSourcePrefetchProvider).sources(provider, url);
+  }
+
+  /// Switches playback to [source] from the quality menu, keeping the
+  /// position. A source that is only a server link is resolved to a playable
+  /// stream first, the same way the picker does when one is chosen.
+  Future<bool> switchToSource(StreamResult source) async {
+    var playable = source;
+    if (source.requiresResolution) {
+      final provider = _resolveProvider();
+      if (provider == null) return false;
+      final streams = await provider.loadStreams(source.url);
+      if (streams.isEmpty) return false;
+      playable = streams.first;
+    }
+    await changeStream(playable, manualSelection: true);
+    return true;
+  }
+
   AnimeWitcherProvider? _resolveProvider() {
     final activeState = ref.read(activeProviderProvider);
     final manager = ref.read(extensionManagerProvider.notifier);

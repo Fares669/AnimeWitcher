@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/utils/responsive_breakpoints.dart';
-import 'catalog_ltr.dart';
+import 'catalog_direction.dart';
 import 'multimedia_card.dart';
 import 'shimmer_placeholder.dart';
 
@@ -117,7 +117,7 @@ class AnimeCatalogShimmer extends StatelessWidget {
             isPortrait: true,
             isDesktop: isDesktop,
           );
-    return CatalogLtr(
+    return CatalogDirection(
       child: GridView.builder(
         physics: physics,
         padding:

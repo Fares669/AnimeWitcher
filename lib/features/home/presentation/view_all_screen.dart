@@ -8,7 +8,7 @@ import 'package:animewitcher/features/details/presentation/details_screen.dart';
 import '../../../core/utils/image_utils.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
-import '../../../shared/widgets/catalog_ltr.dart';
+import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 
@@ -298,7 +298,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                   ],
                 ),
               )
-            : CatalogLtr(
+            : CatalogDirection(
                 child: GridView.builder(
                   controller: _scrollController,
                   physics: const AlwaysScrollableScrollPhysics(),

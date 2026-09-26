@@ -1,5 +1,5 @@
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
-import 'package:animewitcher/shared/widgets/catalog_ltr.dart';
+import 'package:animewitcher/shared/widgets/catalog_direction.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -29,7 +29,7 @@ Widget _threeTileGrid() {
 }
 
 void main() {
-  testWidgets('Arabic grids start on the right without CatalogLtr', (
+  testWidgets('Arabic grids start on the right without CatalogDirection', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(390, 800);
@@ -44,20 +44,20 @@ void main() {
     expect(first.dx, greaterThan(last.dx));
   });
 
-  testWidgets('CatalogLtr places the first anime tile on the left', (
-    tester,
-  ) async {
+  testWidgets('in Arabic the first poster is on the right', (tester) async {
     tester.view.physicalSize = const Size(390, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(_app(body: CatalogLtr(child: _threeTileGrid())));
+    await tester.pumpWidget(
+      _app(body: CatalogDirection(child: _threeTileGrid())),
+    );
 
     final first = tester.getTopLeft(find.byKey(const ValueKey('tile-0')));
     final middle = tester.getTopLeft(find.byKey(const ValueKey('tile-1')));
     final last = tester.getTopLeft(find.byKey(const ValueKey('tile-2')));
-    expect(first.dx, lessThan(middle.dx));
-    expect(middle.dx, lessThan(last.dx));
+    expect(first.dx, greaterThan(middle.dx));
+    expect(middle.dx, greaterThan(last.dx));
   });
 }

@@ -87,12 +87,13 @@ final class _FakeExtensionManager extends ExtensionManager {
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
 }
 
-MultimediaItem _item(String title, MultimediaContentType type) => MultimediaItem(
-  title: title,
-  url: 'test://${Uri.encodeComponent(title)}',
-  posterUrl: '',
-  contentType: type,
-);
+MultimediaItem _item(String title, MultimediaContentType type) =>
+    MultimediaItem(
+      title: title,
+      url: 'test://${Uri.encodeComponent(title)}',
+      posterUrl: '',
+      contentType: type,
+    );
 
 Future<void> _flush() async {
   await Future<void>.delayed(Duration.zero);
@@ -115,9 +116,7 @@ void main() {
     await _flush();
     expect(fake.animeCalls, 1);
 
-    container
-        .read(searchDomainProvider.notifier)
-        .set(SearchDomain.manga);
+    container.read(searchDomainProvider.notifier).set(SearchDomain.manga);
     await _flush();
     expect(fake.mangaCalls, 1);
 
@@ -162,45 +161,45 @@ void main() {
     expect(renderedTitles, isNot(contains('Late anime result')));
   });
 
-
-  test('animation domain uses the animation catalog instead of anime', () async {
-    final fake = _DeferredSearchProvider();
-    final container = ProviderContainer(
-      overrides: [
-        extensionManagerProvider.overrideWith(
-          () => _FakeExtensionManager(fake),
-        ),
-      ],
-    );
-    addTearDown(container.dispose);
-
-    container
-        .read(searchDomainProvider.notifier)
-        .set(SearchDomain.animation);
-    container.read(searchPagedResultsProvider);
-    await _flush();
-
-    expect(fake.animationCalls, 1);
-    expect(fake.animeCalls, 0);
-
-    fake.animation.complete(
-      ProviderMediaPage(
-        items: <MultimediaItem>[
-          _item('Animation result', MultimediaContentType.movie),
+  test(
+    'animation domain uses the animation catalog instead of anime',
+    () async {
+      final fake = _DeferredSearchProvider();
+      final container = ProviderContainer(
+        overrides: [
+          extensionManagerProvider.overrideWith(
+            () => _FakeExtensionManager(fake),
+          ),
         ],
-        nextOffset: 30,
-        hasMore: false,
-      ),
-    );
-    await _flush();
+      );
+      addTearDown(container.dispose);
 
-    final titles = container
-        .read(searchPagedResultsProvider)
-        .results
-        .expand((entry) => entry.results)
-        .map((item) => item.title);
-    expect(titles, contains('Animation result'));
-  });
+      container.read(searchDomainProvider.notifier).set(SearchDomain.animation);
+      container.read(searchPagedResultsProvider);
+      await _flush();
+
+      expect(fake.animationCalls, 1);
+      expect(fake.animeCalls, 0);
+
+      fake.animation.complete(
+        ProviderMediaPage(
+          items: <MultimediaItem>[
+            _item('Animation result', MultimediaContentType.movie),
+          ],
+          nextOffset: 30,
+          hasMore: false,
+        ),
+      );
+      await _flush();
+
+      final titles = container
+          .read(searchPagedResultsProvider)
+          .results
+          .expand((entry) => entry.results)
+          .map((item) => item.title);
+      expect(titles, contains('Animation result'));
+    },
+  );
 
   test('characters stay in separate character result state', () async {
     final fake = _DeferredSearchProvider();
@@ -213,9 +212,7 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    container
-        .read(searchDomainProvider.notifier)
-        .set(SearchDomain.characters);
+    container.read(searchDomainProvider.notifier).set(SearchDomain.characters);
     container.read(searchPagedResultsProvider);
     await _flush();
 
@@ -242,4 +239,108 @@ void main() {
     ]);
   });
 
+  test('all searches every category at once and names each group', () async {
+    final fake = _DeferredSearchProvider();
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(
+          () => _FakeExtensionManager(fake),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(searchDomainProvider.notifier).set(SearchDomain.all);
+    container.read(searchPagedResultsProvider);
+    await _flush();
+
+    // All four asked at once, not one after another.
+    expect(fake.animeCalls, 1);
+    expect(fake.animationCalls, 1);
+    expect(fake.mangaCalls, 1);
+    expect(fake.characterCalls, 1);
+
+    fake.anime.complete(
+      ProviderMediaPage(
+        items: <MultimediaItem>[
+          _item('Anime hit', MultimediaContentType.anime),
+        ],
+        nextOffset: 30,
+        hasMore: true,
+      ),
+    );
+    fake.animation.complete(
+      const ProviderMediaPage(
+        items: <MultimediaItem>[],
+        nextOffset: 0,
+        hasMore: false,
+      ),
+    );
+    fake.manga.complete(
+      ProviderMediaPage(
+        items: <MultimediaItem>[
+          _item('Manga hit', MultimediaContentType.manga),
+        ],
+        nextOffset: 30,
+        hasMore: true,
+      ),
+    );
+    fake.characters.complete(
+      const AnimeWitcherCharacterPage(
+        items: <AnimeWitcherCharacterHit>[
+          AnimeWitcherCharacterHit(id: 'c1', name: 'Character One'),
+        ],
+        page: 0,
+        hasMore: false,
+      ),
+    );
+    await _flush();
+
+    final state = container.read(searchPagedResultsProvider);
+    // One group per category that found something, named after it; the
+    // empty animation list is left out.
+    expect(state.results.map((group) => group.providerId), <String>[
+      'anime',
+      'manga',
+    ]);
+    expect(state.results.first.results.single.title, 'Anime hit');
+    expect(state.characters.single.name, 'Character One');
+    // No paging here: each group leads into its own category for more.
+    expect(state.hasMore, isFalse);
+    expect(state.isLoading, isFalse);
+  });
+
+  test('one failing category does not sink the others in all', () async {
+    final fake = _DeferredSearchProvider();
+    final container = ProviderContainer(
+      overrides: [
+        extensionManagerProvider.overrideWith(
+          () => _FakeExtensionManager(fake),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    container.read(searchDomainProvider.notifier).set(SearchDomain.all);
+    container.read(searchPagedResultsProvider);
+    await _flush();
+
+    fake.anime.completeError(StateError('anime is down'));
+    fake.animation.completeError(StateError('animation is down'));
+    fake.manga.complete(
+      ProviderMediaPage(
+        items: <MultimediaItem>[
+          _item('Manga hit', MultimediaContentType.manga),
+        ],
+        nextOffset: 30,
+        hasMore: false,
+      ),
+    );
+    fake.characters.completeError(StateError('characters are down'));
+    await _flush();
+
+    final state = container.read(searchPagedResultsProvider);
+    expect(state.errorMessage, isNull);
+    expect(state.results.single.providerId, 'manga');
+  });
 }

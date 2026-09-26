@@ -95,8 +95,9 @@ extension AnimeWitcherGlobalRankingInfo on AnimeWitcherGlobalRanking {
   };
 }
 
-typedef AnimeWitcherMalIdResolver =
-    Future<List<Map<String, dynamic>>> Function(Iterable<int> malIds);
+typedef AnimeWitcherMalIdResolver = Future<List<Map<String, dynamic>>> Function(
+  Iterable<int> malIds,
+);
 
 /// Native AnimeWitcher implementation used during the JS-to-native migration.
 ///
@@ -413,9 +414,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
     final arrayValue = _map(value['arrayValue']);
     if (arrayValue.isNotEmpty) {
-      return _list(
-        arrayValue['values'],
-      ).map<dynamic>(_firestoreValue).toList(growable: false);
+      return _list(arrayValue['values'])
+          .map<dynamic>(_firestoreValue)
+          .toList(growable: false);
     }
     final mapValue = _map(value['mapValue']);
     if (mapValue.isNotEmpty) return _firestoreFields(mapValue['fields']);
@@ -815,6 +816,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     String? apiKey,
     CancelToken? cancelToken,
     bool throwOnFailure = false,
+    bool highlight = true,
   }) async {
     await _refreshRemoteConstants();
     return _algoliaIndexRequest(
@@ -830,6 +832,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       attributes: attributes,
       cancelToken: cancelToken,
       throwOnFailure: throwOnFailure,
+      highlight: highlight,
     );
   }
 
@@ -846,6 +849,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     List<String>? attributes,
     CancelToken? cancelToken,
     bool throwOnFailure = false,
+    bool highlight = true,
   }) async {
     final params = <String>[];
     void append(String key, Object? value) {
@@ -864,6 +868,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       append('attributesToRetrieve', jsonEncode(attributes));
     }
     if (filters.isNotEmpty) append('filters', filters);
+    // Highlighting repeats every matched text field, story included, marked
+    // up; a read that shows no matches has no use for it.
+    if (!highlight) append('attributesToHighlight', '[]');
 
     final payload = await _algoliaSdkPost(
       appId: appId,
@@ -1000,9 +1007,9 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       if (!seen.add(item.url)) continue;
       shows.add(AnimeWitcherCharacterShow(item: item, role: reference.role));
     }
-    final visibleUrls = _filterEcchiItems(
-      shows.map((show) => show.item),
-    ).map((item) => item.url).toSet();
+    final visibleUrls = _filterEcchiItems(shows.map((show) => show.item))
+        .map((item) => item.url)
+        .toSet();
     return shows
         .where((show) => visibleUrls.contains(show.item.url))
         .toList(growable: false);
@@ -1525,9 +1532,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
   int? _yearFromHit(Map<String, dynamic> source) {
     final details = _map(source['details']);
-    final match = RegExp(
-      r'\b(19|20)\d{2}\b',
-    ).firstMatch(_text(details['year'] ?? source['year']));
+    final match = RegExp(r'\b(19|20)\d{2}\b')
+        .firstMatch(_text(details['year'] ?? source['year']));
     return match == null ? null : int.tryParse(match.group(0)!);
   }
 
@@ -2496,11 +2502,21 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final safeLimit = limit.clamp(10, 50).toInt();
     final safeOffset = offset < 0 ? 0 : offset;
     final pageNumber = safeOffset ~/ safeLimit;
+    // `all_animation` has nothing to filter on, but every title in it is
+    // also in the anime catalog tagged انميشن, which filters like any anime.
+    // Filtered, the search goes there with that tag added.
+    final filtered = filters.isNotEmpty || _isCustomSort(filters.sort);
     final payload = await _algoliaQuery(
-      'all_animation',
+      filtered ? _searchIndexForSort(filters.sort) : 'all_animation',
       query: query.trim(),
       page: pageNumber,
       hitsPerPage: safeLimit,
+      filters: filtered
+          ? <String>[
+              _buildFilters(filters),
+              _filterGroup('tags', const <String>[_animationTag], 'AND'),
+            ].where((value) => value.isNotEmpty).join(' AND ')
+          : '',
       attributes: _searchAttributes,
       cancelToken: cancelToken,
       throwOnFailure: true,
@@ -2517,6 +2533,16 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       hasMore: hasMore,
     );
   }
+
+  /// Whether a sort asks for something other than the catalog's default,
+  /// most favorited, which is the order every index already comes in.
+  static bool _isCustomSort(String sort) {
+    final value = sort.trim().toLowerCase();
+    return value.isNotEmpty && value != 'favorites';
+  }
+
+  /// The genre the anime catalog marks animation with.
+  static const String _animationTag = 'انميشن';
 
   String _mangaSearchIndexForSort(String sort) {
     // The live September 2026 backend currently exposes only this Manga sort
@@ -2540,6 +2566,17 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
     final safeLimit = limit.clamp(10, 50).toInt();
     final safeOffset = offset < 0 ? 0 : offset;
+    // The index keeps one order, most read. Any filter, or any other order,
+    // is worked out here over the whole catalog.
+    if (filters.isNotEmpty || _isCustomSort(filters.sort)) {
+      return _filteredMangaPage(
+        query.trim(),
+        filters,
+        consumed: safeOffset,
+        limit: safeLimit,
+        cancelToken: cancelToken,
+      );
+    }
     final pageNumber = safeOffset ~/ safeLimit;
     final payload = await _algoliaQuery(
       _mangaSearchIndexForSort(filters.sort),
@@ -2571,10 +2608,257 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     );
   }
 
+  /// The manga filters the catalog's own fields support: genre, type,
+  /// status and year. What each holds was read off the live catalog.
+  @override
+  Future<ProviderSearchFilterOptions> getMangaSearchFilterOptions() async {
+    final now = DateTime.now().year;
+    return ProviderSearchFilterOptions(
+      statuses: const <String>['مستمر', 'مكتمل', 'تم ايقاف انتاجه'],
+      types: const <String>['مانهوا', 'مانجا', 'ون شوت', 'رواية'],
+      years: <String>[for (var year = now + 1; year >= 1980; year--) '$year'],
+      genres: const <String>[
+        'خيال',
+        'رومانسي',
+        'اكشن',
+        'دراما',
+        'مغامرات',
+        'كوميدي',
+        'عالم مختلف',
+        'شونين',
+        'مدرسي',
+        'فنون قتالية',
+        'اعادة بعث',
+        'شوجو',
+        'سفر عبر الزمن',
+        'خارق للطبيعة',
+        'غموض',
+        'قوة خارقة',
+        'تاريخي',
+        'شريحة من الحياة',
+        'حريم',
+        'دموي',
+        'سينين',
+        'رعب',
+        'رياضي',
+        'اثارة',
+        'تشويق',
+        'نفسي',
+        'جوسي',
+        'خيال علمي',
+        'لعبة',
+        'اساطير',
+        'نجاة',
+        'عسكري',
+        'سحر',
+        'طعام',
+        'مصاصي دماء',
+        'مكان عمل',
+        'جريمة منظمة',
+        'العاب خطيرة',
+        'موسيقي',
+        'تحقيق',
+        'رياضات قتالية',
+      ],
+    );
+  }
+
+  /// Spelling the catalog is not consistent about (ى for ي), so a genre
+  /// matches however it was typed in.
+  static String _looseArabic(String value) => value
+      .trim()
+      .replaceAll('ى', 'ي')
+      .replaceAll('أ', 'ا')
+      .replaceAll('إ', 'ا');
+
+  /// Whether one raw manga record passes [filters]: any chosen status, type
+  /// and year, and every chosen genre, as the anime filters combine them.
+  @visibleForTesting
+  static bool mangaHitMatchesFilters(
+    Map<String, Object?> hit,
+    ProviderSearchFilters filters,
+  ) {
+    final details = hit['details'] is Map
+        ? Map<String, Object?>.from(hit['details']! as Map)
+        : const <String, Object?>{};
+    bool anyOf(Set<String> wanted, Object? value) {
+      if (wanted.isEmpty) return true;
+      final have = _looseArabic('${value ?? ''}');
+      return wanted.any((w) => _looseArabic(w) == have);
+    }
+
+    if (!anyOf(filters.statuses, details['status'] ?? details['state'])) {
+      return false;
+    }
+    if (!anyOf(filters.types, hit['type'])) return false;
+    if (!anyOf(filters.years, details['year'])) return false;
+    if (filters.genres.isNotEmpty) {
+      final tags = hit['tags'] is List
+          ? (hit['tags']! as List).map((t) => _looseArabic('$t')).toSet()
+          : const <String>{};
+      for (final genre in filters.genres) {
+        if (!tags.contains(_looseArabic(genre))) return false;
+      }
+    }
+    return true;
+  }
+
+  /// Whole-catalog reads of the manga index, per search text, for the
+  /// searches it cannot answer itself: a filter, or an order other than its
+  /// own. Kept a few minutes, so paging through the results reads nothing.
+  final Map<String, ({DateTime at, List<Map<String, Object?>> hits})>
+  _mangaCatalogCache = <String, ({DateTime at, List<Map<String, Object?>> hits})>{};
+
+  static const Duration _mangaCatalogTtl = Duration(minutes: 10);
+
+  /// Only what a card, a filter and a sort read. The whole record, story and
+  /// all, is about seven times the size, and opening a manga fetches its full
+  /// details separately anyway.
+  @visibleForTesting
+  static const List<String> mangaCatalogAttributes = <String>[
+    'objectID',
+    'manga_id',
+    'path',
+    'name',
+    'manga_name',
+    'title',
+    'english_title',
+    'poster',
+    'poster_uri',
+    'poster_url',
+    'cover_uri',
+    'type',
+    'tags',
+    'details',
+    'rating',
+    'mal_id',
+    'aniList_id',
+    'mangalek_page_url',
+  ];
+
+  Future<List<Map<String, Object?>>> _mangaCatalog(
+    String query,
+    String sort, {
+    CancelToken? cancelToken,
+  }) async {
+    final key = query.trim().toLowerCase();
+    final cached = _mangaCatalogCache[key];
+    if (cached != null &&
+        DateTime.now().difference(cached.at) < _mangaCatalogTtl) {
+      return cached.hits;
+    }
+    const batch = 1000;
+    const maxPages = 5;
+    final hits = <Map<String, Object?>>[];
+    for (var page = 0; page < maxPages; page++) {
+      final payload = await _algoliaQuery(
+        _mangaSearchIndexForSort(sort),
+        query: query,
+        page: page,
+        hitsPerPage: batch,
+        maxHitsPerPage: batch,
+        attributes: mangaCatalogAttributes,
+        highlight: false,
+        cancelToken: cancelToken,
+        throwOnFailure: true,
+      );
+      final raw = _list(payload['hits']);
+      for (final hit in raw) {
+        final source = _map(hit);
+        if (source.isNotEmpty) hits.add(Map<String, Object?>.from(source));
+      }
+      final nbPages = int.tryParse(_text(payload['nbPages'])) ?? 0;
+      if (raw.length < batch || (nbPages > 0 && page + 1 >= nbPages)) break;
+    }
+    if (_mangaCatalogCache.length >= 4) {
+      _mangaCatalogCache.remove(_mangaCatalogCache.keys.first);
+    }
+    _mangaCatalogCache[key] = (at: DateTime.now(), hits: hits);
+    return hits;
+  }
+
+  /// Orders raw manga records by one of the search sorts. The index's own
+  /// order (most read) stands for "favorites"; names compare as written;
+  /// years put a record without one last either way.
+  @visibleForTesting
+  static List<Map<String, Object?>> sortMangaHits(
+    List<Map<String, Object?>> hits,
+    String sort,
+  ) {
+    int? yearOf(Map<String, Object?> hit) {
+      final details = hit['details'];
+      final raw = details is Map ? details['year'] : null;
+      final year = int.tryParse('${raw ?? ''}');
+      return year == null || year <= 0 ? null : year;
+    }
+
+    String nameOf(Map<String, Object?> hit) =>
+        '${hit['name'] ?? hit['manga_name'] ?? hit['title'] ?? ''}'
+            .trim()
+            .toLowerCase();
+
+    final sorted = List<Map<String, Object?>>.of(hits);
+    switch (sort) {
+      case 'name_asc':
+        sorted.sort((a, b) => nameOf(a).compareTo(nameOf(b)));
+      case 'name_desc':
+        sorted.sort((a, b) => nameOf(b).compareTo(nameOf(a)));
+      case 'year_asc' || 'year_desc':
+        final ascending = sort == 'year_asc';
+        sorted.sort((a, b) {
+          final ya = yearOf(a), yb = yearOf(b);
+          if (ya == null && yb == null) return 0;
+          if (ya == null) return 1;
+          if (yb == null) return -1;
+          return ascending ? ya.compareTo(yb) : yb.compareTo(ya);
+        });
+      default:
+        break;
+    }
+    return sorted;
+  }
+
+  /// A manga search the index cannot run itself, run here over the whole
+  /// catalog: filtered, put in order, then served a page at a time.
+  Future<ProviderMediaPage> _filteredMangaPage(
+    String query,
+    ProviderSearchFilters filters, {
+    required int consumed,
+    required int limit,
+    CancelToken? cancelToken,
+  }) async {
+    final catalog = await _mangaCatalog(
+      query,
+      filters.sort,
+      cancelToken: cancelToken,
+    );
+    final matching = sortMangaHits(
+      catalog
+          .where((hit) => mangaHitMatchesFilters(hit, filters))
+          .toList(growable: false),
+      filters.sort,
+    );
+    final items = <MultimediaItem>[];
+    final seen = <String>{};
+    var position = consumed;
+    while (position < matching.length && items.length < limit) {
+      final item = mapAnimeWitcherMangaHit(matching[position]);
+      position++;
+      if (item.title.isEmpty || item.url.endsWith('/manga/')) continue;
+      if (seen.add(item.url)) items.add(item);
+    }
+    return ProviderMediaPage(
+      items: items,
+      nextOffset: position,
+      hasMore: position < matching.length,
+    );
+  }
   String _mangaIdFromUrl(String url) {
     final uri = safeTryParseUri(url.trim());
     if (uri == null || uri.pathSegments.isEmpty) return '';
-    final segments = uri.pathSegments.where((value) => value.isNotEmpty).toList();
+    final segments = uri.pathSegments
+        .where((value) => value.isNotEmpty)
+        .toList();
     if (segments.length < 2 || segments[segments.length - 2] != 'manga') {
       return '';
     }
@@ -2598,9 +2882,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (fields.isEmpty) {
       throw StateError('AnimeWitcher Manga was not found.');
     }
-    final item = mapAnimeWitcherMangaHit(
-      <String, Object?>{'objectID': id, ...fields},
-    );
+    final item = mapAnimeWitcherMangaHit(<String, Object?>{
+      'objectID': id,
+      ...fields,
+    });
     _mangaDetailsCache[id] = item;
     _mangaDetailsExpiresAt[id] = DateTime.now().add(_detailDataTtl);
     return item;
@@ -2751,9 +3036,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
       if (chaptersByKey.isNotEmpty) {
         final chapters = chaptersByKey.values.toList()
-          ..sort(
-            (a, b) => (b.number ?? -1).compareTo(a.number ?? -1),
-          );
+          ..sort((a, b) => (b.number ?? -1).compareTo(a.number ?? -1));
         return List<MangaChapter>.unmodifiable(chapters);
       }
     }
@@ -2765,6 +3048,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final normalized = label?.replaceAll(',', '.');
     return double.tryParse(normalized ?? '') ?? double.tryParse(docId);
   }
+
   MangaChapter? _mangaChapterFromFields(
     Map<String, dynamic> fields, {
     required String mangaId,
@@ -2784,14 +3068,13 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
           'https://animewitcher.com/manga/${Uri.encodeComponent(mangaId)}/chapters/${Uri.encodeComponent(chapterId)}',
       name: name,
       number: _firestoreMangaChapterNumber(name, docId),
-      publishedAt: publishedText.isEmpty ? null : DateTime.tryParse(publishedText),
+      publishedAt: publishedText.isEmpty
+          ? null
+          : DateTime.tryParse(publishedText),
     );
   }
 
-  MangaChapter? _firestoreMangaChapter(
-    dynamic raw, {
-    required String mangaId,
-  }) {
+  MangaChapter? _firestoreMangaChapter(dynamic raw, {required String mangaId}) {
     final document = _map(_map(raw)['document']);
     if (document.isEmpty) return null;
     final documentName = _text(document['name']);
@@ -2823,17 +3106,12 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return List<MangaChapter>.unmodifiable(chapters);
   }
 
-  Future<List<MangaChapter>> _loadFirestoreMangaChapters(
-    String mangaId,
-  ) async {
-    final rows = await _firestoreRestRunQuery(
-      <String, dynamic>{
-        'from': const <Map<String, dynamic>>[
-          <String, dynamic>{'collectionId': 'chapters'},
-        ],
-      },
-      parent: 'manga_list/$mangaId',
-    );
+  Future<List<MangaChapter>> _loadFirestoreMangaChapters(String mangaId) async {
+    final rows = await _firestoreRestRunQuery(<String, dynamic>{
+      'from': const <Map<String, dynamic>>[
+        <String, dynamic>{'collectionId': 'chapters'},
+      ],
+    }, parent: 'manga_list/$mangaId');
     final chapters = <MangaChapter>[];
     final seen = <String>{};
     for (final raw in rows) {
@@ -2864,7 +3142,10 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final imageUrl = _text(fields['image_url'] ?? fields['imageUrl']);
     if (imageUrl.isEmpty) return null;
     final orderRaw =
-        fields['order'] ?? fields['page_number'] ?? fields['pageNumber'] ?? fields['name'];
+        fields['order'] ??
+        fields['page_number'] ??
+        fields['pageNumber'] ??
+        fields['name'];
     final order = orderRaw is num
         ? orderRaw.toInt()
         : int.tryParse(_text(orderRaw)) ?? fallbackOrder;
@@ -2875,10 +3156,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     final mapped = <({String imageUrl, int order})>[];
     var fallbackOrder = 1;
     for (final raw in rows) {
-      final page = _firestoreMangaPageRow(
-        raw,
-        fallbackOrder: fallbackOrder++,
-      );
+      final page = _firestoreMangaPageRow(raw, fallbackOrder: fallbackOrder++);
       if (page != null) mapped.add(page);
     }
     mapped.sort((a, b) => a.order.compareTo(b.order));
@@ -2905,14 +3183,11 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       if (pages.isNotEmpty) return pages;
     }
 
-    final rows = await _firestoreRestRunQuery(
-      <String, dynamic>{
-        'from': const <Map<String, dynamic>>[
-          <String, dynamic>{'collectionId': 'pages'},
-        ],
-      },
-      parent: 'manga_list/$mangaId/chapters/$chapterId',
-    );
+    final rows = await _firestoreRestRunQuery(<String, dynamic>{
+      'from': const <Map<String, dynamic>>[
+        <String, dynamic>{'collectionId': 'pages'},
+      ],
+    }, parent: 'manga_list/$mangaId/chapters/$chapterId');
     final pages = _mapFirestoreMangaPages(rows);
     return pages;
   }
@@ -2951,10 +3226,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     try {
       final html = await _mangaHtml(
         sourceUrl,
-        acceptHtml: (html) => RegExp(
-          r'wp-manga-chapter',
-          caseSensitive: false,
-        ).hasMatch(html),
+        acceptHtml: (html) =>
+            RegExp(r'wp-manga-chapter', caseSensitive: false).hasMatch(html),
       );
       final chapters = parseMangaLekChapters(
         html: html,
@@ -3021,10 +3294,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     try {
       final html = await _mangaHtml(
         sourceUrl,
-        acceptHtml: (html) => RegExp(
-          r'wp-manga-chapter',
-          caseSensitive: false,
-        ).hasMatch(html),
+        acceptHtml: (html) =>
+            RegExp(r'wp-manga-chapter', caseSensitive: false).hasMatch(html),
       );
       final parsed = parseMangaLekChapters(
         html: html,
@@ -3184,9 +3455,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       _OfficialHomeSection? recentMangaSection;
       for (final section in sections) {
         final type = section.type.trim().toLowerCase();
-        final text =
-            '${section.title} ${section.type} ${section.indexName}'
-                .toLowerCase();
+        final text = '${section.title} ${section.type} ${section.indexName}'
+            .toLowerCase();
         if (type == 'manga_recent' ||
             text.contains('manga_recent') ||
             text.contains('فصول المانجا') ||
@@ -3352,9 +3622,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         .toLowerCase();
     return section.type == 'recent' ||
         section.indexName.toLowerCase() == 'recent' ||
-        RegExp(
-          r'أحدث الحلقات|الحلقات الجديدة|آخر الحلقات|recent',
-        ).hasMatch(text);
+        RegExp(r'أحدث الحلقات|الحلقات الجديدة|آخر الحلقات|recent')
+            .hasMatch(text);
   }
 
   _HomePlan _homePlanFromOfficial(_OfficialHomeSection section) {
@@ -3753,9 +4022,8 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     if (json == null || json.isEmpty) return false;
     if (json['hits'] is List) return false;
     if (json['fields'] is Map) return false;
-    return _text(
-      json['objectID'] ?? json['name'] ?? json['anime_id'],
-    ).isNotEmpty;
+    return _text(json['objectID'] ?? json['name'] ?? json['anime_id'])
+        .isNotEmpty;
   }
 
   Future<Map<String, dynamic>> _fetchAnimeDocument(String animeId) async {
@@ -5990,11 +6258,7 @@ class _OfficialHomeSection {
 }
 
 class _HomePlan {
-  const _HomePlan({
-    required this.index,
-    this.query = '',
-    this.recent = false,
-  });
+  const _HomePlan({required this.index, this.query = '', this.recent = false});
   final String index;
   final String query;
   final bool recent;

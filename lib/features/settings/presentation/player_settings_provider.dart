@@ -81,6 +81,16 @@ class PlayerSettings {
   final bool showPlaybackSpeed;
   final bool showEpisodes;
 
+  /// The rest of the player's buttons, hidden and shown the same way.
+  final bool showLock;
+  final bool showEpisodeNav;
+  final bool showSeekButtons;
+  final bool showAnime4kButton;
+  final bool showFullscreen;
+
+  /// The keyboard key drawn under each desktop player button.
+  final bool showKeyHints;
+
   /// Master switch for crowd-sourced intro/credits skip segments (AniSkip
   /// and friends). When off, no lookup runs and no skip button appears.
   final bool skipSegmentsEnabled;
@@ -165,6 +175,12 @@ class PlayerSettings {
     this.showRotate = true,
     this.showPlaybackSpeed = true,
     this.showEpisodes = true,
+    this.showLock = true,
+    this.showEpisodeNav = true,
+    this.showSeekButtons = true,
+    this.showAnime4kButton = true,
+    this.showFullscreen = true,
+    this.showKeyHints = true,
     this.skipSegmentsEnabled = true,
     this.autoSkipIntro = false,
     this.autoSkipCredits = false,
@@ -206,6 +222,12 @@ class PlayerSettings {
     bool? showRotate,
     bool? showPlaybackSpeed,
     bool? showEpisodes,
+    bool? showLock,
+    bool? showEpisodeNav,
+    bool? showSeekButtons,
+    bool? showAnime4kButton,
+    bool? showFullscreen,
+    bool? showKeyHints,
     bool? skipSegmentsEnabled,
     FillerBehaviour? fillerBehaviour,
     bool? prefetchNextEpisode,
@@ -261,6 +283,12 @@ class PlayerSettings {
       showRotate: showRotate ?? this.showRotate,
       showPlaybackSpeed: showPlaybackSpeed ?? this.showPlaybackSpeed,
       showEpisodes: showEpisodes ?? this.showEpisodes,
+      showLock: showLock ?? this.showLock,
+      showEpisodeNav: showEpisodeNav ?? this.showEpisodeNav,
+      showSeekButtons: showSeekButtons ?? this.showSeekButtons,
+      showAnime4kButton: showAnime4kButton ?? this.showAnime4kButton,
+      showFullscreen: showFullscreen ?? this.showFullscreen,
+      showKeyHints: showKeyHints ?? this.showKeyHints,
       skipSegmentsEnabled: skipSegmentsEnabled ?? this.skipSegmentsEnabled,
       fillerBehaviour: fillerBehaviour ?? this.fillerBehaviour,
       prefetchNextEpisode: prefetchNextEpisode ?? this.prefetchNextEpisode,
@@ -418,6 +446,42 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
           defaultValue: true,
         ) ??
         true;
+    final showLock =
+        storage.getPlayerSetting<bool>(
+          'player_show_lock',
+          defaultValue: true,
+        ) ??
+        true;
+    final showEpisodeNav =
+        storage.getPlayerSetting<bool>(
+          'player_show_episode_nav',
+          defaultValue: true,
+        ) ??
+        true;
+    final showSeekButtons =
+        storage.getPlayerSetting<bool>(
+          'player_show_seek_buttons',
+          defaultValue: true,
+        ) ??
+        true;
+    final showAnime4kButton =
+        storage.getPlayerSetting<bool>(
+          'player_show_anime4k_button',
+          defaultValue: true,
+        ) ??
+        true;
+    final showKeyHints =
+        storage.getPlayerSetting<bool>(
+          'player_show_key_hints',
+          defaultValue: true,
+        ) ??
+        true;
+    final showFullscreen =
+        storage.getPlayerSetting<bool>(
+          'player_show_fullscreen',
+          defaultValue: true,
+        ) ??
+        true;
     final showRotate =
         storage.getPlayerSetting<bool>(
           'player_show_rotate',
@@ -533,6 +597,12 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
       showRotate: showRotate,
       showPlaybackSpeed: showPlaybackSpeed,
       showEpisodes: showEpisodes,
+      showLock: showLock,
+      showEpisodeNav: showEpisodeNav,
+      showSeekButtons: showSeekButtons,
+      showAnime4kButton: showAnime4kButton,
+      showFullscreen: showFullscreen,
+      showKeyHints: showKeyHints,
       skipSegmentsEnabled: skipSegmentsEnabled,
       autoSkipIntro: autoSkipIntro,
       fillerBehaviour: fillerBehaviour,
@@ -666,6 +736,36 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
   Future<void> setShowResize(bool val) async {
     await _repository.setPlayerSetting('player_show_resize', val);
     state = AsyncData(state.requireValue.copyWith(showResize: val));
+  }
+
+  Future<void> setShowLock(bool val) async {
+    await _repository.setPlayerSetting('player_show_lock', val);
+    state = AsyncData(state.requireValue.copyWith(showLock: val));
+  }
+
+  Future<void> setShowEpisodeNav(bool val) async {
+    await _repository.setPlayerSetting('player_show_episode_nav', val);
+    state = AsyncData(state.requireValue.copyWith(showEpisodeNav: val));
+  }
+
+  Future<void> setShowSeekButtons(bool val) async {
+    await _repository.setPlayerSetting('player_show_seek_buttons', val);
+    state = AsyncData(state.requireValue.copyWith(showSeekButtons: val));
+  }
+
+  Future<void> setShowAnime4kButton(bool val) async {
+    await _repository.setPlayerSetting('player_show_anime4k_button', val);
+    state = AsyncData(state.requireValue.copyWith(showAnime4kButton: val));
+  }
+
+  Future<void> setShowKeyHints(bool val) async {
+    await _repository.setPlayerSetting('player_show_key_hints', val);
+    state = AsyncData(state.requireValue.copyWith(showKeyHints: val));
+  }
+
+  Future<void> setShowFullscreen(bool val) async {
+    await _repository.setPlayerSetting('player_show_fullscreen', val);
+    state = AsyncData(state.requireValue.copyWith(showFullscreen: val));
   }
 
   Future<void> setShowRotate(bool val) async {

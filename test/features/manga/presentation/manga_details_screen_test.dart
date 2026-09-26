@@ -1,11 +1,13 @@
 import 'dart:io';
 
+import 'package:animewitcher/features/manga/presentation/widgets/manga_chapter_row.dart';
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
-import 'package:animewitcher/core/storage/manga_reading_repository.dart';
+import 'package:animewitcher/core/services/artwork_fallback_service.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/core/storage/manga_reading_repository.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_screen.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_cover_provider.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
@@ -17,7 +19,24 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// Answers every artwork lookup at once with nothing, so a page that asks
+/// for a manga's banner leaves no batch timer behind and makes no request.
+final class _NoArtwork extends ArtworkFallbackService {
+  _NoArtwork() : super(Dio(), StorageService());
+
+  @override
+  Future<({String? cover, String? banner})> mangaArtwork({
+    int? malId,
+    String title = '',
+  }) async => (cover: null, banner: null);
+}
+
 final class _MangaProvider extends AnimeWitcherProvider {
+  _MangaProvider({this.chapterCount});
+
+  /// Serves this many chapters instead of the single 12.5.
+  final int? chapterCount;
+
   int detailsCalls = 0;
   int chaptersCalls = 0;
   bool detailsFinished = false;
@@ -83,6 +102,19 @@ final class _MangaProvider extends AnimeWitcherProvider {
   Future<List<MangaChapter>> getMangaChapters(String url) async {
     chaptersCalls += 1;
     chaptersStartedBeforeDetailsFinished = !detailsFinished;
+    final count = chapterCount;
+    if (count != null) {
+      return <MangaChapter>[
+        for (var i = 1; i <= count; i++)
+          MangaChapter(
+            id: '$i',
+            mangaId: 'm1',
+            url: 'chapter://$i',
+            name: 'الفصل $i',
+            number: i.toDouble(),
+          ),
+      ];
+    }
     return const <MangaChapter>[
       MangaChapter(
         id: '12.5',
@@ -149,6 +181,7 @@ final class _Manager extends ExtensionManager {
 Widget _app(AnimeWitcherProvider provider) => ProviderScope(
   overrides: [
     extensionManagerProvider.overrideWith(() => _Manager(provider)),
+    artworkFallbackServiceProvider.overrideWithValue(_NoArtwork()),
     storageServiceProvider.overrideWithValue(_MangaDetailsReadingStorage()),
     mangaReaderSettingsProvider.overrideWith(
       _MangaDetailsReaderSettingsNotifier.new,
@@ -171,10 +204,7 @@ Widget _app(AnimeWitcherProvider provider) => ProviderScope(
         posterUrl: '',
         contentType: MultimediaContentType.manga,
         provider: provider.packageName,
-        syncData: const <String, String>{
-          'mangaId': 'm1',
-          'awScore': '9.2',
-        },
+        syncData: const <String, String>{'mangaId': 'm1', 'awScore': '9.2'},
       ),
     ),
   ),
@@ -193,6 +223,14 @@ Future<void> _pumpUntil(
     }
   }
   fail(reason);
+}
+
+/// A phone-sized window, which draws the page's compact header.
+void _usePhoneWindow(WidgetTester tester) {
+  tester.view.physicalSize = const Size(390, 844);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
 }
 
 void main() {
@@ -228,31 +266,18 @@ void main() {
     );
   });
 
-  testWidgets('manga details keeps horizontal tab swiping enabled', (
-    tester,
-  ) async {
-    await tester.pumpWidget(_app(_MangaProvider()));
-    await _pumpUntil(
-      tester,
-      () => find.byType(TabBarView).evaluate().isNotEmpty,
-      reason: 'manga tab view did not render',
-    );
-
-    final tabView = tester.widget<TabBarView>(find.byType(TabBarView));
-    expect(tabView.physics, isNot(isA<NeverScrollableScrollPhysics>()));
-  });
-
   testWidgets('long pressing manga title copies it like anime details', (
     tester,
   ) async {
+    _usePhoneWindow(tester);
     String? clipboardText;
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       SystemChannels.platform,
       (call) async {
         if (call.method == 'Clipboard.setData' && call.arguments is Map) {
-          clipboardText = Map<Object?, Object?>.from(
-            call.arguments as Map,
-          )['text'] as String?;
+          clipboardText =
+              Map<Object?, Object?>.from(call.arguments as Map)['text']
+                  as String?;
         }
         return null;
       },
@@ -271,9 +296,10 @@ void main() {
       reason: 'manga title did not render',
     );
 
-    final title = find.descendant(
-      of: find.byKey(const ValueKey('manga-details-hero')),
-      matching: find.text('Solo Leveling'),
+    // The name in the header, not the small one on the poster's stand-in.
+    final title = find.byWidgetPredicate(
+      (widget) =>
+          widget is Text && widget.data == 'Solo Leveling' && widget.maxLines == 3,
     );
     expect(title, findsOneWidget);
 
@@ -304,9 +330,10 @@ void main() {
     expect(item.fullPosterUrl, custom);
   });
 
-  testWidgets('manga details renders only details and chapters tabs', (
+  testWidgets('a phone gets the anime page layout, compact, on one page', (
     tester,
   ) async {
+    _usePhoneWindow(tester);
     await tester.pumpWidget(_app(_MangaProvider()));
     await _pumpUntil(
       tester,
@@ -314,40 +341,134 @@ void main() {
       reason: 'manga details content did not render',
     );
 
-    final tabBar = tester.widget<TabBar>(find.byType(TabBar));
-    expect(tabBar.indicatorSize, isNull);
-
-    expect(find.text('التفاصيل'), findsOneWidget);
-    expect(find.textContaining('الفصول'), findsOneWidget);
-    expect(find.text('Solo Leveling'), findsWidgets);
-    expect(find.text('Manga description'), findsOneWidget);
-    expect(find.text('9.2'), findsOneWidget);
-    expect(find.byKey(const ValueKey('manga-details-hero')), findsOneWidget);
-    expect(find.byKey(const ValueKey('manga-rate-action')), findsOneWidget);
-    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
-    expect(find.byIcon(Icons.bookmark_border_rounded), findsOneWidget);
-    expect(find.text('المراجعات'), findsNothing);
-
-    final actionGenre = find.byKey(const ValueKey('manga-genre-Action'));
-    expect(actionGenre, findsOneWidget);
     expect(
-      find.ancestor(of: actionGenre, matching: find.byType(InkWell)),
-      findsNothing,
+      find.byKey(const ValueKey<String>('manga-details-wide')),
+      findsOneWidget,
     );
+    // One page, not the old two tabs.
+    expect(find.byType(TabBarView), findsNothing);
+    expect(find.text('Solo Leveling'), findsWidgets);
+    expect(find.byIcon(Icons.favorite_border_rounded), findsWidgets);
 
-    await tester.tap(find.textContaining('الفصول'));
-    await _pumpUntil(
-      tester,
-      () => find.text('الفصل 12.5').evaluate().isNotEmpty,
-      reason: 'chapter tab did not render loaded chapter',
+    final page = find.byType(Scrollable).first;
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey<String>('manga-chapter-row-12.5')),
+      200,
+      scrollable: page,
     );
-
     expect(find.text('الفصل 12.5'), findsOneWidget);
+    // Nothing of the anime page's own sections.
     expect(find.text('الحلقات'), findsNothing);
-    expect(find.text('التعليقات'), findsNothing);
-    expect(find.text('المراجعات'), findsNothing);
-    expect(find.text('الشخصيات'), findsNothing);
     expect(find.text('متشابهة'), findsNothing);
     expect(find.text('ذات صلة'), findsNothing);
   });
+
+  testWidgets(
+    'a wide window gets the anime page layout, chapters on the page',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(_app(_MangaProvider()));
+      await _pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey<String>('manga-details-wide'))
+            .evaluate()
+            .isNotEmpty,
+        reason: 'the wide page did not appear',
+      );
+      // The rows are built as the page scrolls to them.
+      final page = find.byType(Scrollable).first;
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey<String>('manga-chapter-row-12.5')),
+        200,
+        scrollable: page,
+      );
+
+      expect(
+        find.byKey(const ValueKey<String>('manga-details-wide')),
+        findsOneWidget,
+      );
+      // One page, not the phone's two tabs.
+      expect(find.byType(TabBarView), findsNothing);
+      // Nothing read yet, so the white pill starts the manga.
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey<String>('manga-read-pill')),
+          matching: find.text('ابدأ القراءة'),
+        ),
+        findsOneWidget,
+      );
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey<String>('manga-genre-Action')),
+        200,
+        scrollable: page,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('manga-genre-Action')),
+        findsOneWidget,
+      );
+    },
+  );
+  testWidgets(
+    'a long manga on a wide window builds only the chapters in view',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(_app(_MangaProvider(chapterCount: 1500)));
+      await _pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey<String>('manga-details-wide'))
+            .evaluate()
+            .isNotEmpty,
+        reason: 'the wide page did not appear',
+      );
+      final page = find.byType(Scrollable).first;
+      // Down to the chapters, and a screen into them.
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey<String>('manga-chapter-range-menu')),
+        200,
+        scrollable: page,
+      );
+      await tester.drag(page, const Offset(0, -600));
+      await tester.pumpAndSettle();
+
+      final built = find.byType(MangaChapterRow).evaluate().length;
+      expect(built, greaterThan(0));
+      // A screenful, not all fifteen hundred.
+      expect(built, lessThan(60));
+
+      // "Go to" still reaches a chapter far from any built row.
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey<String>('manga-chapter-go-to')),
+        -200,
+        scrollable: page,
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey<String>('manga-chapter-go-to')),
+        '1200',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey<String>('manga-chapter-row-1200')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .getRect(
+              find.byKey(const ValueKey<String>('manga-chapter-row-1200')),
+            )
+            .overlaps(Offset.zero & tester.view.physicalSize),
+        isTrue,
+      );
+    },
+  );
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../../shared/widgets/custom_widgets.dart';
 import '../../../../shared/widgets/glass_dialog.dart';
 import '../../../../core/account/account_providers.dart';
@@ -13,8 +14,10 @@ import '../../../../core/utils/app_utils.dart';
 import '../../../../core/utils/factory_reset.dart';
 import '../player_settings_provider.dart';
 import '../general_settings_provider.dart';
+
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
+
 import '../cache_provider.dart';
 import '../../../../core/services/download_concurrency.dart';
 import '../../../../core/services/download_parallel.dart';
@@ -95,15 +98,6 @@ void showDefaultHomeScreenDialog(
   );
 }
 
-// Must be used inside a RadioGroup<ThemeMode> ancestor.
-Widget _buildThemeOption(String title, ThemeMode value, VoidCallback onSelect) {
-  return ListTile(
-    title: Text(title),
-    leading: Radio<ThemeMode>(value: value),
-    onTap: onSelect,
-  );
-}
-
 /// Formats seek duration for display (e.g. "10 sec", "2 min").
 String formatSeekDuration(int seconds, AppLocalizations l10n) {
   if (seconds >= 60) {
@@ -162,9 +156,8 @@ void showDurationDialog(BuildContext context, WidgetRef ref, int current) {
                 Text(
                   formatSeekDuration(selected, l10n),
                   key: const ValueKey('seek-duration-value'),
-                  style: Theme.of(ctx).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: Theme.of(ctx).textTheme.headlineSmall
+                      ?.copyWith(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
                 CustomSlider(
@@ -288,9 +281,8 @@ void showDownloadConcurrencyDialog(
               Text(
                 _downloadConcurrencyDialogValue(selected),
                 key: const ValueKey('download-concurrency-value'),
-                style: Theme.of(ctx).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+                style: Theme.of(ctx).textTheme.headlineSmall
+                    ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
               CustomSlider(
@@ -300,8 +292,7 @@ void showDownloadConcurrencyDialog(
                 max: kDownloadConcurrencyMax.toDouble(),
                 divisions: kDownloadConcurrencyMax - kDownloadConcurrencyMin,
                 step: 1.0,
-                onChanged: (value) =>
-                    setState(() => selected = value.round()),
+                onChanged: (value) => setState(() => selected = value.round()),
               ),
               const SizedBox(height: 4),
               Text(
@@ -376,9 +367,8 @@ void showDownloadPartsDialog(BuildContext context, WidgetRef ref, int current) {
               Text(
                 _downloadPartsDialogValue(selected),
                 key: const ValueKey('download-parts-value'),
-                style: Theme.of(ctx).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+                style: Theme.of(ctx).textTheme.headlineSmall
+                    ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
               CustomSlider(
@@ -388,8 +378,7 @@ void showDownloadPartsDialog(BuildContext context, WidgetRef ref, int current) {
                 max: kDownloadPartsMax.toDouble(),
                 divisions: kDownloadPartsMax - kDownloadPartsAuto,
                 step: 1.0,
-                onChanged: (value) =>
-                    setState(() => selected = value.round()),
+                onChanged: (value) => setState(() => selected = value.round()),
               ),
               const SizedBox(height: 4),
               Text(
@@ -541,9 +530,8 @@ void showReadaheadDialog(BuildContext context, WidgetRef ref, int current) {
                 Text(
                   formatReadahead(selectedSeconds, l10n),
                   key: const ValueKey('buffer-depth-value'),
-                  style: Theme.of(ctx).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: Theme.of(ctx).textTheme.headlineSmall
+                      ?.copyWith(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
                 CustomSlider(
@@ -735,35 +723,28 @@ void showThemeDialog(
     builder: (context) => AlertDialog(
       surfaceTintColor: Colors.transparent,
       title: Text(l10n.chooseTheme),
-      content: RadioGroup<ThemeMode>(
-        groupValue: currentTheme,
+      content: RadioGroup<AppThemeStyle>(
+        groupValue: ref.read(appThemeStyleProvider),
         onChanged: (val) {
           if (val == null) return;
-          ref.read(appThemeModeProvider.notifier).setThemeMode(val);
+          ref.read(appThemeStyleProvider.notifier).select(val);
           Navigator.pop<void>(context);
         },
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildThemeOption(l10n.system, ThemeMode.system, () {
-                ref
-                    .read(appThemeModeProvider.notifier)
-                    .setThemeMode(ThemeMode.system);
-                Navigator.pop<void>(context);
-              }),
-              _buildThemeOption(l10n.dark, ThemeMode.dark, () {
-                ref
-                    .read(appThemeModeProvider.notifier)
-                    .setThemeMode(ThemeMode.dark);
-                Navigator.pop<void>(context);
-              }),
-              _buildThemeOption(l10n.light, ThemeMode.light, () {
-                ref
-                    .read(appThemeModeProvider.notifier)
-                    .setThemeMode(ThemeMode.light);
-                Navigator.pop<void>(context);
-              }),
+              // No system entry: with more than one dark theme, the system's
+              // light-or-dark answer no longer picks one.
+              for (final style in AppThemeStyle.values)
+                RadioListTile<AppThemeStyle>(
+                  value: style,
+                  title: Text(
+                    style.label(
+                      arabic: l10n.localeName.toLowerCase().startsWith('ar'),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -888,29 +869,100 @@ void showPlayerControlsDialog(BuildContext context, WidgetRef ref) {
       ref.read(playerSettingsProvider).asData?.value ?? const PlayerSettings();
   final includePip = defaultTargetPlatform == TargetPlatform.android;
 
-  final metadata = [
-    if (includePip)
-      (icon: Icons.picture_in_picture_alt_rounded, label: l10n.showPip),
-    (icon: Icons.aspect_ratio_rounded, label: l10n.showResize),
-    (icon: Icons.screen_rotation_rounded, label: l10n.showRotate),
-    (icon: Icons.speed_rounded, label: l10n.showPlaybackSpeed),
-    (icon: Icons.playlist_play_rounded, label: l10n.showEpisodes),
-  ];
-  final setters = [
-    if (includePip) notifier.setShowPip,
-    notifier.setShowResize,
-    notifier.setShowRotate,
-    notifier.setShowPlaybackSpeed,
-    notifier.setShowEpisodes,
-  ];
-  final values = [
-    if (includePip) settings.showPip,
-    settings.showResize,
-    settings.showRotate,
-    settings.showPlaybackSpeed,
-    settings.showEpisodes,
-  ];
+  final isDesktop =
+      defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.linux;
+  final isTouch =
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+  String t(String english, String arabic) =>
+      appText(context, english: english, arabic: arabic);
 
+  // Every button the player can draw, each with its own switch. A button
+  // that only exists on some devices is listed only there.
+  final rows =
+      <
+        ({
+          IconData icon,
+          String label,
+          bool value,
+          Future<void> Function(bool) set,
+        })
+      >[
+        if (isTouch)
+          (
+            icon: Icons.lock_open_rounded,
+            label: t('Lock button', 'زر القفل'),
+            value: settings.showLock,
+            set: notifier.setShowLock,
+          ),
+        (
+          icon: Icons.skip_next_rounded,
+          label: t('Previous and next episode', 'الحلقة السابقة والتالية'),
+          value: settings.showEpisodeNav,
+          set: notifier.setShowEpisodeNav,
+        ),
+        (
+          icon: Icons.replay_10_rounded,
+          label: t('Rewind and forward', 'الإرجاع والتقديم'),
+          value: settings.showSeekButtons,
+          set: notifier.setShowSeekButtons,
+        ),
+        (
+          icon: Icons.speed_rounded,
+          label: l10n.showPlaybackSpeed,
+          value: settings.showPlaybackSpeed,
+          set: notifier.setShowPlaybackSpeed,
+        ),
+        (
+          icon: Icons.playlist_play_rounded,
+          label: l10n.showEpisodes,
+          value: settings.showEpisodes,
+          set: notifier.setShowEpisodes,
+        ),
+        (
+          icon: Icons.auto_awesome_rounded,
+          label: t('Anime4K button', 'زر Anime4K'),
+          value: settings.showAnime4kButton,
+          set: notifier.setShowAnime4kButton,
+        ),
+        (
+          icon: Icons.aspect_ratio_rounded,
+          label: l10n.showResize,
+          value: settings.showResize,
+          set: notifier.setShowResize,
+        ),
+        if (isTouch)
+          (
+            icon: Icons.screen_rotation_rounded,
+            label: l10n.showRotate,
+            value: settings.showRotate,
+            set: notifier.setShowRotate,
+          ),
+        if (includePip)
+          (
+            icon: Icons.picture_in_picture_alt_rounded,
+            label: l10n.showPip,
+            value: settings.showPip,
+            set: notifier.setShowPip,
+          ),
+        if (isDesktop)
+          (
+            icon: Icons.fullscreen_rounded,
+            label: t('Fullscreen button', 'زر ملء الشاشة'),
+            value: settings.showFullscreen,
+            set: notifier.setShowFullscreen,
+          ),
+        if (isDesktop)
+          (
+            icon: Icons.keyboard_rounded,
+            label: t('Key names under buttons', 'اسم المفتاح تحت الأزرار'),
+            value: settings.showKeyHints,
+            set: notifier.setShowKeyHints,
+          ),
+      ];
+  final values = [for (final row in rows) row.value];
   showGlassDialog<void>(
     context: context,
     builder: (ctx) => StatefulBuilder(
@@ -922,13 +974,13 @@ void showPlayerControlsDialog(BuildContext context, WidgetRef ref) {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                for (var i = 0; i < metadata.length; i++)
+                for (var i = 0; i < rows.length; i++)
                   SwitchListTile(
-                    secondary: Icon(metadata[i].icon),
-                    title: Text(metadata[i].label),
+                    secondary: Icon(rows[i].icon),
+                    title: Text(rows[i].label),
                     value: values[i],
                     onChanged: (val) {
-                      setters[i](val);
+                      rows[i].set(val);
                       setState(() => values[i] = val);
                     },
                   ),
@@ -1007,8 +1059,7 @@ void showFillerBehaviourDialog(BuildContext context, WidgetRef ref) {
                   FillerBehaviour.note => appText(
                     context,
                     english: 'The next-episode card says so and offers the episode after it',
-                    arabic:
-                        'تظهر ملاحظة على بطاقة الحلقة التالية مع الانتقال إلى ما بعدها',
+                    arabic: 'تظهر ملاحظة على بطاقة الحلقة التالية مع الانتقال إلى ما بعدها',
                   ),
                   FillerBehaviour.skip => appText(
                     context,

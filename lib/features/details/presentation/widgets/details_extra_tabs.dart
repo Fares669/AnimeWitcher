@@ -9,44 +9,37 @@ import '../../../../shared/widgets/underline_segment_tabs.dart';
 import 'details_character_rails.dart';
 import 'details_poster_grid.dart';
 
-/// Visual RTL order: أنميات مشابهة (right), ذات صلة (center), الشخصيات (left).
+/// Visual RTL order: أنميات مشابهة (right), الشخصيات (left). The related
+/// titles live in the seasons bar above the episodes now, so no tab of their
+/// own.
 const int detailsExtraSimilarTabIndex = 0;
-const int detailsExtraRelatedTabIndex = 1;
-const int detailsExtraCharactersTabIndex = 2;
+const int detailsExtraCharactersTabIndex = 1;
 
 class DetailsExtraTabs extends StatefulWidget {
   const DetailsExtraTabs({
     super.key,
     required this.similar,
-    required this.related,
-    required this.relatedHasMore,
     required this.cast,
     required this.onTabBecameVisible,
     required this.onAnimeTap,
     required this.onCharacterTap,
     this.similarHasMore = false,
     this.onShowMoreSimilar,
-    this.onShowMoreRelated,
     this.onShowMoreCharacters,
     this.onRetrySimilar,
-    this.onRetryRelated,
     this.onRetryCast,
     this.contentPadding = const EdgeInsets.symmetric(horizontal: 16),
   });
 
   final AsyncValue<List<MultimediaItem>> similar;
-  final AsyncValue<List<MultimediaItem>> related;
-  final bool relatedHasMore;
   final bool similarHasMore;
   final AsyncValue<List<Actor>> cast;
   final ValueChanged<int> onTabBecameVisible;
   final void Function(MultimediaItem item) onAnimeTap;
   final void Function(Actor actor) onCharacterTap;
   final VoidCallback? onShowMoreSimilar;
-  final VoidCallback? onShowMoreRelated;
   final void Function(String role)? onShowMoreCharacters;
   final VoidCallback? onRetrySimilar;
-  final VoidCallback? onRetryRelated;
   final VoidCallback? onRetryCast;
   final EdgeInsetsGeometry contentPadding;
 
@@ -64,7 +57,7 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
   void initState() {
     super.initState();
     _tabController = TabController(
-      length: 3,
+      length: 2,
       vsync: this,
       initialIndex: detailsExtraSimilarTabIndex,
     )..addListener(_handleTabTick);
@@ -141,7 +134,7 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
     widget.onTabBecameVisible(index);
   }
 
-  /// Characters rails can be taller than the 6-poster similar/related grid.
+  /// Characters rails can be taller than the 6-poster similar grid.
   /// Size the shared [TabBarView] to the taller tab so characters never get
   /// their own vertical scroll inside the details page.
   double _charactersTabBodyHeight(
@@ -177,13 +170,8 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
         // show at most six slots, so on a wide window that is one row, and
         // reserving two left a poster's height of nothing underneath.
         final columns = detailsExtraTabRenderedColumns(context, bodyWidth);
-        final onRelated = _tabController.index == detailsExtraRelatedTabIndex;
-        final tabItems = onRelated
-            ? widget.related.asData?.value.length ?? 0
-            : widget.similar.asData?.value.length ?? 0;
-        final hasMore = onRelated
-            ? widget.relatedHasMore
-            : widget.similarHasMore;
+        final tabItems = widget.similar.asData?.value.length ?? 0;
+        final hasMore = widget.similarHasMore;
         final slots = tabItems == 0
             ? animeWitcherExtraTabPreviewSlots
             : (hasMore || tabItems > animeWitcherExtraTabPreviewSlots
@@ -196,7 +184,7 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
           bodyWidth,
           rows: rows,
         );
-        // The height of the tab on screen, not of the tallest of the three.
+        // The height of the tab on screen, not of the taller of the two.
         // Sized to the tallest, a page whose characters fill two rails left
         // that much empty room under a single row of similar anime, and
         // everything below — the comments — sat a screen further down than
@@ -218,7 +206,6 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
                 onTap: _notifyTab,
                 tabs: const [
                   FilterStyleTab(label: animeWitcherSimilarTabLabel),
-                  FilterStyleTab(label: animeWitcherRelatedTabLabel),
                   FilterStyleTab(label: animeWitcherCharactersTabLabel),
                 ],
               ),
@@ -238,13 +225,6 @@ class _DetailsExtraTabsState extends State<DetailsExtraTabs>
                           onItemTap: widget.onAnimeTap,
                           onShowMore: widget.onShowMoreSimilar,
                           onRetry: widget.onRetrySimilar,
-                        ),
-                        _RelatedTab(
-                          state: widget.related,
-                          hasMore: widget.relatedHasMore,
-                          onItemTap: widget.onAnimeTap,
-                          onShowMore: widget.onShowMoreRelated,
-                          onRetry: widget.onRetryRelated,
                         ),
                         _CharactersTab(
                           state: widget.cast,
@@ -321,49 +301,6 @@ class _SimilarTab extends StatelessWidget {
       child: DetailsPosterGrid(
         keyPrefix: 'similar',
         items: preview.items,
-        hasMore: preview.showMore,
-        onShowMore: onShowMore,
-        onItemTap: onItemTap,
-      ),
-    );
-  }
-}
-
-class _RelatedTab extends StatelessWidget {
-  const _RelatedTab({
-    required this.state,
-    required this.hasMore,
-    required this.onItemTap,
-    this.onShowMore,
-    this.onRetry,
-  });
-
-  final AsyncValue<List<MultimediaItem>> state;
-  final bool hasMore;
-  final void Function(MultimediaItem item) onItemTap;
-  final VoidCallback? onShowMore;
-  final VoidCallback? onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    if (state.isLoading) return const _ExtraTabLoading();
-    if (state.hasError) {
-      return _ExtraTabMessage(
-        message: animeWitcherRelatedErrorMessage,
-        onRetry: onRetry,
-      );
-    }
-    final items = state.asData?.value ?? const <MultimediaItem>[];
-    if (items.isEmpty) {
-      return const _ExtraTabMessage(message: animeWitcherRelatedEmptyMessage);
-    }
-    final preview = extraTabGridPreview(items, hasMore: hasMore);
-    return Align(
-      alignment: Alignment.topCenter,
-      child: DetailsPosterGrid(
-        keyPrefix: 'related',
-        items: preview.items,
-        showRelationBadge: true,
         hasMore: preview.showMore,
         onShowMore: onShowMore,
         onItemTap: onItemTap,

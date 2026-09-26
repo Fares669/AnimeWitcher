@@ -569,6 +569,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       return KeyEventResult.handled;
     }
 
+    // E opens the episodes, S the ⚙ panel — the keys shown under their
+    // buttons on the desktop bar.
+    if (event.logicalKey == LogicalKeyboardKey.keyE) {
+      _controlsKeyFinal.currentState?.openEpisodesPanel();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyS) {
+      _controlsKeyFinal.currentState?.showControls();
+      _controlsKeyFinal.currentState?.toggleSettingsPanel();
+      return KeyEventResult.handled;
+    }
+
     // TV with controls already visible but focus on root (rare/transient) â
     // leave arrows for traversal.
     if (_isTv) return KeyEventResult.ignored;

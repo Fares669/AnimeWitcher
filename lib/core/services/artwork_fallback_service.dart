@@ -52,7 +52,14 @@ class ArtworkFallbackService {
   void _restore() {
     if (_restored) return;
     _restored = true;
-    for (final entry in _storage.getFallbackPosters().entries) {
+    final Map<String, String> stored;
+    try {
+      stored = _storage.getFallbackPosters();
+    } catch (_) {
+      // Storage not opened yet: start empty rather than fail every lookup.
+      return;
+    }
+    for (final entry in stored.entries) {
       if (entry.value.isEmpty) continue;
       if (entry.key.startsWith(_titleKeyPrefix)) {
         _titleCache[entry.key.substring(_titleKeyPrefix.length)] = entry.value;
@@ -368,6 +375,124 @@ class ArtworkFallbackService {
       waiting[key]?.complete(url);
     }
     _schedulePersist();
+  }
+
+  // ------------------------------------------------------------------ manga
+
+  /// Manga artwork, looked up as MANGA: MyAnimeList numbers manga and anime
+  /// separately, so the anime lookups above would answer a manga's id with
+  /// some unrelated anime, or with nothing. One answer carries both the cover
+  /// and the banner, keyed `id:<malId>` or `t:<title>`.
+  static final LinkedHashMap<String, ({String? cover, String? banner})>
+  _mangaCache = LinkedHashMap<String, ({String? cover, String? banner})>();
+  final Map<String, Completer<({String? cover, String? banner})>>
+  _pendingManga = <String, Completer<({String? cover, String? banner})>>{};
+  final Map<String, ({int? malId, String title})> _pendingMangaQuery =
+      <String, ({int? malId, String title})>{};
+  Timer? _mangaFlushTimer;
+
+  static String _mangaKey(int? malId, String title) =>
+      malId != null && malId > 0 ? 'id:$malId' : 't:${_titleKey(title)}';
+
+  /// Whether this manga's artwork has been asked for already, and what came
+  /// back, so a card can paint it on its first frame.
+  ({String? cover, String? banner})? cachedManga(int? malId, String title) =>
+      _mangaCache[_mangaKey(malId, title)];
+
+  bool hasResolvedManga(int? malId, String title) =>
+      _mangaCache.containsKey(_mangaKey(malId, title));
+
+  /// The cover and banner AniList keeps for a manga: by its MyAnimeList id
+  /// where the catalog carries one, else by its title. Batched like the
+  /// anime lookups, so a row of cards costs one request.
+  Future<({String? cover, String? banner})> mangaArtwork({
+    int? malId,
+    String title = '',
+  }) {
+    final key = _mangaKey(malId, title);
+    if (key == 't:') {
+      return Future.value((cover: null, banner: null));
+    }
+    final cached = _mangaCache[key];
+    if (cached != null) return Future.value(cached);
+    final queued = _pendingManga[key];
+    if (queued != null) return queued.future;
+
+    final completer = Completer<({String? cover, String? banner})>();
+    _pendingManga[key] = completer;
+    _pendingMangaQuery[key] = (malId: malId, title: title.trim());
+    _mangaFlushTimer ??= Timer(_batchWindow, _flushManga);
+    return completer.future;
+  }
+
+  void _flushManga() {
+    _mangaFlushTimer = null;
+    final keys = _pendingManga.keys.take(_titlesPerQuery).toList();
+    final waiting = <String, Completer<({String? cover, String? banner})>>{
+      for (final key in keys) key: _pendingManga.remove(key)!,
+    };
+    final queries = <String, ({int? malId, String title})>{
+      for (final key in keys) key: _pendingMangaQuery.remove(key)!,
+    };
+    unawaited(_runMangaBatch(keys, queries, waiting));
+    if (_pendingManga.isNotEmpty) {
+      _mangaFlushTimer = Timer(_batchWindow, _flushManga);
+    }
+  }
+
+  Future<void> _runMangaBatch(
+    List<String> keys,
+    Map<String, ({int? malId, String title})> queries,
+    Map<String, Completer<({String? cover, String? banner})>> waiting,
+  ) async {
+    final params = <String>[];
+    final fields = <String>[];
+    final variables = <String, dynamic>{};
+    for (var i = 0; i < keys.length; i++) {
+      final query = queries[keys[i]]!;
+      final byId = query.malId != null && query.malId! > 0;
+      params.add(byId ? '\$m$i: Int' : '\$m$i: String');
+      fields.add(
+        'm$i: Page(perPage: 1) { media('
+        '${byId ? 'idMal' : 'search'}: \$m$i, type: MANGA) { '
+        'bannerImage coverImage { extraLarge large medium } } }',
+      );
+      variables['m$i'] = byId ? query.malId : query.title;
+    }
+
+    Map<String, dynamic>? data;
+    var answered = true;
+    try {
+      final response = await _post(<String, dynamic>{
+        'query': 'query (${params.join(', ')}) { ${fields.join(' ')} }',
+        'variables': variables,
+      });
+      final raw = response?['data'];
+      data = raw is Map<String, dynamic> ? raw : null;
+    } catch (e) {
+      if (kDebugMode) debugPrint('[Artwork] AniList manga batch failed: $e');
+      answered = false;
+    }
+
+    for (var i = 0; i < keys.length; i++) {
+      final media = (data?['m$i'] as Map?)?['media'];
+      final first = media is List && media.isNotEmpty ? media.first : null;
+      final banner = first is Map ? '${first['bannerImage'] ?? ''}'.trim() : '';
+      final art = (
+        cover: first is Map ? _coverUrl(first['coverImage']) : null,
+        banner: banner.isEmpty || banner == 'null' ? null : banner,
+      );
+      // As with anime: a failed request has learned nothing, so it is not
+      // remembered as "no artwork".
+      if (answered) {
+        _mangaCache.remove(keys[i]);
+        _mangaCache[keys[i]] = art;
+        while (_mangaCache.length > _cacheMax) {
+          _mangaCache.remove(_mangaCache.keys.first);
+        }
+      }
+      waiting[keys[i]]?.complete(art);
+    }
   }
 
   // ---------------------------------------------------------------- AniList

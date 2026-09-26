@@ -23,11 +23,8 @@ class SearchActionButtons extends StatefulWidget {
     required this.filterTooltip,
     required this.sortIcon,
     required this.sortSystemImage,
-    this.domain,
-    this.onDomainSelected,
     this.showSort = true,
     this.showFilter = true,
-    this.domainTooltip = 'Search domain',
     this.filterCount = 0,
     this.isFilterLoading = false,
     this.height = SearchGlassSurface.height,
@@ -42,21 +39,16 @@ class SearchActionButtons extends StatefulWidget {
   final String filterTooltip;
   final IconData sortIcon;
   final String sortSystemImage;
-  final SearchDomain? domain;
-  final ValueChanged<SearchDomain>? onDomainSelected;
   final bool showSort;
   final bool showFilter;
-  final String domainTooltip;
   final int filterCount;
   final bool isFilterLoading;
   final double height;
   final Color? tintColor;
 
-  /// Visible domain/sort/filter tap targets (no divider chrome).
-  static double groupWidthForHeight(
-    double height, {
-    int visibleControls = 2,
-  }) =>
+  /// Visible sort/filter tap targets (no divider chrome). The search
+  /// category is picked in the filter sheet.
+  static double groupWidthForHeight(double height, {int visibleControls = 2}) =>
       height * visibleControls +
       (appleUsesPersistentLiquidGlassHeader && visibleControls > 0 ? 32 : 0);
 
@@ -84,12 +76,8 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
   Widget build(BuildContext context) {
     final tint = widget.tintColor ?? Theme.of(context).colorScheme.primary;
     final height = widget.height;
-    final hasDomain =
-        widget.domain != null && widget.onDomainSelected != null;
     final visibleControls =
-        (hasDomain ? 1 : 0) +
-        (widget.showSort ? 1 : 0) +
-        (widget.showFilter ? 1 : 0);
+        (widget.showSort ? 1 : 0) + (widget.showFilter ? 1 : 0);
     final width = SearchActionButtons.groupWidthForHeight(
       height,
       visibleControls: visibleControls,
@@ -100,7 +88,6 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
         ? SearchFilterBadge(count: widget.filterCount)
         : null;
     final fallbackControls = <Widget>[
-      if (hasDomain) _buildDomainControl(tint),
       if (widget.showSort) _buildSortControl(tint),
       if (widget.showFilter)
         _ActionIcon(
@@ -108,9 +95,7 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
           icon: Icons.tune_rounded,
           color: tint,
           size: height,
-          onPressed: widget.isFilterLoading
-              ? null
-              : widget.onFilterPressed,
+          onPressed: widget.isFilterLoading ? null : widget.onFilterPressed,
           isLoading: widget.isFilterLoading,
           badgeCount: widget.filterCount,
         ),
@@ -134,19 +119,6 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
                       height: height,
                       captureGestures: true,
                       children: <Widget>[
-                        if (hasDomain)
-                          AppleLiquidGlassToolbarButton(
-                            icon: _domainIcon(widget.domain!),
-                            systemImage: _domainSystemImage(widget.domain!),
-                            tooltip: widget.domainTooltip,
-                            color: tint,
-                            menuTintColor: tint,
-                            menuItems: _domainItems(context),
-                            selectedMenuValue: widget.domain!.name,
-                            onMenuSelected: _onDomainMenuSelected,
-                            onPressed: () {},
-                            width: height,
-                          ),
                         if (widget.showSort)
                           AppleLiquidGlassToolbarButton(
                             icon: widget.sortIcon,
@@ -186,16 +158,11 @@ class _SearchActionButtonsState extends State<SearchActionButtons> {
               : AppleLiquidGlassSurface(
                   borderRadius: BorderRadius.circular(height / 2),
                   interactive: true,
+                  // The search field's own fill, so the two read as one.
                   fallbackColor: Theme.of(context)
                       .colorScheme
                       .surfaceContainerHighest
-                      .withValues(alpha: 0.5),
-                  fallbackBorder: BorderSide(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurfaceVariant
-                        .withValues(alpha: 0.12),
-                  ),
+                      .withValues(alpha: 0.6),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[

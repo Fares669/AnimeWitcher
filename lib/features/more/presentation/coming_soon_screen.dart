@@ -12,7 +12,7 @@ import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/catalog_ltr.dart';
+import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 import '../../../core/utils/window_controls_inset.dart';
@@ -191,7 +191,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     final extra = _loading || (_error != null && _hasMore) ? 1 : 0;
     return MouseDragRefreshIndicator(
       onRefresh: _refresh,
-      child: CatalogLtr(
+      child: CatalogDirection(
         child: GridView.builder(
           controller: _controller,
           physics: const AlwaysScrollableScrollPhysics(),

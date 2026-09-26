@@ -566,8 +566,14 @@ class StorageService {
 
   Set<String> getHiddenTaskbarItems() {
     final value = _settingsBox.get('hidden_taskbar_items');
-    if (value is! List) return const <String>{};
-    return value.map((item) => item.toString()).toSet();
+    final hidden = value is List
+        ? value.map((item) => item.toString()).toSet()
+        : <String>{};
+    // The manga tab came after these were first saved. Until the order saved
+    // beside them knows it, it stays hidden: showing it is the viewer's call,
+    // made in the taskbar settings, which then save both lists together.
+    if (!getTaskbarOrder().contains('manga')) hidden.add('manga');
+    return hidden;
   }
 
   Future<void> setDevLoadAssets(bool enabled) async {

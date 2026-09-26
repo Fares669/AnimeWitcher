@@ -20,9 +20,31 @@ class MangaReaderKeyboardHandler {
   final VoidCallback? onNextChapter;
   final VoidCallback? onPreviousChapter;
 
-  bool handleKeyEvent(KeyEvent event, {bool isReverseHorizontal = false}) {
+  /// Handles [event], and says whether it was one of the reader's keys.
+  ///
+  /// With [volumeKeys] on, volume down turns to the next page and up to
+  /// the one before, as Mihon has them; [volumeKeysInverted] swaps them.
+  bool handleKeyEvent(
+    KeyEvent event, {
+    bool isReverseHorizontal = false,
+    bool volumeKeys = false,
+    bool volumeKeysInverted = false,
+  }) {
+    final key = event.logicalKey;
+    final isVolume =
+        key == LogicalKeyboardKey.audioVolumeDown ||
+        key == LogicalKeyboardKey.audioVolumeUp;
+    if (isVolume) {
+      if (!volumeKeys) return false;
+      // Held or released, still the reader's: the volume must not move.
+      if (event is! KeyDownEvent) return true;
+      final forward =
+          (key == LogicalKeyboardKey.audioVolumeDown) != volumeKeysInverted;
+      (forward ? onNextPage : onPreviousPage)?.call();
+      return true;
+    }
     if (event is! KeyDownEvent) return false;
-    switch (event.logicalKey) {
+    switch (key) {
       case LogicalKeyboardKey.f11:
         onFullScreen?.call();
         return true;
@@ -68,13 +90,24 @@ class MangaReaderKeyboardHandler {
   Widget wrapWithKeyboardListener({
     required Widget child,
     bool isReverseHorizontal = false,
+    bool volumeKeys = false,
+    bool volumeKeysInverted = false,
     required FocusNode focusNode,
   }) {
-    return KeyboardListener(
+    // A handled key stops here, so the system does not also act on it:
+    // the volume keys turn the page without changing the volume.
+    return Focus(
       autofocus: true,
       focusNode: focusNode,
-      onKeyEvent: (event) =>
-          handleKeyEvent(event, isReverseHorizontal: isReverseHorizontal),
+      onKeyEvent: (_, event) =>
+          handleKeyEvent(
+            event,
+            isReverseHorizontal: isReverseHorizontal,
+            volumeKeys: volumeKeys,
+            volumeKeysInverted: volumeKeysInverted,
+          )
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored,
       child: child,
     );
   }
