@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/features/details/presentation/details_ratings.dart';
@@ -148,6 +150,22 @@ void main() {
     expect(formatRatingScore(9.1), '9.1');
     expect(formatRatingScore(8.73), '8.73');
     expect(formatRatingScore(7.0), '7');
+  });
+
+  test('hero rating state loads and renders the saved score for anime and manga', () {
+    final anime = File(
+      'lib/features/details/presentation/details_screen.dart',
+    ).readAsStringSync();
+    final manga = File(
+      'lib/features/manga/presentation/manga_details_screen.dart',
+    ).readAsStringSync();
+
+    expect(anime, contains('loadAnimeUserRating'));
+    expect(anime, contains("ratingCaption: _userRating == null ? null : '\${_userRating!}/10'"));
+    expect(anime, contains('Icons.star_rounded'));
+    expect(manga, contains('loadMangaUserRating'));
+    expect(manga, contains("ratingCaption: _userRating == null ? null : '\${_userRating!}/10'"));
+    expect(manga, contains('Icons.star_rounded'));
   });
 
   test('review target points at anime_list/{id}/reviews', () {
