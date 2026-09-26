@@ -541,6 +541,7 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
           context,
           allEpisodes: orderedEpisodes,
           displayedEpisodes: displayedEpisodes,
+          selectionActive: detailsState.selectedEpisodeKeys.isNotEmpty,
         );
       },
     );
@@ -550,6 +551,7 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
     BuildContext context, {
     required List<Episode> allEpisodes,
     required List<Episode> displayedEpisodes,
+    required bool selectionActive,
   }) {
     return SliverMainAxisGroup(
       slivers: [
@@ -597,6 +599,8 @@ class SliverDetailsEpisodeList extends ConsumerWidget {
               ),
           ],
         ),
+        if (selectionActive)
+          const SliverToBoxAdapter(child: SizedBox(height: 132)),
       ],
     );
   }
@@ -989,6 +993,7 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
           displayedEpisodes,
           query,
           allEpisodes: orderedEpisodes,
+          selectionActive: detailsState.selectedEpisodeKeys.isNotEmpty,
         );
       },
     );
@@ -999,6 +1004,7 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
     List<Episode> displayedEpisodes,
     String query, {
     required List<Episode> allEpisodes,
+    required bool selectionActive,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1161,6 +1167,7 @@ class DetailsDesktopEpisodeColumn extends ConsumerWidget {
               );
             },
           ),
+        if (selectionActive) const SizedBox(height: 132),
       ],
     );
   }

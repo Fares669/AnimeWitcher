@@ -94,6 +94,8 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   final TextEditingController _goToController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   OverlayEntry? _selectionOverlay;
+  Animation<double>? _routeSecondaryAnimation;
+  AnimationStatusListener? _routeStatusListener;
 
   bool get _selecting => _selectedChapterIds.isNotEmpty;
 
@@ -101,7 +103,34 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final animation = ModalRoute.of(context)?.secondaryAnimation;
+    if (identical(animation, _routeSecondaryAnimation)) return;
+
+    final oldListener = _routeStatusListener;
+    if (oldListener != null) {
+      _routeSecondaryAnimation?.removeStatusListener(oldListener);
+    }
+
+    _routeSecondaryAnimation = animation;
+    _routeStatusListener = (status) {
+      if (status == AnimationStatus.forward && mounted && _selecting) {
+        _clearSelection();
+      }
+    };
+    final listener = _routeStatusListener;
+    if (animation != null && listener != null) {
+      animation.addStatusListener(listener);
+    }
+  }
+
+  @override
   void dispose() {
+    final listener = _routeStatusListener;
+    if (listener != null) {
+      _routeSecondaryAnimation?.removeStatusListener(listener);
+    }
     _selectionOverlay?.remove();
     _goToController.dispose();
     _scrollController.dispose();
