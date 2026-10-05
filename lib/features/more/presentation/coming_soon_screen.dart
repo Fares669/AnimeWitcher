@@ -4,7 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
@@ -15,7 +15,6 @@ import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
-import '../../../core/utils/window_controls_inset.dart';
 
 class ComingSoonScreen extends ConsumerStatefulWidget {
   const ComingSoonScreen({super.key});
@@ -124,65 +123,44 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
       unawaited(_refresh());
     });
     final isArabic = _isArabic(context);
+    final embedded = MorePaneScope.of(context);
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            // Leave the window's caption buttons their corner; the
-            // title is aligned to that same edge in Arabic.
-            actions: const <Widget>[WindowControlsGap()],
-            title: ApplePersistentGlassHeaderScope(
-              enabled:
-                  !MorePaneScope.of(context) && Navigator.of(context).canPop(),
-              onBack: () => Navigator.of(context).pop(),
-              child: Align(
-                alignment: isArabic
-                    ? Alignment.centerRight
-                    : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  child: Text(isArabic ? 'القادم قريبًا' : 'Coming soon'),
-                ),
-              ),
-            ),
-            leading:
-                appleUsesPersistentLiquidGlassHeader ||
-                    MorePaneScope.of(context)
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-            elevation: 0,
-          ),
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: isArabic ? 'القادم قريبًا' : 'Coming soon',
+        canPop: !embedded && Navigator.of(context).canPop(),
+        onBack: () => Navigator.of(context).pop(),
       ),
-      body: _buildBody(isArabic),
+      body: _buildBody(isArabic, headerTop),
     );
   }
 
-  Widget _buildBody(bool isArabic) {
+  Widget _buildBody(bool isArabic, double headerTop) {
     if (_items.isEmpty && _loading) {
-      return const AnimeCatalogShimmer();
+      return Padding(
+        padding: EdgeInsets.only(top: headerTop),
+        child: const AnimeCatalogShimmer(),
+      );
     }
     if (_items.isEmpty && _error != null) {
-      return _LoadError(
+      return Padding(
+        padding: EdgeInsets.only(top: headerTop),
+        child: _LoadError(
         message: isArabic
             ? 'تعذر تحميل الأعمال القادمة'
             : 'Could not load upcoming titles',
-        onRetry: _refresh,
+          onRetry: _refresh,
+        ),
       );
     }
     if (_items.isEmpty) {
-      return Center(
-        child: Text(
-          isArabic ? 'لا توجد أعمال قادمة حاليًا' : 'No upcoming titles',
+      return Padding(
+        padding: EdgeInsets.only(top: headerTop),
+        child: Center(
+          child: Text(
+            isArabic ? 'لا توجد أعمال قادمة حاليًا' : 'No upcoming titles',
+          ),
         ),
       );
     }
@@ -197,7 +175,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
           physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.fromLTRB(
             MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            16,
+            headerTop + 16,
             MultimediaCardLayout.catalogGridHorizontalPadding(context),
             110,
           ),
