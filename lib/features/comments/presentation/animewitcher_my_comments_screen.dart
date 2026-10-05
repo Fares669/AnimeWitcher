@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_models.dart';
@@ -444,77 +445,27 @@ class _AnimeWitcherMyCommentsScreenState
     ref.watch(animeWitcherAccountControllerProvider);
     final isArabic = _isArabic;
     final usePersistentGlass = appleUsesPersistentLiquidGlassHeader;
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          // Keep back on the visual left and the liquid-glass sort on the
-          // visual right, next to the (RTL) title — same header geometry as
-          // the anime-details comments/reviews screen.
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            centerTitle: false,
-            titleSpacing: 16,
-            automaticallyImplyLeading: false,
-            leading: usePersistentGlass
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-            title: ApplePersistentGlassHeaderScope(
-              enabled: Navigator.of(context).canPop() || usePersistentGlass,
-              onBack: () => Navigator.of(context).maybePop(),
-              toolbarTrailingInset: usePersistentGlass
-                  ? AnimeWitcherCommentSortControl.persistentTrailingInset
-                  : null,
-              trailingButtons: usePersistentGlass
-                  ? AnimeWitcherCommentSortControl.persistentButtons(
-                      context: context,
-                      isArabic: isArabic,
-                      tooltip: _sortTooltip(isArabic),
-                      sort: _sort,
-                      onSelected: (value) {
-                        _changeSort(_sortFromValue(value));
-                      },
-                    )
-                  : null,
-              child: Padding(
-                padding: EdgeInsets.only(
-                  right: usePersistentGlass && isArabic
-                      ? AnimeWitcherCommentSortControl.persistentTitleClearance
-                      : 0,
-                  left: usePersistentGlass && !isArabic
-                      ? AnimeWitcherCommentSortControl.persistentTitleClearance
-                      : 0,
-                ),
-                child: Align(
-                  alignment:
-                      isArabic ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Directionality(
-                    textDirection:
-                        isArabic ? TextDirection.rtl : TextDirection.ltr,
-                    child: Text(
-                      _screenTitle(isArabic),
-                      key: kMyCommentsTitleKey,
-                    ),
-                  ),
-                ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: _screenTitle(isArabic),
+        titleKey: kMyCommentsTitleKey,
+        onBack: () => Navigator.of(context).maybePop(),
+        actions: usePersistentGlass
+            ? const <Widget>[]
+            : AnimeWitcherCommentSortControl.appBarActions(
+                tooltip: _sortTooltip(isArabic),
+                selectedValue: _sort.name,
+                items: AnimeWitcherCommentSortControl.menuItems(isArabic),
+                onSelected: (value) {
+                  _changeSort(_sortFromValue(value));
+                },
               ),
-            ),
-            actions: usePersistentGlass
-                ? const <Widget>[]
-                : AnimeWitcherCommentSortControl.appBarActions(
-                    tooltip: _sortTooltip(isArabic),
-                    selectedValue: _sort.name,
-                    items: AnimeWitcherCommentSortControl.menuItems(isArabic),
-                    onSelected: (value) {
-                      _changeSort(_sortFromValue(value));
-                    },
-                  ),
-          ),
-        ),
       ),
-      body: Center(
+      body: Padding(
+        padding: EdgeInsets.only(top: headerTop),
+        child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760),
           child: _buildBody(),
