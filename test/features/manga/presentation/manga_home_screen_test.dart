@@ -165,7 +165,7 @@ void main() {
     expect(find.text('Popular 0'), findsWidgets);
     expect(
       tester.getCenter(find.text('الأكثر قراءة')).dx,
-      greaterThan(tester.view.physicalSize.width / 2),
+      closeTo(tester.view.physicalSize.width / 2, 1),
     );
     expect(
       tester.getCenter(find.text('Popular 0').first).dx,
@@ -188,7 +188,7 @@ void main() {
     expect(find.text('Fresh Chapter Manga'), findsWidgets);
     expect(
       tester.getCenter(find.text('فصول جديدة')).dx,
-      greaterThan(tester.view.physicalSize.width / 2),
+      closeTo(tester.view.physicalSize.width / 2, 1),
     );
     await tester.pump(const Duration(milliseconds: 100));
   });
