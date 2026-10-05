@@ -84,6 +84,10 @@ void main() {
         find.byType(Scrollable).first,
         const Offset(0, -400),
       );
+      await tester.drag(
+        find.byType(Scrollable).first,
+        const Offset(0, 96),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('التنزيلات'), findsWidgets);
@@ -123,6 +127,10 @@ void main() {
         find.text(downloadPartsTitle()),
         find.byType(Scrollable).first,
         const Offset(0, -240),
+      );
+      await tester.drag(
+        find.byType(Scrollable).first,
+        const Offset(0, 96),
       );
       await tester.pumpAndSettle();
 
@@ -215,6 +223,10 @@ void main() {
       find.text(downloadNotificationsTitle()),
       find.byType(Scrollable).first,
       const Offset(0, -400),
+    );
+    await tester.drag(
+      find.byType(Scrollable).first,
+      const Offset(0, 96),
     );
     await tester.pumpAndSettle();
 
