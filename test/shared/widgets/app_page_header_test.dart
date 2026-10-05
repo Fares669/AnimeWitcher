@@ -133,9 +133,52 @@ void main() {
     expect(titleRect.right, lessThanOrEqualTo(actionRect.left));
   });
 
-  testWidgets('contains multiple blur bands for progressive backdrop', (
+  testWidgets('matches the title typography of the old standard AppBar', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    const title = 'Favorites';
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          appBar: AppBar(
+            title: Text(
+              title,
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final standard = tester
+        .renderObject<RenderParagraph>(find.text(title))
+        .text
+        .style!;
+
+    await tester.pumpWidget(
+      app(locale: const Locale('en'), title: title),
+    );
+    await tester.pumpAndSettle();
+    final progressive = tester
+        .renderObject<RenderParagraph>(find.text(title))
+        .text
+        .style!;
+
+    expect(progressive.fontSize, standard.fontSize);
+    expect(progressive.fontFamily, standard.fontFamily);
+    expect(progressive.fontWeight, standard.fontWeight);
+    expect(progressive.color, standard.color);
+  });
+
+  testWidgets('uses fine non-overlapping blur bands', (tester) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
     await tester.pumpWidget(
       app(
         locale: const Locale('en'),
@@ -144,13 +187,26 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byType(AppProgressiveHeaderBackdrop), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byType(AppProgressiveHeaderBackdrop),
-        matching: find.byType(BackdropFilter),
-      ),
-      findsAtLeastNWidgets(3),
+    final backdrop = find.byType(AppProgressiveHeaderBackdrop);
+    expect(backdrop, findsOneWidget);
+
+    final filters = find.descendant(
+      of: backdrop,
+      matching: find.byType(BackdropFilter),
     );
+    expect(filters, findsAtLeastNWidgets(16));
+
+    final rects = <Rect>[
+      for (var i = 0; i < filters.evaluate().length; i++)
+        tester.getRect(filters.at(i)),
+    ]..sort((a, b) => a.top.compareTo(b.top));
+
+    for (var i = 0; i < rects.length - 1; i++) {
+      expect(
+        rects[i].bottom,
+        closeTo(rects[i + 1].top, 0.01),
+        reason: 'adjacent blur bands must meet without overlapping seams',
+      );
+    }
   });
 }
