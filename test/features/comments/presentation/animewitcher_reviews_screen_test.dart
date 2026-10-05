@@ -15,6 +15,7 @@ import 'package:animewitcher/features/comments/presentation/widgets/animewitcher
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:animewitcher/shared/widgets/animated_sort_menu_button.dart';
 import 'package:animewitcher/shared/widgets/app_back_button.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -231,21 +232,11 @@ void _expectAccountSortHeader(
     lessThan(titleRect.center.dx),
     reason: 'Back stays on the visual left, away from the title',
   );
-  expect(
-    sortRect.center.dx,
-    greaterThan(titleRect.center.dx),
-    reason: 'Sort sits to the visual right of the title, not next to back',
-  );
-  expect(
-    sortRect.left - titleRect.right,
-    lessThan(36),
-    reason: 'Sort is immediately next to the title',
-  );
-  expect(
-    titleRect.left - backRect.right,
-    greaterThan(sortRect.left - titleRect.right),
-    reason: 'Sort is closer to the title than the back button is',
-  );
+  final width = tester.getSize(find.byType(MaterialApp)).width;
+  expect(titleRect.center.dx, closeTo(width / 2, 1));
+  expect(sortRect.center.dx, greaterThan(titleRect.center.dx));
+  expect(titleRect.left, greaterThan(backRect.right));
+  expect(find.byType(AppPageAppBar), findsOneWidget);
 }
 
 Future<void> _openOwnReviewEditor(WidgetTester tester) async {
@@ -274,6 +265,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('المراجعات'), findsOneWidget);
+    expect(find.byType(AppPageAppBar), findsOneWidget);
     expect(find.text('مراجعة منشورة'), findsOneWidget);
     expect(find.text('اكتب مراجعة...'), findsOneWidget);
     expect(find.text('لا توجد مراجعات منشورة بعد.'), findsNothing);
