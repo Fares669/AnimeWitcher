@@ -172,9 +172,17 @@ class SearchStartPage extends StatelessWidget {
               ),
             ),
           ),
-          TextButton(
+          TextButton.icon(
             onPressed: onClearRecents,
-            child: Text(appText(context, english: 'Clear', arabic: 'مسح')),
+            icon: const Icon(
+              Icons.delete_outline,
+              size: 16,
+              color: Colors.red,
+            ),
+            label: Text(
+              appText(context, english: 'Clear all', arabic: 'مسح الكل'),
+              style: const TextStyle(color: Colors.red),
+            ),
           ),
         ],
       ),
