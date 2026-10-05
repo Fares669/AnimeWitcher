@@ -22,6 +22,28 @@ void main() {
     expect(12 + 22, 34);
   });
 
+  test('search headers reuse the shared progressive blur backdrop', () {
+    final source = File(
+      'lib/features/search/presentation/search_screen.dart',
+    ).readAsStringSync();
+
+    expect(
+      source,
+      contains("import '../../../shared/widgets/app_page_header.dart';"),
+    );
+    expect(
+      RegExp(r'flexibleSpace:\s*const AppProgressiveHeaderBackdrop\(\)'),
+          .hasMatch(source),
+      isTrue,
+    );
+    expect(
+      RegExp(
+        r'height:\s*_floatingHeaderExtent\s*\+\s*MediaQuery\.paddingOf\(context\)\.top[\s\S]*?const AppProgressiveHeaderBackdrop\(\)',
+      ).hasMatch(source),
+      isTrue,
+    );
+  });
+
   testWidgets('characters immediately give the missing sort width to search', (
     tester,
   ) async {
