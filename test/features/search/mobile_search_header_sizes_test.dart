@@ -32,8 +32,9 @@ void main() {
       contains("import '../../../shared/widgets/app_page_header.dart';"),
     );
     expect(
-      RegExp(r'flexibleSpace:\s*const AppProgressiveHeaderBackdrop\(\)'),
-          .hasMatch(source),
+      RegExp(
+        r'flexibleSpace:\s*const AppProgressiveHeaderBackdrop\(\)',
+      ).hasMatch(source),
       isTrue,
     );
     expect(
