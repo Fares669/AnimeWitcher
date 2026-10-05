@@ -127,7 +127,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
               )
             : GridView.builder(
                 controller: _scrollController,
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
+                padding: EdgeInsets.fromLTRB(12, headerTop + 12, 12, 28),
                 physics: const AlwaysScrollableScrollPhysics(),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 2,
