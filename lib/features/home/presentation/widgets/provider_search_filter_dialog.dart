@@ -419,11 +419,21 @@ class _ProviderSearchFilterDialogState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // Five years to a row, the newest five first.
-                    _ChipWrap(
-                      values: shownYears,
-                      selected: _years,
-                      columns: _yearsShown,
-                      onToggle: (value) => _toggle(_years, value),
+                    AnimatedSize(
+                      key: const ValueKey<String>(
+                        'filter-year-size-transition',
+                      ),
+                      duration: const Duration(milliseconds: 240),
+                      reverseDuration: const Duration(milliseconds: 190),
+                      curve: Curves.easeOutCubic,
+                      alignment: AlignmentDirectional.topStart,
+                      clipBehavior: Clip.hardEdge,
+                      child: _ChipWrap(
+                        values: shownYears,
+                        selected: _years,
+                        columns: _yearsShown,
+                        onToggle: (value) => _toggle(_years, value),
+                      ),
                     ),
                     if (options.years.length > _yearsShown)
                       Align(
@@ -599,6 +609,8 @@ Future<ProviderSearchFilters?> showProviderSearchFilterSheet({
   required BuildContext context,
   required WidgetBuilder builder,
 }) {
+  final media = MediaQuery.of(context);
+  final height = media.size.height - media.padding.top;
   return showModalBottomSheet<ProviderSearchFilters>(
     context: context,
     isScrollControlled: true,
@@ -606,10 +618,7 @@ Future<ProviderSearchFilters?> showProviderSearchFilterSheet({
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.5),
     constraints: const BoxConstraints(),
-    builder: (context) => SizedBox(
-      height: MediaQuery.sizeOf(context).height,
-      child: builder(context),
-    ),
+    builder: (context) => SizedBox(height: height, child: builder(context)),
   );
 }
 
