@@ -7,14 +7,24 @@ import 'app_back_button.dart';
 import 'apple_liquid_glass.dart';
 
 /// A compact Apple-style backdrop: blur is strongest at the system edge and
-/// progressively fades toward the content edge.
+/// continuously fades toward the content edge.
 ///
-/// A few native BackdropFilter bands keep this cheap and dependency-free while
-/// avoiding a full-screen blur.
+/// Flutter's BackdropFilter has one blur radius per filter, so a variable blur
+/// is approximated with many thin, non-overlapping bands. The bands are fine
+/// enough that adjacent sigma changes are visually continuous, and a
+/// BackdropGroup lets them reuse the same captured backdrop input.
 class AppProgressiveHeaderBackdrop extends StatelessWidget {
   const AppProgressiveHeaderBackdrop({super.key});
 
-  static const List<double> _sigmas = <double>[18, 14, 10, 7, 4, 2];
+  static const int _bandCount = 24;
+  static const double _maxSigma = 18;
+
+  double _sigmaForBand(int index) {
+    final t = (index + 0.5) / _bandCount;
+    final remaining = 1 - t;
+    final smooth = remaining * remaining * (3 - 2 * remaining);
+    return _maxSigma * smooth;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -22,42 +32,44 @@ class AppProgressiveHeaderBackdrop extends StatelessWidget {
     return IgnorePointer(
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final bandHeight = constraints.maxHeight / _sigmas.length;
-          return Stack(
-            fit: StackFit.expand,
-            children: [
-              for (var i = 0; i < _sigmas.length; i++)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: bandHeight * i,
-                  height: bandHeight + 1,
-                  child: ClipRect(
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(
-                        sigmaX: _sigmas[i],
-                        sigmaY: _sigmas[i],
+          final bandHeight = constraints.maxHeight / _bandCount;
+          return BackdropGroup(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                for (var i = 0; i < _bandCount; i++)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: bandHeight * i,
+                    height: bandHeight,
+                    child: ClipRect(
+                      child: BackdropFilter.grouped(
+                        filter: ImageFilter.blur(
+                          sigmaX: _sigmaForBand(i),
+                          sigmaY: _sigmaForBand(i),
+                        ),
+                        child: const SizedBox.expand(),
                       ),
-                      child: const SizedBox.expand(),
+                    ),
+                  ),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        surface.withValues(alpha: 0.24),
+                        surface.withValues(alpha: 0.13),
+                        surface.withValues(alpha: 0.045),
+                        surface.withValues(alpha: 0),
+                      ],
+                      stops: const [0, 0.42, 0.76, 1],
                     ),
                   ),
                 ),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      surface.withValues(alpha: 0.26),
-                      surface.withValues(alpha: 0.14),
-                      surface.withValues(alpha: 0.05),
-                      surface.withValues(alpha: 0),
-                    ],
-                    stops: const [0, 0.42, 0.76, 1],
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           );
         },
       ),
@@ -97,6 +109,15 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final theme = Theme.of(context);
+    final appBarTitleStyle =
+        (theme.appBarTheme.titleTextStyle ?? theme.textTheme.titleLarge)
+            ?.copyWith(
+              color:
+                  theme.appBarTheme.foregroundColor ??
+                  theme.colorScheme.onSurface,
+              fontWeight: FontWeight.bold,
+            );
     final pop = onBack ?? () => Navigator.of(context).maybePop();
     final leadingInset = windowControlsLeadingInset;
     final titleClearance =
@@ -150,7 +171,7 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.center,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                          style: appBarTitleStyle,
                         ),
                       ),
                     ),
