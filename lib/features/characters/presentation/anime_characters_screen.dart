@@ -10,7 +10,7 @@ import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import 'character_card.dart';
@@ -107,55 +107,38 @@ class _AnimeCharactersScreenState
             : (widget.animeTitle?.trim().isNotEmpty == true
                 ? widget.animeTitle!
                 : (isArabic ? 'الشخصيات' : 'Characters'));
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            title: ApplePersistentGlassHeaderScope(
-              enabled: Navigator.of(context).canPop(),
-              onBack: () => Navigator.of(context).pop(),
-              child: Align(
-                alignment: isArabic
-                    ? Alignment.centerRight
-                    : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  child: Text(title),
-                ),
-              ),
-            ),
-            leading: appleUsesPersistentLiquidGlassHeader
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-            elevation: 0,
-          ),
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: title,
+        onBack: () => Navigator.of(context).pop(),
       ),
       body: _loading
-          ? const AnimeCatalogShimmer(characterCaptionSpace: true)
+          ? Padding(
+              padding: EdgeInsets.only(top: headerTop),
+              child: const AnimeCatalogShimmer(characterCaptionSpace: true),
+            )
           : _error != null
-              ? Center(
+              ? Padding(
+                  padding: EdgeInsets.only(top: headerTop),
+                  child: Center(
                   child: FilledButton.tonalIcon(
                     onPressed: _load,
                     icon: const Icon(Icons.refresh_rounded),
                     label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+                    ),
                   ),
                 )
               : _cast.isEmpty
-                  ? Center(
-                      child: Text(
+                  ? Padding(
+                      padding: EdgeInsets.only(top: headerTop),
+                      child: Center(
+                        child: Text(
                         isArabic
                             ? animeWitcherCharactersEmptyMessage
                             : 'No characters have been added yet',
+                        ),
                       ),
                     )
                   : MouseDragRefreshIndicator(
@@ -165,7 +148,7 @@ class _AnimeCharactersScreenState
                           physics: const AlwaysScrollableScrollPhysics(),
                           padding: EdgeInsets.fromLTRB(
             MultimediaCardLayout.catalogGridHorizontalPadding(context),
-            16,
+            headerTop + 16,
             MultimediaCardLayout.catalogGridHorizontalPadding(context),
             110,
           ),
