@@ -30,6 +30,7 @@ import 'widgets/search_sort_dialog.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/recoverable_network_state.dart';
@@ -443,16 +444,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               top: 0,
               left: 0,
               right: 0,
-              // Nothing is painted behind the controls, so the results show
-              // through as they scroll past. The search field carries its own
-              // pill, which is what keeps it legible over the artwork.
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Only the search field and its controls are pinned. The
-                  // chips for applied filters belong to the results and
-                  // scroll away with them.
-                  SearchHeaderBar(
+              child: SizedBox(
+                height:
+                    _floatingHeaderExtent +
+                    MediaQuery.paddingOf(context).top,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    const AppProgressiveHeaderBackdrop(),
+                    Align(
+                      alignment: Alignment.bottomCenter,
+                      child: SearchHeaderBar(
                     textController: _controller,
                     searchFocusNode: _focusNode,
                     clearButtonFocusNode: _clearButtonFocusNode,
@@ -485,13 +487,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     // picked, anime or manga, so every category needs a way in.
                     showFilter: true,
                     onSubmitted: _submitSearch,
-                    onChanged: (val) {
-                      ref
-                          .read(searchSuggestionControllerProvider.notifier)
-                          .onQueryChanged(val);
-                    },
-                  ),
-                ],
+                        onChanged: (val) {
+                          ref
+                              .read(
+                                searchSuggestionControllerProvider.notifier,
+                              )
+                              .onQueryChanged(val);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -628,6 +634,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         shadowColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
+        flexibleSpace: const AppProgressiveHeaderBackdrop(),
         bottom: activeFilterCount == 0
             ? null
             : PreferredSize(
