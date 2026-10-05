@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:animewitcher/core/account/account_providers.dart';
@@ -554,51 +555,26 @@ class _AnimeWitcherCommentsScreenState
       });
     }
 
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            centerTitle: false,
-            titleSpacing: 16,
-            automaticallyImplyLeading: false,
-            leading: appleUsesPersistentLiquidGlassHeader
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-            title: Padding(
-              padding: EdgeInsets.only(
-                right: appleUsesPersistentLiquidGlassHeader && isArabic
-                    ? AnimeWitcherCommentSortControl.persistentTitleClearance
-                    : 0,
-                left: appleUsesPersistentLiquidGlassHeader && !isArabic
-                    ? AnimeWitcherCommentSortControl.persistentTitleClearance
-                    : 0,
-              ),
-              child: Align(
-                alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
-                  child: Text(_screenTitle(isArabic)),
-                ),
-              ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: _screenTitle(isArabic),
+        onBack: () => Navigator.of(context).pop(),
+        actions: appleUsesPersistentLiquidGlassHeader
+          ? const <Widget>[]
+          : AnimeWitcherCommentSortControl.appBarActions(
+              tooltip: _sortTooltip(isArabic),
+              selectedValue: _sort.name,
+              items: AnimeWitcherCommentSortControl.menuItems(isArabic),
+              onSelected: (value) {
+                _applyCommentSort(_commentSortFromValue(value));
+              },
             ),
-            actions: appleUsesPersistentLiquidGlassHeader
-                ? const <Widget>[]
-                : AnimeWitcherCommentSortControl.appBarActions(
-                    tooltip: _sortTooltip(isArabic),
-                    selectedValue: _sort.name,
-                    items: AnimeWitcherCommentSortControl.menuItems(isArabic),
-                    onSelected: (value) {
-                      _applyCommentSort(_commentSortFromValue(value));
-                    },
-                  ),
-          ),
-        ),
       ),
-      body: Column(
+      body: Padding(
+        padding: EdgeInsets.only(top: headerTop),
+        child: Column(
         children: [
           if (widget.target.title.trim().isNotEmpty)
             Container(
@@ -621,6 +597,7 @@ class _AnimeWitcherCommentsScreenState
           Expanded(child: _buildCommentsBody(context, isArabic)),
           _buildComposer(context, isArabic, isSignedIn),
         ],
+        ),
       ),
     );
   }
