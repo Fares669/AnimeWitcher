@@ -258,6 +258,48 @@ void main() {
     expect(find.byKey(const ValueKey('filterChip-2023')), findsOneWidget);
   });
 
+  testWidgets('release years animate between collapsed and expanded heights', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final years = [for (var y = 2028; y >= 2019; y--) '$y'];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showDialog<ProviderSearchFilters>(
+                context: context,
+                builder: (_) => ProviderSearchFilterDialog(
+                  options: ProviderSearchFilterOptions(years: years),
+                  initialValue: const ProviderSearchFilters(),
+                ),
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final yearCard = find.byKey(const ValueKey('filterCard-year'));
+    final collapsed = tester.getSize(yearCard).height;
+    await tester.tap(find.text('Show more'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    final midway = tester.getSize(yearCard).height;
+    await tester.pumpAndSettle();
+    final expanded = tester.getSize(yearCard).height;
+
+    expect(expanded, greaterThan(collapsed));
+    expect(midway, greaterThan(collapsed));
+    expect(midway, lessThan(expanded));
+  });
+
   testWidgets('on a phone the filters rise as a full-screen sheet', (
     tester,
   ) async {
@@ -267,6 +309,12 @@ void main() {
     ProviderSearchFilters? result;
     await tester.pumpWidget(
       MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            padding: const EdgeInsets.only(top: 47, bottom: 34),
+          ),
+          child: child!,
+        ),
         home: Builder(
           builder: (context) => Scaffold(
             body: TextButton(
@@ -292,7 +340,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(BottomSheet), findsOneWidget);
-    expect(tester.getRect(find.byType(BottomSheet)).height, 800);
+    final sheet = tester.getRect(find.byType(BottomSheet));
+    expect(sheet.top, 47);
+    expect(sheet.bottom, 800);
     await tester.tap(find.byKey(const ValueKey('filterChip-Action')));
     await tester.tap(find.byKey(const ValueKey('filterApply')));
     await tester.pumpAndSettle();
