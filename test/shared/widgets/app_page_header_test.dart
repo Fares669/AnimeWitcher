@@ -175,7 +175,9 @@ void main() {
     expect(progressive.color, standard.color);
   });
 
-  testWidgets('uses fine non-overlapping blur bands', (tester) async {
+  testWidgets('uses one fixed blur with a soft visual fade at the edge', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(400, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -191,23 +193,27 @@ void main() {
     final backdrop = find.byType(AppProgressiveHeaderBackdrop);
     expect(backdrop, findsOneWidget);
 
-    final filters = find.descendant(
-      of: backdrop,
-      matching: find.byType(BackdropFilter),
+    expect(
+      find.descendant(
+        of: backdrop,
+        matching: find.byType(BackdropFilter),
+      ),
+      findsOneWidget,
     );
-    expect(filters, findsAtLeastNWidgets(16));
 
-    final rects = <Rect>[
-      for (var i = 0; i < filters.evaluate().length; i++)
-        tester.getRect(filters.at(i)),
-    ]..sort((a, b) => a.top.compareTo(b.top));
+    final gradients = find.descendant(
+      of: backdrop,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is DecoratedBox &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration as BoxDecoration).gradient is LinearGradient,
+      ),
+    );
+    expect(gradients, findsOneWidget);
 
-    for (var i = 0; i < rects.length - 1; i++) {
-      expect(
-        rects[i].bottom,
-        closeTo(rects[i + 1].top, 0.01),
-        reason: 'adjacent blur bands must meet without overlapping seams',
-      );
-    }
+    final box = tester.widget<DecoratedBox>(gradients);
+    final gradient = (box.decoration as BoxDecoration).gradient! as LinearGradient;
+    expect(gradient.colors.last.a, 0);
   });
 }
