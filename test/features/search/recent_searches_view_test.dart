@@ -139,6 +139,9 @@ void main() {
     );
 
     expect(find.text('مسح الكل'), findsOneWidget);
+    final deleteIcon = find.byIcon(Icons.delete_outline);
+    expect(deleteIcon, findsOneWidget);
+    expect(tester.widget<Icon>(deleteIcon).color, Colors.red);
     await tester.tap(find.text('مسح الكل'));
     await tester.pump();
     expect(cleared, 1);
