@@ -60,6 +60,7 @@ class _AnimeWitcherAccountScreenState
     );
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
         title: appText(
           context,
@@ -74,13 +75,21 @@ class _AnimeWitcherAccountScreenState
           // the whole account at once; stacked in one column they ran past the
           // bottom of the screen and sign out had to be scrolled to.
           if (profile != null && constraints.maxWidth >= 900) {
-            return _buildSignedInWide(profile, busy);
+            return Padding(
+              padding: EdgeInsets.only(
+                top: appPageHeaderContentTopInset(context),
+              ),
+              child: _buildSignedInWide(profile, busy),
+            );
           }
           return Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 720),
               child: ListView(
-                padding: const EdgeInsets.only(bottom: 100),
+                padding: EdgeInsets.only(
+                  top: appPageHeaderContentTopInset(context),
+                  bottom: 100,
+                ),
                 children: [
                   const SizedBox(height: LayoutConstants.spacingMd),
                   if (profile != null)
