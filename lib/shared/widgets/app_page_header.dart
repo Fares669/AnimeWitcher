@@ -6,72 +6,45 @@ import '../../core/utils/window_controls_inset.dart';
 import 'app_back_button.dart';
 import 'apple_liquid_glass.dart';
 
-/// A compact Apple-style backdrop: blur is strongest at the system edge and
-/// continuously fades toward the content edge.
+/// A compact translucent header backdrop.
 ///
-/// Flutter's BackdropFilter has one blur radius per filter, so a variable blur
-/// is approximated with many thin, non-overlapping bands. The bands are fine
-/// enough that adjacent sigma changes are visually continuous, and a
-/// BackdropGroup lets them reuse the same captured backdrop input.
+/// One fixed BackdropFilter keeps scrolling cheap. A transparent surface
+/// gradient softens the lower edge so the header blends into content instead
+/// of ending as an obvious tinted line.
 class AppProgressiveHeaderBackdrop extends StatelessWidget {
   const AppProgressiveHeaderBackdrop({super.key});
 
-  static const int _bandCount = 24;
-  static const double _maxSigma = 18;
-
-  double _sigmaForBand(int index) {
-    final t = (index + 0.5) / _bandCount;
-    final remaining = 1 - t;
-    final smooth = remaining * remaining * (3 - 2 * remaining);
-    return _maxSigma * smooth;
-  }
+  static const double _sigma = 12;
 
   @override
   Widget build(BuildContext context) {
     final surface = Theme.of(context).colorScheme.surface;
     return IgnorePointer(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final bandHeight = constraints.maxHeight / _bandCount;
-          return BackdropGroup(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                for (var i = 0; i < _bandCount; i++)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    top: bandHeight * i,
-                    height: bandHeight,
-                    child: ClipRect(
-                      child: BackdropFilter.grouped(
-                        filter: ImageFilter.blur(
-                          sigmaX: _sigmaForBand(i),
-                          sigmaY: _sigmaForBand(i),
-                        ),
-                        child: const SizedBox.expand(),
-                      ),
-                    ),
-                  ),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        surface.withValues(alpha: 0.24),
-                        surface.withValues(alpha: 0.13),
-                        surface.withValues(alpha: 0.045),
-                        surface.withValues(alpha: 0),
-                      ],
-                      stops: const [0, 0.42, 0.76, 1],
-                    ),
-                  ),
-                ),
-              ],
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: _sigma, sigmaY: _sigma),
+              child: const SizedBox.expand(),
             ),
-          );
-        },
+          ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  surface.withValues(alpha: 0.22),
+                  surface.withValues(alpha: 0.12),
+                  surface.withValues(alpha: 0.04),
+                  surface.withValues(alpha: 0),
+                ],
+                stops: const [0, 0.52, 0.82, 1],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
