@@ -42,6 +42,30 @@ void main() {
     expect(ran, 'One Piece');
   });
 
+  testWidgets('recent-search clear matches the home clear-all treatment', (
+    tester,
+  ) async {
+    var cleared = 0;
+    await tester.pumpWidget(
+      _app(
+        SearchStartPage(
+          recents: const <String>['One Piece'],
+          onRecent: (_) {},
+          onRemoveRecent: (_) {},
+          onClearRecents: () => cleared++,
+          onOpen: (_) {},
+        ),
+      ),
+    );
+
+    expect(find.text('مسح الكل'), findsOneWidget);
+    final deleteIcon = find.byIcon(Icons.delete_outline);
+    expect(deleteIcon, findsOneWidget);
+    expect(tester.widget<Icon>(deleteIcon).color, Colors.red);
+    await tester.tap(find.text('مسح الكل'));
+    expect(cleared, 1);
+  });
+
   test('MyAnimeList ids are read from a Jikan list, in order', () {
     expect(
       malIdsFromJikanList(<String, dynamic>{
