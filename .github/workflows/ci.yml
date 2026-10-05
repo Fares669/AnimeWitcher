@@ -48,11 +48,12 @@ jobs:
         run: flutter test test/core/services/download_v2
 
       - name: PR261 UI tests
-        run: |
-          flutter test test/features/home/presentation/provider_search_filter_dialog_category_test.dart
-          flutter test test/features/home/presentation/widgets/home_rails_rtl_test.dart
-          flutter test test/features/search/search_start_page_test.dart
-          flutter test test/features/search/recent_searches_view_test.dart
+        run: >-
+          flutter test
+          test/features/home/presentation/provider_search_filter_dialog_category_test.dart
+          test/features/home/presentation/widgets/home_rails_rtl_test.dart
+          test/features/search/search_start_page_test.dart
+          test/features/search/recent_searches_view_test.dart
 
       - name: Test
         # A mock Firestore client test exercises the configured REST path. This
