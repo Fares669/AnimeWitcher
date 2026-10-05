@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/extensions/base_provider.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
@@ -102,48 +102,19 @@ class _NewsListScreenState extends State<NewsListScreen> {
       size: size,
       padding: MediaQuery.paddingOf(context),
     );
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            title: ApplePersistentGlassHeaderScope(
-              enabled: Navigator.of(context).canPop(),
-              onBack: () => Navigator.of(context).maybePop(),
-              child: Align(
-                alignment: isArabic
-                    ? Alignment.centerRight
-                    : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  child: Text(
-                    isArabic ? 'الأخبار' : 'News',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ),
-            ),
-            leading: appleUsesPersistentLiquidGlassHeader
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-            elevation: 0,
-          ),
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: isArabic ? 'الأخبار' : 'News',
+        onBack: () => Navigator.of(context).maybePop(),
       ),
       body: MouseDragRefreshIndicator(
         onRefresh: _refresh,
         child: columns == 1
             ? ListView.separated(
                 controller: _scrollController,
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
+                padding: EdgeInsets.fromLTRB(12, headerTop + 12, 12, 28),
                 physics: const AlwaysScrollableScrollPhysics(),
                 itemCount: _items.length + (_isLoading ? 1 : 0),
                 separatorBuilder: (_, index) {
