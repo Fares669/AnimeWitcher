@@ -102,17 +102,14 @@ void main() {
       final titleBox = tester.getRect(find.text('الحلقات الجديدة'));
       final viewAllBox = tester.getRect(find.text('عرض الكل'));
       expect(titleBox.left, greaterThan(viewAllBox.left));
-      expect(find.byIcon(Icons.arrow_forward_ios), findsOneWidget);
-
-      final chevronRight = tester
-          .getTopRight(find.byIcon(Icons.arrow_forward_ios))
-          .dx;
-      final labelLeft = tester.getTopLeft(find.text('عرض الكل')).dx;
       expect(
-        chevronRight,
-        lessThan(labelLeft + 1),
-        reason: 'chevron sits to the left of عرض الكل',
+        find.descendant(
+          of: find.byType(HomeViewAllButton),
+          matching: find.byType(TextButton),
+        ),
+        findsOneWidget,
       );
+      expect(find.byIcon(Icons.arrow_forward_ios), findsNothing);
 
       final artifacts = debugShotDirectory();
       if (artifacts != null) {
