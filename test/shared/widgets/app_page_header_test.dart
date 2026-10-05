@@ -2,6 +2,7 @@ import 'package:animewitcher/shared/widgets/app_back_button.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -142,10 +143,10 @@ void main() {
 
     const title = 'Favorites';
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
         home: Scaffold(
           appBar: AppBar(
-            title: Text(
+            title: const Text(
               title,
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
