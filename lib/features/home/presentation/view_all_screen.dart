@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
-import 'package:animewitcher/shared/widgets/app_back_button.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
@@ -66,19 +65,12 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
   bool _providerHasMore = true;
   Object? _providerLoadError;
   int _providerOffset = 0;
-  late final int? _persistentHeaderBranchIndex;
 
   bool get _isProvider => widget.category == ViewAllCategory.providerContent;
 
   @override
   void initState() {
     super.initState();
-    // Bind this pushed page to the branch it originated from. Using a fixed
-    // Home branch lets the retained Home/Search/Library route publish its
-    // native Liquid Glass controls above this page when opened from another
-    // branch. Capturing the active branch keeps the current route authoritative.
-    _persistentHeaderBranchIndex =
-        applePersistentGlassHeaderController.activeBranchIndex;
     if (_isProvider) {
       _scrollController.addListener(_onScroll);
     }
@@ -229,45 +221,13 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
       isPortrait: _isPortrait,
       isDesktop: isDesktop,
     );
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final headerTop = appPageHeaderContentTopInset(context);
 
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            title: ApplePersistentGlassHeaderScope(
-              enabled: Navigator.of(context).canPop(),
-              branchIndex: _persistentHeaderBranchIndex,
-              onBack: () => Navigator.of(context).maybePop(),
-              child: Align(
-                alignment: isArabic
-                    ? Alignment.centerRight
-                    : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  child: Text(
-                    widget.title,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ),
-            ),
-            leading: appleUsesPersistentLiquidGlassHeader
-                ? null
-                : AppBackButton(
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-            elevation: 0,
-          ),
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: widget.title,
+        onBack: () => Navigator.of(context).maybePop(),
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -285,6 +245,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
             ? MouseDragRefreshIndicator(
                 onRefresh: _loadNextProviderPage,
                 child: ListView(
+                  padding: EdgeInsets.only(top: headerTop),
                   physics: const AlwaysScrollableScrollPhysics(),
                   children: [
                     SizedBox(height: MediaQuery.sizeOf(context).height * 0.2),
@@ -301,7 +262,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: EdgeInsets.fromLTRB(
                     gridHorizontalPadding,
-                    16,
+                    headerTop + 16,
                     gridHorizontalPadding,
                     16,
                   ),
