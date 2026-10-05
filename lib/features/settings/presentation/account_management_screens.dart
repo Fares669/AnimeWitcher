@@ -58,6 +58,7 @@ class _AnimeWitcherProfileEditScreenState
   Widget build(BuildContext context) {
     final busy = _saving || _preparingImage;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
         title: appText(
           context,
@@ -69,9 +70,9 @@ class _AnimeWitcherProfileEditScreenState
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720),
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(
+            padding: EdgeInsets.fromLTRB(
               LayoutConstants.spacingLg,
-              LayoutConstants.spacingMd,
+              appPageHeaderContentTopInset(context) + LayoutConstants.spacingMd,
               LayoutConstants.spacingLg,
               100,
             ),
@@ -725,14 +726,15 @@ class _AccountFormScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(title: title),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 620),
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(
+            padding: EdgeInsets.fromLTRB(
               LayoutConstants.spacingLg,
-              LayoutConstants.spacingLg,
+              appPageHeaderContentTopInset(context) + LayoutConstants.spacingLg,
               LayoutConstants.spacingLg,
               100,
             ),
