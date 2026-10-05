@@ -65,6 +65,11 @@ class AppProgressiveHeaderBackdrop extends StatelessWidget {
   }
 }
 
+/// Top padding that keeps initial scroll content below [AppPageAppBar]
+/// while still allowing it to move underneath the translucent header.
+double appPageHeaderContentTopInset(BuildContext context) =>
+    MediaQuery.paddingOf(context).top + kToolbarHeight;
+
 /// Standard conventional page chrome.
 ///
 /// The title is physically centred in the viewport rather than centred in the
