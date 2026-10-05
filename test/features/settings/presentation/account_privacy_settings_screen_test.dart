@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('account privacy header keeps title right and back left', (tester) async {
+  testWidgets('account privacy header centers title and keeps back left', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -41,7 +41,10 @@ void main() {
     expect(back, findsOneWidget);
     final titleRect = tester.getRect(title);
     final backRect = tester.getRect(back);
-    expect(titleRect.center.dx, greaterThan(tester.view.physicalSize.width / 2));
+    expect(
+      titleRect.center.dx,
+      closeTo(tester.view.physicalSize.width / 2, 1),
+    );
     expect(backRect.center.dx, lessThan(80));
     expect(titleRect.left, greaterThan(backRect.right));
   });
