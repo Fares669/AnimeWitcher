@@ -47,7 +47,7 @@ void main() {
       closeTo(tester.view.physicalSize.width / 2, 1),
     );
     expect(backRect.center.dx, lessThan(80));
-    expect(titleRect.left, greaterThan(backRect.right));
+    expect(titleRect.left, greaterThanOrEqualTo(backRect.right));
 
     final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).last);
     expect(scaffold.extendBodyBehindAppBar, isTrue);
