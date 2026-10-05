@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
@@ -16,7 +16,6 @@ import '../../../shared/widgets/multimedia_card.dart';
 import '../../details/presentation/details_screen.dart';
 import '../../library/presentation/history_provider.dart';
 import '../../library/presentation/library_lists.dart';
-import '../../../core/utils/window_controls_inset.dart';
 
 class RecentWatchedScreen extends StatelessWidget {
   const RecentWatchedScreen({super.key});
@@ -25,46 +24,16 @@ class RecentWatchedScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    final embedded = MorePaneScope.of(context);
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            // Leave the window's caption buttons their corner; the
-            // title is aligned to that same edge in Arabic.
-            actions: const <Widget>[WindowControlsGap()],
-            title: ApplePersistentGlassHeaderScope(
-              enabled:
-                  !MorePaneScope.of(context) && Navigator.of(context).canPop(),
-              onBack: () => Navigator.of(context).pop(),
-              child: Align(
-                alignment: isArabic
-                    ? Alignment.centerRight
-                    : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  child: Text(isArabic ? 'آخر المشاهدات' : 'Recently watched'),
-                ),
-              ),
-            ),
-            leading:
-                appleUsesPersistentLiquidGlassHeader ||
-                    MorePaneScope.of(context)
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-            elevation: 0,
-          ),
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: isArabic ? 'آخر المشاهدات' : 'Recently watched',
+        canPop: !embedded && Navigator.of(context).canPop(),
+        onBack: () => Navigator.of(context).pop(),
       ),
-      body: const RecentWatchedBody(),
+      body: RecentWatchedBody(topPadding: headerTop),
     );
   }
 }
@@ -73,10 +42,15 @@ class RecentWatchedScreen extends StatelessWidget {
 /// account when it opens. Long press takes a title off it. The library's
 /// "آخر المشاهدات" and the full page both show this.
 class RecentWatchedBody extends ConsumerStatefulWidget {
-  const RecentWatchedBody({super.key, this.sort = LibrarySort.added});
+  const RecentWatchedBody({
+    super.key,
+    this.sort = LibrarySort.added,
+    this.topPadding = 0,
+  });
 
   /// The library filter's order; "latest added" here is latest watched.
   final LibrarySort sort;
+  final double topPadding;
 
   @override
   ConsumerState<RecentWatchedBody> createState() => _RecentWatchedBodyState();
@@ -115,11 +89,15 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
 
     Widget body;
     if (_initialSyncRunning && history.isEmpty) {
-      body = const AnimeCatalogShimmer();
+      body = Padding(
+        padding: EdgeInsets.only(top: widget.topPadding),
+        child: const AnimeCatalogShimmer(),
+      );
     } else if (history.isEmpty) {
       body = MouseDragRefreshIndicator(
         onRefresh: _refreshFromServer,
         child: ListView(
+          padding: EdgeInsets.only(top: widget.topPadding),
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
             SizedBox(
@@ -134,6 +112,7 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
         onRefresh: _refreshFromServer,
         child: _RecentWatchedGrid(
           items: history,
+          topPadding: widget.topPadding,
           onRemove: (historyItem) {
             HapticFeedback.mediumImpact();
             unawaited(
@@ -161,10 +140,15 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
 }
 
 class _RecentWatchedGrid extends StatelessWidget {
-  const _RecentWatchedGrid({required this.items, required this.onRemove});
+  const _RecentWatchedGrid({
+    required this.items,
+    required this.onRemove,
+    required this.topPadding,
+  });
 
   final List<HistoryItem> items;
   final ValueChanged<HistoryItem> onRemove;
+  final double topPadding;
 
   @override
   Widget build(BuildContext context) {
@@ -173,7 +157,7 @@ class _RecentWatchedGrid extends StatelessWidget {
       child: GridView.builder(
         padding: EdgeInsets.fromLTRB(
           MultimediaCardLayout.catalogGridHorizontalPadding(context),
-          16,
+          topPadding + 16,
           MultimediaCardLayout.catalogGridHorizontalPadding(context),
           110,
         ),
