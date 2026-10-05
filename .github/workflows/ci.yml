@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main, feat/manga-manhwa]
   push:
-    branches: [main, fix/download-manager-performance-v2]
+    branches: [main, fix/download-manager-performance-v2, feat/pr261-ui-followup]
 
 permissions:
   contents: read
