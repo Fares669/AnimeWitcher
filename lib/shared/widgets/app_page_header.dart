@@ -81,12 +81,14 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.canPop = true,
     this.onBack,
     this.actions = const <Widget>[],
+    this.titleKey,
   });
 
   final String title;
   final bool canPop;
   final VoidCallback? onBack;
   final List<Widget> actions;
+  final Key? titleKey;
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -99,6 +101,7 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
     final leadingInset = windowControlsLeadingInset;
     final titleClearance =
         windowControlsSymmetricInset + (actions.isEmpty ? 72.0 : 120.0);
+    final hasWindowControlsGap = actions.any((action) => action is WindowControlsGap);
 
     return Directionality(
       textDirection: TextDirection.ltr,
@@ -123,7 +126,10 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                     child: AppBackButton(onPressed: pop),
                   )
                 : null,
-            actions: <Widget>[...actions, const WindowControlsGap()],
+            actions: <Widget>[
+              ...actions,
+              if (!hasWindowControlsGap) const WindowControlsGap(),
+            ],
           ),
           Positioned.fill(
             child: SafeArea(
@@ -140,6 +146,7 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                             isArabic ? TextDirection.rtl : TextDirection.ltr,
                         child: Text(
                           title,
+                          key: titleKey,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.center,
