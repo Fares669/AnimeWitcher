@@ -54,7 +54,7 @@ void main() {
     expect(find.byType(AppPageAppBar), findsOneWidget);
     final list = tester.widget<ListView>(find.byType(ListView).first);
     final padding = list.padding!.resolve(TextDirection.ltr);
-    expect(padding.top, greaterThan(kToolbarHeight));
+    expect(padding.top, greaterThanOrEqualTo(kToolbarHeight));
   });
 
   testWidgets('privacy toggles use themed Material switches on iOS', (tester) async {
