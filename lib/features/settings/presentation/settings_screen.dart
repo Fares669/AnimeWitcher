@@ -65,54 +65,9 @@ class SettingsScreen extends ConsumerWidget {
     final isTv = profile?.isTv == true || context.isTv;
     final isWidescreen = isTv || context.isTabletOrLarger;
     final canPop = Navigator.of(context).canPop();
-    final isRtl = Directionality.of(context) == TextDirection.rtl;
-
-    if (isWidescreen) {
-      return Scaffold(
-        backgroundColor: Colors.transparent,
-        body: Column(
-          children: [
-            // Inline header matching other widescreen screens
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Container(
-                height: LayoutConstants.dashboardHeaderHeight,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: LayoutConstants.dashboardContentPadding,
-                ),
-                alignment: Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: TextDirection.ltr,
-                  child: Row(
-                    children: [
-                      if (canPop) ...[
-                        AppleLiquidGlassBackButton(
-                          onPressed: () => Navigator.of(context).maybePop(),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      Text(
-                        AppLocalizations.of(context)!.settings,
-                        textDirection: isRtl
-                            ? TextDirection.rtl
-                            : TextDirection.ltr,
-                        style: Theme.of(context).textTheme.titleLarge
-                            ?.copyWith(fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Expanded(child: _buildSettingsList(context, ref, isTv)),
-          ],
-        ),
-      );
-    }
-
-    // Mobile layout
     final l10n = AppLocalizations.of(context)!;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(title: l10n.settings, canPop: canPop),
       body: _buildSettingsList(context, ref, isTv),
     );
@@ -129,7 +84,10 @@ class SettingsScreen extends ConsumerWidget {
           maxWidth: LayoutConstants.contentMaxWidth,
         ),
         child: ListView(
-          padding: const EdgeInsets.only(bottom: 100),
+          padding: EdgeInsets.only(
+            top: appPageHeaderContentTopInset(context),
+            bottom: 100,
+          ),
           children: _settingsSections(context, ref, isTv),
         ),
       ),
