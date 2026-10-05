@@ -466,9 +466,10 @@ class _AnimeWitcherMyCommentsScreenState
       body: Padding(
         padding: EdgeInsets.only(top: headerTop),
         child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 760),
-          child: _buildBody(),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: _buildBody(),
+          ),
         ),
       ),
     );
