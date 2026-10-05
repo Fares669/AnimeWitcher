@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:animewitcher/core/account/account_providers.dart';
@@ -324,51 +325,31 @@ class _AnimeWitcherRepliesScreenState
       });
     }
 
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            centerTitle: false,
-            titleSpacing: 16,
-            automaticallyImplyLeading: false,
-            leading: appleUsesPersistentLiquidGlassHeader
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-            title: Padding(
-              padding: EdgeInsets.only(
-                right: appleUsesPersistentLiquidGlassHeader && isArabic ? 92 : 0,
-                left: appleUsesPersistentLiquidGlassHeader && !isArabic ? 92 : 0,
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: isArabic ? 'الردود' : 'Replies',
+        onBack: () => Navigator.of(context).pop(),
+        actions: appleUsesPersistentLiquidGlassHeader
+            ? const <Widget>[]
+            : AnimeWitcherCommentSortControl.appBarActions(
+                tooltip: isArabic ? 'ترتيب الردود' : 'Sort replies',
+                selectedValue: _sort.name,
+                items: AnimeWitcherCommentSortControl.menuItems(isArabic),
+                onSelected: (value) {
+                  _applyReplySort(_replySortFromValue(value));
+                },
               ),
-              child: Align(
-                alignment: isArabic ? Alignment.centerRight : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
-                  child: Text(isArabic ? 'الردود' : 'Replies'),
-                ),
-              ),
-            ),
-            actions: appleUsesPersistentLiquidGlassHeader
-                ? const <Widget>[]
-                : AnimeWitcherCommentSortControl.appBarActions(
-                    tooltip: isArabic ? 'ترتيب الردود' : 'Sort replies',
-                    selectedValue: _sort.name,
-                    items: AnimeWitcherCommentSortControl.menuItems(isArabic),
-                    onSelected: (value) {
-                      _applyReplySort(_replySortFromValue(value));
-                    },
-                  ),
-          ),
-        ),
       ),
-      body: Column(
+      body: Padding(
+        padding: EdgeInsets.only(top: headerTop),
+        child: Column(
         children: [
           Expanded(child: _buildRepliesBody(context, isArabic)),
           _buildComposer(context, isArabic, isSignedIn),
         ],
+        ),
       ),
     );
   }
