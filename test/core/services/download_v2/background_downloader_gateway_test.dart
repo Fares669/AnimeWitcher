@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:animewitcher/core/services/download_concurrency.dart';
+import 'package:animewitcher/core/services/download_parallel.dart';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:background_downloader/background_downloader.dart';
