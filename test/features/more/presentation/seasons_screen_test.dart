@@ -250,7 +250,7 @@ void main() {
     },
   );
 
-  testWidgets('season title stays outside the tab pages and fixed while scrolling', (
+  testWidgets('season title scrolls away while the season tabs stay fixed', (
     tester,
   ) async {
     await _pumpSeasons(tester, provider: _ScrollableSeasonsProvider());
@@ -263,15 +263,22 @@ void main() {
       final title = find.text(entry.value).hitTestable();
       expect(
         find.ancestor(of: title, matching: find.byType(TabBarView)),
-        findsNothing,
+        findsOneWidget,
       );
-      final before = tester.getRect(title);
+      final tabsBefore = tester.getRect(find.byType(TabBar));
       await tester.drag(
-        find.byType(GridView).hitTestable().first,
+        find.byType(CustomScrollView).hitTestable().first,
         const Offset(0, -400),
       );
       await tester.pump(const Duration(milliseconds: 500));
-      expect(tester.getRect(title), before);
+      expect(find.text(entry.value).hitTestable(), findsNothing);
+      expect(tester.getRect(find.byType(TabBar)), tabsBefore);
+      await tester.drag(
+        find.byType(CustomScrollView).hitTestable().first,
+        const Offset(0, 400),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text(entry.value).hitTestable(), findsOneWidget);
     }
     expect(tester.takeException(), isNull);
   });
@@ -306,4 +313,5 @@ void main() {
     await _writeShot(tester, shotKey, 'seasons_other_years_centered.png');
   });
 }
+
 

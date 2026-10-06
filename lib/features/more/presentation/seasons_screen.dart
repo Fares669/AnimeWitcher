@@ -138,17 +138,9 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           }
 
           final data = snapshot.data!;
-          final seasonTitle = switch (_selectedTab) {
-            0 => data.config.past,
-            1 => data.config.current,
-            2 => data.config.next,
-            _ => '',
-          };
           return Column(
             children: [
               _SeasonTabs(controller: _tabController, isArabic: isArabic),
-              if (seasonTitle.trim().isNotEmpty)
-                SeasonListTitle(title: seasonTitle),
               Expanded(
                 child: TabBarView(
                   controller: _tabController,
@@ -180,6 +172,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           key: ValueKey('past-${data.config.past}-$_reloadGeneration'),
           provider: data.provider,
           season: data.config.past,
+          showSeasonTitle: true,
           emptyLabel: isArabic
               ? 'لا توجد أعمال في الموسم السابق'
               : 'No titles in the previous season',
@@ -189,6 +182,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           key: ValueKey('current-${data.config.current}-$_reloadGeneration'),
           provider: data.provider,
           season: data.config.current,
+          showSeasonTitle: true,
           emptyLabel: isArabic
               ? 'لا توجد أعمال في الموسم الحالي'
               : 'No titles in the current season',
@@ -198,6 +192,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           key: ValueKey('next-${data.config.next}-$_reloadGeneration'),
           provider: data.provider,
           season: data.config.next,
+          showSeasonTitle: true,
           emptyLabel: isArabic
               ? 'لا توجد أعمال في الموسم القادم'
               : 'No titles in the next season',
@@ -493,6 +488,7 @@ class _SeasonGrid extends StatefulWidget {
   final double topPadding;
   final String season;
   final String emptyLabel;
+  final bool showSeasonTitle;
 
   const _SeasonGrid({
     super.key,
@@ -500,6 +496,7 @@ class _SeasonGrid extends StatefulWidget {
     this.topPadding = 0,
     required this.season,
     required this.emptyLabel,
+    this.showSeasonTitle = false,
   });
 
   @override
@@ -593,77 +590,78 @@ class _SeasonGridState extends State<_SeasonGrid>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    if (_items.isEmpty && _loading) {
-      return const AnimeCatalogShimmer();
-    }
-    if (_items.isEmpty && _error != null) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.only(top: widget.topPadding + 120),
-        children: [_LoadError(message: widget.emptyLabel, onRetry: _loadNext)],
-      );
-    }
-    if (_items.isEmpty) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.only(top: widget.topPadding + 120),
-        children: [Center(child: Text(widget.emptyLabel))],
-      );
-    }
-
     final isDesktop = context.isDesktop;
+    final initialLoading = _items.isEmpty && _loading;
     final extra = _loading || (_error != null && _hasMore) ? 1 : 0;
     return CatalogDirection(
-      child: GridView.builder(
+      child: CustomScrollView(
         controller: _controller,
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(
-          MultimediaCardLayout.catalogGridHorizontalPadding(context),
-          widget.topPadding + 16,
-          MultimediaCardLayout.catalogGridHorizontalPadding(context),
-          110,
-        ),
-        gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
-          context,
-          maxCrossAxisExtent: isDesktop ? 240 : 150,
-          childAspectRatio: MultimediaCardLayout.gridAspectRatio(
-            isPortrait: true,
-            isDesktop: isDesktop,
-          ),
-          crossAxisSpacing: MultimediaCardLayout.catalogGridCrossAxisSpacing(
-            context,
-          ),
-          mainAxisSpacing: MultimediaCardLayout.catalogGridMainAxisSpacing(
-            context,
-          ),
-          handsetPortraitCrossAxisCount:
-              MultimediaCardLayout.handsetPortraitGridColumns,
-          horizontalPadding: MultimediaCardLayout.catalogGridHorizontalPadding(
-            context,
-          ),
-        ),
-        itemCount: _items.length + extra,
-        itemBuilder: (context, index) {
-          if (index >= _items.length) {
-            if (_error != null) {
-              return IconButton(
-                tooltip: 'إعادة المحاولة',
-                onPressed: _loadNext,
-                icon: const Icon(Icons.refresh_rounded),
-              );
-            }
-            return const AnimePosterShimmer();
-          }
-          final item = _items[index];
-          return MultimediaCard.fromItem(
-            key: ValueKey('season-${widget.season}-${item.url}'),
-            item: item,
-            heroTag: 'season-${widget.season}-${item.id}-$index',
-            onTap: () => DetailsRoute(
-              $extra: DetailsRouteExtra(item: item),
-            ).push<void>(context),
-          );
-        },
+        slivers: [
+          if (widget.showSeasonTitle && widget.season.trim().isNotEmpty)
+            SliverToBoxAdapter(child: SeasonListTitle(title: widget.season)),
+          if (_items.isEmpty && !initialLoading)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _error != null
+                  ? _LoadError(message: widget.emptyLabel, onRetry: _loadNext)
+                  : Center(child: Text(widget.emptyLabel)),
+            )
+          else
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(
+                MultimediaCardLayout.catalogGridHorizontalPadding(context),
+                (initialLoading ? 0 : widget.topPadding) + 16,
+                MultimediaCardLayout.catalogGridHorizontalPadding(context),
+                110,
+              ),
+              sliver: SliverGrid(
+                gridDelegate: ResponsiveBreakpoints.animeGridDelegate(
+                  context,
+                  maxCrossAxisExtent: isDesktop ? 240 : 150,
+                  childAspectRatio: MultimediaCardLayout.gridAspectRatio(
+                    isPortrait: true,
+                    isDesktop: isDesktop,
+                  ),
+                  crossAxisSpacing:
+                      MultimediaCardLayout.catalogGridCrossAxisSpacing(context),
+                  mainAxisSpacing:
+                      MultimediaCardLayout.catalogGridMainAxisSpacing(context),
+                  handsetPortraitCrossAxisCount:
+                      MultimediaCardLayout.handsetPortraitGridColumns,
+                  horizontalPadding:
+                      MultimediaCardLayout.catalogGridHorizontalPadding(context),
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    if (initialLoading) return const AnimePosterShimmer();
+                    if (index >= _items.length) {
+                      if (_error != null) {
+                        return IconButton(
+                          tooltip: 'إعادة المحاولة',
+                          onPressed: _loadNext,
+                          icon: const Icon(Icons.refresh_rounded),
+                        );
+                      }
+                      return const AnimePosterShimmer();
+                    }
+                    final item = _items[index];
+                    return MultimediaCard.fromItem(
+                      key: ValueKey('season-${widget.season}-${item.url}'),
+                      item: item,
+                      heroTag: 'season-${widget.season}-${item.id}-$index',
+                      onTap: () => DetailsRoute(
+                        $extra: DetailsRouteExtra(item: item),
+                      ).push<void>(context),
+                    );
+                  },
+                  childCount: initialLoading
+                      ? (isDesktop ? 18 : 12)
+                      : _items.length + extra,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -698,4 +696,5 @@ class _LoadError extends StatelessWidget {
     );
   }
 }
+
 
