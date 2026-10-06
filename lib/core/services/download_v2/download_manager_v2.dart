@@ -124,6 +124,8 @@ final class DownloadManagerV2 {
   final Map<DownloadLogicalId, int> _lastPositiveSpeedAtMillis =
       <DownloadLogicalId, int>{};
   final Map<String, int> _lastNativeSpeedProjectionAtMillis = <String, int>{};
+  final Map<DownloadLogicalId, int> _sourceRefreshAttempts =
+      <DownloadLogicalId, int>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
       StreamController<List<LogicalDownloadRecordV2>>.broadcast();
 
@@ -637,8 +639,16 @@ final class DownloadManagerV2 {
         logicalId,
         () => _requestFromRecord(record),
       );
+      return _resumeRecordUnsafe(record, request);
+    });
+  }
 
-      if (record.awaitingAdmission) {
+  Future<DownloadTransportSnapshot> _resumeRecordUnsafe(
+    LogicalDownloadRecordV2 record,
+    DownloadStartRequestV2 request,
+  ) async {
+    final logicalId = record.logicalId;
+    if (record.awaitingAdmission) {
         final activeRecord = record.intent == DownloadUserIntent.active
             ? record
             : record.copyWith(
@@ -817,7 +827,6 @@ final class DownloadManagerV2 {
         return _startExistingMangaGenerationUnsafe(request, record);
       }
       return _startFreshGeneration(request, record);
-    });
   }
 
   /// Cancels the logical download.
