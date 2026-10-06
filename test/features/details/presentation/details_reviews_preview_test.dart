@@ -81,11 +81,11 @@ void main() {
             ),
           ),
         );
-        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pumpAndSettle();
         expect(service.loads, 0);
 
         controller.jumpTo(1000);
-        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pumpAndSettle();
         expect(service.loads, 0);
 
         controller.jumpTo(controller.position.maxScrollExtent);

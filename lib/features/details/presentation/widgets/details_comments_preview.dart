@@ -236,7 +236,9 @@ class _DetailsCommentsPreviewState
             ],
           ),
           const SizedBox(height: 12),
-          if (_loading)
+          if (!_startedLoading)
+            const SizedBox(height: 84)
+          else if (_loading)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Center(child: CircularProgressIndicator()),
