@@ -1,0 +1,21 @@
+display_name: AnimeWitcher
+package_name: animewitcher
+description: Arabic anime streaming client.
+maintainer:
+  name: Fares669
+  email: 108722956+Fares669@users.noreply.github.com
+priority: optional
+section: utils
+depends:
+  - libgtk-3-0
+  - liblzma5
+  - libmpv-dev
+  - libasound2
+  - libsecret-1-0
+installed_size: 0
+icon: ios/Runner/Assets.xcassets/AppIcon.appiconset/AppIcon~ios-marketing.png
+categories:
+  - Video
+  - AudioVideo
+  - Player
+generic_name: Media Player

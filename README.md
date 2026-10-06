@@ -4,6 +4,8 @@
 
 **تطبيق أنمي عربي لمشاهدة الحلقات وتحميلها، مبني بـ Flutter ويعمل على الهاتف والحاسب والتلفاز.**
 
+**الموقع الرسمي:** [animewitcher.com](https://animewitcher.com/)
+
   <a href="https://github.com/Fares669/AnimeWitcher/releases">
     <img src="https://img.shields.io/github/downloads/Fares669/AnimeWitcher/total?style=for-the-badge&color=1f6feb" />
   </a>
@@ -151,6 +153,7 @@
 | **iOS**         | ✅ (يتطلّب Sideloading)   |
 | **ويندوز**      |            ✅             |
 | **ماك**         |            ✅             |
+| **لينكس**      |            ✅             |
 
 ## 📥 التثبيت
 
@@ -181,11 +184,12 @@
 
 **أدلّة مصوّرة:** [دليل Impactor](https://impactor.khcrysalis.dev/docs/getting-started/installing/) — [شرح Sideloadly بالفيديو](https://www.youtube.com/watch?v=vqTsavQc3lQ)
 
-### 💻 ويندوز / ماك
+### 💻 ويندوز / ماك / لينكس
 
-1. نزّل الملف المناسب لنظامك (`.exe` لويندوز، `.dmg` للماك).
+1. نزّل الملف المناسب لنظامك (`.exe` لويندوز، `.dmg` للماك، `.deb` أو `.tar.gz` للينكس).
 2. ثبّت التطبيق وشغّله.
    - *على الماك: إن ظهرت رسالة "مطوّر غير معروف"، افتح **الإعدادات → الخصوصية والأمان** واضغط **Open Anyway** مرة واحدة.*
+   - *على لينكس: حزمة `.deb` هي الأسهل على Debian/Ubuntu، وملف `.tar.gz` نسخة محمولة يمكن فكّها وتشغيل `animewitcher` منها مباشرة.*
 
 ## 🛠️ البناء من المصدر
 
@@ -275,6 +279,6 @@ flutter run
 
 ## 📄 الترخيص
 
-[MIT](LICENSE)
+[GPL-3.0-only](LICENSE)
 
 </div>

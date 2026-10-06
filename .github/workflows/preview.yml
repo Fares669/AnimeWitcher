@@ -28,6 +28,11 @@ on:
         required: true
         default: true
         type: boolean
+      build_linux:
+        description: 'Build Linux'
+        required: true
+        default: true
+        type: boolean
 
   push:
     branches: [fix/download-manager-performance-v2]
@@ -371,3 +376,78 @@ jobs:
             windows/packaging/exe/Output/*.exe
             animewitcher-windows-${{ matrix.arch }}-preview.zip
           retention-days: 7
+
+  linux:
+    name: Linux Build (${{ matrix.arch }})
+    if: ${{ github.event.inputs.build_linux == 'true' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x64
+          - os: ubuntu-22.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.branch }}
+      - uses: subosito/flutter-action@v2
+        if: ${{ matrix.arch != 'arm64' }}
+        with:
+          channel: 'stable'
+      - name: Setup Flutter (ARM64 Linux)
+        if: ${{ matrix.arch == 'arm64' }}
+        run: |
+          git clone https://github.com/flutter/flutter.git -b stable "$RUNNER_TOOL_CACHE/flutter"
+          echo "$RUNNER_TOOL_CACHE/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo sed -i 's|http://ports.ubuntu.com|https://ports.ubuntu.com|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          sudo apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libmpv-dev libasound2-dev libsecret-1-dev
+
+      - name: Install Flutter Dependencies
+        run: |
+          flutter config --enable-linux-desktop
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Generate dart-defines file
+        shell: bash
+        run: |
+          cat > dart-defines.json << 'JSON_EOF'
+          {
+            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
+            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
+            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
+            "ANIMEWITCHER_FIREBASE_PROJECT_ID": "${{ secrets.ANIMEWITCHER_FIREBASE_PROJECT_ID }}",
+            "ANIMEWITCHER_FIREBASE_API_KEY": "${{ secrets.ANIMEWITCHER_FIREBASE_API_KEY }}"
+          }
+          JSON_EOF
+
+      - name: Build Linux Packages
+        run: |
+          export PATH="$PATH:$HOME/.pub-cache/bin"
+          dart pub global activate fastforge
+          fastforge package --platform linux --targets deb --flutter-build-args=dart-define-from-file=dart-defines.json
+          mv dist/*/*.deb "animewitcher-linux-${{ matrix.arch }}-preview.deb"
+
+          flutter build linux --release --dart-define-from-file=dart-defines.json
+          cd "build/linux/${{ matrix.arch }}/release/bundle"
+          tar -czf "../../../../../animewitcher-linux-${{ matrix.arch }}-preview.tar.gz" .
+
+      - name: Upload Linux Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            animewitcher-linux-${{ matrix.arch }}-preview.tar.gz
+            animewitcher-linux-${{ matrix.arch }}-preview.deb
+          retention-days: 7
+
