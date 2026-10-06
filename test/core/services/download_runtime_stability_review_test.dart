@@ -128,7 +128,7 @@ void main() {
       },
     );
 
-    test('complete assembly staging file is adopted after a crash', () {
+    test('preallocated assembly staging is never trusted by size after a crash', () {
       final source = File('lib/core/services/persistent_parallel_download.dart')
           .readAsStringSync();
       final start = source.indexOf('Future<bool> _adoptCompletedTarget(');
@@ -136,9 +136,12 @@ void main() {
       expect(start, greaterThanOrEqualTo(0));
       expect(end, greaterThan(start));
       final section = source.substring(start, end);
-      expect(section, contains(".assembling"));
-      expect(section, contains('await staging.rename(target.path)'));
-      expect(section, contains('await file.length() != part.size'));
+      expect(section, isNot(contains('.assembling')));
+      expect(section, isNot(contains('staging.rename')));
+      expect(
+        section,
+        contains('Its size cannot prove that a previous assembly finished'),
+      );
     });
 
     test('continued-processing speed zero explicitly clears stale speed', () {

@@ -35,21 +35,24 @@ void main() {
         storageServiceProvider.overrideWithValue(_IdleStorage()),
       ],
     );
-    addTearDown(() async {
+    try {
+      var publications = 0;
+      container.listen(downloadsProvider, (_, next) {
+        if (next.hasValue) publications++;
+      });
+      await container.read(downloadsProvider.future);
+      await tester.pump();
+      final afterBuild = publications;
+
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(publications, afterBuild);
+    } finally {
+      // testWidgets checks for pending timers before addTearDown callbacks run.
+      // Dispose the keepAlive provider here so its periodic timers are canceled.
       container.dispose();
       await manager.dispose();
-    });
-    var publications = 0;
-    container.listen(downloadsProvider, (_, next) {
-      if (next.hasValue) publications++;
-    });
-    await container.read(downloadsProvider.future);
-    await tester.pump();
-    final afterBuild = publications;
-
-    await tester.pump(const Duration(seconds: 3));
-
-    expect(publications, afterBuild);
+    }
   });
 
   test('does not construct the V2 manager for an empty projection', () {

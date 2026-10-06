@@ -23,7 +23,9 @@ void main() {
       expect(expirationBlock, isNot(contains('cancellationHandler?')));
       expect(
         expirationBlock,
-        contains('task?.setTaskCompleted(success: false)'),
+        contains(
+          'completion.finish { task.setTaskCompleted(success: false) }',
+        ),
       );
       expect(expirationBlock, contains('self.activeTask = nil'));
       expect(expirationBlock, contains('self.identifier = nil'));
