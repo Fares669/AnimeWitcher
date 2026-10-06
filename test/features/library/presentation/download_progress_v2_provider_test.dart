@@ -28,11 +28,12 @@ void main() {
       gateway: _EmptyGateway(),
       sourceResolver: StaticSourceResolverV2(),
     );
+    final storage = _IdleStorage();
     final container = ProviderContainer(
       overrides: [
         downloadManagerV2Provider.overrideWithValue(manager),
         logicalDownloadStoreV2Provider.overrideWithValue(store),
-        storageServiceProvider.overrideWithValue(_IdleStorage()),
+        storageServiceProvider.overrideWithValue(storage),
       ],
     );
     try {
@@ -43,10 +44,12 @@ void main() {
       await container.read(downloadsProvider.future);
       await tester.pump();
       final afterBuild = publications;
+      final metadataReadsAfterBuild = storage.metadataReads;
 
-      await tester.pump(const Duration(seconds: 3));
+      await tester.pump(const Duration(seconds: 31));
 
       expect(publications, afterBuild);
+      expect(storage.metadataReads, metadataReadsAfterBuild);
     } finally {
       // testWidgets checks for pending timers before addTearDown callbacks run.
       // Dispose the keepAlive provider here so its periodic timers are canceled.
@@ -91,7 +94,11 @@ final class _EmptyGateway implements BackgroundDownloaderGateway {
 }
 
 final class _IdleStorage extends MemoryStorageService {
+  int metadataReads = 0;
+
   @override
-  Future<Map<String, Map<String, dynamic>>> getAllDownloadMetadata() async =>
-      const {};
+  Future<Map<String, Map<String, dynamic>>> getAllDownloadMetadata() async {
+    metadataReads++;
+    return const {};
+  }
 }

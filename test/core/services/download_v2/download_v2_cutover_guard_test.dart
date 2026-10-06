@@ -198,6 +198,44 @@ void main() {
       );
       expect(manager, contains('Future<bool> hasCompletedDownload('));
     });
+    test(
+      'existing presentation metadata refreshes only after successful V2 start',
+      () {
+        final launcher = _read(
+          'lib/features/details/presentation/download_launcher.dart',
+        );
+        final manga = _read(
+          'lib/features/manga/presentation/manga_details_controller.dart',
+        );
+
+        final launcherStart = launcher.indexOf('await downloadManager.start(');
+        final launcherRefresh = launcher.indexOf(
+          'if (hasExistingMetadata)',
+          launcherStart,
+        );
+        expect(launcherStart, greaterThanOrEqualTo(0));
+        expect(launcherRefresh, greaterThan(launcherStart));
+        expect(
+          launcher.substring(
+            launcherRefresh,
+            launcher.indexOf('}', launcherRefresh) + 1,
+          ),
+          contains('saveDownloadMetadata'),
+        );
+
+        final mangaStart = manga.indexOf(
+          'await ref.read(downloadManagerV2Provider).start(request)',
+        );
+        final mangaRefresh = manga.indexOf('if (hasExistingMetadata)', mangaStart);
+        expect(mangaStart, greaterThanOrEqualTo(0));
+        expect(mangaRefresh, greaterThan(mangaStart));
+        expect(
+          manga.substring(mangaRefresh, manga.indexOf('}', mangaRefresh) + 1),
+          contains('saveDownloadMetadata'),
+        );
+      },
+    );
+
   });
 }
 

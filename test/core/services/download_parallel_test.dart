@@ -252,5 +252,12 @@ void main() {
       expect(kPersistentDownloadChunkGroup, isNot(kLogicalDownloadGroup));
       expect(isLogicalEpisodeDownloadTask(parent), isTrue);
     });
+    test('range probe parser accepts HTTP case and whitespace variants', () {
+      expect(parseRangeProbeTotalBytesV2('bytes 0-0/123'), 123);
+      expect(parseRangeProbeTotalBytesV2('  ByTeS  0 - 0 / 456  '), 456);
+      expect(parseRangeProbeTotalBytesV2('bytes 0-0/*'), isNull);
+      expect(parseRangeProbeTotalBytesV2('bytes 1-1/123'), isNull);
+    });
+
   });
 }
