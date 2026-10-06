@@ -310,12 +310,13 @@ bool downloadPartResponseMatchesRequestedRange({
       break;
     }
   }
-  final match = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$')
+  final match = RegExp(r'^bytes\s+(\d+)\s*-\s*(\d+)\s*/\s*(\d+|\*)$')
       .firstMatch(contentRange ?? '');
   if (match == null) return false;
   final responseStart = int.parse(match[1]!);
   final responseEnd = int.parse(match[2]!);
-  final responseSize = int.parse(match[3]!);
+  final totalStr = match[3]!;
+  final responseSize = totalStr == '*' ? resourceSize : int.tryParse(totalStr);
   return responseStart >= from &&
       responseStart <= to &&
       responseEnd == to &&
@@ -3763,11 +3764,32 @@ class PersistentParallelDownload {
       await _pause(session);
       return;
     }
-    try {
-      await staging.rename(target.path);
-    } on FileSystemException catch (error) {
-      if (!_isInsufficientStorageError(error)) rethrow;
-      await _handleAssemblyStorageFailure(session, staging, error: error);
+    var renamed = false;
+    for (var attempt = 0; attempt < 4; attempt++) {
+      try {
+        await staging.rename(target.path);
+        renamed = true;
+        break;
+      } on FileSystemException catch (error) {
+        if (_isInsufficientStorageError(error)) {
+          await _handleAssemblyStorageFailure(session, staging, error: error);
+          return;
+        }
+        if (attempt == 3) {
+          try {
+            await staging.copy(target.path);
+            await staging.delete();
+            renamed = true;
+          } catch (_) {
+            rethrow;
+          }
+        } else {
+          await Future<void>.delayed(Duration(milliseconds: 75 * (attempt + 1)));
+        }
+      }
+    }
+    if (!renamed) {
+      await _pause(session);
       return;
     }
     await _finishCompleteSession(session);

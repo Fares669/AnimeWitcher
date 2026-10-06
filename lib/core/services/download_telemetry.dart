@@ -133,7 +133,7 @@ class DownloadTelemetryEstimator {
     final remainingBytes = expected > 0
         ? (expected - state.transferredBytes).clamp(0, expected)
         : 0;
-    final remaining = speed > 0 && remainingBytes > 0
+    final remaining = speed > 0 && remainingBytes > 0 && speed.isFinite
         ? Duration(milliseconds: ((remainingBytes / speed) * 1000).ceil())
         : Duration.zero;
 
