@@ -3,8 +3,40 @@ import 'dart:io';
 import 'package:animewitcher/core/utils/download_cleanup.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 void main() {
+  test('default cleanup preserves unrelated Downloads subtree', () async {
+    if (Platform.isAndroid || Platform.isIOS) return;
+    final root = await Directory.systemTemp.createTemp('aw-cleanup-platform-');
+    addTearDown(() => root.delete(recursive: true));
+    final original = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _CleanupPathProvider(root.path);
+    addTearDown(() => PathProviderPlatform.instance = original);
+    final outside = File(p.join(root.path, 'Downloads', 'Private', 'keep.mp4'));
+    await outside.parent.create(recursive: true);
+    await outside.writeAsBytes([1, 2, 3]);
+
+    expect(await deleteDownloadedVideo(outside), isFalse);
+    expect(await outside.exists(), isTrue);
+  });
+
+  test('default cleanup recognizes V2 anime directory', () async {
+    if (Platform.isAndroid || Platform.isIOS) return;
+    final root = await Directory.systemTemp.createTemp('aw-cleanup-v2-');
+    addTearDown(() => root.delete(recursive: true));
+    final original = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _CleanupPathProvider(root.path);
+    addTearDown(() => PathProviderPlatform.instance = original);
+    final video = File(p.join(root.path, 'anime', 'Show', 'episode.mp4'));
+    await video.parent.create(recursive: true);
+    await video.writeAsBytes([1, 2, 3]);
+
+    expect(await deleteDownloadedVideo(video), isTrue);
+    expect(await video.parent.exists(), isFalse);
+    expect(await Directory(p.join(root.path, 'anime')).exists(), isTrue);
+  });
+
   test('app download containment is segment-aware and traversal-safe', () {
     final root = p.join(
       Directory.systemTemp.path,
@@ -40,30 +72,18 @@ void main() {
     });
 
     final configuredRoot = Directory(
-      p.join(
-        sandbox.path,
-        'configured',
-        'AnimeWitcher',
-        'Downloads',
-      ),
+      p.join(sandbox.path, 'configured', 'AnimeWitcher', 'Downloads'),
     );
     await configuredRoot.create(recursive: true);
     final unconfiguredSeries = Directory(
-      p.join(
-        sandbox.path,
-        'unconfigured',
-        'AnimeWitcher',
-        'Downloads',
-        'Show',
-      ),
+      p.join(sandbox.path, 'unconfigured', 'AnimeWitcher', 'Downloads', 'Show'),
     );
     await unconfiguredSeries.create(recursive: true);
 
     expect(
-      pathIsInsideConfiguredAppDownloads(
-        unconfiguredSeries.path,
-        [configuredRoot.path],
-      ),
+      pathIsInsideConfiguredAppDownloads(unconfiguredSeries.path, [
+        configuredRoot.path,
+      ]),
       isFalse,
     );
 
@@ -107,22 +127,11 @@ void main() {
       if (await sandbox.exists()) await sandbox.delete(recursive: true);
     });
     final configuredRoot = Directory(
-      p.join(
-        sandbox.path,
-        'configured',
-        'AnimeWitcher',
-        'Downloads',
-      ),
+      p.join(sandbox.path, 'configured', 'AnimeWitcher', 'Downloads'),
     );
     await configuredRoot.create(recursive: true);
     final externalSeries = Directory(
-      p.join(
-        sandbox.path,
-        'external',
-        'AnimeWitcher',
-        'Downloads',
-        'Show',
-      ),
+      p.join(sandbox.path, 'external', 'AnimeWitcher', 'Downloads', 'Show'),
     );
     await externalSeries.create(recursive: true);
     final externalFile = File(p.join(externalSeries.path, 'episode 01.mp4'));
@@ -140,35 +149,42 @@ void main() {
     expect(await externalTemp.exists(), isTrue);
   });
 
-  test('series cleanup never recursively deletes unknown user content', () async {
-    final sandbox = await Directory.systemTemp.createTemp('aw-cleanup-safety-');
-    addTearDown(() async {
-      if (await sandbox.exists()) await sandbox.delete(recursive: true);
-    });
-    final downloads = Directory(
-      p.join(sandbox.path, 'AnimeWitcher', 'Downloads'),
-    );
-    final series = Directory(p.join(downloads.path, 'Show'));
-    await series.create(recursive: true);
-    final unknown = File(p.join(series.path, 'notes.txt'));
-    await unknown.writeAsString('keep me');
+  test(
+    'series cleanup never recursively deletes unknown user content',
+    () async {
+      final sandbox = await Directory.systemTemp.createTemp(
+        'aw-cleanup-safety-',
+      );
+      addTearDown(() async {
+        if (await sandbox.exists()) await sandbox.delete(recursive: true);
+      });
+      final downloads = Directory(
+        p.join(sandbox.path, 'AnimeWitcher', 'Downloads'),
+      );
+      final series = Directory(p.join(downloads.path, 'Show'));
+      await series.create(recursive: true);
+      final unknown = File(p.join(series.path, 'notes.txt'));
+      await unknown.writeAsString('keep me');
 
-    final deletedEpisode = File(
-      p.join(series.path, 'Season 1', 'episode 01.mp4'),
-    );
-    await deleteSeriesFolderIfNoVideosRemain(
-      deletedEpisode,
-      appDownloadRoots: [downloads.path],
-    );
+      final deletedEpisode = File(
+        p.join(series.path, 'Season 1', 'episode 01.mp4'),
+      );
+      await deleteSeriesFolderIfNoVideosRemain(
+        deletedEpisode,
+        appDownloadRoots: [downloads.path],
+      );
 
-    expect(await unknown.exists(), isTrue);
-    expect(await series.exists(), isTrue);
-  });
+      expect(await unknown.exists(), isTrue);
+      expect(await series.exists(), isTrue);
+    },
+  );
 
   test(
     'series cleanup preserves recoverable partial and assembling evidence',
     () async {
-      final sandbox = await Directory.systemTemp.createTemp('aw-cleanup-owned-');
+      final sandbox = await Directory.systemTemp.createTemp(
+        'aw-cleanup-owned-',
+      );
       addTearDown(() async {
         if (await sandbox.exists()) await sandbox.delete(recursive: true);
       });
@@ -244,4 +260,12 @@ void main() {
     expect(await link.exists(), isTrue);
     expect(await unknown.exists(), isTrue);
   });
+}
+
+final class _CleanupPathProvider extends PathProviderPlatform {
+  _CleanupPathProvider(this.downloads);
+  final String downloads;
+
+  @override
+  Future<String?> getDownloadsPath() async => downloads;
 }

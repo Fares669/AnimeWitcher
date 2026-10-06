@@ -43,10 +43,28 @@ DownloadLauncher downloadLauncher(Ref ref) {
 
 class DownloadLauncher {
   final Ref _ref;
+  final Set<String> _launchingItems = <String>{};
 
   DownloadLauncher(this._ref);
 
   Future<void> launch(
+    BuildContext context,
+    MultimediaItem item, {
+    String? episodeUrl,
+    Episode? episode,
+  }) async {
+    final resolveUrl = episodeUrl ?? episode?.url ?? item.url;
+    if (resolveUrl.isEmpty) return;
+    final key = '${item.provider ?? ''}|${item.url}|$resolveUrl';
+    if (!_launchingItems.add(key)) return;
+    try {
+      await _launch(context, item, episodeUrl: episodeUrl, episode: episode);
+    } finally {
+      _launchingItems.remove(key);
+    }
+  }
+
+  Future<void> _launch(
     BuildContext context,
     MultimediaItem item, {
     String? episodeUrl,
@@ -247,76 +265,75 @@ class DownloadLauncher {
     }
 
     if (finalContext.mounted) {
-      unawaited(
-        showDialog<void>(
-          context: finalContext,
-          builder: (ctx) => AlertDialog(
-            title: Text(l10n.confirmDownload),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(l10n.titleWithParam(item.title)),
-                const SizedBox(height: 8),
-                Text(l10n.sourceWithParam(stream.source)),
-                const SizedBox(height: 8),
-                Text(l10n.sizeWithParam(metadata.sizeString)),
-                const SizedBox(height: 12),
-                Row(
-                  textDirection: TextDirection.rtl,
-                  children: [
-                    IconButton(
-                      tooltip: appText(
-                        ctx,
-                        english: 'Copy link',
-                        arabic: 'نسخ الرابط',
-                      ),
-                      onPressed: () async {
-                        await Clipboard.setData(
-                          ClipboardData(text: stream.url),
-                        );
-                        if (!ctx.mounted) return;
-                        ScaffoldMessenger.maybeOf(ctx)?.showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              appText(
-                                ctx,
-                                english: 'Link copied',
-                                arabic: 'تم نسخ الرابط',
-                              ),
+      Future<void>? confirmationStart;
+      await showDialog<void>(
+        context: finalContext,
+        builder: (ctx) => AlertDialog(
+          title: Text(l10n.confirmDownload),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(l10n.titleWithParam(item.title)),
+              const SizedBox(height: 8),
+              Text(l10n.sourceWithParam(stream.source)),
+              const SizedBox(height: 8),
+              Text(l10n.sizeWithParam(metadata.sizeString)),
+              const SizedBox(height: 12),
+              Row(
+                textDirection: TextDirection.rtl,
+                children: [
+                  IconButton(
+                    tooltip: appText(
+                      ctx,
+                      english: 'Copy link',
+                      arabic: 'نسخ الرابط',
+                    ),
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: stream.url));
+                      if (!ctx.mounted) return;
+                      ScaffoldMessenger.maybeOf(ctx)?.showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            appText(
+                              ctx,
+                              english: 'Link copied',
+                              arabic: 'تم نسخ الرابط',
                             ),
-                            duration: const Duration(seconds: 2),
                           ),
-                        );
-                      },
-                      icon: const Icon(Icons.copy_rounded),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Directionality(
-                        textDirection: TextDirection.ltr,
-                        child: Text(
-                          stream.url,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(ctx).textTheme.bodySmall,
+                          duration: const Duration(seconds: 2),
                         ),
+                      );
+                    },
+                    icon: const Icon(Icons.copy_rounded),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Directionality(
+                      textDirection: TextDirection.ltr,
+                      child: Text(
+                        stream.url,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(ctx).textTheme.bodySmall,
                       ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(l10n.fileSaveLocationNotification),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: Text(l10n.cancel),
+                  ),
+                ],
               ),
-              ElevatedButton(
-                onPressed: () async {
-                  Navigator.pop(ctx);
+              const SizedBox(height: 12),
+              Text(l10n.fileSaveLocationNotification),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(l10n.cancel),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (confirmationStart != null) return;
+                confirmationStart = () async {
                   try {
                     final episodeData =
                         episode ??
@@ -414,14 +431,19 @@ class DownloadLauncher {
                           destinationPath,
                         );
                     final storage = _ref.read(storageServiceProvider);
-                    await storage.saveDownloadMetadata(
-                      logicalId.value,
-                      item,
-                      episode: episodeData,
-                      trackingUrl: resolveUrl,
-                      filePath: absolutePath,
-                      logicalId: logicalId.value,
-                    );
+                    final hasExistingMetadata =
+                        await storage.getDownloadMetadata(logicalId.value) !=
+                        null;
+                    if (!hasExistingMetadata) {
+                      await storage.saveDownloadMetadata(
+                        logicalId.value,
+                        item,
+                        episode: episodeData,
+                        trackingUrl: resolveUrl,
+                        filePath: absolutePath,
+                        logicalId: logicalId.value,
+                      );
+                    }
 
                     final downloadManager = _ref.read(
                       downloadManagerV2Provider,
@@ -442,7 +464,9 @@ class DownloadLauncher {
                         ),
                       );
                     } catch (startError, startStackTrace) {
-                      await storage.removeDownloadMetadata(logicalId.value);
+                      if (!hasExistingMetadata) {
+                        await storage.removeDownloadMetadata(logicalId.value);
+                      }
                       Error.throwWithStackTrace(startError, startStackTrace);
                     }
                   } catch (error) {
@@ -451,13 +475,15 @@ class DownloadLauncher {
                         .read(notificationServiceProvider)
                         .showError(_friendlyErrorMessage(l10n, error));
                   }
-                },
-                child: Text(l10n.downloadNow),
-              ),
-            ],
-          ),
+                }();
+                Navigator.pop(ctx);
+              },
+              child: Text(l10n.downloadNow),
+            ),
+          ],
         ),
       );
+      await confirmationStart;
     }
   }
 

@@ -1121,17 +1121,26 @@ class PersistentParallelDownload {
       final child = Task.createFromJson(
         Map<String, dynamic>.from(chunk['task'] as Map),
       ) as DownloadTask;
+      final from = (chunk['fromByte'] as num).toInt();
+      final to = (chunk['toByte'] as num).toInt();
+      if (from < 0 || to < from) {
+        throw const FormatException('Invalid chunk byte range');
+      }
       return _DownloadPart(
         child.copyWith(
           group: kPersistentDownloadChunkGroup,
           retries: kDownloadPartRetries,
         ),
-        (chunk['fromByte'] as num).toInt(),
-        (chunk['toByte'] as num).toInt(),
+        from,
+        to,
         progress: (chunk['progress'] as num? ?? 0).toDouble(),
         complete: chunk['status'] == TaskStatus.complete.index,
       );
     }).toList();
+    if (parts.length > kDownloadLegacyWorkUnitsMax ||
+        !_validRestoredLayout(parts, -1)) {
+      throw const FormatException('Invalid chunk checkpoint layout');
+    }
     final session = _ParallelSession(task, await _manifest(task), parts);
     await _persist(session);
     _register(session);
@@ -3386,23 +3395,10 @@ class PersistentParallelDownload {
       return true;
     }
 
-    // A crash can happen after the complete staging file was flushed and
-    // closed but before its atomic rename. Reuse it only when every source
-    // Range is still exact, which proves this staging file belongs to this
-    // recoverable multipart generation. Otherwise normal assembly rewrites it.
-    final staging = File('${target.path}.assembling');
-    if (!await staging.exists() || await staging.length() != session.size) {
-      return false;
-    }
-    for (final part in session.parts) {
-      final file = File(await part.task.filePath());
-      if (!await file.exists() || await file.length() != part.size) {
-        return false;
-      }
-    }
-    await staging.rename(target.path);
-    await _finishCompleteSession(session);
-    return true;
+    // Staging is preallocated to the final length before bytes are written.
+    // Its size cannot prove that a previous assembly finished; rebuild from
+    // the preserved, verified ranges instead of promoting a partial write.
+    return false;
   }
 
   bool _requestedByteRange(_DownloadPart part) => part.task.headers.entries.any(
@@ -3563,7 +3559,7 @@ class PersistentParallelDownload {
       }
     }
 
-    await source.rename(target.path);
+    if (!await _promoteCompletedFile(session, source, target)) return false;
     sourcePart.complete = true;
     sourcePart.progress = 1;
     sourcePart.credibleProgress = 1;
@@ -3687,6 +3683,46 @@ class PersistentParallelDownload {
     await _parkForStorageFailure(session);
   }
 
+  Future<bool> _promoteCompletedFile(
+    _ParallelSession session,
+    File source,
+    File target,
+  ) async {
+    for (var attempt = 0; attempt < 4; attempt++) {
+      if (session.deleted || _disposed) return false;
+      try {
+        // A target may appear while assembly is writing. Preserve it, including
+        // directories and links, instead of replacing user-visible state.
+        if (await FileSystemEntity.type(target.path, followLinks: false) !=
+            FileSystemEntityType.notFound) {
+          await _pause(session);
+          return false;
+        }
+        await source.rename(target.path);
+        return true;
+      } on FileSystemException catch (error) {
+        if (_isInsufficientStorageError(error)) {
+          await _handleAssemblyStorageFailure(
+            session,
+            File('${target.path}.assembling'),
+            error: error,
+          );
+          return false;
+        }
+        if (attempt == 3) {
+          _recordDiagnostic('assembly.renameFailed', {
+            'taskId': session.task.taskId,
+            'osError': error.osError?.errorCode,
+          });
+          await _pause(session);
+          return false;
+        }
+        await Future<void>.delayed(Duration(milliseconds: 75 * (attempt + 1)));
+      }
+    }
+    return false;
+  }
+
   Future<void> _assemble(_ParallelSession session) async {
     _recordDiagnostic('assembly.begin', {
       'taskId': session.task.taskId,
@@ -3704,6 +3740,36 @@ class PersistentParallelDownload {
     }
 
     final staging = File('${target.path}.assembling');
+    try {
+      // Verify every durable source and settled writer before discarding stale
+      // staging. Keep the ranges as the recovery authority throughout assembly.
+      for (final part in session.parts) {
+        final file = File(await part.task.filePath());
+        if (!part.complete ||
+            part.launched ||
+            !await file.exists() ||
+            await file.length() != part.size) {
+          await _pause(session);
+          return;
+        }
+      }
+      final stagingType = await FileSystemEntity.type(
+        staging.path,
+        followLinks: false,
+      );
+      if (stagingType != FileSystemEntityType.notFound) {
+        if (stagingType != FileSystemEntityType.file) {
+          await _pause(session);
+          return;
+        }
+        // Release the previous allocation before measuring replacement room.
+        // File length alone does not prove allocated space or valid content.
+        await staging.delete();
+      }
+    } on FileSystemException {
+      await _pause(session);
+      return;
+    }
     if (!await _hasAssemblyHeadroom(
       session,
       target,
@@ -3747,7 +3813,10 @@ class PersistentParallelDownload {
       }
       await output!.flush();
     } on FileSystemException catch (error) {
-      if (!_isInsufficientStorageError(error)) rethrow;
+      if (!_isInsufficientStorageError(error)) {
+        await _pause(session);
+        return;
+      }
       try {
         await output?.close();
       } catch (_) {}
@@ -3764,34 +3833,7 @@ class PersistentParallelDownload {
       await _pause(session);
       return;
     }
-    var renamed = false;
-    for (var attempt = 0; attempt < 4; attempt++) {
-      try {
-        await staging.rename(target.path);
-        renamed = true;
-        break;
-      } on FileSystemException catch (error) {
-        if (_isInsufficientStorageError(error)) {
-          await _handleAssemblyStorageFailure(session, staging, error: error);
-          return;
-        }
-        if (attempt == 3) {
-          try {
-            await staging.copy(target.path);
-            await staging.delete();
-            renamed = true;
-          } catch (_) {
-            rethrow;
-          }
-        } else {
-          await Future<void>.delayed(Duration(milliseconds: 75 * (attempt + 1)));
-        }
-      }
-    }
-    if (!renamed) {
-      await _pause(session);
-      return;
-    }
+    if (!await _promoteCompletedFile(session, staging, target)) return;
     await _finishCompleteSession(session);
   }
 }
@@ -3851,12 +3893,13 @@ class _ParallelSession {
   int get size => parts.fold(0, (sum, part) => sum + part.size);
   int get creditedBytes =>
       parts.fold<int>(0, (sum, part) => sum + part.durableBytes);
-  double get progress =>
-      parts.fold<double>(
-        0,
-        (sum, part) => sum + part.size * part.credibleProgress,
-      ) /
-      size;
+  double get progress => size <= 0
+      ? 0
+      : parts.fold<double>(
+              0,
+              (sum, part) => sum + part.size * part.credibleProgress,
+            ) /
+            size;
   double get durableProgress => size <= 0 ? 0 : creditedBytes / size;
   Future<void> get idle async {
     await _pending;

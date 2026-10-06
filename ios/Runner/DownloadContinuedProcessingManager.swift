@@ -21,6 +21,21 @@ private enum DownloadContinuedProcessingError: LocalizedError {
   }
 }
 
+/// Expiration can race an explicit endSession on another callback queue.
+/// Claim completion once without holding a lock while calling into the OS.
+private final class DownloadContinuedProcessingCompletion: @unchecked Sendable {
+  private let lock = NSLock()
+  private var completed = false
+
+  func finish(_ completion: () -> Void) {
+    lock.lock()
+    guard !completed else { lock.unlock(); return }
+    completed = true
+    lock.unlock()
+    completion()
+  }
+}
+
 /// Owns the **one** iOS 26 BGContinuedProcessingTask for an active download
 /// session (the whole queue), not one task per episode.
 ///
@@ -54,6 +69,7 @@ final class DownloadContinuedProcessingManager {
 
   private let scheduler = BGTaskScheduler.shared
   private var activeTask: BGContinuedProcessingTask?
+  private var activeTaskCompletion: DownloadContinuedProcessingCompletion?
   private var snapshot: Snapshot?
   private var identifier: String?
   private var didRegisterIdentifier = false
@@ -142,6 +158,8 @@ final class DownloadContinuedProcessingManager {
       throw DownloadContinuedProcessingError.identifierNotPermitted(sessionId)
     }
 
+    // Unlike BGProcessingTask, iOS 26 continued-processing handlers may be
+    // registered when user intent is expressed, after app launch (WWDC25/227).
     if !didRegisterIdentifier {
       let accepted = scheduler.register(
         forTaskWithIdentifier: sessionId,
@@ -362,6 +380,8 @@ final class DownloadContinuedProcessingManager {
 
     if let task = activeTask {
       activeTask = nil
+      let completion = activeTaskCompletion
+      activeTaskCompletion = nil
       if verifiedSuccess {
         if task.progress.totalUnitCount <= 0 {
           task.progress.totalUnitCount = 1000
@@ -383,7 +403,11 @@ final class DownloadContinuedProcessingManager {
         )
       }
       task.expirationHandler = nil
-      task.setTaskCompleted(success: verifiedSuccess)
+      if let completion {
+        completion.finish { task.setTaskCompleted(success: verifiedSuccess) }
+      } else {
+        task.setTaskCompleted(success: verifiedSuccess)
+      }
     }
 
     snapshot = nil
@@ -394,11 +418,14 @@ final class DownloadContinuedProcessingManager {
 
   private func attach(_ task: BGContinuedProcessingTask) {
     activeTask = task
+    let completion = DownloadContinuedProcessingCompletion()
+    activeTaskCompletion = completion
 
     task.expirationHandler = { [weak self, weak task] in
-      task?.setTaskCompleted(success: false)
+      guard let task else { return }
+      completion.finish { task.setTaskCompleted(success: false) }
       Task { @MainActor in
-        guard let self else { return }
+        guard let self, self.activeTask === task else { return }
 
         // Expiration only revokes the BGContinuedProcessingTask lease / system
         // overlay. The actual episode is owned by background URLSession (or by
@@ -407,6 +434,7 @@ final class DownloadContinuedProcessingManager {
         // callback to `cancellationHandler` used to mark the logical parent
         // paused and promote the next episode while its parts were still live.
         self.activeTask = nil
+        self.activeTaskCompletion = nil
         self.snapshot = nil
         self.identifier = nil
         self.currentEpisodeTaskId = ""
@@ -552,3 +580,4 @@ final class DownloadContinuedProcessingManager {
   }
 }
 #endif
+

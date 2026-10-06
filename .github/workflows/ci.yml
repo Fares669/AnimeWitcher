@@ -108,6 +108,9 @@ jobs:
           PYCODE
           swiftc -typecheck /tmp/download-log.swift
 
+      - name: Compile and exercise native queue safety helpers
+        run: python3 test/native/ios_native_download_safety_test.py
+
   cleanup-obsolete-workflows:
     name: Clean obsolete workflow history
     if: >-

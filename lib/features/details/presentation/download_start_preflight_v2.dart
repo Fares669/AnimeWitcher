@@ -36,7 +36,7 @@ Future<void> requestDownloadPermissionsV2({
   }
 
   final androidInfo = await DeviceInfoPlugin().androidInfo;
-  if (androidInfo.version.sdkInt <= 29) {
+  if (androidInfo.version.sdkInt <= 28) {
     final storageStatus = await Permission.storage.status;
     if (!storageStatus.isGranted) {
       await Permission.storage.request();

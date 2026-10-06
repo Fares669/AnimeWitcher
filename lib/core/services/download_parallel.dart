@@ -21,7 +21,6 @@ int effectiveDownloadPartsForPlatform({
   return selectedParts.clamp(kDownloadPartsMin, kDownloadPartsMax).toInt();
 }
 
-
 /// Gopeed lets an idle connection steal half of a slow connection's remaining
 /// range. Native URLSession/background_downloader children cannot safely change
 /// their Range header after launch, so AnimeWitcher uses immutable checkpoint
@@ -169,18 +168,15 @@ int selectDownloadWorkUnitCount({
       .clamp(kDownloadPartsMin, kDownloadPartsMax)
       .toInt();
   if (totalBytes <= 0) return active;
+  if (totalBytes < active) return totalBytes;
 
-  final tailTarget = (active * 2)
-      .clamp(active, kDownloadWorkUnitsMax)
-      .toInt();
+  final tailTarget = (active * 2).clamp(active, kDownloadWorkUnitsMax).toInt();
   final checkpointTarget =
       ((totalBytes + kDownloadCheckpointTargetBytes - 1) ~/
               kDownloadCheckpointTargetBytes)
           .clamp(active, kDownloadWorkUnitsMax)
           .toInt();
-  final desired = tailTarget > checkpointTarget
-      ? tailTarget
-      : checkpointTarget;
+  final desired = tailTarget > checkpointTarget ? tailTarget : checkpointTarget;
 
   // Never create sub-512 KiB work solely for checkpointing. Very small files
   // may still have smaller ranges when the user explicitly requests more

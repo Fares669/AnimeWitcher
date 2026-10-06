@@ -53,8 +53,8 @@ class DownloadItem {
     this.timeRemaining = Duration.zero,
   }) : trackingUrl = trackingUrl ?? task.metaData,
        destinationPath = destinationPath ?? '',
-       parallelChunks = parallelChunks ??
-           (task is ParallelDownloadTask ? task.chunks : 1);
+       parallelChunks =
+           parallelChunks ?? (task is ParallelDownloadTask ? task.chunks : 1);
 
   String get id => task.taskId;
 }
@@ -304,7 +304,13 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     // Progress is ephemeral manager state. Project it from memory every second;
     // do not scan both Hive boxes on the UI isolate for every progress tick.
     _refreshTimer = Timer.periodic(_refreshInterval, (_) {
-      _refreshPresentationState();
+      if (_records.any(
+        (record) =>
+            record.intent == DownloadUserIntent.active &&
+            record.completedAtMillis == null,
+      )) {
+        _refreshPresentationState();
+      }
     });
     // Keep a much slower durable reconciliation as a lifecycle/race safety net.
     _durableRefreshTimer = Timer.periodic(_durableRefreshInterval, (_) {
@@ -369,7 +375,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final items = <DownloadItem>[];
     for (final record in _records) {
       if (record.intent == DownloadUserIntent.canceled) continue;
-      final metadata = metadataByTaskId[record.taskId] ??
+      final metadata =
+          metadataByTaskId[record.taskId] ??
           metadataByLogicalId[record.logicalId.value];
       if (metadata == null || metadata['item'] is! Map) continue;
 
@@ -385,17 +392,9 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           ? Map<String, dynamic>.from(metadata['taskSnapshot'] as Map)
           : const <String, dynamic>{};
       final chapter = MangaChapter.fromJson(taskSnapshot['chapter']);
-      final trackingUrl = _trackingUrlFor(
-        metadata,
-        item,
-        episode,
-        chapter,
-      );
+      final trackingUrl = _trackingUrlFor(metadata, item, episode, chapter);
       final snapshot = manager.snapshotFor(record.logicalId);
-      final task = _presentationTaskFor(
-        record,
-        trackingUrl: trackingUrl,
-      );
+      final task = _presentationTaskFor(record, trackingUrl: trackingUrl);
       final projected = DownloadItem(
         task: task,
         status: _taskStatusFor(record, snapshot),
@@ -506,11 +505,23 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     await _reloadDurableState();
   }
 
+  Future<void> retryDownload(String taskId) async {
+    final item = state.value?.where((item) => item.id == taskId).firstOrNull;
+    final logical = item?.logicalId?.trim();
+    if (logical == null || logical.isEmpty) return;
+    await ref
+        .read(downloadManagerV2Provider)
+        .restart(DownloadLogicalId(logical));
+    await _reloadDurableState();
+  }
+
   Future<void> resumeDownload(String taskId) async {
     final item = state.value?.where((item) => item.id == taskId).firstOrNull;
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
-    await ref.read(downloadManagerV2Provider).resume(DownloadLogicalId(logical));
+    await ref
+        .read(downloadManagerV2Provider)
+        .resume(DownloadLogicalId(logical));
     await _reloadDurableState();
   }
 }

@@ -13,18 +13,29 @@ void main() {
     final appDelegate = File('ios/Runner/AppDelegate.swift').readAsStringSync();
 
     expect(launcher, contains('cacheSkipSegmentsForDownloadV2('));
-    expect(launcher, contains('requestNotifications: !notificationPrefs.noneEnabled'));
+    expect(
+      launcher,
+      contains('requestNotifications: !notificationPrefs.noneEnabled'),
+    );
     expect(helper, contains('bool requestNotifications = true'));
     expect(helper, contains('if (requestNotifications &&'));
     expect(helper, contains('Permission.ignoreBatteryOptimizations'));
-    expect(helper, contains('Permission.manageExternalStorage'));
+    expect(helper, isNot(contains('Permission.manageExternalStorage')));
+    final manifest = File('android/app/src/main/AndroidManifest.xml')
+        .readAsStringSync();
+    expect(
+      manifest,
+      isNot(contains('android.permission.MANAGE_EXTERNAL_STORAGE')),
+    );
     expect(helper, contains('Permission.storage.request()'));
     expect(helper, contains('PermissionType.notifications'));
     expect(helper, contains('.permissions.request('));
     expect(helper, contains('bd.PermissionType.notifications'));
     expect(
       appDelegate,
-      isNot(contains('UNUserNotificationCenter.current().requestAuthorization')),
+      isNot(
+        contains('UNUserNotificationCenter.current().requestAuthorization'),
+      ),
       reason: 'notification permission belongs to the first real download, not app launch',
     );
     expect(helper, contains('skipSegmentCacheProvider'));

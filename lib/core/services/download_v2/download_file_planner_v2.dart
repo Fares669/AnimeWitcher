@@ -50,10 +50,11 @@ Future<DownloadSourceMetadataV2?> probeDownloadSourceV2(
       size = int.tryParse(response.headers.value('content-length') ?? '');
       mimeType = response.headers.value('content-type');
       supportsRanges =
-          response.headers.value('accept-ranges')?.toLowerCase().contains(
-                'bytes',
-              ) ==
-              true;
+          response.headers
+              .value('accept-ranges')
+              ?.toLowerCase()
+              .contains('bytes') ==
+          true;
     } catch (_) {}
 
     try {
@@ -119,6 +120,33 @@ String _mangaChapterFolderName(MangaChapter chapter) {
   return _downloadFolderName(chapter.name, fallback: 'فصل');
 }
 
+/// Keep the preferred location when it permits actual writes. Scoped Android
+/// storage can expose a public directory while refusing new files within it.
+Future<String> firstWritableDownloadDirectoryV2(
+  Iterable<Directory> directories,
+) async {
+  for (final directory in directories) {
+    Directory? probe;
+    try {
+      await directory.create(recursive: true);
+      probe = await directory.createTemp('.aw-write-');
+      await File(p.join(probe.path, 'probe')).writeAsBytes([0], flush: true);
+      return directory.path;
+    } on FileSystemException {
+      // Try the next app-specific location without changing existing downloads.
+    } finally {
+      if (probe != null) {
+        try {
+          await probe.delete(recursive: true);
+        } catch (_) {}
+      }
+    }
+  }
+  throw const FileSystemException(
+    'No writable download directory is available',
+  );
+}
+
 Future<String> _downloadMediaDirectoryV2(
   String mediaType,
   List<String> segments,
@@ -127,33 +155,41 @@ Future<String> _downloadMediaDirectoryV2(
     return p.joinAll(<String>['Downloads', mediaType, ...segments]);
   }
   if (Platform.isAndroid) {
-    String? androidRoot;
+    final directories = <Directory>[
+      Directory(
+        p.joinAll(['/storage/emulated/0/Download', mediaType, ...segments]),
+      ),
+    ];
     try {
-      final publicDownload = Directory('/storage/emulated/0/Download');
-      if (await publicDownload.exists()) {
-        androidRoot = publicDownload.path;
-      } else {
-        final ext = await getExternalStorageDirectory();
-        if (ext != null) androidRoot = ext.path;
+      final external = await getExternalStorageDirectory();
+      if (external != null) {
+        directories.add(
+          Directory(p.joinAll([external.path, mediaType, ...segments])),
+        );
       }
     } catch (_) {}
-    final root = androidRoot ?? '/storage/emulated/0/Download';
-    return p.joinAll(<String>[
-      root,
-      mediaType,
-      ...segments,
-    ]);
+    try {
+      final documents = await getApplicationDocumentsDirectory();
+      directories.add(
+        Directory(
+          p.joinAll([documents.path, 'Downloads', mediaType, ...segments]),
+        ),
+      );
+    } catch (_) {}
+    return firstWritableDownloadDirectoryV2(directories);
   }
 
   final downloads = await getDownloadsDirectory();
-  final root = downloads?.path ??
+  final root =
+      downloads?.path ??
       p.join((await getApplicationDocumentsDirectory()).path, 'Downloads');
   return p.joinAll(<String>[root, mediaType, ...segments]);
 }
 
 /// Produces the final Anime path expected by V2. iOS keeps an
 /// app-documents-relative path so it survives sandbox container relocation;
-/// Android and desktop use their public Downloads directory.
+/// Android keeps public Downloads when writable and otherwise uses app-specific
+/// storage; desktop uses its Downloads directory.
 Future<String> downloadDestinationPathV2(
   MultimediaItem item, {
   Episode? episode,
@@ -172,10 +208,7 @@ Future<String> mangaChapterDestinationDirectoryV2(
 ) async {
   final title = _downloadFolderName(manga.title, fallback: 'Manga');
   final chapterFolder = _mangaChapterFolderName(chapter);
-  return _downloadMediaDirectoryV2(
-    'manga',
-    <String>[title, chapterFolder],
-  );
+  return _downloadMediaDirectoryV2('manga', <String>[title, chapterFolder]);
 }
 
 Future<String> absoluteDownloadDestinationPathV2(String destinationPath) async {

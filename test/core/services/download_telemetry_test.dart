@@ -139,6 +139,20 @@ void main() {
       expect(stale.timeRemaining, Duration.zero);
     });
 
+    test('nonfinite progress never invents completed bytes', () {
+      final estimator = DownloadTelemetryEstimator();
+      estimator.seed('invalid', transferredBytes: 250, expectedBytes: 1000);
+      for (final progress in [double.nan, double.infinity, -double.infinity]) {
+        final reading = estimator.observeProgress(
+          taskId: 'invalid',
+          progress: progress,
+          expectedBytes: 1000,
+        );
+        expect(reading.transferredBytes, 250);
+        expect(reading.speedBytesPerSecond.isFinite, isTrue);
+      }
+    });
+
     test('native expected size survives speed reset', () {
       final estimator = DownloadTelemetryEstimator();
       estimator.seed('resume', expectedBytes: 188000000);

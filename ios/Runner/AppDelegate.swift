@@ -17,6 +17,7 @@ import UserNotifications
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    DownloadNativeWaitingQueue.installLifecycleObservers()
     DownloadNativeWaitingQueue.installUrlSessionHook()
     do {
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -194,6 +195,29 @@ import UserNotifications
 
     channel.setMethodCallHandler { call, result in
 #if os(iOS)
+      if call.method == "availableDiskBytes" {
+        guard let arguments = call.arguments as? [String: Any],
+              let path = arguments["path"] as? String, !path.isEmpty else {
+          result(FlutterError(code: "INVALID_ARGUMENTS", message: "path is required", details: nil))
+          return
+        }
+        var directory = URL(fileURLWithPath: path)
+        // Assembly targets need not exist yet. Query their existing ancestor
+        // so Foundation measures the correct filesystem volume.
+        while !FileManager.default.fileExists(atPath: directory.path), directory.path != "/" {
+          directory.deleteLastPathComponent()
+        }
+        if let values = try? directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+           let available = values.volumeAvailableCapacityForImportantUsage {
+          result(available)
+        } else if let attributes = try? FileManager.default.attributesOfFileSystem(forPath: directory.path),
+                  let available = attributes[.systemFreeSize] as? NSNumber {
+          result(available.int64Value)
+        } else {
+          result(nil)
+        }
+        return
+      }
       if call.method == "configureDiagnosticLog" {
         let arguments = call.arguments as? [String: Any] ?? [:]
         DownloadNativeDiagnosticLog.configure(arguments["enabled"] as? Bool ?? false)
@@ -205,7 +229,7 @@ import UserNotifications
         // Retry the complete preflight, never a partially installed seam.
         DownloadNativeWaitingQueue.installUrlSessionHook()
         let acceptedVersion = DownloadNativeWaitingQueue.persist(from: arguments)
-        DownloadNativeWaitingQueue.promoteMultipartIfPossible()
+        if acceptedVersion >= 0 { DownloadNativeWaitingQueue.promoteMultipartIfPossible() }
         // Persistence is not a native ownership claim. Acknowledge it even
         // when native promotion is unavailable so Dart's scheduler can run.
         result([
@@ -2780,3 +2804,4 @@ private func presentAppleSearchFilters(
   host.modalTransitionStyle = .crossDissolve
   presenter.present(host, animated: true)
 }
+

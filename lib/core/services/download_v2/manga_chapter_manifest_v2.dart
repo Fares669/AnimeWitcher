@@ -98,7 +98,8 @@ final class MangaChapterManifestV2 {
     final file = File(p.join(directory.path, fileName));
     final temp = File('${file.path}.tmp');
     await temp.writeAsString(jsonEncode(toJson()), flush: true);
-    if (await file.exists()) await file.delete();
+    // Same-directory rename replaces the checkpoint atomically. Retain the
+    // previous file if the OS cannot publish the new one.
     await temp.rename(file.path);
   }
 }

@@ -75,13 +75,20 @@ DownloadItem _item({
 }
 
 class _StubDownloadsNotifier extends DownloadsNotifier {
-  _StubDownloadsNotifier(this._items, {this.resumeError});
+  _StubDownloadsNotifier(this._items, {this.resumeError, this.retryError});
 
   final List<DownloadItem> _items;
   final Object? resumeError;
+  final Object? retryError;
 
   @override
   Future<List<DownloadItem>> build() async => _items;
+
+  @override
+  Future<void> retryDownload(String taskId) async {
+    final error = retryError;
+    if (error != null) throw error;
+  }
 
   @override
   Future<void> resumeDownload(String taskId) async {
@@ -104,6 +111,7 @@ Widget _downloadsApp(
   TextDirection? shellDirection,
   bool episodeSortAscending = true,
   Object? resumeError,
+  Object? retryError,
   NotificationService? notificationService,
 }) {
   Widget home = const Scaffold(
@@ -118,7 +126,11 @@ Widget _downloadsApp(
   return ProviderScope(
     overrides: [
       downloadsProvider.overrideWith(
-        () => _StubDownloadsNotifier(items, resumeError: resumeError),
+        () => _StubDownloadsNotifier(
+          items,
+          resumeError: resumeError,
+          retryError: retryError,
+        ),
       ),
       if (notificationService != null)
         notificationServiceProvider.overrideWithValue(notificationService),
@@ -150,11 +162,7 @@ void main() {
     await tester.pumpWidget(
       _downloadsApp(
         <DownloadItem>[
-          _item(
-            taskId: 'paused-v2',
-            timestamp: 1,
-            status: TaskStatus.paused,
-          ),
+          _item(taskId: 'paused-v2', timestamp: 1, status: TaskStatus.paused),
         ],
         resumeError: StateError('source re-selection required'),
         notificationService: notifications,
@@ -173,6 +181,41 @@ void main() {
       contains('source re-selection required'),
     );
 
+    notifications.clearToasts();
+    await tester.pump();
+  });
+
+  testWidgets('failed downloads offer retry instead of paused resume', (
+    tester,
+  ) async {
+    final notifications = NotificationService();
+    addTearDown(() {
+      notifications.clearToasts();
+      notifications.dispose();
+    });
+    await tester.pumpWidget(
+      _downloadsApp(
+        <DownloadItem>[
+          _item(taskId: 'failed-v2', timestamp: 1, status: TaskStatus.failed),
+        ],
+        resumeError: StateError('incorrect paused-resume command'),
+        retryError: StateError('retry could not resolve source'),
+        notificationService: notifications,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('فشل التنزيل'), findsOneWidget);
+    expect(find.text('متوقف مؤقتاً'), findsNothing);
+    expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
+    await tester.tap(find.byTooltip('إعادة المحاولة'));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      notifications.toasts.single.message,
+      contains('retry could not resolve source'),
+    );
     notifications.clearToasts();
     await tester.pump();
   });
@@ -1077,6 +1120,4 @@ void main() {
           .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
   });
-
-
 }

@@ -64,11 +64,13 @@ class DownloadTelemetryEstimator {
     double fallbackSpeedBytesPerSecond = 0,
     DateTime? now,
   }) {
-    final normalized = progress.clamp(0.0, 1.0).toDouble();
+    final normalized = progress.isFinite
+        ? progress.clamp(0.0, 1.0).toDouble()
+        : null;
     final knownExpected = expectedBytes > 0
         ? expectedBytes
         : expectedBytesFor(taskId);
-    final transferred = knownExpected > 0
+    final transferred = knownExpected > 0 && normalized != null
         ? (knownExpected * normalized).round()
         : null;
     return observe(
@@ -119,9 +121,10 @@ class DownloadTelemetryEstimator {
     final lastReportedSpeedAt = state.reportedSpeedSamples.isEmpty
         ? null
         : state.reportedSpeedSamples.last.at;
-    final hasFreshByte = lastByteAt != null &&
-        timestamp.difference(lastByteAt) < staleAfter;
-    final hasFreshReportedSpeed = lastReportedSpeedAt != null &&
+    final hasFreshByte =
+        lastByteAt != null && timestamp.difference(lastByteAt) < staleAfter;
+    final hasFreshReportedSpeed =
+        lastReportedSpeedAt != null &&
         timestamp.difference(lastReportedSpeedAt) < staleAfter;
     if (!hasFreshByte &&
         !hasFreshReportedSpeed &&
