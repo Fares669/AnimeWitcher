@@ -567,8 +567,10 @@ void main() {
     );
     expect(
       (await f.store.get(f.request.logicalId))?.intent,
-      DownloadUserIntent.paused,
-      reason: 'user intent remains durable while transport truth stays visible',
+      DownloadUserIntent.active,
+      reason:
+          'a rejected pause must roll back paused intent while the writer '
+          'remains active',
     );
 
     handle.emitSnapshot(
