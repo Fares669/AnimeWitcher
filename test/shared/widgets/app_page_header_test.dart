@@ -175,6 +175,41 @@ void main() {
     expect(progressive.color, standard.color);
   });
 
+  testWidgets('accepts progressive blur calibration without stacking filters', (
+    tester,
+  ) async {
+    Object? widget;
+    try {
+      widget = Function.apply(
+        AppProgressiveHeaderBackdrop.new,
+        const <Object?>[],
+        const <Symbol, Object?>{
+          #maxSigma: 12.0,
+          #falloff: 1.2,
+        },
+      );
+    } catch (_) {
+      widget = null;
+    }
+
+    expect(widget, isA<AppProgressiveHeaderBackdrop>());
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 400,
+            height: 100,
+            child: widget! as Widget,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(BackdropFilter), findsAtMostNWidgets(1));
+  });
+
   testWidgets('uses one fixed blur with a soft visual fade at the edge', (
     tester,
   ) async {
