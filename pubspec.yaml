@@ -97,6 +97,9 @@ flutter:
   assets:
     - assets/images/
 
+  shaders:
+    - shaders/progressive_header_blur.frag
+
   # The app's typeface, every weight it draws (licence: OFL.txt beside them).
   fonts:
     - family: Readex Pro
