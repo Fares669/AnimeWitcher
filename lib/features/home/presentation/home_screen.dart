@@ -14,6 +14,7 @@ import 'package:animewitcher/core/navigation/app_layout_style.dart';
 import 'home_provider.dart';
 import 'home_section_titles.dart';
 import 'home_state.dart';
+import '../../news/presentation/open_news.dart';
 
 import 'package:animewitcher/features/home/presentation/widgets/continue_watching_section.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
@@ -129,27 +130,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     openNewsUrl(item);
   }
 
-  Future<void> _openLinkedNewsAnime(
-    BuildContext context,
-    AnimeWitcherProvider provider,
-    NewsItem item,
-  ) async {
-    final animeId = item.animeId?.trim();
-    if (animeId == null || animeId.isEmpty) return;
-
-    try {
-      final baseUrl = provider.mainUrl.replaceFirst(RegExp(r'/$'), '');
-      final details = await provider.getDetails(
-        baseUrl + '/watch/' + Uri.encodeComponent(animeId),
-      );
-      if (!context.mounted) return;
-      DetailsRoute($extra: DetailsRouteExtra(item: details))
-          .push<void>(context);
-    } catch (_) {
-      // The article remains usable even if its linked anime is unavailable.
-    }
-  }
-
   void _openNewsList(
     BuildContext context,
     AnimeWitcherProvider provider,
@@ -158,13 +138,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     pushOverTaskbar<void>(
       context,
       MaterialPageRoute<void>(
-        builder: (_) => NewsListScreen(
+        builder: (routeContext) => NewsListScreen(
           initialItems: items,
           loadPage: (offset, limit) =>
               provider.getNewsPage(offset: offset, limit: limit),
           onOpen: (item) => _openNewsArticle(item),
           onAnimeTap: (item) {
-            _openLinkedNewsAnime(context, provider, item);
+            openLinkedNewsAnime(routeContext, provider, item);
           },
         ),
       ),
@@ -248,7 +228,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         onViewAll: () => _openNewsList(context, provider, news),
         onOpen: _openNewsArticle,
         onAnimeTap: (item) {
-          _openLinkedNewsAnime(context, provider, item);
+          openLinkedNewsAnime(context, provider, item);
         },
       );
     }

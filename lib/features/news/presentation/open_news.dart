@@ -31,27 +31,30 @@ void openNewsScreen(BuildContext context, WidgetRef ref) {
         loadPage: (offset, limit) =>
             provider.getNewsPage(offset: offset, limit: limit),
         onOpen: openNewsUrl,
-        onAnimeTap: (item) => _openLinkedAnime(routeContext, provider, item),
+        onAnimeTap: (item) => openLinkedNewsAnime(routeContext, provider, item),
       ),
     ),
   );
 }
 
-Future<void> _openLinkedAnime(
+void openLinkedNewsAnime(
   BuildContext context,
   AnimeWitcherProvider provider,
   NewsItem item,
-) async {
+) {
   final animeId = item.animeId?.trim();
   if (animeId == null || animeId.isEmpty) return;
-  try {
-    final baseUrl = provider.mainUrl.replaceFirst(RegExp(r'/$'), '');
-    final details = await provider.getDetails(
-      '$baseUrl/watch/${Uri.encodeComponent(animeId)}',
-    );
-    if (!context.mounted) return;
-    DetailsRoute($extra: DetailsRouteExtra(item: details)).push<void>(context);
-  } catch (_) {
-    // The article remains usable even if its linked anime is unavailable.
-  }
+  final baseUrl = provider.mainUrl.replaceFirst(RegExp(r'/$'), '');
+  // Open with the known identity; DetailsScreen owns loading and error states.
+  DetailsRoute(
+    $extra: DetailsRouteExtra(
+      item: MultimediaItem(
+        title: item.title,
+        url: '$baseUrl/watch/${Uri.encodeComponent(animeId)}',
+        posterUrl: '',
+        contentType: MultimediaContentType.anime,
+        provider: provider.packageName,
+      ),
+    ),
+  ).push<void>(context);
 }
