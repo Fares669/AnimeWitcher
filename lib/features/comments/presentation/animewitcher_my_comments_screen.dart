@@ -443,7 +443,6 @@ class _AnimeWitcherMyCommentsScreenState
     ref.watch(animeWitcherAccountControllerProvider);
     final isArabic = _isArabic;
     final usePersistentGlass = appleUsesPersistentLiquidGlassHeader;
-    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
@@ -461,13 +460,10 @@ class _AnimeWitcherMyCommentsScreenState
                 },
               ),
       ),
-      body: Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: _buildBody(),
-          ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: _buildBody(),
         ),
       ),
     );
@@ -489,6 +485,7 @@ class _AnimeWitcherMyCommentsScreenState
         onRefresh: _loadInitial,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(top: appPageHeaderContentTopInset(context)),
           children: [
             SizedBox(height: MediaQuery.sizeOf(context).height * 0.26),
             const Icon(Icons.forum_outlined, size: 46),
@@ -513,7 +510,9 @@ class _AnimeWitcherMyCommentsScreenState
       child: ListView.separated(
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
+        padding: EdgeInsets.fromLTRB(
+          12, appPageHeaderContentTopInset(context) + 12, 12, 28,
+        ),
         itemCount: _comments.length + (_hasMore || _loadingMore ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 10),
         itemBuilder: (context, index) {
@@ -941,4 +940,5 @@ class _MyCommentsError extends StatelessWidget {
     );
   }
 }
+
 

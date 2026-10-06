@@ -555,7 +555,6 @@ class _AnimeWitcherCommentsScreenState
       });
     }
 
-    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
@@ -572,32 +571,11 @@ class _AnimeWitcherCommentsScreenState
               },
             ),
       ),
-      body: Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: Column(
+      body: Column(
         children: [
-          if (widget.target.title.trim().isNotEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-              color: Theme.of(context).colorScheme.surfaceContainerLow,
-              child: Directionality(
-                textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
-                child: Text(
-                  widget.target.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.start,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                ),
-              ),
-            ),
           Expanded(child: _buildCommentsBody(context, isArabic)),
           _buildComposer(context, isArabic, isSignedIn),
         ],
-        ),
       ),
     );
   }
@@ -618,6 +596,7 @@ class _AnimeWitcherCommentsScreenState
         onRefresh: _loadInitial,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(top: appPageHeaderContentTopInset(context)),
           children: [
             SizedBox(height: MediaQuery.sizeOf(context).height * 0.25),
             Padding(
@@ -640,7 +619,9 @@ class _AnimeWitcherCommentsScreenState
       child: ListView.separated(
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+        padding: EdgeInsets.fromLTRB(
+          12, appPageHeaderContentTopInset(context) + 12, 12, 24,
+        ),
         itemCount: _comments.length + (_hasMore || _loadingMore ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
@@ -1142,3 +1123,4 @@ String _commentTimeAgo(DateTime? date, bool isArabic) {
   String two(int value) => value.toString().padLeft(2, '0');
   return '${two(local.day)}/${two(local.month)}/${local.year}';
 }
+
