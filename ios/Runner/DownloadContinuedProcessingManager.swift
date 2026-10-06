@@ -396,6 +396,7 @@ final class DownloadContinuedProcessingManager {
     activeTask = task
 
     task.expirationHandler = { [weak self, weak task] in
+      task?.setTaskCompleted(success: false)
       Task { @MainActor in
         guard let self else { return }
 
@@ -405,7 +406,6 @@ final class DownloadContinuedProcessingManager {
         // intentionally independent and must keep transferring. Mapping this
         // callback to `cancellationHandler` used to mark the logical parent
         // paused and promote the next episode while its parts were still live.
-        task?.setTaskCompleted(success: false)
         self.activeTask = nil
         self.snapshot = nil
         self.identifier = nil

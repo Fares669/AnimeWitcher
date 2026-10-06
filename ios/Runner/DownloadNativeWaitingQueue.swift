@@ -1093,6 +1093,9 @@ enum DownloadNativeWaitingQueue {
     return waiter
   }
 
+  private static var lastForegroundCheckTime: CFAbsoluteTime = 0
+  private static var cachedForegroundState: Bool = false
+
   /// Skip native promotion while the user is looking at the app. Home
   /// screen / island must still promote — `applicationState == .active` is
   /// true under BGContinuedProcessing even when the scene is backgrounded.
@@ -1100,13 +1103,20 @@ enum DownloadNativeWaitingQueue {
     if NSClassFromString("XCTestCase") != nil {
       return false
     }
-    return runOnMainActor {
+    let now = CFAbsoluteTimeGetCurrent()
+    if now - lastForegroundCheckTime < 0.25 {
+      return cachedForegroundState
+    }
+    let state = runOnMainActor {
       let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
       if !scenes.isEmpty {
         return scenes.contains { $0.activationState == .foregroundActive }
       }
       return UIApplication.shared.applicationState == .active
     }
+    lastForegroundCheckTime = now
+    cachedForegroundState = state
+    return state
   }
 
   private static func start(
