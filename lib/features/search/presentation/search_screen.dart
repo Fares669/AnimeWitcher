@@ -39,19 +39,12 @@ import '../../../shared/widgets/glass_dialog.dart';
 import 'package:animewitcher/core/utils/localized_text.dart';
 
 import '../data/recent_searches.dart';
-import 'widgets/recent_searches_view.dart';
 import 'widgets/search_start_page.dart';
-import '../../library/presentation/history_provider.dart';
-import '../../../core/account/account_providers.dart';
-import '../../../core/storage/library_category.dart';
-import '../../../core/storage/history_repository.dart';
-import '../../../core/storage/library_repository.dart';
 import 'widgets/search_instant_results.dart';
 import 'widgets/phone_suggestion_box.dart';
 import '../../home/presentation/home_provider.dart';
 import '../../home/presentation/home_state.dart';
 import '../data/mal_rankings.dart';
-import '../../home/presentation/view_all_screen.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
@@ -731,15 +724,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     Widget belowHeader(Widget child) => Padding(
       padding: EdgeInsets.only(top: topInset),
-      child: withFilterChips
-          ? Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                chips,
-                Expanded(child: child),
-              ],
-            )
-          : child,
+      child: Column(
+        children: [
+          if (withFilterChips) chips,
+          _buildRecentSearches(context),
+          Expanded(child: child),
+        ],
+      ),
     );
 
     // Typed but not searched — one letter, or anything on a phone, which
@@ -751,18 +742,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         (phone
             ? ref.watch(searchQueryProvider).trim() != _controller.text.trim()
             : ref.watch(searchQueryProvider).isEmpty)) {
-      final page = _buildStartPage(context, typing: true);
-      // Behind the box: the search page, or what was searched last.
-      final base = page != null
-          ? belowHeader(page)
-          : phone
-          ? _buildBody(
-              context,
-              withFilterChips: withFilterChips,
-              topInset: topInset,
-              behindPanel: true,
-            )
-          : belowHeader(const SizedBox.shrink());
+      final base = _buildBody(
+        context,
+        withFilterChips: withFilterChips,
+        topInset: topInset,
+        behindPanel: true,
+      );
       // On a phone, a box of the first results drops under the field; the
       // page stays in view below it.
       if (!phone || suggestionState.query.trim().length < 2) return base;
@@ -800,19 +785,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       // The results float over the search page, which stays behind them
       // dimmed; a click outside or Esc closes them.
       // Behind the panel: the search page, or what was last searched.
-      final page = _buildStartPage(context, typing: true);
       return Stack(
         fit: StackFit.expand,
         children: [
-          if (page != null)
-            belowHeader(page)
-          else
-            _buildBody(
-              context,
-              withFilterChips: withFilterChips,
-              topInset: topInset,
-              behindPanel: true,
-            ),
+          _buildBody(
+            context,
+            withFilterChips: withFilterChips,
+            topInset: topInset,
+            behindPanel: true,
+          ),
           GestureDetector(
             key: const ValueKey<String>('search-results-barrier'),
             onTap: _closeResultsPanel,
@@ -856,11 +837,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       );
     }
 
-    // An empty box would browse the whole catalogue; it offers recent
-    // searches and what is popular instead.
-    final startPage = _buildStartPage(context);
-    if (startPage != null) return belowHeader(startPage);
-
     if (domain == SearchDomain.characters) {
       if (state.characters.isEmpty && state.isLoading) {
         return belowHeader(
@@ -886,6 +862,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               SliverToBoxAdapter(child: SizedBox(height: topInset)),
+              SliverToBoxAdapter(child: _buildRecentSearches(context)),
               _characterGrid(
                 context,
                 state.characters,
@@ -924,6 +901,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             SliverToBoxAdapter(child: SizedBox(height: topInset)),
+            SliverToBoxAdapter(child: _buildRecentSearches(context)),
             if (withFilterChips) SliverToBoxAdapter(child: chips),
             for (var index = 0; index < state.results.length; index++)
               SearchResultSection(
@@ -975,7 +953,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         state.results.any((entry) => entry.results.isNotEmpty);
     Widget clearOfHeader(Widget child) => Padding(
       padding: EdgeInsets.only(top: topInset),
-      child: child,
+      child: Column(
+        children: [
+          _buildRecentSearches(context),
+          Expanded(child: child),
+        ],
+      ),
     );
     if (!hasAny && state.isLoading) {
       return clearOfHeader(_buildLoadingIndicator(context));
@@ -1013,6 +996,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             SliverToBoxAdapter(child: SizedBox(height: topInset)),
+            SliverToBoxAdapter(child: _buildRecentSearches(context)),
             for (var index = 0; index < state.results.length; index++) ...[
               heading(
                 SearchDomain.values.byName(state.results[index].providerId),
@@ -1177,58 +1161,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
-  /// Saved as a favourite or to watch later, and never played: from the
-  /// library, less anything with watch history.
-  List<MultimediaItem> _savedNotStarted() {
-    ref.watch(accountDataRevisionProvider);
-    ref.watch(continueWatchingProvider);
-    try {
-      final library = ref.read(libraryRepositoryProvider);
-      final history = ref.read(historyRepositoryProvider);
-      final watched = <String>{
-        for (final entry in history.getWatchHistory()) entry.item.url,
-        for (final entry in history.getContinueWatching()) entry.item.url,
-      };
-      final seen = <String>{};
-      return <MultimediaItem>[
-        for (final category in const [
-          LibraryCategory.planToWatch,
-          LibraryCategory.favorite,
-        ])
-          for (final item in library.getLibraryItems(category: category))
-            if (item.contentType != MultimediaContentType.manga &&
-                !watched.contains(item.url) &&
-                seen.add(item.url))
-              item,
-      ].take(20).toList(growable: false);
-    } catch (_) {
-      return const <MultimediaItem>[];
-    }
-  }
-
-  /// A ranking as a whole page, loading on as it scrolls.
-  void _openRanking(
-    BuildContext context,
-    MalRanking ranking,
-    List<MultimediaItem> first,
-  ) {
-    final load = ref.read(malRankingLoaderProvider);
-    void open(MultimediaItem item) =>
-        DetailsRoute($extra: DetailsRouteExtra(item: item)).push<void>(context);
-    ViewAllRoute(
-      $extra: ViewAllRouteExtra(
-        title: ranking == MalRanking.topMovies
-            ? appText(context, english: 'Top movies', arabic: 'أفضل الأفلام')
-            : appText(context, english: 'Top rated', arabic: 'الأعلى تقييمًا'),
-        initialMediaList: first,
-        category: ViewAllCategory.providerContent,
-        onTap: open,
-        loadPage: (offset) => load(ranking, offset),
-        forcePortrait: true,
-      ),
-    ).push<void>(context);
-  }
-
   bool _surprising = false;
 
   /// Opens a random anime from MyAnimeList's two hundred best rated that the
@@ -1282,24 +1214,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final isInputEmpty = _controller.text.trim().isEmpty;
 
     if (query.isEmpty || isInputEmpty) {
-      final recents = ref.watch(recentSearchesProvider);
-      final domain = ref.watch(searchDomainProvider);
-      // Before anything is typed: recent searches and what is popular.
-      // Characters are only found by name.
-      if (domain != SearchDomain.characters) {
-        return _buildStartPage(context) ?? _buildSearchInvitation(context);
-      }
-      // What you searched for last is more useful than an invitation to
-      // search, so it takes the placeholder's place when there is any.
-      if (recents.isNotEmpty) {
-        return RecentSearchesView(
-          searches: recents,
-          onSelected: _submitSearch,
-          onRemoved: (value) =>
-              ref.read(recentSearchesProvider.notifier).remove(value),
-          onClearAll: () => ref.read(recentSearchesProvider.notifier).clear(),
-        );
-      }
       return _buildSearchInvitation(context);
     }
     return Center(
@@ -1315,59 +1229,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
-  /// Recent searches and what is popular, for an empty search box, in place
-  /// of browsing the whole catalogue. Null where they do not belong:
-  /// something typed, filters set, or characters, which are only found by
-  /// name.
-  Widget? _buildStartPage(
-    BuildContext context, {
-    double topPadding = 0,
-    bool typing = false,
-  }) {
-    // While typing, the page shows behind the floating results.
-    if ((!typing && _controller.text.trim().isNotEmpty) ||
-        ref.watch(searchQueryProvider).isNotEmpty ||
-        ref.watch(searchProviderFiltersProvider).isNotEmpty) {
-      return null;
+  Widget _buildRecentSearches(BuildContext context) {
+    if (ref.watch(searchQueryProvider).trim().isNotEmpty) {
+      return const SizedBox.shrink();
     }
-    final domain = ref.watch(searchDomainProvider);
-    if (domain == SearchDomain.characters) return null;
-    final recents = ref.watch(recentSearchesProvider);
-    // The anime rows; manga has none of its own yet.
-    final anime = domain != SearchDomain.manga;
-    final topRated = anime
-        ? ref.watch(malRankingProvider(MalRanking.top)).value ??
-              const <MultimediaItem>[]
-        : const <MultimediaItem>[];
-    final topMovies = anime
-        ? ref.watch(malRankingProvider(MalRanking.topMovies)).value ??
-              const <MultimediaItem>[]
-        : const <MultimediaItem>[];
-    final page = SearchStartPage(
-      recents: recents,
-      onRecent: _submitSearch,
-      onRemoveRecent: (value) =>
-          ref.read(recentSearchesProvider.notifier).remove(value),
-      onClearRecents: () => ref.read(recentSearchesProvider.notifier).clear(),
-      topPadding: topPadding,
-      topTen: anime
-          ? ref.watch(malTopTenProvider).value ?? const <MultimediaItem>[]
-          : const <MultimediaItem>[],
-      notStarted: anime ? _savedNotStarted() : const <MultimediaItem>[],
-      topRated: topRated.take(20).toList(growable: false),
-      onTopRatedViewAll: topRated.isEmpty
-          ? null
-          : () => _openRanking(context, MalRanking.top, topRated),
-      topMovies: topMovies.take(20).toList(growable: false),
-      onTopMoviesViewAll: topMovies.isEmpty
-          ? null
-          : () => _openRanking(context, MalRanking.topMovies, topMovies),
-      onOpen: (item) =>
-          DetailsRoute($extra: DetailsRouteExtra(item: item))
-              .push<void>(context),
+    return Directionality(
+      textDirection: Directionality.of(context),
+      child: SearchStartPage(
+        recents: ref.watch(recentSearchesProvider),
+        onRecent: _submitSearch,
+        onRemoveRecent: (value) =>
+            ref.read(recentSearchesProvider.notifier).remove(value),
+        onClearRecents: () => ref.read(recentSearchesProvider.notifier).clear(),
+      ),
     );
-    if (page.hasAnything) return page;
-    return _buildSearchInvitation(context);
   }
 
   Widget _buildSearchInvitation(BuildContext context) {
@@ -1542,3 +1417,4 @@ class _AllSearchHeading extends StatelessWidget {
     );
   }
 }
+
