@@ -4,7 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/shared/widgets/underline_segment_tabs.dart';
 
 import '../../../core/account/account_providers.dart';
@@ -16,8 +16,7 @@ import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
-import '../../details/presentation/details_screen.dart';
-import '../../../core/utils/window_controls_inset.dart';
+import '../../../core/router/app_router.dart';
 
 typedef _RankingPageLoader =
     Future<ProviderMediaPage> Function(
@@ -83,48 +82,18 @@ class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
   Widget build(BuildContext context) {
     final accountRevision = ref.watch(accountDataRevisionProvider);
     final isArabic = _isArabic(context);
+    final embedded = MorePaneScope.of(context);
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            // Leave the window's caption buttons their corner; the
-            // title is aligned to that same edge in Arabic.
-            actions: const <Widget>[WindowControlsGap()],
-            title: ApplePersistentGlassHeaderScope(
-              enabled:
-                  !MorePaneScope.of(context) && Navigator.of(context).canPop(),
-              onBack: () => Navigator.of(context).pop(),
-              child: Align(
-                alignment: isArabic
-                    ? Alignment.centerRight
-                    : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  child: Text(
-                    isArabic ? 'الإحصائيات العالمية' : 'Global statistics',
-                  ),
-                ),
-              ),
-            ),
-            leading:
-                appleUsesPersistentLiquidGlassHeader ||
-                    MorePaneScope.of(context)
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-            elevation: 0,
-          ),
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: isArabic ? 'الإحصائيات العالمية' : 'Global statistics',
+        canPop: !embedded && Navigator.of(context).canPop(),
+        onBack: () => Navigator.of(context).pop(),
       ),
-      body: Column(
+      body: Padding(
+        padding: EdgeInsets.only(top: headerTop),
+        child: Column(
         children: [
           _RankingTabs(controller: _tabController, isArabic: isArabic),
           Expanded(
@@ -155,6 +124,7 @@ class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -452,11 +422,9 @@ class _RankingGrid extends StatelessWidget {
               key: ValueKey('${ranking.queryType}-${item.url}'),
               item: item,
               heroTag: 'global-ranking-${ranking.queryType}-${item.id}-$index',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => DetailsScreen(item: item),
-                ),
-              ),
+              onTap: () => DetailsRoute(
+                $extra: DetailsRouteExtra(item: item),
+              ).push<void>(context),
             );
           },
         ),
@@ -499,3 +467,4 @@ class _RankingError extends StatelessWidget {
     );
   }
 }
+

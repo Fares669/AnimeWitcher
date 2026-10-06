@@ -15,6 +15,7 @@ import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../home/presentation/widgets/home_section_header.dart';
 import '../../home/presentation/widgets/latest_manga_chapters_section.dart';
+import 'manga_home_prefetch.dart';
 import 'manga_view_all_screen.dart';
 
 /// Manga on a tab of its own, for a viewer who turned that tab on: the new
@@ -43,18 +44,23 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Fetched ahead of time while home was open: shown at once, then
+    // refreshed like any other visit.
+    // Only looked at when it was started: reading it would start it, a
+    // second request beside the tab's own.
+    final ready = ref.exists(mangaHomeFirstPageProvider)
+        ? ref.read(mangaHomeFirstPageProvider).value
+        : null;
+    if (ready != null) {
+      _latest = ready.latest;
+      _popular = ready.popular;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_reload()));
   }
 
-  AnimeWitcherProvider? _provider() {
-    final providers = ref
-        .read(extensionManagerProvider.notifier)
-        .getAllProviders();
-    for (final provider in providers) {
-      if (provider.supportedTypes.contains(ProviderType.manga)) return provider;
-    }
-    return providers.isEmpty ? null : providers.first;
-  }
+  AnimeWitcherProvider? _provider() => mangaCatalogueOf(
+    ref.read(extensionManagerProvider.notifier).getAllProviders(),
+  );
 
   Future<void> _reload() async {
     setState(() => _failed = false);
@@ -68,7 +74,8 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
           })
           .catchError((Object _) {}),
     );
-    setState(() => _loading = true);
+    // Rows already on screen stay there while the fresh ones load.
+    if (_popular.isEmpty) setState(() => _loading = true);
     try {
       final page = await provider.searchMangaPage(
         '',

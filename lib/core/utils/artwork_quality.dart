@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 /// Whether artwork is fetched and decoded at its largest available size.
@@ -13,9 +16,15 @@ void applyArtworkQuality(bool highQuality) {
   // Full-size artwork needs room to stay cached; a small budget would only
   // evict and re-decode the same posters while scrolling. Standard artwork is
   // small enough for the lighter budget the app used before.
+  //
+  // A desktop has the memory to keep every poster of home and a search in
+  // memory, so scrolling back draws them at once rather than decoding again;
+  // phones and TV boxes keep the lighter budgets.
+  final roomy =
+      !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
   PaintingBinding.instance.imageCache
-    ..maximumSize = highQuality ? 400 : 200
-    ..maximumSizeBytes = (highQuality ? 256 : 50) * 1024 * 1024;
+    ..maximumSize = roomy ? 1500 : (highQuality ? 400 : 200)
+    ..maximumSizeBytes = (roomy ? 320 : (highQuality ? 256 : 50)) * 1024 * 1024;
 }
 
 /// Hands [builder] the decode width for artwork painted [paintedWidth] logical

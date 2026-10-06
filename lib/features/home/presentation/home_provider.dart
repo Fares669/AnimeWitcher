@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -41,7 +42,58 @@ class HomeData extends _$HomeData {
     }
 
     Future.microtask(() => fetch(keepCurrent: true));
-    return const HomeLoading();
+    // Last launch's rows, shown at once while the catalogue is asked again:
+    // the request takes seconds, and the rows rarely change in between.
+    final kept = _readSnapshot(activeProvider.packageName);
+    return kept == null ? const HomeLoading() : HomeSuccess(kept);
+  }
+
+  static String _snapshotKey(String packageName) =>
+      'home_snapshot_$packageName';
+
+  Map<String, List<MultimediaItem>>? _readSnapshot(String packageName) {
+    try {
+      final raw = ref
+          .read(storageServiceProvider)
+          .getString(_snapshotKey(packageName));
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      final rows = decoded is Map ? decoded['rows'] : null;
+      if (rows is! Map || rows.isEmpty) return null;
+      return <String, List<MultimediaItem>>{
+        for (final entry in rows.entries)
+          if (entry.value is List)
+            '${entry.key}': <MultimediaItem>[
+              for (final item in entry.value as List)
+                if (item is Map)
+                  MultimediaItem.fromJson(Map<String, dynamic>.from(item)),
+            ],
+      };
+    } catch (_) {
+      // An unreadable snapshot only costs the instant start.
+      return null;
+    }
+  }
+
+  void _saveSnapshot(
+    String packageName,
+    Map<String, List<MultimediaItem>> rows,
+  ) {
+    if (rows.isEmpty) return;
+    try {
+      final encoded = jsonEncode(<String, dynamic>{
+        'rows': <String, dynamic>{
+          for (final entry in rows.entries)
+            entry.key: entry.value.map((item) => item.toJson()).toList(),
+        },
+      });
+      unawaited(
+        ref
+            .read(storageServiceProvider)
+            .setString(_snapshotKey(packageName), encoded)
+            .catchError((_) {}),
+      );
+    } catch (_) {}
   }
 
   /// Retry after an offline/error screen. Drops stale HTTP sockets first so
@@ -82,6 +134,7 @@ class HomeData extends _$HomeData {
     try {
       final items = await activeProvider.getHome();
       if (generation != _fetchGeneration) return;
+      _saveSnapshot(activeProvider.packageName, items);
       state = HomeSuccess(
         items,
         news: previous?.news ?? const <NewsItem>[],

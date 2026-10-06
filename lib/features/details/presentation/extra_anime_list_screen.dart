@@ -10,7 +10,7 @@ import '../../../core/extensions/base_provider.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/router/app_router.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import 'widgets/details_poster_grid.dart';
 
@@ -159,54 +159,38 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            title: ApplePersistentGlassHeaderScope(
-              enabled: Navigator.of(context).canPop(),
-              onBack: () => Navigator.of(context).pop(),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: Directionality(
-                  textDirection: TextDirection.rtl,
-                  child: Text(widget.title),
-                ),
-              ),
-            ),
-            leading: appleUsesPersistentLiquidGlassHeader
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-            elevation: 0,
-          ),
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: widget.title,
+        onBack: () => Navigator.of(context).pop(),
       ),
       body: _loading
           ? const AnimeCatalogShimmer()
           : _error != null
-          ? Center(
-              child: FilledButton.tonalIcon(
+          ? Padding(
+              padding: EdgeInsets.only(top: headerTop),
+              child: Center(
+                child: FilledButton.tonalIcon(
                 onPressed: _load,
                 icon: const Icon(Icons.refresh_rounded),
                 label: const Text('إعادة المحاولة'),
+                ),
               ),
             )
           : _items.isEmpty
-          ? Center(child: Text(widget.emptyMessage))
+          ? Padding(
+              padding: EdgeInsets.only(top: headerTop),
+              child: Center(child: Text(widget.emptyMessage)),
+            )
           : MouseDragRefreshIndicator(
               onRefresh: _load,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: EdgeInsets.fromLTRB(
                   MultimediaCardLayout.catalogGridHorizontalPadding(context),
-                  16,
+                  headerTop + 16,
                   MultimediaCardLayout.catalogGridHorizontalPadding(context),
                   110,
                 ),
@@ -228,4 +212,5 @@ class _ExtraAnimeListScreenState extends ConsumerState<ExtraAnimeListScreen> {
     );
   }
 }
+
 

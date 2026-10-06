@@ -1016,6 +1016,23 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
         .toList(growable: false);
   }
 
+  /// The catalogue's entries for MyAnimeList ids, in the order given; ids
+  /// the catalogue does not carry are left out.
+  Future<List<MultimediaItem>> getAnimesByMalIds(List<int> malIds) async {
+    final hitsByMalId = await _animeListHitsByMalIds(malIds.map((id) => '$id'));
+    final items = <MultimediaItem>[];
+    final seen = <String>{};
+    for (final id in malIds) {
+      final hit = hitsByMalId['$id'];
+      if (hit == null) continue;
+      final item = _mapHit(hit);
+      if (item.title.trim().isEmpty || item.url.trim().isEmpty) continue;
+      if (!seen.add(item.url)) continue;
+      items.add(item);
+    }
+    return _filterEcchiItems(items);
+  }
+
   Future<Map<String, Map<String, dynamic>>> _animeListHitsByMalIds(
     Iterable<String> rawIds,
   ) async {
@@ -1030,29 +1047,38 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
 
     final hitsByMalId = <String, Map<String, dynamic>>{};
     const batchSize = 10;
-    for (var start = 0; start < ids.length; start += batchSize) {
-      final end = start + batchSize > ids.length
-          ? ids.length
-          : start + batchSize;
-      final batch = ids.sublist(start, end);
-      final raw = await _firestoreRestRunQueryOrThrow(<String, dynamic>{
-        'from': const <Map<String, dynamic>>[
-          <String, dynamic>{'collectionId': 'anime_list'},
-        ],
-        'where': <String, dynamic>{
-          'fieldFilter': <String, dynamic>{
-            'field': const <String, dynamic>{'fieldPath': 'mal_id'},
-            'op': 'IN',
-            'value': <String, dynamic>{
-              'arrayValue': <String, dynamic>{
-                'values': <Map<String, dynamic>>[
-                  for (final id in batch) <String, dynamic>{'stringValue': id},
-                ],
+    // The batches go out together: one after another, a page of twenty-five
+    // ids was three round trips end to end.
+    final batches = <List<String>>[
+      for (var start = 0; start < ids.length; start += batchSize)
+        ids.sublist(
+          start,
+          start + batchSize > ids.length ? ids.length : start + batchSize,
+        ),
+    ];
+    final results = await Future.wait(<Future<List<dynamic>>>[
+      for (final batch in batches)
+        _firestoreRestRunQueryOrThrow(<String, dynamic>{
+          'from': const <Map<String, dynamic>>[
+            <String, dynamic>{'collectionId': 'anime_list'},
+          ],
+          'where': <String, dynamic>{
+            'fieldFilter': <String, dynamic>{
+              'field': const <String, dynamic>{'fieldPath': 'mal_id'},
+              'op': 'IN',
+              'value': <String, dynamic>{
+                'arrayValue': <String, dynamic>{
+                  'values': <Map<String, dynamic>>[
+                    for (final id in batch)
+                      <String, dynamic>{'stringValue': id},
+                  ],
+                },
               },
             },
           },
-        },
-      });
+        }),
+    ]);
+    for (final raw in results) {
       for (final row in raw) {
         final hit = _firestoreDocumentHit(_map(row)['document']);
         if (hit.isEmpty) continue;

@@ -244,4 +244,26 @@ void main() {
 
     expect(container.read(mangaHasOwnTabProvider), !before);
   });
+
+  testWidgets('turning the manga tab on shows it on the preview bar', (
+    tester,
+  ) async {
+    await pumpAt(tester, const Size(1280, 800), storage: _TaskbarStorage());
+    final preview = find.byType(HomeLayoutPreview);
+    final manga = find.descendant(
+      of: preview,
+      matching: find.byIcon(Icons.menu_book_rounded),
+    );
+    final before = manga.evaluate().length;
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey<String>('setup-manga-own-tab')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey<String>('setup-manga-own-tab')));
+    await tester.pumpAndSettle();
+
+    // Switched the other way from how it started: the icon came or went.
+    expect(manga.evaluate().length, isNot(before));
+  });
 }

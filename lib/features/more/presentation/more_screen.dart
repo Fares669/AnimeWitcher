@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:animewitcher/features/settings/presentation/general_settings_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/navigation/app_layout_style.dart';
@@ -86,11 +88,16 @@ class MoreScreen extends ConsumerWidget {
     // width, and a short window is better served by the single list.
     const twoPaneMinimumShortestSide = 640.0;
     final size = MediaQuery.sizeOf(context);
+    final headerTop = appPageHeaderContentTopInset(context);
+    final pageTitle = isArabic ? 'المزيد' : 'More';
     if (size.width >= twoPaneMinimumWidth &&
         size.shortestSide >= twoPaneMinimumShortestSide) {
       return Scaffold(
-        appBar: AppBar(centerTitle: false),
-        body: MoreSidebarShell(
+        extendBodyBehindAppBar: true,
+        appBar: AppPageAppBar(title: pageTitle, canPop: false),
+        body: Padding(
+          padding: EdgeInsets.only(top: headerTop),
+          child: MoreSidebarShell(
           header: MoreSidebarHeader(
             name: accountProfile == null
                 ? appText(context, english: 'Sign in', arabic: 'تسجيل الدخول')
@@ -158,22 +165,27 @@ class MoreScreen extends ConsumerWidget {
               items: _settingsDestinations(context, ref),
             ),
           ],
+          ),
         ),
       );
     }
 
     return Scaffold(
-      // No title: the window's caption buttons are painted over this same
-      // corner, and the two collided. The bar stays for its spacing, and
-      // holds the side menu's button when that layout is on.
-      appBar: AppBar(
-        centerTitle: false,
-        actions: const <Widget>[
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: pageTitle,
+        canPop: false,
+        actions: <Widget>[
           AppSideMenuButton(padding: EdgeInsetsDirectional.only(end: 12)),
         ],
       ),
       body: ListView(
-        padding: EdgeInsets.fromLTRB(16, 12, 16, bottomPadding),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          headerTop + 12,
+          16,
+          bottomPadding,
+        ),
         children: [
           _MorePanel(
             children: [
@@ -537,7 +549,11 @@ class _SettingsGroupPane extends ConsumerWidget {
           LivePreviewFrame(
             followTheme: true,
             caption: '$caption · ${arabic ? 'الرئيسية' : 'Home'}',
-            child: HomeLayoutPreview(layout: layout, theme: theme),
+            child: HomeLayoutPreview(
+              layout: layout,
+              theme: theme,
+              mangaTab: ref.watch(mangaHasOwnTabProvider),
+            ),
           ),
           LivePreviewFrame(
             followTheme: true,

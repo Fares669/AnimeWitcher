@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'poster_plate.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
 import '../../core/domain/entity/multimedia_item.dart';
@@ -10,7 +11,6 @@ import '../../core/utils/image_fallbacks.dart';
 import '../../core/utils/responsive_breakpoints.dart';
 import 'cards_wrapper.dart';
 import 'fallback_poster_image.dart';
-import 'shimmer_placeholder.dart';
 import 'thumbnail_error_placeholder.dart';
 
 /// Shared poster + caption metrics so rails and grids reserve the same space.
@@ -356,8 +356,10 @@ class MultimediaCard extends StatelessWidget {
       height: double.infinity,
       memCacheWidth: decodeWidth,
       filterQuality: FilterQuality.medium,
+      // Harbor's plate: the card's own colour, from its title, until the
+      // picture is in.
       placeholder: (context) => showImageLoadingShimmer
-          ? ShimmerPlaceholder(borderRadius: MultimediaCardLayout.posterRadius)
+          ? PosterPlate(seed: title)
           : _buildImageLoadingCard(context),
       errorWidget: (context) => ThumbnailErrorPlaceholder(label: title),
     );

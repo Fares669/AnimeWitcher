@@ -222,9 +222,13 @@ class HomeLayoutPreview extends StatelessWidget {
     required this.layout,
     required this.theme,
     this.phone = false,
+    this.mangaTab = false,
   });
 
   final AppLayoutStyle layout;
+
+  /// Manga has a tab of its own, drawn after search as the real bar has it.
+  final bool mangaTab;
 
   /// The theme to draw in.
   final AppThemeStyle theme;
@@ -245,6 +249,11 @@ class HomeLayoutPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
     final p = _Palette.of(theme);
+    final icons = <IconData>[
+      ..._icons.take(2),
+      if (mangaTab) Icons.menu_book_rounded,
+      ..._icons.skip(2),
+    ];
 
     final content = AnimatedContainer(
       duration: const Duration(milliseconds: 250),
@@ -322,8 +331,8 @@ class HomeLayoutPreview extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      for (var i = 0; i < _icons.length; i++)
-                        icon(_icons[i], selected: i == 0),
+                      for (var i = 0; i < icons.length; i++)
+                        icon(icons[i], selected: i == 0),
                       icon(Icons.newspaper_rounded),
                     ],
                   ),
@@ -340,8 +349,8 @@ class HomeLayoutPreview extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 22),
               child: Column(
                 children: [
-                  for (var i = 0; i < _icons.length; i++) ...[
-                    icon(_icons[i], selected: i == 0),
+                  for (var i = 0; i < icons.length; i++) ...[
+                    icon(icons[i], selected: i == 0),
                     const SizedBox(height: 14),
                   ],
                   const Spacer(),
@@ -382,9 +391,9 @@ class HomeLayoutPreview extends StatelessWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          for (var i = 0; i < _icons.length; i++) ...[
+                          for (var i = 0; i < icons.length; i++) ...[
                             if (i > 0) const SizedBox(width: 8),
-                            icon(_icons[i], selected: i == 0),
+                            icon(icons[i], selected: i == 0),
                           ],
                         ],
                       ),

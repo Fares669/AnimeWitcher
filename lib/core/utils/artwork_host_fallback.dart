@@ -25,9 +25,10 @@ final ValueNotifier<bool> malArtworkUnreachable = ValueNotifier<bool>(false);
 /// artwork behaves exactly as it did before this existed.
 final ValueNotifier<bool> artworkFallbackEnabled = ValueNotifier<bool>(false);
 
+/// The setting governs looking artwork up elsewhere; whether the CDN is
+/// reachable is checked regardless, and is not reset by it.
 void applyArtworkFallbackEnabled(bool enabled) {
   artworkFallbackEnabled.value = enabled;
-  if (!enabled) malArtworkUnreachable.value = false;
 }
 
 bool isMalArtworkUrl(String url) {
@@ -40,10 +41,12 @@ bool isMalArtworkUrl(String url) {
 /// Orders artwork candidates so ones that can actually load come first.
 ///
 /// Order is otherwise preserved, so the catalog's own preference still
-/// decides between two reachable URLs.
+/// decides between two reachable URLs. Only the catalog's own candidates are
+/// reordered, so this needs no setting: on a network that blocks the CDN, the
+/// AniList copy the catalog stores comes first.
 List<String> preferReachableArtwork(Iterable<String> candidates) {
   final values = candidates.where((c) => c.trim().isNotEmpty).toList();
-  if (!artworkFallbackEnabled.value || !malArtworkUnreachable.value) {
+  if (!malArtworkUnreachable.value) {
     return values;
   }
   final reachable = values.where((c) => !isMalArtworkUrl(c)).toList();
@@ -74,6 +77,15 @@ void seedMalArtworkReachability(bool unreachable) {
 Future<bool> probeMalArtworkUnreachable({
   Duration timeout = const Duration(seconds: 3),
 }) async {
+  // A blocking network usually answers the name with a sinkhole address
+  // (0.0.0.0), which is known at once; a request to it would only hang.
+  try {
+    final addresses = await InternetAddress.lookup(Uri.parse(_probeUrl).host)
+        .timeout(timeout);
+    if (addresses.isEmpty || addresses.every(_isSinkhole)) return true;
+  } catch (_) {
+    return true;
+  }
   HttpClient? client;
   try {
     client = HttpClient()..connectionTimeout = timeout;
@@ -94,3 +106,9 @@ Future<bool> probeMalArtworkUnreachable({
     client?.close(force: true);
   }
 }
+
+bool _isSinkhole(InternetAddress address) =>
+    address.isLoopback ||
+    address.isLinkLocal ||
+    address.address == '0.0.0.0' ||
+    address.address == '::';

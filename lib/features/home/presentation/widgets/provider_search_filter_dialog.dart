@@ -1,10 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../../../shared/widgets/apple_liquid_glass.dart';
-
 import '../../../../core/extensions/base_provider.dart';
-import '../../../../core/utils/layout_constants.dart';
-import '../../../../core/utils/responsive_breakpoints.dart';
 
 /// One of the main categories the sheet can switch between, such as anime
 /// or manga, shown in its header.
@@ -52,16 +48,20 @@ class ProviderSearchFilterDialog extends StatefulWidget {
     this.category,
     this.optionsFor,
     this.onCategoryApplied,
+    this.asSheet = false,
   });
+
+  /// Shown by [showProviderSearchFilterSheet]: the whole screen, risen from
+  /// the bottom, with a handle to drag it back down.
+  final bool asSheet;
 
   @override
   State<ProviderSearchFilterDialog> createState() =>
       _ProviderSearchFilterDialogState();
 }
 
-class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabController;
+class _ProviderSearchFilterDialogState
+    extends State<ProviderSearchFilterDialog> {
   late Set<String> _statuses;
   late Set<String> _types;
   late Set<String> _ageRatings;
@@ -69,21 +69,23 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
   late Set<String> _seasons;
   late Set<String> _genres;
   String? _category;
+  bool _allYears = false;
   final Map<String, Future<ProviderSearchFilterOptions>> _optionsByCategory =
       {};
 
+  /// Years shown before "more": the list runs back decades.
+  static const int _yearsShown = 5;
+
   bool get _isArabic =>
       Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
+  String _t(String english, String arabic) => _isArabic ? arabic : english;
 
   bool get _seasonRequiresYear => _seasons.isNotEmpty && _years.isEmpty;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
-    _tabController.addListener(() {
-      if (mounted) setState(() {});
-    });
     _statuses = {...widget.initialValue.statuses};
     _types = {...widget.initialValue.types};
     _ageRatings = {...widget.initialValue.ageRatings};
@@ -113,12 +115,6 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
     final category = _category;
     if (category != null) widget.onCategoryApplied?.call(category);
     Navigator.of(context).pop(_value);
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
   }
 
   void _toggle(Set<String> target, String value) {
@@ -171,169 +167,125 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
     );
   }
 
-  List<_FilterTabSpec> get _tabs => [
-    _FilterTabSpec(
-      icon: Icons.local_offer_outlined,
-      label: _isArabic ? 'التصنيفات' : 'Genres',
-      active: _genres.isNotEmpty,
-    ),
-    _FilterTabSpec(
-      icon: Icons.calendar_today_outlined,
-      label: _isArabic ? 'السنة' : 'Year',
-      active: _years.isNotEmpty || _seasons.isNotEmpty,
-    ),
-    _FilterTabSpec(
-      icon: Icons.shield_outlined,
-      label: _isArabic ? 'العمر' : 'Age',
-      active: _ageRatings.isNotEmpty,
-    ),
-    _FilterTabSpec(
-      icon: Icons.category_outlined,
-      label: _isArabic ? 'النوع' : 'Type',
-      active: _types.isNotEmpty,
-    ),
-    _FilterTabSpec(
-      icon: Icons.wifi_tethering_rounded,
-      label: _isArabic ? 'الحالة' : 'Status',
-      active: _statuses.isNotEmpty,
-    ),
-  ];
-
-  List<Widget> _optionViews(
-    ProviderSearchFilterOptions options, {
-    required bool compactLandscape,
-  }) {
-    final genreColumns = compactLandscape ? 5 : 3;
-    final pairColumns = compactLandscape ? 4 : 2;
-    return [
-      _MultiSelectGrid(
-        values: options.genres,
-        selected: _genres,
-        onToggle: (value) => _toggle(_genres, value),
-        crossAxisCount: genreColumns,
-        compact: true,
-        dense: compactLandscape,
-      ),
-      _SeasonYearGrid(
-        seasons: options.seasons,
-        years: options.years,
-        selectedSeasons: _seasons,
-        selectedYears: _years,
-        onSeasonToggle: _toggleSeason,
-        onYearToggle: (value) => _toggle(_years, value),
-        crossAxisCount: compactLandscape ? 5 : 4,
-        dense: compactLandscape,
-      ),
-      _MultiSelectGrid(
-        values: options.ageRatings,
-        selected: _ageRatings,
-        onToggle: (value) => _toggle(_ageRatings, value),
-        crossAxisCount: pairColumns,
-        dense: compactLandscape,
-      ),
-      _MultiSelectGrid(
-        values: options.types,
-        selected: _types,
-        onToggle: (value) => _toggle(_types, value),
-        crossAxisCount: pairColumns,
-        dense: compactLandscape,
-      ),
-      _MultiSelectGrid(
-        values: options.statuses,
-        selected: _statuses,
-        onToggle: (value) => _toggle(_statuses, value),
-        crossAxisCount: pairColumns,
-        dense: compactLandscape,
-      ),
-    ];
-  }
-
-  Widget _header(BuildContext context, {required bool compact}) {
+  /// Back on the left, the title between, reset on the right — in either
+  /// reading direction.
+  Widget _header(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        compact ? 12 : 20,
-        compact ? 8 : 20,
-        compact ? 4 : 8,
-        // Closer to the category row when there is one beneath it.
-        widget.categories.isEmpty ? (compact ? 8 : 20) : (compact ? 4 : 12),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.tune_rounded,
-            color: colors.primary,
-            size: compact ? 22 : 28,
-          ),
-          const SizedBox(width: LayoutConstants.spacingSm),
-          Expanded(
-            child: Text(
-              _isArabic ? 'فلاتر البحث' : 'Search filters',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style:
-                  (compact
-                          ? theme.textTheme.titleMedium
-                          : theme.textTheme.headlineSmall)
-                      ?.copyWith(fontWeight: FontWeight.bold),
-            ),
-          ),
-          if (_value.isNotEmpty)
-            Container(
-              margin: const EdgeInsetsDirectional.only(end: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-              decoration: BoxDecoration(
-                color: colors.primary.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(50),
+    final count = _value.count;
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(4, widget.asSheet ? 14 : 4, 6, 2),
+        // The title sits in the middle of the sheet, whatever the widths of
+        // the buttons either side of it.
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 100),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Flexible(
+                    child: Text(
+                      _t('Search filters', 'فلاتر البحث'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  if (count > 0) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.primary.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(50),
+                      ),
+                      child: Text(
+                        '$count',
+                        style: TextStyle(
+                          color: colors.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
-              child: Text(
-                '${_value.count}',
-                style: TextStyle(
-                  color: colors.primary,
-                  fontWeight: FontWeight.w700,
+            ),
+            Row(
+              children: [
+                IconButton(
+                  key: const ValueKey<String>('filterBack'),
+                  tooltip: _t('Back', 'رجوع'),
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  onPressed: () => Navigator.of(context).pop(),
                 ),
-              ),
+                const Spacer(),
+                TextButton(
+                  key: const ValueKey<String>('filterReset'),
+                  onPressed: _value.isEmpty ? null : _clearAll,
+                  style: TextButton.styleFrom(
+                    foregroundColor: colors.error,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                  ),
+                  child: Text(
+                    _t('Reset', 'إعادة الضبط'),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
             ),
-          IconButton(
-            onPressed: () => Navigator.of(context).pop(),
-            icon: const Icon(Icons.close_rounded),
-            visualDensity: compact
-                ? VisualDensity.compact
-                : VisualDensity.standard,
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  /// The main categories as a row of pills; scrolls when the sheet is too
-  /// narrow to hold them all.
+  /// The main categories as one row of pills sharing the width, all in view
+  /// at once; on a narrow phone the icons go so the names keep their room.
   Widget _categoryStrip(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return SingleChildScrollView(
+    final count = widget.categories.length;
+    return Padding(
       key: const ValueKey<String>('filterCategoryStrip'),
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final category in widget.categories)
-            Padding(
-              padding: const EdgeInsetsDirectional.only(end: 6),
-              child: _CategoryPill(
-                key: ValueKey<String>('filterCategory-${category.value}'),
-                category: category,
-                selected: category.value == _category,
-                accent: colors.primary,
-                onTap: () => _pickCategory(category.value),
-              ),
-            ),
-        ],
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final each = (constraints.maxWidth - 4 * (count - 1)) / count;
+          final icons = each >= 78;
+          return Row(
+            children: [
+              for (var i = 0; i < count; i++) ...[
+                if (i > 0) const SizedBox(width: 4),
+                Expanded(
+                  child: _CategoryPill(
+                    key: ValueKey<String>(
+                      'filterCategory-${widget.categories[i].value}',
+                    ),
+                    category: widget.categories[i],
+                    selected: widget.categories[i].value == _category,
+                    accent: colors.primary,
+                    showIcon: icons,
+                    onTap: () => _pickCategory(widget.categories[i].value),
+                  ),
+                ),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
 
-  /// A category with nothing to filter says so where the tabs would be.
+  /// A category with nothing to filter says so where the cards would be.
   Widget _noFiltersNote(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     String? note;
@@ -354,9 +306,7 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
             const SizedBox(height: 12),
             Text(
               note ??
-                  (_isArabic
-                      ? 'لا توجد فلاتر لهذا القسم'
-                      : 'This section has no filters'),
+                  _t('This section has no filters', 'لا توجد فلاتر لهذا القسم'),
               textAlign: TextAlign.center,
               style: TextStyle(color: colors.onSurfaceVariant),
             ),
@@ -366,219 +316,479 @@ class _ProviderSearchFilterDialogState extends State<ProviderSearchFilterDialog>
     );
   }
 
-  Widget _footer(BuildContext context, {required bool compact}) {
-    final colors = Theme.of(context).colorScheme;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        compact ? 12 : LayoutConstants.spacingMd,
-        compact ? 6 : LayoutConstants.spacingMd,
-        compact ? 12 : LayoutConstants.spacingMd,
-        compact ? 8 : LayoutConstants.spacingMd,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (_seasonRequiresYear)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.info_outline_rounded,
-                    size: 18,
-                    color: colors.primary,
+  /// The small groups two to a row where there is room, then year and
+  /// genres the full width: their lists are long.
+  Widget _cards(BuildContext context, ProviderSearchFilterOptions options) {
+    final small = <Widget>[
+      if (options.statuses.isNotEmpty)
+        _FilterCard(
+          key: const ValueKey<String>('filterCard-status'),
+          title: _t('Status', 'الحالة'),
+          child: _ChipWrap(
+            values: options.statuses,
+            selected: _statuses,
+            onToggle: (value) => _toggle(_statuses, value),
+          ),
+        ),
+      if (options.types.isNotEmpty)
+        _FilterCard(
+          key: const ValueKey<String>('filterCard-type'),
+          title: _t('Type', 'النوع'),
+          child: _ChipWrap(
+            values: options.types,
+            selected: _types,
+            onToggle: (value) => _toggle(_types, value),
+          ),
+        ),
+      if (options.seasons.isNotEmpty)
+        _FilterCard(
+          key: const ValueKey<String>('filterCard-season'),
+          title: _t('Season', 'الموسم'),
+          note: _seasonRequiresYear
+              ? _t('Choose a year with the season', 'اختر سنة مع الموسم')
+              : null,
+          child: _ChipWrap(
+            values: options.seasons,
+            selected: _seasons,
+            onToggle: _toggleSeason,
+          ),
+        ),
+      if (options.ageRatings.isNotEmpty)
+        _FilterCard(
+          key: const ValueKey<String>('filterCard-age'),
+          title: _t('Age rating', 'التصنيف العمري'),
+          child: _ChipWrap(
+            values: options.ageRatings,
+            selected: _ageRatings,
+            onToggle: (value) => _toggle(_ageRatings, value),
+          ),
+        ),
+    ];
+    final years = _allYears
+        ? options.years
+        : options.years.take(_yearsShown).toList(growable: false);
+    // Years picked beyond the first few stay in view.
+    final shownYears = <String>[
+      ...years,
+      for (final year in _years)
+        if (!years.contains(year) && options.years.contains(year)) year,
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // The list's own padding comes off the width first.
+        final width = constraints.maxWidth - 24;
+        final twoColumns = width >= 330;
+        return ListView(
+          key: const ValueKey<String>('filterCards'),
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+          children: [
+            // Two to a row, each pair as tall as its taller card, so no
+            // gap opens under the shorter one.
+            if (twoColumns)
+              for (var i = 0; i < small.length; i += 2)
+                Padding(
+                  padding: EdgeInsets.only(
+                    bottom: i + 2 < small.length ? 8 : 0,
                   ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      _isArabic
-                          ? 'اختر سنة مع الموسم'
-                          : 'Choose a year with the season',
-                      style: TextStyle(
-                        color: colors.primary,
-                        fontWeight: FontWeight.w600,
+                  child: IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(child: small[i]),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: i + 1 < small.length
+                              ? small[i + 1]
+                              : const SizedBox.shrink(),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+            else
+              for (final card in small)
+                Padding(padding: const EdgeInsets.only(bottom: 8), child: card),
+            if (options.years.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _FilterCard(
+                key: const ValueKey<String>('filterCard-year'),
+                title: _t('Release year', 'سنة الإصدار'),
+                multiple: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Five years to a row, the newest five first.
+                    AnimatedSize(
+                      key: const ValueKey<String>(
+                        'filter-year-size-transition',
+                      ),
+                      duration: const Duration(milliseconds: 240),
+                      reverseDuration: const Duration(milliseconds: 190),
+                      curve: Curves.easeOutCubic,
+                      alignment: AlignmentDirectional.topStart,
+                      clipBehavior: Clip.hardEdge,
+                      child: _ChipWrap(
+                        values: shownYears,
+                        selected: _years,
+                        columns: _yearsShown,
+                        onToggle: (value) => _toggle(_years, value),
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-          Row(
-            children: [
-              Flexible(
-                child: TextButton.icon(
-                  onPressed: _value.isEmpty ? null : _clearAll,
-                  icon: const Icon(Icons.restart_alt_rounded),
-                  label: Text(
-                    _isArabic ? 'مسح الكل' : 'Clear all',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _seasonRequiresYear ? null : _apply,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: colors.primary,
-                    foregroundColor: colors.onPrimary,
-                    padding: EdgeInsets.symmetric(vertical: compact ? 10 : 16),
-                    minimumSize: Size(0, compact ? 40 : 48),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  child: Text(
-                    _isArabic ? 'تطبيق' : 'Apply',
-                    style: TextStyle(
-                      fontSize: compact ? 14 : 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                    if (options.years.length > _yearsShown)
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: TextButton(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            minimumSize: const Size(0, 34),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          onPressed: () =>
+                              setState(() => _allYears = !_allYears),
+                          child: Text(
+                            _allYears
+                                ? _t('Show less', 'عرض أقل')
+                                : _t('Show more', 'عرض المزيد'),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ],
-          ),
-        ],
-      ),
+            if (options.genres.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _FilterCard(
+                key: const ValueKey<String>('filterCard-genres'),
+                title: _t('Genres', 'التصنيفات'),
+                multiple: true,
+                child: _ChipWrap(
+                  values: options.genres,
+                  selected: _genres,
+                  onToggle: (value) => _toggle(_genres, value),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 
-  Widget _horizontalTabs(BuildContext context, {required bool spread}) {
+  /// The big Apply bar along the bottom.
+  Widget _applyBar(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return TabBar(
-      controller: _tabController,
-      isScrollable: !spread,
-      tabAlignment: spread ? TabAlignment.fill : TabAlignment.start,
-      indicatorColor: colors.primary,
-      labelColor: colors.primary,
-      unselectedLabelColor: colors.onSurfaceVariant,
-      labelPadding: spread ? const EdgeInsets.symmetric(horizontal: 4) : null,
-      tabs: [
-        for (final tab in _tabs)
-          _FilterTab(icon: tab.icon, label: tab.label, active: tab.active),
-      ],
+    final count = _value.count;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+        child: SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: FilledButton(
+            key: const ValueKey<String>('filterApply'),
+            onPressed: _seasonRequiresYear ? null : _apply,
+            style: FilledButton.styleFrom(
+              backgroundColor: colors.primary,
+              foregroundColor: colors.onPrimary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            child: Text(
+              count > 0
+                  ? '${_t('Apply', 'تطبيق')} ($count)'
+                  : _t('Apply', 'تطبيق'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final viewport = MediaQuery.sizeOf(context);
+    // A phone gets the whole screen; anything larger a tall window.
+    final phone = viewport.shortestSide < 600;
+
+    final body = Material(
+      color: colors.surface,
+      child: FutureBuilder<ProviderSearchFilterOptions>(
+        // Picking a category loads its filters once; the cards wait for
+        // them rather than showing the last category's.
+        key: ValueKey<String?>(_category),
+        future: _category == null
+            ? Future.value(widget.options)
+            : _optionsOf(_category!),
+        initialData: _category == null || _category == widget.category
+            ? widget.options
+            : null,
+        builder: (context, snapshot) {
+          final options = snapshot.data;
+          if (options != null) _shownOptions = options;
+          final loading =
+              options == null &&
+              snapshot.connectionState != ConnectionState.done;
+          final hasFilters = options != null && !options.isEmpty;
+          return SafeArea(
+            bottom: false,
+            child: Column(
+              children: [
+                _header(context),
+                if (widget.categories.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: _categoryStrip(context),
+                  ),
+                Expanded(
+                  child: loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : hasFilters
+                      ? _cards(context, options)
+                      : _noFiltersNote(context),
+                ),
+                _applyBar(context),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    if (widget.asSheet) {
+      return ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: Stack(
+          children: [
+            body,
+            // The handle, over the space above the header.
+            PositionedDirectional(
+              top: MediaQuery.paddingOf(context).top + 4,
+              start: 0,
+              end: 0,
+              child: Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: colors.onSurfaceVariant.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    if (phone) return Dialog.fullscreen(child: body);
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 720,
+          maxHeight: (viewport.height * 0.86).clamp(320.0, 900.0),
+        ),
+        child: body,
+      ),
+    );
+  }
+}
+
+/// Opens the filters as a phone's sheet: up from the bottom to fill the
+/// screen, dragged or swiped back down to close, as the library's filters.
+/// [builder] gives the [ProviderSearchFilterDialog], with `asSheet` set.
+Future<ProviderSearchFilters?> showProviderSearchFilterSheet({
+  required BuildContext context,
+  required WidgetBuilder builder,
+}) {
+  final media = MediaQuery.of(context);
+  final height = media.size.height - media.padding.top;
+  return showModalBottomSheet<ProviderSearchFilters>(
+    context: context,
+    isScrollControlled: true,
+    useRootNavigator: true,
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.black.withValues(alpha: 0.5),
+    constraints: const BoxConstraints(),
+    builder: (context) => SizedBox(height: height, child: builder(context)),
+  );
+}
+
+/// One group of choices on its own card, a title above, "multiple" beside
+/// it where several can be picked.
+class _FilterCard extends StatelessWidget {
+  const _FilterCard({
+    super.key,
+    required this.title,
+    required this.child,
+    this.multiple = false,
+    this.note,
+  });
+
+  final String title;
+  final Widget child;
+  final bool multiple;
+  final String? note;
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final viewport = MediaQuery.sizeOf(context);
-    final isHandsetLandscape = context.isHandsetLandscape;
-    final insetH = isHandsetLandscape ? 12.0 : 16.0;
-    // Landscape phones have little vertical room; use a tight inset so the
-    // sheet can grow into the empty bands above and below instead of sitting
-    // as a short strip in the middle.
-    final insetV = isHandsetLandscape ? 4.0 : 28.0;
-    final availableHeight = (viewport.height - insetV * 2)
-        .clamp(160.0, 720.0)
-        .toDouble();
-    final dialogHeight = isHandsetLandscape
-        ? availableHeight
-        : (viewport.height * 0.82).clamp(180.0, availableHeight).toDouble();
-    final maxWidth = isHandsetLandscape
-        ? (viewport.width - insetH * 2).clamp(280.0, 840.0)
-        : 560.0;
-
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      surfaceTintColor: Colors.transparent,
-      elevation: 0,
-      insetPadding: EdgeInsets.symmetric(horizontal: insetH, vertical: insetV),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: SizedBox(
-          width: double.infinity,
-          height: dialogHeight,
-          child: AppleLiquidGlassSurface(
-            borderRadius: BorderRadius.circular(isHandsetLandscape ? 20 : 28),
-            style: 'regular',
-            interactive: true,
-            // The same fill and hairline the home capsule and the taskbar
-            // carry, so the sheet belongs to them. It can afford to be
-            // translucent because the surface blurs what is behind it; the
-            // text stays off the posters without hiding them entirely.
-            fallbackColor: colors.surfaceContainerHighest.withValues(
-              alpha: 0.72,
-            ),
-            fallbackBorder: BorderSide(
-              color: colors.onSurfaceVariant.withValues(alpha: 0.12),
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: FutureBuilder<ProviderSearchFilterOptions>(
-                // Picking a category loads its filters once; the tabs wait
-                // for them rather than showing the last category's.
-                key: ValueKey<String?>(_category),
-                future: _category == null
-                    ? Future.value(widget.options)
-                    : _optionsOf(_category!),
-                initialData: _category == null || _category == widget.category
-                    ? widget.options
-                    : null,
-                builder: (context, snapshot) {
-                  final options = snapshot.data;
-                  if (options != null) _shownOptions = options;
-                  final loading =
-                      options == null &&
-                      snapshot.connectionState != ConnectionState.done;
-                  final hasFilters = options != null && !options.isEmpty;
-                  return Column(
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(color: theme.dividerColor),
-                          ),
-                        ),
-                        child: Column(
-                          children: [
-                            _header(context, compact: isHandsetLandscape),
-                            // The main category, under the title and above
-                            // the tabs it decides.
-                            if (widget.categories.isNotEmpty)
-                              Padding(
-                                padding: EdgeInsets.fromLTRB(
-                                  isHandsetLandscape ? 12 : 20,
-                                  0,
-                                  isHandsetLandscape ? 12 : 20,
-                                  isHandsetLandscape ? 6 : 12,
-                                ),
-                                child: _categoryStrip(context),
-                              ),
-                            if (hasFilters)
-                              _horizontalTabs(
-                                context,
-                                spread: isHandsetLandscape,
-                              ),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: loading
-                            ? const Center(child: CircularProgressIndicator())
-                            : hasFilters
-                            ? TabBarView(
-                                controller: _tabController,
-                                children: _optionViews(
-                                  options,
-                                  compactLandscape: isHandsetLandscape,
-                                ),
-                              )
-                            : _noFiltersNote(context),
-                      ),
-                      _footer(context, compact: isHandsetLandscape),
-                    ],
-                  );
-                },
+    final arabic =
+        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Flexible(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
+              if (multiple) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.primary.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                  child: Text(
+                    arabic ? 'متعدد' : 'Multiple',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: colors.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          child,
+          if (note != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              note!,
+              style: TextStyle(
+                fontSize: 12,
+                color: colors.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Choices as pills that wrap onto as many lines as they need.
+class _ChipWrap extends StatelessWidget {
+  const _ChipWrap({
+    required this.values,
+    required this.selected,
+    required this.onToggle,
+    this.columns,
+  });
+
+  final List<String> values;
+  final Set<String> selected;
+  final ValueChanged<String> onToggle;
+
+  /// Equal-width rows of this many instead of wrapping by length.
+  final int? columns;
+
+  static const double _gap = 6;
+
+  Widget _chip(BuildContext context, String value) {
+    final colors = Theme.of(context).colorScheme;
+    final on = selected.contains(value);
+    return Material(
+      key: ValueKey<String>('filterChip-$value'),
+      color: on
+          ? colors.primary.withValues(alpha: 0.18)
+          : colors.surfaceContainerHighest,
+      shape: StadiumBorder(
+        side: BorderSide(
+          color: on
+              ? colors.primary.withValues(alpha: 0.6)
+              : Colors.transparent,
+        ),
+      ),
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: () => onToggle(value),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+          child: Text(
+            value,
+            maxLines: 1,
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: on ? colors.primary : colors.onSurface,
+              fontWeight: on ? FontWeight.w700 : FontWeight.w500,
             ),
           ),
         ),
       ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final perRow = columns;
+    if (perRow == null) {
+      return Wrap(
+        spacing: _gap,
+        runSpacing: _gap,
+        children: [for (final value in values) _chip(context, value)],
+      );
+    }
+    return Column(
+      children: [
+        for (var i = 0; i < values.length; i += perRow)
+          Padding(
+            padding: EdgeInsets.only(top: i == 0 ? 0 : _gap),
+            child: Row(
+              children: [
+                for (var j = i; j < i + perRow; j++) ...[
+                  if (j > i) const SizedBox(width: _gap),
+                  Expanded(
+                    child: j < values.length
+                        ? _chip(context, values[j])
+                        : const SizedBox.shrink(),
+                  ),
+                ],
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
@@ -588,6 +798,7 @@ class _CategoryPill extends StatelessWidget {
   final bool selected;
   final Color accent;
   final VoidCallback onTap;
+  final bool showIcon;
 
   const _CategoryPill({
     super.key,
@@ -595,6 +806,7 @@ class _CategoryPill extends StatelessWidget {
     required this.selected,
     required this.accent,
     required this.onTap,
+    this.showIcon = true,
   });
 
   @override
@@ -619,266 +831,32 @@ class _CategoryPill extends StatelessWidget {
           customBorder: const StadiumBorder(),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(category.icon, size: 16, color: foreground),
-                const SizedBox(width: 6),
-                Text(
-                  category.label,
-                  style: TextStyle(
-                    color: foreground,
-                    fontSize: 13,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FilterTabSpec {
-  final IconData icon;
-  final String label;
-  final bool active;
-
-  const _FilterTabSpec({
-    required this.icon,
-    required this.label,
-    required this.active,
-  });
-}
-
-class _FilterTab extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool active;
-
-  const _FilterTab({
-    required this.icon,
-    required this.label,
-    required this.active,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Tab(
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(icon, size: 18),
-                if (active)
-                  const Positioned(
-                    right: -3,
-                    top: -3,
-                    child: CircleAvatar(
-                      radius: 4,
-                      backgroundColor: Colors.redAccent,
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(width: 5),
-            Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SeasonYearGrid extends StatelessWidget {
-  final List<String> seasons;
-  final List<String> years;
-  final Set<String> selectedSeasons;
-  final Set<String> selectedYears;
-  final ValueChanged<String> onSeasonToggle;
-  final ValueChanged<String> onYearToggle;
-  final int crossAxisCount;
-  final bool dense;
-
-  const _SeasonYearGrid({
-    required this.seasons,
-    required this.years,
-    required this.selectedSeasons,
-    required this.selectedYears,
-    required this.onSeasonToggle,
-    required this.onYearToggle,
-    this.crossAxisCount = 4,
-    this.dense = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final values = <String>[...seasons, ...years];
-
-    return GridView.builder(
-      padding: EdgeInsets.all(dense ? 8 : LayoutConstants.spacingMd),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxisCount,
-        childAspectRatio: dense ? 3.2 : 1.85,
-        crossAxisSpacing: dense ? 6 : 8,
-        mainAxisSpacing: dense ? 6 : 10,
-      ),
-      itemCount: values.length,
-      itemBuilder: (context, index) {
-        final isSeason = index < seasons.length;
-        final value = values[index];
-        final isSelected = isSeason
-            ? selectedSeasons.contains(value)
-            : selectedYears.contains(value);
-
-        return InkWell(
-          onTap: () => isSeason ? onSeasonToggle(value) : onYearToggle(value),
-          borderRadius: BorderRadius.circular(14),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 140),
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 7),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? colors.primary.withValues(alpha: 0.2)
-                  : colors.onSurface.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: isSelected
-                    ? colors.primary
-                    : colors.outlineVariant.withValues(alpha: 0.35),
-              ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  isSelected
-                      ? Icons.check_circle_rounded
-                      : Icons.circle_outlined,
-                  size: 17,
-                  color: isSelected
-                      ? colors.primary
-                      : colors.onSurfaceVariant.withValues(alpha: 0.55),
-                ),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: Text(
-                    value,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+            // A long name shrinks to fit rather than pushing the row wider.
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (showIcon) ...[
+                    Icon(category.icon, size: 15, color: foreground),
+                    const SizedBox(width: 5),
+                  ],
+                  Text(
+                    category.label,
                     maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 12,
-                      color: isSelected ? colors.primary : colors.onSurface,
-                      fontWeight: isSelected
-                          ? FontWeight.w700
-                          : FontWeight.w500,
+                      color: foreground,
+                      fontSize: 12.5,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _MultiSelectGrid extends StatelessWidget {
-  final List<String> values;
-  final Set<String> selected;
-  final ValueChanged<String> onToggle;
-  final int crossAxisCount;
-  final bool compact;
-  final bool dense;
-
-  const _MultiSelectGrid({
-    required this.values,
-    required this.selected,
-    required this.onToggle,
-    required this.crossAxisCount,
-    this.compact = false,
-    this.dense = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-
-    return GridView.builder(
-      padding: EdgeInsets.all(dense ? 8 : LayoutConstants.spacingMd),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxisCount,
-        childAspectRatio: dense
-            ? (compact ? 3.4 : 3.8)
-            : (compact ? 2.05 : 2.5),
-        crossAxisSpacing: dense ? 6 : 10,
-        mainAxisSpacing: dense ? 6 : 10,
-      ),
-      itemCount: values.length,
-      itemBuilder: (context, index) {
-        final value = values[index];
-        final isSelected = selected.contains(value);
-
-        return InkWell(
-          onTap: () => onToggle(value),
-          borderRadius: BorderRadius.circular(14),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 140),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? colors.primary.withValues(alpha: 0.2)
-                  : colors.onSurface.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: isSelected
-                    ? colors.primary
-                    : colors.outlineVariant.withValues(alpha: 0.35),
+                ],
               ),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  isSelected
-                      ? Icons.check_circle_rounded
-                      : Icons.circle_outlined,
-                  size: compact ? 17 : 19,
-                  color: isSelected
-                      ? colors.primary
-                      : colors.onSurfaceVariant.withValues(alpha: 0.55),
-                ),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    value,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: compact ? 11.5 : 13,
-                      color: isSelected ? colors.primary : colors.onSurface,
-                      fontWeight: isSelected
-                          ? FontWeight.w700
-                          : FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ],
-            ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

@@ -137,7 +137,23 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
                 onNews: () => openNewsScreen(context, ref),
                 onAccount: () => openAccountScreen(context),
               ),
-              Expanded(child: widget.navigationShell),
+              // The pages are told the width they really have. Told the
+              // window's, a tablet held upright laid them out for the rail's
+              // 76 points too, and their headers ran into one another.
+              Expanded(
+                child: MediaQuery(
+                  data: mq.copyWith(
+                    size: Size(
+                      (mq.size.width - AppSideRail.width).clamp(
+                        0.0,
+                        double.infinity,
+                      ),
+                      mq.size.height,
+                    ),
+                  ),
+                  child: widget.navigationShell,
+                ),
+              ),
             ],
           ),
         ),

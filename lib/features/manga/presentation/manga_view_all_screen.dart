@@ -3,9 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/responsive_breakpoints.dart';
-import '../../../core/utils/window_controls_inset.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/app_back_button.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 
@@ -107,30 +106,12 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
     final padding = MultimediaCardLayout.catalogGridHorizontalPadding(context);
     final bottom = MediaQuery.paddingOf(context).bottom;
 
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            leading: const AppBackButton(),
-            title: Align(
-              alignment: _arabic
-                  ? Alignment.centerRight
-                  : Alignment.centerLeft,
-              child: Directionality(
-                textDirection: _arabic
-                    ? TextDirection.rtl
-                    : TextDirection.ltr,
-                child: Text(widget.title),
-              ),
-            ),
-            actions: const <Widget>[WindowControlsGap()],
-          ),
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: widget.title,
+        onBack: () => Navigator.of(context).maybePop(),
       ),
       body: Directionality(
         textDirection: _arabic ? TextDirection.rtl : TextDirection.ltr,
@@ -141,7 +122,12 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: <Widget>[
             SliverPadding(
-              padding: EdgeInsets.fromLTRB(padding, 12, padding, 24 + bottom),
+              padding: EdgeInsets.fromLTRB(
+                padding,
+                headerTop + 12,
+                padding,
+                24 + bottom,
+              ),
               sliver: _failed && _items.isEmpty
                   ? SliverToBoxAdapter(
                       child: Center(

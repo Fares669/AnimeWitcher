@@ -11,10 +11,12 @@ import 'package:animewitcher/core/storage/secure_token_storage.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/features/comments/presentation/animewitcher_my_comments_screen.dart';
+import 'package:animewitcher/features/comments/presentation/animewitcher_replies_screen.dart';
 import 'package:animewitcher/features/comments/presentation/widgets/animewitcher_comment_sort_control.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:animewitcher/shared/widgets/animated_sort_menu_button.dart';
 import 'package:animewitcher/shared/widgets/app_back_button.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -86,6 +88,20 @@ class _FakeAccountService extends AnimeWitcherAccountService {
   }) async {
     lastLimit = limit;
     lastSort = sort;
+    return AnimeWitcherCommentPage(
+      items: reviews,
+      cursor: null,
+      hasMore: false,
+    );
+  }
+
+  @override
+  Future<AnimeWitcherCommentPage> loadReplies(
+    AnimeWitcherComment parent, {
+    AnimeWitcherCommentSort sort = AnimeWitcherCommentSort.newest,
+    FirestoreDocument? cursor,
+    int limit = 20,
+  }) async {
     return AnimeWitcherCommentPage(
       items: reviews,
       cursor: null,
@@ -231,21 +247,11 @@ void _expectAccountSortHeader(
     lessThan(titleRect.center.dx),
     reason: 'Back stays on the visual left, away from the title',
   );
-  expect(
-    sortRect.center.dx,
-    greaterThan(titleRect.center.dx),
-    reason: 'Sort sits to the visual right of the title, not next to back',
-  );
-  expect(
-    sortRect.left - titleRect.right,
-    lessThan(36),
-    reason: 'Sort is immediately next to the title',
-  );
-  expect(
-    titleRect.left - backRect.right,
-    greaterThan(sortRect.left - titleRect.right),
-    reason: 'Sort is closer to the title than the back button is',
-  );
+  final width = tester.getSize(find.byType(MaterialApp)).width;
+  expect(titleRect.center.dx, closeTo(width / 2, 1));
+  expect(sortRect.center.dx, greaterThan(titleRect.center.dx));
+  expect(titleRect.left, greaterThan(backRect.right));
+  expect(find.byType(AppPageAppBar), findsOneWidget);
 }
 
 Future<void> _openOwnReviewEditor(WidgetTester tester) async {
@@ -257,6 +263,78 @@ Future<void> _openOwnReviewEditor(WidgetTester tester) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  final socialScreens = <String, Widget>{
+    'comments': const AnimeWitcherCommentsScreen(
+      target: AnimeWitcherCommentTarget(
+        collectionPath: 'anime_list/jigokuraku/comments',
+        sourceDocumentPath: 'anime_list/jigokuraku',
+        title: 'Jigokuraku',
+      ),
+    ),
+    'reviews': const AnimeWitcherCommentsScreen(target: _target),
+    'replies': AnimeWitcherRepliesScreen(
+      parentComment: _review(id: 'parent', text: 'parent'),
+    ),
+    'my comments': const AnimeWitcherMyCommentsScreen(),
+    'my reviews': const AnimeWitcherMyCommentsScreen(isReviews: true),
+  };
+  for (final screen in socialScreens.entries) {
+    testWidgets('${screen.key} scroll beneath the shared blurred header', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        _app(
+          service: _FakeAccountService(
+            reviews: List.generate(
+              20,
+              (index) => _review(
+                id: 'r$index',
+                text: 'entry-$index',
+                userId: 'me',
+              ),
+            ),
+          ),
+          home: screen.value,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final header = find.byType(AppProgressiveHeaderBackdrop);
+      final list = find.byType(ListView);
+      expect(header, findsOneWidget);
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(
+        tester.getTopLeft(list).dy,
+        lessThan(tester.getBottomLeft(header).dy),
+        reason: 'The list viewport reaches behind the header blur.',
+      );
+      expect(
+        tester.getTopLeft(find.text('entry-0')).dy,
+        greaterThanOrEqualTo(tester.getBottomLeft(header).dy),
+        reason: 'The first entry starts below the header.',
+      );
+      final scrollable = tester.state<ScrollableState>(
+        find.descendant(of: list, matching: find.byType(Scrollable)).first,
+      );
+      scrollable.position.jumpTo(
+        tester.getTopLeft(find.text('entry-0')).dy -
+            tester.getBottomLeft(header).dy / 2,
+      );
+      await tester.pump();
+      expect(
+        tester.getTopLeft(find.text('entry-0')).dy,
+        lessThan(tester.getBottomLeft(header).dy),
+        reason: 'Scrolled content passes beneath the header.',
+      );
+      if (screen.value is AnimeWitcherCommentsScreen) {
+        expect(find.text('Jigokuraku'), findsNothing);
+      }
+    });
+  }
 
   testWidgets('published reviews list review_text with page size 10', (
     tester,
@@ -274,6 +352,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('المراجعات'), findsOneWidget);
+    expect(find.byType(AppPageAppBar), findsOneWidget);
     expect(find.text('مراجعة منشورة'), findsOneWidget);
     expect(find.text('اكتب مراجعة...'), findsOneWidget);
     expect(find.text('لا توجد مراجعات منشورة بعد.'), findsNothing);

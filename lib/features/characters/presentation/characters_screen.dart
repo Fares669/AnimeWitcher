@@ -14,7 +14,7 @@ import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/utils/request_generation.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
-import '../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/multimedia_card.dart';
@@ -23,7 +23,6 @@ import '../../search/presentation/search_text_direction.dart';
 import '../../settings/presentation/account_screen.dart';
 import 'character_card.dart';
 import 'character_details_screen.dart';
-import '../../../core/utils/window_controls_inset.dart';
 
 class CharactersScreen extends ConsumerStatefulWidget {
   const CharactersScreen({
@@ -338,46 +337,18 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     final title = widget.favoritesOnly
         ? (isArabic ? 'الشخصيات المفضلة' : 'Favorite characters')
         : (isArabic ? 'الشخصيات' : 'Characters');
+    final embedded = MorePaneScope.of(context);
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 16,
-            // Leave the window's caption buttons their corner; the
-            // title is aligned to that same edge in Arabic.
-            actions: const <Widget>[WindowControlsGap()],
-            title: ApplePersistentGlassHeaderScope(
-              enabled:
-                  !MorePaneScope.of(context) && Navigator.of(context).canPop(),
-              onBack: () => Navigator.of(context).pop(),
-              child: Align(
-                alignment: isArabic
-                    ? Alignment.centerRight
-                    : Alignment.centerLeft,
-                child: Directionality(
-                  textDirection: isArabic
-                      ? TextDirection.rtl
-                      : TextDirection.ltr,
-                  child: Text(title),
-                ),
-              ),
-            ),
-            leading:
-                appleUsesPersistentLiquidGlassHeader ||
-                    MorePaneScope.of(context)
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-            elevation: 0,
-          ),
-        ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: title,
+        canPop: !embedded && Navigator.of(context).canPop(),
+        onBack: () => Navigator.of(context).pop(),
       ),
-      body: widget.favoritesOnly
+      body: Padding(
+        padding: EdgeInsets.only(top: headerTop),
+        child: widget.favoritesOnly
           ? _buildFavoritesTab(isArabic)
           : Column(
               children: [
@@ -428,6 +399,7 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
                 ),
               ],
             ),
+      ),
     );
   }
 

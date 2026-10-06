@@ -255,6 +255,7 @@ extension on _PlayerSettingsPanelState {
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
+              textDirection: TextDirection.ltr,
               children: [
                 const Icon(
                   Icons.chevron_left_rounded,
@@ -263,12 +264,15 @@ extension on _PlayerSettingsPanelState {
                   textDirection: TextDirection.ltr,
                 ),
                 const SizedBox(width: 4),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                Expanded(
+                  child: Text(
+                    title,
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ],

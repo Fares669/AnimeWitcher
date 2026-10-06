@@ -75,6 +75,7 @@ class _AnimeWitcherPrivacySettingsScreenState
   Widget build(BuildContext context) {
     final isArabic = Localizations.localeOf(context).languageCode == 'ar';
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
         title: appText(
           context,
@@ -84,7 +85,10 @@ class _AnimeWitcherPrivacySettingsScreenState
         canPop: Navigator.of(context).canPop(),
       ),
       body: ListView(
-        padding: const EdgeInsets.only(bottom: 100),
+        padding: EdgeInsets.only(
+          top: appPageHeaderContentTopInset(context),
+          bottom: 100,
+        ),
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(

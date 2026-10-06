@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/mouse_drag_refresh_indicator.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/account/account_providers.dart';
 import '../../../core/account/animewitcher_account_models.dart';
@@ -11,7 +12,7 @@ import '../../../core/account/firestore_rest_client.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/request_generation.dart';
-import '../../details/presentation/details_screen.dart';
+import '../../../core/router/app_router.dart';
 import 'animewitcher_replies_screen.dart';
 import 'widgets/animewitcher_comment_sort_control.dart';
 import '../../../core/utils/avatar_image.dart';
@@ -377,19 +378,17 @@ class _AnimeWitcherMyCommentsScreenState
     final animeId = comment.animeId?.trim();
     if (animeId == null || animeId.isEmpty) return;
 
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => DetailsScreen(
-          item: MultimediaItem(
-            title: animeId,
-            url: AnimeWitcherSyncIds.mainUrl(animeId),
-            posterUrl: '',
-            contentType: MultimediaContentType.anime,
-            provider: animeWitcherNativeProviderId,
-          ),
+    DetailsRoute(
+      $extra: DetailsRouteExtra(
+        item: MultimediaItem(
+          title: animeId,
+          url: AnimeWitcherSyncIds.mainUrl(animeId),
+          posterUrl: '',
+          contentType: MultimediaContentType.anime,
+          provider: animeWitcherNativeProviderId,
         ),
       ),
-    );
+    ).push<void>(context);
   }
 
   void _replaceComment(AnimeWitcherComment updated) {
@@ -445,74 +444,21 @@ class _AnimeWitcherMyCommentsScreenState
     final isArabic = _isArabic;
     final usePersistentGlass = appleUsesPersistentLiquidGlassHeader;
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          // Keep back on the visual left and the liquid-glass sort on the
-          // visual right, next to the (RTL) title — same header geometry as
-          // the anime-details comments/reviews screen.
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            centerTitle: false,
-            titleSpacing: 16,
-            automaticallyImplyLeading: false,
-            leading: usePersistentGlass
-                ? null
-                : AppleLiquidGlassBackButton(
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-            title: ApplePersistentGlassHeaderScope(
-              enabled: Navigator.of(context).canPop() || usePersistentGlass,
-              onBack: () => Navigator.of(context).maybePop(),
-              toolbarTrailingInset: usePersistentGlass
-                  ? AnimeWitcherCommentSortControl.persistentTrailingInset
-                  : null,
-              trailingButtons: usePersistentGlass
-                  ? AnimeWitcherCommentSortControl.persistentButtons(
-                      context: context,
-                      isArabic: isArabic,
-                      tooltip: _sortTooltip(isArabic),
-                      sort: _sort,
-                      onSelected: (value) {
-                        _changeSort(_sortFromValue(value));
-                      },
-                    )
-                  : null,
-              child: Padding(
-                padding: EdgeInsets.only(
-                  right: usePersistentGlass && isArabic
-                      ? AnimeWitcherCommentSortControl.persistentTitleClearance
-                      : 0,
-                  left: usePersistentGlass && !isArabic
-                      ? AnimeWitcherCommentSortControl.persistentTitleClearance
-                      : 0,
-                ),
-                child: Align(
-                  alignment:
-                      isArabic ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Directionality(
-                    textDirection:
-                        isArabic ? TextDirection.rtl : TextDirection.ltr,
-                    child: Text(
-                      _screenTitle(isArabic),
-                      key: kMyCommentsTitleKey,
-                    ),
-                  ),
-                ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: _screenTitle(isArabic),
+        titleKey: kMyCommentsTitleKey,
+        onBack: () => Navigator.of(context).maybePop(),
+        actions: usePersistentGlass
+            ? const <Widget>[]
+            : AnimeWitcherCommentSortControl.appBarActions(
+                tooltip: _sortTooltip(isArabic),
+                selectedValue: _sort.name,
+                items: AnimeWitcherCommentSortControl.menuItems(isArabic),
+                onSelected: (value) {
+                  _changeSort(_sortFromValue(value));
+                },
               ),
-            ),
-            actions: usePersistentGlass
-                ? const <Widget>[]
-                : AnimeWitcherCommentSortControl.appBarActions(
-                    tooltip: _sortTooltip(isArabic),
-                    selectedValue: _sort.name,
-                    items: AnimeWitcherCommentSortControl.menuItems(isArabic),
-                    onSelected: (value) {
-                      _changeSort(_sortFromValue(value));
-                    },
-                  ),
-          ),
-        ),
       ),
       body: Center(
         child: ConstrainedBox(
@@ -539,6 +485,7 @@ class _AnimeWitcherMyCommentsScreenState
         onRefresh: _loadInitial,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(top: appPageHeaderContentTopInset(context)),
           children: [
             SizedBox(height: MediaQuery.sizeOf(context).height * 0.26),
             const Icon(Icons.forum_outlined, size: 46),
@@ -563,7 +510,9 @@ class _AnimeWitcherMyCommentsScreenState
       child: ListView.separated(
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
+        padding: EdgeInsets.fromLTRB(
+          12, appPageHeaderContentTopInset(context) + 12, 12, 28,
+        ),
         itemCount: _comments.length + (_hasMore || _loadingMore ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 10),
         itemBuilder: (context, index) {
@@ -991,4 +940,5 @@ class _MyCommentsError extends StatelessWidget {
     );
   }
 }
+
 

@@ -11,33 +11,26 @@ void main() {
     expect(source.contains("isArabic ? 'تعليقات'"), isFalse);
   });
 
-  test('character details moves actions into the liquid glass header', () {
+  test('character details uses the shared centered progressive header', () {
     final source = File(
       'lib/features/characters/presentation/character_details_screen.dart',
     ).readAsStringSync();
 
-    expect(source, contains('trailingButtons: headerButtons'));
+    expect(source, contains('AppPageAppBar('));
+    expect(source, contains('extendBodyBehindAppBar: true'));
+    expect(source, contains('appPageHeaderContentTopInset(context)'));
     expect(source, contains('AppleLiquidGlassActionGroup('));
     expect(source, contains('icon: Icons.chat_bubble_outline_rounded'));
     expect(source, contains('icon: Icons.more_horiz_rounded'));
-    expect(source, contains('child: const SizedBox.shrink()'));
     expect(source.contains('class _CharacterActionButton'), isFalse);
   });
 
-  test('character actions follow anime placement outside iOS', () {
+  test('character actions remain available outside the persistent header', () {
     final source = File(
       'lib/features/characters/presentation/character_details_screen.dart',
     ).readAsStringSync();
 
     expect(source, contains('final isLarge = context.isTabletOrLarger'));
-    expect(
-      source,
-      contains('left: 8 + windowControlsLeadingInset'),
-    );
-    expect(
-      source,
-      contains('right: 8 + windowControlsTrailingInset'),
-    );
     expect(
       source,
       contains('appleUsesPersistentLiquidGlassHeader || isLarge'),
@@ -48,10 +41,7 @@ void main() {
     );
   });
 
-  test('character iOS glass matches anime inset and comments can morph', () {
-    final characterSource = File(
-      'lib/features/characters/presentation/character_details_screen.dart',
-    ).readAsStringSync();
+  test('comments preserve the persistent-header morph behavior', () {
     final commentsSource = File(
       'lib/features/comments/presentation/animewitcher_comments_screen.dart',
     ).readAsStringSync();
@@ -59,9 +49,7 @@ void main() {
       'lib/shared/widgets/apple_liquid_glass.dart',
     ).readAsStringSync();
 
-    expect(characterSource, contains('toolbarTrailingInset: 34'));
     expect(commentsSource, contains('allowInstantBoundaryMorph: true'));
-    expect(glassSource, contains('config?.toolbarTrailingInset ??'));
     expect(glassSource, contains('hardCutInstantBoundary'));
     expect(glassSource, contains('!allowInstantBoundaryMorph'));
   });

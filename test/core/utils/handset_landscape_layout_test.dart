@@ -10,7 +10,6 @@ import 'package:animewitcher/features/home/presentation/widgets/media_horizontal
 import 'package:animewitcher/features/home/presentation/widgets/provider_search_filter_dialog.dart';
 import 'package:animewitcher/features/search/presentation/widgets/search_result_section.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:animewitcher/shared/widgets/catalog_direction.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -363,38 +362,40 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
+    // A phone held sideways still gets the whole screen: back on the left,
+    // the title, reset on the right, and the Apply bar along the bottom.
     expect(find.text('فلاتر البحث'), findsOneWidget);
-    expect(find.text('تطبيق'), findsOneWidget);
-    expect(find.text('مسح الكل'), findsOneWidget);
-    expect(find.byIcon(Icons.close_rounded), findsOneWidget);
-    expect(find.text('التصنيفات'), findsOneWidget);
-    expect(find.text('السنة'), findsOneWidget);
-    expect(find.text('العمر'), findsOneWidget);
-    expect(find.text('النوع'), findsOneWidget);
-    expect(find.text('الحالة'), findsOneWidget);
-    expect(find.text('اكشن'), findsOneWidget);
-    expect(find.text('غموض'), findsOneWidget);
-    expect(find.text('تاريخي'), findsOneWidget);
+    expect(find.text('إعادة الضبط'), findsOneWidget);
+    expect(find.byKey(const ValueKey('filterBack')), findsOneWidget);
     expect(
-      tester.getRect(find.text('غموض')).bottom,
-      lessThan(tester.getRect(find.text('تطبيق')).top),
+      tester.getRect(find.byKey(const ValueKey('filterBack'))).left,
+      lessThan(tester.getRect(find.text('إعادة الضبط')).left),
     );
-    // 12 chips / 5 landscape columns => a third row. The taller sheet must
-    // keep that row fully above the apply button instead of clipping it.
+    final apply = tester.getRect(find.byKey(const ValueKey('filterApply')));
+    expect(apply.bottom, lessThanOrEqualTo(_phoneLandscape.height));
+    expect(apply.width, greaterThan(_phoneLandscape.width * 0.8));
+    // The groups are cards, two to a row: status beside type.
+    final status = tester.getRect(
+      find.byKey(const ValueKey('filterCard-status')),
+    );
+    final type = tester.getRect(find.byKey(const ValueKey('filterCard-type')));
+    expect((status.top - type.top).abs(), lessThan(1));
+    expect(find.text('الحالة'), findsOneWidget);
+    expect(find.text('النوع'), findsOneWidget);
+    // Genres are further down the cards, reached by scrolling.
+    await tester.scrollUntilVisible(
+      find.text('تاريخي'),
+      200,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('filterCards')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(find.text('التصنيفات'), findsOneWidget);
     expect(
       tester.getRect(find.text('تاريخي')).bottom,
-      lessThan(tester.getRect(find.text('تطبيق')).top),
+      lessThanOrEqualTo(apply.top),
     );
-
-    final dialog = tester.getRect(find.byType(Dialog));
-    final panel = tester.getRect(find.byType(AppleLiquidGlassSurface));
-    expect(dialog.height, lessThanOrEqualTo(360));
-    expect(panel.height, greaterThan(300));
-    expect(panel.height, lessThanOrEqualTo(360));
-    expect(panel.width, greaterThan(600));
-    expect(find.text('تطبيق'), findsOneWidget);
-    expect(tester.getRect(find.text('تطبيق')).bottom, lessThan(360));
-    expect(tester.getRect(find.text('مسح الكل')).bottom, lessThan(360));
 
     await _writeShot(
       tester,
@@ -402,7 +403,7 @@ void main() {
       const ValueKey('filter-landscape-shot'),
     );
 
-    await tester.tap(find.byIcon(Icons.close_rounded));
+    await tester.tap(find.byKey(const ValueKey('filterBack')));
     await tester.pumpAndSettle();
     expect(find.text('فلاتر البحث'), findsNothing);
   });

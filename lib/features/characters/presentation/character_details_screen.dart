@@ -17,11 +17,12 @@ import '../../../core/utils/artwork_quality.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../core/utils/window_controls_inset.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
+import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/shimmer_placeholder.dart';
 import '../../../shared/widgets/thumbnail_error_placeholder.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
-import '../../details/presentation/details_screen.dart';
+import '../../../core/router/app_router.dart';
 import '../../settings/presentation/account_screen.dart';
 import 'character_animes_grid.dart';
 
@@ -270,11 +271,9 @@ class _CharacterDetailsScreenState
   }
 
   void _openAnime(MultimediaItem item) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => DetailsScreen(item: item),
-      ),
-    );
+    DetailsRoute(
+      $extra: DetailsRouteExtra(item: item),
+    ).push<void>(context);
   }
 
   @override
@@ -302,59 +301,34 @@ class _CharacterDetailsScreenState
     final headerButtons = _buildHeaderButtons(context);
     final isLarge = context.isTabletOrLarger;
 
+    final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: Directionality(
-          textDirection: TextDirection.ltr,
-          child: AppBar(
-            automaticallyImplyLeading: false,
-            centerTitle: false,
-            titleSpacing: 8,
-            title: ApplePersistentGlassHeaderScope(
-              enabled: Navigator.of(context).canPop(),
-              onBack: () => Navigator.of(context).pop(),
-              backForegroundColor: colors.onSurface,
-              backFallbackColor: colors.surfaceContainerHigh,
-              toolbarTrailingInset: 34,
-              trailingButtons: headerButtons,
-              child: const SizedBox.shrink(),
-            ),
-            leadingWidth: appleUsesPersistentLiquidGlassHeader ? 0 : 64,
-            leading: appleUsesPersistentLiquidGlassHeader
-                ? null
-                : Padding(
-                    padding: EdgeInsets.only(
-                      left: 8 + windowControlsLeadingInset,
-                    ),
-                    child: AppleLiquidGlassBackButton(
-                      size: 46,
-                      onPressed: () => Navigator.of(context).maybePop(),
-                    ),
+      extendBodyBehindAppBar: true,
+      appBar: AppPageAppBar(
+        title: name.isEmpty ? (isArabic ? 'الشخصية' : 'Character') : name,
+        onBack: () => Navigator.of(context).maybePop(),
+        actions: appleUsesPersistentLiquidGlassHeader || isLarge
+            ? const <Widget>[]
+            : <Widget>[
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: AppleLiquidGlassActionGroup(
+                    height: 46,
+                    fallbackColor: colors.surfaceContainerHigh,
+                    children: headerButtons,
                   ),
-            actions: appleUsesPersistentLiquidGlassHeader || isLarge
-                ? const <Widget>[]
-                : <Widget>[
-                    Padding(
-                      padding: EdgeInsets.only(
-                        right: 8 + windowControlsTrailingInset,
-                      ),
-                      child: AppleLiquidGlassActionGroup(
-                        height: 46,
-                        fallbackColor: colors.surfaceContainerHigh,
-                        children: headerButtons,
-                      ),
-                    ),
-                  ],
-            elevation: 0,
-            scrolledUnderElevation: 0,
-          ),
-        ),
+                ),
+              ],
       ),
       body: _loading && document == null
-          ? const Center(child: AppLoadingIndicator())
+          ? Padding(
+              padding: EdgeInsets.only(top: headerTop),
+              child: const Center(child: AppLoadingIndicator()),
+            )
           : _error != null && document == null
-              ? Center(
+              ? Padding(
+                  padding: EdgeInsets.only(top: headerTop),
+                  child: Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Column(
@@ -371,13 +345,19 @@ class _CharacterDetailsScreenState
                           label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
                         ),
                       ],
+                      ),
                     ),
                   ),
                 )
               : MouseDragRefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 110),
+                    padding: EdgeInsets.fromLTRB(
+                      20,
+                      headerTop + 16,
+                      20,
+                      110,
+                    ),
                     children: [
                       Center(
                         child: SizedBox(
@@ -538,3 +518,4 @@ class _CharacterDetailsScreenState
     );
   }
 }
+

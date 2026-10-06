@@ -7,6 +7,7 @@ import 'package:animewitcher/features/home/presentation/widgets/news_card.dart';
 import 'package:animewitcher/features/news/presentation/news_list_screen.dart';
 import 'package:animewitcher/features/news/presentation/news_utils.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -56,6 +57,26 @@ void main() {
       ),
       closeTo(294, 0.5),
     );
+  });
+
+  testWidgets('news list scrolls under the progressive page header', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      _app(const Size(390, 844), <NewsItem>[_item('1'), _item('2')]),
+    );
+    await tester.pump();
+
+    final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
+    expect(scaffold.extendBodyBehindAppBar, isTrue);
+    expect(find.byType(AppPageAppBar), findsOneWidget);
+
+    final list = tester.widget<ListView>(find.byType(ListView).first);
+    final padding = list.padding!.resolve(TextDirection.ltr);
+    expect(padding.top, greaterThan(kToolbarHeight));
   });
 
   testWidgets('landscape news page places two articles on the first row', (

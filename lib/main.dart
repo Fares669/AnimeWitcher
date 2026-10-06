@@ -5,6 +5,7 @@ import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter/gestures.dart' show kDoubleTapSlop, kDoubleTapTimeout;
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/services.dart'; // LogicalKeyboardKey, KeyDownEvent
 import 'package:flutter/foundation.dart'; // For kReleaseMode
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,6 +43,7 @@ import 'core/account/account_providers.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AppProgressiveHeaderBackdrop.preload();
   MediaKit.ensureInitialized();
 
   // Silence logs in release mode
@@ -185,14 +187,25 @@ class _AppRootState extends State<AppRoot> {
       // (and the matching image cache budget) before the first screen paints.
       applyArtworkQuality(_storageService.isHighQualityPostersEnabled());
 
-      // Artwork mostly lives on MyAnimeList's CDN, which some networks block.
-      // Publish last run's answer immediately so the first screen already
-      // picks reachable artwork, then re-check in the background. Skipped
-      // entirely unless the viewer asked for it, so the default costs nothing.
+      // Artwork mostly lives on MyAnimeList's CDN, which some networks block
+      // — the address comes back as 0.0.0.0 and every poster hangs until it
+      // times out. Whether it is blocked here is always checked, whatever
+      // the fallback setting: the catalog stores an AniList copy of each
+      // poster, and using it costs nothing. Last run's answer drives the
+      // first screen; the very first run waits briefly for the check, which
+      // is a DNS answer and so usually takes milliseconds.
       final artworkFallback = _storageService.isArtworkFallbackEnabled();
       applyArtworkFallbackEnabled(artworkFallback);
-      if (artworkFallback) {
-        seedMalArtworkReachability(_storageService.isMalArtworkUnreachable());
+      seedMalArtworkReachability(_storageService.isMalArtworkUnreachable());
+      if (_storageService.malArtworkProbedAt() == null) {
+        try {
+          final unreachable = await probeMalArtworkUnreachable(
+            timeout: const Duration(milliseconds: 1500),
+          );
+          seedMalArtworkReachability(unreachable);
+          await _storageService.setMalArtworkUnreachable(unreachable);
+        } catch (_) {}
+      } else {
         unawaited(_refreshArtworkHostReachability());
       }
 

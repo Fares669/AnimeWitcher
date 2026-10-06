@@ -7,6 +7,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/providers/anime_data_source_settings_provider.dart';
 import '../../../core/services/external_player_service.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/base_provider.dart';
@@ -67,8 +68,9 @@ class PlaybackLauncher {
   Future<MultimediaItem> _hydratePlayerEpisodes(
     MultimediaItem item, {
     AnimeWitcherProvider? provider,
+    bool loadArtwork = false,
   }) async {
-    if ((item.episodes?.isNotEmpty ?? false) ||
+    if (((item.episodes?.isNotEmpty ?? false) && !loadArtwork) ||
         !_needsPlayerEpisodes(item) ||
         item.url.trim().isEmpty) {
       return item;
@@ -77,19 +79,40 @@ class PlaybackLauncher {
     final resolvedProvider = provider ?? _resolveProvider(item);
     if (resolvedProvider == null) return item;
 
+    var hydrated = item;
     try {
-      final episodes = await resolvedProvider.getEpisodes(item.url);
-      if (episodes.isEmpty) return item;
-      return item.copyWith(
-        episodes: episodes,
-        provider: item.provider ?? resolvedProvider.packageName,
-      );
+      if (!(hydrated.episodes?.isNotEmpty ?? false)) {
+        final episodes = await resolvedProvider.getEpisodes(item.url);
+        if (episodes.isEmpty) return item;
+        hydrated = item.copyWith(
+          episodes: episodes,
+          provider: item.provider ?? resolvedProvider.packageName,
+        );
+      }
+      if (loadArtwork &&
+          _ref.read(animeDataSourceSettingsProvider).episodeImagesFromAniZip) {
+        // History omits sync IDs. The provider resolves AniZip using the anime
+        // URL, just as it does for the details page's episode artwork.
+        final metadata = await resolvedProvider.getEpisodeMetadata(item.url);
+        final posters = <String, String>{
+          for (final episode in metadata)
+            if (episode.url.isNotEmpty &&
+                (episode.posterUrl?.trim().isNotEmpty ?? false))
+              episode.url: episode.posterUrl!.trim(),
+        };
+        hydrated = hydrated.copyWith(
+          episodes: hydrated.episodes!.map((episode) {
+            final poster = posters[episode.url];
+            return poster == null ? episode : episode.copyWith(posterUrl: poster);
+          }).toList(growable: false),
+        );
+      }
     } catch (e) {
       if (kDebugMode) {
         debugPrint('PlaybackLauncher._hydratePlayerEpisodes: $e');
       }
-      return item;
     }
+    return hydrated;
   }
 
   Episode? _canonicalEpisode(
@@ -227,6 +250,7 @@ class PlaybackLauncher {
         localFile?.path ?? savedUrl,
         baseItem: item,
         episode: hintEpisode,
+        loadEpisodeArtwork: true,
       );
       return;
     }
@@ -285,6 +309,7 @@ class PlaybackLauncher {
       detailedItem: detailedItem,
       episode: resolvedEpisode,
       preselectedSource: selected,
+      loadEpisodeArtwork: true,
     );
   }
 
@@ -399,6 +424,7 @@ class PlaybackLauncher {
     MultimediaItem? detailedItem,
     Episode? episode,
     StreamResult? preselectedSource,
+    bool loadEpisodeArtwork = false,
   }) async {
     final settings = await _ref.read(playerSettingsProvider.future);
     if (!context.mounted) return;
@@ -406,7 +432,10 @@ class PlaybackLauncher {
     final item = detailedItem ?? baseItem;
     // Start this immediately so episode metadata loads in parallel with local
     // file detection / source selection instead of adding another serial wait.
-    final playerItemFuture = _hydratePlayerEpisodes(item);
+    final playerItemFuture = _hydratePlayerEpisodes(
+      item,
+      loadArtwork: loadEpisodeArtwork,
+    );
     final resolvedEpisode =
         episode ?? item.episodes?.firstWhereOrNull((e) => e.url == url);
     final resolvedEpisodeUrl = resolvedEpisode?.url.trim() ?? '';

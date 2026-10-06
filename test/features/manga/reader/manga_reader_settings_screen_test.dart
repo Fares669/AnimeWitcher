@@ -4,6 +4,7 @@ import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -54,22 +55,26 @@ void main() {
   });
 
 
-  test('reader settings keeps back left and reset right without duplicate iOS back', () {
-    final source = File(
-      'lib/features/manga/reader/manga_reader_settings_screen.dart',
-    ).readAsStringSync();
+  testWidgets('reader settings uses centered progressive page header', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
 
-    expect(source, contains('Directionality('));
-    expect(source, contains('textDirection: TextDirection.ltr'));
-    expect(source, contains('automaticallyImplyLeading: false'));
-    expect(source, contains('ApplePersistentGlassHeaderScope('));
-    expect(source, contains('AppleLiquidGlassBackButton('));
-    expect(source, contains('leading: appleUsesPersistentLiquidGlassHeader'));
-    expect(source, contains('? null'));
-    expect(
-      source,
-      contains('actions: appleUsesPersistentLiquidGlassHeader'),
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          mangaReaderSettingsProvider.overrideWith(_ReaderSettingsNotifier.new),
+        ],
+        child: const MaterialApp(home: MangaReaderSettingsScreen()),
+      ),
     );
+
+    expect(find.byType(AppPageAppBar), findsOneWidget);
+    expect(find.byType(AppProgressiveHeaderBackdrop), findsOneWidget);
+    expect(tester.getCenter(find.text('Manga Reader')).dx, closeTo(195, 1));
+    expect(find.byIcon(Icons.restart_alt_rounded), findsOneWidget);
   });
 
   testWidgets('reader settings exposes Mangayomi reading and display controls', (

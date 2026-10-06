@@ -491,6 +491,8 @@ class _FirstRunSetupScreenState extends ConsumerState<FirstRunSetupScreen> {
               layout: _effectiveLayout,
               theme: themeStyle,
               phone: phoneHome,
+              // The switch below shows on the bar at once.
+              mangaTab: _mangaTab,
             ),
             _Step.details => SeasonsBarPagePreview(
               style: _seasons,

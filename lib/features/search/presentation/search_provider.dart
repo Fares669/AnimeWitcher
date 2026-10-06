@@ -434,9 +434,12 @@ class PagedSearchNotifier extends Notifier<SearchAggregateState> {
 
   @override
   SearchAggregateState build() {
-    ref.listen(searchQueryProvider, (_, next) {
+    ref.listen(searchQueryProvider, (previous, next) {
       _query = next;
-      _reload();
+      // A new search drops what was shown — the catalogue an empty search
+      // browses, or the last search — so it is not on screen as if it were
+      // the answer while the new one loads.
+      _reload(clearExisting: previous?.trim() != next.trim());
     });
     ref.listen(searchProviderFiltersProvider, (_, next) {
       _filters = next;
@@ -762,22 +765,49 @@ Stream<SearchAggregateState> searchResults(Ref ref) {
 
 class SearchSuggestionState {
   final List<String> suggestions;
+
+  /// The results the titles came from, for the results shown while typing:
+  /// the category searched, or anime when every category is.
+  final List<MultimediaItem> items;
+
+  /// Searching every category: what the others found.
+  final List<MultimediaItem> animation;
+  final List<MultimediaItem> manga;
+  final List<AnimeWitcherCharacterHit> characters;
   final bool isLoading;
   final String query;
 
   const SearchSuggestionState({
     this.suggestions = const [],
+    this.items = const [],
+    this.animation = const [],
+    this.manga = const [],
+    this.characters = const [],
     this.isLoading = false,
     this.query = '',
   });
 
+  bool get hasResults =>
+      items.isNotEmpty ||
+      animation.isNotEmpty ||
+      manga.isNotEmpty ||
+      characters.isNotEmpty;
+
   SearchSuggestionState copyWith({
     List<String>? suggestions,
+    List<MultimediaItem>? items,
+    List<MultimediaItem>? animation,
+    List<MultimediaItem>? manga,
+    List<AnimeWitcherCharacterHit>? characters,
     bool? isLoading,
     String? query,
   }) {
     return SearchSuggestionState(
       suggestions: suggestions ?? this.suggestions,
+      items: items ?? this.items,
+      animation: animation ?? this.animation,
+      manga: manga ?? this.manga,
+      characters: characters ?? this.characters,
       isLoading: isLoading ?? this.isLoading,
       query: query ?? this.query,
     );
@@ -805,6 +835,10 @@ class SearchSuggestionController extends _$SearchSuggestionController {
       state = state.copyWith(
         query: query,
         suggestions: const [],
+        items: const [],
+        animation: const [],
+        manga: const [],
+        characters: const [],
         isLoading: false,
       );
       return;
@@ -817,21 +851,87 @@ class SearchSuggestionController extends _$SearchSuggestionController {
       try {
         final manager = ref.read(extensionManagerProvider.notifier);
         final providers = manager.getAllProviders();
-        final results = providers.isEmpty
-            ? const <MultimediaItem>[]
-            : await providers.first.search(query);
+        final domain = ref.read(searchDomainProvider);
+        final provider = providers.isEmpty ? null : providers.first;
+        const none = ProviderSearchFilters();
+        Future<List<MultimediaItem>> quiet(
+          Future<ProviderMediaPage> Function() request,
+        ) => request()
+            .then((page) => page.items)
+            .catchError((Object _) => const <MultimediaItem>[]);
+        // Each category its own catalogue; "all" asks them all at once, as
+        // the full search does, and a category that fails is left out.
+        final everything = domain == SearchDomain.all;
+        final animationFuture =
+            provider != null && (everything || domain == SearchDomain.animation)
+            ? quiet(
+                () => provider.searchAnimationPage(
+                  query,
+                  none,
+                  offset: 0,
+                  limit: 20,
+                ),
+              )
+            : Future.value(const <MultimediaItem>[]);
+        final mangaFuture =
+            provider != null && (everything || domain == SearchDomain.manga)
+            ? quiet(
+                () =>
+                    provider.searchMangaPage(query, none, offset: 0, limit: 20),
+              )
+            : Future.value(const <MultimediaItem>[]);
+        final charactersFuture =
+            (everything || domain == SearchDomain.characters) &&
+                provider is AnimeWitcherNativeProvider
+            ? provider
+                  .searchCharacters(query)
+                  .then((page) => page.items)
+                  .catchError((Object _) => const <AnimeWitcherCharacterHit>[])
+            : Future.value(const <AnimeWitcherCharacterHit>[]);
+        final animeFuture =
+            provider != null && (everything || domain == SearchDomain.anime)
+            ? provider.search(query)
+            : Future.value(const <MultimediaItem>[]);
+        final anime = await animeFuture;
+        final animation = await animationFuture;
+        final mangaItems = await mangaFuture;
+        final characters = await charactersFuture;
+        final results = switch (domain) {
+          SearchDomain.animation => animation,
+          SearchDomain.manga => mangaItems,
+          _ => anime,
+        };
         final suggestions = results
             .map((item) => item.title.trim())
             .where((title) => title.isNotEmpty)
             .toSet()
             .take(10)
             .toList(growable: false);
+        final seen = <String>{};
+        final items = results
+            .where((item) => item.title.trim().isNotEmpty && seen.add(item.url))
+            .take(30)
+            .toList(growable: false);
         if (state.query == query) {
-          state = state.copyWith(suggestions: suggestions, isLoading: false);
+          state = state.copyWith(
+            suggestions: suggestions,
+            items: items,
+            animation: everything ? animation : const [],
+            manga: everything ? mangaItems : const [],
+            characters: characters.take(12).toList(growable: false),
+            isLoading: false,
+          );
         }
       } catch (_) {
         if (state.query == query) {
-          state = state.copyWith(suggestions: const [], isLoading: false);
+          state = state.copyWith(
+            suggestions: const [],
+            items: const [],
+            animation: const [],
+            manga: const [],
+            characters: const [],
+            isLoading: false,
+          );
         }
       }
     });

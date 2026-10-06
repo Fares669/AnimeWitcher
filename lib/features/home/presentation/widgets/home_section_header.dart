@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../../../core/utils/layout_constants.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../l10n/generated/app_localizations.dart';
-import '../../../../shared/widgets/cards_wrapper.dart';
 
 /// Home rail header: title on the start edge (right in Arabic) and the
 /// action — usually [HomeViewAllButton] — on the end edge (left).
@@ -79,8 +78,7 @@ class HomeSectionHeader extends StatelessWidget {
   }
 }
 
-/// "عرض الكل" with a chevron pointing the way the language reads: to the
-/// left in Arabic, to the right in English. Pinned to the header's end edge.
+/// The same simple primary text action used by search section headings.
 class HomeViewAllButton extends StatelessWidget {
   const HomeViewAllButton({super.key, required this.onTap});
 
@@ -88,41 +86,9 @@ class HomeViewAllButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
-    final color = Theme.of(
-      context,
-    ).colorScheme.onSurface.withValues(alpha: 0.7);
-    return CardsWrapper(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: LayoutConstants.spacingSm,
-          vertical: 6,
-        ),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              l10n.viewAll,
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const SizedBox(width: 4),
-            // Onwards, whichever way that is: the arrow was pinned pointing
-            // right while the page around it read right to left, so it
-            // pointed back at the row it was meant to lead away from.
-            Icon(Icons.arrow_forward_ios, size: 10, color: color),
-          ],
-        ),
-      ),
+    return TextButton(
+      onPressed: onTap,
+      child: Text(AppLocalizations.of(context)!.viewAll),
     );
   }
 }

@@ -210,8 +210,36 @@ class DetailsRoute extends GoRouteData with $DetailsRoute {
   const DetailsRoute({required this.$extra});
   final DetailsRouteExtra $extra;
 
+  static final _pendingOrigins = Expando<bool>();
+
   @override
-  Widget build(BuildContext context, GoRouterState state) {
+  Future<T?> push<T>(BuildContext context) async {
+    if (!context.mounted) return null;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final origin = ModalRoute.of(context) ?? navigator;
+    if (_pendingOrigins[origin] == true ||
+        (origin is ModalRoute && !origin.isCurrent)) {
+      return null;
+    }
+    // Lock before GoRouter starts parsing. Two cards on the same page share
+    // this origin; a related anime on the new details page has its own origin.
+    _pendingOrigins[origin] = true;
+    try {
+      final router = GoRouter.maybeOf(context);
+      final result = router != null
+          ? router.push<T>(location, extra: $extra)
+          : navigator.push<T>(MaterialPageRoute<T>(builder: (_) => _screen()));
+      WidgetsBinding.instance.ensureVisualUpdate();
+      return await result;
+    } finally {
+      _pendingOrigins[origin] = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, GoRouterState state) => _screen();
+
+  Widget _screen() {
     return DetailsScreen(
       item: $extra.item,
       autoPlay: $extra.autoPlay,

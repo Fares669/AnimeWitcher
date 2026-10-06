@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:animewitcher/core/network/poster_cache.dart';
+import 'package:animewitcher/shared/widgets/poster_plate.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -93,9 +95,17 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
     }
   }
 
-  bool get _lookupAllowed => artworkFallbackEnabled.value || widget.manga;
+  bool get _lookupAllowed =>
+      artworkFallbackEnabled.value ||
+      widget.manga ||
+      // A poster on a host that cannot be reached here only ever fails, a
+      // long DNS timeout later; looking it up elsewhere needs no setting.
+      (malArtworkUnreachable.value && isMalArtworkUrl(widget.imageUrl));
   bool _primaryFailed = false;
   bool _lookedUp = false;
+
+  /// The lookup has answered, with a picture or without one.
+  bool _lookupFinished = false;
 
   @override
   void initState() {
@@ -108,6 +118,7 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
 
   @override
   void dispose() {
+    _retryTimer?.cancel();
     artworkFallbackEnabled.removeListener(_onSwitchChanged);
     malArtworkUnreachable.removeListener(_onSwitchChanged);
     super.dispose();
@@ -118,7 +129,7 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
   /// themselves rather than wait to be scrolled away and back.
   void _onSwitchChanged() {
     if (!mounted || widget.manga) return;
-    if (!artworkFallbackEnabled.value) {
+    if (!_lookupAllowed) {
       // Back to the catalog's own artwork, and anything found while the
       // lookup was on is dropped so the two states cannot be told apart.
       if (_fallbackUrl == null && !_lookedUp) return;
@@ -155,9 +166,59 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
       _fallbackUrl = null;
       _primaryFailed = false;
       _lookedUp = false;
+      _resetRetry();
       _adoptCachedFallback();
       _resolveWhenNothingToShow();
     }
+  }
+
+  // Retries after Harbor's poster retry policy (see poster_plate.dart).
+  int _retry = 0;
+  Timer? _retryTimer;
+  String? _failedUrl;
+
+  void _resetRetry() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _retry = 0;
+    _failedUrl = null;
+  }
+
+  /// [url] failed: try it again a little later, longer each time, and after
+  /// the last try let it rest.
+  void _scheduleRetry(String url) {
+    _failedUrl = url;
+    if (_retryTimer?.isActive ?? false) return;
+    final policy = PosterRetryPolicy.instance;
+    if (!policy.canRetry(url, _retry)) {
+      if (_retry >= PosterRetryPolicy.limit) policy.cool(url);
+      return;
+    }
+    _retryTimer = Timer(policy.delayFor(_retry)!, () => _retryNow(url));
+  }
+
+  void _retryNow(String url) {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    if (!mounted || _failedUrl != url) return;
+    unawaited(
+      CachedNetworkImage.evictFromCache(
+        url,
+        cacheManager: posterCacheManager,
+      ).catchError((Object _) => false),
+    );
+    setState(() {
+      _failedUrl = null;
+      _retry++;
+    });
+  }
+
+  /// Pointing at a card that failed tries it again at once, as Harbor does.
+  void _retryOnHover() {
+    final url = _failedUrl;
+    if (url == null || PosterRetryPolicy.instance.isCooling(url)) return;
+    if (_retry >= PosterRetryPolicy.limit) return;
+    _retryNow(url);
   }
 
   /// A title already resolved for another card is known synchronously, so its
@@ -238,20 +299,47 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
       _lookedUp = true;
       url = await service.posterForTitle(title);
     } else {
+      // Nothing to look up by: the card shows its error picture.
+      if (mounted) {
+        setState(() {
+          _lookedUp = true;
+          _lookupFinished = true;
+        });
+      }
       return;
     }
 
-    if (!mounted || url == null || url.isEmpty) return;
-    setState(() => _fallbackUrl = url);
+    if (!mounted) return;
+    if (url == null || url.isEmpty) {
+      setState(() => _lookupFinished = true);
+      return;
+    }
+    setState(() {
+      _lookupFinished = true;
+      _fallbackUrl = url;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final url = _fallbackUrl ?? widget.imageUrl;
     if (url.trim().isEmpty) return widget.errorWidget(context);
+    // A host known to be blocked here is not asked at all: the request would
+    // hang for twenty seconds holding one of the few download slots, and
+    // every other poster would queue behind it. The lookup started in
+    // initState replaces the picture.
+    if (_fallbackUrl == null &&
+        malArtworkUnreachable.value &&
+        isMalArtworkUrl(url)) {
+      return _lookedUp && _lookupFinished
+          ? widget.errorWidget(context)
+          : widget.placeholder(context);
+    }
 
-    return CachedNetworkImage(
+    final image = CachedNetworkImage(
+      key: ValueKey<String>('$url#$_retry'),
       imageUrl: url,
+      cacheManager: posterCacheManager,
       fit: widget.fit,
       alignment: widget.alignment,
       width: widget.width,
@@ -268,11 +356,20 @@ class _FallbackPosterImageState extends ConsumerState<FallbackPosterImage> {
             if (mounted) _resolveFallback();
           });
         }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _scheduleRetry(url);
+        });
         return widget.errorWidget(context);
       },
       fadeOutDuration: Duration.zero,
       fadeInDuration: widget.fadeInDuration,
       useOldImageOnUrlChange: true,
+    );
+    return MouseRegion(
+      opaque: false,
+      hitTestBehavior: HitTestBehavior.translucent,
+      onEnter: (_) => _retryOnHover(),
+      child: image,
     );
   }
 }

@@ -18,6 +18,8 @@ final class _PreviewService extends AnimeWitcherAccountService {
           secureStorage: SecureTokenStorage(StorageService()),
         );
 
+  int loads = 0;
+
   @override
   Future<AnimeWitcherCommentPage> loadComments(
     AnimeWitcherCommentTarget target, {
@@ -25,6 +27,7 @@ final class _PreviewService extends AnimeWitcherAccountService {
     FirestoreDocument? cursor,
     int limit = 20,
   }) async {
+    loads++;
     return const AnimeWitcherCommentPage(
       items: <AnimeWitcherComment>[],
       cursor: null,
@@ -34,6 +37,71 @@ final class _PreviewService extends AnimeWitcherAccountService {
 }
 
 void main() {
+  for (final useSlivers in <bool>[false, true]) {
+    testWidgets(
+      'reviews wait until visible in a ${useSlivers ? 'sliver' : 'box'} viewport',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(390, 844));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final controller = ScrollController();
+        addTearDown(controller.dispose);
+        final service = _PreviewService();
+        final content = Column(
+          children: [
+            const SizedBox(height: 2000),
+            DetailsCommentsPreview(
+              item: MultimediaItem(
+                title: 'Anime',
+                url: 'https://animewitcher.com/anime/anime-id',
+                posterUrl: '',
+              ),
+            ),
+          ],
+        );
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              animeWitcherAccountServiceProvider.overrideWithValue(service),
+            ],
+            child: MaterialApp(
+              locale: const Locale('ar'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: Scaffold(
+                body: useSlivers
+                    ? CustomScrollView(
+                        controller: controller,
+                        slivers: [SliverToBoxAdapter(child: content)],
+                      )
+                    : SingleChildScrollView(
+                        controller: controller,
+                        child: content,
+                      ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(service.loads, 0);
+
+        controller.jumpTo(1000);
+        await tester.pumpAndSettle();
+        expect(service.loads, 0);
+
+        controller.jumpTo(controller.position.maxScrollExtent);
+        await tester.pumpAndSettle();
+        expect(service.loads, 1);
+        expect(find.text('لا توجد مراجعات منشورة بعد.'), findsOneWidget);
+
+        controller.jumpTo(0);
+        await tester.pumpAndSettle();
+        controller.jumpTo(controller.position.maxScrollExtent);
+        await tester.pumpAndSettle();
+        expect(service.loads, 1);
+      },
+    );
+  }
+
   testWidgets('details footer shows reviews where comments used to be', (
     tester,
   ) async {

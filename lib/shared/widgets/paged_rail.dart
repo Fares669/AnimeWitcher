@@ -202,6 +202,10 @@ class _PagedRailState extends State<PagedRail> {
     });
   }
 
+  /// Cards this far past either edge are built, so their posters are on
+  /// their way before the rail is scrolled to them.
+  static const double _aheadExtent = 1200;
+
   @override
   Widget build(BuildContext context) {
     final Widget listView = widget.separatorBuilder != null
@@ -214,6 +218,7 @@ class _PagedRailState extends State<PagedRail> {
             physics: widget.physics,
             reverse: widget.reverse,
             clipBehavior: widget.clipBehavior,
+            cacheExtent: _aheadExtent,
             itemBuilder: widget.itemBuilder,
           )
         : ListView.builder(
@@ -225,6 +230,7 @@ class _PagedRailState extends State<PagedRail> {
             physics: widget.physics,
             reverse: widget.reverse,
             clipBehavior: widget.clipBehavior,
+            cacheExtent: _aheadExtent,
             itemBuilder: widget.itemBuilder,
           );
 

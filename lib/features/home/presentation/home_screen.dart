@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
@@ -12,6 +14,7 @@ import 'package:animewitcher/core/navigation/app_layout_style.dart';
 import 'home_provider.dart';
 import 'home_section_titles.dart';
 import 'home_state.dart';
+import '../../news/presentation/open_news.dart';
 
 import 'package:animewitcher/features/home/presentation/widgets/continue_watching_section.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
@@ -44,6 +47,10 @@ import 'package:animewitcher/features/news/presentation/news_list_screen.dart';
 import 'package:animewitcher/features/news/presentation/news_utils.dart';
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/features/search/data/mal_rankings.dart';
+import 'package:animewitcher/features/manga/presentation/manga_home_prefetch.dart';
+import 'package:animewitcher/core/network/poster_cache.dart';
+import 'package:animewitcher/core/utils/localized_text.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -83,7 +90,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    // The search page's MyAnimeList rows take seconds to gather; started
+    // here, they are usually ready by the time search is opened.
+    for (final ranking in MalRanking.values) {
+      ref.read(malRankingProvider(ranking).future).ignore();
+    }
+    // Once home has had the network to itself for a while, the manga tab's
+    // first page is fetched too, so the tab opens already filled.
+    _prefetchTimer = Timer(const Duration(seconds: 6), () {
+      if (!mounted || !ref.read(mangaHasOwnTabProvider)) return;
+      ref.read(mangaHomeFirstPageProvider.future).ignore();
+    });
   }
+
+  Timer? _prefetchTimer;
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
@@ -99,6 +119,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   @override
   void dispose() {
+    _prefetchTimer?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _showBottomFade.dispose();
@@ -109,27 +130,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     openNewsUrl(item);
   }
 
-  Future<void> _openLinkedNewsAnime(
-    BuildContext context,
-    AnimeWitcherProvider provider,
-    NewsItem item,
-  ) async {
-    final animeId = item.animeId?.trim();
-    if (animeId == null || animeId.isEmpty) return;
-
-    try {
-      final baseUrl = provider.mainUrl.replaceFirst(RegExp(r'/$'), '');
-      final details = await provider.getDetails(
-        baseUrl + '/watch/' + Uri.encodeComponent(animeId),
-      );
-      if (!context.mounted) return;
-      DetailsRoute($extra: DetailsRouteExtra(item: details))
-          .push<void>(context);
-    } catch (_) {
-      // The article remains usable even if its linked anime is unavailable.
-    }
-  }
-
   void _openNewsList(
     BuildContext context,
     AnimeWitcherProvider provider,
@@ -138,13 +138,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     pushOverTaskbar<void>(
       context,
       MaterialPageRoute<void>(
-        builder: (_) => NewsListScreen(
+        builder: (routeContext) => NewsListScreen(
           initialItems: items,
           loadPage: (offset, limit) =>
               provider.getNewsPage(offset: offset, limit: limit),
           onOpen: (item) => _openNewsArticle(item),
           onAnimeTap: (item) {
-            _openLinkedNewsAnime(context, provider, item);
+            openLinkedNewsAnime(routeContext, provider, item);
           },
         ),
       ),
@@ -228,7 +228,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         onViewAll: () => _openNewsList(context, provider, news),
         onOpen: _openNewsArticle,
         onAnimeTap: (item) {
-          _openLinkedNewsAnime(context, provider, item);
+          openLinkedNewsAnime(context, provider, item);
         },
       );
     }
@@ -236,6 +236,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final sections = <Widget>[];
     if (entries.isEmpty && news.isNotEmpty) {
       sections.add(buildNewsSection());
+    }
+
+    // Each rail's first posters are fetched to disk now, before the rail
+    // is scrolled to: drawn from disk, they appear at once.
+    for (final entry in entries) {
+      warmPosters(entry.value.take(12).map((item) => item.posterUrl));
     }
 
     for (var index = 0; index < entries.length; index++) {
@@ -278,9 +284,50 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       if (news.isNotEmpty && index == newsAfterIndex) {
         sections.add(buildNewsSection());
       }
+      // MyAnimeList's rankings, after the newest episodes.
+      if (index == 0) sections.addAll(_malRankingRails(context));
     }
+    if (entries.isEmpty) sections.addAll(_malRankingRails(context));
+
 
     return sections;
+  }
+
+  /// MyAnimeList's rankings — popular now, best rated, most watched — as
+  /// rails with their "view all" pages. Only the catalogue's own shows are
+  /// in them; a ranking not fetched yet is left out until it is.
+  List<Widget> _malRankingRails(BuildContext context) {
+    final load = ref.watch(malRankingLoaderProvider);
+    final rails = <Widget>[];
+    for (final (ranking, english, arabic)
+        in const <(MalRanking, String, String)>[
+          (MalRanking.airing, 'Trending now', 'رائج الآن'),
+          (MalRanking.top, 'Top rated', 'الأفضل'),
+          (MalRanking.popular, 'Most watched', 'الأكثر مشاهدة'),
+        ]) {
+      final items =
+          ref.watch(malRankingProvider(ranking)).value ??
+          const <MultimediaItem>[];
+      if (items.isEmpty) continue;
+      warmPosters(items.take(12).map((item) => item.posterUrl));
+      rails.add(
+        MediaHorizontalList(
+          key: ValueKey<String>('home-mal-${ranking.name}'),
+          title: appText(context, english: english, arabic: arabic),
+          mediaList: items,
+          category: ViewAllCategory.providerContent,
+          showViewAll: true,
+          loadViewAllPage: (offset) => load(ranking, offset),
+          onTap: (item) {
+            DetailsRoute($extra: DetailsRouteExtra(item: item))
+                .push<void>(context);
+          },
+          heroTagPrefix: 'home_mal_${ranking.name}',
+          forcePortrait: true,
+        ),
+      );
+    }
+    return rails;
   }
 
   bool _isNewEpisodesSectionTitle(String title) {

@@ -1,6 +1,7 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/features/home/presentation/view_all_screen.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -21,6 +22,34 @@ MultimediaItem _item(String title, String id) {
 }
 
 void main() {
+  testWidgets('view all content scrolls under the progressive header', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ViewAllScreen(
+          title: 'All titles',
+          initialMediaList: <MultimediaItem>[_item('First', 'first')],
+          category: ViewAllCategory.popularTV,
+          forcePortrait: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
+    expect(scaffold.extendBodyBehindAppBar, isTrue);
+    expect(find.byType(AppPageAppBar), findsOneWidget);
+
+    final grid = tester.widget<GridView>(find.byType(GridView).first);
+    final padding = grid.padding!.resolve(TextDirection.ltr);
+    expect(padding.top, greaterThan(kToolbarHeight));
+  });
+
   testWidgets('a failed first page can be retried', (tester) async {
     var calls = 0;
 

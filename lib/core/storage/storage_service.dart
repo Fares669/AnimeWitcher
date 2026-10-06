@@ -1,5 +1,7 @@
 import 'package:crypto/crypto.dart';
 
+import '../network/poster_cache.dart';
+
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -1531,6 +1533,7 @@ class StorageService {
       // ... (rest of the code)
       try {
         await DefaultCacheManager().emptyCache();
+        await posterCacheManager.emptyCache();
       } catch (e) {
         if (kDebugMode) debugPrint("Error clearing cache manager: $e");
       }

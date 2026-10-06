@@ -1,13 +1,14 @@
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/features/settings/presentation/account_privacy_settings_screen.dart';
 import 'package:animewitcher/shared/widgets/app_back_button.dart';
+import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('account privacy header keeps title right and back left', (tester) async {
+  testWidgets('account privacy header centers title and keeps back left', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -41,9 +42,19 @@ void main() {
     expect(back, findsOneWidget);
     final titleRect = tester.getRect(title);
     final backRect = tester.getRect(back);
-    expect(titleRect.center.dx, greaterThan(tester.view.physicalSize.width / 2));
+    expect(
+      titleRect.center.dx,
+      closeTo(tester.view.physicalSize.width / 2, 1),
+    );
     expect(backRect.center.dx, lessThan(80));
-    expect(titleRect.left, greaterThan(backRect.right));
+    expect(titleRect.left, greaterThanOrEqualTo(backRect.right));
+
+    final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).last);
+    expect(scaffold.extendBodyBehindAppBar, isTrue);
+    expect(find.byType(AppPageAppBar), findsOneWidget);
+    final list = tester.widget<ListView>(find.byType(ListView).first);
+    final padding = list.padding!.resolve(TextDirection.ltr);
+    expect(padding.top, greaterThanOrEqualTo(kToolbarHeight));
   });
 
   testWidgets('privacy toggles use themed Material switches on iOS', (tester) async {
