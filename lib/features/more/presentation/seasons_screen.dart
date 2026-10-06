@@ -138,9 +138,17 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           }
 
           final data = snapshot.data!;
+          final seasonTitle = switch (_selectedTab) {
+            0 => data.config.past,
+            1 => data.config.current,
+            2 => data.config.next,
+            _ => '',
+          };
           return Column(
             children: [
               _SeasonTabs(controller: _tabController, isArabic: isArabic),
+              if (seasonTitle.trim().isNotEmpty)
+                SeasonListTitle(title: seasonTitle),
               Expanded(
                 child: TabBarView(
                   controller: _tabController,
@@ -168,7 +176,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
   Widget _tabBody(_SeasonsBootstrap data, bool isArabic, int index) {
     switch (index) {
       case 0:
-        return _SeasonCatalogTab(
+        return _SeasonGrid(
           key: ValueKey('past-${data.config.past}-$_reloadGeneration'),
           provider: data.provider,
           season: data.config.past,
@@ -177,7 +185,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
               : 'No titles in the previous season',
         );
       case 1:
-        return _SeasonCatalogTab(
+        return _SeasonGrid(
           key: ValueKey('current-${data.config.current}-$_reloadGeneration'),
           provider: data.provider,
           season: data.config.current,
@@ -186,7 +194,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
               : 'No titles in the current season',
         );
       case 2:
-        return _SeasonCatalogTab(
+        return _SeasonGrid(
           key: ValueKey('next-${data.config.next}-$_reloadGeneration'),
           provider: data.provider,
           season: data.config.next,
@@ -265,36 +273,6 @@ class _SeasonsLoadingBody extends StatelessWidget {
       children: [
         if (showSeasonTitle) const SeasonListTitleSkeleton(),
         const Expanded(child: AnimeCatalogShimmer()),
-      ],
-    );
-  }
-}
-
-class _SeasonCatalogTab extends StatelessWidget {
-  final AnimeWitcherNativeProvider provider;
-  final String season;
-  final String emptyLabel;
-
-  const _SeasonCatalogTab({
-    super.key,
-    required this.provider,
-    required this.season,
-    required this.emptyLabel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (season.trim().isNotEmpty) SeasonListTitle(title: season),
-        Expanded(
-          child: _SeasonGrid(
-            provider: provider,
-            season: season,
-            emptyLabel: emptyLabel,
-          ),
-        ),
       ],
     );
   }
@@ -517,6 +495,7 @@ class _SeasonGrid extends StatefulWidget {
   final String emptyLabel;
 
   const _SeasonGrid({
+    super.key,
     required this.provider,
     this.topPadding = 0,
     required this.season,
@@ -615,10 +594,7 @@ class _SeasonGridState extends State<_SeasonGrid>
   Widget build(BuildContext context) {
     super.build(context);
     if (_items.isEmpty && _loading) {
-      return Padding(
-        padding: EdgeInsets.only(top: widget.topPadding),
-        child: const AnimeCatalogShimmer(),
-      );
+      return const AnimeCatalogShimmer();
     }
     if (_items.isEmpty && _error != null) {
       return ListView(

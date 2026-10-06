@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:animewitcher/features/home/presentation/widgets/home_section_header.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
@@ -42,9 +40,6 @@ import '../data/recent_searches.dart';
 import 'widgets/search_start_page.dart';
 import 'widgets/search_instant_results.dart';
 import 'widgets/phone_suggestion_box.dart';
-import '../../home/presentation/home_provider.dart';
-import '../../home/presentation/home_state.dart';
-import '../data/mal_rankings.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
@@ -452,8 +447,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     searchFocusNode: _focusNode,
                     clearButtonFocusNode: _clearButtonFocusNode,
                     isCompact: false,
-                    onRandom: _surpriseMe,
-                    isRandomLoading: _surprising,
                     onShowFilters: _showSearchFilters,
                     onSortSelected: _applySearchSort,
                     sortValue: ref.watch(searchProviderFiltersProvider).sort,
@@ -509,13 +502,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final capabilities = domain.capabilities;
 
     return SearchActionButtons(
-      onRandom: _surpriseMe,
-      isRandomLoading: _surprising,
-      randomTooltip: appText(
-        context,
-        english: 'Surprise me',
-        arabic: 'اقترح لي أنمي',
-      ),
       showSort: capabilities.showSort,
       // The sheet also picks the category, so it is always there.
       showFilter: true,
@@ -722,16 +708,25 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           )
         : const SizedBox.shrink();
 
-    Widget belowHeader(Widget child) => Padding(
-      padding: EdgeInsets.only(top: topInset),
-      child: Column(
-        children: [
-          if (withFilterChips) chips,
-          _buildRecentSearches(context),
-          Expanded(child: child),
-        ],
-      ),
-    );
+    Widget belowHeader(Widget child) {
+      final body = Padding(
+        padding: EdgeInsets.only(top: topInset),
+        child: Column(
+          children: [
+            if (withFilterChips) chips,
+            _buildRecentSearches(context),
+            Expanded(child: child),
+          ],
+        ),
+      );
+      return child is AnimeCatalogShimmer
+          ? _withLoadingBehindHeader(
+              body,
+              topInset: topInset,
+              characterCaptionSpace: child.characterCaptionSpace,
+            )
+          : body;
+    }
 
     // Typed but not searched — one letter, or anything on a phone, which
     // searches on Enter: the search page stays.
@@ -961,7 +956,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ),
     );
     if (!hasAny && state.isLoading) {
-      return clearOfHeader(_buildLoadingIndicator(context));
+      return _withLoadingBehindHeader(
+        clearOfHeader(_buildLoadingIndicator(context)),
+        topInset: topInset,
+      );
     }
     if (!hasAny && state.errorMessage != null) {
       return clearOfHeader(
@@ -1090,6 +1088,33 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
+  Widget _withLoadingBehindHeader(
+    Widget body, {
+    required double topInset,
+    bool characterCaptionSpace = false,
+  }) {
+    if (topInset <= 0) return body;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        body,
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: topInset,
+          child: IgnorePointer(
+            child: AnimeCatalogShimmer(
+              padding: EdgeInsets.zero,
+              physics: const NeverScrollableScrollPhysics(),
+              characterCaptionSpace: characterCaptionSpace,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildLoadingIndicator(BuildContext context) {
     return const AnimeCatalogShimmer();
   }
@@ -1159,54 +1184,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       onSeeAll: () => _submitSearch(_controller.text),
       onClose: _closeResultsPanel,
     );
-  }
-
-  bool _surprising = false;
-
-  /// Opens a random anime from MyAnimeList's two hundred best rated that the
-  /// catalogue carries; with MyAnimeList out of reach, one from home's rows.
-  Future<void> _surpriseMe() async {
-    if (_surprising) return;
-    setState(() => _surprising = true);
-    final random = math.Random();
-    MultimediaItem? pick;
-    try {
-      final load = ref.read(malRankingLoaderProvider);
-      for (var attempt = 0; attempt < 3 && pick == null; attempt++) {
-        final page = await load(
-          MalRanking.top,
-          random.nextInt(8) * malRankingPageSize,
-        );
-        if (page.items.isNotEmpty) {
-          pick = page.items[random.nextInt(page.items.length)];
-        }
-      }
-    } catch (_) {}
-    if (pick == null) {
-      final home = ref.read(homeDataProvider);
-      if (home is HomeSuccess) {
-        final all = home.data.values.expand((items) => items).toList();
-        if (all.isNotEmpty) pick = all[random.nextInt(all.length)];
-      }
-    }
-    if (!mounted) return;
-    setState(() => _surprising = false);
-    if (pick == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            appText(
-              context,
-              english: "Couldn't pick one right now. Try again.",
-              arabic: 'تعذر الاختيار الآن، حاول مرة أخرى.',
-            ),
-          ),
-        ),
-      );
-      return;
-    }
-    await DetailsRoute($extra: DetailsRouteExtra(item: pick))
-        .push<void>(context);
   }
 
   Widget _buildEmptyState(BuildContext context) {
@@ -1417,4 +1394,5 @@ class _AllSearchHeading extends StatelessWidget {
     );
   }
 }
+
 

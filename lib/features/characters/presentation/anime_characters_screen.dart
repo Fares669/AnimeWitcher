@@ -115,10 +115,7 @@ class _AnimeCharactersScreenState
         onBack: () => Navigator.of(context).pop(),
       ),
       body: _loading
-          ? Padding(
-              padding: EdgeInsets.only(top: headerTop),
-              child: const AnimeCatalogShimmer(characterCaptionSpace: true),
-            )
+          ? const AnimeCatalogShimmer(characterCaptionSpace: true)
           : _error != null
               ? Padding(
                   padding: EdgeInsets.only(top: headerTop),
@@ -204,4 +201,5 @@ class _AnimeCharactersScreenState
     );
   }
 }
+
 

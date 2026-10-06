@@ -262,7 +262,7 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: EdgeInsets.fromLTRB(
                     gridHorizontalPadding,
-                    headerTop + 16,
+                    items.isEmpty && isLoading ? 16 : headerTop + 16,
                     gridHorizontalPadding,
                     16,
                   ),
@@ -374,4 +374,5 @@ class _ProviderPageLoadError extends StatelessWidget {
           );
   }
 }
+
 

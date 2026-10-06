@@ -108,6 +108,22 @@ class _StubSeasonsProvider extends AnimeWitcherNativeProvider {
   }
 }
 
+class _ScrollableSeasonsProvider extends _StubSeasonsProvider {
+  @override
+  Future<ProviderMediaPage> getSeasonPage(
+    String season, {
+    int offset = 0,
+    int limit = 30,
+  }) async => ProviderMediaPage(
+    items: [
+      for (var i = 0; i < 30; i++)
+        MultimediaItem(title: 'Show $i', url: 'test://$season/$i', posterUrl: ''),
+    ],
+    nextOffset: 30,
+    hasMore: false,
+  );
+}
+
 Future<void> _pumpSeasons(
   WidgetTester tester, {
   required AnimeWitcherNativeProvider provider,
@@ -234,6 +250,32 @@ void main() {
     },
   );
 
+  testWidgets('season title stays outside the tab pages and fixed while scrolling', (
+    tester,
+  ) async {
+    await _pumpSeasons(tester, provider: _ScrollableSeasonsProvider());
+    for (final entry in const {
+      'الحالي': 'صيف عام 2026',
+      'السابق': 'ربيع عام 2026',
+      'القادم': 'خريف عام 2026',
+    }.entries) {
+      await _selectTab(tester, entry.key);
+      final title = find.text(entry.value).hitTestable();
+      expect(
+        find.ancestor(of: title, matching: find.byType(TabBarView)),
+        findsNothing,
+      );
+      final before = tester.getRect(title);
+      await tester.drag(
+        find.byType(GridView).hitTestable().first,
+        const Offset(0, -400),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(tester.getRect(title), before);
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('other-seasons year headings are horizontally centered', (
     tester,
   ) async {
@@ -264,3 +306,4 @@ void main() {
     await _writeShot(tester, shotKey, 'seasons_other_years_centered.png');
   });
 }
+

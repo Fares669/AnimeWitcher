@@ -138,10 +138,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
 
   Widget _buildBody(bool isArabic, double headerTop) {
     if (_items.isEmpty && _loading) {
-      return Padding(
-        padding: EdgeInsets.only(top: headerTop),
-        child: const AnimeCatalogShimmer(),
-      );
+      return const AnimeCatalogShimmer();
     }
     if (_items.isEmpty && _error != null) {
       return Padding(
@@ -256,3 +253,4 @@ class _LoadError extends StatelessWidget {
     );
   }
 }
+

@@ -255,6 +255,7 @@ extension on _PlayerSettingsPanelState {
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
+              textDirection: TextDirection.ltr,
               children: [
                 const Icon(
                   Icons.chevron_left_rounded,
@@ -591,3 +592,4 @@ class PlayerKeyHint extends StatelessWidget {
     );
   }
 }
+
