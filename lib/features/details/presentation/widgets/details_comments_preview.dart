@@ -6,6 +6,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import '../../../home/presentation/widgets/home_section_header.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
@@ -40,6 +41,7 @@ class _DetailsCommentsPreviewState
     extends ConsumerState<DetailsCommentsPreview> {
   List<AnimeWitcherComment> _comments = const <AnimeWitcherComment>[];
   bool _loading = true;
+  bool _startedLoading = false;
   bool _loadingMore = false;
   bool _hasMore = true;
   FirestoreDocument? _cursor;
@@ -48,15 +50,6 @@ class _DetailsCommentsPreviewState
 
   AnimeWitcherCommentTarget? get _target =>
       animeWitcherAnimeReviewTarget(widget.item);
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-    // The comments sit at the foot of the page's own scroll rather than in a
-    // list of their own, so more of them are asked for by watching that.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _watchPageScroll());
-  }
 
   void _watchPageScroll() {
     if (!mounted) return;
@@ -67,10 +60,41 @@ class _DetailsCommentsPreviewState
   }
 
   void _onPageScroll() {
+    if (!mounted) return;
+    if (!_startedLoading) {
+      if (_isSectionOnScreen()) {
+        _startedLoading = true;
+        _load();
+      }
+      return;
+    }
     final position = _watchedPosition;
     if (position == null || !position.hasContentDimensions) return;
     final remaining = position.maxScrollExtent - position.pixels;
     if (remaining <= kDetailsCommentsLoadMargin) _loadMore();
+  }
+
+  bool _isSectionOnScreen() {
+    final object = context.findRenderObject();
+    if (object is! RenderBox || !object.hasSize || !object.attached) {
+      return false;
+    }
+    // Match the similar-anime section, including sliver scroll offsets.
+    final viewport = RenderAbstractViewport.maybeOf(object);
+    final position = _watchedPosition;
+    if (viewport != null &&
+        position != null &&
+        position.hasPixels &&
+        position.hasContentDimensions) {
+      final leading = viewport.getOffsetToReveal(object, 0).offset;
+      final trailing = leading + object.size.height;
+      final viewStart = position.pixels;
+      final viewEnd = viewStart + position.viewportDimension;
+      return leading < viewEnd && trailing > viewStart;
+    }
+    final section = object.localToGlobal(Offset.zero) & object.size;
+    return !section.isEmpty &&
+        section.overlaps(Offset.zero & MediaQuery.sizeOf(context));
   }
 
   @override
@@ -88,10 +112,19 @@ class _DetailsCommentsPreviewState
   @override
   void didUpdateWidget(covariant DetailsCommentsPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.url != widget.item.url) _load();
+    if (oldWidget.item.url != widget.item.url) {
+      _startedLoading = false;
+      _comments = const <AnimeWitcherComment>[];
+      _loading = true;
+      _loadingMore = false;
+      _hasMore = true;
+      _cursor = null;
+      _error = null;
+    }
   }
 
   Future<void> _load() async {
+    final itemUrl = widget.item.url;
     final target = _target;
     if (target == null) {
       if (mounted) setState(() => _loading = false);
@@ -108,7 +141,7 @@ class _DetailsCommentsPreviewState
       final page = await ref
           .read(animeWitcherAccountServiceProvider)
           .loadComments(target, limit: kDetailsCommentsPageSize);
-      if (!mounted) return;
+      if (!mounted || widget.item.url != itemUrl) return;
       setState(() {
         _comments = page.items;
         _cursor = page.cursor;
@@ -116,7 +149,7 @@ class _DetailsCommentsPreviewState
         _loading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || widget.item.url != itemUrl) return;
       setState(() {
         _error = error;
         _loading = false;
@@ -125,6 +158,7 @@ class _DetailsCommentsPreviewState
   }
 
   Future<void> _loadMore() async {
+    final itemUrl = widget.item.url;
     final target = _target;
     if (target == null || _loading || _loadingMore || !_hasMore) return;
     setState(() => _loadingMore = true);
@@ -136,7 +170,7 @@ class _DetailsCommentsPreviewState
             cursor: _cursor,
             limit: kDetailsCommentsPageSize,
           );
-      if (!mounted) return;
+      if (!mounted || widget.item.url != itemUrl) return;
       setState(() {
         _comments = <AnimeWitcherComment>[..._comments, ...page.items];
         _cursor = page.cursor;
@@ -145,7 +179,7 @@ class _DetailsCommentsPreviewState
         _loadingMore = false;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || widget.item.url != itemUrl) return;
       // The ones already read stay on the page; the next scroll tries again.
       setState(() => _loadingMore = false);
     }
@@ -176,6 +210,9 @@ class _DetailsCommentsPreviewState
   @override
   Widget build(BuildContext context) {
     if (_target == null) return const SizedBox.shrink();
+    if (!_startedLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onPageScroll());
+    }
 
     final theme = Theme.of(context);
     final title = appText(context, english: 'Reviews', arabic: 'المراجعات');
