@@ -174,7 +174,6 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
                       tintColor: theme.colorScheme.primary,
                       height: SearchGlassSurface.height,
                     ),
-                    ),
                     SizedBox(
                       // Details pins its native toolbar 34pt inside the iOS
                       // safe-area trailing edge. Search is an inline platform
@@ -193,4 +192,3 @@ class _SearchHeaderBarState extends ConsumerState<SearchHeaderBar> {
     );
   }
 }
-
