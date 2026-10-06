@@ -16,7 +16,7 @@ import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../shared/widgets/shimmer_placeholder.dart';
-import '../../details/presentation/details_screen.dart';
+import '../../../core/router/app_router.dart';
 
 class SeasonsScreen extends ConsumerStatefulWidget {
   const SeasonsScreen({super.key});
@@ -659,11 +659,9 @@ class _SeasonGridState extends State<_SeasonGrid>
             key: ValueKey('season-${widget.season}-${item.url}'),
             item: item,
             heroTag: 'season-${widget.season}-${item.id}-$index',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => DetailsScreen(item: item),
-              ),
-            ),
+            onTap: () => DetailsRoute(
+              $extra: DetailsRouteExtra(item: item),
+            ).push<void>(context),
           );
         },
       ),
@@ -700,3 +698,4 @@ class _LoadError extends StatelessWidget {
     );
   }
 }
+

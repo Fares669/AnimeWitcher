@@ -4,7 +4,7 @@ import 'package:animewitcher/shared/widgets/app_page_header.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/extensions/base_provider.dart';
-import 'package:animewitcher/features/details/presentation/details_screen.dart';
+import 'package:animewitcher/core/router/app_router.dart';
 import '../../../core/utils/image_utils.dart';
 import '../../../core/utils/localized_text.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
@@ -308,11 +308,9 @@ class _ViewAllScreenState extends State<ViewAllScreen> {
                         if (widget.onTap != null) {
                           widget.onTap!(item);
                         } else {
-                          Navigator.of(context).push<void>(
-                            MaterialPageRoute<void>(
-                              builder: (_) => DetailsScreen(item: item),
-                            ),
-                          );
+                          DetailsRoute(
+                            $extra: DetailsRouteExtra(item: item),
+                          ).push<void>(context);
                         }
                       },
                     );
@@ -374,5 +372,6 @@ class _ProviderPageLoadError extends StatelessWidget {
           );
   }
 }
+
 
 

@@ -14,7 +14,7 @@ import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
-import '../../details/presentation/details_screen.dart';
+import '../../../core/router/app_router.dart';
 
 class ComingSoonScreen extends ConsumerStatefulWidget {
   const ComingSoonScreen({super.key});
@@ -211,11 +211,9 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
               key: ValueKey('coming-${item.url}'),
               item: item,
               heroTag: 'coming-${item.id}-$index',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => DetailsScreen(item: item),
-                ),
-              ),
+              onTap: () => DetailsRoute(
+                $extra: DetailsRouteExtra(item: item),
+              ).push<void>(context),
             );
           },
         ),
@@ -253,4 +251,5 @@ class _LoadError extends StatelessWidget {
     );
   }
 }
+
 

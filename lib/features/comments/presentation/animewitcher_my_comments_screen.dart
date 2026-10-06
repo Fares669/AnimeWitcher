@@ -12,7 +12,7 @@ import '../../../core/account/firestore_rest_client.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/request_generation.dart';
-import '../../details/presentation/details_screen.dart';
+import '../../../core/router/app_router.dart';
 import 'animewitcher_replies_screen.dart';
 import 'widgets/animewitcher_comment_sort_control.dart';
 import '../../../core/utils/avatar_image.dart';
@@ -378,19 +378,17 @@ class _AnimeWitcherMyCommentsScreenState
     final animeId = comment.animeId?.trim();
     if (animeId == null || animeId.isEmpty) return;
 
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => DetailsScreen(
-          item: MultimediaItem(
-            title: animeId,
-            url: AnimeWitcherSyncIds.mainUrl(animeId),
-            posterUrl: '',
-            contentType: MultimediaContentType.anime,
-            provider: animeWitcherNativeProviderId,
-          ),
+    DetailsRoute(
+      $extra: DetailsRouteExtra(
+        item: MultimediaItem(
+          title: animeId,
+          url: AnimeWitcherSyncIds.mainUrl(animeId),
+          posterUrl: '',
+          contentType: MultimediaContentType.anime,
+          provider: animeWitcherNativeProviderId,
         ),
       ),
-    );
+    ).push<void>(context);
   }
 
   void _replaceComment(AnimeWitcherComment updated) {

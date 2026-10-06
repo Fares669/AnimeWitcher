@@ -18,7 +18,7 @@ import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
-import '../../details/presentation/details_screen.dart';
+import '../../../core/router/app_router.dart';
 
 class BroadcastScheduleScreen extends ConsumerStatefulWidget {
   const BroadcastScheduleScreen({super.key});
@@ -434,11 +434,9 @@ class _ScheduleGrid extends StatelessWidget {
               key: ValueKey('broadcast-$day-${item.url}'),
               item: item,
               heroTag: 'broadcast-$day-${item.id}-$index',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => DetailsScreen(item: item),
-                ),
-              ),
+              onTap: () => DetailsRoute(
+                $extra: DetailsRouteExtra(item: item),
+              ).push<void>(context),
             );
           },
         ),
@@ -446,3 +444,4 @@ class _ScheduleGrid extends StatelessWidget {
     );
   }
 }
+

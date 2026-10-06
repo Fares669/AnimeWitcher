@@ -16,7 +16,7 @@ import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
-import '../../details/presentation/details_screen.dart';
+import '../../../core/router/app_router.dart';
 
 typedef _RankingPageLoader =
     Future<ProviderMediaPage> Function(
@@ -422,11 +422,9 @@ class _RankingGrid extends StatelessWidget {
               key: ValueKey('${ranking.queryType}-${item.url}'),
               item: item,
               heroTag: 'global-ranking-${ranking.queryType}-${item.id}-$index',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => DetailsScreen(item: item),
-                ),
-              ),
+              onTap: () => DetailsRoute(
+                $extra: DetailsRouteExtra(item: item),
+              ).push<void>(context),
             );
           },
         ),
@@ -469,3 +467,4 @@ class _RankingError extends StatelessWidget {
     );
   }
 }
+

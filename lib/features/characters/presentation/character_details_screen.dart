@@ -22,7 +22,7 @@ import '../../../shared/widgets/loading_indicator.dart';
 import '../../../shared/widgets/shimmer_placeholder.dart';
 import '../../../shared/widgets/thumbnail_error_placeholder.dart';
 import '../../comments/presentation/animewitcher_comments_screen.dart';
-import '../../details/presentation/details_screen.dart';
+import '../../../core/router/app_router.dart';
 import '../../settings/presentation/account_screen.dart';
 import 'character_animes_grid.dart';
 
@@ -271,11 +271,9 @@ class _CharacterDetailsScreenState
   }
 
   void _openAnime(MultimediaItem item) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => DetailsScreen(item: item),
-      ),
-    );
+    DetailsRoute(
+      $extra: DetailsRouteExtra(item: item),
+    ).push<void>(context);
   }
 
   @override
@@ -520,3 +518,4 @@ class _CharacterDetailsScreenState
     );
   }
 }
+

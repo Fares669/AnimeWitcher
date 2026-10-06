@@ -13,7 +13,7 @@ import '../../../core/utils/responsive_breakpoints.dart';
 import '../../../shared/widgets/anime_catalog_shimmer.dart';
 import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
-import '../../details/presentation/details_screen.dart';
+import '../../../core/router/app_router.dart';
 import '../../library/presentation/history_provider.dart';
 import '../../library/presentation/library_lists.dart';
 
@@ -185,11 +185,9 @@ class _RecentWatchedGrid extends StatelessWidget {
             key: ValueKey('recent-${item.url}'),
             item: item,
             heroTag: 'recent-${item.id}-$index',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => DetailsScreen(item: item),
-              ),
-            ),
+            onTap: () => DetailsRoute(
+              $extra: DetailsRouteExtra(item: item),
+            ).push<void>(context),
             onLongPress: () => onRemove(history),
           );
         },
@@ -225,4 +223,5 @@ class _EmptyRecentWatched extends StatelessWidget {
     );
   }
 }
+
 
