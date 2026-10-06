@@ -354,6 +354,18 @@ final class DownloadManagerV2 {
             _snapshots[record.logicalId] = projected;
             _recordDiagnostic(record.logicalId, projected);
 
+          case DownloadUserIntent.failed:
+            final failed = DownloadTransportSnapshot(
+              taskId: record.taskId,
+              status: DownloadTransportStatus.failed,
+              progress: 0,
+              totalBytes: record.expectedBytes,
+              failureCategory: record.failureCategory,
+              failureMessage: record.failureMessage,
+            );
+            _snapshots[record.logicalId] = failed;
+            _recordDiagnostic(record.logicalId, failed);
+
           case DownloadUserIntent.active:
             final request = _requests.putIfAbsent(
               record.logicalId,
@@ -413,9 +425,17 @@ final class DownloadManagerV2 {
               );
             }
         }
-      } catch (_) {
+      } catch (e) {
         final current = await _store.get(record.logicalId) ?? record;
-        _rememberRecord(current);
+        final failedRecord = current.copyWith(
+          intent: DownloadUserIntent.failed,
+          awaitingAdmission: false,
+          failureCategory: DownloadFailureCategory.unknown,
+          failureMessage: 'startup recovery failed: $e',
+          updatedAtMillis: _nowMillis(),
+        );
+        await _store.put(failedRecord);
+        _rememberRecord(failedRecord);
         final failed = DownloadTransportSnapshot(
           taskId: current.taskId,
           status: DownloadTransportStatus.failed,
@@ -440,39 +460,51 @@ final class DownloadManagerV2 {
       await initialize();
       final currentRecord = await _store.get(request.logicalId);
 
-      if (currentRecord != null &&
-          currentRecord.intent == DownloadUserIntent.active) {
-        _rememberRecord(currentRecord);
-        if (currentRecord.awaitingAdmission) {
-          final queued =
-              _snapshots[request.logicalId] ??
-              DownloadTransportSnapshot(
-                taskId: currentRecord.taskId,
-                status: DownloadTransportStatus.queued,
-                progress: 0,
-                totalBytes: currentRecord.expectedBytes,
-                transferredBytes: currentRecord.expectedBytes == null
-                    ? null
-                    : 0,
-              );
-          _snapshots[request.logicalId] = queued;
-          _recordDiagnostic(request.logicalId, queued);
-          // A user start may refresh presentation metadata without changing
-          // the durable logical record. Republish so Downloads reloads that
-          // metadata immediately instead of waiting for a restart/safety scan.
-          await _publishRecords();
-          _scheduleAdmissionPromotion();
-          return queued;
+      if (currentRecord != null) {
+        if (currentRecord.completedAtMillis != null &&
+            await hasCompletedDownload(request.logicalId)) {
+          final completed = DownloadTransportSnapshot(
+            taskId: currentRecord.taskId,
+            status: DownloadTransportStatus.complete,
+            progress: 1.0,
+            totalBytes: currentRecord.expectedBytes,
+            transferredBytes: currentRecord.expectedBytes,
+          );
+          _snapshots[request.logicalId] = completed;
+          return completed;
         }
 
-        final existing = await _exactHandle(currentRecord.taskId);
-        if (existing != null && _isRecoverable(existing.current)) {
-          _activateHandle(request.logicalId, existing);
-          // The transport can be reused while the launcher has just written
-          // fresh display metadata. Publish the unchanged record so the
-          // presentation layer observes that metadata write immediately.
-          await _publishRecords();
-          return existing.current;
+        if (currentRecord.intent == DownloadUserIntent.paused) {
+          return _resumeRecordUnsafe(currentRecord, request);
+        }
+
+        if (currentRecord.intent == DownloadUserIntent.active) {
+          _rememberRecord(currentRecord);
+          if (currentRecord.awaitingAdmission) {
+            final queued =
+                _snapshots[request.logicalId] ??
+                DownloadTransportSnapshot(
+                  taskId: currentRecord.taskId,
+                  status: DownloadTransportStatus.queued,
+                  progress: 0,
+                  totalBytes: currentRecord.expectedBytes,
+                  transferredBytes: currentRecord.expectedBytes == null
+                      ? null
+                      : 0,
+                );
+            _snapshots[request.logicalId] = queued;
+            _recordDiagnostic(request.logicalId, queued);
+            await _publishRecords();
+            _scheduleAdmissionPromotion();
+            return queued;
+          }
+
+          final existing = await _exactHandle(currentRecord.taskId);
+          if (existing != null && _isRecoverable(existing.current)) {
+            _activateHandle(request.logicalId, existing);
+            await _publishRecords();
+            return existing.current;
+          }
         }
       }
 
@@ -1301,14 +1333,39 @@ final class DownloadManagerV2 {
     _snapshots[admitted.logicalId] = queued;
     _recordDiagnostic(admitted.logicalId, queued);
 
-    final handle = await _startTransportForRequest(
-      request: request,
-      taskId: admitted.taskId,
-      parallelChunks: admitted.parallelChunks,
-      expectedBytes: admitted.expectedBytes,
-    );
-    _activateHandle(admitted.logicalId, handle);
-    return handle.current;
+    try {
+      final handle = await _startTransportForRequest(
+        request: request,
+        taskId: admitted.taskId,
+        parallelChunks: admitted.parallelChunks,
+        expectedBytes: admitted.expectedBytes,
+      );
+      _activateHandle(admitted.logicalId, handle);
+      return handle.current;
+    } catch (e) {
+      final failedRecord = admitted.copyWith(
+        intent: DownloadUserIntent.failed,
+        awaitingAdmission: false,
+        failureCategory: DownloadFailureCategory.unknown,
+        failureMessage: e.toString(),
+        updatedAtMillis: _nowMillis(),
+      );
+      await _store.put(failedRecord);
+      _rememberRecord(failedRecord);
+      await _publishRecords();
+      final failedSnapshot = DownloadTransportSnapshot(
+        taskId: admitted.taskId,
+        status: DownloadTransportStatus.failed,
+        progress: _snapshots[admitted.logicalId]?.progress ?? 0,
+        totalBytes: admitted.expectedBytes,
+        failureCategory: DownloadFailureCategory.unknown,
+        failureMessage: e.toString(),
+      );
+      _snapshots[admitted.logicalId] = failedSnapshot;
+      _recordDiagnostic(admitted.logicalId, failedSnapshot);
+      _scheduleAdmissionPromotion();
+      rethrow;
+    }
   }
 
   Future<DownloadTransportHandle> _startTransportForRequest({
@@ -1443,15 +1500,40 @@ final class DownloadManagerV2 {
     _snapshots[request.logicalId] = queued;
     _recordDiagnostic(request.logicalId, queued);
 
-    final handle = await _startTransportForRequest(
-      request: request,
-      taskId: taskId,
-      parallelChunks: parallelChunks,
-      expectedBytes: expectedBytes,
-      videoSource: source,
-    );
-    _activateHandle(request.logicalId, handle);
-    return handle.current;
+    try {
+      final handle = await _startTransportForRequest(
+        request: request,
+        taskId: taskId,
+        parallelChunks: parallelChunks,
+        expectedBytes: expectedBytes,
+        videoSource: source,
+      );
+      _activateHandle(request.logicalId, handle);
+      return handle.current;
+    } catch (e) {
+      final failedRecord = nextRecord.copyWith(
+        intent: DownloadUserIntent.failed,
+        awaitingAdmission: false,
+        failureCategory: DownloadFailureCategory.unknown,
+        failureMessage: e.toString(),
+        updatedAtMillis: _nowMillis(),
+      );
+      await _store.put(failedRecord);
+      _rememberRecord(failedRecord);
+      await _publishRecords();
+      final failedSnapshot = DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.failed,
+        progress: 0,
+        totalBytes: expectedBytes,
+        failureCategory: DownloadFailureCategory.unknown,
+        failureMessage: e.toString(),
+      );
+      _snapshots[request.logicalId] = failedSnapshot;
+      _recordDiagnostic(request.logicalId, failedSnapshot);
+      _scheduleAdmissionPromotion();
+      rethrow;
+    }
   }
 
   Future<DownloadTransportSnapshot> _pauseHandleAndSettle(
@@ -1582,6 +1664,9 @@ final class DownloadManagerV2 {
     }
     await _gateway.removeTracking(obsoleteTaskId);
     _handlesByTaskId.remove(obsoleteTaskId);
+    final sub = _subscriptionsByTaskId.remove(obsoleteTaskId);
+    if (sub != null) unawaited(sub.cancel());
+    _sourceRefreshAttempts.remove(logicalId);
     _scheduleAdmissionPromotion();
   }
 
@@ -1624,13 +1709,18 @@ final class DownloadManagerV2 {
   }
 
   Future<void> _deleteDestination(String destinationPath) async {
-    final file = await _destinationFile(destinationPath);
+    final trimmed = destinationPath.trim();
+    if (trimmed.isEmpty || trimmed == '.' || trimmed == '/') return;
+    final file = await _destinationFile(trimmed);
+    final documentsDir = (await getApplicationDocumentsDirectory()).path;
+    if (p.equals(file.path, documentsDir)) return;
+
     if (await file.exists()) {
       await file.delete();
       return;
     }
     final directory = Directory(file.path);
-    if (await directory.exists()) {
+    if (await directory.exists() && p.isWithin(documentsDir, directory.path)) {
       await directory.delete(recursive: true);
     }
   }
@@ -2024,6 +2114,39 @@ final class DownloadManagerV2 {
     DownloadLogicalId logicalId,
     String failedTaskId,
   ) {
+    final attempts = (_sourceRefreshAttempts[logicalId] ?? 0) + 1;
+    _sourceRefreshAttempts[logicalId] = attempts;
+    if (attempts > 3) {
+      _sourceRefreshAttempts.remove(logicalId);
+      unawaited(
+        _commands.run(logicalId, () async {
+          final record = await _store.get(logicalId);
+          if (record == null) return;
+          final failedRecord = record.copyWith(
+            intent: DownloadUserIntent.failed,
+            awaitingAdmission: false,
+            failureCategory: DownloadFailureCategory.sourceExpired,
+            failureMessage: 'Max source refresh attempts exceeded',
+            updatedAtMillis: _nowMillis(),
+          );
+          await _store.put(failedRecord);
+          _rememberRecord(failedRecord);
+          await _publishRecords();
+          final failed = DownloadTransportSnapshot(
+            taskId: record.taskId,
+            status: DownloadTransportStatus.failed,
+            progress: _snapshots[logicalId]?.progress ?? 0,
+            failureCategory: DownloadFailureCategory.sourceExpired,
+            failureMessage: 'Max source refresh attempts exceeded',
+          );
+          _snapshots[logicalId] = failed;
+          _recordDiagnostic(logicalId, failed);
+          _scheduleAdmissionPromotion();
+        }),
+      );
+      return;
+    }
+
     unawaited(
       _commands.run(logicalId, () async {
         final record = await _store.get(logicalId);
