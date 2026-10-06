@@ -25,7 +25,7 @@ gate = manager[manager.index("private final class DownloadContinuedProcessingCom
 service = "com.animewitcher.native-safety-test." + str(uuid.uuid4())
 encryption = encryption.replace("com.animewitcher.download.nativeQueueEncryption", service)
 checks = r'''
-let payload = Data(#"{"url":"https://example.test/video?sig=secret","headers":{"Authorization":"Bearer secret","Cookie":"session=secret"},"taskJson":"embedded credentials","resumeDataBase64":"resume payload"}"#.utf8)
+let payload = Data(#"{\"url\":\"https://example.test/video?sig=secret\",\"headers\":{\"Authorization\":\"Bearer secret\",\"Cookie\":\"session=secret\"},\"taskJson\":\"embedded credentials\",\"resumeDataBase64\":\"resume payload\"}"#.utf8)
 guard let encrypted = DownloadNativeQueueEncryption.encrypt(payload) else {
   fatalError("Cannot create the isolated test Keychain item")
 }
@@ -37,7 +37,7 @@ tampered[tampered.count - 1] ^= 1
 assert(DownloadNativeQueueEncryption.decrypt(tampered) == nil, "Reject unauthenticated payloads")
 assert(DownloadNativeQueueEncryption.decrypt(Data([1, 2, 3])) == nil)
 
-let gate = DownloadContinuedProcessingCompletion()
+private let gate = DownloadContinuedProcessingCompletion()
 final class Counter: @unchecked Sendable {
   private let lock = NSLock()
   private(set) var value = 0

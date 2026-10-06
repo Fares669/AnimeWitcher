@@ -88,7 +88,7 @@ final class _RenameFailingFile implements File {
   Future<bool> exists() => file.exists();
 
   @override
-  Future<File> delete({bool recursive = false}) =>
+  Future<FileSystemEntity> delete({bool recursive = false}) =>
       file.delete(recursive: recursive);
 
   @override
