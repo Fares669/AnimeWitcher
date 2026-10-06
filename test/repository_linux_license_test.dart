@@ -38,7 +38,7 @@ void main() {
       expect(workflow, contains('build_linux:'));
       expect(workflow, contains('  linux:'));
       expect(workflow, contains('flutter build linux --release'));
-      expect(workflow, contains('animewitcher-linux-${{ matrix.arch }}'));
+      expect(workflow, contains(r'animewitcher-linux-${{ matrix.arch }}'));
       expect(workflow, contains('.deb'));
       expect(workflow, contains('.tar.gz'));
     }
