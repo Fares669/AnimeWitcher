@@ -156,8 +156,10 @@ int _statusRank(TaskStatus status) {
       return 3;
     case TaskStatus.complete:
       return 4;
-    default:
+    case TaskStatus.failed:
       return 5;
+    default:
+      return 6;
   }
 }
 
@@ -534,6 +536,7 @@ TaskStatus _taskStatusFor(
 ) {
   if (record.completedAtMillis != null) return TaskStatus.complete;
   if (record.intent == DownloadUserIntent.canceled) return TaskStatus.canceled;
+  if (record.intent == DownloadUserIntent.failed) return TaskStatus.failed;
   if (record.intent == DownloadUserIntent.paused) return TaskStatus.paused;
 
   return switch (snapshot?.status) {
@@ -541,8 +544,8 @@ TaskStatus _taskStatusFor(
     DownloadTransportStatus.running => TaskStatus.running,
     DownloadTransportStatus.held => TaskStatus.waitingToRetry,
     DownloadTransportStatus.paused => TaskStatus.paused,
-    DownloadTransportStatus.failed || DownloadTransportStatus.missing =>
-      TaskStatus.paused,
+    DownloadTransportStatus.failed => TaskStatus.failed,
+    DownloadTransportStatus.missing => TaskStatus.failed,
     DownloadTransportStatus.canceled => TaskStatus.canceled,
     // Package completion is not a logical completion until the V2 integrity
     // gate persists completedAtMillis.

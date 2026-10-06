@@ -127,8 +127,19 @@ Future<String> _downloadMediaDirectoryV2(
     return p.joinAll(<String>['Downloads', mediaType, ...segments]);
   }
   if (Platform.isAndroid) {
+    String? androidRoot;
+    try {
+      final publicDownload = Directory('/storage/emulated/0/Download');
+      if (await publicDownload.exists()) {
+        androidRoot = publicDownload.path;
+      } else {
+        final ext = await getExternalStorageDirectory();
+        if (ext != null) androidRoot = ext.path;
+      }
+    } catch (_) {}
+    final root = androidRoot ?? '/storage/emulated/0/Download';
     return p.joinAll(<String>[
-      '/storage/emulated/0/Download',
+      root,
       mediaType,
       ...segments,
     ]);

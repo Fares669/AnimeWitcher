@@ -36,13 +36,11 @@ Future<void> requestDownloadPermissionsV2({
   }
 
   final androidInfo = await DeviceInfoPlugin().androidInfo;
-  if (androidInfo.version.sdkInt >= 30) {
-    final storageStatus = await Permission.manageExternalStorage.status;
+  if (androidInfo.version.sdkInt <= 29) {
+    final storageStatus = await Permission.storage.status;
     if (!storageStatus.isGranted) {
-      await Permission.manageExternalStorage.request();
+      await Permission.storage.request();
     }
-  } else {
-    await Permission.storage.request();
   }
 }
 

@@ -16,7 +16,12 @@ const Set<String> kDownloadVideoExtensions = {
 
 const String kAppDownloadsRootMarker = 'AnimeWitcher/Downloads';
 
-const List<String> kDownloadTempSuffixes = ['.part', '.tmp', '.download'];
+const List<String> kDownloadTempSuffixes = [
+  '.part',
+  '.tmp',
+  '.download',
+  '.assembling',
+];
 
 /// Canonical episode identity: [DownloadTask.metaData], which is set to
 /// `episode.url` (not `taskId`).
@@ -210,7 +215,12 @@ Future<List<String>> _platformConfiguredAppDownloadRoots() async {
                   await getApplicationDocumentsDirectory())
               .path;
     }
-    return <String>[p.join(basePath, 'AnimeWitcher', 'Downloads')];
+    return <String>[
+      p.join(basePath, 'AnimeWitcher', 'Downloads'),
+      p.join(basePath, 'anime'),
+      p.join(basePath, 'manga'),
+      p.join(basePath, 'Downloads'),
+    ];
   } catch (_) {
     // Filesystem ownership is a safety boundary. If the platform root cannot
     // be established, recursive/sibling cleanup must fail closed.
