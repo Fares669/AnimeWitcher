@@ -207,7 +207,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byType(BackdropFilter), findsAtMostNWidgets(1));
+    expect(find.byType(BackdropFilter).evaluate().length, lessThanOrEqualTo(1));
   });
 
   testWidgets('uses one fixed blur with a soft visual fade at the edge', (
