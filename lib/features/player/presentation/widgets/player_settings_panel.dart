@@ -264,12 +264,15 @@ extension on _PlayerSettingsPanelState {
                   textDirection: TextDirection.ltr,
                 ),
                 const SizedBox(width: 4),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                Expanded(
+                  child: Text(
+                    title,
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ],
@@ -592,4 +595,3 @@ class PlayerKeyHint extends StatelessWidget {
     );
   }
 }
-
