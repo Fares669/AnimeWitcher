@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../domain/entity/manga.dart';
 import '../../domain/entity/multimedia_item.dart';
 import '../../utils/episode_label.dart';
+import '../download_parallel.dart';
 
 final class DownloadSourceMetadataV2 {
   const DownloadSourceMetadataV2({
@@ -76,9 +77,9 @@ Future<DownloadSourceMetadataV2?> probeDownloadSourceV2(
           .timeout(const Duration(seconds: 10));
       final contentRange = response.headers.value('content-range');
       if (response.statusCode == 206 && contentRange != null) {
-        final match = RegExp(r'^bytes 0-0/(\d+)$').firstMatch(contentRange);
-        supportsRanges = match != null;
-        if (match != null) size = int.tryParse(match[1]!);
+        final total = parseRangeProbeTotalBytesV2(contentRange);
+        supportsRanges = total != null;
+        if (total != null) size = total;
       } else {
         supportsRanges = false;
         final contentLength = int.tryParse(

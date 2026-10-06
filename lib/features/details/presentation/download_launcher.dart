@@ -463,6 +463,16 @@ class DownloadLauncher {
                           parallelChunks: parallelChunks,
                         ),
                       );
+                      if (hasExistingMetadata) {
+                        await storage.saveDownloadMetadata(
+                          logicalId.value,
+                          item,
+                          episode: episodeData,
+                          trackingUrl: resolveUrl,
+                          filePath: absolutePath,
+                          logicalId: logicalId.value,
+                        );
+                      }
                     } catch (startError, startStackTrace) {
                       if (!hasExistingMetadata) {
                         await storage.removeDownloadMetadata(logicalId.value);

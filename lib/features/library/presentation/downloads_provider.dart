@@ -314,7 +314,14 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     });
     // Keep a much slower durable reconciliation as a lifecycle/race safety net.
     _durableRefreshTimer = Timer.periodic(_durableRefreshInterval, (_) {
-      unawaited(_reloadDurableState());
+      final needsDurableReconciliation = _records.any(
+        (record) =>
+            record.completedAtMillis == null &&
+            record.intent != DownloadUserIntent.canceled,
+      );
+      if (needsDurableReconciliation) {
+        unawaited(_reloadDurableState());
+      }
     });
 
     ref.onDispose(() {

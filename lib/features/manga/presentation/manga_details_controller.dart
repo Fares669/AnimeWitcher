@@ -194,6 +194,27 @@ class MangaDetailsController extends _$MangaDetailsController {
 
     try {
       await ref.read(downloadManagerV2Provider).start(request);
+      if (hasExistingMetadata) {
+        await storage.saveDownloadMetadata(
+          request.logicalId.value,
+          item,
+          trackingUrl: chapter.url,
+          filePath: request.destinationPath,
+          logicalId: request.logicalId.value,
+          taskSnapshot: <String, dynamic>{
+            'mediaKind': DownloadMediaKind.mangaChapter.name,
+            'chapter': <String, Object?>{
+              'id': chapter.id,
+              'mangaId': chapter.mangaId,
+              'url': chapter.url,
+              'name': chapter.name,
+              if (chapter.number != null) 'number': chapter.number,
+              if (chapter.publishedAt != null)
+                'publishedAt': chapter.publishedAt!.toIso8601String(),
+            },
+          },
+        );
+      }
     } catch (error, stackTrace) {
       if (!hasExistingMetadata) {
         await storage.removeDownloadMetadata(request.logicalId.value);

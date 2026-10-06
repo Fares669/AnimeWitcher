@@ -1051,18 +1051,6 @@ Map<String, Object> _nativeBackgroundWaiterPayloadV2(
   return (start, end);
 }
 
-int? parseRangeProbeTotalBytesV2(String? contentRange) {
-  final value = contentRange?.trim();
-  if (value == null || value.isEmpty) return null;
-  final match = RegExp(
-    r'^bytes\s+0\s*-\s*0\s*/\s*(\d+)\s*$',
-    caseSensitive: false,
-  ).firstMatch(value);
-  if (match == null) return null;
-  final total = int.tryParse(match[1]!);
-  return total != null && total > 0 ? total : null;
-}
-
 DownloadTransportStatus durableParallelProgressStatusV2({
   required double progress,
   required bool parentActive,
