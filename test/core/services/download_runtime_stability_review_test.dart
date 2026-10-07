@@ -278,10 +278,10 @@ void main() {
       expect(start, greaterThanOrEqualTo(0));
       expect(end, greaterThan(start));
       final section = source.substring(start, end);
-      expect(section, contains('FileMode.writeOnlyExclusive'));
+      expect(section, contains('create(exclusive: true)'));
       expect(section, contains('.promoting'));
       expect(
-        section.indexOf('FileMode.writeOnlyExclusive'),
+        section.indexOf('create(exclusive: true)'),
         lessThan(section.indexOf('source.rename(target.path)')),
       );
     });
