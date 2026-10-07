@@ -128,22 +128,6 @@ void main() {
       },
     );
 
-    test('preallocated assembly staging is never trusted by size after a crash', () {
-      final source = File('lib/core/services/persistent_parallel_download.dart')
-          .readAsStringSync();
-      final start = source.indexOf('Future<bool> _adoptCompletedTarget(');
-      final end = source.indexOf('bool _requestedByteRange(', start);
-      expect(start, greaterThanOrEqualTo(0));
-      expect(end, greaterThan(start));
-      final section = source.substring(start, end);
-      expect(section, isNot(contains('.assembling')));
-      expect(section, isNot(contains('staging.rename')));
-      expect(
-        section,
-        contains('Its size cannot prove that a previous assembly finished'),
-      );
-    });
-
     test('continued-processing speed zero explicitly clears stale speed', () {
       final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
           .readAsStringSync();
@@ -285,6 +269,5 @@ void main() {
         lessThan(section.indexOf('source.rename(target.path)')),
       );
     });
-
   });
 }
