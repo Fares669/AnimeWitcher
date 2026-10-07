@@ -37,6 +37,12 @@ Scope: supplied deep audit versus PR264 head `770416556d64e887c5dd4461e3142da310
 
 ## Validation and limits
 
+Follow-up from head `33b463b`: CI run 37589053690 passed analysis, focused V2 tests, Android/iOS builds and native Swift checks, but failed two full-suite regressions and the Windows interrupted-publication regression. This follow-up adds an exclusive final-path reservation with a flushed identity marker, recovery/cleanup of owned reservations, and tests preserving foreign targets and retained ranges across restart. A marker cannot authorize adopting a same-size replacement while the original source still exists. The existing marker-free recovery of previously committed outputs remains compatible.
+
+Independent review also found two startup admission gaps: paused-intent native writers still running after rejected/throwing pause, and orphan active manga chapters recovering without the admission guard. Count live transport ownership while preserving paused user intent; wake waiters on a real paused callback; queue orphan chapters using their existing generation and pages. New behavioral regressions cover both pause failure modes and the manga concurrency boundary.
+
+The final-path reservation protects cooperating creators that honor exclusive creation. Dart's ordinary rename cannot prevent another process deliberately replacing the path after the final check. Ambiguous, torn or foreign ownership markers fail closed with resumable ranges retained. The complete CI matrix must validate this follow-up before completion is claimed.
+
 Baseline CI run 37497720984 had seven focused V2 failures. Most were caused by the newly unconditional documents lookup during deletion; one asserted the obsolete all-files permission request. New behavioral tests cover state recovery, admission, range assembly, checkpoint replacement, storage fallback, retry and metadata rollback. macOS CI compiles actual production encryption/completion helpers and exercises AES authentication and concurrent once-only completion. The iOS build checks full native integration.
 
 No local Flutter/Swift runtime is installed. Static checks and Dart formatting do not substitute for CI. Device checks remain useful for Windows sharing violations, Android upgrade access to historical public files, and iOS lifecycle/protected-data behavior. Native queue encryption does not encrypt separate package/Dart stores. Device-only keys do not migrate to a new device; unreadable native state is protected from callback overwrites and requires a fresh authoritative Dart snapshot.

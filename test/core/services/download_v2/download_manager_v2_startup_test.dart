@@ -11,6 +11,70 @@ import 'package:flutter_test/flutter_test.dart';
 import 'download_v2_test_support.dart';
 
 void main() {
+  for (final throws in [false, true]) {
+    test(
+      'startup ${throws ? "throwing" : "rejected"} pause keeps a live writer admitted until a late pause',
+      () async {
+        final f = await _startupFixture(
+          intent: DownloadUserIntent.paused,
+          hasExactHandle: true,
+          maxConcurrentDownloads: 1,
+        );
+        addTearDown(f.manager.dispose);
+        final handle = f.gateway.handleFor(f.record.taskId)!;
+        handle.onPause = () async {
+          if (throws) throw StateError('native pause rejected');
+          return false;
+        };
+        await f.manager.initialize();
+        expect(
+          (await f.store.get(f.logicalId))?.intent,
+          DownloadUserIntent.paused,
+        );
+        expect(
+          f.manager.snapshotFor(f.logicalId)?.status,
+          DownloadTransportStatus.running,
+        );
+        final waitingId = logicalDownloadIdFor(
+          animeId: 'anilist:21',
+          episodeKey: '13',
+          variantKey: 'sub:1080p',
+        );
+        final waiting = await f.manager.start(
+          DownloadStartRequestV2(
+            logicalId: waitingId,
+            mediaId: 'anilist:21',
+            unitKey: '13',
+            variantKey: 'sub:1080p',
+            destinationPath: 'downloads/anime/episode-13.mp4',
+            sourceDescriptor: f.record.sourceDescriptor,
+            allowPause: true,
+            retries: 2,
+            parallelChunks: 1,
+          ),
+        );
+        expect(waiting.status, DownloadTransportStatus.queued);
+        expect(f.gateway.startedSpecs, isEmpty);
+        expect(handle.cancelCalls, 0);
+
+        handle.emitStatus(DownloadTransportStatus.paused);
+        for (
+          var attempt = 0;
+          attempt < 100 && f.gateway.startedSpecs.isEmpty;
+          attempt++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(f.gateway.startedSpecs, hasLength(1));
+        expect(f.gateway.startedSpecs.single.taskId, waiting.taskId);
+        expect(
+          (await f.store.get(f.logicalId))?.intent,
+          DownloadUserIntent.paused,
+        );
+      },
+    );
+  }
+
   test('startup initialization can retry after one gateway failure', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final gateway = _StartupGateway()..initializeFailuresRemaining = 1;
@@ -403,6 +467,7 @@ Future<_StartupFixture> _startupFixture({
   bool hasExactHandle = false,
   bool hasDifferentHandle = false,
   DownloadTransportStatus exactHandleStatus = DownloadTransportStatus.running,
+  int? maxConcurrentDownloads,
 }) async {
   final logicalId = logicalDownloadIdFor(
     animeId: 'anilist:21',
@@ -443,6 +508,9 @@ Future<_StartupFixture> _startupFixture({
     store: store,
     gateway: gateway,
     sourceResolver: resolver,
+    maxConcurrentDownloads: maxConcurrentDownloads == null
+        ? null
+        : () => maxConcurrentDownloads!,
   );
   return _StartupFixture(
     logicalId: logicalId,

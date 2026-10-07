@@ -11,3 +11,10 @@ Validate the supplied deep audit against current code and locked background_down
 6. Independently review the combined diff, resolve important findings, publish to the existing PR with a head lease, run analysis, focused/full tests and iOS CI, and revise the PR description to match evidence. Do not merge.
 
 Baseline CI run 37497720984: analysis and iOS/native logger checks succeeded; focused V2 suite had 147 passes and seven failures. Local workspace has no Flutter or Swift SDK, so local static checks are not runtime validation. Final CI must supply execution evidence.
+
+## Recovery follow-up at head 33b463b
+
+1. Fix the observed Linux/Windows RED regressions for exclusive final-file reservation and interrupted promotion recovery. Preserve existing destinations and resumable ranges.
+2. Count startup paused-but-live writers against admission without changing durable user intent; wake queued work when the writer actually pauses.
+3. Apply admission and destination ownership to orphan manga chapter recovery while retaining the existing generation and pages.
+4. Independently review the changes, run the existing Linux/Windows/Android/iOS/native CI gates, and replace the stale PR validation summary with evidence from the new head.

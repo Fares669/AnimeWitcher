@@ -321,7 +321,14 @@ final class DownloadManagerV2 {
               if (!exactHandle.current.isFinal &&
                   exactHandle.current.status !=
                       DownloadTransportStatus.paused) {
-                settledPause = await _pauseHandleAndSettle(exactHandle);
+                try {
+                  settledPause = await _pauseHandleAndSettle(exactHandle);
+                } catch (_) {
+                  // A rejected startup pause leaves the exact writer alive.
+                  // Keep user intent paused and expose transport truth so it
+                  // retains admission until a genuine pause callback arrives.
+                  settledPause = exactHandle.current;
+                }
               }
               _activateHandle(record.logicalId, exactHandle);
             }
@@ -425,7 +432,7 @@ final class DownloadManagerV2 {
               }
               _activateHandle(record.logicalId, exactHandle);
             } else if (record.mediaKind == DownloadMediaKind.mangaChapter) {
-              await _startExistingMangaGenerationUnsafe(request, record);
+              await _resumeRecordUnsafe(record, request);
             } else {
               await _startFreshGeneration(
                 request,
@@ -805,65 +812,62 @@ final class DownloadManagerV2 {
       });
     }
 
-    if (record.intent == DownloadUserIntent.paused) {
-      if (record.mediaKind == DownloadMediaKind.mangaChapter) {
-        final destinationKey = await _canonicalDestinationPath(
-          request.destinationPath,
+    if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+      final destinationKey = await _canonicalDestinationPath(
+        request.destinationPath,
+      );
+      return _destinationCommands.run(destinationKey, () async {
+        final conflict = await _findDestinationConflict(
+          destinationKey,
+          logicalId,
         );
-        return _destinationCommands.run(destinationKey, () async {
-          final conflict = await _findDestinationConflict(
-            destinationKey,
-            logicalId,
+        if (conflict != null) {
+          throw StateError(
+            'Canonical destination is already owned by ${conflict.logicalId}',
           );
-          if (conflict != null) {
-            throw StateError(
-              'Canonical destination is already owned by ${conflict.logicalId}',
-            );
-          }
-          if (!await _reserveAdmission(logicalId)) {
-            final waitingRecord = record.copyWith(
-              intent: DownloadUserIntent.active,
-              awaitingAdmission: true,
-              parallelChunks: mangaChapterPageConnectionsFromPreference(
-                request.parallelChunks,
-              ),
-              clearFailure: true,
-              updatedAtMillis: _nowMillis(),
-            );
-            await _store.put(waitingRecord);
-            _rememberRecord(waitingRecord);
-            await _publishRecords();
-            final queued = DownloadTransportSnapshot(
-              taskId: waitingRecord.taskId,
-              status: DownloadTransportStatus.queued,
-              progress: _snapshots[logicalId]?.progress ?? 0,
-              configuredConnections: mangaChapterPageConnectionsFromPreference(
-                request.parallelChunks,
-              ),
-              activeConnections: 0,
-            );
-            _snapshots[logicalId] = queued;
-            _recordDiagnostic(logicalId, queued);
-            _scheduleAdmissionPromotion();
-            return queued;
-          }
-          try {
-            return await _startExistingMangaGenerationUnsafe(request, record);
-          } finally {
-            _admissionReservations.remove(logicalId);
-            _scheduleAdmissionPromotion();
-          }
-        });
-      }
+        }
+        if (!await _reserveAdmission(logicalId)) {
+          final waitingRecord = record.copyWith(
+            intent: DownloadUserIntent.active,
+            awaitingAdmission: true,
+            parallelChunks: mangaChapterPageConnectionsFromPreference(
+              request.parallelChunks,
+            ),
+            clearFailure: true,
+            updatedAtMillis: _nowMillis(),
+          );
+          await _store.put(waitingRecord);
+          _rememberRecord(waitingRecord);
+          await _publishRecords();
+          final queued = DownloadTransportSnapshot(
+            taskId: waitingRecord.taskId,
+            status: DownloadTransportStatus.queued,
+            progress: _snapshots[logicalId]?.progress ?? 0,
+            configuredConnections: mangaChapterPageConnectionsFromPreference(
+              request.parallelChunks,
+            ),
+            activeConnections: 0,
+          );
+          _snapshots[logicalId] = queued;
+          _recordDiagnostic(logicalId, queued);
+          _scheduleAdmissionPromotion();
+          return queued;
+        }
+        try {
+          return await _startExistingMangaGenerationUnsafe(request, record);
+        } finally {
+          _admissionReservations.remove(logicalId);
+          _scheduleAdmissionPromotion();
+        }
+      });
+    }
+    if (record.intent == DownloadUserIntent.paused) {
       throw StateError(
         'Download cannot resume safely without its exact paused transfer; '
         'existing progress was kept paused',
       );
     }
 
-    if (record.mediaKind == DownloadMediaKind.mangaChapter) {
-      return _startExistingMangaGenerationUnsafe(request, record);
-    }
     return _startFreshGeneration(request, record);
   }
 
@@ -1158,14 +1162,21 @@ final class DownloadManagerV2 {
         .where((id) => id != excluding)
         .toSet();
     for (final record in await _store.all()) {
-      if (record.logicalId == excluding ||
-          record.intent != DownloadUserIntent.active ||
-          record.awaitingAdmission ||
-          record.completedAtMillis != null) {
+      if (record.logicalId == excluding || record.completedAtMillis != null) {
         continue;
       }
 
       final snapshot = _snapshots[record.logicalId];
+      final pausedWriterIsLive =
+          record.intent == DownloadUserIntent.paused &&
+          (snapshot?.status == DownloadTransportStatus.queued ||
+              snapshot?.status == DownloadTransportStatus.running ||
+              snapshot?.status == DownloadTransportStatus.held);
+      if (!pausedWriterIsLive &&
+          (record.intent != DownloadUserIntent.active ||
+              record.awaitingAdmission)) {
+        continue;
+      }
       final reservesSlot =
           snapshot == null ||
           snapshot.status == DownloadTransportStatus.queued ||
@@ -1193,30 +1204,32 @@ final class DownloadManagerV2 {
     if (existing != null && identical(existing, promotion)) return;
 
     unawaited(
-      promotion.then<void>((_) {
-        _admissionPromotionRetryAttempts = 0;
-        _admissionPromotionRetryTimer?.cancel();
-        _admissionPromotionRetryTimer = null;
-      }).catchError((Object error, StackTrace _) {
-        final attempt = _admissionPromotionRetryAttempts + 1;
-        _admissionPromotionRetryAttempts = attempt;
-        _diagnostics.recordTransport('admission.promotionFailed', {
-          'errorType': error.runtimeType.toString(),
-          'count': attempt,
-        });
-        if (_recordChanges.isClosed ||
-            attempt >= 3 ||
-            _admissionPromotionRetryTimer != null) {
-          return;
-        }
-        _admissionPromotionRetryTimer = Timer(
-          Duration(milliseconds: 100 << (attempt - 1)),
-          () {
+      promotion
+          .then<void>((_) {
+            _admissionPromotionRetryAttempts = 0;
+            _admissionPromotionRetryTimer?.cancel();
             _admissionPromotionRetryTimer = null;
-            _scheduleAdmissionPromotion();
-          },
-        );
-      }),
+          })
+          .catchError((Object error, StackTrace _) {
+            final attempt = _admissionPromotionRetryAttempts + 1;
+            _admissionPromotionRetryAttempts = attempt;
+            _diagnostics.recordTransport('admission.promotionFailed', {
+              'errorType': error.runtimeType.toString(),
+              'count': attempt,
+            });
+            if (_recordChanges.isClosed ||
+                attempt >= 3 ||
+                _admissionPromotionRetryTimer != null) {
+              return;
+            }
+            _admissionPromotionRetryTimer = Timer(
+              Duration(milliseconds: 100 << (attempt - 1)),
+              () {
+                _admissionPromotionRetryTimer = null;
+                _scheduleAdmissionPromotion();
+              },
+            );
+          }),
     );
   }
 
@@ -1603,8 +1616,7 @@ final class DownloadManagerV2 {
           ? null
           : await _sourceResolver.resolve(request.sourceDescriptor);
     } catch (error) {
-      if (previous != null &&
-          previous.intent != DownloadUserIntent.canceled) {
+      if (previous != null && previous.intent != DownloadUserIntent.canceled) {
         await _persistFailure(
           previous,
           DownloadTransportSnapshot(
@@ -2126,7 +2138,9 @@ final class DownloadManagerV2 {
       return;
     }
 
-    if (snapshot.isFinal) {
+    if (snapshot.isFinal ||
+        (intent == DownloadUserIntent.paused &&
+            snapshot.status == DownloadTransportStatus.paused)) {
       _scheduleAdmissionPromotion();
     }
   }

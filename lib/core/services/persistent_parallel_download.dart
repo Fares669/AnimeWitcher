@@ -1215,6 +1215,7 @@ class PersistentParallelDownload {
         // file before the parent complete record/cleanup was persisted. Adopt
         // that exact-size target instead of assembling or downloading again.
         if (await _adoptCompletedTarget(session)) return true;
+        if (!session.active) return false;
 
         await _restoreNativeOwnership(session);
         for (final part in session.parts) {
@@ -3288,6 +3289,7 @@ class PersistentParallelDownload {
         _activeConnectionIds.remove(part.task.taskId);
       }
       await cancelParts(session.parts.map((part) => part.task.taskId).toList());
+      await _clearOwnedPromotion(session, removeReservation: true);
       for (final part in session.parts) {
         _children.remove(part.task.taskId);
         final file = File(await part.task.filePath());
@@ -3387,18 +3389,106 @@ class PersistentParallelDownload {
     }
   }
 
+  Future<String?> _promotionSourcePath(
+    _ParallelSession session,
+    File target,
+  ) async {
+    final marker = File('${target.path}.promoting');
+    try {
+      if (await FileSystemEntity.type(marker.path, followLinks: false) !=
+          FileSystemEntityType.file) {
+        return null;
+      }
+      final payload = jsonDecode(await marker.readAsString());
+      if (payload is! Map ||
+          payload['parentTaskId'] != session.task.taskId ||
+          payload['expectedBytes'] != session.size ||
+          payload['sourcePath'] is! String) {
+        return null;
+      }
+      final sourcePath = payload['sourcePath'] as String;
+      if (p.equals(sourcePath, '${target.path}.assembling')) return sourcePath;
+      for (final part in session.parts) {
+        if (p.equals(sourcePath, await part.task.filePath())) return sourcePath;
+      }
+    } catch (_) {
+      // A torn or foreign marker never grants ownership of a destination.
+    }
+    return null;
+  }
+
+  Future<void> _clearOwnedPromotion(
+    _ParallelSession session, {
+    bool removeReservation = false,
+  }) async {
+    final target = File(await session.task.filePath());
+    if (await _promotionSourcePath(session, target) == null) return;
+    try {
+      if (removeReservation &&
+          await FileSystemEntity.type(target.path, followLinks: false) ==
+              FileSystemEntityType.file &&
+          await target.length() == 0) {
+        await target.delete();
+      }
+      await File('${target.path}.promoting').delete();
+    } catch (_) {
+      // Keep a locked reservation's marker so later cleanup can prove ownership.
+    }
+  }
+
   Future<bool> _adoptCompletedTarget(_ParallelSession session) async {
     final target = File(await session.task.filePath());
-    if (await target.exists()) {
-      if (await target.length() != session.size) return false;
+    if (await FileSystemEntity.type(target.path, followLinks: false) !=
+        FileSystemEntityType.file) {
+      return false;
+    }
+    final length = await target.length();
+    final markerType = await FileSystemEntity.type(
+      '${target.path}.promoting',
+      followLinks: false,
+    );
+    final sourcePath = await _promotionSourcePath(session, target);
+    if (length == session.size) {
+      if (markerType != FileSystemEntityType.notFound &&
+          (sourcePath == null ||
+              await FileSystemEntity.type(sourcePath, followLinks: false) !=
+                  FileSystemEntityType.notFound)) {
+        // A retained source proves rename did not commit. This nonempty target
+        // belongs to another writer, even if its length happens to match.
+        // Unknown markers likewise cannot authorize deletion of durable ranges.
+        await _pause(session);
+        return false;
+      }
+      // Preserve marker-free recovery for output committed by older versions.
+      // A valid marker with no source identifies a completed atomic rename.
       await _finishCompleteSession(session);
       return true;
     }
+    if (length != 0 || sourcePath == null) return false;
 
-    // Staging is preallocated to the final length before bytes are written.
-    // Its size cannot prove that a previous assembly finished; rebuild from
-    // the preserved, verified ranges instead of promoting a partial write.
-    return false;
+    final source = File(sourcePath);
+    if (await FileSystemEntity.type(source.path, followLinks: false) !=
+            FileSystemEntityType.file ||
+        await source.length() != session.size) {
+      return false;
+    }
+    if (p.equals(source.path, '${target.path}.assembling')) {
+      for (final part in session.parts) {
+        final file = File(await part.task.filePath());
+        if (part.launched ||
+            await FileSystemEntity.type(file.path, followLinks: false) !=
+                FileSystemEntityType.file ||
+            await file.length() != part.size) {
+          return false;
+        }
+      }
+    }
+    // The marker is flushed only after the complete source is flushed/closed.
+    // Its matching identity, empty reservation and exact retained bytes allow
+    // recovery without trusting a merely preallocated .assembling file.
+    if (!await _promoteCompletedFile(session, source, target)) return false;
+    await _finishCompleteSession(session);
+    return true;
   }
 
   bool _requestedByteRange(_DownloadPart part) => part.task.headers.entries.any(
@@ -3582,6 +3672,7 @@ class PersistentParallelDownload {
       TaskProgressUpdate(session.task, 1, session.size, 0, Duration.zero),
     );
     await _status(session, TaskStatus.complete);
+    await _clearOwnedPromotion(session);
 
     for (final part in session.parts) {
       _children.remove(part.task.taskId);
@@ -3688,25 +3779,75 @@ class PersistentParallelDownload {
     File source,
     File target,
   ) async {
+    final marker = File('${target.path}.promoting');
+    var reserved = false;
     for (var attempt = 0; attempt < 4; attempt++) {
       if (session.deleted || _disposed) return false;
       try {
-        // A target may appear while assembly is writing. Preserve it, including
-        // directories and links, instead of replacing user-visible state.
+        if (!reserved) {
+          final markerType = await FileSystemEntity.type(
+            marker.path,
+            followLinks: false,
+          );
+          final savedSource = await _promotionSourcePath(session, target);
+          if (markerType != FileSystemEntityType.notFound &&
+              (savedSource == null || !p.equals(savedSource, source.path))) {
+            await _pause(session);
+            return false;
+          }
+          final interruptedReservation =
+              savedSource != null &&
+              await FileSystemEntity.type(target.path, followLinks: false) ==
+                  FileSystemEntityType.file &&
+              await target.length() == 0;
+          if (!interruptedReservation) {
+            // Atomic create fails if a cooperating creator won the destination.
+            // Unlike a check followed by rename, this reserves the actual path.
+            await target.create(exclusive: true);
+          }
+          if (markerType == FileSystemEntityType.notFound) {
+            await marker.create(exclusive: true);
+            await marker.writeAsString(
+              jsonEncode({
+                'parentTaskId': session.task.taskId,
+                'expectedBytes': session.size,
+                'sourcePath': source.path,
+              }),
+              flush: true,
+            );
+          }
+          // A crash before the marker is flushed parks safely: an unmarked
+          // empty file is never removed or treated as our reservation.
+          reserved = true;
+          _recordDiagnostic('assembly.destinationReserved', {
+            'taskId': session.task.taskId,
+          });
+        }
+        // Detect writers that ignore the exclusive reservation. The stdlib
+        // cannot prevent another process replacing the path after this check.
         if (await FileSystemEntity.type(target.path, followLinks: false) !=
-            FileSystemEntityType.notFound) {
+                FileSystemEntityType.file ||
+            await target.length() != 0) {
           await _pause(session);
           return false;
         }
         await source.rename(target.path);
+        try {
+          await marker.delete();
+        } catch (_) {
+          // Restart can adopt the committed target and remove this marker.
+        }
         return true;
       } on FileSystemException catch (error) {
         if (_isInsufficientStorageError(error)) {
-          await _handleAssemblyStorageFailure(
-            session,
-            File('${target.path}.assembling'),
-            error: error,
+          // Keep the flushed source and any owned reservation for retry.
+          onAssemblyFailure?.call(
+            ParallelAssemblyFailure(
+              parentTaskId: session.task.taskId,
+              reason: ParallelAssemblyFailureReason.insufficientStorage,
+            ),
           );
+          await _parkForStorageFailure(session);
           return false;
         }
         if (attempt == 3) {
@@ -3730,11 +3871,9 @@ class PersistentParallelDownload {
       'count': session.parts.length,
     });
     final target = File(await session.task.filePath());
-    if (await target.exists()) {
-      if (await target.length() == session.size) {
-        await _finishCompleteSession(session);
-        return;
-      }
+    if (await FileSystemEntity.type(target.path, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      if (await _adoptCompletedTarget(session)) return;
       await _pause(session);
       return;
     }
