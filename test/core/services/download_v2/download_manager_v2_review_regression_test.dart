@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
+import 'package:animewitcher/core/services/download_v2/download_source_resolver_v2.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_diagnostics.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
@@ -453,6 +455,104 @@ void main() {
       expect(gateway.startedSpecs, hasLength(1));
       expect(gateway.handleFor(taskId), isNotNull);
     });
+
+    test(
+      'source resolution failure persists an active missing writer as failed',
+      () async {
+        final store = InMemoryLogicalDownloadStoreV2();
+        final gateway = _Gateway();
+        final resolver = _FailAfterFirstSourceResolver();
+        final manager = DownloadManagerV2(
+          store: store,
+          gateway: gateway,
+          sourceResolver: resolver,
+        );
+        addTearDown(manager.dispose);
+        final request = _request(
+          logicalId: _logicalId('source-resolution-failure'),
+          destinationPath: '/tmp/aw-v2-source-resolution-failure.mp4',
+        );
+
+        await manager.start(request);
+        final taskId = gateway.startedSpecs.single.taskId;
+        gateway.handleFor(taskId)!.emit(
+          DownloadTransportSnapshot(
+            taskId: taskId,
+            status: DownloadTransportStatus.missing,
+            progress: 0.4,
+          ),
+        );
+
+        await expectLater(manager.start(request), throwsStateError);
+
+        final record = await store.get(request.logicalId);
+        expect(record, isNotNull);
+        expect(record!.intent, DownloadUserIntent.failed);
+        expect(record.failureCategory, DownloadFailureCategory.unknown);
+        expect(
+          manager.snapshotFor(request.logicalId)?.status,
+          DownloadTransportStatus.failed,
+        );
+      },
+    );
+
+    test(
+      'scheduled admission promotion retries one transient coordinator error',
+      () async {
+        final store = InMemoryLogicalDownloadStoreV2();
+        final gateway = _Gateway();
+        final diagnostics = InMemoryDownloadDiagnosticsV2();
+        var failNextLimitRead = false;
+        final manager = DownloadManagerV2(
+          store: store,
+          gateway: gateway,
+          sourceResolver: StaticSourceResolverV2(),
+          diagnostics: diagnostics,
+          maxConcurrentDownloads: () {
+            if (failNextLimitRead) {
+              failNextLimitRead = false;
+              throw StateError('transient admission failure');
+            }
+            return 1;
+          },
+        );
+        addTearDown(manager.dispose);
+        final first = _request(
+          logicalId: _logicalId('admission-owner'),
+          destinationPath: '/tmp/aw-v2-admission-owner.mp4',
+        );
+        final second = _request(
+          logicalId: _logicalId('admission-waiter'),
+          destinationPath: '/tmp/aw-v2-admission-waiter.mp4',
+        );
+
+        await manager.start(first);
+        expect((await manager.start(second)).status, DownloadTransportStatus.queued);
+        failNextLimitRead = true;
+        final firstTaskId = gateway.startedSpecs.single.taskId;
+        gateway.handleFor(firstTaskId)!.emit(
+          DownloadTransportSnapshot(
+            taskId: firstTaskId,
+            status: DownloadTransportStatus.failed,
+            progress: 0.5,
+            failureCategory: DownloadFailureCategory.transport,
+            failureMessage: 'offline',
+          ),
+        );
+
+        await _waitFor(() async => gateway.startedSpecs.length == 2);
+        expect(
+          diagnostics.transportEvents.any(
+            (event) => event['event'] == 'admission.promotionFailed',
+          ),
+          isTrue,
+        );
+        expect(
+          (await store.get(second.logicalId))?.awaitingAdmission,
+          isFalse,
+        );
+      },
+    );
   });
 }
 
@@ -621,4 +721,23 @@ final class _DownloadPathProvider extends PathProviderPlatform {
   Future<String?> getDownloadsPath() async => path;
   @override
   Future<String?> getApplicationDocumentsPath() async => path;
+}
+
+final class _FailAfterFirstSourceResolver implements DownloadSourceResolverV2 {
+  int calls = 0;
+
+  @override
+  Future<ResolvedDownloadSourceV2> resolve(
+    Map<String, Object?> descriptor,
+  ) async {
+    calls++;
+    if (calls > 1) {
+      throw StateError('source unavailable');
+    }
+    return const ResolvedDownloadSourceV2(
+      url: 'https://example.invalid/video.mp4',
+      headers: <String, String>{},
+      expectedBytes: 100,
+    );
+  }
 }

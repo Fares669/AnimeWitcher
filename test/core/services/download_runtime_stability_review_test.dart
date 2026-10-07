@@ -269,5 +269,22 @@ void main() {
         expect(section, contains('never used as durable resume evidence'));
       },
     );
+
+    test('final assembly promotion reserves the destination before rename', () {
+      final source = File('lib/core/services/persistent_parallel_download.dart')
+          .readAsStringSync();
+      final start = source.indexOf('Future<bool> _promoteCompletedFile(');
+      final end = source.indexOf('Future<void> _assemble(', start);
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final section = source.substring(start, end);
+      expect(section, contains('FileMode.writeOnlyExclusive'));
+      expect(section, contains('.promoting'));
+      expect(
+        section.indexOf('FileMode.writeOnlyExclusive'),
+        lessThan(section.indexOf('source.rename(target.path)')),
+      );
+    });
+
   });
 }

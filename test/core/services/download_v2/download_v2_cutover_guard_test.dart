@@ -236,6 +236,17 @@ void main() {
       },
     );
 
+
+    test('CI builds Android and exercises download recovery on Windows', () {
+      final ci = _read('.github/workflows/ci.yml');
+
+      expect(ci, contains('android-v2-build:'));
+      expect(ci, contains('flutter build apk --debug'));
+      expect(ci, contains('windows-v2-tests:'));
+      expect(ci, contains('runs-on: windows-2022'));
+      expect(ci, contains('persistent_parallel_download_test.dart'));
+    });
+
   });
 }
 
