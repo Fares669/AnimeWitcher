@@ -583,7 +583,7 @@ void main() {
 
       coordinator.handleUpdate(TaskStatusUpdate(first, TaskStatus.failed));
       await waitUntil(() => coordinator.activeConnectionCount == 0);
-      await Future<void>.delayed(const Duration(milliseconds: 25));
+      await waitUntil(() => settled.contains(parent.taskId));
       expect(starts.length, startsAtPause);
       expect(coordinator.isActive(parent.taskId), isFalse);
       expect(settled, contains(parent.taskId));
@@ -990,6 +990,44 @@ void main() {
       expect(checkedHeadroom, isTrue);
       expect(starts, isEmpty);
       expect(await target.readAsBytes(), List<int>.generate(25, (i) => i));
+    },
+  );
+
+  test(
+    'restart recovers an interrupted exclusive final-file reservation',
+    () async {
+      expect(await coordinator.start(parent, 25), isTrue);
+      await expandFreshTo(5);
+      await coordinator.pause(parent);
+      final original = List<DownloadTask>.from(starts);
+      for (var i = 0; i < original.length; i++) {
+        final file = File(await original[i].filePath());
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(
+          List<int>.generate(5, (j) => i * 5 + j),
+          flush: true,
+        );
+      }
+      await coordinator.dispose();
+
+      final target = File(await parent.filePath());
+      final staging = File('${target.path}.assembling');
+      final marker = File('${target.path}.promoting');
+      await staging.writeAsBytes(
+        List<int>.generate(25, (i) => i),
+        flush: true,
+      );
+      await marker.create(exclusive: true);
+      await target.create(exclusive: true);
+
+      starts.clear();
+      coordinator = create();
+      expect(await coordinator.start(parent, 25), isTrue);
+      await waitUntil(() => target.existsSync() && target.lengthSync() == 25);
+
+      expect(starts, isEmpty);
+      expect(await target.readAsBytes(), List<int>.generate(25, (i) => i));
+      expect(await marker.exists(), isFalse);
     },
   );
 
