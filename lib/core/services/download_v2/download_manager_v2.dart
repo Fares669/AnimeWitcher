@@ -133,6 +133,8 @@ final class DownloadManagerV2 {
   Future<void>? _initialization;
   Future<void>? _admissionPromotion;
   bool _admissionPromotionRequested = false;
+  Timer? _admissionPromotionRetryTimer;
+  int _admissionPromotionRetryAttempts = 0;
   final Set<DownloadLogicalId> _admissionReservations = <DownloadLogicalId>{};
 
   /// Application-owned logical records for presentation. This never exposes
@@ -1185,7 +1187,37 @@ final class DownloadManagerV2 {
   }
 
   void _scheduleAdmissionPromotion() {
-    unawaited(_promoteAdmissions().catchError((Object _, StackTrace __) {}));
+    if (_recordChanges.isClosed) return;
+    final existing = _admissionPromotion;
+    final promotion = _promoteAdmissions();
+    if (existing != null && identical(existing, promotion)) return;
+
+    unawaited(
+      promotion.then<void>((_) {
+        _admissionPromotionRetryAttempts = 0;
+        _admissionPromotionRetryTimer?.cancel();
+        _admissionPromotionRetryTimer = null;
+      }).catchError((Object error, StackTrace _) {
+        final attempt = _admissionPromotionRetryAttempts + 1;
+        _admissionPromotionRetryAttempts = attempt;
+        _diagnostics.recordTransport('admission.promotionFailed', {
+          'errorType': error.runtimeType.toString(),
+          'count': attempt,
+        });
+        if (_recordChanges.isClosed ||
+            attempt >= 3 ||
+            _admissionPromotionRetryTimer != null) {
+          return;
+        }
+        _admissionPromotionRetryTimer = Timer(
+          Duration(milliseconds: 100 << (attempt - 1)),
+          () {
+            _admissionPromotionRetryTimer = null;
+            _scheduleAdmissionPromotion();
+          },
+        );
+      }),
+    );
   }
 
   Future<void> reconcileAdmission() async {
@@ -1565,9 +1597,28 @@ final class DownloadManagerV2 {
     }
 
     final isManga = request.mediaKind == DownloadMediaKind.mangaChapter;
-    final source = isManga
-        ? null
-        : await _sourceResolver.resolve(request.sourceDescriptor);
+    ResolvedDownloadSourceV2? source;
+    try {
+      source = isManga
+          ? null
+          : await _sourceResolver.resolve(request.sourceDescriptor);
+    } catch (error) {
+      if (previous != null &&
+          previous.intent != DownloadUserIntent.canceled) {
+        await _persistFailure(
+          previous,
+          DownloadTransportSnapshot(
+            taskId: previous.taskId,
+            status: DownloadTransportStatus.failed,
+            progress: _snapshots[previous.logicalId]?.progress ?? 0,
+            totalBytes: previous.expectedBytes,
+            failureCategory: DownloadFailureCategory.unknown,
+            failureMessage: 'source resolution failed: $error',
+          ),
+        );
+      }
+      rethrow;
+    }
     final generation = (previous?.generation ?? 0) + 1;
     final taskId = taskIdForGeneration(request.logicalId, generation);
     final updatedAtMillis = _nowMillis();
@@ -2429,6 +2480,8 @@ final class DownloadManagerV2 {
   }
 
   Future<void> dispose() async {
+    _admissionPromotionRetryTimer?.cancel();
+    _admissionPromotionRetryTimer = null;
     for (final subscription in _subscriptionsByTaskId.values) {
       await subscription.cancel();
     }

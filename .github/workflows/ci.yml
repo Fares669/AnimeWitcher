@@ -53,6 +53,54 @@ jobs:
         # never sent to an external service by the test suite.
         run: flutter test --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
 
+  android-v2-build:
+    if: >-
+      github.event.head_commit.message != 'chore: purge obsolete workflow history'
+    name: Build Android V2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Build Android debug APK
+        run: >-
+          flutter build apk --debug
+          --dart-define=ANIMEWITCHER_FIREBASE_API_KEY=test-api-key
+
+  windows-v2-tests:
+    if: >-
+      github.event.head_commit.message != 'chore: purge obsolete workflow history'
+    name: Exercise Windows download recovery
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Install dependencies and generate sources
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Test Windows durable download file semantics
+        run: flutter test test/core/services/persistent_parallel_download_test.dart
+
   ios-v2-build:
     if: >-
       github.event.head_commit.message != 'chore: purge obsolete workflow history'
