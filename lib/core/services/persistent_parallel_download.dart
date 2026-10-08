@@ -3839,8 +3839,32 @@ class PersistentParallelDownload {
             await _pause(session);
             return false;
           }
+          if (markerType == FileSystemEntityType.notFound) {
+            // Without our marker, anything already at the path is another
+            // writer's: never reserve over it.
+            if (await FileSystemEntity.type(target.path, followLinks: false) !=
+                FileSystemEntityType.notFound) {
+              await _pause(session);
+              return false;
+            }
+            // The marker goes first, and whole: written beside, then renamed
+            // in. A failure part-way (a full disk) leaves no marker and no
+            // reservation, so the retry after space is freed starts clean
+            // instead of finding a torn marker it can never prove is ours.
+            final pending = File('${marker.path}.tmp');
+            await pending.writeAsString(
+              jsonEncode({
+                'parentTaskId': session.task.taskId,
+                'expectedBytes': session.size,
+                'sourcePath': source.path,
+              }),
+              flush: true,
+            );
+            await pending.rename(marker.path);
+          }
+          // Our marker is in place, so an empty file at the target is our own
+          // reservation from an interrupted attempt.
           final interruptedReservation =
-              savedSource != null &&
               await FileSystemEntity.type(target.path, followLinks: false) ==
                   FileSystemEntityType.file &&
               await target.length() == 0;
@@ -3849,19 +3873,6 @@ class PersistentParallelDownload {
             // Unlike a check followed by rename, this reserves the actual path.
             await target.create(exclusive: true);
           }
-          if (markerType == FileSystemEntityType.notFound) {
-            await marker.create(exclusive: true);
-            await marker.writeAsString(
-              jsonEncode({
-                'parentTaskId': session.task.taskId,
-                'expectedBytes': session.size,
-                'sourcePath': source.path,
-              }),
-              flush: true,
-            );
-          }
-          // A crash before the marker is flushed parks safely: an unmarked
-          // empty file is never removed or treated as our reservation.
           reserved = true;
           _recordDiagnostic('assembly.destinationReserved', {
             'taskId': session.task.taskId,
