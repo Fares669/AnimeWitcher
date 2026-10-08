@@ -88,7 +88,7 @@ class DownloadContinuedProcessingService {
   );
 
   final SystemDownloadCancellation onSystemCancel;
-  final SystemDownloadSessionLost? onSessionLost;
+  SystemDownloadSessionLost? onSessionLost;
   final SystemDownloadTaskUpdate? onTaskUpdate;
   final SystemDownloadChunkUpdate? onChunkUpdate;
   final bool forceAvailableForTesting;

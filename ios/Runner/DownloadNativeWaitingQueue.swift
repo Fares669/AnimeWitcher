@@ -2299,11 +2299,33 @@ enum DownloadNativeWaitingQueue {
     // system task fresh while Dart is suspended, including single-part files.
     if id.hasPrefix("aw_v2_") {
       if !isAppInForeground() {
+        // Child Range callbacks carry their own throughput. For a whole-file
+        // V2 task, compute speed from native progress while Flutter sleeps.
+        // Do not overwrite a multipart parent's live child speed samples.
+        let now = CFAbsoluteTimeGetCurrent()
+        lock.lock()
+        let state = loadLocked()
+        let expected = state.sessionCurrentTaskId == id
+          ? state.sessionTotalBytes : -1
+        var nativeSpeed = -1.0
+        if expected > 0,
+           state.transferringTaskIds.contains(id),
+           v2ParallelChildSamples[id]?.isEmpty ?? true {
+          let written = Int64((Double(expected) * normalized).rounded(.down))
+          nativeSpeed = rollingSpeedLocked(
+            windows: &taskSpeedWindows,
+            taskId: id,
+            totalWritten: written,
+            now: now
+          )
+        }
+        lock.unlock()
         runOnMainActor {
           if #available(iOS 26.0, *) {
             _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
               taskId: id,
-              progress: normalized
+              progress: normalized,
+              speedBytesPerSecond: nativeSpeed
             )
           }
         }
