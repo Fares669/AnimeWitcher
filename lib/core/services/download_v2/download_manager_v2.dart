@@ -229,7 +229,10 @@ final class DownloadManagerV2 {
           }
 
           if (record.mediaKind != DownloadMediaKind.mangaChapter) {
-            await _deleteDestination(record.destinationPath);
+            await _deleteDestination(
+            record.destinationPath,
+            ownerLogicalId: record.logicalId,
+          );
           }
           final invalidRecord = record.copyWith(
             intent: DownloadUserIntent.failed,
@@ -908,6 +911,7 @@ final class DownloadManagerV2 {
           await _cancelRecord(record);
           await _deleteDestination(
             record.destinationPath,
+            ownerLogicalId: record.logicalId,
             mediaKind: record.mediaKind,
             mangaRecord: record,
           );
@@ -1881,11 +1885,21 @@ final class DownloadManagerV2 {
 
   Future<void> _deleteDestination(
     String destinationPath, {
+    required DownloadLogicalId ownerLogicalId,
     DownloadMediaKind mediaKind = DownloadMediaKind.videoEpisode,
     LogicalDownloadRecordV2? mangaRecord,
   }) async {
     final trimmed = destinationPath.trim();
     if (trimmed.isEmpty || trimmed == '.' || trimmed == '/') return;
+    // Legacy logical records may share a destination. Never delete another
+    // record's bytes when removing or invalidating just this record.
+    if (await _findDestinationConflict(
+          await _canonicalDestinationPath(trimmed),
+          ownerLogicalId,
+        ) !=
+        null) {
+      return;
+    }
     final file = await _destinationFile(trimmed);
     if (await file.exists()) {
       await file.delete();
@@ -2260,7 +2274,10 @@ final class DownloadManagerV2 {
         );
         if (!result.isValid &&
             record.mediaKind != DownloadMediaKind.mangaChapter) {
-          await _deleteDestination(record.destinationPath);
+          await _deleteDestination(
+            record.destinationPath,
+            ownerLogicalId: record.logicalId,
+          );
         }
         final now = _nowMillis();
 

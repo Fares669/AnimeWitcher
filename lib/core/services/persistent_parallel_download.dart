@@ -1214,7 +1214,7 @@ class PersistentParallelDownload {
         // Crash window: assembly may already have atomically renamed the final
         // file before the parent complete record/cleanup was persisted. Adopt
         // that exact-size target instead of assembling or downloading again.
-        if (await _adoptCompletedTarget(session)) return true;
+        if (restored && await _adoptCompletedTarget(session)) return true;
         if (!session.active) return false;
 
         await _restoreNativeOwnership(session);
@@ -3436,6 +3436,43 @@ class PersistentParallelDownload {
     }
   }
 
+  /// Legacy marker-free commits are verified against all saved Range bytes,
+  /// not just the output size. This runs only during crash recovery.
+  Future<bool> _matchesCompletedRangeBytes(
+    _ParallelSession session,
+    File target,
+  ) async {
+    if (session.parts.any((part) => !part.complete || part.launched)) {
+      return false;
+    }
+    RandomAccessFile? reader;
+    try {
+      reader = await target.open(mode: FileMode.read);
+      for (final part in session.parts) {
+        final file = File(await part.task.filePath());
+        if (await FileSystemEntity.type(file.path, followLinks: false) !=
+                FileSystemEntityType.file ||
+            await file.length() != part.size) {
+          return false;
+        }
+        await for (final chunk in file.openRead()) {
+          final candidate = await reader.read(chunk.length);
+          if (candidate.length != chunk.length) return false;
+          for (var i = 0; i < chunk.length; i++) {
+            if (chunk[i] != candidate[i]) return false;
+          }
+        }
+      }
+      return await reader.position() == session.size;
+    } on FileSystemException {
+      return false;
+    } finally {
+      try {
+        await reader?.close();
+      } catch (_) {}
+    }
+  }
+
   Future<bool> _adoptCompletedTarget(_ParallelSession session) async {
     final target = File(await session.task.filePath());
     if (await FileSystemEntity.type(target.path, followLinks: false) !=
@@ -3459,8 +3496,15 @@ class PersistentParallelDownload {
         await _pause(session);
         return false;
       }
-      // Preserve marker-free recovery for output committed by older versions.
-      // A valid marker with no source identifies a completed atomic rename.
+      if (markerType == FileSystemEntityType.notFound &&
+          !await _matchesCompletedRangeBytes(session, target)) {
+        // Foreign same-size outputs have no ownership proof. Keep the durable
+        // range files and park instead of accepting or overwriting the target.
+        await _pause(session);
+        return false;
+      }
+      // A valid marker with no source identifies a committed atomic rename.
+      // Older marker-free files must match their completed Range files.
       await _finishCompleteSession(session);
       return true;
     }
