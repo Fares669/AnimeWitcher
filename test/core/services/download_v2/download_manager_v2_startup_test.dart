@@ -166,6 +166,110 @@ void main() {
     );
   });
 
+  for (final throws in [false, true]) {
+    test('startup preserves a paused generation when automatic resume ${throws ? "throws" : "is rejected"}', () async {
+      final fixture = await _startupFixture(
+        intent: DownloadUserIntent.active,
+        hasExactHandle: true,
+        exactHandleStatus: DownloadTransportStatus.paused,
+      );
+      addTearDown(fixture.manager.dispose);
+      final handle = fixture.gateway.handleFor(fixture.record.taskId)!;
+      if (throws) {
+        handle.resumeError = StateError('native resume unavailable');
+      } else {
+        handle.resumeResult = false;
+      }
+
+      await fixture.manager.initialize();
+
+      expect(handle.resumeCalls, 1);
+      expect(fixture.gateway.startedSpecs, isEmpty);
+      final saved = await fixture.store.get(fixture.logicalId);
+      expect(saved?.generation, fixture.record.generation);
+      expect(saved?.taskId, fixture.record.taskId);
+      expect(saved?.intent, DownloadUserIntent.paused);
+      expect(
+        fixture.manager.snapshotFor(fixture.logicalId)?.status,
+        DownloadTransportStatus.paused,
+      );
+    });
+  }
+
+  test('startup rejected duplicate cancel keeps the live writer admitted', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _StartupGateway();
+    final ownerId = logicalDownloadIdFor(
+      animeId: 'anilist:41',
+      episodeKey: '1',
+      variantKey: 'sub:1080p',
+    );
+    final duplicateId = logicalDownloadIdFor(
+      animeId: 'anilist:42',
+      episodeKey: '2',
+      variantKey: 'sub:1080p',
+    );
+    LogicalDownloadRecordV2 record(DownloadLogicalId id, int timestamp) {
+      return LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2,
+        logicalId: id,
+        mediaId: 'anilist:41',
+        unitKey: id.value,
+        variantKey: 'sub:1080p',
+        generation: 1,
+        taskId: taskIdForGeneration(id, 1),
+        intent: DownloadUserIntent.active,
+        destinationPath: 'downloads/anime/colliding.mp4',
+        sourceDescriptor: const <String, Object?>{'providerId': 'provider.example'},
+        expectedBytes: 100,
+        updatedAtMillis: timestamp,
+      );
+    }
+
+    final owner = record(ownerId, 1);
+    final duplicate = record(duplicateId, 2);
+    await store.put(owner);
+    await store.put(duplicate);
+    gateway.addRehydrated(owner.taskId, DownloadTransportStatus.running);
+    gateway.addRehydrated(duplicate.taskId, DownloadTransportStatus.running);
+    final handle = gateway.handleFor(duplicate.taskId)!
+      ..onPause = (() async => false)
+      ..cancelResult = false;
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: StaticSourceResolverV2(expectedBytes: 100),
+      maxConcurrentDownloads: () => 2,
+    );
+    addTearDown(manager.dispose);
+
+    await manager.initialize();
+    expect(handle.cancelCalls, 1);
+    expect((await store.get(duplicateId))?.intent, DownloadUserIntent.paused);
+    expect(manager.snapshotFor(duplicateId)?.status, DownloadTransportStatus.running);
+
+    final thirdId = logicalDownloadIdFor(
+      animeId: 'anilist:43',
+      episodeKey: '3',
+      variantKey: 'sub:1080p',
+    );
+    final third = await manager.start(
+      DownloadStartRequestV2(
+        logicalId: thirdId,
+        mediaId: 'anilist:43',
+        unitKey: '3',
+        variantKey: 'sub:1080p',
+        destinationPath: 'downloads/anime/third.mp4',
+        sourceDescriptor: const <String, Object?>{'providerId': 'provider.example'},
+        allowPause: true,
+        retries: 2,
+        parallelChunks: 1,
+      ),
+    );
+    expect(third.status, DownloadTransportStatus.queued);
+    expect(gateway.startedSpecs, isEmpty);
+  });
+
   test('startup resumes an exact paused transfer for active intent', () async {
     final f = await _startupFixture(
       intent: DownloadUserIntent.active,
@@ -604,6 +708,9 @@ final class _StartupHandle implements DownloadTransportHandle {
   int pauseCalls = 0;
   int resumeCalls = 0;
   int cancelCalls = 0;
+  bool resumeResult = true;
+  Object? resumeError;
+  bool cancelResult = true;
 
   @override
   String get taskId => _current.taskId;
@@ -635,6 +742,8 @@ final class _StartupHandle implements DownloadTransportHandle {
   @override
   Future<bool> resume() async {
     resumeCalls++;
+    if (resumeError != null) throw resumeError!;
+    if (!resumeResult) return false;
     emitStatus(DownloadTransportStatus.running);
     return true;
   }
@@ -642,6 +751,7 @@ final class _StartupHandle implements DownloadTransportHandle {
   @override
   Future<bool> cancel() async {
     cancelCalls++;
+    if (!cancelResult) return false;
     emitStatus(DownloadTransportStatus.canceled);
     return true;
   }
