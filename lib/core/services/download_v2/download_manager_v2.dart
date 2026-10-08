@@ -127,6 +127,8 @@ final class DownloadManagerV2 {
   final Map<String, int> _lastNativeSpeedProjectionAtMillis = <String, int>{};
   final Map<DownloadLogicalId, int> _sourceRefreshAttempts =
       <DownloadLogicalId, int>{};
+  final Map<DownloadLogicalId, DownloadTransportSnapshot>
+      _firstRenewedPositiveSample = <DownloadLogicalId, DownloadTransportSnapshot>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
       StreamController<List<LogicalDownloadRecordV2>>.broadcast();
 
@@ -1633,13 +1635,16 @@ final class DownloadManagerV2 {
     );
     await _store.put(pausedRecord);
     _rememberRecord(pausedRecord);
-    final paused = _snapshotWithStatus(
-      handle.current,
-      DownloadTransportStatus.paused,
-    );
-    _snapshots[record.logicalId] = paused;
-    _recordDiagnostic(record.logicalId, paused);
+    // A native resume may start the writer and then throw before confirming.
+    // Preserve paused *intent*, but never invent a paused transport snapshot.
+    final truth = handle.current;
+    _snapshots[record.logicalId] = truth;
+    _recordDiagnostic(record.logicalId, truth);
     await _publishRecords();
+    if (!truth.isFinal && truth.status != DownloadTransportStatus.paused &&
+        truth.status != DownloadTransportStatus.missing) {
+      _activateHandle(record.logicalId, handle);
+    }
   }
 
   Future<DownloadTransportSnapshot> _startFreshGenerationUnsafe(
@@ -2176,12 +2181,23 @@ final class DownloadManagerV2 {
     final accepted = _acceptSnapshot(logicalId, snapshot);
     if (!accepted) return;
 
-    // Bytes arriving prove the last renewal worked. The cap is for sources
-    // that keep expiring without delivering, not for long downloads whose
-    // short-lived links expire several times along the way.
-    if (snapshot.status == DownloadTransportStatus.running &&
+    // A resumed transfer may initially report *old* positive progress.
+    // Only progress beyond its first positive sample proves the new source
+    // delivered bytes; stale callbacks must not replenish the expiry budget.
+    if (_sourceRefreshAttempts.containsKey(logicalId) &&
+        snapshot.status == DownloadTransportStatus.running &&
         (snapshot.progress > 0 || (snapshot.transferredBytes ?? 0) > 0)) {
-      _sourceRefreshAttempts.remove(logicalId);
+      final baseline = _firstRenewedPositiveSample.putIfAbsent(
+        logicalId,
+        () => snapshot,
+      );
+      final newBytes = snapshot.transferredBytes != null &&
+          baseline.transferredBytes != null &&
+          snapshot.transferredBytes! > baseline.transferredBytes!;
+      if (newBytes || snapshot.progress > baseline.progress) {
+        _sourceRefreshAttempts.remove(logicalId);
+        _firstRenewedPositiveSample.remove(logicalId);
+      }
     }
 
     if (snapshot.status == DownloadTransportStatus.failed &&
@@ -2444,6 +2460,7 @@ final class DownloadManagerV2 {
         }
         // Count only fenced renewal commands, never duplicate/stale callbacks.
         _sourceRefreshAttempts[logicalId] = attempts + 1;
+        _firstRenewedPositiveSample.remove(logicalId);
         await Future<void>.delayed(
           Duration(milliseconds: 200 * (1 << attempts)),
         );
@@ -2587,6 +2604,7 @@ final class DownloadManagerV2 {
     _recordsByLogicalId.clear();
     _lastPositiveSpeedAtMillis.clear();
     _lastNativeSpeedProjectionAtMillis.clear();
+    _firstRenewedPositiveSample.clear();
     await _recordChanges.close();
   }
 }

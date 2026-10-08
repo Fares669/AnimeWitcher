@@ -3860,18 +3860,20 @@ class PersistentParallelDownload {
               }),
               flush: true,
             );
-            await pending.rename(marker.path);
-          }
-          // Our marker is in place, so an empty file at the target is our own
-          // reservation from an interrupted attempt.
-          final interruptedReservation =
-              await FileSystemEntity.type(target.path, followLinks: false) ==
-                  FileSystemEntityType.file &&
-              await target.length() == 0;
-          if (!interruptedReservation) {
-            // Atomic create fails if a cooperating creator won the destination.
-            // Unlike a check followed by rename, this reserves the actual path.
+            // Reserve before publishing the ownership marker: otherwise a
+            // foreign writer may create an empty target in the gap and be
+            // mistaken for our interrupted reservation.
             await target.create(exclusive: true);
+            await pending.rename(marker.path);
+          } else {
+            // Legacy valid markers were published after reserving the target.
+            final interruptedReservation =
+                await FileSystemEntity.type(target.path, followLinks: false) ==
+                    FileSystemEntityType.file &&
+                await target.length() == 0;
+            if (!interruptedReservation) {
+              await target.create(exclusive: true);
+            }
           }
           reserved = true;
           _recordDiagnostic('assembly.destinationReserved', {
