@@ -127,6 +127,8 @@ final class DownloadManagerV2 {
   final Map<String, int> _lastNativeSpeedProjectionAtMillis = <String, int>{};
   final Map<DownloadLogicalId, int> _sourceRefreshAttempts =
       <DownloadLogicalId, int>{};
+  final Map<DownloadLogicalId, DownloadTransportSnapshot>
+      _firstRenewedPositiveSample = <DownloadLogicalId, DownloadTransportSnapshot>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
       StreamController<List<LogicalDownloadRecordV2>>.broadcast();
 
@@ -473,8 +475,11 @@ final class DownloadManagerV2 {
         }
       } catch (e) {
         final current = await _store.get(record.logicalId) ?? record;
+        // Recovery can fail for a passing reason, such as launching offline.
+        // Keep the user's intent so the next launch tries again; this session
+        // shows the failure below, and Retry still starts it at once.
         final failedRecord = current.copyWith(
-          intent: DownloadUserIntent.failed,
+          intent: record.intent,
           awaitingAdmission: false,
           failureCategory: DownloadFailureCategory.unknown,
           failureMessage: 'startup recovery failed: $e',
@@ -520,7 +525,8 @@ final class DownloadManagerV2 {
           return completed;
         }
 
-        if (currentRecord.intent == DownloadUserIntent.paused) {
+        if (currentRecord.intent == DownloadUserIntent.paused &&
+            await _hasResumablePausedState(currentRecord)) {
           return _resumeRecordUnsafe(currentRecord, request);
         }
 
@@ -710,6 +716,20 @@ final class DownloadManagerV2 {
       );
       return _resumeRecordUnsafe(record, request);
     });
+  }
+
+  /// Whether a paused record still has something to resume: a place in the
+  /// queue, Manga pages kept on disk, or its exact transfer. A video whose
+  /// transfer the system dropped has none, and starts again instead.
+  Future<bool> _hasResumablePausedState(LogicalDownloadRecordV2 record) async {
+    if (record.awaitingAdmission ||
+        record.mediaKind == DownloadMediaKind.mangaChapter) {
+      return true;
+    }
+    final handle = await _exactHandle(record.taskId);
+    return handle != null &&
+        !handle.current.isFinal &&
+        handle.current.status != DownloadTransportStatus.missing;
   }
 
   Future<DownloadTransportSnapshot> _resumeRecordUnsafe(
@@ -1388,22 +1408,29 @@ final class DownloadManagerV2 {
           await _preservePausedResumeFailure(record, existing);
           return;
         }
-        final readiness = _parallelPauseReadiness;
-        if (record.mediaKind != DownloadMediaKind.mangaChapter &&
-            record.parallelChunks > 1 &&
-            readiness != null &&
-            existing is! SelfSettlingParallelDownloadTransportHandleV2) {
-          final ready = await readiness.waitUntilReady(
-            taskId: record.taskId,
-            expectedChildren: record.parallelChunks,
-          );
-          if (!ready) {
-            await _preservePausedResumeFailure(record, existing);
-            return;
+        final bool resumed;
+        try {
+          final readiness = _parallelPauseReadiness;
+          if (record.mediaKind != DownloadMediaKind.mangaChapter &&
+              record.parallelChunks > 1 &&
+              readiness != null &&
+              existing is! SelfSettlingParallelDownloadTransportHandleV2) {
+            final ready = await readiness.waitUntilReady(
+              taskId: record.taskId,
+              expectedChildren: record.parallelChunks,
+            );
+            if (!ready) {
+              await _preservePausedResumeFailure(record, existing);
+              return;
+            }
           }
+          resumed = await existing.resume();
+        } catch (_) {
+          // A thrown resume is no proof the progress is gone. Keep it paused
+          // rather than failed, whose Retry would start from byte zero.
+          await _preservePausedResumeFailure(record, existing);
+          return;
         }
-
-        final resumed = await existing.resume();
         if (resumed) {
           final admitted = record.copyWith(
             awaitingAdmission: false,
@@ -1608,13 +1635,16 @@ final class DownloadManagerV2 {
     );
     await _store.put(pausedRecord);
     _rememberRecord(pausedRecord);
-    final paused = _snapshotWithStatus(
-      handle.current,
-      DownloadTransportStatus.paused,
-    );
-    _snapshots[record.logicalId] = paused;
-    _recordDiagnostic(record.logicalId, paused);
+    // A native resume may start the writer and then throw before confirming.
+    // Preserve paused *intent*, but never invent a paused transport snapshot.
+    final truth = handle.current;
+    _snapshots[record.logicalId] = truth;
+    _recordDiagnostic(record.logicalId, truth);
     await _publishRecords();
+    if (!truth.isFinal && truth.status != DownloadTransportStatus.paused &&
+        truth.status != DownloadTransportStatus.missing) {
+      _activateHandle(record.logicalId, handle);
+    }
   }
 
   Future<DownloadTransportSnapshot> _startFreshGenerationUnsafe(
@@ -2151,6 +2181,25 @@ final class DownloadManagerV2 {
     final accepted = _acceptSnapshot(logicalId, snapshot);
     if (!accepted) return;
 
+    // A resumed transfer may initially report *old* positive progress.
+    // Only progress beyond its first positive sample proves the new source
+    // delivered bytes; stale callbacks must not replenish the expiry budget.
+    if (_sourceRefreshAttempts.containsKey(logicalId) &&
+        snapshot.status == DownloadTransportStatus.running &&
+        (snapshot.progress > 0 || (snapshot.transferredBytes ?? 0) > 0)) {
+      final baseline = _firstRenewedPositiveSample.putIfAbsent(
+        logicalId,
+        () => snapshot,
+      );
+      final newBytes = snapshot.transferredBytes != null &&
+          baseline.transferredBytes != null &&
+          snapshot.transferredBytes! > baseline.transferredBytes!;
+      if (newBytes || snapshot.progress > baseline.progress) {
+        _sourceRefreshAttempts.remove(logicalId);
+        _firstRenewedPositiveSample.remove(logicalId);
+      }
+    }
+
     if (snapshot.status == DownloadTransportStatus.failed &&
         snapshot.failureCategory == DownloadFailureCategory.sourceExpired) {
       _recordDiagnostic(
@@ -2411,6 +2460,7 @@ final class DownloadManagerV2 {
         }
         // Count only fenced renewal commands, never duplicate/stale callbacks.
         _sourceRefreshAttempts[logicalId] = attempts + 1;
+        _firstRenewedPositiveSample.remove(logicalId);
         await Future<void>.delayed(
           Duration(milliseconds: 200 * (1 << attempts)),
         );
@@ -2426,8 +2476,13 @@ final class DownloadManagerV2 {
           );
         } catch (error) {
           final current = await _store.get(logicalId);
-          if (current == null || current.intent != DownloadUserIntent.active)
+          // The fresh start may already have saved this as an unknown failure;
+          // it is the expired source that failed, and the UI says so.
+          if (current == null ||
+              current.intent == DownloadUserIntent.canceled ||
+              current.completedAtMillis != null) {
             return;
+          }
           await _persistFailure(
             current,
             DownloadTransportSnapshot(
@@ -2549,6 +2604,7 @@ final class DownloadManagerV2 {
     _recordsByLogicalId.clear();
     _lastPositiveSpeedAtMillis.clear();
     _lastNativeSpeedProjectionAtMillis.clear();
+    _firstRenewedPositiveSample.clear();
     await _recordChanges.close();
   }
 }

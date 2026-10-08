@@ -1101,6 +1101,63 @@ void main() {
     },
   );
 
+  test('exclusive destination is reserved before the promotion marker is published', () {
+    final source = File('lib/core/services/persistent_parallel_download.dart')
+        .readAsStringSync();
+    final start = source.indexOf('Future<bool> _promoteCompletedFile(');
+    final end = source.indexOf('Future<void> _assemble(', start);
+    expect(start, greaterThanOrEqualTo(0));
+    final promotion = source.substring(start, end);
+    expect(
+      promotion.indexOf('await target.create(exclusive: true)'),
+      lessThan(promotion.indexOf('await pending.rename(marker.path)')),
+      reason: 'a marker alone must not authorize overwriting a foreign empty target',
+    );
+  });
+
+  test(
+    'a marker that cannot be written leaves no reservation behind',
+    () async {
+      expect(await coordinator.start(parent, 25), isTrue);
+      await expandFreshTo(5);
+      await coordinator.pause(parent);
+      final original = List<DownloadTask>.from(starts);
+      for (var i = 0; i < original.length; i++) {
+        final file = File(await original[i].filePath());
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(
+          List<int>.generate(5, (j) => i * 5 + j),
+          flush: true,
+        );
+      }
+      await coordinator.dispose();
+
+      // The marker's write fails, as on a full disk.
+      final target = File(await parent.filePath());
+      final blocker = Directory('${target.path}.promoting.tmp');
+      await blocker.create(recursive: true);
+      starts.clear();
+      coordinator = create();
+      await coordinator.start(parent, 25);
+      await waitUntil(
+        () => records[parent.taskId]?.status == TaskStatus.paused,
+      );
+      expect(await target.exists(), isFalse);
+      expect(await File('${target.path}.promoting').exists(), isFalse);
+
+      // With room again, the next start finishes the file.
+      await coordinator.dispose();
+      await blocker.delete();
+      starts.clear();
+      coordinator = create();
+      expect(await coordinator.start(parent, 25), isTrue);
+      await waitUntil(() => target.existsSync() && target.lengthSync() == 25);
+      expect(starts, isEmpty);
+      expect(await target.readAsBytes(), List<int>.generate(25, (i) => i));
+      expect(await File('${target.path}.promoting').exists(), isFalse);
+    },
+  );
+
   test(
     'foreign replacement of a reserved destination preserves parts',
     () async {
