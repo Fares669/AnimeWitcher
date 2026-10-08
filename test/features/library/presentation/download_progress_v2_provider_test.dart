@@ -188,12 +188,12 @@ final class _IdleStorage extends MemoryStorageService {
 
 Future<void> _waitForDownloadCount(ProviderContainer container, int expected) async {
   for (var attempt = 0; attempt < 100; attempt++) {
-    if ((container.read(downloadsProvider).valueOrNull?.length ?? -1) == expected) {
+    if ((container.read(downloadsProvider).value?.length ?? -1) == expected) {
       return;
     }
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
-  fail('Expected $expected visible downloads; got ${container.read(downloadsProvider).valueOrNull?.length}');
+  fail('Expected $expected visible downloads; got ${container.read(downloadsProvider).value?.length}');
 }
 
 final class _DownloadMetadataStorage extends MemoryStorageService {
