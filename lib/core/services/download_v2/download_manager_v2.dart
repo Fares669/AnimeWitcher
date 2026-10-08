@@ -278,7 +278,12 @@ final class DownloadManagerV2 {
 
           DownloadTransportSnapshot? settled;
           if (exactHandle != null && !exactHandle.current.isFinal) {
-            settled = await _pauseHandleAndSettle(exactHandle);
+            try {
+              settled = await _pauseHandleAndSettle(exactHandle);
+            } catch (_) {
+              // A rejected pause is not proof the duplicate writer stopped.
+              settled = exactHandle.current;
+            }
           }
           final pauseBase =
               settled ??
@@ -297,7 +302,15 @@ final class DownloadManagerV2 {
             // hidden behind paused presentation while it keeps writing into the
             // owner's destination. Canonical-writer safety wins here: settle that
             // duplicate transport destructively and expose the resulting truth.
-            await _settleObsoleteHandle(exactHandle, cancelEvenIfFinal: false);
+            try {
+              await _settleObsoleteHandle(exactHandle, cancelEvenIfFinal: false);
+            } catch (_) {
+              // If even cancel is rejected, the writer remains authoritative.
+              // Preserve paused user intent but expose its running transport so
+              // admission counts this exact writer until it really settles.
+              _activateHandle(pausedRecord.logicalId, exactHandle);
+              continue;
+            }
             final settledTruth = exactHandle.current;
             _snapshots[pausedRecord.logicalId] = settledTruth;
             _recordDiagnostic(pausedRecord.logicalId, settledTruth);
@@ -426,11 +439,24 @@ final class DownloadManagerV2 {
                 _isRecoverable(exactHandle.current)) {
               if (exactHandle.current.status ==
                   DownloadTransportStatus.paused) {
-                final resumed = await exactHandle.resume();
+                var resumed = false;
+                try {
+                  resumed = await exactHandle.resume();
+                } catch (_) {
+                  // Preserve the exact generation if native resume throws.
+                }
                 if (!resumed) {
-                  throw StateError(
-                    'Active download could not resume its exact paused transfer',
+                  // Never turn a recoverable paused transfer into a failed row
+                  // whose Retry action destroys its partial progress.
+                  final pausedRecord = record.copyWith(
+                    intent: DownloadUserIntent.paused,
+                    awaitingAdmission: false,
+                    updatedAtMillis: _nowMillis(),
                   );
+                  await _store.put(pausedRecord);
+                  _rememberRecord(pausedRecord);
+                  _activateHandle(pausedRecord.logicalId, exactHandle);
+                  continue;
                 }
               }
               _activateHandle(record.logicalId, exactHandle);
