@@ -276,7 +276,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   static const Duration _refreshInterval = Duration(seconds: 1);
   static const Duration _durableRefreshInterval = Duration(seconds: 30);
 
-  final Set<String> _deletingIds = <String>{};
   final Set<String> _artworkScheduledIds = <String>{};
   List<LogicalDownloadRecordV2> _records = const <LogicalDownloadRecordV2>[];
   Map<String, Map<String, dynamic>> _metadataByTaskId =
@@ -433,7 +432,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       }
     }
 
-    items.removeWhere((item) => _deletingIds.contains(item.id));
     items.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return _orderDownloads(collapseDuplicateDownloads(items).visible);
   }
@@ -496,12 +494,14 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     }
 
     final droppedIds = toRemove.keys.toSet();
-    _deletingIds.addAll(droppedIds);
     if (state.value != null) {
       state = AsyncData(
         state.value!.where((item) => !droppedIds.contains(item.id)).toList(),
       );
     }
+    // The persisted records, not taskId tombstones, own visibility. New
+    // downloads may legitimately reuse the deleted task's generation-one ID.
+    await _reloadDurableState();
   }
 
   Future<void> pauseDownload(String taskId) async {
