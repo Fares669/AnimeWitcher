@@ -128,19 +128,6 @@ void main() {
       },
     );
 
-    test('complete assembly staging file is adopted after a crash', () {
-      final source = File('lib/core/services/persistent_parallel_download.dart')
-          .readAsStringSync();
-      final start = source.indexOf('Future<bool> _adoptCompletedTarget(');
-      final end = source.indexOf('bool _requestedByteRange(', start);
-      expect(start, greaterThanOrEqualTo(0));
-      expect(end, greaterThan(start));
-      final section = source.substring(start, end);
-      expect(section, contains(".assembling"));
-      expect(section, contains('await staging.rename(target.path)'));
-      expect(section, contains('await file.length() != part.size'));
-    });
-
     test('continued-processing speed zero explicitly clears stale speed', () {
       final swift = File('ios/Runner/DownloadContinuedProcessingManager.swift')
           .readAsStringSync();
@@ -266,5 +253,21 @@ void main() {
         expect(section, contains('never used as durable resume evidence'));
       },
     );
+
+    test('final assembly promotion reserves the destination before rename', () {
+      final source = File('lib/core/services/persistent_parallel_download.dart')
+          .readAsStringSync();
+      final start = source.indexOf('Future<bool> _promoteCompletedFile(');
+      final end = source.indexOf('Future<void> _assemble(', start);
+      expect(start, greaterThanOrEqualTo(0));
+      expect(end, greaterThan(start));
+      final section = source.substring(start, end);
+      expect(section, contains('create(exclusive: true)'));
+      expect(section, contains('.promoting'));
+      expect(
+        section.indexOf('create(exclusive: true)'),
+        lessThan(section.indexOf('source.rename(target.path)')),
+      );
+    });
   });
 }

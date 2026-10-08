@@ -36,6 +36,8 @@ void main() {
       );
 
       expect(record?.completedAtMillis, isNull);
+      expect(record?.intent, DownloadUserIntent.failed);
+      expect(record?.awaitingAdmission, isFalse);
       expect(record?.failureCategory, DownloadFailureCategory.integrity);
       expect(record?.failureMessage, 'missing');
       expect(
@@ -58,6 +60,7 @@ void main() {
       );
 
       expect(record?.completedAtMillis, isNull);
+      expect(record?.intent, DownloadUserIntent.failed);
       expect(record?.failureMessage, 'empty');
     });
 
@@ -78,6 +81,7 @@ void main() {
         );
 
         expect(record?.completedAtMillis, isNull);
+        expect(record?.intent, DownloadUserIntent.failed);
         expect(record?.failureMessage, 'size-mismatch');
       },
     );

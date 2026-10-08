@@ -46,6 +46,15 @@ void main() {
     expect(formatDownloadSpeed(_data(networkSpeed: 1.5), l10n), '1.50 MB/s');
   });
 
+  test('nonfinite speed displays calculating', () {
+    for (final speed in [double.nan, double.infinity, -double.infinity]) {
+      expect(
+        formatDownloadSpeed(_data(networkSpeed: speed), l10n),
+        l10n.calculating,
+      );
+    }
+  });
+
   testWidgets('formatDownloadTimeRemaining uses Arabic units', (tester) async {
     late String remaining;
     await tester.pumpWidget(

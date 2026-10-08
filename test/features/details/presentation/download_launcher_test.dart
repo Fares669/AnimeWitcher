@@ -35,6 +35,7 @@ class _FakeDownloadSource extends AnimeWitcherProvider {
   _FakeDownloadSource(this.sources);
 
   final Completer<List<StreamResult>> sources;
+  int sourceLoads = 0;
 
   @override
   String get packageName => 'fake.download';
@@ -74,6 +75,7 @@ class _FakeDownloadSource extends AnimeWitcherProvider {
 
   @override
   Future<List<StreamResult>> loadStreamSources(String url) {
+    sourceLoads++;
     return sources.future;
   }
 
@@ -91,103 +93,162 @@ Future<void> _writeShot(WidgetTester tester, String filename) async {
   );
   final image = await boundary.toImage(pixelRatio: 2);
   final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-  File(
-    '${artifacts.path}/$filename',
-  ).writeAsBytesSync(bytes!.buffer.asUint8List());
+  File('${artifacts.path}/$filename')
+      .writeAsBytesSync(bytes!.buffer.asUint8List());
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('download opens the same server sheet loading as play', (
-    tester,
-  ) async {
-    final pending = Completer<List<StreamResult>>();
-    final source = _FakeDownloadSource(pending);
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.runAsync(TestFonts.loadWalkthroughFonts);
+  testWidgets(
+    'duplicate launch opens one server sheet and loads sources once',
+    (tester) async {
+      final pending = Completer<List<StreamResult>>();
+      final source = _FakeDownloadSource(pending);
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.runAsync(TestFonts.loadWalkthroughFonts);
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          storageServiceProvider.overrideWithValue(MemoryStorageService()),
-          extensionManagerProvider.overrideWith(
-            () => _StubExtensions(<AnimeWitcherProvider>[source]),
-          ),
-          activeProviderProvider.overrideWithValue(source),
-        ],
-        child: RepaintBoundary(
-          key: _shotKey,
-          child: MaterialApp(
-            debugShowCheckedModeBanner: false,
-            locale: const Locale('ar'),
-            localizationsDelegates: AppLocalizations.localizationsDelegates,
-            supportedLocales: AppLocalizations.supportedLocales,
-            theme: ThemeData(
-              brightness: Brightness.dark,
-              fontFamily: 'NotoSansArabic',
-              scaffoldBackgroundColor: Colors.black,
-              colorScheme: const ColorScheme.dark(
-                primary: Color(0xFFEEC60A),
-                surface: Color(0xFF1A1A1A),
-              ),
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            storageServiceProvider.overrideWithValue(MemoryStorageService()),
+            extensionManagerProvider.overrideWith(
+              () => _StubExtensions(<AnimeWitcherProvider>[source]),
             ),
-            home: Scaffold(
-              body: Builder(
-                builder: (context) {
-                  return TextButton(
-                    onPressed: () {
-                      unawaited(
-                        ProviderScope.containerOf(context)
-                            .read(downloadLauncherProvider)
-                            .launch(
-                              context,
-                              MultimediaItem(
-                                title: 'Show',
-                                url: 'https://example.test/show',
-                                posterUrl: '',
+            activeProviderProvider.overrideWithValue(source),
+          ],
+          child: RepaintBoundary(
+            key: _shotKey,
+            child: MaterialApp(
+              debugShowCheckedModeBanner: false,
+              locale: const Locale('ar'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              theme: ThemeData(
+                brightness: Brightness.dark,
+                fontFamily: 'NotoSansArabic',
+                scaffoldBackgroundColor: Colors.black,
+                colorScheme: const ColorScheme.dark(
+                  primary: Color(0xFFEEC60A),
+                  surface: Color(0xFF1A1A1A),
+                ),
+              ),
+              home: Scaffold(
+                body: Builder(
+                  builder: (context) {
+                    return TextButton(
+                      onPressed: () {
+                        unawaited(
+                          ProviderScope.containerOf(context)
+                              .read(downloadLauncherProvider)
+                              .launch(
+                                context,
+                                MultimediaItem(
+                                  title: 'Show',
+                                  url: 'https://example.test/show',
+                                  posterUrl: '',
+                                ),
+                                episode: Episode(
+                                  name: '',
+                                  url: 'https://example.test/ep9',
+                                  episode: 9,
+                                  serverName: 'الحلقة 9',
+                                ),
                               ),
-                              episode: Episode(
-                                name: '',
-                                url: 'https://example.test/ep9',
-                                episode: 9,
-                                serverName: 'الحلقة 9',
-                              ),
-                            ),
-                      );
-                    },
-                    child: const Text('download'),
-                  );
-                },
+                        );
+                      },
+                      child: const Text('download'),
+                    );
+                  },
+                ),
               ),
             ),
           ),
         ),
-      ),
-    );
+      );
 
-    await tester.tap(find.text('download'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+      final launchContext = tester.element(find.text('download'));
+      final launcher = ProviderScope.containerOf(launchContext)
+          .read(downloadLauncherProvider);
+      final item = MultimediaItem(
+        title: 'Show',
+        url: 'https://example.test/show',
+        posterUrl: '',
+        episodes: <Episode>[
+          Episode(
+            name: '',
+            url: 'https://example.test/ep9',
+            episode: 9,
+            serverName: 'الحلقة 9',
+          ),
+        ],
+      );
+      unawaited(
+        launcher.launch(
+          launchContext,
+          item,
+          episodeUrl: 'https://example.test/ep9',
+        ),
+      );
+      unawaited(
+        launcher.launch(
+          launchContext,
+          item,
+          episodeUrl: 'https://example.test/ep9',
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.byType(LoadingDialog), findsNothing);
-    expect(find.text('جارٍ الحل...'), findsNothing);
-    expect(find.byType(AppLoadingIndicator), findsOneWidget);
-    expect(find.text('جارٍ التحميل...'), findsOneWidget);
-    expect(find.text('الحلقة 9'), findsOneWidget);
+      expect(source.sourceLoads, 1);
+      expect(find.byType(LoadingDialog), findsNothing);
+      expect(find.text('جارٍ الحل...'), findsNothing);
+      expect(find.byType(AppLoadingIndicator), findsOneWidget);
+      expect(find.text('جارٍ التحميل...'), findsOneWidget);
+      expect(find.text('الحلقة 9'), findsOneWidget);
 
-    await tester.runAsync(
-      () => _writeShot(tester, 'download_server_sheet_loading.png'),
-    );
+      await tester.runAsync(
+        () => _writeShot(tester, 'download_server_sheet_loading.png'),
+      );
 
-    pending.complete(const <StreamResult>[
-      StreamResult(url: 'src-pd', source: 'PD', quality: '1080'),
-    ]);
-    await tester.pumpAndSettle();
+      pending.complete(const <StreamResult>[
+        StreamResult(url: 'src-pd', source: 'PD', quality: '1080'),
+      ]);
+      await tester.pumpAndSettle();
 
-    expect(find.text('جارٍ التحميل...'), findsNothing);
-    expect(find.text('PD'), findsOneWidget);
-    expect(find.byIcon(Icons.file_download_outlined), findsOneWidget);
-  });
+      expect(find.text('جارٍ التحميل...'), findsNothing);
+      expect(find.text('PD'), findsOneWidget);
+      expect(find.byIcon(Icons.file_download_outlined), findsOneWidget);
+
+      // A different episode can launch while the first selection is still open.
+      unawaited(
+        launcher.launch(
+          launchContext,
+          item,
+          episodeUrl: 'https://example.test/ep10',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(source.sourceLoads, 2);
+      Navigator.of(tester.element(find.text('PD').last)).pop();
+      await tester.pumpAndSettle();
+      Navigator.of(tester.element(find.text('PD'))).pop();
+      await tester.pumpAndSettle();
+
+      // Canceling the picker releases this episode's guard for another attempt.
+      unawaited(
+        launcher.launch(
+          launchContext,
+          item,
+          episodeUrl: 'https://example.test/ep9',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(source.sourceLoads, 3);
+      expect(find.text('PD'), findsOneWidget);
+      Navigator.of(tester.element(find.text('PD'))).pop();
+      await tester.pumpAndSettle();
+    },
+  );
 }

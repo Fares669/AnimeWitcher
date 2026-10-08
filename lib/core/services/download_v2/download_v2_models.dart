@@ -4,7 +4,7 @@ const int kLogicalDownloadSchemaVersionV2 = 2;
 
 enum DownloadMediaKind { videoEpisode, mangaChapter }
 
-enum DownloadUserIntent { active, paused, canceled }
+enum DownloadUserIntent { active, paused, canceled, failed }
 
 enum DownloadFailureCategory {
   sourceExpired,

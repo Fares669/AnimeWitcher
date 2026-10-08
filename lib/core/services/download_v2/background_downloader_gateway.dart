@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import '../download_concurrency.dart';
@@ -214,9 +215,7 @@ final class PackageBackgroundDownloaderGateway
 
   Future<void> _initializeOnce() async {
     await _downloader.configure(
-      globalConfig: const <(String, dynamic)>[
-        (Config.holdingQueue, false),
-      ],
+      globalConfig: const <(String, dynamic)>[(Config.holdingQueue, false)],
       iOSConfig: const <(String, dynamic)>[
         (Config.excludeFromCloudBackup, Config.always),
       ],
@@ -225,9 +224,11 @@ final class PackageBackgroundDownloaderGateway
       _downloader,
       _notificationPreferences(),
     );
-    await _downloader.start(autoCleanDatabase: true);
-    await _recordStartupInventory();
+    // start() replays native updates. Subscribe first and retain records until
+    // the V2 store has reconciled old background completions.
     _ensureDurableParallelCoordinator();
+    await _downloader.start(autoCleanDatabase: false);
+    await _recordStartupInventory();
   }
 
   /// Generation-fenced zero-byte Range candidates that iOS may start on the
@@ -273,9 +274,7 @@ final class PackageBackgroundDownloaderGateway
       _downloader,
       _notificationPreferences(),
     );
-    final transport = MangaChapterTransportV2(
-      startPage: _startMangaPageTaskV2,
-    );
+    final transport = MangaChapterTransportV2(startPage: _startMangaPageTaskV2);
     return transport.start(spec);
   }
 
@@ -322,8 +321,9 @@ final class PackageBackgroundDownloaderGateway
     await configurePackageNotificationsV2(_downloader, prefs);
 
     if (_isIOS()) {
-      final capability = await (_rangeCapabilityProbe?.call(spec) ??
-          _probeRangeCapabilityV2(spec));
+      final capability =
+          await (_rangeCapabilityProbe?.call(spec) ??
+              _probeRangeCapabilityV2(spec));
       if (capability.supportsRanges && capability.totalBytes > 0) {
         final parent = await packageTaskForV2(
           spec,
@@ -388,8 +388,7 @@ final class PackageBackgroundDownloaderGateway
     }
 
     final tracked = _downloader.transfers.forId(taskId);
-    if (tracked != null &&
-        !_isDurableInternalTask(tracked.task)) {
+    if (tracked != null && !_isDurableInternalTask(tracked.task)) {
       return _handleFor(tracked);
     }
 
@@ -397,8 +396,7 @@ final class PackageBackgroundDownloaderGateway
     // current task ID. Never attach by URL/filename heuristics.
     final rehydrated = await _downloader.transfers.rehydrateFromDatabase();
     for (final transfer in rehydrated) {
-      if (transfer.taskId == taskId &&
-          !_isDurableInternalTask(transfer.task)) {
+      if (transfer.taskId == taskId && !_isDurableInternalTask(transfer.task)) {
         return _handleFor(transfer);
       }
     }
@@ -436,8 +434,8 @@ final class PackageBackgroundDownloaderGateway
     final records = await _downloader.database.allRecords();
     final packageTasks = await _downloader.allTasks(allGroups: true);
     // ignore: invalid_use_of_visible_for_testing_member
-    final pausedTasks =
-        await _downloader.database.storage.retrieveAllPausedTasks();
+    final pausedTasks = await _downloader.database.storage
+        .retrieveAllPausedTasks();
     var resumeDataCount = 0;
     for (final task in pausedTasks) {
       // ignore: invalid_use_of_visible_for_testing_member
@@ -503,8 +501,8 @@ final class PackageBackgroundDownloaderGateway
     // Keep that package detail inside this adapter: paused children must not
     // reserve a native-writer slot after an app relaunch.
     // ignore: invalid_use_of_visible_for_testing_member
-    final pausedTasks =
-        await _downloader.database.storage.retrieveAllPausedTasks();
+    final pausedTasks = await _downloader.database.storage
+        .retrieveAllPausedTasks();
     final active = activeDurablePartTaskIdsV2(
       packageTasks: packageTasks,
       pausedTasks: pausedTasks,
@@ -564,15 +562,15 @@ final class PackageBackgroundDownloaderGateway
       saveRecord: _saveDurableRecord,
       recordForId: _downloader.database.recordForId,
       livePartIds: _activeDurablePartTaskIds,
+      availableStorageBytes: availableDownloadStorageBytesV2,
       shouldDrainPartOnPause: (_) => _isIOS(),
       onUpdate: (update) {
         _durableHandles[update.task.taskId]?.accept(update);
         if (update is TaskStatusUpdate &&
             update.status == TaskStatus.complete) {
           unawaited(
-            _cleanupDurableChildTracking(update.task.taskId).catchError(
-              (Object _, StackTrace __) {},
-            ),
+            _cleanupDurableChildTracking(update.task.taskId)
+                .catchError((Object _, StackTrace __) {}),
           );
         }
       },
@@ -611,11 +609,13 @@ final class PackageBackgroundDownloaderGateway
     // Read package-owned pause/resume state only for diagnostics. The package
     // remains the sole authority that consumes resumeData.
     // ignore: invalid_use_of_visible_for_testing_member
-    final resumeData =
-        await _downloader.database.storage.retrieveResumeData(task.taskId);
+    final resumeData = await _downloader.database.storage.retrieveResumeData(
+      task.taskId,
+    );
     // ignore: invalid_use_of_visible_for_testing_member
-    final pausedTask =
-        await _downloader.database.storage.retrievePausedTask(task.taskId);
+    final pausedTask = await _downloader.database.storage.retrievePausedTask(
+      task.taskId,
+    );
     final resumeDataPresent = resumeData != null;
     final packagePaused = pausedTask != null;
 
@@ -752,13 +752,24 @@ final class PackageBackgroundDownloaderGateway
   }
 }
 
+/// The durable iOS assembler needs room for the final file while retaining its
+/// resumable parts. Query the destination volume through the existing bridge.
+Future<int?> availableDownloadStorageBytesV2(String path) async {
+  try {
+    return await const MethodChannel(
+      'com.animewitcher.app/download_continued_processing',
+    ).invokeMethod<int>('availableDiskBytes', <String, Object>{'path': path});
+  } on MissingPluginException {
+    return null;
+  } on PlatformException {
+    return null;
+  }
+}
+
 /// Returns the requested parent width. On iOS the gateway routes widths greater
 /// than one through AnimeWitcher's durable immutable-range coordinator instead
 /// of background_downloader's ParallelDownloadTask resume implementation.
-int effectivePackageParallelChunksV2(
-  int requestedChunks, {
-  bool? isIOS,
-}) {
+int effectivePackageParallelChunksV2(int requestedChunks, {bool? isIOS}) {
   assert(requestedChunks > 0);
   return requestedChunks;
 }
@@ -925,14 +936,11 @@ Future<bool> waitForPackageParallelResumeDataV2({
   if (task is! ParallelDownloadTask) return true;
   if (maxAttempts <= 0) return false;
 
-  final wait =
-      delay ?? ((duration) => Future<void>.delayed(duration));
+  final wait = delay ?? ((duration) => Future<void>.delayed(duration));
   for (var attempt = 0; attempt < maxAttempts; attempt++) {
     final parentResumeData = await retrieveResumeData(task.taskId);
     if (parentResumeData != null) {
-      final childTaskIds = _parallelChildTaskIds(
-        parentResumeData.data,
-      );
+      final childTaskIds = _parallelChildTaskIds(parentResumeData.data);
       if (childTaskIds.isNotEmpty) {
         final childResumeData = await Future.wait(
           childTaskIds.map(retrieveResumeData),
@@ -971,10 +979,7 @@ List<String> _parallelChildTaskIds(String resumeData) {
   }
 }
 
-typedef DownloadRangeCapabilityV2 = ({
-  int totalBytes,
-  bool supportsRanges,
-});
+typedef DownloadRangeCapabilityV2 = ({int totalBytes, bool supportsRanges});
 
 Future<DownloadRangeCapabilityV2> _probeRangeCapabilityV2(
   DownloadTaskSpecV2 spec,
@@ -1002,10 +1007,7 @@ Future<DownloadRangeCapabilityV2> _probeRangeCapabilityV2(
           total > 0,
     );
   } catch (_) {
-    return (
-      totalBytes: spec.expectedBytes ?? -1,
-      supportsRanges: false,
-    );
+    return (totalBytes: spec.expectedBytes ?? -1, supportsRanges: false);
   } finally {
     client.close(force: true);
   }
@@ -1047,18 +1049,6 @@ Map<String, Object> _nativeBackgroundWaiterPayloadV2(
   final end = int.tryParse(match[2]!);
   if (start == null || end == null || start < 0 || end < start) return null;
   return (start, end);
-}
-
-int? parseRangeProbeTotalBytesV2(String? contentRange) {
-  final value = contentRange?.trim();
-  if (value == null || value.isEmpty) return null;
-  final match = RegExp(
-    r'^bytes\s+0\s*-\s*0\s*/\s*(\d+)\s*$',
-    caseSensitive: false,
-  ).firstMatch(value);
-  if (match == null) return null;
-  final total = int.tryParse(match[1]!);
-  return total != null && total > 0 ? total : null;
 }
 
 DownloadTransportStatus durableParallelProgressStatusV2({
@@ -1187,8 +1177,7 @@ final class _DurableParallelDownloadTransportHandle
           transferredBytes: _current.transferredBytes,
           totalBytes: _current.totalBytes,
           configuredConnections: parent.chunks,
-          activeConnections:
-              coordinator.activeConnectionCountFor(taskId) ?? 0,
+          activeConnections: coordinator.activeConnectionCountFor(taskId) ?? 0,
         ),
       );
     }
@@ -1209,8 +1198,7 @@ final class _DurableParallelDownloadTransportHandle
           durableBytes: coordinator.durableBytesFor(taskId),
           parentActive: coordinator.isActive(taskId),
           configuredConnections: parent.chunks,
-          activeConnections:
-              coordinator.activeConnectionCountFor(taskId) ?? 0,
+          activeConnections: coordinator.activeConnectionCountFor(taskId) ?? 0,
           networkSpeedMBps: update.networkSpeed,
           timeRemaining: update.timeRemaining,
         ),
@@ -1237,8 +1225,7 @@ final class _DurableParallelDownloadTransportHandle
           transferredBytes: transferredBytes,
           totalBytes: _current.totalBytes,
           configuredConnections: parent.chunks,
-          activeConnections:
-              coordinator.activeConnectionCountFor(taskId) ?? 0,
+          activeConnections: coordinator.activeConnectionCountFor(taskId) ?? 0,
           failureCategory: _failureCategory(update.status, update.exception),
           failureMessage: update.exception?.toString(),
         ),
@@ -1337,8 +1324,7 @@ class _PackageDownloadTransportHandle implements DownloadTransportHandle {
         // read-only probe confined to the adapter and remove it when upstream
         // exposes/awaits that lifecycle point.
         // ignore: invalid_use_of_visible_for_testing_member
-        retrieveResumeData:
-            _downloader.database.storage.retrieveResumeData,
+        retrieveResumeData: _downloader.database.storage.retrieveResumeData,
       );
       if (!ready) return false;
     }
@@ -1393,8 +1379,9 @@ DownloadTransportSnapshot packageTransportSnapshotForV2(
 }) {
   final progress =
       transfer.progress ?? (transfer.status == TaskStatus.complete ? 1.0 : 0.0);
-  final transferredBytes =
-      totalBytes == null ? null : (totalBytes * progress).round();
+  final transferredBytes = totalBytes == null
+      ? null
+      : (totalBytes * progress).round();
   final exception = transfer.exception;
   final packageStatus = transfer.status;
   var projectedStatus = transportStatusFromPackage(

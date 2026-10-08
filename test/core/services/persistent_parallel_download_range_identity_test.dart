@@ -9,6 +9,31 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('completed Range accepts whitespace, case and an unknown total', () {
+    for (final value in ['BYTES 0-4/20', 'bytes 0 - 4 / 20', 'bytes 0-4/*']) {
+      expect(
+        downloadPartResponseMatchesRequestedRange(
+          from: 0,
+          to: 4,
+          resourceSize: 20,
+          statusCode: 206,
+          responseHeaders: {'Content-Range': value},
+        ),
+        isTrue,
+      );
+    }
+    expect(
+      downloadPartResponseMatchesRequestedRange(
+        from: 0,
+        to: 4,
+        resourceSize: 20,
+        statusCode: 206,
+        responseHeaders: {'Content-Range': 'bytes 0-4/21'},
+      ),
+      isFalse,
+    );
+  });
+
   test(
     'restore canonicalizes child Range header from manifest bounds',
     () async {

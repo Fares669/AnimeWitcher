@@ -7,16 +7,16 @@ import 'package:path_provider/path_provider.dart';
 import '../domain/entity/multimedia_item.dart';
 
 /// Video extensions that count as remaining episode files.
-const Set<String> kDownloadVideoExtensions = {
-  '.mp4',
-  '.mkv',
-  '.webm',
-  '.avi',
-};
+const Set<String> kDownloadVideoExtensions = {'.mp4', '.mkv', '.webm', '.avi'};
 
 const String kAppDownloadsRootMarker = 'AnimeWitcher/Downloads';
 
-const List<String> kDownloadTempSuffixes = ['.part', '.tmp', '.download'];
+const List<String> kDownloadTempSuffixes = [
+  '.part',
+  '.tmp',
+  '.download',
+  '.assembling',
+];
 
 /// Canonical episode identity: [DownloadTask.metaData], which is set to
 /// `episode.url` (not `taskId`).
@@ -197,23 +197,41 @@ String? _configuredAppDownloadsRootForPath(
   return null;
 }
 
-Future<List<String>> _platformConfiguredAppDownloadRoots() async {
+/// Exact media roots used by V2 plus the legacy app-owned download root.
+/// A general Documents/Downloads directory is never recursive-delete authority.
+Future<List<String>> platformConfiguredAppDownloadRoots() async {
+  final roots = <String>[];
+  void addMediaRoots(String base) {
+    roots.addAll([p.join(base, 'anime'), p.join(base, 'manga')]);
+  }
+
   try {
-    late final String basePath;
     if (Platform.isAndroid) {
-      basePath = '/storage/emulated/0/Download';
+      const publicDownloads = '/storage/emulated/0/Download';
+      addMediaRoots(publicDownloads);
+      roots.add(p.join(publicDownloads, 'AnimeWitcher', 'Downloads'));
+      final external = await getExternalStorageDirectory();
+      if (external != null) addMediaRoots(external.path);
+      final documents = await getApplicationDocumentsDirectory();
+      addMediaRoots(p.join(documents.path, 'Downloads'));
     } else if (Platform.isIOS) {
-      basePath = (await getApplicationDocumentsDirectory()).path;
+      final documents = await getApplicationDocumentsDirectory();
+      addMediaRoots(p.join(documents.path, 'Downloads'));
+      roots.add(p.join(documents.path, 'AnimeWitcher', 'Downloads'));
     } else {
-      basePath =
-          (await getDownloadsDirectory() ??
-                  await getApplicationDocumentsDirectory())
-              .path;
+      final downloads = await getDownloadsDirectory();
+      if (downloads != null) {
+        addMediaRoots(downloads.path);
+        roots.add(p.join(downloads.path, 'AnimeWitcher', 'Downloads'));
+      } else {
+        final documents = await getApplicationDocumentsDirectory();
+        addMediaRoots(p.join(documents.path, 'Downloads'));
+        roots.add(p.join(documents.path, 'AnimeWitcher', 'Downloads'));
+      }
     }
-    return <String>[p.join(basePath, 'AnimeWitcher', 'Downloads')];
+    return roots;
   } catch (_) {
-    // Filesystem ownership is a safety boundary. If the platform root cannot
-    // be established, recursive/sibling cleanup must fail closed.
+    // Ownership is a safety boundary; an unresolved platform root fails closed.
     return const <String>[];
   }
 }
@@ -227,7 +245,7 @@ Future<List<String>> _effectiveAppDownloadRoots(
         .map(_normalizedAbsoluteDownloadPath)
         .toList(growable: false);
   }
-  return _platformConfiguredAppDownloadRoots();
+  return platformConfiguredAppDownloadRoots();
 }
 
 Future<bool> _resolvesInsideConfiguredAppDownloads(
@@ -259,10 +277,7 @@ Directory? seriesFolderForDownloadedFile(
   File file, {
   Iterable<String> appDownloadRoots = const <String>[],
 }) {
-  final root = _configuredAppDownloadsRootForPath(
-    file.path,
-    appDownloadRoots,
-  );
+  final root = _configuredAppDownloadsRootForPath(file.path, appDownloadRoots);
   if (root == null) return null;
 
   var dir = file.parent;
@@ -429,10 +444,7 @@ Future<bool> deleteDownloadedVideo(
 
     await deleteSiblingTempFiles(file, appDownloadRoots: roots);
     final deleted = await deleteFileWithRetry(file);
-    await deleteSeriesFolderIfNoVideosRemain(
-      file,
-      appDownloadRoots: roots,
-    );
+    await deleteSeriesFolderIfNoVideosRemain(file, appDownloadRoots: roots);
     return deleted;
   } catch (_) {
     return false;

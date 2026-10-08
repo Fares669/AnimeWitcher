@@ -85,27 +85,30 @@ void main() {
       );
     });
 
-    test('iOS V2 Auto may request a probe-worthy width before Range is proven', () {
-      const mib = 1024 * 1024;
-      expect(
-        selectV2DownloadParts(
-          preference: 0,
-          totalBytes: 392 * mib,
-          metadataSupportsRanges: false,
-          isIOS: true,
-        ),
-        4,
-      );
-      expect(
-        selectV2DownloadParts(
-          preference: 0,
-          totalBytes: 99 * mib,
-          metadataSupportsRanges: false,
-          isIOS: true,
-        ),
-        1,
-      );
-    });
+    test(
+      'iOS V2 Auto may request a probe-worthy width before Range is proven',
+      () {
+        const mib = 1024 * 1024;
+        expect(
+          selectV2DownloadParts(
+            preference: 0,
+            totalBytes: 392 * mib,
+            metadataSupportsRanges: false,
+            isIOS: true,
+          ),
+          4,
+        );
+        expect(
+          selectV2DownloadParts(
+            preference: 0,
+            totalBytes: 99 * mib,
+            metadataSupportsRanges: false,
+            isIOS: true,
+          ),
+          1,
+        );
+      },
+    );
 
     test('manual preference can request the full sixteen', () {
       const mib = 1024 * 1024;
@@ -155,16 +158,19 @@ void main() {
     test('large episodes keep the durable work queue bounded', () {
       const mib = 1024 * 1024;
       expect(
-        selectDownloadWorkUnitCount(
-          connections: 16,
-          totalBytes: 752 * mib,
-        ),
+        selectDownloadWorkUnitCount(connections: 16, totalBytes: 752 * mib),
         128,
         reason:
             'connection parallelism stays at sixteen while the immutable '
             'checkpoint queue must not fan out to hundreds of 1 MiB tasks',
       );
       expect(kDownloadCheckpointTargetBytes, 4 * mib);
+    });
+
+    test('work units never outnumber the bytes in a tiny file', () {
+      expect(selectDownloadWorkUnitCount(connections: 16, totalBytes: 1), 1);
+      expect(selectDownloadWorkUnitCount(connections: 16, totalBytes: 3), 3);
+      expect(selectDownloadWorkUnitCount(connections: 16, totalBytes: 16), 16);
     });
 
     test('tail work never creates tiny extra ranges', () {
@@ -246,5 +252,12 @@ void main() {
       expect(kPersistentDownloadChunkGroup, isNot(kLogicalDownloadGroup));
       expect(isLogicalEpisodeDownloadTask(parent), isTrue);
     });
+    test('range probe parser accepts HTTP case and whitespace variants', () {
+      expect(parseRangeProbeTotalBytesV2('bytes 0-0/123'), 123);
+      expect(parseRangeProbeTotalBytesV2('  ByTeS  0 - 0 / 456  '), 456);
+      expect(parseRangeProbeTotalBytesV2('bytes 0-0/*'), isNull);
+      expect(parseRangeProbeTotalBytesV2('bytes 1-1/123'), isNull);
+    });
+
   });
 }

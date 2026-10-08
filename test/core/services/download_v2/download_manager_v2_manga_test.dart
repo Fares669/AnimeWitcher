@@ -12,6 +12,82 @@ import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('startup orphan chapters respect admission without changing generation or pages', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-orphans-');
+    addTearDown(() => temp.delete(recursive: true));
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _Gateway();
+    final ids = <DownloadLogicalId>[];
+    for (var chapter = 1; chapter <= 2; chapter++) {
+      final id = logicalDownloadIdForMangaChapter(
+        mangaId: 'm1',
+        chapterId: '$chapter',
+      );
+      ids.add(id);
+      final dir = Directory('${temp.path}/$chapter');
+      await dir.create();
+      await File('${dir.path}/0001.webp').writeAsBytes([1, 2, 3]);
+      await store.put(
+        LogicalDownloadRecordV2(
+          schemaVersion: kLogicalDownloadSchemaVersionV2,
+          logicalId: id,
+          mediaKind: DownloadMediaKind.mangaChapter,
+          mediaId: 'm1',
+          unitKey: '$chapter',
+          variantKey: 'pages',
+          generation: 3,
+          taskId: taskIdForGeneration(id, 3),
+          intent: DownloadUserIntent.active,
+          destinationPath: dir.path,
+          sourceDescriptor: <String, Object?>{
+            'mangaUrl': 'manga://m1',
+            'chapterId': '$chapter',
+          },
+          parallelChunks: 1,
+          updatedAtMillis: chapter,
+        ),
+      );
+    }
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver(),
+      maxConcurrentDownloads: () => 1,
+    );
+    addTearDown(manager.dispose);
+    await manager.initialize();
+    await manager.reconcileAdmission();
+    expect(gateway.mangaSpecs, hasLength(1));
+    final waiting = (await store.all()).singleWhere(
+      (record) => record.awaitingAdmission,
+    );
+    expect(waiting.generation, 3);
+    expect(waiting.taskId, taskIdForGeneration(waiting.logicalId, 3));
+    expect(await File('${waiting.destinationPath}/0001.webp').readAsBytes(), [
+      1,
+      2,
+      3,
+    ]);
+    expect(
+      (await manager.resume(waiting.logicalId)).status,
+      DownloadTransportStatus.queued,
+    );
+    expect(gateway.mangaSpecs, hasLength(1));
+
+    final runningId = ids.singleWhere((id) => id != waiting.logicalId);
+    await manager.pause(runningId);
+    await manager.reconcileAdmission();
+    expect(gateway.mangaSpecs, hasLength(2));
+    expect(gateway.mangaSpecs.last.taskId, waiting.taskId);
+    expect((await store.get(waiting.logicalId))?.generation, 3);
+    expect(await File('${waiting.destinationPath}/0001.webp').readAsBytes(), [
+      1,
+      2,
+      3,
+    ]);
+  });
+
   test('manga start resolves pages and never uses video parallelism', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     final gateway = _Gateway();

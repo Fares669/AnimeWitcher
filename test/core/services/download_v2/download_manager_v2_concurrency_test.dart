@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
@@ -9,6 +10,91 @@ import 'package:animewitcher/core/services/download_v2/logical_download_store_v2
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'verified completion promotes a waiter after an earlier full-slot pump',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'aw-v2-complete-slot-',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      final file = File('${temp.path}/first.mp4');
+      await file.writeAsBytes(List.filled(100, 1));
+      final store = _CompletionBlockedStore();
+      final gateway = _ConcurrencyGateway();
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: gateway,
+        sourceResolver: _Resolver(),
+        maxConcurrentDownloads: () => 1,
+      );
+      addTearDown(manager.dispose);
+      final original = _request(episode: '1', chunks: 1);
+      final first = DownloadStartRequestV2(
+        logicalId: original.logicalId,
+        mediaId: original.mediaId,
+        unitKey: original.unitKey,
+        variantKey: original.variantKey,
+        destinationPath: file.path,
+        sourceDescriptor: original.sourceDescriptor,
+        allowPause: true,
+        retries: 2,
+        parallelChunks: 1,
+      );
+      await manager.start(first);
+      await manager.start(_request(episode: '2', chunks: 1));
+      gateway.emit(
+        gateway.startedSpecs.single.taskId,
+        DownloadTransportStatus.complete,
+      );
+      await store.entered.future;
+      try {
+        await manager.reconcileAdmission();
+        expect(gateway.startedSpecs, hasLength(1));
+      } finally {
+        store.release.complete();
+      }
+      await gateway.waitForStarts(2);
+      expect((await store.get(first.logicalId))?.completedAtMillis, isNotNull);
+    },
+  );
+
+  test('slow source resolution reserves a slot without blocking independent starts', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _ConcurrencyGateway();
+    final resolver = _Resolver();
+    final blocked = Completer<void>();
+    final entered = Completer<void>();
+    resolver.beforeResolve = (descriptor) async {
+      if (descriptor['episode'] == 'slow') {
+        entered.complete();
+        await blocked.future;
+      }
+    };
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+      maxConcurrentDownloads: () => 2,
+    );
+    addTearDown(manager.dispose);
+    final slow = manager.start(_request(episode: 'slow', chunks: 1));
+    await entered.future;
+    try {
+      final fast = await manager
+          .start(_request(episode: 'fast', chunks: 1))
+          .timeout(const Duration(seconds: 1));
+      expect(fast.status, DownloadTransportStatus.running);
+      final waiting = await manager
+          .start(_request(episode: 'waiting', chunks: 1))
+          .timeout(const Duration(seconds: 1));
+      expect(waiting.status, DownloadTransportStatus.queued);
+      expect(gateway.startedSpecs, hasLength(1));
+    } finally {
+      blocked.complete();
+      await slow;
+    }
+  });
+
   test(
     'logical concurrency caps episodes without counting package chunks',
     () async {
@@ -222,17 +308,42 @@ DownloadStartRequestV2 _request({
 
 final class _Resolver implements DownloadSourceResolverV2 {
   int calls = 0;
+  Future<void> Function(Map<String, Object?> descriptor)? beforeResolve;
 
   @override
   Future<ResolvedDownloadSourceV2> resolve(
     Map<String, Object?> descriptor,
   ) async {
     calls++;
+    await beforeResolve?.call(descriptor);
     return ResolvedDownloadSourceV2(
       url: 'https://example.invalid/${descriptor['episode']}.mp4',
       headers: const <String, String>{},
       expectedBytes: 100,
     );
+  }
+}
+
+final class _CompletionBlockedStore implements LogicalDownloadStoreV2 {
+  final inner = InMemoryLogicalDownloadStoreV2();
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  @override
+  Future<LogicalDownloadRecordV2?> get(DownloadLogicalId id) => inner.get(id);
+  @override
+  Future<List<LogicalDownloadRecordV2>> all() => inner.all();
+  @override
+  Future<void> put(LogicalDownloadRecordV2 record) => inner.put(record);
+  @override
+  Future<void> remove(DownloadLogicalId id) => inner.remove(id);
+  @override
+  Future<LogicalDownloadRecordV2?> mutate(
+    DownloadLogicalId id,
+    LogicalDownloadRecordV2? Function(LogicalDownloadRecordV2?) change,
+  ) async {
+    entered.complete();
+    await release.future;
+    return inner.mutate(id, change);
   }
 }
 

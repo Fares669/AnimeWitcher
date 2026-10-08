@@ -21,6 +21,22 @@ int effectiveDownloadPartsForPlatform({
   return selectedParts.clamp(kDownloadPartsMin, kDownloadPartsMax).toInt();
 }
 
+/// Parses the total length from an exact 0-0 Content-Range probe.
+///
+/// HTTP field values are case-insensitive for the unit token and commonly
+/// contain optional whitespace. Wildcard totals are intentionally rejected
+/// because they cannot safely size immutable multipart ranges.
+int? parseRangeProbeTotalBytesV2(String? contentRange) {
+  final value = contentRange?.trim();
+  if (value == null || value.isEmpty) return null;
+  final match = RegExp(
+    r'^bytes\s+0\s*-\s*0\s*/\s*(\d+)\s*',
+    caseSensitive: false,
+  ).firstMatch(value);
+  if (match == null || match.end != value.length) return null;
+  final total = int.tryParse(match[1]!);
+  return total != null && total > 0 ? total : null;
+}
 
 /// Gopeed lets an idle connection steal half of a slow connection's remaining
 /// range. Native URLSession/background_downloader children cannot safely change
@@ -169,18 +185,15 @@ int selectDownloadWorkUnitCount({
       .clamp(kDownloadPartsMin, kDownloadPartsMax)
       .toInt();
   if (totalBytes <= 0) return active;
+  if (totalBytes < active) return totalBytes;
 
-  final tailTarget = (active * 2)
-      .clamp(active, kDownloadWorkUnitsMax)
-      .toInt();
+  final tailTarget = (active * 2).clamp(active, kDownloadWorkUnitsMax).toInt();
   final checkpointTarget =
       ((totalBytes + kDownloadCheckpointTargetBytes - 1) ~/
               kDownloadCheckpointTargetBytes)
           .clamp(active, kDownloadWorkUnitsMax)
           .toInt();
-  final desired = tailTarget > checkpointTarget
-      ? tailTarget
-      : checkpointTarget;
+  final desired = tailTarget > checkpointTarget ? tailTarget : checkpointTarget;
 
   // Never create sub-512 KiB work solely for checkpointing. Very small files
   // may still have smaller ranges when the user explicitly requests more

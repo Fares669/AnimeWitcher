@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 
 import '../download_continued_processing_service.dart';
@@ -237,9 +238,34 @@ final class IosDownloadContinuedProcessingObserverV2
              pauseReadiness,
            ),
        _nativeBackgroundPlans = nativeBackgroundPlans,
-       _releaseNativeBackgroundOffers = releaseNativeBackgroundOffers;
+       _releaseNativeBackgroundOffers = releaseNativeBackgroundOffers {
+    // A BGContinuedProcessing lease can expire while URLSession keeps writing.
+    // Do not let the old Dart _sessionActive flag suppress the new system task.
+    _service.onSessionLost ??= _recoverLostSystemSession;
+    _lifecycleListener = AppLifecycleListener(
+      onResume: _refreshSystemSessionOnForeground,
+    );
+  }
 
   final DownloadContinuedProcessingService _service;
+  late final AppLifecycleListener _lifecycleListener;
+
+  void _recoverLostSystemSession() {
+    if (_disposed || !_sessionActive) return;
+    _sessionActive = false;
+    final active = _outstanding.values.where(_isPackageOwnedActive).firstOrNull;
+    if (active != null) {
+      unawaited(observe(active.record, active.snapshot));
+    }
+  }
+
+  void _refreshSystemSessionOnForeground() {
+    if (_disposed) return;
+    final active = _outstanding.values.where(_isPackageOwnedActive).firstOrNull;
+    if (active != null) {
+      unawaited(observe(active.record, active.snapshot));
+    }
+  }
   final List<Map<String, Object>> Function()? _nativeBackgroundPlans;
   final void Function()? _releaseNativeBackgroundOffers;
   final Map<String, _ContinuedEntryV2> _outstanding =
@@ -536,6 +562,7 @@ final class IosDownloadContinuedProcessingObserverV2
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _lifecycleListener.dispose();
     await _tail.catchError((Object _) {});
     await _service.dispose();
     _resetSession();

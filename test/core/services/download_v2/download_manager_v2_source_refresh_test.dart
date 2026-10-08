@@ -10,6 +10,63 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'duplicate expiration callbacks do not consume future renewal budget',
+    () async {
+      final store = InMemoryLogicalDownloadStoreV2();
+      final gateway = _FakeGateway();
+      final resolver = _FakeResolver(
+        List.filled(
+          5,
+          const ResolvedDownloadSourceV2(
+            url: 'https://cdn.example.invalid/renewed.mp4',
+            headers: <String, String>{},
+            expectedBytes: 100,
+          ),
+        ),
+      );
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: gateway,
+        sourceResolver: resolver,
+      );
+      addTearDown(manager.dispose);
+      final request = _request();
+      await manager.start(request);
+      for (var renewal = 0; renewal < 3; renewal++) {
+        final taskId = gateway.startedSpecs.last.taskId;
+        for (var duplicate = 0; duplicate < 5; duplicate++) {
+          gateway.emitSourceExpired(taskId);
+        }
+        await gateway.waitForStarts(renewal + 2);
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          (await store.get(request.logicalId))?.intent,
+          DownloadUserIntent.active,
+        );
+      }
+      gateway.emitSourceExpired(gateway.startedSpecs.last.taskId);
+      for (var attempt = 0; attempt < 100; attempt++) {
+        if ((await store.get(request.logicalId))?.intent ==
+            DownloadUserIntent.failed)
+          break;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(resolver.calls, 4);
+      expect(
+        (await store.get(request.logicalId))?.intent,
+        DownloadUserIntent.failed,
+      );
+
+      await manager.restart(request.logicalId);
+      expect(resolver.calls, 5);
+      expect(
+        (await store.get(request.logicalId))?.intent,
+        DownloadUserIntent.active,
+      );
+    },
+  );
+
+  test(
     'current-generation 403 resolves one fresh source and replaces task',
     () async {
       final store = InMemoryLogicalDownloadStoreV2();

@@ -38,7 +38,9 @@ void main() {
     expect(body, contains('downloadManagerV2Provider'));
     expect(body, contains('if (logical != null && logical.isNotEmpty)'));
     expect(body, contains('manager.delete(DownloadLogicalId(logical))'));
-    expect(body, contains('_deletingIds.addAll(droppedIds)'));
+    expect(body, contains('await _reloadDurableState()'));
+    expect(body, isNot(contains('_deletingIds')));
+    expect(body, contains("state.value!.where((item) => !droppedIds.contains(item.id))"));
     expect(body, contains('storage.removeDownloadMetadata('));
     expect(body, isNot(contains('FileDownloader().database.deleteRecordWithId')));
     expect(body, isNot(contains('.deleteDownloadOutcome(')));

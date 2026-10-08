@@ -168,30 +168,57 @@ class MangaDetailsController extends _$MangaDetailsController {
         storage.getDownloadParallelParts(),
       ),
     );
-    await storage.saveDownloadMetadata(
-      request.logicalId.value,
-      item,
-      trackingUrl: chapter.url,
-      filePath: request.destinationPath,
-      logicalId: request.logicalId.value,
-      taskSnapshot: <String, dynamic>{
-        'mediaKind': DownloadMediaKind.mangaChapter.name,
-        'chapter': <String, Object?>{
-          'id': chapter.id,
-          'mangaId': chapter.mangaId,
-          'url': chapter.url,
-          'name': chapter.name,
-          if (chapter.number != null) 'number': chapter.number,
-          if (chapter.publishedAt != null)
-            'publishedAt': chapter.publishedAt!.toIso8601String(),
+    final hasExistingMetadata =
+        await storage.getDownloadMetadata(request.logicalId.value) != null;
+    if (!hasExistingMetadata) {
+      await storage.saveDownloadMetadata(
+        request.logicalId.value,
+        item,
+        trackingUrl: chapter.url,
+        filePath: request.destinationPath,
+        logicalId: request.logicalId.value,
+        taskSnapshot: <String, dynamic>{
+          'mediaKind': DownloadMediaKind.mangaChapter.name,
+          'chapter': <String, Object?>{
+            'id': chapter.id,
+            'mangaId': chapter.mangaId,
+            'url': chapter.url,
+            'name': chapter.name,
+            if (chapter.number != null) 'number': chapter.number,
+            if (chapter.publishedAt != null)
+              'publishedAt': chapter.publishedAt!.toIso8601String(),
+          },
         },
-      },
-    );
+      );
+    }
 
     try {
       await ref.read(downloadManagerV2Provider).start(request);
+      if (hasExistingMetadata) {
+        await storage.saveDownloadMetadata(
+          request.logicalId.value,
+          item,
+          trackingUrl: chapter.url,
+          filePath: request.destinationPath,
+          logicalId: request.logicalId.value,
+          taskSnapshot: <String, dynamic>{
+            'mediaKind': DownloadMediaKind.mangaChapter.name,
+            'chapter': <String, Object?>{
+              'id': chapter.id,
+              'mangaId': chapter.mangaId,
+              'url': chapter.url,
+              'name': chapter.name,
+              if (chapter.number != null) 'number': chapter.number,
+              if (chapter.publishedAt != null)
+                'publishedAt': chapter.publishedAt!.toIso8601String(),
+            },
+          },
+        );
+      }
     } catch (error, stackTrace) {
-      await storage.removeDownloadMetadata(request.logicalId.value);
+      if (!hasExistingMetadata) {
+        await storage.removeDownloadMetadata(request.logicalId.value);
+      }
       Error.throwWithStackTrace(error, stackTrace);
     }
   }

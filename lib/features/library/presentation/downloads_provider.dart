@@ -53,8 +53,8 @@ class DownloadItem {
     this.timeRemaining = Duration.zero,
   }) : trackingUrl = trackingUrl ?? task.metaData,
        destinationPath = destinationPath ?? '',
-       parallelChunks = parallelChunks ??
-           (task is ParallelDownloadTask ? task.chunks : 1);
+       parallelChunks =
+           parallelChunks ?? (task is ParallelDownloadTask ? task.chunks : 1);
 
   String get id => task.taskId;
 }
@@ -156,8 +156,10 @@ int _statusRank(TaskStatus status) {
       return 3;
     case TaskStatus.complete:
       return 4;
-    default:
+    case TaskStatus.failed:
       return 5;
+    default:
+      return 6;
   }
 }
 
@@ -274,7 +276,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   static const Duration _refreshInterval = Duration(seconds: 1);
   static const Duration _durableRefreshInterval = Duration(seconds: 30);
 
-  final Set<String> _deletingIds = <String>{};
   final Set<String> _artworkScheduledIds = <String>{};
   List<LogicalDownloadRecordV2> _records = const <LogicalDownloadRecordV2>[];
   Map<String, Map<String, dynamic>> _metadataByTaskId =
@@ -302,11 +303,24 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     // Progress is ephemeral manager state. Project it from memory every second;
     // do not scan both Hive boxes on the UI isolate for every progress tick.
     _refreshTimer = Timer.periodic(_refreshInterval, (_) {
-      _refreshPresentationState();
+      if (_records.any(
+        (record) =>
+            record.intent == DownloadUserIntent.active &&
+            record.completedAtMillis == null,
+      )) {
+        _refreshPresentationState();
+      }
     });
     // Keep a much slower durable reconciliation as a lifecycle/race safety net.
     _durableRefreshTimer = Timer.periodic(_durableRefreshInterval, (_) {
-      unawaited(_reloadDurableState());
+      final needsDurableReconciliation = _records.any(
+        (record) =>
+            record.completedAtMillis == null &&
+            record.intent != DownloadUserIntent.canceled,
+      );
+      if (needsDurableReconciliation) {
+        unawaited(_reloadDurableState());
+      }
     });
 
     ref.onDispose(() {
@@ -367,7 +381,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final items = <DownloadItem>[];
     for (final record in _records) {
       if (record.intent == DownloadUserIntent.canceled) continue;
-      final metadata = metadataByTaskId[record.taskId] ??
+      final metadata =
+          metadataByTaskId[record.taskId] ??
           metadataByLogicalId[record.logicalId.value];
       if (metadata == null || metadata['item'] is! Map) continue;
 
@@ -383,17 +398,9 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           ? Map<String, dynamic>.from(metadata['taskSnapshot'] as Map)
           : const <String, dynamic>{};
       final chapter = MangaChapter.fromJson(taskSnapshot['chapter']);
-      final trackingUrl = _trackingUrlFor(
-        metadata,
-        item,
-        episode,
-        chapter,
-      );
+      final trackingUrl = _trackingUrlFor(metadata, item, episode, chapter);
       final snapshot = manager.snapshotFor(record.logicalId);
-      final task = _presentationTaskFor(
-        record,
-        trackingUrl: trackingUrl,
-      );
+      final task = _presentationTaskFor(record, trackingUrl: trackingUrl);
       final projected = DownloadItem(
         task: task,
         status: _taskStatusFor(record, snapshot),
@@ -425,7 +432,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       }
     }
 
-    items.removeWhere((item) => _deletingIds.contains(item.id));
     items.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return _orderDownloads(collapseDuplicateDownloads(items).visible);
   }
@@ -488,12 +494,14 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     }
 
     final droppedIds = toRemove.keys.toSet();
-    _deletingIds.addAll(droppedIds);
     if (state.value != null) {
       state = AsyncData(
         state.value!.where((item) => !droppedIds.contains(item.id)).toList(),
       );
     }
+    // The persisted records, not taskId tombstones, own visibility. New
+    // downloads may legitimately reuse the deleted task's generation-one ID.
+    await _reloadDurableState();
   }
 
   Future<void> pauseDownload(String taskId) async {
@@ -504,11 +512,23 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     await _reloadDurableState();
   }
 
+  Future<void> retryDownload(String taskId) async {
+    final item = state.value?.where((item) => item.id == taskId).firstOrNull;
+    final logical = item?.logicalId?.trim();
+    if (logical == null || logical.isEmpty) return;
+    await ref
+        .read(downloadManagerV2Provider)
+        .restart(DownloadLogicalId(logical));
+    await _reloadDurableState();
+  }
+
   Future<void> resumeDownload(String taskId) async {
     final item = state.value?.where((item) => item.id == taskId).firstOrNull;
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
-    await ref.read(downloadManagerV2Provider).resume(DownloadLogicalId(logical));
+    await ref
+        .read(downloadManagerV2Provider)
+        .resume(DownloadLogicalId(logical));
     await _reloadDurableState();
   }
 }
@@ -534,6 +554,7 @@ TaskStatus _taskStatusFor(
 ) {
   if (record.completedAtMillis != null) return TaskStatus.complete;
   if (record.intent == DownloadUserIntent.canceled) return TaskStatus.canceled;
+  if (record.intent == DownloadUserIntent.failed) return TaskStatus.failed;
   if (record.intent == DownloadUserIntent.paused) return TaskStatus.paused;
 
   return switch (snapshot?.status) {
@@ -541,8 +562,8 @@ TaskStatus _taskStatusFor(
     DownloadTransportStatus.running => TaskStatus.running,
     DownloadTransportStatus.held => TaskStatus.waitingToRetry,
     DownloadTransportStatus.paused => TaskStatus.paused,
-    DownloadTransportStatus.failed || DownloadTransportStatus.missing =>
-      TaskStatus.paused,
+    DownloadTransportStatus.failed => TaskStatus.failed,
+    DownloadTransportStatus.missing => TaskStatus.failed,
     DownloadTransportStatus.canceled => TaskStatus.canceled,
     // Package completion is not a logical completion until the V2 integrity
     // gate persists completedAtMillis.

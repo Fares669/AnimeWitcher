@@ -59,7 +59,7 @@ enum DownloadNativeDiagnosticLog {
           file = directory.appendingPathComponent("download-ios-\(session)-\(String(format: "%020d", sequence)).log")
           try Data().write(to: file!)
           size = 0
-          let files = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey])
+          let files = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.hasPrefix("download-ios-") && $0.pathExtension == "log" }
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
           for old in files.dropFirst(5) where old != file { try fm.removeItem(at: old) }
@@ -80,9 +80,68 @@ enum DownloadNativeDiagnosticLog {
 
 import ObjectiveC
 import UIKit
+import CryptoKit
+import Security
 #if canImport(background_downloader)
 import background_downloader
 #endif
+
+/// Keep the large queue in the existing batched defaults store, encrypted as a
+/// whole: task JSON and resume blobs can also contain URLs and credentials.
+/// Only the small encryption key goes into Keychain, never on every byte sample.
+private enum DownloadNativeQueueEncryption {
+  // All callers hold DownloadNativeWaitingQueue.lock.
+  private static var cachedKey: SymmetricKey?
+  private(set) static var keyMissing = false
+  private static let service = "com.animewitcher.download.nativeQueueEncryption"
+
+  private static func key(createIfMissing: Bool) -> SymmetricKey? {
+    if let cachedKey { return cachedKey }
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: "queue-v2",
+    ]
+    var lookup = query
+    lookup[kSecReturnData as String] = true
+    lookup[kSecMatchLimit as String] = kSecMatchLimitOne
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(lookup as CFDictionary, &item)
+    keyMissing = status == errSecItemNotFound
+    if status == errSecSuccess, let data = item as? Data, data.count == 32 {
+      let key = SymmetricKey(data: data)
+      cachedKey = key
+      return key
+    }
+    guard status == errSecItemNotFound, createIfMissing else {
+      NSLog("[DownloadNativeWaitingQueue] encryption key unavailable (%d)", status)
+      return nil
+    }
+    let key = SymmetricKey(size: .bits256)
+    var insert = query
+    insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    insert[kSecValueData as String] = key.withUnsafeBytes { Data($0) }
+    let inserted = SecItemAdd(insert as CFDictionary, nil)
+    guard inserted == errSecSuccess else {
+      NSLog("[DownloadNativeWaitingQueue] encryption key creation failed (%d)", inserted)
+      return nil
+    }
+    cachedKey = key
+    keyMissing = false
+    return key
+  }
+
+  static func decrypt(_ data: Data) -> Data? {
+    guard let key = key(createIfMissing: false),
+          let box = try? AES.GCM.SealedBox(combined: data) else { return nil }
+    return try? AES.GCM.open(box, using: key)
+  }
+
+  static func encrypt(_ data: Data) -> Data? {
+    guard let key = key(createIfMissing: true) else { return nil }
+    return try? AES.GCM.seal(data, using: key).combined
+  }
+}
 
 /// Full waiter payloads so Swift can start the next URLSession download when
 /// ep1 completes — without Flutter, and without reconstructing the task in Dart.
@@ -90,6 +149,9 @@ import background_downloader
 /// store holds url/headers/filename/directory/task JSON for the plugin session.
 enum DownloadNativeWaitingQueue {
   static let stateKey = "com.animewitcher.download.nativeWaitingQueue.v2"
+  private static let encryptedStateKey = stateKey + ".encrypted"
+  // A locked/corrupt store must never be overwritten by an empty native load.
+  private static var stateReadFailed = false
 
   struct Waiter: Codable, Equatable, Sendable {
     var taskId: String
@@ -392,6 +454,11 @@ enum DownloadNativeWaitingQueue {
     lock.lock()
     defer { lock.unlock() }
     var current = loadLocked()
+    // A device-only key intentionally cannot migrate to a new device. Only a
+    // fresh authoritative Dart snapshot may replace such restored ciphertext;
+    // native callbacks cannot treat unreadable storage as an empty queue.
+    if stateReadFailed && !DownloadNativeQueueEncryption.keyMissing { return -1 }
+    stateReadFailed = false
     requeueExpiredMultipartClaimsLocked(&current)
     let snapshotVersion = intValue(arguments["snapshotVersion"])
     if let snapshotVersion, snapshotVersion < current.snapshotVersion {
@@ -490,7 +557,7 @@ enum DownloadNativeWaitingQueue {
       && dartCurrentId != "session"
       && dartCurrentId != current.sessionCurrentTaskId
 
-    saveLocked(
+    let saved = saveLocked(
       State(
         snapshotVersion: acceptedVersion,
         maxConcurrent: maxConcurrent,
@@ -549,7 +616,7 @@ enum DownloadNativeWaitingQueue {
         multipartClaims: current.multipartClaims
       )
     )
-    return acceptedVersion
+    return saved ? acceptedVersion : -1
   }
 
   static func load() -> State {
@@ -562,6 +629,8 @@ enum DownloadNativeWaitingQueue {
     lock.lock()
     defer { lock.unlock() }
     UserDefaults.standard.removeObject(forKey: stateKey)
+    UserDefaults.standard.removeObject(forKey: encryptedStateKey)
+    stateReadFailed = false
     seenTransferringIds.removeAll()
     activeEpisodeKeysByTaskId.removeAll()
     startingEpisodeKeys.removeAll()
@@ -657,8 +726,7 @@ enum DownloadNativeWaitingQueue {
     }
     state.multipartClaims[index].launchCommitted = true
     state.multipartClaims[index].expiresAtMillis = nowMillis() + 15 * 60 * 1000
-    saveLocked(state)
-    return true
+    return saveLocked(state)
   }
 
   private static func settleMultipartClaim(childTaskId: String) {
@@ -981,15 +1049,14 @@ enum DownloadNativeWaitingQueue {
       let waiter: Waiter?
       lock.lock()
       var state = loadLocked()
+      guard !stateReadFailed else { lock.unlock(); return }
       let cap = clamp(state.maxConcurrent)
       if state.transferringTaskIds.count >= cap {
         lock.unlock()
         return
       }
       waiter = popWaiterLocked(&state)
-      if waiter != nil {
-        saveLocked(state)
-      }
+      if waiter != nil, !saveLocked(state) { lock.unlock(); return }
       lock.unlock()
       guard let waiter else { return }
       startIfNotAlreadyNative(waiter, on: session)
@@ -1093,20 +1160,57 @@ enum DownloadNativeWaitingQueue {
     return waiter
   }
 
-  /// Skip native promotion while the user is looking at the app. Home
-  /// screen / island must still promote — `applicationState == .active` is
-  /// true under BGContinuedProcessing even when the scene is backgrounded.
-  private static func isAppInForeground() -> Bool {
-    if NSClassFromString("XCTestCase") != nil {
-      return false
-    }
-    return runOnMainActor {
-      let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-      if !scenes.isEmpty {
-        return scenes.contains { $0.activationState == .foregroundActive }
+  private static let foregroundStateLock = NSLock()
+  private static var cachedForegroundState = true
+  private static var foregroundObservers: [NSObjectProtocol] = []
+
+  /// Installed at launch on main, before URLSession delegate callbacks. Byte
+  /// callbacks only read the lock-protected cache, never wait for the UI thread.
+  @MainActor
+  static func installLifecycleObservers() {
+    guard foregroundObservers.isEmpty else { return }
+    refreshForegroundState()
+    let names: [Notification.Name] = [
+      UIScene.didActivateNotification,
+      UIScene.willDeactivateNotification,
+      UIScene.didEnterBackgroundNotification,
+      UIScene.didDisconnectNotification,
+      UIApplication.didBecomeActiveNotification,
+      UIApplication.willResignActiveNotification,
+      UIApplication.didEnterBackgroundNotification,
+    ]
+    foregroundObservers = names.map { name in
+      NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { notification in
+        MainActor.assumeIsolated {
+          refreshForegroundState(notification)
+        }
       }
-      return UIApplication.shared.applicationState == .active
     }
+  }
+
+  @MainActor
+  private static func refreshForegroundState(_ notification: Notification? = nil) {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let resigningScene = notification?.name == UIScene.willDeactivateNotification
+      || notification?.name == UIScene.didDisconnectNotification
+      ? notification?.object as? UIScene : nil
+    let appResigning = notification?.name == UIApplication.willResignActiveNotification
+      || notification?.name == UIApplication.didEnterBackgroundNotification
+    let active = !appResigning && (scenes.isEmpty
+      ? UIApplication.shared.applicationState == .active
+      : scenes.contains { $0 !== resigningScene && $0.activationState == .foregroundActive })
+    foregroundStateLock.lock()
+    cachedForegroundState = active
+    foregroundStateLock.unlock()
+  }
+
+  /// Scene visibility is authoritative: BGContinuedProcessing can keep the
+  /// application active even while its windows are backgrounded.
+  private static func isAppInForeground() -> Bool {
+    if NSClassFromString("XCTestCase") != nil { return false }
+    foregroundStateLock.lock()
+    defer { foregroundStateLock.unlock() }
+    return cachedForegroundState
   }
 
   private static func start(
@@ -1764,6 +1868,7 @@ enum DownloadNativeWaitingQueue {
     if let suppliedSession { latestDownloadSession = suppliedSession }
     let session = suppliedSession ?? latestDownloadSession
     let state = loadLocked()
+    guard !stateReadFailed else { lock.unlock(); return }
     let plans = state.multipartPlans.filter { parentId == nil || $0.parentTaskId == parentId }
     lock.unlock()
 
@@ -1802,6 +1907,7 @@ enum DownloadNativeWaitingQueue {
       let selected: [Waiter]
       lock.lock()
       var state = loadLocked()
+      guard !stateReadFailed else { lock.unlock(); return }
       requeueExpiredMultipartClaimsLocked(&state)
       guard let index = state.multipartPlans.firstIndex(where: { $0.parentTaskId == parentId }) else {
         lock.unlock()
@@ -1843,7 +1949,7 @@ enum DownloadNativeWaitingQueue {
         }
       }
       state.multipartPlans[index] = plan
-      saveLocked(state)
+      guard saveLocked(state) else { lock.unlock(); return }
       lock.unlock()
 
       for waiter in selected {
@@ -2193,11 +2299,33 @@ enum DownloadNativeWaitingQueue {
     // system task fresh while Dart is suspended, including single-part files.
     if id.hasPrefix("aw_v2_") {
       if !isAppInForeground() {
+        // Child Range callbacks carry their own throughput. For a whole-file
+        // V2 task, compute speed from native progress while Flutter sleeps.
+        // Do not overwrite a multipart parent's live child speed samples.
+        let now = CFAbsoluteTimeGetCurrent()
+        lock.lock()
+        let state = loadLocked()
+        let expected = state.sessionCurrentTaskId == id
+          ? state.sessionTotalBytes : -1
+        var nativeSpeed = -1.0
+        if expected > 0,
+           state.transferringTaskIds.contains(id),
+           v2ParallelChildSamples[id]?.isEmpty ?? true {
+          let written = Int64((Double(expected) * normalized).rounded(.down))
+          nativeSpeed = rollingSpeedLocked(
+            windows: &taskSpeedWindows,
+            taskId: id,
+            totalWritten: written,
+            now: now
+          )
+        }
+        lock.unlock()
         runOnMainActor {
           if #available(iOS 26.0, *) {
             _ = DownloadContinuedProcessingManager.shared.updateFromNativeIfCurrent(
               taskId: id,
-              progress: normalized
+              progress: normalized,
+              speedBytesPerSecond: nativeSpeed
             )
           }
         }
@@ -2466,6 +2594,7 @@ enum DownloadNativeWaitingQueue {
   private static func refreshSessionOverlay(success: Bool) {
     lock.lock()
     let state = loadLocked()
+    guard !stateReadFailed else { lock.unlock(); return }
     let idle = state.sessionIsIdle
     let transferringCount = state.transferringTaskIds.count
     let presentation = overlayPresentation(
@@ -2584,9 +2713,16 @@ enum DownloadNativeWaitingQueue {
   }
 
   private static func loadLocked() -> State {
-    guard let data = UserDefaults.standard.data(forKey: stateKey),
-          let state = try? JSONDecoder().decode(State.self, from: data)
-    else {
+    stateReadFailed = false
+    let data: Data?
+    if let encrypted = UserDefaults.standard.data(forKey: encryptedStateKey) {
+      data = DownloadNativeQueueEncryption.decrypt(encrypted)
+      stateReadFailed = data == nil
+    } else {
+      data = UserDefaults.standard.data(forKey: stateKey)
+    }
+    guard let data, let state = try? JSONDecoder().decode(State.self, from: data) else {
+      if data != nil { stateReadFailed = true }
       return State(
         maxConcurrent: 1,
         transferringTaskIds: [],
@@ -2595,13 +2731,22 @@ enum DownloadNativeWaitingQueue {
         completedTaskIds: []
       )
     }
+    // Migrate old plaintext only after preserving every waiter, task JSON,
+    // auth header and resume blob in authenticated encrypted storage.
+    if UserDefaults.standard.object(forKey: stateKey) != nil {
+      if !saveLocked(state) { stateReadFailed = true }
+    }
     return state
   }
 
-  private static func saveLocked(_ state: State) {
-    if let data = try? JSONEncoder().encode(state) {
-      UserDefaults.standard.set(data, forKey: stateKey)
-    }
+  @discardableResult
+  private static func saveLocked(_ state: State) -> Bool {
+    guard !stateReadFailed,
+          let data = try? JSONEncoder().encode(state),
+          let encrypted = DownloadNativeQueueEncryption.encrypt(data) else { return false }
+    UserDefaults.standard.set(encrypted, forKey: encryptedStateKey)
+    UserDefaults.standard.removeObject(forKey: stateKey)
+    return true
   }
 
   private static func unique(_ values: [String]) -> [String] {

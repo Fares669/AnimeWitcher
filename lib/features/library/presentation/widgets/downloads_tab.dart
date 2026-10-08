@@ -19,6 +19,7 @@ import '../../../../core/services/download_parallel.dart';
 import 'segmented_download_progress.dart';
 import 'completed_download_episode_card.dart';
 import '../../../../core/utils/layout_constants.dart';
+import '../../../../core/utils/localized_text.dart';
 import '../../../details/presentation/downloaded_file_provider.dart';
 import '../../../details/presentation/playback_launcher.dart';
 import '../download_progress_v2_provider.dart';
@@ -546,10 +547,9 @@ class _DownloadItemTile extends ConsumerWidget {
         status == TaskStatus.running ||
         status == TaskStatus.enqueued ||
         status == TaskStatus.waitingToRetry;
-    final isPaused =
-        status == TaskStatus.paused ||
-        status == TaskStatus.failed ||
-        status == TaskStatus.notFound;
+    final isPaused = status == TaskStatus.paused;
+    final isFailed =
+        status == TaskStatus.failed || status == TaskStatus.notFound;
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final episodeLabel = item.episode == null
@@ -630,7 +630,9 @@ class _DownloadItemTile extends ConsumerWidget {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    isDone ? l10n.completed : _getStatusText(status, l10n),
+                    isDone
+                        ? l10n.completed
+                        : _getStatusText(context, status, l10n),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: isDone
                           ? Colors.green
@@ -724,9 +726,20 @@ class _DownloadItemTile extends ConsumerWidget {
                           .pauseDownload(item.task.taskId),
                       visualDensity: VisualDensity.compact,
                     ),
-                  if (isPaused)
+                  if (isPaused || isFailed)
                     IconButton(
-                      icon: const Icon(Icons.play_arrow_rounded),
+                      tooltip: isFailed
+                          ? appText(
+                              context,
+                              english: 'Retry',
+                              arabic: 'إعادة المحاولة',
+                            )
+                          : l10n.statusPaused,
+                      icon: Icon(
+                        isFailed
+                            ? Icons.refresh_rounded
+                            : Icons.play_arrow_rounded,
+                      ),
                       onPressed: () {
                         unawaited(_resumeDownload(context, ref));
                       },
@@ -779,9 +792,12 @@ class _DownloadItemTile extends ConsumerWidget {
 
   Future<void> _resumeDownload(BuildContext context, WidgetRef ref) async {
     try {
-      await ref
-          .read(downloadsProvider.notifier)
-          .resumeDownload(item.task.taskId);
+      final notifier = ref.read(downloadsProvider.notifier);
+      if (status == TaskStatus.failed || status == TaskStatus.notFound) {
+        await notifier.retryDownload(item.task.taskId);
+      } else {
+        await notifier.resumeDownload(item.task.taskId);
+      }
     } catch (error) {
       if (!context.mounted) return;
       var message = error.toString().trim();
@@ -789,7 +805,7 @@ class _DownloadItemTile extends ConsumerWidget {
       if (message.startsWith(stateErrorPrefix)) {
         message = message.substring(stateErrorPrefix.length).trim();
       }
-      if (message.isEmpty) message = 'Unable to resume download';
+      if (message.isEmpty) message = 'Unable to continue download';
       ref.read(notificationServiceProvider).showError(message);
     }
   }
@@ -802,7 +818,11 @@ class _DownloadItemTile extends ConsumerWidget {
     );
   }
 
-  String _getStatusText(TaskStatus status, AppLocalizations l10n) {
+  String _getStatusText(
+    BuildContext context,
+    TaskStatus status,
+    AppLocalizations l10n,
+  ) {
     switch (status) {
       case TaskStatus.enqueued:
         return l10n.statusQueued;
@@ -812,6 +832,11 @@ class _DownloadItemTile extends ConsumerWidget {
         return l10n.statusFinished;
       case TaskStatus.failed:
       case TaskStatus.notFound:
+        return appText(
+          context,
+          english: 'Download failed',
+          arabic: 'فشل التنزيل',
+        );
       case TaskStatus.paused:
         return l10n.statusPaused;
       case TaskStatus.canceled:
