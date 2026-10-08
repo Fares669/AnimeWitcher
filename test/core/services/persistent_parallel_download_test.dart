@@ -154,10 +154,49 @@ void main() {
     statuses.clear();
     coordinator = create();
 
-    expect(await coordinator.start(parent, 25), isTrue);
-    expect(starts, isNotEmpty);
+    expect(await coordinator.start(parent, 25), isFalse);
+    expect(starts, isEmpty);
     expect(statuses, isNot(contains(TaskStatus.complete)));
     expect(await target.readAsBytes(), List<int>.filled(25, 77));
+  });
+
+  test('complete checkpoint does not adopt foreign same-size bytes', () async {
+    expect(await coordinator.start(parent, 25), isTrue);
+    await expandFreshTo(5);
+    await coordinator.pause(parent);
+    final original = List<DownloadTask>.from(starts);
+    await coordinator.dispose();
+
+    for (var i = 0; i < original.length; i++) {
+      await File(await original[i].filePath()).writeAsBytes(
+        List<int>.generate(5, (j) => i * 5 + j),
+        flush: true,
+      );
+    }
+    final target = File(await parent.filePath());
+    final manifest = File('${target.path}.parts/manifest.json');
+    final checkpoint =
+        jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
+    for (final raw in checkpoint['parts'] as List) {
+      final part = raw as Map<String, dynamic>;
+      part['complete'] = true;
+      part['progress'] = 1.0;
+      part['credibleProgress'] = 1.0;
+      part['durableBytes'] = (part['to'] as int) - (part['from'] as int) + 1;
+    }
+    await manifest.writeAsString(jsonEncode(checkpoint), flush: true);
+    await target.writeAsBytes(List<int>.filled(25, 77), flush: true);
+    starts.clear();
+    statuses.clear();
+    coordinator = create();
+
+    expect(await coordinator.start(parent, 25), isFalse);
+    expect(starts, isEmpty);
+    expect(statuses, isNot(contains(TaskStatus.complete)));
+    expect(await target.readAsBytes(), List<int>.filled(25, 77));
+    for (final part in original) {
+      expect(await File(await part.filePath()).length(), 5);
+    }
   });
 
   test('missing multipart manifest is reported as not restorable', () async {
