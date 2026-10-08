@@ -235,20 +235,24 @@ final class _ReaddGateway implements BackgroundDownloaderGateway {
 }
 
 final class _ReaddHandle implements DownloadTransportHandle {
-  _ReaddHandle(this.taskId);
-
-  @override
-  final String taskId;
-
-  @override
-  DownloadTransportSnapshot get current => DownloadTransportSnapshot(
+  _ReaddHandle(this.taskId) : _current = DownloadTransportSnapshot(
     taskId: taskId,
     status: DownloadTransportStatus.running,
     progress: 0,
   );
 
   @override
-  Stream<DownloadTransportSnapshot> get snapshots => const Stream.empty();
+  final String taskId;
+
+  DownloadTransportSnapshot _current;
+  final StreamController<DownloadTransportSnapshot> _changes =
+      StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
+
+  @override
+  DownloadTransportSnapshot get current => _current;
+
+  @override
+  Stream<DownloadTransportSnapshot> get snapshots => _changes.stream;
 
   @override
   Future<bool> pause() async => true;
@@ -257,5 +261,13 @@ final class _ReaddHandle implements DownloadTransportHandle {
   Future<bool> resume() async => true;
 
   @override
-  Future<bool> cancel() async => true;
+  Future<bool> cancel() async {
+    _current = DownloadTransportSnapshot(
+      taskId: taskId,
+      status: DownloadTransportStatus.canceled,
+      progress: 0,
+    );
+    _changes.add(_current);
+    return true;
+  }
 }
