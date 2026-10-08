@@ -68,6 +68,16 @@ void main() {
     expect(queue, contains('return saved ? acceptedVersion : -1'));
   });
 
+  test('native V2 parent background samples include measured speed', () {
+    final start = queue.indexOf('if id.hasPrefix("aw_v2_") {');
+    final end = queue.indexOf('guard nativePromotionAvailable else { return }', start);
+    expect(start, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(start));
+    final parent = queue.substring(start, end);
+    expect(parent, contains('rollingSpeedLocked('));
+    expect(parent, contains('speedBytesPerSecond: nativeSpeed'));
+  });
+
   test('disk capacity bridge works before the iOS 26 overlay guard', () {
     final start = delegate.indexOf('if call.method == "availableDiskBytes"');
     expect(start, greaterThanOrEqualTo(0));

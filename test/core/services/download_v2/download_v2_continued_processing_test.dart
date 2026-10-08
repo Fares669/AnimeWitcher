@@ -140,6 +140,74 @@ void main() {
     },
   );
 
+
+  test('a lost iOS system lease restarts for the same running generation', () async {
+    final calls = <MethodCall>[];
+    var allowUpdate = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'start') {
+            return 'com.animewitcher.app.download.session';
+          }
+          if (call.method == 'update') return allowUpdate;
+          return true;
+        });
+    final service = DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {},
+      forceAvailableForTesting: true,
+    );
+    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    final record = LogicalDownloadRecordV2(
+      schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: const DownloadLogicalId('recovered-episode'),
+      mediaId: 'anime-1',
+      unitKey: 'episode-1',
+      variantKey: 'sub|480p',
+      generation: 2,
+      taskId: 'aw_v2_recovered_episode_g2',
+      intent: DownloadUserIntent.active,
+      destinationPath: 'downloads/Episode 1.mp4',
+      sourceDescriptor: const <String, Object?>{'providerId': 'provider'},
+      expectedBytes: 1000,
+      updatedAtMillis: 1,
+    );
+    try {
+      await observer.observe(
+        record,
+        const DownloadTransportSnapshot(
+          taskId: 'aw_v2_recovered_episode_g2',
+          status: DownloadTransportStatus.running,
+          progress: .25,
+          transferredBytes: 250,
+          totalBytes: 1000,
+        ),
+      );
+      expect(calls.where((c) => c.method == 'start'), hasLength(1));
+      await observer.observe(
+        record,
+        const DownloadTransportSnapshot(
+          taskId: 'aw_v2_recovered_episode_g2',
+          status: DownloadTransportStatus.running,
+          progress: .35,
+          transferredBytes: 350,
+          totalBytes: 1000,
+        ),
+      );
+      // Swift reports false after the OS task expires while the native
+      // URLSession writer continues. No manual pause/resume is required.
+      for (var i = 0; i < 40 &&
+          calls.where((c) => c.method == 'start').length < 2; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(calls.where((c) => c.method == 'start'), hasLength(2));
+      expect(calls.where((c) => c.method == 'stop'), isEmpty);
+      allowUpdate = true;
+    } finally {
+      await observer.dispose();
+    }
+  });
+
   test(
     'package-owned queued V2 starts iOS session before first progress',
     () async {
