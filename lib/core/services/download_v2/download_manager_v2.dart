@@ -473,8 +473,11 @@ final class DownloadManagerV2 {
         }
       } catch (e) {
         final current = await _store.get(record.logicalId) ?? record;
+        // Recovery can fail for a passing reason, such as launching offline.
+        // Keep the user's intent so the next launch tries again; this session
+        // shows the failure below, and Retry still starts it at once.
         final failedRecord = current.copyWith(
-          intent: DownloadUserIntent.failed,
+          intent: record.intent,
           awaitingAdmission: false,
           failureCategory: DownloadFailureCategory.unknown,
           failureMessage: 'startup recovery failed: $e',
@@ -520,7 +523,8 @@ final class DownloadManagerV2 {
           return completed;
         }
 
-        if (currentRecord.intent == DownloadUserIntent.paused) {
+        if (currentRecord.intent == DownloadUserIntent.paused &&
+            await _hasResumablePausedState(currentRecord)) {
           return _resumeRecordUnsafe(currentRecord, request);
         }
 
@@ -710,6 +714,20 @@ final class DownloadManagerV2 {
       );
       return _resumeRecordUnsafe(record, request);
     });
+  }
+
+  /// Whether a paused record still has something to resume: a place in the
+  /// queue, Manga pages kept on disk, or its exact transfer. A video whose
+  /// transfer the system dropped has none, and starts again instead.
+  Future<bool> _hasResumablePausedState(LogicalDownloadRecordV2 record) async {
+    if (record.awaitingAdmission ||
+        record.mediaKind == DownloadMediaKind.mangaChapter) {
+      return true;
+    }
+    final handle = await _exactHandle(record.taskId);
+    return handle != null &&
+        !handle.current.isFinal &&
+        handle.current.status != DownloadTransportStatus.missing;
   }
 
   Future<DownloadTransportSnapshot> _resumeRecordUnsafe(
@@ -1388,22 +1406,29 @@ final class DownloadManagerV2 {
           await _preservePausedResumeFailure(record, existing);
           return;
         }
-        final readiness = _parallelPauseReadiness;
-        if (record.mediaKind != DownloadMediaKind.mangaChapter &&
-            record.parallelChunks > 1 &&
-            readiness != null &&
-            existing is! SelfSettlingParallelDownloadTransportHandleV2) {
-          final ready = await readiness.waitUntilReady(
-            taskId: record.taskId,
-            expectedChildren: record.parallelChunks,
-          );
-          if (!ready) {
-            await _preservePausedResumeFailure(record, existing);
-            return;
+        final bool resumed;
+        try {
+          final readiness = _parallelPauseReadiness;
+          if (record.mediaKind != DownloadMediaKind.mangaChapter &&
+              record.parallelChunks > 1 &&
+              readiness != null &&
+              existing is! SelfSettlingParallelDownloadTransportHandleV2) {
+            final ready = await readiness.waitUntilReady(
+              taskId: record.taskId,
+              expectedChildren: record.parallelChunks,
+            );
+            if (!ready) {
+              await _preservePausedResumeFailure(record, existing);
+              return;
+            }
           }
+          resumed = await existing.resume();
+        } catch (_) {
+          // A thrown resume is no proof the progress is gone. Keep it paused
+          // rather than failed, whose Retry would start from byte zero.
+          await _preservePausedResumeFailure(record, existing);
+          return;
         }
-
-        final resumed = await existing.resume();
         if (resumed) {
           final admitted = record.copyWith(
             awaitingAdmission: false,
@@ -2151,6 +2176,14 @@ final class DownloadManagerV2 {
     final accepted = _acceptSnapshot(logicalId, snapshot);
     if (!accepted) return;
 
+    // Bytes arriving prove the last renewal worked. The cap is for sources
+    // that keep expiring without delivering, not for long downloads whose
+    // short-lived links expire several times along the way.
+    if (snapshot.status == DownloadTransportStatus.running &&
+        (snapshot.progress > 0 || (snapshot.transferredBytes ?? 0) > 0)) {
+      _sourceRefreshAttempts.remove(logicalId);
+    }
+
     if (snapshot.status == DownloadTransportStatus.failed &&
         snapshot.failureCategory == DownloadFailureCategory.sourceExpired) {
       _recordDiagnostic(
@@ -2426,8 +2459,13 @@ final class DownloadManagerV2 {
           );
         } catch (error) {
           final current = await _store.get(logicalId);
-          if (current == null || current.intent != DownloadUserIntent.active)
+          // The fresh start may already have saved this as an unknown failure;
+          // it is the expired source that failed, and the UI says so.
+          if (current == null ||
+              current.intent == DownloadUserIntent.canceled ||
+              current.completedAtMillis != null) {
             return;
+          }
           await _persistFailure(
             current,
             DownloadTransportSnapshot(
