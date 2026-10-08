@@ -16,6 +16,75 @@ import 'download_v2_test_support.dart';
 
 void main() {
   group('deep-review reliability regressions', () {
+
+    test('deleting a legacy duplicate never removes another record\'s final file', () async {
+      final temp = await Directory.systemTemp.createTemp('aw-v2-owner-delete-');
+      addTearDown(() => temp.delete(recursive: true));
+      final target = File('${temp.path}/shared.mp4');
+      await target.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+      final owner = _record(
+        logicalId: _logicalId('owner-delete'),
+        destinationPath: target.path,
+        completedAtMillis: 1,
+        expectedBytes: 4,
+      );
+      final duplicate = _record(
+        logicalId: _logicalId('duplicate-delete'),
+        destinationPath: target.path,
+        completedAtMillis: 1,
+        expectedBytes: 4,
+      );
+      final store = InMemoryLogicalDownloadStoreV2();
+      await store.put(owner);
+      await store.put(duplicate);
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: _Gateway(),
+        sourceResolver: StaticSourceResolverV2(),
+      );
+      addTearDown(manager.dispose);
+      await manager.initialize();
+
+      await manager.delete(duplicate.logicalId);
+      expect(await target.readAsBytes(), <int>[1, 2, 3, 4]);
+      expect((await store.get(owner.logicalId))?.completedAtMillis, isNotNull);
+      await manager.delete(owner.logicalId);
+      expect(await target.exists(), isFalse);
+    });
+
+    test('invalid completed duplicate cannot delete a valid earlier owner file', () async {
+      final temp = await Directory.systemTemp.createTemp('aw-v2-owner-startup-');
+      addTearDown(() => temp.delete(recursive: true));
+      final target = File('${temp.path}/shared.mp4');
+      await target.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+      final owner = _record(
+        logicalId: _logicalId('owner-startup'),
+        destinationPath: target.path,
+        completedAtMillis: 1,
+        expectedBytes: 4,
+      );
+      final duplicate = _record(
+        logicalId: _logicalId('duplicate-startup'),
+        destinationPath: target.path,
+        completedAtMillis: 1,
+        expectedBytes: 5,
+      );
+      final store = InMemoryLogicalDownloadStoreV2();
+      await store.put(owner);
+      await store.put(duplicate);
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: _Gateway(),
+        sourceResolver: StaticSourceResolverV2(),
+      );
+      addTearDown(manager.dispose);
+
+      await manager.initialize();
+      expect(await target.readAsBytes(), <int>[1, 2, 3, 4]);
+      expect((await store.get(owner.logicalId))?.completedAtMillis, isNotNull);
+      expect((await store.get(duplicate.logicalId))?.intent, DownloadUserIntent.failed);
+    });
+
     for (final sameDestination in [false, true]) {
       test(
         'in-flight rejected cancel preserves ${sameDestination ? "destination" : "slot"} ownership',

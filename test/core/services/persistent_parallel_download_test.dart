@@ -133,6 +133,33 @@ void main() {
     await Future<void>.delayed(Duration.zero);
   }
 
+
+  test('fresh multipart start cannot adopt an unrelated same-size final file', () async {
+    final target = File(await parent.filePath());
+    await target.writeAsBytes(List<int>.filled(25, 77), flush: true);
+
+    expect(await coordinator.start(parent, 25), isTrue);
+    expect(starts, isNotEmpty);
+    expect(statuses, isNot(contains(TaskStatus.complete)));
+    expect(await target.readAsBytes(), List<int>.filled(25, 77));
+  });
+
+  test('incomplete checkpoint never adopts an unrelated same-size target', () async {
+    expect(await coordinator.start(parent, 25), isTrue);
+    await coordinator.pause(parent);
+    final target = File(await parent.filePath());
+    await target.writeAsBytes(List<int>.filled(25, 77), flush: true);
+    await coordinator.dispose();
+    starts.clear();
+    statuses.clear();
+    coordinator = create();
+
+    expect(await coordinator.start(parent, 25), isTrue);
+    expect(starts, isNotEmpty);
+    expect(statuses, isNot(contains(TaskStatus.complete)));
+    expect(await target.readAsBytes(), List<int>.filled(25, 77));
+  });
+
   test('missing multipart manifest is reported as not restorable', () async {
     final manifest = File('${await parent.filePath()}.parts/manifest.json');
     expect(await manifest.exists(), isFalse);
@@ -1269,14 +1296,31 @@ void main() {
       '(committed marker: $committedMarker)',
       () async {
         expect(await coordinator.start(parent, 25), isTrue);
+        await expandFreshTo(5);
         await coordinator.pause(parent);
+        final parts = List<DownloadTask>.from(starts);
         await coordinator.dispose();
 
+        // Emulate an interrupted *completed* assembly: all verified Range
+        // files and their durable manifest existed before the final rename.
+        for (var i = 0; i < parts.length; i++) {
+          await File(await parts[i].filePath()).writeAsBytes(
+            List<int>.generate(5, (j) => i * 5 + j),
+            flush: true,
+          );
+        }
         final target = File(await parent.filePath());
-        await target.writeAsBytes(
-          List<int>.generate(25, (i) => i),
-          flush: true,
-        );
+        final manifest = File('${target.path}.parts/manifest.json');
+        final checkpoint = jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
+        for (final raw in checkpoint['parts'] as List) {
+          final part = raw as Map<String, dynamic>;
+          part['complete'] = true;
+          part['progress'] = 1.0;
+          part['credibleProgress'] = 1.0;
+          part['durableBytes'] = (part['to'] as int) - (part['from'] as int) + 1;
+        }
+        await manifest.writeAsString(jsonEncode(checkpoint), flush: true);
+        await target.writeAsBytes(List<int>.generate(25, (i) => i), flush: true);
         final marker = File('${target.path}.promoting');
         if (committedMarker) {
           await marker.writeAsString(
