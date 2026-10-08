@@ -196,10 +196,12 @@ void main() {
       );
       // Swift reports false after the OS task expires while the native
       // URLSession writer continues. No manual pause/resume is required.
-      for (var i = 0; i < 40 &&
+      for (var i = 0; i < 180 &&
           calls.where((c) => c.method == 'start').length < 2; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 5));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
       }
+      expect(calls.where((c) => c.method == 'update'), isNotEmpty,
+          reason: 'the native update must have actually rejected the lease');
       expect(calls.where((c) => c.method == 'start'), hasLength(2));
       expect(calls.where((c) => c.method == 'stop'), isEmpty);
       allowUpdate = true;
