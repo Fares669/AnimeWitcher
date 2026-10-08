@@ -1101,6 +1101,20 @@ void main() {
     },
   );
 
+  test('exclusive destination is reserved before the promotion marker is published', () {
+    final source = File('lib/core/services/persistent_parallel_download.dart')
+        .readAsStringSync();
+    final start = source.indexOf('Future<bool> _promoteCompletedFile(');
+    final end = source.indexOf('Future<void> _assemble(', start);
+    expect(start, greaterThanOrEqualTo(0));
+    final promotion = source.substring(start, end);
+    expect(
+      promotion.indexOf('await target.create(exclusive: true)'),
+      lessThan(promotion.indexOf('await pending.rename(marker.path)')),
+      reason: 'a marker alone must not authorize overwriting a foreign empty target',
+    );
+  });
+
   test(
     'a marker that cannot be written leaves no reservation behind',
     () async {

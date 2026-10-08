@@ -50,6 +50,69 @@ void main() {
     },
   );
 
+  test('thrown resume after native running remains visible and occupies admission', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _FakeGateway();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: _FakeResolver(),
+      maxConcurrentDownloads: () => 1,
+    );
+    addTearDown(manager.dispose);
+    final paused = _request('11');
+    final blocker = _request('12');
+    final next = _request('13');
+
+    await manager.start(paused);
+    await manager.pause(paused.logicalId);
+    await manager.start(blocker);
+    await manager.resume(paused.logicalId);
+    gateway.handleFor(gateway.taskIdOf(paused))!.runThenThrowOnResume = true;
+    await manager.cancel(blocker.logicalId);
+    await _until(() async =>
+        (await store.get(paused.logicalId))?.intent == DownloadUserIntent.paused &&
+        (await store.get(paused.logicalId))?.awaitingAdmission == false);
+
+    expect(gateway.handleFor(gateway.taskIdOf(paused))!.current.status,
+        DownloadTransportStatus.running);
+    expect(manager.snapshotFor(paused.logicalId)?.status,
+        DownloadTransportStatus.running,
+        reason: 'the native writer never stopped despite resume throwing');
+    final third = await manager.start(next);
+    expect(third.status, DownloadTransportStatus.queued);
+    expect(gateway.startedSpecs, hasLength(2));
+  });
+
+  test('stale positive progress after renewal does not reset expiry budget', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _FakeGateway();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: _FakeResolver(),
+    );
+    addTearDown(manager.dispose);
+    final request = _request('15');
+    await manager.start(request);
+
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      gateway.emitSourceExpired(gateway.startedSpecs.last.taskId);
+      await gateway.waitForStarts(attempt + 1);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      // The first snapshot may contain resume bytes from the *old* source.
+      gateway.emitProgress(gateway.startedSpecs.last.taskId, 0.50);
+    }
+
+    gateway.emitSourceExpired(gateway.startedSpecs.last.taskId);
+    await _until(() async =>
+        (await store.get(request.logicalId))?.intent == DownloadUserIntent.failed);
+    expect(gateway.startedSpecs, hasLength(4),
+        reason: 'fourth consecutive expiration with no new bytes must stop');
+    expect((await store.get(request.logicalId))?.failureCategory,
+        DownloadFailureCategory.sourceExpired);
+  });
+
   test(
     'recovery that fails at launch leaves the download to resume next time',
     () async {
@@ -112,6 +175,7 @@ void main() {
       await gateway.waitForStarts(renewal + 1);
       // Let the manager subscribe to the renewed transfer first.
       await Future<void>.delayed(const Duration(milliseconds: 20));
+      gateway.emitProgress(gateway.startedSpecs.last.taskId, 0.01);
       gateway.emitProgress(gateway.startedSpecs.last.taskId, 0.1 * renewal);
     }
 
@@ -310,6 +374,7 @@ final class _FakeHandle implements DownloadTransportHandle {
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
   int cancelCalls = 0;
   bool throwOnResume = false;
+  bool runThenThrowOnResume = false;
 
   @override
   String get taskId => _current.taskId;
@@ -329,6 +394,10 @@ final class _FakeHandle implements DownloadTransportHandle {
   @override
   Future<bool> resume() async {
     if (throwOnResume) throw StateError('native resume rejected');
+    if (runThenThrowOnResume) {
+      emit(_with(DownloadTransportStatus.running));
+      throw StateError('native started before acknowledgement was lost');
+    }
     emit(_with(DownloadTransportStatus.running));
     return true;
   }
