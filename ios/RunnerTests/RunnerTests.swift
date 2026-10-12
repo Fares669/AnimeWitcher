@@ -7,8 +7,10 @@ class RunnerTests: XCTestCase {
   override func setUp() {
     super.setUp()
     DownloadNativeWaitingQueue.installUrlSessionHook()
-    XCTAssertTrue(DownloadNativeWaitingQueue.nativePromotionAvailable,
-                  "CocoaPods package-version export and all three selectors must work")
+    XCTAssertFalse(DownloadNativeWaitingQueue.nativePromotionAvailable,
+                   "observer hooks must not claim package transport ownership")
+    DownloadNativeWaitingQueue.installUrlSessionHook()
+    XCTAssertFalse(DownloadNativeWaitingQueue.nativePromotionAvailable)
   }
 
   func testDM26DelayedStatusCannotCompleteReusedTaskOrReleaseItsSlot() {
@@ -54,7 +56,8 @@ class RunnerTests: XCTestCase {
     let state = DownloadNativeWaitingQueue.load()
     XCTAssertFalse(state.completedTaskIds.contains("ep1"))
     XCTAssertTrue(state.pausedTaskIds.contains("ep1"))
-    XCTAssertEqual(state.transferringTaskIds, ["ep2"])
+    XCTAssertTrue(state.transferringTaskIds.isEmpty)
+    XCTAssertEqual(state.waiters.map(\.taskId), ["ep2"])
   }
 
   override func tearDown() {
@@ -182,11 +185,12 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(state.pausedTaskIds, ["ep2"])
   }
 
-  func testFailedEpisodeParksPausedAndStartsNextWaiter() {
+  func testFailedEpisodeObservationLeavesNextWaiterForPackage() {
     DownloadNativeWaitingQueue.resetForTests()
     DownloadNativeWaitingQueue.persist(from: ep1TransferringEp2Waiting())
 
     let session = URLSession(configuration: .ephemeral)
+    defer { session.invalidateAndCancel() }
     let ep1 = session.downloadTask(with: URL(string: "https://127.0.0.1:1/ep1.mp4")!)
     ep1.taskDescription = "{\"taskId\":\"ep1\"}"
     let error = NSError(
@@ -204,16 +208,17 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(state.pausedTaskIds, ["ep1"])
     XCTAssertFalse(state.completedTaskIds.contains("ep1"))
     XCTAssertFalse(state.transferringTaskIds.contains("ep1"))
-    XCTAssertEqual(state.transferringTaskIds, ["ep2"])
-    XCTAssertTrue(state.waiters.isEmpty)
+    XCTAssertTrue(state.transferringTaskIds.isEmpty)
+    XCTAssertEqual(state.waiters.map(\.taskId), ["ep2"])
     XCTAssertFalse(state.sessionIsIdle)
   }
 
-  func testNativeCompletionStartsNextWaiterBeforeDartWakes() {
+  func testCompletionObservationDoesNotStartNextPackageWaiter() {
     DownloadNativeWaitingQueue.resetForTests()
     DownloadNativeWaitingQueue.persist(from: ep1TransferringEp2Waiting())
 
     let session = URLSession(configuration: .ephemeral)
+    defer { session.invalidateAndCancel() }
     let ep1 = session.downloadTask(with: URL(string: "https://127.0.0.1:1/ep1.mp4")!)
     ep1.taskDescription = "{\"taskId\":\"ep1\"}"
     DownloadNativeWaitingQueue.handlePluginTaskCompleted(
@@ -223,16 +228,17 @@ class RunnerTests: XCTestCase {
     )
 
     let state = DownloadNativeWaitingQueue.load()
-    XCTAssertEqual(state.transferringTaskIds, ["ep2"])
-    XCTAssertTrue(state.waiters.isEmpty)
+    XCTAssertTrue(state.transferringTaskIds.isEmpty)
+    XCTAssertEqual(state.waiters.map(\.taskId), ["ep2"])
     XCTAssertTrue(state.completedTaskIds.contains("ep1"))
   }
 
-  func testStaleDartSnapshotCannotUnstartANativePromotion() {
+  func testDartSnapshotDoesNotInventANativePromotion() {
     DownloadNativeWaitingQueue.resetForTests()
     DownloadNativeWaitingQueue.persist(from: ep1TransferringEp2Waiting())
 
     let session = URLSession(configuration: .ephemeral)
+    defer { session.invalidateAndCancel() }
     let ep1 = session.downloadTask(with: URL(string: "https://127.0.0.1:1/ep1.mp4")!)
     ep1.taskDescription = "{\"taskId\":\"ep1\"}"
     DownloadNativeWaitingQueue.handlePluginTaskCompleted(
@@ -249,8 +255,9 @@ class RunnerTests: XCTestCase {
     ])
 
     let state = DownloadNativeWaitingQueue.load()
-    XCTAssertEqual(state.transferringTaskIds, ["ep2"])
-    XCTAssertTrue(state.waiters.isEmpty)
+    XCTAssertTrue(state.transferringTaskIds.isEmpty)
+    XCTAssertEqual(state.waiters.map(\.taskId), ["ep2"])
+    XCTAssertTrue(state.completedTaskIds.contains("ep1"))
   }
 
   private func ep1TransferringEp2Waiting() -> [String: Any] {
@@ -305,7 +312,7 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(state.overlayCurrentIndex(), 3)
   }
 
-  func testDragParkReleasesNativeSlotSoNextFileCanStart() {
+  func testDartDragParkSnapshotPreservesWaitingOrderWithoutNativePromotion() {
     DownloadNativeWaitingQueue.resetForTests()
     DownloadNativeWaitingQueue.persist(from: ep1TransferringEp2Waiting())
     XCTAssertEqual(DownloadNativeWaitingQueue.load().transferringTaskIds, ["ep1"])
@@ -328,7 +335,7 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(state.sessionTaskIds.first, "ep2")
   }
 
-  func testCompletedFileIsNotPromotedAsTheNextWaiter() {
+  func testCompletedFileIsExcludedFromDartWaitingSnapshot() {
     DownloadNativeWaitingQueue.resetForTests()
     DownloadNativeWaitingQueue.persist(from: ep1TransferringEp2Waiting())
     let session = URLSession(configuration: .ephemeral)
@@ -399,6 +406,7 @@ class RunnerTests: XCTestCase {
     DownloadNativeWaitingQueue.resetForTests()
     DownloadNativeWaitingQueue.persist(from: ep1TransferringEp2Waiting())
     let session = URLSession(configuration: .ephemeral)
+    defer { session.invalidateAndCancel() }
     let ep1 = session.downloadTask(with: URL(string: "https://127.0.0.1:1/ep1.mp4")!)
     ep1.taskDescription = "{\"taskId\":\"ep1\"}"
     DownloadNativeWaitingQueue.markPluginTaskCompleted(task: ep1)
@@ -406,6 +414,7 @@ class RunnerTests: XCTestCase {
     XCTAssertTrue(state.completedTaskIds.contains("ep1"))
     XCTAssertFalse(state.transferringTaskIds.contains("ep1"))
     XCTAssertEqual(state.overlayCurrentIndex(), 2)
+    XCTAssertEqual(state.waiters.map(\.taskId), ["ep2"])
   }
 
   private func ep1Waiter() -> [String: Any] {

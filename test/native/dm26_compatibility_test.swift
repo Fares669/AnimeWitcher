@@ -33,16 +33,19 @@ enum DM26CompatibilityTests {
       let available = (0..<3).map { mask & (1 << $0) != 0 }
       precondition(!installer.install(version: "9.6.1", available: available) { writes += 1 })
       precondition(writes == 0 && !installer.isInstalled)
-      precondition(installer.install(version: "9.6.1", available: [true, true, true]) { writes += 1 })
+      precondition(!installer.install(version: "9.6.1", available: [true, true, true]) { writes += 1 },
+                   "observer installation must not claim transport ownership")
       precondition(writes == 1 && installer.isInstalled, "a partial attempt must not suppress recovery")
-      precondition(installer.install(version: "9.6.1", available: [true, true, true]) { writes += 1 })
-      precondition(writes == 1, "reinstall must not wrap its own IMP")
+      precondition(!installer.install(version: "9.6.1", available: [true, true, true]) { writes += 1 },
+                   "observer installation must not claim transport ownership")
+      precondition(writes == 1 && installer.isInstalled, "reinstall must not wrap its own IMP or claim ownership")
     }
     for version in [nil, "0.0.1", "9.6.2"] as [String?] {
       let installer = DownloadHookInstallation()
       precondition(!installer.install(version: version, available: [true, true, true]) {
         preconditionFailure("unsupported package must not install")
       })
+      precondition(!installer.isInstalled)
     }
     print("DM-26 compatibility behavior: PASS")
   }

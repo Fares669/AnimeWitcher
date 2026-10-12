@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// 9.6.1 emits supported status synchronously inside the delegate invocation.
 /// Task.taskId is NOT an execution ID; no observation survives that invocation.
@@ -85,5 +86,58 @@ final class DownloadHookInstallation {
     apply()
     isInstalled = true
     return transportOwnershipEnabled
+  }
+}
+
+struct DownloadFilePromotionError: Error {
+  let code: String
+  let errnoValue: Int32?
+}
+
+/// Publishes a closed, verified source without ever replacing a destination.
+/// Unsupported volumes fail closed; neither copying nor ordinary rename is safe.
+enum DownloadFilePromotion {
+  static func promoteCompletedFile(
+    sourcePath: String,
+    targetPath: String,
+    expectedBytes: Int64
+  ) throws {
+    guard sourcePath.hasPrefix("/"), targetPath.hasPrefix("/"),
+          !sourcePath.utf8.contains(0), !targetPath.utf8.contains(0),
+          expectedBytes >= 0 else {
+      throw DownloadFilePromotionError(code: "INVALID_ARGUMENTS", errnoValue: nil)
+    }
+    let source = URL(fileURLWithPath: sourcePath).standardizedFileURL
+    let target = URL(fileURLWithPath: targetPath).standardizedFileURL
+    guard source.path != target.path else {
+      throw DownloadFilePromotionError(code: "INVALID_ARGUMENTS", errnoValue: nil)
+    }
+    try source.withUnsafeFileSystemRepresentation { sourceFS in
+      guard let sourceFS else {
+        throw DownloadFilePromotionError(code: "INVALID_ARGUMENTS", errnoValue: nil)
+      }
+      var info = stat()
+      if lstat(sourceFS, &info) != 0 {
+        let failure = errno
+        throw DownloadFilePromotionError(code: "PROMOTION_SOURCE_INVALID", errnoValue: failure)
+      }
+      guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+            info.st_size == expectedBytes else {
+        throw DownloadFilePromotionError(code: "PROMOTION_SOURCE_INVALID", errnoValue: nil)
+      }
+      try target.withUnsafeFileSystemRepresentation { targetFS in
+        guard let targetFS else {
+          throw DownloadFilePromotionError(code: "INVALID_ARGUMENTS", errnoValue: nil)
+        }
+        let result = renamex_np(sourceFS, targetFS, UInt32(RENAME_EXCL))
+        let failure = errno
+        guard result == 0 else {
+          throw DownloadFilePromotionError(
+            code: failure == EEXIST ? "DESTINATION_EXISTS" : "PROMOTION_FAILED",
+            errnoValue: failure
+          )
+        }
+      }
+    }
   }
 }

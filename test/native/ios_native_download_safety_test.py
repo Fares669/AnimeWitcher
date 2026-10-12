@@ -61,3 +61,13 @@ with tempfile.TemporaryDirectory(prefix="ios-native-safety-") as directory:
     executable = Path(directory) / "checks"
     subprocess.run(["swiftc", str(swift), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
+
+with tempfile.TemporaryDirectory(prefix="ios-download-promotion-") as directory:
+    main = Path(directory) / "main.swift"
+    main.write_text((root / "test/native/download_file_promotion_test.swift").read_text())
+    executable = Path(directory) / "promotion-checks"
+    subprocess.run([
+        "swiftc", str(root / "ios/Runner/DownloadCallbackCompatibility.swift"),
+        str(main), "-o", str(executable),
+    ], check=True)
+    subprocess.run([str(executable)], check=True)
