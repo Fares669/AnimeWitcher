@@ -96,11 +96,15 @@ class _Files extends DownloadedFiles {
 class _Playback extends PlaybackLauncher {
   _Playback(super.ref);
   final List<String> played = [];
+  final List<MultimediaItem> playedItems = [];
   @override
   Future<void> play(BuildContext context, String url, {
     required MultimediaItem baseItem, MultimediaItem? detailedItem, Episode? episode,
     StreamResult? preselectedSource, bool loadEpisodeArtwork = false,
-  }) async => played.add(url);
+  }) async {
+    played.add(url);
+    playedItems.add(detailedItem ?? baseItem);
+  }
 }
 
 final _episode = Episode(name: 'Episode 1', url: 'episode://1', episode: 1);
@@ -109,12 +113,12 @@ final _show = MultimediaItem(
   contentType: MultimediaContentType.anime, episodes: [_episode],
 );
 
-DownloadItem _row(String logical, {TaskStatus status = TaskStatus.running, int timestamp = 1}) =>
+DownloadItem _row(String logical, {TaskStatus status = TaskStatus.running, int timestamp = 1, Episode? episode}) =>
     DownloadItem(
       task: DownloadTask(taskId: 'task-$logical', url: 'https://example.test/$logical', filename: '$logical.mp4'),
       status: status, progress: status == TaskStatus.complete ? 1 : .4,
-      item: _show, episode: _episode, logicalId: logical,
-      trackingUrl: _episode.url, timestamp: timestamp,
+      item: _show, episode: episode ?? _episode, logicalId: logical,
+      trackingUrl: episode?.url ?? _episode.url, timestamp: timestamp,
     );
 
 Widget _app(Widget home) => MaterialApp(
@@ -223,6 +227,8 @@ void main() {
     final rows = _Rows([
       _row('selected', status: TaskStatus.complete, timestamp: 1),
       _row('other', status: TaskStatus.complete, timestamp: 2),
+      _row('adjacent', status: TaskStatus.complete, timestamp: 3,
+        episode: Episode(name: 'Episode 2', url: 'episode://2', episode: 2)),
     ]);
     late _Playback playback;
     final container = ProviderContainer(overrides: [
@@ -252,6 +258,7 @@ void main() {
     await tester.tap(selected);
     await pumpUntil(tester, () => playback.played.isNotEmpty, 'selected completed playback');
     expect(playback.played, [files.first.path]);
+    expect(playback.playedItems.single.episodes?.map((value) => value.url), containsAll(['episode://1', 'episode://2']));
   });
 }
 

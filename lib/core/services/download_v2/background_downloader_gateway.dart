@@ -336,6 +336,7 @@ final class PackageBackgroundDownloaderGateway
     final reusable = await reusableMangaPageHandleV2(
       existing: existing,
       destinationPath: page.destinationPath,
+      expectedDigest: page.expectedDigest,
       removeTracking: () => removeTracking(page.taskId),
     );
     if (reusable != null) return reusable;
@@ -854,13 +855,18 @@ Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
   required DownloadTransportHandle? existing,
   required String destinationPath,
   required Future<void> Function() removeTracking,
+  String? expectedDigest,
 }) async {
   if (existing == null) return null;
 
   final status = existing.current.status;
   if (status == DownloadTransportStatus.complete) {
     final file = File(destinationPath);
-    if (await isMangaPageImageV2(file)) return existing;
+    if (await isMangaPageImageV2(file) &&
+        (expectedDigest == null ||
+            await MangaChapterManifestV2.pageDigest(file) == expectedDigest)) {
+      return existing;
+    }
     await removeTracking();
     return null;
   }
@@ -869,10 +875,27 @@ Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
     final resumed = await existing.resume();
     if (resumed) return existing;
 
-    // A recovered Manga page must never leave an active chapter parked on a
-    // stale paused package task. Cancel/forget it and let the caller recreate
-    // only this page from its fresh chapter-page descriptor.
-    await existing.cancel();
+    // Cancel acceptance does not release the exact native writer's ownership.
+    final settled = Completer<void>();
+    final subscription = existing.snapshots.listen((snapshot) {
+      if ((snapshot.isFinal || snapshot.status == DownloadTransportStatus.missing) &&
+          !settled.isCompleted) settled.complete();
+    });
+    try {
+      if (!await existing.cancel()) {
+        throw StateError('Could not stop unresumable manga page ${existing.taskId}');
+      }
+      if (!existing.current.isFinal &&
+          existing.current.status != DownloadTransportStatus.missing) {
+        try {
+          await settled.future.timeout(const Duration(seconds: 10));
+        } on TimeoutException {
+          throw StateError('Manga page ${existing.taskId} did not settle after cancel');
+        }
+      }
+    } finally {
+      await subscription.cancel();
+    }
     await removeTracking();
     return null;
   }

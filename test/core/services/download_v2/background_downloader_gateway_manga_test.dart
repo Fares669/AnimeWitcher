@@ -177,11 +177,12 @@ final class _PausedHandle implements DownloadTransportHandle {
   final bool resumeAccepted;
   int resumeCalls = 0;
   int cancelCalls = 0;
+  DownloadTransportStatus status = DownloadTransportStatus.paused;
 
   @override
   DownloadTransportSnapshot get current => DownloadTransportSnapshot(
         taskId: taskId,
-        status: DownloadTransportStatus.paused,
+        status: status,
         progress: 0.4,
       );
 
@@ -201,6 +202,7 @@ final class _PausedHandle implements DownloadTransportHandle {
   @override
   Future<bool> cancel() async {
     cancelCalls++;
+    status = DownloadTransportStatus.canceled;
     return true;
   }
 }

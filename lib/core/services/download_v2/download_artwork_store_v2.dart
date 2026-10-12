@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'download_continued_processing_v2.dart';
 import 'download_v2_models.dart';
+import 'download_v2_identity.dart';
 import 'manga_chapter_manifest_v2.dart';
 
 enum DownloadArtworkKindV2 { episode, poster }
@@ -37,7 +38,10 @@ final class DownloadArtworkStoreV2 {
   final Future<void> Function(File, String) _publishFile;
   final Map<String, int> _deletionEpochs = <String, int>{};
   final Map<String, _ArtworkWriteV2> _writes = <String, _ArtworkWriteV2>{};
-  int _temporarySequence = 0;
+  final Map<String, Future<void>> _publications = <String, Future<void>>{};
+  final Map<String, Future<void>> _deletions = <String, Future<void>>{};
+  int _activeFetches = 0;
+  final Queue<Completer<void>> _fetchWaiters = Queue<Completer<void>>();
 
   int _epochFor(String logicalId) => _deletionEpochs[logicalId] ?? 0;
 
@@ -137,6 +141,8 @@ final class DownloadArtworkStoreV2 {
   }) async {
     bool allowed() => alive() && _epochFor(logicalId) == epoch;
     if (kIsWeb || logicalId.trim().isEmpty || !allowed()) return null;
+    await _deletions[logicalId];
+    if (!allowed()) return null;
     final saved = await existing(logicalId, kind);
     if (!allowed()) return null;
     if (saved != null) return saved;
@@ -160,7 +166,7 @@ final class DownloadArtworkStoreV2 {
     String? legacyTaskId,
     bool Function() allowed,
   ) async {
-    File? temporary;
+    Directory? staging;
     try {
       List<int>? bytes;
       if (kind == DownloadArtworkKindV2.episode && legacyTaskId != null) {
@@ -181,7 +187,7 @@ final class DownloadArtworkStoreV2 {
         if (bytes == null && allowed()) {
           final uri = Uri.tryParse(remote);
           if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http') && uri.host.isNotEmpty) {
-            bytes = await _fetchBytes(uri).timeout(_fetchTimeout);
+            bytes = await _fetchLimited(uri, allowed);
           }
         }
       }
@@ -189,46 +195,104 @@ final class DownloadArtworkStoreV2 {
       final directory = await _ownedDirectory(logicalId, create: true);
       if (!allowed() || directory == null) return null;
       final target = File(p.join(directory.path, '${kind.name}.img'));
-      final targetType = await FileSystemEntity.type(target.path, followLinks: false);
-      if (targetType != FileSystemEntityType.notFound && targetType != FileSystemEntityType.file) return null;
-      temporary = File('${target.path}.${_temporarySequence++}.tmp');
-      if (await FileSystemEntity.type(temporary.path, followLinks: false) != FileSystemEntityType.notFound) return null;
       if (!allowed() || await _ownedDirectory(logicalId) == null) return null;
+      // createTemp atomically owns a unique staging directory. No pre-existing
+      // leaf, including another store's staging file, is ever opened or cleaned.
+      staging = await directory.createTemp('.artwork-');
+      if (!allowed() || !await _ownedStaging(logicalId, staging)) return null;
+      final temporary = File(p.join(staging.path, 'pending.img'));
       await temporary.writeAsBytes(bytes, flush: true);
       if (!allowed() || !await _validImage(temporary)) return null;
-      // Re-check owned parents and leaf after every asynchronous fetch/write.
-      final checkedDirectory = await _ownedDirectory(logicalId);
-      if (!allowed() || checkedDirectory == null || !p.equals(checkedDirectory.path, directory.path)) return null;
-      final finalType = await FileSystemEntity.type(target.path, followLinks: false);
-      if (finalType != FileSystemEntityType.notFound && finalType != FileSystemEntityType.file) return null;
-      await _publishFile(temporary, target.path);
-      return allowed() ? target : null;
+      return await _publish(logicalId, temporary, target, allowed);
     } catch (_) {
       return null;
     } finally {
-      if (temporary != null) {
+      if (staging != null) {
         try {
-          final parent = await _ownedDirectory(logicalId);
-          if (parent != null && p.equals(parent.path, temporary.parent.path) &&
-              await FileSystemEntity.type(temporary.path, followLinks: false) == FileSystemEntityType.file) {
-            await temporary.delete();
-          }
+          if (await _ownedStaging(logicalId, staging)) await staging.delete(recursive: true);
         } catch (_) {}
       }
     }
   }
 
-  Future<void> delete(String logicalId, {String? legacyTaskId}) async {
+  Future<bool> _ownedStaging(String logicalId, Directory staging) async {
+    final parent = await _ownedDirectory(logicalId);
+    return parent != null && p.equals(parent.path, staging.parent.path) &&
+        await FileSystemEntity.type(staging.path, followLinks: false) == FileSystemEntityType.directory &&
+        p.equals(await staging.resolveSymbolicLinks(), staging.path);
+  }
+
+  Future<void> _waitForPublication(String logicalId) =>
+      _publications[logicalId] ?? Future<void>.value();
+
+  Future<File?> _publish(String logicalId, File temporary, File target, bool Function() allowed) {
+    final previous = _waitForPublication(logicalId);
+    final operation = previous.then<File?>((_) async {
+      final directory = await _ownedDirectory(logicalId);
+      if (!allowed() || directory == null || !p.equals(directory.path, target.parent.path) ||
+          !await _ownedStaging(logicalId, temporary.parent)) return null;
+      final type = await FileSystemEntity.type(target.path, followLinks: false);
+      // Check after the last awaited stat, immediately before issuing rename.
+      if (!allowed() || (type != FileSystemEntityType.notFound && type != FileSystemEntityType.file)) return null;
+      await _publishFile(temporary, target.path);
+      if (allowed()) return target;
+      // Keep the publication lock while removing our obsolete just-published
+      // bytes. A replacement or deletion cannot race this cleanup.
+      final checked = await _ownedDirectory(logicalId);
+      if (checked != null && p.equals(checked.path, target.parent.path) &&
+          await FileSystemEntity.type(target.path, followLinks: false) == FileSystemEntityType.file) {
+        await target.delete();
+      }
+      return null;
+    });
+    final barrier = operation.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _publications[logicalId] = barrier;
+    return operation.whenComplete(() {
+      if (identical(_publications[logicalId], barrier)) _publications.remove(logicalId);
+    });
+  }
+
+  Future<void> delete(String logicalId, {String? legacyTaskId}) {
     // Fence queued jobs before any path lookup or filesystem await.
     _deletionEpochs[logicalId] = _epochFor(logicalId) + 1;
+    final previous = _deletions[logicalId] ?? Future<void>.value();
+    final operation = previous.then((_) async {
+      try {
+        // Fetches never hold this barrier; only an already-issued publication.
+        await _waitForPublication(logicalId);
+        final directory = await _ownedDirectory(logicalId);
+        if (directory != null) await directory.delete(recursive: true);
+        if (legacyTaskId != null) {
+          final legacy = await legacyFileFor(legacyTaskId);
+          if (legacy != null && await FileSystemEntity.type(legacy.path, followLinks: false) == FileSystemEntityType.file) await legacy.delete();
+        }
+      } catch (_) {}
+    });
+    _deletions[logicalId] = operation;
+    return operation.whenComplete(() {
+      if (identical(_deletions[logicalId], operation)) _deletions.remove(logicalId);
+    });
+  }
+
+  Future<List<int>?> _fetchLimited(Uri uri, bool Function() allowed) async {
+    if (_activeFetches >= 2) {
+      final ready = Completer<void>();
+      _fetchWaiters.add(ready);
+      await ready.future;
+    } else {
+      _activeFetches++;
+    }
     try {
-      final directory = await _ownedDirectory(logicalId);
-      if (directory != null) await directory.delete(recursive: true);
-      if (legacyTaskId != null) {
-        final legacy = await legacyFileFor(legacyTaskId);
-        if (legacy != null && await FileSystemEntity.type(legacy.path, followLinks: false) == FileSystemEntityType.file) await legacy.delete();
+      if (!allowed()) return null;
+      return await _fetchBytes(uri).timeout(_fetchTimeout);
+    } finally {
+      if (_fetchWaiters.isNotEmpty) {
+        // Transfer this permit directly to the oldest waiter.
+        _fetchWaiters.removeFirst().complete();
+      } else {
+        _activeFetches--;
       }
-    } catch (_) {}
+    }
   }
 
   static Future<File?> _cachedFile(String url) async => (await DefaultCacheManager().getFileFromCache(url))?.file;
@@ -265,6 +329,35 @@ final downloadArtworkStoreV2 = DownloadArtworkStoreV2();
 Future<void> deleteDownloadArtworkV2(String logicalId, {String? legacyTaskId}) =>
     downloadArtworkStoreV2.delete(logicalId, legacyTaskId: legacyTaskId);
 
+/// Legacy artwork is never assigned from a title, URL alias, or record-supplied
+/// variant. Its saved metadata must independently identify this exact record.
+bool downloadArtworkMetadataMatchesRecordV2(
+  Map<String, dynamic> metadata,
+  LogicalDownloadRecordV2 record,
+) {
+  final declared = metadata['logicalId'];
+  if (declared != null) {
+    return declared is String && declared.trim() == record.logicalId.value;
+  }
+  if (record.mediaKind != DownloadMediaKind.videoEpisode) return false;
+  final rawItem = metadata['item'];
+  final variant = metadata['variantKey'];
+  final unit = metadata['trackingUrl'];
+  if (rawItem is! Map || variant is! String || variant.trim().isEmpty ||
+      unit is! String || unit.trim().isEmpty) return false;
+  final tmdb = rawItem['tmdbId'];
+  final imdb = rawItem['imdbId'];
+  final url = rawItem['url'];
+  final media = tmdb != null ? tmdb.toString().trim()
+      : imdb is String && imdb.trim().isNotEmpty ? imdb.trim()
+      : url is String ? url.trim() : '';
+  if (media.isEmpty || media != record.mediaId || unit.trim() != record.unitKey ||
+      variant.trim() != record.variantKey) return false;
+  return logicalDownloadIdFor(
+    animeId: media, episodeKey: unit, variantKey: variant,
+  ) == record.logicalId;
+}
+
 final class DownloadArtworkSourceV2 {
   const DownloadArtworkSourceV2({this.episodeUrl, this.posterUrl, this.legacyTaskId});
   final String? episodeUrl;
@@ -285,6 +378,7 @@ final class DownloadArtworkObserverV2 implements DownloadPresentationObserverV2 
   final Set<String> _seen = <String>{};
   final Queue<_ArtworkJobV2> _queue = Queue<_ArtworkJobV2>();
   int _active = 0;
+  final Set<_ArtworkJobV2> _activeJobs = <_ArtworkJobV2>{};
   bool _disposed = false;
 
   @override
@@ -306,8 +400,10 @@ final class DownloadArtworkObserverV2 implements DownloadPresentationObserverV2 
     while (!_disposed && _active < 2 && _queue.isNotEmpty) {
       final job = _queue.removeFirst();
       _active++;
+      _activeJobs.add(job);
       unawaited(_capture(job).whenComplete(() {
         _active--;
+        _activeJobs.remove(job);
         job.finished.complete();
         _drain();
       }));
@@ -339,6 +435,9 @@ final class DownloadArtworkObserverV2 implements DownloadPresentationObserverV2 
     while (_queue.isNotEmpty) {
       _queue.removeFirst().finished.complete();
     }
+    await Future.wait(_activeJobs.map(
+      (job) => _store._waitForPublication(job.record.logicalId.value),
+    ).toList(growable: false));
   }
 }
 

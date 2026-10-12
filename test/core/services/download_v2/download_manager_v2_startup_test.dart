@@ -131,19 +131,24 @@ void main() {
         hasExactHandle: true,
       );
       final handle = f.gateway.handleFor(f.record.taskId)!;
-      handle.onPause = () async => true;
+      final pauseEntered = Completer<void>();
+      handle.onPause = () async {
+        pauseEntered.complete();
+        return true;
+      };
 
       var initialized = false;
       final initializeFuture = f.manager.initialize().whenComplete(() {
         initialized = true;
       });
-      await Future<void>.delayed(Duration.zero);
-
-      expect(handle.pauseCalls, 1);
-      expect(initialized, isFalse);
-
-      handle.emitStatus(DownloadTransportStatus.paused);
-      await initializeFuture;
+      try {
+        await pauseEntered.future.timeout(const Duration(seconds: 5));
+        expect(handle.pauseCalls, 1);
+        expect(initialized, isFalse);
+      } finally {
+        handle.emitStatus(DownloadTransportStatus.paused);
+        await initializeFuture;
+      }
 
       expect(initialized, isTrue);
       expect(

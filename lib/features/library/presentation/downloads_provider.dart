@@ -404,7 +404,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           : const <String, dynamic>{};
       final chapter = MangaChapter.fromJson(taskSnapshot['chapter']);
       final trackingUrl = _trackingUrlFor(metadata, item, episode, chapter);
-      final snapshot = manager.snapshotFor(record.logicalId);
+      final observed = manager.snapshotFor(record.logicalId);
+      final snapshot = observed?.taskId == record.taskId ? observed : null;
       final task = _presentationTaskFor(record, trackingUrl: trackingUrl);
       final projected = DownloadItem(
         task: task,
@@ -429,8 +430,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           projected.mediaKind == DownloadMediaKind.videoEpisode &&
           _artworkScheduledIds.add(projected.id)) {
         unawaited(
-          ensureDownloadedEpisodeArtwork(
+          retainDownloadedArtwork(
             taskId: projected.id,
+            logicalId: projected.logicalId!,
+            item: projected.item,
             episode: projected.episode,
           ),
         );

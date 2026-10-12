@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -12,6 +13,7 @@ import 'package:animewitcher/core/utils/episode_order.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 
 import '../../../../core/domain/entity/manga.dart';
+import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/services/download_v2/download_v2_models.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/services/download_concurrency.dart';
@@ -25,6 +27,7 @@ import '../../../details/presentation/playback_launcher.dart';
 import '../download_progress_v2_provider.dart';
 import '../download_delete_confirmation.dart';
 import '../downloads_provider.dart';
+import '../download_episode_artwork.dart';
 import '../download_unit_count_label.dart';
 import 'completed_download_chapter_card.dart';
 import '../../../../l10n/generated/app_localizations.dart';
@@ -33,6 +36,28 @@ import '../../../../core/utils/file_size_formatter.dart';
 import '../../../../core/utils/download_time_remaining.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/underline_segment_tabs.dart';
+
+MultimediaItem _savedPlaybackItem(DownloadItem selected, Iterable<DownloadItem> downloads) {
+  String mediaIdentity(MultimediaItem item) => item.tmdbId?.toString() ??
+      ((item.imdbId?.trim().isNotEmpty ?? false) ? item.imdbId!.trim() : item.url.trim());
+  final media = mediaIdentity(selected.item);
+  final episodes = <String, Episode>{
+    for (final episode in selected.item.episodes ?? const <Episode>[])
+      if (episode.url.trim().isNotEmpty) episode.url.trim(): episode,
+  };
+  for (final download in downloads) {
+    final episode = download.episode;
+    if (download.status == TaskStatus.complete && media.isNotEmpty &&
+        mediaIdentity(download.item) == media && episode != null && episode.url.trim().isNotEmpty) {
+      episodes[episode.url.trim()] = episode;
+    }
+  }
+  final current = selected.episode;
+  if (current != null && current.url.trim().isNotEmpty) episodes[current.url.trim()] = current;
+  return episodes.isEmpty ? selected.item : selected.item.copyWith(
+    episodes: episodeItemsInDisplayOrder(episodes.values.toList(), episodeOf: (episode) => episode, ascending: true),
+  );
+}
 
 class DownloadsTab extends ConsumerStatefulWidget {
   const DownloadsTab({super.key});
@@ -259,13 +284,62 @@ class _CompletedDownloadsList extends StatelessWidget {
   }
 }
 
-class _GroupedDownloadTile extends ConsumerWidget {
+class _GroupedDownloadTile extends ConsumerStatefulWidget {
   final List<DownloadItem> items;
 
   const _GroupedDownloadTile({required this.items});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_GroupedDownloadTile> createState() => _GroupedDownloadTileState();
+}
+
+class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
+  late Future<File?> _poster;
+  List<DownloadItem> get items => widget.items;
+
+  String _artworkId(DownloadItem item) {
+    final logical = item.logicalId?.trim() ?? '';
+    return logical.isEmpty ? item.id : logical;
+  }
+
+  String _posterKey(List<DownloadItem> values) => values.map(
+    (item) => '${_artworkId(item)}:${item.item.posterUrl}',
+  ).join('|');
+
+  @override
+  void initState() {
+    super.initState();
+    _poster = _loadPoster();
+  }
+
+  @override
+  void didUpdateWidget(covariant _GroupedDownloadTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_posterKey(oldWidget.items) != _posterKey(items)) _poster = _loadPoster();
+  }
+
+  Future<File?> _loadPoster() async {
+    // A group's first row may lack artwork while another retained copy exists.
+    for (final item in items) {
+      final saved = await existingDownloadedPosterArtwork(_artworkId(item));
+      if (saved != null) return saved;
+    }
+    for (final item in items) {
+      final saved = await ensureDownloadedPosterArtwork(
+        logicalId: _artworkId(item), posterUrl: item.item.posterUrl,
+      );
+      if (saved != null) return saved;
+    }
+    return null;
+  }
+
+  Widget _posterPlaceholder(ThemeData theme) => Container(
+    width: 80, height: 120, color: theme.dividerColor,
+    child: const Icon(Icons.movie_outlined),
+  );
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
     final firstItem = items.first;
@@ -317,23 +391,25 @@ class _GroupedDownloadTile extends ConsumerWidget {
               borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
               child: ArtworkDecode(
                 paintedWidth: 80,
-                builder: (BuildContext context, int? decodeWidth) =>
-                    CachedNetworkImage(
-                      imageUrl:
-                          AppImageFallbacks.poster(firstItem.item.posterUrl) ??
-                          '',
-                      width: 80,
-                      height: 120,
-                      fit: BoxFit.cover,
-                      memCacheWidth: decodeWidth,
-                      filterQuality: FilterQuality.medium,
-                      errorWidget: (context, url, error) => Container(
-                        width: 80,
-                        height: 120,
-                        color: theme.dividerColor,
-                        child: const Icon(Icons.movie_outlined),
-                      ),
-                    ),
+                builder: (BuildContext context, int? decodeWidth) => FutureBuilder<File?>(
+                  future: _poster,
+                  builder: (context, snapshot) {
+                    final saved = snapshot.data;
+                    if (saved != null) {
+                      return Image.file(
+                        saved, width: 80, height: 120, fit: BoxFit.cover,
+                        cacheWidth: decodeWidth, filterQuality: FilterQuality.medium,
+                        errorBuilder: (_, _, _) => _posterPlaceholder(theme),
+                      );
+                    }
+                    return CachedNetworkImage(
+                      imageUrl: AppImageFallbacks.poster(firstItem.item.posterUrl) ?? '',
+                      width: 80, height: 120, fit: BoxFit.cover,
+                      memCacheWidth: decodeWidth, filterQuality: FilterQuality.medium,
+                      errorWidget: (_, _, _) => _posterPlaceholder(theme),
+                    );
+                  },
+                ),
               ),
             ),
             const SizedBox(width: LayoutConstants.spacingMd),
@@ -465,7 +541,7 @@ class _GroupedDownloadTile extends ConsumerWidget {
   ) async {
     final file = await ref
         .read(downloadedFilesProvider.notifier)
-        .resolveFile(item.item, episode: item.episode);
+        .resolveFile(item.item, episode: item.episode, logicalId: item.logicalId);
 
     if (file == null || !await file.exists()) {
       if (context.mounted) {
@@ -484,7 +560,7 @@ class _GroupedDownloadTile extends ConsumerWidget {
             .play(
               context,
               file.path,
-              baseItem: item.item,
+              baseItem: _savedPlaybackItem(item, items),
               episode: item.episode,
             ),
       );
@@ -853,7 +929,7 @@ class _DownloadItemTile extends ConsumerWidget {
   ) async {
     final file = await ref
         .read(downloadedFilesProvider.notifier)
-        .resolveFile(item.item, episode: item.episode);
+        .resolveFile(item.item, episode: item.episode, logicalId: item.logicalId);
 
     if (file == null || !await file.exists()) {
       if (context.mounted) {
@@ -872,7 +948,7 @@ class _DownloadItemTile extends ConsumerWidget {
             .play(
               context,
               file.path,
-              baseItem: item.item,
+              baseItem: _savedPlaybackItem(item, ref.read(downloadsProvider).value ?? [item]),
               episode: item.episode,
             ),
       );

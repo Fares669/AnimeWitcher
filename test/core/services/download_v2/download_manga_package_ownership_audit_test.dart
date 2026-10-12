@@ -15,12 +15,16 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 import '../../../support/manga_image_fixtures.dart';
 import 'download_v2_test_support.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  final originalPathProvider = PathProviderPlatform.instance;
+  setUp(() => PathProviderPlatform.instance = _PackageTestPathProvider());
+  tearDown(() => PathProviderPlatform.instance = originalPathProvider);
 
   for (final intent in [DownloadUserIntent.paused, DownloadUserIntent.canceled]) {
     test('offline $intent manga startup controls its persisted child without a parent record', () async {
@@ -87,6 +91,44 @@ void main() {
     expect((await f.store.get(f.logicalId))?.generation, 4);
     expect((await f.store.get(f.logicalId))?.taskId, taskIdForGeneration(f.logicalId, 4));
     expect(await File(p.join(f.directory.path, '0001.png')).readAsBytes(), tinyMangaPng);
+  });
+
+  test('lowered chapter limit retains recovered running occupancy before third admission', () async {
+    final f = await _Fixture.create(limit: 1);
+    addTearDown(f.dispose);
+    f.resolver.fail = true;
+    final firstChild = await f.addPage(1, TaskStatus.running);
+    final otherDirectory = await Directory(p.join(f.directory.path, 'other-chapter')).create();
+    final otherId = logicalDownloadIdForMangaChapter(mangaId: 'manga-package', chapterId: 'other');
+    final otherParent = taskIdForGeneration(otherId, 3);
+    await File(p.join(otherDirectory.path, '0001.png')).writeAsBytes(tinyMangaPng);
+    await MangaChapterManifestV2(
+      version: 1, mangaId: 'manga-package', chapterId: 'other', pageCount: 2,
+      completedIndexes: const {0}, isComplete: false,
+    ).writeTo(otherDirectory);
+    await f.store.put(f.record.copyWith(
+      logicalId: otherId, taskId: otherParent, unitKey: 'other',
+      destinationPath: otherDirectory.path, updatedAtMillis: 2,
+    ));
+    final otherChild = await f.addTask(
+      '${otherParent}_p0002', TaskStatus.running, filename: '0002.png',
+      directoryPath: otherDirectory.path,
+    );
+    await f.manager.initialize();
+    await f.manager.reconcileAdmission();
+    expect(f.downloader.transfers.forId(firstChild.taskId)!.status, TaskStatus.running);
+    expect(f.downloader.transfers.forId(otherChild.taskId)!.status, TaskStatus.running);
+    await f.downloader._status(otherChild.taskId, TaskStatus.canceled);
+    await _until(() async => f.manager.snapshotFor(otherId)?.status == DownloadTransportStatus.missing);
+    final third = await f.manager.start(_videoRequest(f.directory.path));
+    expect(third.status, DownloadTransportStatus.queued);
+    expect(f.downloader.testTransfers.started, isEmpty);
+    expect(f.manager.snapshotFor(f.logicalId)?.status,
+        anyOf(DownloadTransportStatus.running, DownloadTransportStatus.held));
+    expect((await f.store.get(f.logicalId))?.awaitingAdmission, isFalse);
+    expect((await f.store.get(f.logicalId))?.generation, 3);
+    expect(f.downloader.transfers.forId(firstChild.taskId)!.status, TaskStatus.running);
+    expect(await File(await firstChild.filePath()).readAsBytes(), tinyMangaPng);
   });
 
   test('full manga reconstruction reuses exact current children without canceling page bytes', () async {
@@ -325,6 +367,11 @@ Future<void> _until(Future<bool> Function() done) async {
   fail('expected package ownership condition was not reached');
 }
 
+final class _PackageTestPathProvider extends PathProviderPlatform {
+  @override
+  Future<String?> getTemporaryPath() async => Directory.systemTemp.path;
+}
+
 final class _Fixture {
   _Fixture(this.directory, this.downloader, {required DownloadUserIntent intent, required int limit}) {
     parentId = taskIdForGeneration(logicalId, 3);
@@ -371,11 +418,12 @@ final class _Fixture {
           filename: '${(index + 1).toString().padLeft(4, '0')}.png', group: group);
 
   Future<DownloadTask> addTask(String id, TaskStatus status, {
-    String? filename, String group = kDownloadV2SilentPackageGroup, String metadata = '',
+    String? filename, String? directoryPath,
+    String group = kDownloadV2SilentPackageGroup, String metadata = '',
   }) async {
     final task = DownloadTask(
       taskId: id, url: 'https://example.test/$id.png', filename: filename ?? '$id.png',
-      directory: directory.path, baseDirectory: BaseDirectory.root,
+      directory: directoryPath ?? directory.path, baseDirectory: BaseDirectory.root,
       group: group, metaData: metadata, allowPause: true, updates: Updates.statusAndProgress,
     );
     await File(await task.filePath()).writeAsBytes(tinyMangaPng);

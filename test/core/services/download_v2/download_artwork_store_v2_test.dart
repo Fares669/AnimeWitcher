@@ -140,7 +140,8 @@ void main() {
     await saved.delete();
     final outside = await File('${root.path}/outside-temp.img').writeAsBytes(tinyMangaJpeg);
     await Link('${saved.path}.1.tmp').create(outside.path);
-    expect(await artwork.ensure(logicalId: 'linked-temp', kind: DownloadArtworkKindV2.poster, url: 'https://example.test/poster'), isNull);
+    expect(await artwork.ensure(logicalId: 'linked-temp', kind: DownloadArtworkKindV2.poster, url: 'https://example.test/poster'), isNotNull);
+    expect(await FileSystemEntity.type('${saved.path}.1.tmp', followLinks: false), FileSystemEntityType.link);
     await artwork.delete('linked-temp');
     expect(await outside.readAsBytes(), tinyMangaJpeg);
   });
@@ -191,6 +192,57 @@ void main() {
     addTearDown(replacement.dispose);
     await replacement.observe(record, _snapshot(record));
     expect(await artwork.existing(record.logicalId.value, DownloadArtworkKindV2.poster), isNotNull);
+  });
+
+  test('replacement cannot reuse obsolete bytes while the prior rename is settling', () async {
+    final renamed = Completer<void>();
+    final release = Completer<void>();
+    final replacementStarted = Completer<void>();
+    var fetches = 0;
+    var publications = 0;
+    final artwork = DownloadArtworkStoreV2(
+      supportDirectory: () async => root, cachedFileForUrl: (_) async => null,
+      fetchBytes: (_) async => ++fetches == 1 ? tinyMangaJpeg : tinyMangaPng,
+      publishFile: (file, target) async {
+        await file.rename(target);
+        if (++publications == 1) {
+          renamed.complete();
+          await release.future.timeout(const Duration(seconds: 5));
+        }
+      },
+    );
+    final record = _record('replacement-read');
+    final original = DownloadArtworkObserverV2(store: artwork, sourceFor: (_) async =>
+      const DownloadArtworkSourceV2(posterUrl: 'https://example.test/poster'));
+    final oldCapture = original.observe(record, _snapshot(record));
+    await renamed.future.timeout(const Duration(seconds: 2));
+    final disposal = original.dispose();
+    final replacement = DownloadArtworkObserverV2(store: artwork, sourceFor: (_) async {
+      replacementStarted.complete();
+      return const DownloadArtworkSourceV2(posterUrl: 'https://example.test/poster');
+    });
+    addTearDown(replacement.dispose);
+    final capture = replacement.observe(record, _snapshot(record));
+    final completed = capture.then((_) => true);
+    var completedBeforeRelease = false;
+    try {
+      await replacementStarted.future.timeout(const Duration(seconds: 2));
+      await Future<void>.delayed(Duration.zero);
+      completedBeforeRelease = await completed.timeout(
+        const Duration(milliseconds: 250), onTimeout: () => false,
+      );
+    } finally {
+      release.complete();
+      await oldCapture;
+      await disposal;
+      await capture;
+    }
+    expect(completedBeforeRelease, isFalse, reason: 'replacement must wait only for the issued publication');
+    final retained = await artwork.existing(record.logicalId.value, DownloadArtworkKindV2.poster);
+    expect(retained, isNotNull);
+    expect(await retained!.readAsBytes(), tinyMangaPng);
+    expect(fetches, 2);
+    expect(publications, 2);
   });
 
   test('default HTTP fetch rejects an oversized streamed response before publishing', () async {
@@ -247,6 +299,22 @@ void main() {
     final retained = await artwork.existing('recreated', DownloadArtworkKindV2.poster);
     expect(await retained!.readAsBytes(), tinyMangaPng);
     expect(calls, 2);
+  });
+
+  test('UI backfill also shares the store network concurrency ceiling', () async {
+    var active = 0;
+    var peak = 0;
+    final artwork = store(fetchBytes: (_) async {
+      active++;
+      if (active > peak) peak = active;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      active--;
+      return tinyMangaPng;
+    });
+    await Future.wait([for (var index = 0; index < 8; index++) artwork.ensure(
+      logicalId: 'ui-$index', kind: DownloadArtworkKindV2.poster, url: 'https://example.test/poster',
+    )]);
+    expect(peak, 2);
   });
 
   test('observer captures background records once per phase with bounded concurrency', () async {

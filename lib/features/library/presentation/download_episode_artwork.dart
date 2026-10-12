@@ -1,95 +1,55 @@
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/services/download_v2/download_artwork_store_v2.dart';
 
-const String _downloadEpisodeArtworkDirectory = 'download_episode_artwork';
-final Map<String, Future<File?>> _artworkWrites = <String, Future<File?>>{};
+/// Legacy task-owned location, retained for exact-record offline migration.
+Future<File?> downloadedEpisodeArtworkFile(String taskId) =>
+    downloadArtworkStoreV2.legacyFileFor(taskId);
 
-Future<File?> downloadedEpisodeArtworkFile(String taskId) async {
-  if (kIsWeb || taskId.isEmpty) return null;
-  final support = await getApplicationSupportDirectory();
-  final key = sha1.convert(taskId.codeUnits).toString();
-  return File(p.join(support.path, _downloadEpisodeArtworkDirectory, '$key.img'));
-}
+Future<File?> existingDownloadedEpisodeArtwork(String taskId) =>
+    downloadArtworkStoreV2.existingLegacy(taskId);
 
-Future<File?> existingDownloadedEpisodeArtwork(String taskId) async {
-  final file = await downloadedEpisodeArtworkFile(taskId);
-  if (file == null) return null;
-  try {
-    return await file.exists() && await file.length() > 0 ? file : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-Future<File?> _persistDownloadedEpisodeArtwork(
-  String taskId,
-  String url,
-) async {
-  final target = await downloadedEpisodeArtworkFile(taskId);
-  if (target == null) return null;
-  final temp = File('${target.path}.tmp');
-  try {
-    await target.parent.create(recursive: true);
-    final cached = await DefaultCacheManager()
-        .getSingleFile(url)
-        .timeout(const Duration(seconds: 20));
-    if (!await cached.exists() || await cached.length() <= 0) return null;
-
-    if (await temp.exists()) await temp.delete();
-    await cached.copy(temp.path);
-    if (!await temp.exists() || await temp.length() <= 0) return null;
-    if (await target.exists()) await target.delete();
-    await temp.rename(target.path);
-    return target;
-  } catch (_) {
-    try {
-      if (await temp.exists()) await temp.delete();
-    } catch (_) {}
-    return null;
-  }
-}
-
-/// Copies an episode still out of the temporary image cache into application
-/// support storage. Completed downloads therefore keep their episode artwork
-/// even after the normal image cache is cleared or the device is offline.
 Future<File?> ensureDownloadedEpisodeArtwork({
   required String taskId,
   required Episode? episode,
+  String? logicalId,
 }) async {
-  final url = episode?.posterUrl?.trim() ?? '';
-  if (kIsWeb || taskId.isEmpty || url.isEmpty) return null;
-
-  final existing = await existingDownloadedEpisodeArtwork(taskId);
-  if (existing != null) return existing;
-
-  final inFlight = _artworkWrites[taskId];
-  if (inFlight != null) return inFlight;
-
-  final operation = _persistDownloadedEpisodeArtwork(taskId, url);
-  _artworkWrites[taskId] = operation;
-  try {
-    return await operation;
-  } finally {
-    if (identical(_artworkWrites[taskId], operation)) {
-      _artworkWrites.remove(taskId);
-    }
+  final logical = logicalId?.trim() ?? '';
+  if (logical.isEmpty) {
+    // Old callers may have lost remote metadata after an offline restart.
+    final legacy = await existingDownloadedEpisodeArtwork(taskId);
+    if (legacy != null) return legacy;
   }
+  return downloadArtworkStoreV2.ensure(
+    logicalId: logical.isEmpty ? taskId : logical,
+    kind: DownloadArtworkKindV2.episode,
+    url: episode?.posterUrl,
+    legacyTaskId: taskId,
+  );
 }
 
-Future<void> deleteDownloadedEpisodeArtwork(String taskId) async {
-  _artworkWrites.remove(taskId);
-  final file = await downloadedEpisodeArtworkFile(taskId);
-  if (file == null) return;
-  try {
-    if (await file.exists()) await file.delete();
-    final temp = File('${file.path}.tmp');
-    if (await temp.exists()) await temp.delete();
-  } catch (_) {}
+Future<File?> existingDownloadedPosterArtwork(String logicalId) =>
+    downloadArtworkStoreV2.existing(logicalId, DownloadArtworkKindV2.poster);
+
+Future<File?> ensureDownloadedPosterArtwork({
+  required String logicalId,
+  required String? posterUrl,
+}) => downloadArtworkStoreV2.ensure(
+  logicalId: logicalId, kind: DownloadArtworkKindV2.poster, url: posterUrl,
+);
+
+Future<void> retainDownloadedArtwork({
+  required String logicalId,
+  required String taskId,
+  required MultimediaItem item,
+  required Episode? episode,
+}) async {
+  await Future.wait([
+    ensureDownloadedEpisodeArtwork(taskId: taskId, logicalId: logicalId, episode: episode),
+    ensureDownloadedPosterArtwork(logicalId: logicalId, posterUrl: item.posterUrl),
+  ]);
 }
+
+Future<void> deleteDownloadedEpisodeArtwork(String taskId) =>
+    deleteDownloadArtworkV2(taskId, legacyTaskId: taskId);

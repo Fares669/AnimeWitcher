@@ -215,7 +215,9 @@ final class DownloadManagerV2 {
           _forgetHandle(id);
           startupOwnership = null;
         }
-        startupOwnership = await _exactHandle(record.taskId);
+        startupOwnership = record.mediaKind == DownloadMediaKind.mangaChapter
+            ? await _exactHandle(record.taskId)
+            : _handlesByTaskId[record.taskId];
         var duplicateStartupDestination = false;
         if (record.intent != DownloadUserIntent.canceled) {
           final destinationKey = await _canonicalDestinationPath(
@@ -2548,16 +2550,21 @@ final class DownloadManagerV2 {
   }
 
   Future<Set<int>> _verifiedMangaCheckpointIndexes(LogicalDownloadRecordV2 record) async {
-    final directory = Directory((await _destinationFile(record.destinationPath)).path);
-    if (!await directory.exists()) return {};
-    final manifest = await MangaChapterManifestV2.readFrom(directory);
-    if (manifest == null || manifest.mangaId != record.mediaId ||
-        manifest.chapterId != record.unitKey || manifest.pageCount <= 0) return {};
-    final files = await _verifiedMangaPageFiles(directory, manifest);
-    return {
-      for (final index in files.keys)
-        if (manifest.completedIndexes.contains(index) && manifest.pageDigests.containsKey(index)) index,
-    };
+    try {
+      final directory = Directory((await _destinationFile(record.destinationPath)).path);
+      if (!await directory.exists()) return {};
+      final manifest = await MangaChapterManifestV2.readFrom(directory);
+      if (manifest == null || manifest.mangaId != record.mediaId ||
+          manifest.chapterId != record.unitKey || manifest.pageCount <= 0) return {};
+      final files = await _verifiedMangaPageFiles(directory, manifest);
+      return {
+        for (final index in files.keys)
+          if (manifest.completedIndexes.contains(index) && manifest.pageDigests.containsKey(index)) index,
+      };
+    } on FileSystemException {
+      // An unreadable checkpoint supplies no new verified renewal evidence.
+      return {};
+    }
   }
 
   void _scheduleSourceRefresh(

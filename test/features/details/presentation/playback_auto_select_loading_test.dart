@@ -25,7 +25,7 @@ final class _NoDownloads extends DownloadedFiles {
   Map<String, File?> build() => const <String, File?>{};
 
   @override
-  Future<File?> resolveFile(MultimediaItem item, {Episode? episode}) async {
+  Future<File?> resolveFile(MultimediaItem item, {Episode? episode, String? logicalId}) async {
     return null;
   }
 }

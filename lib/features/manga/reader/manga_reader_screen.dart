@@ -17,6 +17,7 @@ import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/loading_indicator.dart';
 import 'manga_reader_controller.dart';
+import '../../library/presentation/downloads_provider.dart';
 import 'manga_reader_keyboard_handler.dart';
 import 'manga_reader_image_actions.dart';
 import 'manga_reader_cover_provider.dart';
@@ -119,6 +120,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       chapter: widget.chapter,
       chapters: widget.chapters,
       localChapterDirectory: widget.localChapterDirectory,
+      localChapterDirectoryFor: (chapter) async {
+        final downloads = await ref.read(downloadsProvider.future);
+        return completedMangaChapterDownload(downloads, chapter)?.destinationPath;
+      },
       initialMode: settings.modeForManga(_readerMangaId),
     );
     _controller.addListener(_handleControllerChanged);

@@ -44,6 +44,7 @@ final class MangaChapterPageTaskV2 {
     required this.headers,
     required this.destinationPath,
     required this.retries,
+    this.expectedDigest,
   });
 
   final String taskId;
@@ -52,6 +53,7 @@ final class MangaChapterPageTaskV2 {
   final Map<String, String> headers;
   final String destinationPath;
   final int retries;
+  final String? expectedDigest;
 }
 
 abstract interface class MangaChapterPageResolverV2 {
@@ -289,6 +291,7 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
           _pageFileName(index, page),
         ),
         retries: spec.retries,
+        expectedDigest: _manifest.pageDigests[index],
       );
       final handle = await startPage(pageTask);
       _startingIndexes.remove(index);

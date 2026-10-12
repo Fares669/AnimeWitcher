@@ -23,10 +23,11 @@ class MangaReaderController extends ChangeNotifier {
     required MangaChapter chapter,
     required this.chapters,
     this.localChapterDirectory,
+    this.localChapterDirectoryFor,
     MangaReaderPageCache? pageCache,
     MangaReaderMode? initialMode,
   }) : _chapter = chapter,
-       _localChapterId = chapter.id,
+       _initialLocalChapter = chapter,
        _pageCache = pageCache ?? MangaReaderPageCache(),
        _mode = initialMode ?? preferredModeFor(manga);
 
@@ -35,7 +36,8 @@ class MangaReaderController extends ChangeNotifier {
   final MultimediaItem manga;
   final List<MangaChapter> chapters;
   final String? localChapterDirectory;
-  final String _localChapterId;
+  final MangaChapter _initialLocalChapter;
+  final Future<String?> Function(MangaChapter chapter)? localChapterDirectoryFor;
   final MangaReaderPageCache _pageCache;
 
   MangaChapter _chapter;
@@ -84,8 +86,10 @@ class MangaReaderController extends ChangeNotifier {
     return index >= 0 && index + 1 < chapters.length;
   }
 
-  String get _mangaId {
-    final chapterId = _chapter.mangaId.trim();
+  String get _mangaId => _mangaIdFor(_chapter);
+
+  String _mangaIdFor(MangaChapter chapter) {
+    final chapterId = chapter.mangaId.trim();
     if (chapterId.isNotEmpty) return chapterId;
     final syncId = manga.syncData?['mangaId']?.trim() ?? '';
     return syncId.isNotEmpty ? syncId : manga.url;
@@ -102,7 +106,7 @@ class MangaReaderController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final localPages = await _loadLocalPages();
+      final localPages = await _loadLocalPages(_chapter);
       if (forceSourceReload && localPages.isEmpty) {
         _preloadedChapterPages.remove(chapterId);
         await _pageCache.remove(_mangaId, _chapter);
@@ -159,13 +163,16 @@ class MangaReaderController extends ChangeNotifier {
           return;
         }
         try {
-          final cached = await _pageCache.get(_mangaId, chapter);
-          final pages =
-              cached ?? await provider.getMangaChapterPages(manga.url, chapter);
+          final local = await _loadLocalPages(chapter);
+          final mangaId = _mangaIdFor(chapter);
+          final cached = local.isEmpty ? await _pageCache.get(mangaId, chapter) : null;
+          final pages = local.isNotEmpty
+              ? local
+              : cached ?? await provider.getMangaChapterPages(manga.url, chapter);
           if (pages.isNotEmpty) {
             _preloadedChapterPages[id] = List<MangaPage>.unmodifiable(pages);
-            if (cached == null) {
-              await _pageCache.put(_mangaId, chapter, pages);
+            if (local.isEmpty && cached == null) {
+              await _pageCache.put(mangaId, chapter, pages);
             }
           }
         } catch (_) {
@@ -177,19 +184,27 @@ class MangaReaderController extends ChangeNotifier {
     );
   }
 
-  Future<List<MangaPage>> _loadLocalPages() async {
-    final rawDirectory = localChapterDirectory?.trim() ?? '';
-    if (rawDirectory.isEmpty || _chapter.id != _localChapterId) {
-      return const <MangaPage>[];
+  Future<List<MangaPage>> _loadLocalPages(MangaChapter chapter) async {
+    String? resolvedDirectory;
+    try {
+      resolvedDirectory = await localChapterDirectoryFor?.call(chapter);
+    } catch (_) {
+      // An unavailable downloads projection must not hide the initial directory.
     }
+    final initial = chapter.id == _initialLocalChapter.id &&
+        _mangaIdFor(chapter) == _mangaIdFor(_initialLocalChapter);
+    final rawDirectory = (resolvedDirectory?.trim().isNotEmpty ?? false)
+        ? resolvedDirectory!.trim()
+        : initial ? localChapterDirectory?.trim() ?? '' : '';
+    if (rawDirectory.isEmpty) return const <MangaPage>[];
 
     final directory = await resolveMangaChapterDirectoryV2(rawDirectory);
     if (!await directory.exists()) return const <MangaPage>[];
     final manifest = await MangaChapterManifestV2.readFrom(directory);
     if (manifest == null ||
         !manifest.isComplete ||
-        manifest.mangaId != _mangaId ||
-        manifest.chapterId != _chapter.id ||
+        manifest.mangaId != _mangaIdFor(chapter) ||
+        manifest.chapterId != chapter.id ||
         manifest.pageCount <= 0) {
       return const <MangaPage>[];
     }

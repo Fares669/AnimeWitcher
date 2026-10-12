@@ -13,6 +13,60 @@ import 'package:path/path.dart' as p;
 import '../../../support/manga_image_fixtures.dart';
 
 void main() {
+  test('dispose joins an issued manifest publication before chapter reconstruction', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-dispose-publication-');
+    addTearDown(() => temp.delete(recursive: true));
+    final io = _DelayedManifestPublicationIO(
+      p.join(temp.path, '${MangaChapterManifestV2.fileName}.tmp'),
+    );
+    await IOOverrides.runWithIOOverrides(() async {
+      final starter = _FakePageStarter();
+      final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+        MangaChapterTransportSpecV2(
+          taskId: 'dispose-publication', mangaId: 'm1', chapterId: 'c1',
+          destinationDirectory: temp.path, retries: 1,
+          pages: const [MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png')],
+        ),
+      );
+      await starter.waitUntilStarted(0);
+      io.delayNextPublication = true;
+      await starter.complete(0);
+      await io.entered.future.timeout(const Duration(seconds: 2));
+      var disposed = false;
+      final disposal = handle.dispose().whenComplete(() => disposed = true);
+      await Future<void>.delayed(Duration.zero);
+      try {
+        expect(disposed, isFalse, reason: 'an issued old checkpoint must settle before disposal completes');
+      } finally {
+        io.release.complete();
+        await io.published.future;
+        await disposal;
+      }
+      final checkpoint = (await MangaChapterManifestV2.readFrom(temp))!;
+      expect(checkpoint.completedIndexes, const {0});
+      expect(checkpoint.isComplete, isTrue);
+      final reopenedStarter = _FakePageStarter();
+      final reopened = await MangaChapterTransportV2(startPage: reopenedStarter.start).start(
+        MangaChapterTransportSpecV2(
+          taskId: 'dispose-reconstructed', mangaId: 'm1', chapterId: 'c1',
+          destinationDirectory: temp.path, retries: 1,
+          pages: const [
+            MangaPage(index: 0, imageUrl: 'https://cdn.test/0.png'),
+            MangaPage(index: 1, imageUrl: 'https://cdn.test/1.png'),
+          ],
+        ),
+      );
+      await reopenedStarter.waitUntilStarted(1);
+      await reopened.cancel();
+      await reopened.dispose();
+      final fresh = (await MangaChapterManifestV2.readFrom(temp))!;
+      expect(fresh.pageCount, 2);
+      expect(fresh.completedIndexes, isEmpty);
+      expect(fresh.pageDigests, isEmpty);
+      expect(await File(p.join(temp.path, '0001.png')).readAsBytes(), tinyMangaPng);
+    }, io);
+  });
+
   test('fresh extensionless real image completes and records its digest', () async {
     final temp = await Directory.systemTemp.createTemp('aw-extensionless-page-');
     addTearDown(() => temp.delete(recursive: true));
@@ -846,4 +900,47 @@ Future<void> _waitForTerminal(DownloadTransportHandle handle) async {
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }
   throw StateError('parent did not reach a terminal status; current=${handle.current.status}');
+}
+
+final class _DelayedManifestPublicationIO extends IOOverrides {
+  _DelayedManifestPublicationIO(this.tempPath);
+  final String tempPath;
+  bool delayNextPublication = false;
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  final published = Completer<void>();
+  @override
+  File createFile(String path) {
+    final file = super.createFile(path);
+    return path == tempPath ? _DelayedManifestPublicationFile(file, this) : file;
+  }
+}
+
+final class _DelayedManifestPublicationFile implements File {
+  _DelayedManifestPublicationFile(this.delegate, this.io);
+  final File delegate;
+  final _DelayedManifestPublicationIO io;
+  @override
+  String get path => delegate.path;
+  @override
+  Future<File> writeAsString(String contents, {
+    FileMode mode = FileMode.write, Encoding encoding = utf8, bool flush = false,
+  }) async {
+    await delegate.writeAsString(contents, mode: mode, encoding: encoding, flush: flush);
+    return this;
+  }
+  @override
+  Future<File> rename(String newPath) async {
+    if (!io.delayNextPublication) return delegate.rename(newPath);
+    io.delayNextPublication = false;
+    io.entered.complete();
+    try {
+      await io.release.future;
+      return await delegate.rename(newPath);
+    } finally {
+      io.published.complete();
+    }
+  }
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
