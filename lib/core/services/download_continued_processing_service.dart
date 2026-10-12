@@ -43,6 +43,8 @@ class DownloadGlobalHandlerLease {
     return lease;
   }
 
+  bool get isCurrent => _activeGeneration == generation;
+
   bool releaseIfCurrent() {
     if (_activeGeneration != generation) return false;
     _activeGeneration = null;
@@ -104,6 +106,8 @@ class DownloadContinuedProcessingService {
   Timer? _updateTimer;
   DateTime? _lastUpdateAt;
   Map<String, Object>? _pendingUpdate;
+  Future<void> _updateTail = Future<void>.value();
+  int _updateEpoch = 0;
 
   DownloadContinuedProcessingService({
     required this.onSystemCancel,
@@ -121,6 +125,9 @@ class DownloadContinuedProcessingService {
 
   bool get _isAvailable =>
       forceAvailableForTesting || (!kIsWeb && Platform.isIOS);
+
+  bool get ownsCurrentHandler =>
+      !_disposed && (_handlerLease?.isCurrent ?? false);
 
   Future<void> configureDiagnosticLog(bool enabled) =>
       _invoke('configureDiagnosticLog', {'enabled': enabled});
@@ -207,14 +214,34 @@ class DownloadContinuedProcessingService {
     });
   }
 
-  Future<void> _sendUpdate(Map<String, Object> arguments) async {
-    final accepted = await _invokeForResult<Object?>('update', arguments);
-    if (accepted is bool && !accepted && !_disposed) {
-      onSessionLost?.call();
+  Future<void> _sendUpdate(Map<String, Object> arguments) {
+    final epoch = _updateEpoch;
+    final operation = _updateTail.then((_) async {
+      if (_disposed || epoch != _updateEpoch) return;
+      final accepted = await _invokeForResult<Object?>('update', arguments);
+      if (accepted is bool && !accepted && !_disposed && epoch == _updateEpoch) {
+        onSessionLost?.call();
+      }
+    });
+    _updateTail = operation.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return operation;
+  }
+
+  Future<void> _flushPendingUpdate(String taskId) async {
+    _updateTimer?.cancel();
+    _updateTimer = null;
+    final pending = _pendingUpdate;
+    _pendingUpdate = null;
+    if (pending != null && pending['taskId'] == taskId) {
+      _lastUpdateAt = DateTime.now();
+      await _sendUpdate(pending);
+    } else {
+      await _updateTail;
     }
   }
 
   void _cancelPendingUpdate() {
+    _updateEpoch++;
     _updateTimer?.cancel();
     _updateTimer = null;
     _pendingUpdate = null;
@@ -226,7 +253,13 @@ class DownloadContinuedProcessingService {
     required String status,
     bool endSession = false,
   }) async {
+    final epoch = _updateEpoch;
+    if (success && endSession) await _flushPendingUpdate(taskId);
+    if (!ownsCurrentHandler || epoch != _updateEpoch) return;
     _cancelPendingUpdate();
+    final terminalEpoch = _updateEpoch;
+    if (success && endSession) await _updateTail;
+    if (!ownsCurrentHandler || terminalEpoch != _updateEpoch) return;
     await _invoke('finish', <String, Object>{
       'taskId': taskId,
       'success': success,
@@ -393,7 +426,7 @@ class DownloadContinuedProcessingService {
     String method,
     Map<String, Object> arguments,
   ) async {
-    if (!_isAvailable || _disposed) return null;
+    if (!_isAvailable || !ownsCurrentHandler) return null;
 
     try {
       return await _channel.invokeMethod<T>(method, arguments);
@@ -416,7 +449,7 @@ class DownloadContinuedProcessingService {
   }
 
   Future<void> _invoke(String method, Map<String, Object> arguments) async {
-    if (!_isAvailable || _disposed) return;
+    if (!_isAvailable || !ownsCurrentHandler) return;
 
     try {
       await _channel.invokeMethod<void>(method, arguments);

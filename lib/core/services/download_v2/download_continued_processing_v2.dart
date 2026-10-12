@@ -298,7 +298,18 @@ final class IosDownloadContinuedProcessingObserverV2
     LogicalDownloadRecordV2 record,
     DownloadTransportSnapshot snapshot,
   ) async {
-    if (_disposed || record.taskId != snapshot.taskId) return;
+    if (record.taskId != snapshot.taskId) return;
+    final terminal = switch (snapshot.status) {
+      DownloadTransportStatus.complete ||
+      DownloadTransportStatus.failed ||
+      DownloadTransportStatus.paused ||
+      DownloadTransportStatus.canceled ||
+      DownloadTransportStatus.missing => true,
+      _ => false,
+    };
+    // Drain accepted terminal events on shutdown only while this lease still
+    // owns the overlay. New events are rejected synchronously by observe().
+    if (_disposed && (!terminal || !_service.ownsCurrentHandler)) return;
     final logicalId = record.logicalId.value;
     final entry = _ContinuedEntryV2(record, snapshot);
 

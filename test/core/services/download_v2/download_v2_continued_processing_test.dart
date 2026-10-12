@@ -69,26 +69,213 @@ void main() {
       return true;
     });
     final service = DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true);
+    Future<void>? initialUpdate;
+    Future<void>? finalUpdate;
     Future<void>? finish;
     try {
       await service.start(taskId: 'terminal-task', displayName: 'Saved episode');
-      await service.update(taskId: 'terminal-task', progress: .25, totalBytes: 1000, transferredBytes: 250);
+      // Do not assume wall time stayed inside the sample window before this
+      // call: an immediate native update can already be waiting at the gate.
+      initialUpdate = service.update(taskId: 'terminal-task', progress: .25, totalBytes: 1000, transferredBytes: 250);
       await tester.pump(const Duration(milliseconds: 1100));
       await pumpUntilFuture(tester, started.future, 'timer-fired native update entry');
-      await service.update(taskId: 'terminal-task', progress: 1, totalBytes: 1000, transferredBytes: 1000);
+      finalUpdate = service.update(taskId: 'terminal-task', progress: 1, totalBytes: 1000, transferredBytes: 1000);
       finish = service.finish(taskId: 'terminal-task', success: true, status: 'completed', endSession: true);
       await tester.pump();
       expect(calls.where((call) => call.method == 'finish'), isEmpty,
         reason: 'finish must not overtake the already-issued update');
     } finally {
       release.complete();
+      if (initialUpdate != null) await pumpUntilFuture(tester, initialUpdate, 'initial native update completion');
+      if (finalUpdate != null) await pumpUntilFuture(tester, finalUpdate, 'final native update completion');
       if (finish != null) await pumpUntilFuture(tester, finish, 'ordered native terminal finish');
       await service.dispose();
     }
     expect(calls.map((call) => call.method), ['start', 'update', 'update', 'finish']);
-    final finalUpdate = calls.where((call) => call.method == 'update').last.arguments as Map;
-    expect(finalUpdate['progress'], 1.0);
-    expect(finalUpdate['transferredBytes'], 1000);
+    final finalArguments = calls.where((call) => call.method == 'update').last.arguments as Map;
+    expect(finalArguments['progress'], 1.0);
+    expect(finalArguments['transferredBytes'], 1000);
+  });
+
+  for (final status in [DownloadTransportStatus.complete, DownloadTransportStatus.failed]) {
+    for (final replace in [false, true]) {
+    testWidgets('dispose handles accepted $status behind start with replacement=$replace', (tester) async {
+      final calls = <MethodCall>[];
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final record = _terminalProgressRecord();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        if (call.method == 'start' && (call.arguments as Map)['taskId'] == record.taskId) {
+          entered.complete();
+          await release.future;
+        }
+        return true;
+      });
+      final service = DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true);
+      final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+      IosDownloadContinuedProcessingObserverV2? replacement;
+      Future<void>? active;
+      Future<void>? terminal;
+      Future<void>? disposal;
+      try {
+        active = observer.observe(record, DownloadTransportSnapshot(
+          taskId: record.taskId, status: DownloadTransportStatus.running, progress: .25,
+        ));
+        await pumpUntilFuture(tester, entered.future, 'old observer start acknowledgement entry');
+        terminal = observer.observe(record.copyWith(completedAtMillis: status == DownloadTransportStatus.complete ? 1 : null),
+          DownloadTransportSnapshot(taskId: record.taskId, status: status, progress: 1, transferredBytes: 1000, totalBytes: 1000));
+        disposal = observer.dispose();
+        // New events after disposal remain rejected, even while accepted work drains.
+        await observer.observe(record, DownloadTransportSnapshot(
+          taskId: record.taskId, status: DownloadTransportStatus.running, progress: .9,
+        ));
+        if (replace) {
+          replacement = IosDownloadContinuedProcessingObserverV2(service: DownloadContinuedProcessingService(
+            onSystemCancel: (_) async {}, forceAvailableForTesting: true,
+          ));
+          final next = record.copyWith(taskId: 'aw_v2_queued_replacement_g1');
+          await replacement.observe(next, DownloadTransportSnapshot(
+            taskId: next.taskId, status: DownloadTransportStatus.running, progress: .1,
+          ));
+        }
+      } finally {
+        release.complete();
+        if (active != null) await pumpUntilFuture(tester, active, 'old active observation completion');
+        if (terminal != null) await pumpUntilFuture(tester, terminal, 'accepted terminal observation completion');
+        if (disposal != null) await pumpUntilFuture(tester, disposal, 'terminal observer disposal');
+        await observer.dispose();
+        await replacement?.dispose();
+      }
+      expect(calls.map((call) => call.method), replace ? ['start', 'start']
+        : status == DownloadTransportStatus.complete ? ['start', 'update', 'finish'] : ['start', 'stop']);
+      if (!replace && status == DownloadTransportStatus.complete) {
+        expect((calls.singleWhere((call) => call.method == 'update').arguments as Map)['transferredBytes'], 1000);
+      }
+    });
+    }
+  }
+
+  testWidgets('obsolete terminal acknowledgement cannot finish a replacement system session', (tester) async {
+    final calls = <MethodCall>[];
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    final record = _terminalProgressRecord();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'update' && (call.arguments as Map)['taskId'] == record.taskId) {
+        entered.complete();
+        await release.future;
+      }
+      return true;
+    });
+    final original = IosDownloadContinuedProcessingObserverV2(service: DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {}, forceAvailableForTesting: true,
+    ));
+    IosDownloadContinuedProcessingObserverV2? replacement;
+    Future<void>? terminal;
+    Future<void>? disposal;
+    try {
+      await original.observe(record, DownloadTransportSnapshot(
+        taskId: record.taskId, status: DownloadTransportStatus.running, progress: .25,
+      ));
+      terminal = original.observe(record.copyWith(completedAtMillis: 1), DownloadTransportSnapshot(
+        taskId: record.taskId, status: DownloadTransportStatus.complete, progress: 1, transferredBytes: 1000, totalBytes: 1000,
+      ));
+      await pumpUntilFuture(tester, entered.future, 'issued terminal update acknowledgement entry');
+      disposal = original.dispose();
+      replacement = IosDownloadContinuedProcessingObserverV2(service: DownloadContinuedProcessingService(
+        onSystemCancel: (_) async {}, forceAvailableForTesting: true,
+      ));
+      final next = record.copyWith(taskId: 'aw_v2_replacement_g1');
+      await replacement.observe(next, DownloadTransportSnapshot(
+        taskId: next.taskId, status: DownloadTransportStatus.running, progress: .1,
+      ));
+    } finally {
+      release.complete();
+      if (terminal != null) await pumpUntilFuture(tester, terminal, 'obsolete terminal completion');
+      if (disposal != null) await pumpUntilFuture(tester, disposal, 'obsolete observer disposal');
+      await original.dispose();
+      await replacement?.dispose();
+    }
+    expect(calls.map((call) => call.method), ['start', 'update', 'start'],
+      reason: 'native finish/stop close the current overlay regardless of the old taskId');
+  });
+
+  testWidgets('an old finish awaiting its update cannot close a newly started service epoch', (tester) async {
+    final calls = <MethodCall>[];
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'update') {
+        entered.complete();
+        await release.future;
+      }
+      return true;
+    });
+    final service = DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true);
+    Future<void>? terminal;
+    try {
+      await service.start(taskId: 'old-epoch', displayName: 'Previous');
+      final pending = service.update(taskId: 'old-epoch', progress: 1, totalBytes: 1000);
+      terminal = service.finish(taskId: 'old-epoch', success: true, status: 'completed', endSession: true);
+      await pumpUntilFuture(tester, entered.future, 'old epoch final update entry');
+      await service.start(taskId: 'new-epoch', displayName: 'Current');
+      release.complete();
+      await pumpUntilFuture(tester, pending, 'old epoch update completion');
+      await pumpUntilFuture(tester, terminal, 'old epoch finish completion');
+      expect(calls.map((call) => call.method), ['start', 'update', 'start']);
+    } finally {
+      if (!release.isCompleted) release.complete();
+      if (terminal != null) await pumpUntilFuture(tester, terminal, 'old epoch terminal cleanup');
+      await service.dispose();
+    }
+  });
+
+  testWidgets('obsolete checkpoint acknowledgement cannot start over a replacement session', (tester) async {
+    final calls = <MethodCall>[];
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'persistNativeQueue') {
+        entered.complete();
+        await release.future;
+        return {'acceptedVersion': (call.arguments as Map)['snapshotVersion'], 'nativePromotionAvailable': true};
+      }
+      return true;
+    });
+    final original = IosDownloadContinuedProcessingObserverV2(
+      service: DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true),
+      nativeBackgroundPlans: () => const [],
+    );
+    IosDownloadContinuedProcessingObserverV2? replacement;
+    Future<void>? active;
+    Future<void>? disposal;
+    try {
+      final record = _terminalProgressRecord();
+      active = original.observe(record, DownloadTransportSnapshot(
+        taskId: record.taskId, status: DownloadTransportStatus.running, progress: .25,
+      ));
+      await pumpUntilFuture(tester, entered.future, 'old checkpoint acknowledgement entry');
+      disposal = original.dispose();
+      replacement = IosDownloadContinuedProcessingObserverV2(service: DownloadContinuedProcessingService(
+        onSystemCancel: (_) async {}, forceAvailableForTesting: true,
+      ));
+      final next = record.copyWith(taskId: 'aw_v2_checkpoint_replacement_g1');
+      await replacement.observe(next, DownloadTransportSnapshot(
+        taskId: next.taskId, status: DownloadTransportStatus.running, progress: .1,
+      ));
+    } finally {
+      release.complete();
+      if (active != null) await pumpUntilFuture(tester, active, 'obsolete checkpoint completion');
+      if (disposal != null) await pumpUntilFuture(tester, disposal, 'obsolete checkpoint observer disposal');
+      await original.dispose();
+      await replacement?.dispose();
+    }
+    expect(calls.map((call) => call.method), ['persistNativeQueue', 'start']);
+    expect((calls.last.arguments as Map)['taskId'], 'aw_v2_checkpoint_replacement_g1');
   });
 
   for (final terminal in ['failed', 'stop', 'dispose']) {
@@ -133,6 +320,44 @@ void main() {
     } finally {
       await service.dispose();
     }
+  });
+
+  testWidgets('stop fences a queued timer update and obsolete session-loss reply', (tester) async {
+    final calls = <MethodCall>[];
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    var losses = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'update') {
+        if (!entered.isCompleted) entered.complete();
+        await release.future;
+        return false;
+      }
+      return true;
+    });
+    final service = DownloadContinuedProcessingService(
+      onSystemCancel: (_) async {}, onSessionLost: () { losses++; }, forceAvailableForTesting: true,
+    );
+    Future<void>? first;
+    Future<void>? queued;
+    try {
+      await service.start(taskId: 'stopped-task', displayName: 'Saved');
+      first = service.update(taskId: 'stopped-task', progress: .25, totalBytes: 1000);
+      await tester.pump(const Duration(milliseconds: 1100));
+      await pumpUntilFuture(tester, entered.future, 'issued update before stop');
+      queued = service.update(taskId: 'stopped-task', progress: .8, totalBytes: 1000);
+      await tester.pump(const Duration(milliseconds: 1100));
+      await service.stop(taskId: 'stopped-task', endSession: true);
+    } finally {
+      release.complete();
+      if (first != null) await pumpUntilFuture(tester, first, 'stopped first update');
+      if (queued != null) await pumpUntilFuture(tester, queued, 'stopped queued update');
+      await tester.pump(const Duration(seconds: 2));
+      await service.dispose();
+    }
+    expect(calls.map((call) => call.method), ['start', 'update', 'stop']);
+    expect(losses, 0);
   });
 
   test('parallel native speed sums live child windows without zero spikes', () {
