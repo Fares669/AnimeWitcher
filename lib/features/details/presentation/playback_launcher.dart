@@ -217,6 +217,7 @@ class PlaybackLauncher {
       episode: history.episode ?? 0,
       posterUrl: history.episodePosterUrl,
       serverName: history.episodeServerName ?? '',
+      serverNumber: history.episodeServerNumber,
     );
   }
 
@@ -410,6 +411,7 @@ class PlaybackLauncher {
             serverName: episode.serverName,
           ),
           episodeServerName: episode.serverName,
+          episodeServerNumber: episode.serverNumber,
           episodePosterUrl: episode.posterUrl,
         );
   }

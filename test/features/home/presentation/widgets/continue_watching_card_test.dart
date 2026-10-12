@@ -122,6 +122,29 @@ Future<void> _writeShot(WidgetTester tester, String filename) async {
 }
 
 void main() {
+  testWidgets('renders original decimal and special labels plus raw numeric fallback', (tester) async {
+    final item = _historyItem().item;
+    for (final metadata in [
+      (label: 'الحلقة ٢.٥', number: '٢.٥', expected: 'الحلقة ٢.٥'),
+      (label: 'الحلقة الخاصة: العودة / الجزء؟', number: null, expected: 'الحلقة الخاصة: العودة / الجزء؟'),
+      (label: '', number: '٢.٥', expected: '٢.٥'),
+    ]) {
+      final history = HistoryItem(
+        item: item, position: 40, duration: 100, timestamp: 0,
+        lastEpisodeUrl: 'abc|ep2', episode: 2,
+        episodeServerName: metadata.label, episodeServerNumber: metadata.number,
+      );
+      // Each nested Navigator owns its initial route builder and child.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpWidget(ProviderScope(child: _shell(child: ContinueWatchingCard(historyItem: history))));
+      await tester.pumpAndSettle();
+      expect(find.text(metadata.expected), findsOneWidget);
+      expect(find.text('حلقة 2'), findsNothing);
+      expect(find.text('الحلقة 2'), findsNothing);
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('tap opens continue-watching playback without leaving home', (
     tester,
   ) async {

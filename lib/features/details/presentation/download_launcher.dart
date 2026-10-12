@@ -369,9 +369,9 @@ class DownloadLauncher {
                       filename = '$episodeLabel$extension';
                     } else {
                       final sanitizedTitle = sanitizeDownloadFileName(
-                        item.title.replaceAll(RegExp(r'[^\w\s-]'), '').trim(),
+                        item.title,
                       );
-                      filename = '$sanitizedTitle$extension';
+                      filename = '${sanitizedTitle.isEmpty ? 'video' : sanitizedTitle}$extension';
                     }
 
                     final destinationPath = await downloadDestinationPathV2(

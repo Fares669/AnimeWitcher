@@ -9,6 +9,14 @@ String _normalizeEpisodeLabel(String value) {
       .replaceAll(RegExp(r'\s+'), ' ');
 }
 
+/// Preserve a supplied numeric display value without changing episode identity.
+String? rawEpisodeNumberForDisplay(Object? value) {
+  if (value is! String && value is! num) return null;
+  final raw = value.toString();
+  final normalized = normalizeLocalizedDigits(raw.trim());
+  return RegExp(r'^-?\d+(?:[.,٫]\d+)?$').hasMatch(normalized) ? raw : null;
+}
+
 /// True when [value] is only a generic episode placeholder such as
 /// "الحلقة 12", "حلقة 12 والأخيرة", or "Episode 3".
 bool isGenericEpisodeTitle(String? value) {
@@ -396,6 +404,7 @@ String continueWatchingPrimaryLabel({
   required bool isArabic,
   String? episodeTitle,
   String? episodeServerName,
+  String? episodeServerNumber,
 }) {
   final number = episode ?? 0;
   final server = episodeServerName ?? '';
@@ -419,6 +428,9 @@ String continueWatchingPrimaryLabel({
       catalogLabel: catalogLabel,
       isFinal: hasFinalEpisodeSuffix(catalogLabel),
     );
+  }
+  if (episodeServerNumber?.trim().isNotEmpty ?? false) {
+    return episodeServerNumber!;
   }
   if (number > 0) {
     return formatEpisodeNumberLabel(episode: number, isArabic: isArabic);

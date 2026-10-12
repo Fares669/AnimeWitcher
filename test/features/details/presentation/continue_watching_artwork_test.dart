@@ -6,6 +6,8 @@ import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/providers/anime_data_source_settings_provider.dart';
 import 'package:animewitcher/core/router/app_router.dart';
+import 'package:animewitcher/core/utils/episode_label.dart';
+import 'package:animewitcher/features/player/presentation/widgets/player_control_components.dart';
 import 'package:animewitcher/features/details/presentation/downloaded_file_provider.dart';
 import 'package:animewitcher/features/details/presentation/playback_launcher.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
@@ -41,11 +43,17 @@ class _Downloads extends DownloadedFiles {
 
 class _History extends WatchHistory {
   Episode? opened;
+  String? storedTitle;
+  String? storedServerName;
+  String? storedServerNumber;
   @override
   List<HistoryItem> build() => [];
   @override
-  Future<void> recordOpened(MultimediaItem item, {String? lastEpisodeUrl, int? season, int? episode, String? episodeTitle, String? episodeServerName, String? episodePosterUrl}) async {
+  Future<void> recordOpened(MultimediaItem item, {String? lastEpisodeUrl, int? season, int? episode, String? episodeTitle, String? episodeServerName, String? episodeServerNumber, String? episodePosterUrl}) async {
     opened = item.episodes!.firstWhere((e) => e.url == lastEpisodeUrl);
+    storedTitle = episodeTitle;
+    storedServerName = episodeServerName;
+    storedServerNumber = episodeServerNumber;
   }
 }
 
@@ -112,17 +120,29 @@ void main() {
       }
     }
   }
+  for (final local in [false, true]) {
+    for (final label in ['الحلقة ٢.٥', 'الحلقة الخاصة: العودة / الجزء؟']) {
+      testWidgets('history resume renders original server label local=$local label=$label', (tester) async {
+        await _resume(tester, enabled: true, existingCatalog: false, local: local,
+          originalEpisode: Episode(name: '', url: 'show|2', episode: 2, season: 1,
+            posterUrl: 'source-2', serverName: label, serverNumber: '٢.٥'));
+      });
+    }
+  }
   testWidgets('AniZip failure preserves the playable catalog', (tester) async {
     await _resume(tester, enabled: true, existingCatalog: false, failArtwork: true, local: false);
   });
 }
 
-Future<void> _resume(WidgetTester tester, {required bool enabled, required bool existingCatalog, bool failArtwork = false, required bool local}) async {
+Future<void> _resume(WidgetTester tester, {required bool enabled, required bool existingCatalog, bool failArtwork = false, required bool local, Episode? originalEpisode}) async {
   final provider = _Provider(failArtwork: failArtwork);
+  if (originalEpisode != null) provider.episodes[1] = originalEpisode;
   final history = _History();
   PlayerRouteExtra? player;
   final item = MultimediaItem(title: 'Show', url: 'show', posterUrl: '', provider: provider.packageName, contentType: MultimediaContentType.anime, episodes: existingCatalog ? provider.episodes : null);
-  final saved = HistoryItem(item: item, position: 30, duration: 100, timestamp: 0, lastEpisodeUrl: 'show|2', episode: 2, season: 1, episodePosterUrl: 'old-2');
+  final saved = HistoryItem(item: item, position: 30, duration: 100, timestamp: 0, lastEpisodeUrl: 'show|2', episode: 2, season: 1, episodePosterUrl: 'old-2',
+    episodeTitle: originalEpisode?.name, episodeServerName: originalEpisode?.serverName,
+    episodeServerNumber: originalEpisode?.serverNumber);
   final router = GoRouter(routes: [
     GoRoute(path: '/', builder: (context, state) => Scaffold(body: TextButton(
       onPressed: () {
@@ -138,7 +158,11 @@ Future<void> _resume(WidgetTester tester, {required bool enabled, required bool 
     ))),
     GoRoute(path: '/player', builder: (context, state) {
       player = state.extra! as PlayerRouteExtra;
-      return const Scaffold(body: Text('player'));
+      return Scaffold(body: Column(children: [
+        const Text('player'),
+        if (originalEpisode != null) PlayerTopBar(title: player!.item.title, episodeLabel: formatEpisodeLabel(
+          episode: player!.episode!.episode, isArabic: true, title: player!.episode!.name, serverName: player!.episode!.serverName)),
+      ]));
     }),
   ]);
   await tester.pumpWidget(ProviderScope(overrides: [
@@ -156,7 +180,7 @@ Future<void> _resume(WidgetTester tester, {required bool enabled, required bool 
   expect(provider.catalogCalls, local || existingCatalog ? 0 : 1);
   expect(provider.artworkCalls, !local && enabled ? 1 : 0);
   final expectedEpisode = local && !existingCatalog
-      ? Episode(name: '', url: 'show|2', episode: 2, season: 1, posterUrl: 'old-2')
+      ? originalEpisode?.copyWith(posterUrl: 'old-2') ?? Episode(name: '', url: 'show|2', episode: 2, season: 1, posterUrl: 'old-2')
       : provider.episodes.last.copyWith(
           posterUrl: !local && enabled && !failArtwork ? 'anizip-2' : 'source-2',
         );
@@ -173,6 +197,13 @@ Future<void> _resume(WidgetTester tester, {required bool enabled, required bool 
   expect(player!.episode!.season, expectedEpisode.season);
   expect(player!.episode!.serverName, expectedEpisode.serverName);
   expect(player!.episode!.isFinal, expectedEpisode.isFinal);
+  expect(player!.episode!.serverNumber, expectedEpisode.serverNumber);
+  if (originalEpisode != null) {
+    expect(find.text(originalEpisode.serverName), findsOneWidget);
+    expect(history.storedTitle, originalEpisode.serverName);
+    expect(history.storedServerName, originalEpisode.serverName);
+    expect(history.storedServerNumber, originalEpisode.serverNumber);
+  }
   expect(history.opened!.posterUrl, expectedEpisode.posterUrl);
   expect(player!.progressUrl, 'show|2');
   router.pop();

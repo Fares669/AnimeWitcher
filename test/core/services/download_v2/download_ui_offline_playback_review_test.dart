@@ -28,7 +28,7 @@ class _History extends WatchHistory {
   @override
   Future<void> recordOpened(MultimediaItem item, {
     String? lastEpisodeUrl, int? season, int? episode, String? episodeTitle,
-    String? episodeServerName, String? episodePosterUrl,
+    String? episodeServerName, String? episodeServerNumber, String? episodePosterUrl,
   }) async {}
 }
 

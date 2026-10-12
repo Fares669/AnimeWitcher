@@ -151,6 +151,7 @@ class _ContinueWatchingCardState extends ConsumerState<ContinueWatchingCard> {
       isArabic: true,
       episodeTitle: episodeTitleRaw,
       episodeServerName: episodeServerName,
+      episodeServerNumber: widget.historyItem.episodeServerNumber,
     );
     final secondaryTitle = continueWatchingSecondaryTitle(
       episodeTitle: episodeTitleRaw,

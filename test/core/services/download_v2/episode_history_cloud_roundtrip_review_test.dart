@@ -16,27 +16,52 @@ class _Storage extends MemoryStorageService {
   @override
   String? getString(String key) => settings[key] as String?;
   @override
-  Future<void> setString(String key, String? value) async => settings[key] = value;
+  Future<void> setString(String key, String? value) async =>
+      settings[key] = value;
   @override
   Future<void> remove(String key) async => settings.remove(key);
   @override
   List<Map<String, dynamic>> getContinueWatching() => rows;
   @override
-  Future<void> markContinueWatchingItemSynced(String url, {required String accountUid, required int syncedAt}) async {}
+  Future<void> markContinueWatchingItemSynced(
+    String url, {
+    required String accountUid,
+    required int syncedAt,
+  }) async {}
   @override
-  Future<void> saveContinueWatchingProgress(MultimediaItem item, int positionMillis, int durationMillis, {
-    String? lastStreamUrl, String? lastEpisodeUrl, int? season, int? episode,
-    String? episodeTitle, String? episodeServerName, String? episodePosterUrl,
-    int? progressPercent, int? timestamp, String? syncedAccountUid, int? syncedAt,
+  Future<void> saveContinueWatchingProgress(
+    MultimediaItem item,
+    int positionMillis,
+    int durationMillis, {
+    String? lastStreamUrl,
+    String? lastEpisodeUrl,
+    int? season,
+    int? episode,
+    String? episodeTitle,
+    String? episodeServerName,
+    String? episodeServerNumber,
+    String? episodePosterUrl,
+    int? progressPercent,
+    int? timestamp,
+    String? syncedAccountUid,
+    int? syncedAt,
   }) async {
     rows.removeWhere((row) => row['url'] == item.url);
     rows.add({
-      'title': item.title, 'url': item.url, 'posterUrl': item.posterUrl,
-      'contentType': item.contentType.name, 'provider': item.provider,
-      'position': positionMillis, 'duration': durationMillis,
-      'lastEpisodeUrl': lastEpisodeUrl, 'episode': episode,
-      'episodeTitle': episodeTitle, 'episodeServerName': episodeServerName,
-      'episodePosterUrl': episodePosterUrl, 'timestamp': timestamp,
+      'title': item.title,
+      'url': item.url,
+      'posterUrl': item.posterUrl,
+      'contentType': item.contentType.name,
+      'provider': item.provider,
+      'position': positionMillis,
+      'duration': durationMillis,
+      'lastEpisodeUrl': lastEpisodeUrl,
+      'episode': episode,
+      'episodeTitle': episodeTitle,
+      'episodeServerName': episodeServerName,
+      'episodeServerNumber': episodeServerNumber,
+      'episodePosterUrl': episodePosterUrl,
+      'timestamp': timestamp,
     });
   }
 }
@@ -56,79 +81,303 @@ class _Firestore extends FirestoreRestClient {
   final writes = <String, Map<String, dynamic>>{};
   List<FirestoreDocument> remote = [];
   @override
-  Future<FirestoreDocument> setDocument(String path, Map<String, dynamic> fields, String idToken, {bool merge = true}) async {
+  Future<FirestoreDocument> setDocument(
+    String path,
+    Map<String, dynamic> fields,
+    String idToken, {
+    bool merge = true,
+  }) async {
     writes[path] = Map.of(fields);
-    return FirestoreDocument(id: path.split('/').last, path: path, fields: fields);
+    return FirestoreDocument(
+      id: path.split('/').last,
+      path: path,
+      fields: fields,
+    );
   }
+
   @override
-  Future<void> setDocumentWithServerTimestamps(String path, Map<String, dynamic> fields, String idToken, {required Set<String> serverTimestampFields, bool merge = true}) async => writes[path] = Map.of(fields);
+  Future<void> setDocumentWithServerTimestamps(
+    String path,
+    Map<String, dynamic> fields,
+    String idToken, {
+    required Set<String> serverTimestampFields,
+    bool merge = true,
+  }) async => writes[path] = Map.of(fields);
   @override
-  Future<List<FirestoreDocument>> listDocuments(String path, String idToken, {int pageSize = 100}) async => remote;
+  Future<List<FirestoreDocument>> listDocuments(
+    String path,
+    String idToken, {
+    int pageSize = 100,
+  }) async => remote;
   @override
-  Future<FirestoreDocument?> getDocument(String path, String idToken) async => null;
+  Future<FirestoreDocument?> getDocument(String path, String idToken) async =>
+      null;
 }
 
-Future<AnimeWitcherAccountService> _account(_Storage storage, _Firestore firestore) async {
+Future<AnimeWitcherAccountService> _account(
+  _Storage storage,
+  _Firestore firestore,
+) async {
   final secure = _Secure(storage);
-  final session = AnimeWitcherSession(uid: 'uid', idToken: 'test', refreshToken: 'test', expiresAt: DateTime.now().add(const Duration(hours: 1)), signInMethod: AnimeWitcherSignInMethod.email);
-  const profile = AnimeWitcherProfile(documentId: 'profile', uid: 'uid', signInMethod: AnimeWitcherSignInMethod.email, userName: 'Viewer');
-  secure.values['animewitcher_account_session_v1'] = jsonEncode(session.toJson());
-  secure.values['animewitcher_account_profile_v1'] = jsonEncode(profile.toJson());
-  final service = AnimeWitcherAccountService(storage: storage, secureStorage: secure, firestore: firestore);
+  final session = AnimeWitcherSession(
+    uid: 'uid',
+    idToken: 'test',
+    refreshToken: 'test',
+    expiresAt: DateTime.now().add(const Duration(hours: 1)),
+    signInMethod: AnimeWitcherSignInMethod.email,
+  );
+  const profile = AnimeWitcherProfile(
+    documentId: 'profile',
+    uid: 'uid',
+    signInMethod: AnimeWitcherSignInMethod.email,
+    userName: 'Viewer',
+  );
+  secure.values['animewitcher_account_session_v1'] = jsonEncode(
+    session.toJson(),
+  );
+  secure.values['animewitcher_account_profile_v1'] = jsonEncode(
+    profile.toJson(),
+  );
+  final service = AnimeWitcherAccountService(
+    storage: storage,
+    secureStorage: secure,
+    firestore: firestore,
+  );
   await service.restoreCachedSession();
   expect(service.isSignedIn, isTrue);
   return service;
 }
 
-final _item = MultimediaItem(title: 'Show', url: 'https://animewitcher.com/watch/show', posterUrl: '', contentType: MultimediaContentType.anime, provider: AnimeWitcherAccountService.animeWitcherProvider);
+final _item = MultimediaItem(
+  title: 'Show',
+  url: 'https://animewitcher.com/watch/show',
+  posterUrl: '',
+  contentType: MultimediaContentType.anime,
+  provider: AnimeWitcherAccountService.animeWitcherProvider,
+);
 
 void main() {
-  for (final name in ['الحلقة ٢', 'الحلقة ٢.٥', 'الحلقة الخاصة: العودة / الجزء؟']) {
-    test('offline saved original label uploads unchanged and online import keeps label $name', () async {
-      final local = _Storage();
-      local.rows.add({
-        'title': _item.title, 'url': _item.url, 'posterUrl': '',
-        'contentType': 'anime', 'provider': _item.provider,
-        'position': 30000, 'duration': 100000,
-        'lastEpisodeUrl': 'show|ep2', 'episode': 2,
-        'episodeTitle': 'Creative title', 'episodeServerName': name,
-        'episodeServerNumber': '٢.٥',
-        'timestamp': DateTime.now().millisecondsSinceEpoch,
-      });
-      final firestore = _Firestore();
-      final service = await _account(local, firestore);
-      await service.syncContinueWatching();
-      final fields = firestore.writes['users/profile/continue_watching/show']!;
-      expect(fields['episode_name'], name);
-      expect(fields['episode_title'], 'Creative title');
-      expect(fields['episode_server_name'], name);
-      expect(fields['episode_number_raw'], '٢.٥');
-      expect(fields['episode_number'], 2);
-      final imported = _Storage();
-      firestore.remote = [FirestoreDocument(id: 'show', path: 'users/profile/continue_watching/show', fields: fields)];
-      final otherDevice = await _account(imported, firestore);
-      await otherDevice.syncContinueWatching();
-      expect(imported.rows.single['episodeServerNumber'], '٢.٥');
-      final history = HistoryItem.fromMap(imported.rows.single);
-      expect(history.episodeTitle, 'Creative title');
-      expect(history.episodeServerName, name);
-      expect(continueWatchingPrimaryLabel(episode: history.episode, isArabic: true, episodeTitle: history.episodeTitle, episodeServerName: history.episodeServerName), name);
-    });
+  for (final name in [
+    'الحلقة ٢',
+    'الحلقة ٢.٥',
+    'الحلقة الخاصة: العودة / الجزء؟',
+  ]) {
+    test(
+      'offline saved original label uploads unchanged and online import keeps label $name',
+      () async {
+        final local = _Storage();
+        local.rows.add({
+          'title': _item.title,
+          'url': _item.url,
+          'posterUrl': '',
+          'contentType': 'anime',
+          'provider': _item.provider,
+          'position': 30000,
+          'duration': 100000,
+          'lastEpisodeUrl': 'show|ep2',
+          'episode': 2,
+          'episodeTitle': 'Creative title',
+          'episodeServerName': name,
+          'episodeServerNumber': '٢.٥',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        final firestore = _Firestore();
+        final service = await _account(local, firestore);
+        await service.syncContinueWatching();
+        final fields =
+            firestore.writes['users/profile/continue_watching/show']!;
+        expect(fields['episode_name'], name);
+        expect(fields['episode_title'], 'Creative title');
+        expect(fields['episode_server_name'], name);
+        expect(fields['episode_number_raw'], '٢.٥');
+        expect(fields['episode_number'], 2);
+        final imported = _Storage();
+        firestore.remote = [
+          FirestoreDocument(
+            id: 'show',
+            path: 'users/profile/continue_watching/show',
+            fields: fields,
+          ),
+        ];
+        final otherDevice = await _account(imported, firestore);
+        await otherDevice.syncContinueWatching();
+        expect(imported.rows.single['episodeServerNumber'], '٢.٥');
+        final history = HistoryItem.fromMap(imported.rows.single);
+        expect(history.episodeTitle, 'Creative title');
+        expect(history.episodeServerName, name);
+        expect(
+          continueWatchingPrimaryLabel(
+            episode: history.episode,
+            isArabic: true,
+            episodeTitle: history.episodeTitle,
+            episodeServerName: history.episodeServerName,
+          ),
+          name,
+        );
+      },
+    );
   }
 
-  test('official legacy cloud episode_name remains the original server label', () async {
-    const original = 'الحلقة ٢.٥';
-    final storage = _Storage();
-    final firestore = _Firestore()..remote = [FirestoreDocument(id: 'show', path: 'users/profile/continue_watching/show', fields: {
-      'anime_id': 'show', 'episode_id': 'ep2', 'episode_number': 2,
-      'episode_name': original, 'episode_url': 'show|ep2', 'position': 30000,
-      'duration': 100000, 'progress': 30,
-      'animewitcher_item': _item.toJson(),
-    })];
-    final account = await _account(storage, firestore);
-    await account.syncContinueWatching();
-    final history = HistoryItem.fromMap(storage.rows.single);
-    expect(history.episodeServerName, original);
-    expect(continueWatchingPrimaryLabel(episode: history.episode, isArabic: true, episodeServerName: history.episodeServerName), original);
-  });
+  test(
+    'official legacy cloud episode_name remains the original server label',
+    () async {
+      const original = 'الحلقة ٢.٥';
+      final storage = _Storage();
+      final firestore = _Firestore()
+        ..remote = [
+          FirestoreDocument(
+            id: 'show',
+            path: 'users/profile/continue_watching/show',
+            fields: {
+              'anime_id': 'show',
+              'episode_id': 'ep2',
+              'episode_number': 2,
+              'episode_name': original,
+              'episode_url': 'show|ep2',
+              'position': 30000,
+              'duration': 100000,
+              'progress': 30,
+              'animewitcher_item': _item.toJson(),
+            },
+          ),
+        ];
+      final account = await _account(storage, firestore);
+      await account.syncContinueWatching();
+      final history = HistoryItem.fromMap(storage.rows.single);
+      expect(history.episodeServerName, original);
+      expect(
+        continueWatchingPrimaryLabel(
+          episode: history.episode,
+          isArabic: true,
+          episodeServerName: history.episodeServerName,
+        ),
+        original,
+      );
+    },
+  );
+
+  for (final change in [
+    (
+      name: 'old client advances episode',
+      label: 'الحلقة ٢',
+      fields: <String, dynamic>{
+        'episode_id': 'ep3',
+        'episode_url': 'show|ep3',
+        'episode_name': 'الحلقة ٣',
+        'episode_number': 3,
+      },
+    ),
+    (
+      name: 'same episode renamed',
+      label: 'الحلقة ٢',
+      fields: <String, dynamic>{
+        'episode_name': 'الحلقة الثانية المعاد تسميتها',
+      },
+    ),
+    (
+      name: 'different episode with shared name',
+      label: 'مترجم',
+      fields: <String, dynamic>{
+        'episode_id': 'ep3',
+        'episode_url': 'show|ep3',
+        'episode_number': 3,
+      },
+    ),
+    (
+      name: 'official number corrected',
+      label: 'الحلقة ٢',
+      fields: <String, dynamic>{'episode_number': 3},
+    ),
+  ]) {
+    test(
+      'retained additive metadata cannot override current official fields: ${change.name}',
+      () async {
+        final storage = _Storage()
+          ..rows.add({
+            'title': _item.title,
+            'url': _item.url,
+            'contentType': 'anime',
+            'position': 30000,
+            'duration': 100000,
+            'lastEpisodeUrl': 'show|ep2',
+            'episode': 2,
+            'episodeTitle': 'Old creative title',
+            'episodeServerName': change.label,
+            'episodeServerNumber': '٢',
+          });
+        final firestore = _Firestore();
+        final writer = await _account(storage, firestore);
+        await writer.syncContinueWatching();
+        // Firestore merge leaves unknown additive fields from the newer writer.
+        final fields = <String, dynamic>{
+          ...firestore.writes['users/profile/continue_watching/show']!,
+          ...change.fields,
+        };
+        firestore.remote = [
+          FirestoreDocument(
+            id: 'show',
+            path: 'users/profile/continue_watching/show',
+            fields: fields,
+          ),
+        ];
+        final freshStorage = _Storage();
+        final reader = await _account(freshStorage, firestore);
+        await reader.syncContinueWatching();
+        final history = HistoryItem.fromMap(freshStorage.rows.single);
+        expect(history.episodeServerName, fields['episode_name']);
+        expect(history.episodeTitle, fields['episode_name']);
+        expect(
+          history.episodeServerNumber,
+          fields['episode_number'].toString(),
+        );
+        expect(history.lastEpisodeUrl, fields['episode_url']);
+      },
+    );
+  }
+
+  test(
+    'new-client raw number roundtrip preserves explicit empty server name',
+    () async {
+      final storage = _Storage()
+        ..rows.add({
+          'title': _item.title,
+          'url': _item.url,
+          'contentType': 'anime',
+          'position': 30000,
+          'duration': 100000,
+          'lastEpisodeUrl': 'show|ep2',
+          'episode': 2,
+          'episodeTitle': 'Creative title',
+          'episodeServerName': '',
+          'episodeServerNumber': '٢.٥',
+        });
+      final firestore = _Firestore();
+      final writer = await _account(storage, firestore);
+      await writer.syncContinueWatching();
+      firestore.remote = [
+        FirestoreDocument(
+          id: 'show',
+          path: 'users/profile/continue_watching/show',
+          fields: firestore.writes['users/profile/continue_watching/show']!,
+        ),
+      ];
+      final freshStorage = _Storage();
+      final reader = await _account(freshStorage, firestore);
+      await reader.syncContinueWatching();
+      final history = HistoryItem.fromMap(freshStorage.rows.single);
+      expect(history.episodeServerName, '');
+      expect(history.episodeTitle, 'Creative title');
+      expect(history.episodeServerNumber, '٢.٥');
+      expect(
+        continueWatchingPrimaryLabel(
+          episode: history.episode,
+          isArabic: true,
+          episodeTitle: history.episodeTitle,
+          episodeServerName: history.episodeServerName,
+          episodeServerNumber: history.episodeServerNumber,
+        ),
+        '٢.٥',
+      );
+    },
+  );
 }
