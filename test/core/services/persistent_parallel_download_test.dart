@@ -6,6 +6,8 @@ import 'package:animewitcher/core/services/persistent_parallel_download.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/parallel_download_fixtures.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory directory;
@@ -28,6 +30,7 @@ void main() {
     void Function(String event, Map<String, Object?> fields)? diagnosticEvent,
     Future<int?> Function(String path)? availableStorageBytes,
   }) => PersistentParallelDownload(
+    verifyPartSource: verifiedSavedTestRange,
     startPart: (task, progress, size) async {
       starts.add(task);
       if (throwStarts) throw StateError('native enqueue failed');

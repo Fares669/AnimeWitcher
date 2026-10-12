@@ -1,3 +1,7 @@
+import 'dart:async';
+
+import '../../../support/widget_completion.dart';
+
 import 'package:animewitcher/core/services/download_continued_processing_service.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
@@ -15,6 +19,120 @@ void main() {
   tearDown(() async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+  });
+
+  testWidgets('successful terminal observer flushes final progress before native finish inside the sample window', (tester) async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return true;
+    });
+    final service = DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true);
+    final observer = IosDownloadContinuedProcessingObserverV2(service: service);
+    try {
+      final record = _terminalProgressRecord();
+      await observer.observe(record, DownloadTransportSnapshot(
+        taskId: record.taskId, status: DownloadTransportStatus.running,
+        progress: .25, transferredBytes: 250, totalBytes: 1000,
+      ));
+      await observer.observe(record.copyWith(completedAtMillis: 1), DownloadTransportSnapshot(
+        taskId: record.taskId, status: DownloadTransportStatus.complete,
+        progress: 1, transferredBytes: 1000, totalBytes: 1000,
+      ));
+      expect(calls.map((call) => call.method), ['start', 'update', 'finish']);
+      final finalUpdate = calls.singleWhere((call) => call.method == 'update').arguments as Map;
+      expect(finalUpdate['taskId'], record.taskId);
+      expect(finalUpdate['progress'], 1.0);
+      expect(finalUpdate['totalBytes'], 1000);
+      expect(finalUpdate['transferredBytes'], 1000);
+      expect(finalUpdate['completedCount'], 0);
+      expect(finalUpdate['batchTotal'], 1);
+      expect(finalUpdate['currentIndex'], 1);
+      await tester.pump(const Duration(seconds: 2));
+      expect(calls.map((call) => call.method), ['start', 'update', 'finish']);
+    } finally {
+      await observer.dispose();
+    }
+  });
+
+  testWidgets('successful finish awaits a timer-fired update then final pending data in order', (tester) async {
+    final calls = <MethodCall>[];
+    final started = Completer<void>();
+    final release = Completer<void>();
+    var updates = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'update' && ++updates == 1) {
+        started.complete();
+        await release.future;
+      }
+      return true;
+    });
+    final service = DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true);
+    Future<void>? finish;
+    try {
+      await service.start(taskId: 'terminal-task', displayName: 'Saved episode');
+      await service.update(taskId: 'terminal-task', progress: .25, totalBytes: 1000, transferredBytes: 250);
+      await tester.pump(const Duration(milliseconds: 1100));
+      await pumpUntilFuture(tester, started.future, 'timer-fired native update entry');
+      await service.update(taskId: 'terminal-task', progress: 1, totalBytes: 1000, transferredBytes: 1000);
+      finish = service.finish(taskId: 'terminal-task', success: true, status: 'completed', endSession: true);
+      await tester.pump();
+      expect(calls.where((call) => call.method == 'finish'), isEmpty,
+        reason: 'finish must not overtake the already-issued update');
+    } finally {
+      release.complete();
+      if (finish != null) await pumpUntilFuture(tester, finish, 'ordered native terminal finish');
+      await service.dispose();
+    }
+    expect(calls.map((call) => call.method), ['start', 'update', 'update', 'finish']);
+    final finalUpdate = calls.where((call) => call.method == 'update').last.arguments as Map;
+    expect(finalUpdate['progress'], 1.0);
+    expect(finalUpdate['transferredBytes'], 1000);
+  });
+
+  for (final terminal in ['failed', 'stop', 'dispose']) {
+    testWidgets('$terminal discards throttled progress without a late native update', (tester) async {
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return true;
+      });
+      final service = DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true);
+      try {
+        await service.start(taskId: 'discard-task', displayName: 'Saved');
+        await service.update(taskId: 'discard-task', progress: .4, totalBytes: 1000);
+        if (terminal == 'failed') {
+          await service.finish(taskId: 'discard-task', success: false, status: 'failed', endSession: true);
+        } else if (terminal == 'stop') {
+          await service.stop(taskId: 'discard-task', endSession: true);
+        } else {
+          await service.dispose();
+        }
+        await tester.pump(const Duration(seconds: 2));
+        expect(calls.where((call) => call.method == 'update'), isEmpty);
+      } finally {
+        await service.dispose();
+      }
+    });
+  }
+
+  testWidgets('stale successful finish never flushes another task pending data', (tester) async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return true;
+    });
+    final service = DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true);
+    try {
+      await service.start(taskId: 'previous-task', displayName: 'Previous');
+      await service.start(taskId: 'current-task', displayName: 'Current');
+      await service.update(taskId: 'current-task', progress: 1, totalBytes: 1000, transferredBytes: 1000);
+      await service.finish(taskId: 'previous-task', success: true, status: 'completed', endSession: true);
+      expect(calls.where((call) => call.method == 'update'), isEmpty);
+    } finally {
+      await service.dispose();
+    }
   });
 
   test('parallel native speed sums live child windows without zero spikes', () {
@@ -537,3 +655,9 @@ void main() {
     },
   );
 }
+LogicalDownloadRecordV2 _terminalProgressRecord() => const LogicalDownloadRecordV2(
+  schemaVersion: kLogicalDownloadSchemaVersionV2, logicalId: DownloadLogicalId('terminal-progress'),
+  mediaId: 'saved-show', unitKey: 'saved-episode', variantKey: 'original', generation: 1,
+  taskId: 'aw_v2_terminal_progress_g1', intent: DownloadUserIntent.active,
+  destinationPath: 'downloads/saved.mp4', sourceDescriptor: {}, expectedBytes: 1000, updatedAtMillis: 1,
+);

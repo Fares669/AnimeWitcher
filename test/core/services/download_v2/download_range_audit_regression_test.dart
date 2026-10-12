@@ -6,8 +6,16 @@ import 'package:animewitcher/core/services/persistent_parallel_download.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+typedef _SourceVerifier = Future<({bool matches, String? validator})> Function(
+  DownloadTask task, File file, int bytes, int resourceSize,
+);
+
 class _RangeHarness {
-  _RangeHarness(this.directory, {this.hasLiveness = true, int maxConnections = 1}) {
+  _RangeHarness(this.directory, {
+    this.hasLiveness = true,
+    int maxConnections = 1,
+    _SourceVerifier? verifier,
+  }) {
     parent = ParallelDownloadTask(
       taskId: 'range-audit',
       url: 'https://example.com/video',
@@ -18,6 +26,7 @@ class _RangeHarness {
       allowPause: true,
     );
     coordinator = PersistentParallelDownload(
+      verifyPartSource: verifier,
       startPart: (task, progress, size) async {
         starts.add(task);
         live.add(task.taskId);
@@ -224,6 +233,95 @@ void main() {
     }
   });
 
+  test('saved_range_verifier_receives_exact_resource_size_and_can_adopt', () async {
+    await harness.close();
+    final probes = <int>[];
+    harness = _RangeHarness(
+      await Directory.systemTemp.createTemp('range-audit-verifier-'),
+      verifier: (task, file, bytes, resourceSize) async {
+        probes.add(resourceSize);
+        expect(task.headers['Range'], 'bytes=0-4');
+        expect(bytes, 5);
+        expect(await file.readAsBytes(), <int>[1, 2, 3, 4, 5]);
+        return (matches: true, validator: '"resource-v1"');
+      },
+    );
+    expect(await harness.coordinator.start(harness.parent, 20), isTrue);
+    final child = harness.starts.single;
+    await harness.writePart(child, <int>[1, 2, 3, 4, 5]);
+    harness.coordinator.handleUpdate(TaskProgressUpdate(child, 0.999, 5));
+    await harness.barrier();
+
+    expect(probes, <int>[20]);
+    expect(harness.records[child.taskId]?.status, TaskStatus.complete);
+    final checkpoint = jsonDecode(await (await harness.manifest).readAsString()) as Map;
+    expect(checkpoint['resourceValidator'], '"resource-v1"');
+  });
+
+  test('changed_saved_range_validator_preserves_bytes_without_completion', () async {
+    expect(await harness.coordinator.start(harness.parent, 20), isTrue);
+    final child = harness.starts.single;
+    final file = await harness.writePart(child, <int>[1, 2, 3, 4, 5]);
+    expect(await harness.coordinator.pause(harness.parent), isTrue);
+    await harness.coordinator.dispose();
+    final manifest = await harness.manifest;
+    final checkpoint = jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
+    checkpoint['resourceValidator'] = '"resource-v1"';
+    await manifest.writeAsString(jsonEncode(checkpoint), flush: true);
+    final restarted = _RangeHarness(
+      harness.directory,
+      verifier: (task, file, bytes, resourceSize) async =>
+          (matches: true, validator: '"resource-v2"'),
+    );
+    try {
+      expect(await restarted.coordinator.start(restarted.parent, 20), isFalse);
+      expect(restarted.starts, isEmpty);
+      expect(restarted.records[child.taskId]?.status, isNot(TaskStatus.complete));
+      expect(await file.readAsBytes(), <int>[1, 2, 3, 4, 5]);
+    } finally {
+      await restarted.coordinator.dispose();
+    }
+  });
+
+  test('legacy_completed_checkpoint_keeps_offline_completion_authority', () async {
+    expect(await harness.coordinator.start(harness.parent, 20), isTrue);
+    final child = harness.starts.single;
+    final file = await harness.writePart(child, <int>[1, 2, 3, 4, 5]);
+    expect(await harness.coordinator.pause(harness.parent), isTrue);
+    await harness.coordinator.dispose();
+    final manifest = await harness.manifest;
+    final checkpoint = jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
+    final first = (checkpoint['parts'] as List).first as Map<String, dynamic>;
+    first['complete'] = true;
+    first['progress'] = 1.0;
+    first['credibleProgress'] = 1.0;
+    first['durableBytes'] = 5;
+    await manifest.writeAsString(jsonEncode(checkpoint), flush: true);
+    final restarted = _RangeHarness(harness.directory);
+    try {
+      expect(await restarted.coordinator.start(restarted.parent, 20), isTrue);
+      expect(restarted.starts.single.taskId, isNot(child.taskId));
+      expect(restarted.records[child.taskId]?.status, TaskStatus.complete);
+      expect(await file.readAsBytes(), <int>[1, 2, 3, 4, 5]);
+    } finally {
+      await restarted.coordinator.dispose();
+    }
+  });
+
+  test('native_completion_without_response_or_verifier_preserves_unverified_bytes', () async {
+    expect(await harness.coordinator.start(harness.parent, 20), isTrue);
+    final child = harness.starts.single;
+    final file = await harness.writePart(child, <int>[1, 2, 3, 4, 5]);
+    harness.live.remove(child.taskId);
+    harness.coordinator.handleUpdate(TaskStatusUpdate(child, TaskStatus.complete));
+    await harness.barrier();
+
+    expect(harness.records[child.taskId]?.status, isNot(TaskStatus.complete));
+    expect(harness.statuses.last, TaskStatus.paused);
+    expect(await file.readAsBytes(), <int>[1, 2, 3, 4, 5]);
+    expect(harness.coordinator.activeConnectionCount, 0);
+  });
+
   test('http404_uses_bounded_renewal instead of retrying unchanged range', () async {
     expect(await harness.coordinator.start(harness.parent, 20), isTrue);
     final child = harness.starts.single;
@@ -312,5 +410,15 @@ void main() {
     expect(await file.readAsBytes(), payload);
     expect(await (await harness.manifest).exists(), isTrue);
     expect(await File(await harness.parent.filePath()).exists(), isFalse);
+
+    harness.rejectCancel = false;
+    harness.live.remove(sibling.taskId);
+    harness.coordinator.handleUpdate(TaskStatusUpdate(sibling, TaskStatus.paused));
+    await harness.barrier();
+    expect(harness.coordinator.activeConnectionCount, 0);
+    expect(harness.coordinator.isActive(harness.parent.taskId), isFalse);
+    expect(harness.statuses.last, TaskStatus.paused);
+    expect(harness.starts, hasLength(2));
+    expect(await file.readAsBytes(), payload);
   });
 }

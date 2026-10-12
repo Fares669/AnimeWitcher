@@ -14,13 +14,13 @@ String _normalizeEpisodeLabel(String value) {
 bool isGenericEpisodeTitle(String? value) {
   final title = _normalizeEpisodeLabel(value ?? '');
   if (title.isEmpty) return true;
-  return RegExp(r'^(?:ال)?حلق[ةه]\s*\d+(?:\s+(?:والأخيرة|والاخيرة))?$')
+  return RegExp(r'^(?:ال)?حلق[ةه]\s*\d+(?:[.,٫]\d+)?(?:\s+(?:والأخيرة|والاخيرة))?$')
           .hasMatch(title) ||
       RegExp(
-        r'^(?:episode|ep\.?)\s*\d+(?:\s+(?:final|last))?$',
+        r'^(?:episode|ep\.?)\s*\d+(?:[.,٫]\d+)?(?:\s+(?:final|last))?$',
         caseSensitive: false,
       ).hasMatch(title) ||
-      RegExp(r'^\d+$').hasMatch(title);
+      RegExp(r'^\d+(?:[.,٫]\d+)?$').hasMatch(title);
 }
 
 /// True when [value] ends with a final-episode suffix such as "والأخيرة".
@@ -367,28 +367,22 @@ bool isDownloadedEpisodeFileName(
       sanitizeDownloadFileName(rawStem.substring(0, quality.start)).toLowerCase() == normalizedLabel;
 }
 
-/// Title persisted in watch history / sync. Keeps a final-episode marker when
-/// there is no creative title so "والأخيرة" survives round-trips.
+/// Original display title persisted in history, independently of file names.
 String episodeTitleForStorage({
   required int episode,
   String? title,
   bool isFinal = false,
   String? serverName,
 }) {
-  final label = resolveEpisodeLabel(
-    episode: episode,
-    isArabic: true,
-    title: title,
-    serverName: serverName,
-    isFinal: isFinal,
-  );
-  if (label.secondary.isNotEmpty) return label.secondary;
-  // Numberless episodes have nothing else to identify them, so keep their
-  // label (الحلقة الخاصة, OVA, مترجم, …) in history.
-  if (episode <= 0 ||
-      isStandaloneEpisodeLabel(label.primary) ||
-      hasFinalEpisodeSuffix(label.primary)) {
-    return label.primary;
+  if (title?.trim().isNotEmpty ?? false) return title!;
+  if (serverName?.trim().isNotEmpty ?? false) return serverName!;
+  // Legacy callers may only know the final marker, with no original text.
+  if (isFinal) {
+    return resolveEpisodeLabel(
+      episode: episode,
+      isArabic: true,
+      isFinal: true,
+    ).primary;
   }
   return '';
 }
@@ -404,13 +398,13 @@ String continueWatchingPrimaryLabel({
   String? episodeServerName,
 }) {
   final number = episode ?? 0;
-  final server = (episodeServerName ?? '').trim();
-  final stored = (episodeTitle ?? '').trim();
+  final server = episodeServerName ?? '';
+  final stored = episodeTitle ?? '';
   // A stored creative title is a secondary line while there is a number to
   // show; without one it is all the row has.
-  final catalogLabel = server.isNotEmpty
+  final catalogLabel = server.trim().isNotEmpty
       ? server
-      : (stored.isNotEmpty &&
+      : (stored.trim().isNotEmpty &&
             (number <= 0 ||
                 isGenericEpisodeTitle(stored) ||
                 isStandaloneEpisodeLabel(stored) ||

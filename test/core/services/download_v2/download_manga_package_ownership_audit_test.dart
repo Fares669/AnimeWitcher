@@ -85,7 +85,10 @@ void main() {
     await f.manager.initialize();
     f.resolver.fail = false;
     await f.manager.restart(f.logicalId);
-    await _until(() async => f.downloader.testTransfers.started.any((task) => task.taskId.endsWith('_g4_p0002')));
+    await _until(
+      () async => f.downloader.testTransfers.started.any((task) => task.taskId.endsWith('_g4_p0002')),
+      diagnostic: f.debugState,
+    );
     expect(f.downloader.canceledIds, contains(child.taskId));
     expect(f.downloader.overlappingPaths, isEmpty);
     expect((await f.store.get(f.logicalId))?.generation, 4);
@@ -131,6 +134,38 @@ void main() {
     expect(await File(await firstChild.filePath()).readAsBytes(), tinyMangaPng);
   });
 
+  test('recovered reconstruction retains its logical reservation while its last writer settles', () async {
+    final f = await _Fixture.create(limit: 1);
+    addTearDown(f.dispose);
+    final child = await f.addPage(1, TaskStatus.running);
+    f.resolver.fail = true;
+    await f.manager.initialize();
+    f.resolver.fail = false;
+    final entered = f.resolver.entered = Completer<void>();
+    final release = f.resolver.gate = Completer<void>();
+    final reconstruction = f.manager.resume(f.logicalId);
+    Future<DownloadTransportSnapshot?>? waiting;
+    final request = _videoRequest(f.directory.path);
+    try {
+      await entered.future.timeout(const Duration(seconds: 5));
+      await f.downloader._status(child.taskId, TaskStatus.canceled);
+      await _until(() async => f.manager.snapshotFor(f.logicalId)?.status == DownloadTransportStatus.missing);
+      waiting = f.manager.start(request).then<DownloadTransportSnapshot?>(
+        (snapshot) => snapshot, onError: (Object _, StackTrace __) => null,
+      );
+      await _until(() async => await f.store.get(request.logicalId) != null);
+      expect((await f.store.get(request.logicalId))?.awaitingAdmission, isTrue,
+          reason: 'existing chapter ownership must reserve its slot through resolver reconstruction');
+      expect(f.manager.snapshotFor(request.logicalId)?.status, DownloadTransportStatus.queued);
+      expect(f.downloader.testTransfers.started, isEmpty);
+    } finally {
+      release.complete();
+      await reconstruction;
+      await waiting;
+      f.resolver.gate = null;
+    }
+  });
+
   test('full manga reconstruction reuses exact current children without canceling page bytes', () async {
     final f = await _Fixture.create();
     addTearDown(f.dispose);
@@ -158,6 +193,31 @@ void main() {
     expect(await f.manager.hasCompletedDownload(f.logicalId), isFalse);
     expect((await MangaChapterManifestV2.readFrom(f.directory))?.isComplete, isFalse);
     expect(await File(p.join(f.directory.path, '0001.png')).readAsBytes(), tinyMangaPng);
+  });
+
+  test('Resume of an already-running normal manga preserves its checkpoint owner without reconstruction', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    final child = await f.addPage(1, TaskStatus.running);
+    await f.manager.initialize();
+    await _until(() async => f.manager.snapshotFor(f.logicalId)?.activeConnections == 1);
+    final parent = (await f.gateway.attach(f.parentId))! as MangaChapterTransportHandleV2;
+    expect(parent.recoveryOnly, isFalse);
+    final checkpoint = File(p.join(f.directory.path, MangaChapterManifestV2.fileName));
+    final before = await checkpoint.readAsBytes();
+    f.resolver.fail = true;
+
+    final resumed = await f.manager.resume(f.logicalId);
+
+    expect(f.resolver.calls, 1, reason: 'the exact normal writer already owns the chapter; Resume cannot issue a replacement checkpoint');
+    expect(resumed.status, DownloadTransportStatus.running);
+    expect(await f.gateway.attach(f.parentId), same(parent));
+    expect((await f.store.get(f.logicalId))?.generation, 3);
+    expect(f.downloader.transfers.forId(child.taskId)!.status, TaskStatus.running);
+    expect(f.downloader.testTransfers.started, isEmpty);
+    expect(f.downloader.canceledIds, isEmpty);
+    expect(await checkpoint.readAsBytes(), before);
+    expect(await File(await child.filePath()).readAsBytes(), tinyMangaPng);
   });
 
   test('recovered manga parent refuses subset resume and disposal preserves native ownership', () async {
@@ -320,7 +380,8 @@ void main() {
     await f.manager.initialize();
     await _until(() async => f.downloader.testTransfers.started.isNotEmpty ||
         f.manager.snapshotFor(f.logicalId)?.isFinal == true);
-    expect(f.downloader.testTransfers.started.map((task) => task.taskId), [child.taskId]);
+    expect(f.downloader.testTransfers.started.map((task) => task.taskId), [child.taskId],
+        reason: f.debugState());
     expect((await f.store.get(f.logicalId))?.completedAtMillis, isNull);
     final checkpoint = (await MangaChapterManifestV2.readFrom(f.directory))!;
     expect(checkpoint.completedIndexes, const {0});
@@ -359,12 +420,12 @@ DownloadStartRequestV2 _videoRequest(String root) {
   );
 }
 
-Future<void> _until(Future<bool> Function() done) async {
+Future<void> _until(Future<bool> Function() done, {String Function()? diagnostic}) async {
   for (var attempt = 0; attempt < 200; attempt++) {
     if (await done()) return;
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
-  fail('expected package ownership condition was not reached');
+  fail('expected package ownership condition was not reached; ${diagnostic?.call() ?? ""}');
 }
 
 final class _PackageTestPathProvider extends PathProviderPlatform {
@@ -400,6 +461,14 @@ final class _Fixture {
   late final LogicalDownloadRecordV2 record;
   late final PackageBackgroundDownloaderGateway gateway;
   late final DownloadManagerV2 manager;
+
+  String debugState() {
+    final snapshot = manager.snapshotFor(logicalId);
+    return 'task=${snapshot?.taskId}, status=${snapshot?.status}, '
+        'failure=${snapshot?.failureMessage}, resolverCalls=${resolver.calls}, '
+        'started=${downloader.testTransfers.started.map((task) => task.taskId).toList()}, '
+        'records=${downloader.storage.records.map((id, row) => MapEntry(id, row.status))}';
+  }
 
   static Future<_Fixture> create({DownloadUserIntent intent = DownloadUserIntent.active, int limit = 10}) async {
     final directory = await Directory.systemTemp.createTemp('aw-manga-package-owner-');
@@ -456,10 +525,16 @@ final class _Fixture {
 final class _Resolver implements MangaChapterPageResolverV2 {
   bool fail = false;
   int calls = 0;
+  Completer<void>? entered;
+  Completer<void>? gate;
   @override
   Future<List<MangaPage>> resolve(Map<String, Object?> descriptor) async {
     calls++;
     if (fail) throw StateError('offline page resolver');
+    if (gate != null) {
+      if (entered?.isCompleted == false) entered!.complete();
+      await gate!.future;
+    }
     return const [
       MangaPage(index: 0, imageUrl: 'https://example.test/0001.png'),
       MangaPage(index: 1, imageUrl: 'https://example.test/0002.png'),

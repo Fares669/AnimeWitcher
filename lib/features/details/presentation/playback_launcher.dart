@@ -16,7 +16,6 @@ import '../../settings/presentation/general_settings_provider.dart';
 import 'package:collection/collection.dart';
 import 'details_controller.dart';
 import 'source_picker.dart';
-import 'stream_source_prefetch.dart';
 import 'downloaded_file_provider.dart';
 import '../../../shared/widgets/loading_dialog.dart';
 import '../../../core/utils/app_utils.dart';
@@ -140,13 +139,11 @@ class PlaybackLauncher {
     Future<List<StreamResult>> Function()? loadSources,
   }) async {
     if (!context.mounted) return null;
-    // Hands over the warm fetch when the player started one as the credits
-    // rolled, so the picker opens with its list already in hand.
+    // Each chooser owns a fresh request; a dismissed picker's result cannot
+    // replace the next picker's list.
     final future = loadSources != null
         ? loadSources()
-        : _ref
-              .read(streamSourcePrefetchProvider)
-              .sources(provider, episodeDataUrl);
+        : provider.loadStreamSources(episodeDataUrl);
     final preferences = _ref.read(generalSettingsProvider);
     if (preferences.autoSelectStreamSource) {
       var canceled = false;

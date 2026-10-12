@@ -189,6 +189,12 @@ void main() {
   }
 
   testWidgets('completed group uses its permanent poster after UI recreation offline', (tester) async {
+    // The transient first frame still renders the existing network fallback.
+    // Initialize its shared cache lifecycle on the real loop, without assuming
+    // that disposing a singleton recreates it for subsequent widget tests.
+    await tester.runAsync(() async {
+      await DefaultCacheManager().getFileFromCache('offline-poster-fixture-lifecycle');
+    });
     final key = sha256.convert(utf8.encode('retained-poster')).toString();
     final saved = File('${cacheRoot.path}/download_artwork_v2/$key/poster.img');
     await tester.runAsync(() async {
@@ -216,8 +222,6 @@ void main() {
       expect(usesSavedPoster(), isTrue);
       await tester.pumpWidget(const SizedBox.shrink());
     }
-    await pumpUntilFuture(tester, DefaultCacheManager().dispose(), 'completed poster fallback cache disposal');
-    await tester.pump();
   });
 
   testWidgets('completed Downloads row plays its selected variant instead of newest file', (tester) async {

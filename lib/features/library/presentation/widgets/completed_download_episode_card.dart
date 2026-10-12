@@ -58,6 +58,7 @@ class _CompletedDownloadEpisodeCardState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.item.id != widget.item.id ||
         oldWidget.item.logicalId != widget.item.logicalId ||
+        oldWidget.item.artworkMetadataVerified != widget.item.artworkMetadataVerified ||
         oldWidget.item.episode?.posterUrl != widget.item.episode?.posterUrl) {
       _artwork = _loadArtwork();
     }
@@ -67,6 +68,7 @@ class _CompletedDownloadEpisodeCardState
     taskId: widget.item.id,
     logicalId: widget.item.logicalId,
     episode: widget.item.episode,
+    allowMetadataBackfill: widget.item.artworkMetadataVerified,
   );
 
   _EpisodeWatchPresentation _watchPresentation(

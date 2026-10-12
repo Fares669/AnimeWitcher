@@ -303,7 +303,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   }
 
   String _posterKey(List<DownloadItem> values) => values.map(
-    (item) => '${_artworkId(item)}:${item.item.posterUrl}',
+    (item) => '${_artworkId(item)}:${item.artworkMetadataVerified}:${item.item.posterUrl}',
   ).join('|');
 
   @override
@@ -325,6 +325,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
       if (saved != null) return saved;
     }
     for (final item in items) {
+      if (!item.artworkMetadataVerified) continue;
       final saved = await ensureDownloadedPosterArtwork(
         logicalId: _artworkId(item), posterUrl: item.item.posterUrl,
       );

@@ -8,6 +8,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/entity/manga.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/download_concurrency.dart';
+import '../../../core/services/download_v2/download_artwork_store_v2.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../core/services/download_v2/download_v2_models.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
@@ -25,6 +26,7 @@ class DownloadItem {
   final MangaChapter? chapter;
   final DownloadMediaKind mediaKind;
   final String? logicalId;
+  final bool artworkMetadataVerified;
   final int timestamp;
   final String trackingUrl;
   final String destinationPath;
@@ -43,6 +45,7 @@ class DownloadItem {
     this.chapter,
     this.mediaKind = DownloadMediaKind.videoEpisode,
     this.logicalId,
+    this.artworkMetadataVerified = false,
     required this.timestamp,
     String? trackingUrl,
     String? destinationPath,
@@ -387,8 +390,9 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     for (final record in _records) {
       if (record.intent == DownloadUserIntent.canceled) continue;
       final metadata =
-          metadataByTaskId[record.taskId] ??
-          metadataByLogicalId[record.logicalId.value];
+          metadataByTaskId[record.logicalId.value] ??
+          metadataByLogicalId[record.logicalId.value] ??
+          metadataByTaskId[record.taskId];
       if (metadata == null || metadata['item'] is! Map) continue;
 
       final item = MultimediaItem.fromJson(
@@ -416,6 +420,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         chapter: chapter,
         mediaKind: record.mediaKind,
         logicalId: record.logicalId.value,
+        artworkMetadataVerified: downloadArtworkMetadataMatchesRecordV2(metadata, record),
         timestamp: (metadata['timestamp'] as int?) ?? record.updatedAtMillis,
         trackingUrl: trackingUrl,
         destinationPath: record.destinationPath,
@@ -428,6 +433,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       items.add(projected);
       if (projected.status == TaskStatus.complete &&
           projected.mediaKind == DownloadMediaKind.videoEpisode &&
+          projected.artworkMetadataVerified &&
           _artworkScheduledIds.add(projected.id)) {
         unawaited(
           retainDownloadedArtwork(

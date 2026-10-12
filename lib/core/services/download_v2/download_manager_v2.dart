@@ -9,6 +9,7 @@ import '../download_parallel.dart';
 import '../../utils/download_cleanup.dart';
 import 'background_downloader_gateway.dart';
 import 'download_continued_processing_v2.dart';
+import 'download_artwork_store_v2.dart';
 import 'download_integrity_verifier_v2.dart';
 import 'download_source_resolver_v2.dart';
 import 'download_v2_diagnostics.dart';
@@ -902,6 +903,11 @@ final class DownloadManagerV2 {
     }
 
     if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+      final alreadyWorking = handle is MangaChapterTransportHandleV2 &&
+          handle.recoveryOnly &&
+          {DownloadTransportStatus.queued, DownloadTransportStatus.running,
+            DownloadTransportStatus.held}.contains(handle.current.status);
+      if (alreadyWorking) _activateHandle(logicalId, handle);
       final destinationKey = await _canonicalDestinationPath(
         request.destinationPath,
       );
@@ -915,7 +921,7 @@ final class DownloadManagerV2 {
             'Canonical destination is already owned by ${conflict.logicalId}',
           );
         }
-        if (!await _reserveAdmission(logicalId)) {
+        if (!alreadyWorking && !await _reserveAdmission(logicalId)) {
           final waitingRecord = record.copyWith(
             intent: DownloadUserIntent.active,
             awaitingAdmission: true,
@@ -945,7 +951,7 @@ final class DownloadManagerV2 {
         try {
           return await _startExistingMangaGenerationUnsafe(request, record);
         } finally {
-          _admissionReservations.remove(logicalId);
+          if (!alreadyWorking) _admissionReservations.remove(logicalId);
           _scheduleAdmissionPromotion();
         }
       });
@@ -1001,6 +1007,9 @@ final class DownloadManagerV2 {
             mediaKind: record.mediaKind,
             mangaRecord: record,
           );
+          if (record.mediaKind == DownloadMediaKind.videoEpisode) {
+            await deleteDownloadArtworkV2(record.logicalId.value, legacyTaskId: record.taskId);
+          }
           await _store.remove(logicalId);
           _currentTaskIds.remove(logicalId);
           _currentGenerations.remove(logicalId);
@@ -1263,6 +1272,10 @@ final class DownloadManagerV2 {
       }
 
       final snapshot = _snapshots[record.logicalId];
+      final transport = _handlesByTaskId[_currentTaskIds[record.logicalId] ?? record.taskId]?.current;
+      final ownsWorkingTransport = transport != null &&
+          {DownloadTransportStatus.queued, DownloadTransportStatus.running,
+            DownloadTransportStatus.held}.contains(transport.status);
       final pausedWriterIsLive =
           (record.intent == DownloadUserIntent.paused ||
               record.intent == DownloadUserIntent.canceled ||
@@ -1270,13 +1283,13 @@ final class DownloadManagerV2 {
           (snapshot?.status == DownloadTransportStatus.queued ||
               snapshot?.status == DownloadTransportStatus.running ||
               snapshot?.status == DownloadTransportStatus.held);
-      if (!pausedWriterIsLive &&
+      if (!ownsWorkingTransport && !pausedWriterIsLive &&
           (record.intent != DownloadUserIntent.active ||
               record.awaitingAdmission)) {
         continue;
       }
       final reservesSlot =
-          snapshot == null ||
+          ownsWorkingTransport || snapshot == null ||
           snapshot.status == DownloadTransportStatus.queued ||
           snapshot.status == DownloadTransportStatus.running ||
           snapshot.status == DownloadTransportStatus.held ||

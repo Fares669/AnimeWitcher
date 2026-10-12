@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
+import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
+import 'package:animewitcher/core/network/dio_client_provider.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:animewitcher/features/details/presentation/download_launcher.dart';
@@ -17,6 +21,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 import '../../../support/memory_storage_service.dart';
 
@@ -36,6 +42,24 @@ class _Downloads extends DownloadedFiles {
   Future<File?> resolveFile(MultimediaItem item, {Episode? episode, String? logicalId}) async => local ? File('/tmp/saved.mp4') : null;
 }
 
+class _CapturedDownload extends MemoryStorageService {
+  String? filePath;
+  @override
+  Future<Map<String, dynamic>?> getDownloadMetadata(String taskId) async => null;
+  @override
+  Future<void> saveDownloadMetadata(String taskId, MultimediaItem item, {Episode? episode, String? trackingUrl, String? filePath, String? logicalId, Map<String, dynamic>? taskSnapshot, bool? queueWaiting, bool? userPaused, double? lastProgress, int? lastExpectedBytes}) async {
+    this.filePath = filePath;
+    throw StateError('captured destination before starting transport');
+  }
+}
+
+class _Paths extends PathProviderPlatform {
+  @override
+  Future<String?> getDownloadsPath() async => '/tmp/aw-title-launch';
+  @override
+  Future<String?> getApplicationDocumentsPath() async => '/tmp/aw-title-launch';
+}
+
 class _Extensions extends ExtensionManager {
   _Extensions(this.provider);
   final AnimeWitcherProvider provider;
@@ -45,6 +69,7 @@ class _Extensions extends ExtensionManager {
 
 class _Sources extends AnimeWitcherProvider {
   final pending = <Completer<List<StreamResult>>>[];
+  Completer<List<StreamResult>>? resolution;
   @override
   String get packageName => 'test.fresh.sources';
   @override
@@ -70,12 +95,13 @@ class _Sources extends AnimeWitcherProvider {
     return result.future;
   }
   @override
-  Future<List<StreamResult>> loadStreams(String url) async => const [];
+  Future<List<StreamResult>> loadStreams(String url) => resolution?.future ?? Future.value(const <StreamResult>[]);
 }
 
-Future<BuildContext> _shell(WidgetTester tester, _Sources provider, {bool auto = false, bool local = false, NotificationService? notifications}) async {
+Future<BuildContext> _shell(WidgetTester tester, _Sources provider, {bool auto = false, bool local = false, NotificationService? notifications, StorageService? storage, Dio? dio}) async {
   await tester.pumpWidget(ProviderScope(overrides: [
-    storageServiceProvider.overrideWithValue(MemoryStorageService()),
+    storageServiceProvider.overrideWithValue(storage ?? MemoryStorageService()),
+    if (dio != null) dioClientProvider.overrideWithValue(dio),
     generalSettingsProvider.overrideWith(() => _Settings(auto)),
     downloadedFilesProvider.overrideWith(() => _Downloads(local: local)),
     extensionManagerProvider.overrideWith(() => _Extensions(provider)),
@@ -102,6 +128,34 @@ final _episode = Episode(name: '', url: 'https://example.test/episode/2', episod
 List<StreamResult> _list(String source) => [StreamResult(url: 'https://cdn.test/$source.mp4', source: source)];
 
 void main() {
+  test('native provider preserves the supplied Arabic decimal number outside its integer identity', () async {
+    final dio = Dio()..interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
+      handler.resolve(Response<dynamic>(requestOptions: options, statusCode: 200, data: options.uri.path.endsWith('/episodes') ? {
+        'documents': [{
+          'name': 'projects/test/databases/(default)/documents/anime_list/show/episodes/ep2',
+          'fields': {
+            'name': {'stringValue': 'الحلقة ٢.٥'},
+            'episode_number': {'stringValue': '٢.٥'},
+          },
+        }],
+      } : <String, dynamic>{}));
+    }));
+    final provider = AnimeWitcherNativeProvider(dio, SettingsRepository(MemoryStorageService()));
+    final episodes = await provider.getEpisodes('https://animewitcher.com/watch/show');
+    expect(episodes.single.serverName, 'الحلقة ٢.٥');
+    expect(episodes.single.toJson()['serverNumber'], '٢.٥');
+  });
+
+  test('raw source number JSON survives artwork copy and persistence without changing integer identity', () {
+    for (final raw in ['٢', '٢.٥', '02.50']) {
+      final original = Episode.fromJson({'name': '', 'url': 'show|ep2', 'episode': 2, 'serverNumber': raw});
+      final saved = original.copyWith(posterUrl: 'artwork').toJson();
+      expect(saved['serverNumber'], raw);
+      expect(saved['episode'], 2);
+      expect(Episode.fromJson(saved).toJson()['serverNumber'], raw);
+    }
+  });
+
   test('history retains the original generic name rather than synthesizing a different label', () {
     const original = 'الحلقة ٢';
     final saved = episodeTitleForStorage(episode: 2, title: original);
@@ -178,11 +232,77 @@ void main() {
     expect(provider.pending, isEmpty);
   });
 
+  for (final cancel in [false, true]) {
+    testWidgets('manual download resolution closes only its loading dialog cancel=$cancel', (tester) async {
+      final provider = _Sources()..resolution = Completer<List<StreamResult>>();
+      final notifications = NotificationService();
+      addTearDown(() { notifications.clearToasts(); notifications.dispose(); });
+      final context = await _shell(tester, provider, notifications: notifications);
+      final launcher = ProviderScope.containerOf(context).read(downloadLauncherProvider);
+      final launched = launcher.launch(context, _item, episode: _episode);
+      await tester.pump();
+      provider.pending.single.complete([StreamResult(url: 'https://example.test/opaque', source: 'manual', requiresResolution: true)]);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('manual'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      if (cancel) {
+        await tester.tap(find.text('إلغاء'));
+        await tester.pumpAndSettle();
+        provider.resolution!.complete(const []);
+      } else {
+        provider.resolution!.completeError(StateError('resolution unavailable'));
+      }
+      await tester.pumpAndSettle();
+      await launched;
+      expect(find.text('episode page'), findsOneWidget);
+      expect(notifications.toasts, hasLength(cancel ? 0 : 1));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final title in ['العنوان العربي', '日本語の映画', 'Mix العربية 日本語', '', '...', List.filled(100, '🧙').join()]) {
+    testWidgets('actual title-only download launch keeps a visible Unicode filename title=$title', (tester) async {
+      final previous = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _Paths();
+      addTearDown(() => PathProviderPlatform.instance = previous);
+      final provider = _Sources();
+      final storage = _CapturedDownload();
+      final notifications = NotificationService();
+      addTearDown(() { notifications.clearToasts(); notifications.dispose(); });
+      final dio = Dio()..interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
+        handler.resolve(Response<dynamic>(requestOptions: options, statusCode: 200, headers: Headers.fromMap({'content-length': ['4096'], 'content-type': ['video/mp4']}), data: options.method == 'HEAD' ? null : ResponseBody.fromString('', 200)));
+      }));
+      final context = await _shell(tester, provider, auto: true, notifications: notifications, storage: storage, dio: dio);
+      final launcher = ProviderScope.containerOf(context).read(downloadLauncherProvider);
+      final launched = launcher.launch(context, MultimediaItem(title: title, url: 'https://example.test/movie', posterUrl: ''));
+      await tester.pump();
+      provider.pending.single.complete(_list('movie'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ElevatedButton), findsOneWidget);
+      await tester.tap(find.byType(ElevatedButton));
+      await tester.pumpAndSettle();
+      await launched;
+      expect(storage.filePath, isNotNull);
+      final filename = p.basename(storage.filePath!);
+      final stem = p.basenameWithoutExtension(filename);
+      expect(p.extension(filename), '.mp4');
+      expect(stem, isNotEmpty);
+      expect(stem.startsWith('.'), isFalse);
+      expect(utf8.encode(filename).length, lessThanOrEqualTo(255));
+      final original = sanitizeDownloadFileName(title);
+      expect(stem, original.isEmpty ? 'video' : original);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
   for (final fails in [false, true]) {
     testWidgets('auto download source failure keeps its caller route fails=$fails and permits retry', (tester) async {
       final provider = _Sources();
       final notifications = NotificationService();
-      addTearDown(notifications.dispose);
+      addTearDown(() { notifications.clearToasts(); notifications.dispose(); });
       final context = await _shell(tester, provider, auto: true, notifications: notifications);
       final launcher = ProviderScope.containerOf(context).read(downloadLauncherProvider);
       final first = launcher.launch(context, _item, episode: _episode);

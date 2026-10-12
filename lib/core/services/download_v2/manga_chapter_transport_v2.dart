@@ -191,6 +191,8 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   MangaChapterManifestV2 _manifest;
   DownloadTransportSnapshot _current;
   Future<void> _pageCompletionTail = Future<void>.value();
+  Future<void>? _manifestPublication;
+  Future<void>? _disposal;
   bool _disposed = false;
   bool _paused = false;
   bool _failing = false;
@@ -408,7 +410,9 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
         pageDigests: digests,
         isComplete: completed.length == spec.pages.length,
       );
-      await _manifest.writeTo(directory);
+      final publication = _manifest.writeTo(directory);
+      _manifestPublication = publication;
+      await publication;
       if (_disposed || _canceled || generation != _generation || _current.isFinal) return;
       await _pageSubscriptions.remove(index)?.cancel();
       _pageHandles.remove(index);
@@ -745,11 +749,14 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   }
 
   @override
-  Future<void> dispose() async {
-    if (_disposed) return;
+  Future<void> dispose() => _disposal ??= _dispose();
+
+  Future<void> _dispose() async {
     _disposed = true;
     _paused = true;
     await _releasePageHandles();
+    // Only an already-issued checkpoint can overwrite a replacement's state.
+    await _manifestPublication?.catchError((Object _, StackTrace __) {});
     await _controller.close();
   }
 

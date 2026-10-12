@@ -244,7 +244,8 @@ void main() {
     }
   });
 
-  test('logical metadata wins over a recycled task key identifying another variant', () async {
+  for (final sameLogical in [false, true]) {
+  test('logical-key metadata wins over a newer recycled task payload sameLogical=$sameLogical', () async {
     final store = InMemoryLogicalDownloadStoreV2();
     const logical = DownloadLogicalId('exact-metadata-variant');
     final record = LogicalDownloadRecordV2(
@@ -257,11 +258,13 @@ void main() {
     final manager = DownloadManagerV2(store: store, gateway: _ReaddGateway(), sourceResolver: StaticSourceResolverV2());
     final storage = _DownloadMetadataStorage();
     storage.metadata[record.taskId] = {
-      'logicalId': 'another-variant',
+      'logicalId': sameLogical ? logical.value : 'another-variant',
+      'timestamp': 100,
       'item': MultimediaItem(title: 'Wrong variant metadata', url: 'show', posterUrl: '').toJson(),
     };
     storage.metadata[logical.value] = {
       'logicalId': logical.value,
+      'timestamp': 1,
       'item': MultimediaItem(title: 'Exact variant metadata', url: 'show', posterUrl: '').toJson(),
     };
     final container = ProviderContainer(overrides: [
@@ -273,11 +276,47 @@ void main() {
       final row = (await container.read(downloadsProvider.future)).single;
       expect(row.logicalId, logical.value);
       expect(row.item.title, 'Exact variant metadata');
+      expect(row.artworkMetadataVerified, isTrue);
     } finally {
       container.dispose();
       await manager.dispose();
     }
   });
+  }
+
+  for (final declaredId in [null, 'another-logical-variant']) {
+    test('unproven task-key metadata remains visible without artwork ownership declared=$declaredId', () async {
+      final store = InMemoryLogicalDownloadStoreV2();
+      const logical = DownloadLogicalId('legacy-visible-row');
+      final record = LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2, logicalId: logical,
+        mediaId: 'show', unitKey: 'episode://legacy', variantKey: '480p',
+        generation: 1, taskId: 'legacy-visible-task', intent: DownloadUserIntent.paused,
+        destinationPath: '/tmp/ui-legacy-visible.mp4', sourceDescriptor: const {}, updatedAtMillis: 1,
+      );
+      await store.put(record);
+      final manager = DownloadManagerV2(store: store, gateway: _ReaddGateway(), sourceResolver: StaticSourceResolverV2());
+      final storage = _DownloadMetadataStorage();
+      storage.metadata[record.taskId] = {
+        if (declaredId != null) 'logicalId': declaredId,
+        'item': MultimediaItem(title: 'Saved legacy row', url: 'show', posterUrl: '').toJson(),
+      };
+      final container = ProviderContainer(overrides: [
+        downloadManagerV2Provider.overrideWithValue(manager), logicalDownloadStoreV2Provider.overrideWithValue(store),
+        storageServiceProvider.overrideWithValue(storage),
+      ]);
+      try {
+        container.listen(downloadsProvider, (_, __) {});
+        final row = (await container.read(downloadsProvider.future)).single;
+        expect(row.item.title, 'Saved legacy row');
+        expect(row.logicalId, logical.value);
+        expect(row.artworkMetadataVerified, isFalse);
+      } finally {
+        container.dispose();
+        await manager.dispose();
+      }
+    });
+  }
 
 }
 

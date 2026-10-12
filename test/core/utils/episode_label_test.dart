@@ -800,7 +800,8 @@ void main() {
         'الحلقة 12 والأخيرة',
       );
       expect(episodeTitleForStorage(episode: 1, serverName: 'مترجم'), 'مترجم');
-      expect(episodeTitleForStorage(episode: 11, title: 'الحلقة 11'), '');
+      // The source label is now retained even without a creative/final title.
+      expect(episodeTitleForStorage(episode: 11, title: 'الحلقة 11'), 'الحلقة 11');
     });
 
     test('keeps the label of numberless episodes', () {

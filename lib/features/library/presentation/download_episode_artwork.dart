@@ -14,8 +14,17 @@ Future<File?> ensureDownloadedEpisodeArtwork({
   required String taskId,
   required Episode? episode,
   String? logicalId,
+  bool allowMetadataBackfill = true,
 }) async {
   final logical = logicalId?.trim() ?? '';
+  if (!allowMetadataBackfill) {
+    // Reading an already-owned copy needs no live metadata. Unknown task-key
+    // metadata never imports a legacy file into a logical variant's ownership.
+    return logical.isEmpty ? await existingDownloadedEpisodeArtwork(taskId)
+        : await downloadArtworkStoreV2.existing(
+      logical, DownloadArtworkKindV2.episode,
+    );
+  }
   if (logical.isEmpty) {
     // Old callers may have lost remote metadata after an offline restart.
     final legacy = await existingDownloadedEpisodeArtwork(taskId);
