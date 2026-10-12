@@ -10,6 +10,7 @@ import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
+import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v2.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -141,6 +142,73 @@ void main() {
       await manager.dispose();
     }
   });
+
+  test('manager disposal fences artwork before joining an issued manga publication', () async {
+    final f = await _Fixture.create(root);
+    final mangaId = logicalDownloadIdForMangaChapter(mangaId: 'manga', chapterId: 'publication');
+    final manga = _PendingMangaPublication(taskIdForGeneration(mangaId, 1));
+    f.gateway.handles.add(manga);
+    await f.store.put(f.record.copyWith(
+      logicalId: mangaId, mediaKind: DownloadMediaKind.mangaChapter,
+      mediaId: 'manga', unitKey: 'publication', variantKey: 'pages',
+      taskId: manga.taskId, generation: 1, intent: DownloadUserIntent.paused,
+      destinationPath: p.join(root.path, 'manga'), updatedAtMillis: 2,
+      clearCompletedAtMillis: true,
+    ));
+    final oldFetchEntered = Completer<void>();
+    final oldBytes = Completer<List<int>?>();
+    final replacementFetchEntered = Completer<bool>();
+    final artwork = DownloadArtworkStoreV2(
+      supportDirectory: () async => root, cachedFileForUrl: (_) async => null,
+      fetchBytes: (uri) {
+        if (uri.path.endsWith('old')) {
+          oldFetchEntered.complete();
+          return oldBytes.future;
+        }
+        replacementFetchEntered.complete(true);
+        return Future.value(tinyMangaPng);
+      },
+    );
+    final oldObserver = DownloadArtworkObserverV2(store: artwork, sourceFor: (_) async =>
+        const DownloadArtworkSourceV2(posterUrl: 'https://example.test/old'));
+    final oldManager = DownloadManagerV2(
+      store: f.store, gateway: f.gateway, sourceResolver: StaticSourceResolverV2(),
+      presentationObservers: [oldObserver],
+    );
+    await oldManager.initialize();
+    await oldFetchEntered.future.timeout(const Duration(seconds: 5));
+    final disposal = oldManager.dispose();
+    await manga.disposalEntered.future.timeout(const Duration(seconds: 5));
+    final replacementStore = InMemoryLogicalDownloadStoreV2();
+    await replacementStore.put(f.record);
+    final replacementObserver = DownloadArtworkObserverV2(store: artwork, sourceFor: (_) async =>
+        const DownloadArtworkSourceV2(posterUrl: 'https://example.test/new'));
+    final replacementManager = DownloadManagerV2(
+      store: replacementStore, gateway: _Gateway(), sourceResolver: StaticSourceResolverV2(),
+      presentationObservers: [replacementObserver],
+    );
+    var fetchedReplacement = false;
+    try {
+      await replacementManager.initialize();
+      fetchedReplacement = await replacementFetchEntered.future.timeout(
+        const Duration(milliseconds: 250), onTimeout: () => false,
+      );
+      if (fetchedReplacement) {
+        await _until(() async => await artwork.existing(
+          f.record.logicalId.value, DownloadArtworkKindV2.poster,
+        ) != null);
+      }
+    } finally {
+      oldBytes.complete(tinyMangaJpeg);
+      manga.releasePublication.complete();
+      await disposal;
+      await replacementManager.dispose();
+    }
+    expect(fetchedReplacement, isTrue, reason: 'a replacement manager cannot join the still-eligible old artwork fetch');
+    final retained = (await artwork.existing(f.record.logicalId.value, DownloadArtworkKindV2.poster))!;
+    expect(await retained.readAsBytes(), tinyMangaPng);
+    expect(await File(f.record.destinationPath).readAsBytes(), [1, 2, 3]);
+  });
 }
 
 Future<List<File>> _ownedCopies(Directory root, String logicalId) async {
@@ -210,12 +278,18 @@ final class _MetadataStorage extends MemoryStorageService {
 
 final class _Gateway implements BackgroundDownloaderGateway {
   int starts = 0;
+  final handles = <DownloadTransportHandle>[];
   @override
   Future<void> initialize() async {}
   @override
-  Future<List<DownloadTransportHandle>> rehydrate() async => [];
+  Future<List<DownloadTransportHandle>> rehydrate() async => handles.toList();
   @override
-  Future<DownloadTransportHandle?> attach(String taskId) async => null;
+  Future<DownloadTransportHandle?> attach(String taskId) async {
+    for (final handle in handles) {
+      if (handle.taskId == taskId) return handle;
+    }
+    return null;
+  }
   @override
   Future<void> removeTracking(String taskId) async {}
   @override
@@ -223,6 +297,34 @@ final class _Gateway implements BackgroundDownloaderGateway {
     starts++;
     throw StateError('verified completed startup must not create a writer');
   }
+}
+
+final class _PendingMangaPublication implements MangaChapterTransportHandleV2 {
+  _PendingMangaPublication(this.taskId);
+  @override
+  final String taskId;
+  final disposalEntered = Completer<void>();
+  final releasePublication = Completer<void>();
+  Future<void>? _disposal;
+  @override
+  bool get recoveryOnly => false;
+  @override
+  DownloadTransportSnapshot get current => DownloadTransportSnapshot(
+    taskId: taskId, status: DownloadTransportStatus.paused, progress: .5,
+  );
+  @override
+  Stream<DownloadTransportSnapshot> get snapshots => const Stream.empty();
+  @override
+  Future<bool> pause() async => true;
+  @override
+  Future<bool> resume() async => false;
+  @override
+  Future<bool> cancel() async => false;
+  @override
+  Future<void> dispose() => _disposal ??= () async {
+    disposalEntered.complete();
+    await releasePublication.future;
+  }();
 }
 
 final class _Paths extends PathProviderPlatform {

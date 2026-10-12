@@ -808,6 +808,25 @@ final class DownloadManagerV2 {
     }
 
     final handle = await _recordHandle(record);
+    if (handle is MangaChapterTransportHandleV2 &&
+        !handle.recoveryOnly &&
+        {
+          DownloadTransportStatus.queued,
+          DownloadTransportStatus.running,
+          DownloadTransportStatus.held,
+        }.contains(handle.current.status)) {
+      final activeRecord = record.copyWith(
+        intent: DownloadUserIntent.active,
+        awaitingAdmission: false,
+        clearFailure: true,
+        updatedAtMillis: _nowMillis(),
+      );
+      await _store.put(activeRecord);
+      _rememberRecord(activeRecord);
+      _activateHandle(logicalId, handle);
+      await _publishRecords();
+      return handle.current;
+    }
     if (handle != null &&
         !(handle is MangaChapterTransportHandleV2 && handle.recoveryOnly) &&
         handle.current.status == DownloadTransportStatus.paused) {
@@ -903,58 +922,72 @@ final class DownloadManagerV2 {
     }
 
     if (record.mediaKind == DownloadMediaKind.mangaChapter) {
-      final alreadyWorking = handle is MangaChapterTransportHandleV2 &&
+      final alreadyWorking =
+          handle is MangaChapterTransportHandleV2 &&
           handle.recoveryOnly &&
-          {DownloadTransportStatus.queued, DownloadTransportStatus.running,
-            DownloadTransportStatus.held}.contains(handle.current.status);
-      if (alreadyWorking) _activateHandle(logicalId, handle);
-      final destinationKey = await _canonicalDestinationPath(
-        request.destinationPath,
-      );
-      return _destinationCommands.run(destinationKey, () async {
-        final conflict = await _findDestinationConflict(
-          destinationKey,
-          logicalId,
+          {
+            DownloadTransportStatus.queued,
+            DownloadTransportStatus.running,
+            DownloadTransportStatus.held,
+          }.contains(handle.current.status);
+      if (alreadyWorking) {
+        _admissionReservations.add(logicalId);
+        _activateHandle(logicalId, handle);
+      }
+      try {
+        final destinationKey = await _canonicalDestinationPath(
+          request.destinationPath,
         );
-        if (conflict != null) {
-          throw StateError(
-            'Canonical destination is already owned by ${conflict.logicalId}',
+        return await _destinationCommands.run(destinationKey, () async {
+          final conflict = await _findDestinationConflict(
+            destinationKey,
+            logicalId,
           );
-        }
-        if (!alreadyWorking && !await _reserveAdmission(logicalId)) {
-          final waitingRecord = record.copyWith(
-            intent: DownloadUserIntent.active,
-            awaitingAdmission: true,
-            parallelChunks: mangaChapterPageConnectionsFromPreference(
-              request.parallelChunks,
-            ),
-            clearFailure: true,
-            updatedAtMillis: _nowMillis(),
-          );
-          await _store.put(waitingRecord);
-          _rememberRecord(waitingRecord);
-          await _publishRecords();
-          final queued = DownloadTransportSnapshot(
-            taskId: waitingRecord.taskId,
-            status: DownloadTransportStatus.queued,
-            progress: _snapshots[logicalId]?.progress ?? 0,
-            configuredConnections: mangaChapterPageConnectionsFromPreference(
-              request.parallelChunks,
-            ),
-            activeConnections: 0,
-          );
-          _snapshots[logicalId] = queued;
-          _recordDiagnostic(logicalId, queued);
+          if (conflict != null) {
+            throw StateError(
+              'Canonical destination is already owned by ${conflict.logicalId}',
+            );
+          }
+          if (!alreadyWorking && !await _reserveAdmission(logicalId)) {
+            final waitingRecord = record.copyWith(
+              intent: DownloadUserIntent.active,
+              awaitingAdmission: true,
+              parallelChunks: mangaChapterPageConnectionsFromPreference(
+                request.parallelChunks,
+              ),
+              clearFailure: true,
+              updatedAtMillis: _nowMillis(),
+            );
+            await _store.put(waitingRecord);
+            _rememberRecord(waitingRecord);
+            await _publishRecords();
+            final queued = DownloadTransportSnapshot(
+              taskId: waitingRecord.taskId,
+              status: DownloadTransportStatus.queued,
+              progress: _snapshots[logicalId]?.progress ?? 0,
+              configuredConnections: mangaChapterPageConnectionsFromPreference(
+                request.parallelChunks,
+              ),
+              activeConnections: 0,
+            );
+            _snapshots[logicalId] = queued;
+            _recordDiagnostic(logicalId, queued);
+            _scheduleAdmissionPromotion();
+            return queued;
+          }
+          try {
+            return await _startExistingMangaGenerationUnsafe(request, record);
+          } finally {
+            if (!alreadyWorking) _admissionReservations.remove(logicalId);
+            _scheduleAdmissionPromotion();
+          }
+        });
+      } finally {
+        if (alreadyWorking) {
+          _admissionReservations.remove(logicalId);
           _scheduleAdmissionPromotion();
-          return queued;
         }
-        try {
-          return await _startExistingMangaGenerationUnsafe(request, record);
-        } finally {
-          if (!alreadyWorking) _admissionReservations.remove(logicalId);
-          _scheduleAdmissionPromotion();
-        }
-      });
+      }
     }
     if (record.intent == DownloadUserIntent.paused) {
       throw StateError(
@@ -2749,19 +2782,27 @@ final class DownloadManagerV2 {
   }
 
   Future<void> dispose() async {
+    final presentationDisposal = Future.wait<void>(
+      _presentationObservers.map((observer) async {
+        try {
+          await observer.dispose();
+        } catch (_) {
+          // Presentation disposal cannot prevent transport cleanup.
+        }
+      }),
+    );
     _admissionPromotionRetryTimer?.cancel();
     _admissionPromotionRetryTimer = null;
     for (final subscription in _subscriptionsByTaskId.values) {
       await subscription.cancel();
     }
     _subscriptionsByTaskId.clear();
-    for (final handle in _handlesByTaskId.values.whereType<MangaChapterTransportHandleV2>()) {
+    for (final handle
+        in _handlesByTaskId.values.whereType<MangaChapterTransportHandleV2>()) {
       await handle.dispose();
     }
     _handlesByTaskId.clear();
-    for (final observer in _presentationObservers) {
-      await observer.dispose();
-    }
+    await presentationDisposal;
     _recordsByLogicalId.clear();
     _lastPositiveSpeedAtMillis.clear();
     _lastNativeSpeedProjectionAtMillis.clear();
