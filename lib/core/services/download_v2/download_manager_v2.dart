@@ -1573,7 +1573,7 @@ final class DownloadManagerV2 {
         }
         final mangaGateway = gateway as MangaChapterGatewayV2;
         final pages = await resolver.resolve(request.sourceDescriptor);
-        return mangaGateway.startMangaChapter(
+        return await mangaGateway.startMangaChapter(
           MangaChapterTransportSpecV2(
             taskId: taskId,
             mangaId: request.mediaId,
@@ -1590,7 +1590,7 @@ final class DownloadManagerV2 {
 
       final source =
           videoSource ?? await _sourceResolver.resolve(request.sourceDescriptor);
-      return _gateway.start(
+      return await _gateway.start(
         DownloadTaskSpecV2(
           taskId: taskId,
           url: source.url,
