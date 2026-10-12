@@ -104,8 +104,6 @@ final class DownloadManagerV2 {
   final _commands = _KeyedCommandQueue<DownloadLogicalId>();
   final _destinationCommands = _KeyedCommandQueue<String>();
   final _admissionCommands = _KeyedCommandQueue<String>();
-  final Map<DownloadLogicalId, DownloadStartRequestV2> _requests =
-      <DownloadLogicalId, DownloadStartRequestV2>{};
   final Map<DownloadLogicalId, String> _currentTaskIds =
       <DownloadLogicalId, String>{};
   final Map<DownloadLogicalId, int> _currentGenerations =
@@ -273,10 +271,6 @@ final class DownloadManagerV2 {
           );
           await _store.put(pausedRecord);
           _rememberRecord(pausedRecord);
-          _requests.putIfAbsent(
-            pausedRecord.logicalId,
-            () => _requestFromRecord(pausedRecord),
-          );
 
           DownloadTransportSnapshot? settled;
           if (exactHandle != null && !exactHandle.current.isFinal) {
@@ -330,10 +324,6 @@ final class DownloadManagerV2 {
 
         switch (record.intent) {
           case DownloadUserIntent.paused:
-            _requests.putIfAbsent(
-              record.logicalId,
-              () => _requestFromRecord(record),
-            );
             DownloadTransportSnapshot? settledPause;
             if (exactHandle != null) {
               if (!exactHandle.current.isFinal &&
@@ -402,10 +392,7 @@ final class DownloadManagerV2 {
             _recordDiagnostic(record.logicalId, failed);
 
           case DownloadUserIntent.active:
-            final request = _requests.putIfAbsent(
-              record.logicalId,
-              () => _requestFromRecord(record),
-            );
+            final request = _requestFromRecord(record);
             if (record.awaitingAdmission) {
               if (exactHandle != null &&
                   _isRecoverable(exactHandle.current) &&
@@ -506,7 +493,6 @@ final class DownloadManagerV2 {
   /// Starts a logical download, coalescing concurrent duplicate starts into
   /// the same exact package writer.
   Future<DownloadTransportSnapshot> start(DownloadStartRequestV2 request) {
-    _requests[request.logicalId] = request;
     return _commands.run(request.logicalId, () async {
       await initialize();
       final currentRecord = await _store.get(request.logicalId);
@@ -527,7 +513,10 @@ final class DownloadManagerV2 {
 
         if (currentRecord.intent == DownloadUserIntent.paused &&
             await _hasResumablePausedState(currentRecord)) {
-          return _resumeRecordUnsafe(currentRecord, request);
+          return _resumeRecordUnsafe(
+            currentRecord,
+            _requestFromRecord(currentRecord),
+          );
         }
 
         if (currentRecord.intent == DownloadUserIntent.active) {
@@ -573,10 +562,7 @@ final class DownloadManagerV2 {
       if (currentRecord == null) {
         throw StateError('Cannot restart missing logical download $logicalId');
       }
-      final request = _requests.putIfAbsent(
-        logicalId,
-        () => _requestFromRecord(currentRecord),
-      );
+      final request = _requestFromRecord(currentRecord);
       _sourceRefreshAttempts.remove(logicalId);
       return _startFreshGeneration(request, currentRecord);
     });
@@ -710,10 +696,7 @@ final class DownloadManagerV2 {
       if (record == null) {
         throw StateError('Cannot resume missing logical download $logicalId');
       }
-      final request = _requests.putIfAbsent(
-        logicalId,
-        () => _requestFromRecord(record),
-      );
+      final request = _requestFromRecord(record);
       return _resumeRecordUnsafe(record, request);
     });
   }
@@ -968,7 +951,6 @@ final class DownloadManagerV2 {
           _recordsByLogicalId.remove(logicalId);
           _snapshots.remove(logicalId);
           _lastPositiveSpeedAtMillis.remove(logicalId);
-          _requests.remove(logicalId);
           await _publishRecords();
         } finally {
           _admissionReservations.remove(logicalId);
@@ -1394,10 +1376,7 @@ final class DownloadManagerV2 {
   Future<void> _promoteQueuedAdmissionUnsafe(
     LogicalDownloadRecordV2 record,
   ) async {
-    final request = _requests.putIfAbsent(
-      record.logicalId,
-      () => _requestFromRecord(record),
-    );
+    final request = _requestFromRecord(record);
     final existing = await _exactHandle(record.taskId);
     if (existing != null) {
       if (existing.current.status == DownloadTransportStatus.paused) {
@@ -2464,10 +2443,7 @@ final class DownloadManagerV2 {
         await Future<void>.delayed(
           Duration(milliseconds: 200 * (1 << attempts)),
         );
-        final request = _requests.putIfAbsent(
-          logicalId,
-          () => _requestFromRecord(record),
-        );
+        final request = _requestFromRecord(record);
         try {
           await _startFreshGeneration(
             request,
