@@ -49,6 +49,29 @@ void main() {
     },
   );
 
+
+  test('recorded page hash rejects nonempty truncated files', () async {
+    final directory = await Directory.systemTemp.createTemp('aw_hash_page_');
+    addTearDown(() => directory.delete(recursive: true));
+    final page = File(p.join(directory.path, '0001.webp'));
+    await page.writeAsBytes(<int>[10, 20, 30, 40], flush: true);
+    final hash = await MangaChapterManifestV2.pageDigest(page);
+    const original = MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'm1',
+      chapterId: 'c1',
+      pageCount: 1,
+      completedIndexes: <int>{0},
+      isComplete: true,
+    );
+    await original.copyWith(pageDigests: <int, String>{0: hash}).writeTo(directory);
+
+    final verified = (await MangaChapterManifestV2.readFrom(directory))!;
+    expect(await verified.isPageValid(0, page), isTrue);
+    await page.writeAsBytes(<int>[10], flush: true);
+    expect(await verified.isPageValid(0, page), isFalse);
+  });
+
   test('manifest replacement publishes the complete new checkpoint', () async {
     final directory = await Directory.systemTemp.createTemp(
       'aw_manifest_replace_',
