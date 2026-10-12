@@ -288,10 +288,12 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         (snapshot) => _dispatchPageSnapshot(index, generation, snapshot),
       );
       _emitAggregate(
-        _paused &&
-                handle.current.status == DownloadTransportStatus.paused
-            ? DownloadTransportStatus.paused
-            : DownloadTransportStatus.running,
+        _failing
+            ? DownloadTransportStatus.held
+            : _paused &&
+                  handle.current.status == DownloadTransportStatus.paused
+                ? DownloadTransportStatus.paused
+                : DownloadTransportStatus.running,
       );
       final currentPage = handle.current;
       if (currentPage.isFinal ||
