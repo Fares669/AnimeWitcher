@@ -5100,6 +5100,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
     return _EpisodeRecord(
       id: id,
       number: number,
+      serverNumber: _serverEpisodeNumberText(source),
       sortOrder: (() {
         final sourceOrder = _episodeSortOrder(source);
         return sourceOrder > 0 ? sourceOrder : fallbackNumber;
@@ -5111,6 +5112,20 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
       isFinal: _hasFinalEpisodeSuffix(serverName),
       dubStatus: _episodeDubStatus(serverName),
     );
+  }
+
+  String? _serverEpisodeNumberText(Map<String, dynamic> source) {
+    for (final key in const [
+      'episode_number',
+      'episodeNumber',
+      'episode',
+      'ep',
+      'number',
+    ]) {
+      final raw = rawEpisodeNumberForDisplay(source[key]);
+      if (raw != null) return raw;
+    }
+    return null;
   }
 
   int? _serverEpisodeNumber(Map<String, dynamic> source) {
@@ -5283,6 +5298,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
             isFiller: record.isFiller,
             isFinal: record.isFinal,
             serverName: record.serverName,
+            serverNumber: record.serverNumber,
             dubStatus: record.dubStatus,
           ),
         )
@@ -5325,6 +5341,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
             isFiller: record.isFiller,
             isFinal: record.isFinal,
             serverName: record.serverName,
+            serverNumber: record.serverNumber,
             dubStatus: record.dubStatus,
           ),
         )
@@ -5380,6 +5397,7 @@ class AnimeWitcherNativeProvider extends AnimeWitcherProvider {
             isFiller: record.isFiller,
             isFinal: record.isFinal,
             serverName: record.serverName,
+            serverNumber: record.serverNumber,
             dubStatus: record.dubStatus,
           ),
         );
@@ -6188,6 +6206,7 @@ class _EpisodeRecord {
   const _EpisodeRecord({
     required this.id,
     required this.number,
+    this.serverNumber,
     required this.sortOrder,
     required this.title,
     required this.serverName,
@@ -6198,6 +6217,7 @@ class _EpisodeRecord {
   });
   final String id;
   final int number;
+  final String? serverNumber;
   final int sortOrder;
   final String title;
   final String serverName;
