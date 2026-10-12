@@ -98,6 +98,7 @@ void main() {
           jsonEncode(<String, Object?>{
             'schemaVersion': kParallelManifestSchemaVersion,
             'parentTaskId': parent.taskId,
+            'parentTask': parent.toJson(),
             'generation': 1,
             'checkpointSequence': 1,
             'expectedBytes': 1000,

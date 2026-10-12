@@ -42,6 +42,7 @@ void main() {
   }) {
     return PersistentParallelDownload(
       verifyPartSource: verifiedSavedTestRange,
+      promoteFile: publishCompletedTestFile,
       startPart: (task, progress, size) async {
         starts.add(task);
         startProgresses.add(progress);
@@ -477,7 +478,10 @@ void main() {
       expect(coordinator.isActive(parent.taskId), isTrue);
       expect(parentStatuses, isNot(contains(TaskStatus.paused)));
       expect(pauses, contains(stuckId));
-      expect(startProgresses, contains(0.999));
+      expect(
+        startProgresses, isNot(contains(0.999)),
+        reason: 'the unsettled native owner must not be resumed a second time',
+      );
       expect(startProgresses, contains(0.75));
 
       // Every completed sibling remains durable while only part.9 is recycled.

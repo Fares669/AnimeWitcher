@@ -39,6 +39,7 @@ void main() {
       PersistentParallelDownload buildCoordinator() =>
           PersistentParallelDownload(
             verifyPartSource: verifiedSavedTestRange,
+            promoteFile: publishCompletedTestFile,
             startPart: (task, progress, size) async {
               starts.add(task);
               return true;
@@ -144,6 +145,7 @@ void main() {
       final starts = <DownloadTask>[];
       final coordinator = PersistentParallelDownload(
         verifyPartSource: verifiedSavedTestRange,
+            promoteFile: publishCompletedTestFile,
         startPart: (task, progress, size) async {
           starts.add(task);
           return true;
