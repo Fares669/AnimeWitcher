@@ -353,7 +353,9 @@ class DownloadLauncher {
                       metadata.mimeType,
                     );
                     final String filename;
-                    if (episodeData != null &&
+                    if (metadata.filename != null) {
+                      filename = metadata.filename!;
+                    } else if (episodeData != null &&
                         usesEpisodeDownloadFileName(
                           episode: episodeData.episode,
                           title: episodeData.name,

@@ -20,7 +20,7 @@ import '../utils/download_resume.dart';
 const Duration kParallelProgressCoalesceDelay = Duration(seconds: 1);
 
 /// Progress manifests are durable recovery checkpoints, not a telemetry bus.
-/// Persist live-byte hints at a low cadence while bytes are flowing; exact
+/// Persist changes to recoverable disk bytes at a low cadence; exact
 /// pause/cancel boundaries and the final all-parts-complete boundary still
 /// persist synchronously. Individual child completions are already durable in
 /// their part file + TaskRecord and are coalesced here so 5-16 workers cannot
@@ -1005,6 +1005,7 @@ class PersistentParallelDownload {
   }
 
   void _invalidatePartAttempt(_ParallelSession session, _DownloadPart part) {
+    part.lastProgressAdvanceAt = null;
     part.attemptGeneration = part.attemptGeneration <= 0
         ? 1
         : part.attemptGeneration + 1;
@@ -1918,6 +1919,7 @@ class PersistentParallelDownload {
   }
 
   void _releaseConnection(_DownloadPart part) {
+    part.lastProgressAdvanceAt = null;
     part.recoveryTimer?.cancel();
     part.recoveryTimer = null;
     _cancelPendingStartLease(part);
@@ -2388,6 +2390,7 @@ class PersistentParallelDownload {
 
   Future<void> _pollDiskProgress(_ParallelSession session) async {
     var changed = false;
+    final now = DateTime.now();
 
     for (final part in session.parts) {
       // Only a native-owned child can change while the parent is active.
@@ -2395,6 +2398,15 @@ class PersistentParallelDownload {
       // during start/restore, so probing them every second only multiplies file
       // system calls by the total queued work-unit count.
       if (part.complete || !part.launched) continue;
+      final lastAdvance = part.lastProgressAdvanceAt;
+      // Disk probes are a per-child fallback. Repeated identical callbacks do
+      // not postpone recovery, and a completion sentinel always gets checked.
+      if (part.progress < kParallelNativeCompletionSentinel &&
+          lastAdvance != null &&
+          !now.isBefore(lastAdvance) &&
+          now.difference(lastAdvance) < const Duration(seconds: 2)) {
+        continue;
+      }
       try {
         final file = File(await part.task.filePath());
         if (!await file.exists()) continue;
@@ -2435,7 +2447,6 @@ class PersistentParallelDownload {
       }
     }
 
-    final now = DateTime.now();
     final creditedBytes = session.creditedBytes;
     final previousBytes = session.lastDiskObservedBytes;
     final previousAt = session.lastDiskObservedAt;
@@ -2623,27 +2634,32 @@ class PersistentParallelDownload {
     final lastNativeAgeMs = ageMs(latestNativeAt);
     final stalledForMs = ageMs(session.lastDiagnosticAdvanceAt);
 
-    _recordDiagnostic('parallel.heartbeat', {
-      'taskId': task.taskId,
-      'liveBytes': liveBytes,
-      'durableBytes': durableBytes,
-      'diskBytes': session.lastDiskObservedBytes >= 0
-          ? session.lastDiskObservedBytes
-          : durableBytes,
-      if (hasNativeByteEvidence) 'nativeWrittenBytes': nativeWrittenBytes,
-      'totalBytes': expectedBytes,
-      'checkpointSequence': session.checkpointSequence,
-      'configuredConnections': task.chunks,
-      'activeConnections': activeConnections,
-      'lastByteAgeMs': stalledForMs,
-      'lastNativeCallbackAgeMs': lastNativeAgeMs,
-      'lastCheckpointAgeMs': ageMs(session.lastCheckpointAt),
-      'lastStatusAgeMs': ageMs(session.lastStatusAt),
-      'parentActive': session.active,
-      'pauseRequested': session.pauseRequested,
-      'speedMBps': speed,
-      'diskObservedSpeedMBps': session.diskObservedSpeed,
-    });
+    final lastHeartbeat = session.lastDiagnosticHeartbeatAt;
+    if (lastHeartbeat == null ||
+        timestamp.difference(lastHeartbeat) >= const Duration(seconds: 5)) {
+      session.lastDiagnosticHeartbeatAt = timestamp;
+      _recordDiagnostic('parallel.heartbeat', {
+        'taskId': task.taskId,
+        'liveBytes': liveBytes,
+        'durableBytes': durableBytes,
+        'diskBytes': session.lastDiskObservedBytes >= 0
+            ? session.lastDiskObservedBytes
+            : durableBytes,
+        if (hasNativeByteEvidence) 'nativeWrittenBytes': nativeWrittenBytes,
+        'totalBytes': expectedBytes,
+        'checkpointSequence': session.checkpointSequence,
+        'configuredConnections': task.chunks,
+        'activeConnections': activeConnections,
+        'lastByteAgeMs': stalledForMs,
+        'lastNativeCallbackAgeMs': lastNativeAgeMs,
+        'lastCheckpointAgeMs': ageMs(session.lastCheckpointAt),
+        'lastStatusAgeMs': ageMs(session.lastStatusAt),
+        'parentActive': session.active,
+        'pauseRequested': session.pauseRequested,
+        'speedMBps': speed,
+        'diskObservedSpeedMBps': session.diskObservedSpeed,
+      });
+    }
 
     final progressRegressed =
         session.lastDiagnosticLiveBytes >= 0 &&
@@ -2924,6 +2940,7 @@ class PersistentParallelDownload {
       final previousCredible = part.credibleProgress;
       final now = DateTime.now();
       if (credible > previousCredible) {
+        part.lastProgressAdvanceAt = now;
         if (speedBytesPerSecond != null && speedBytesPerSecond > 0) {
           part.speed = speedBytesPerSecond / 1000 / 1000;
         } else if (observedBytes != null &&
@@ -2971,7 +2988,6 @@ class PersistentParallelDownload {
           part.task.taskId,
           part.credibleProgress,
         );
-        _scheduleProgressPersist(session);
       }
 
       if (!session.active) return;
@@ -3092,6 +3108,7 @@ class PersistentParallelDownload {
             }
 
             if (part.credibleProgress > previousCredibleProgress) {
+              part.lastProgressAdvanceAt = DateTime.now();
               // A recovered connection that actually writes bytes is healthy
               // again. Future interruptions start from the short backoff and
               // the tail watchdog gets a fresh grace period.
@@ -3122,7 +3139,6 @@ class PersistentParallelDownload {
               part.task.taskId,
               part.credibleProgress,
             );
-            _scheduleProgressPersist(session);
             if (session.active) {
               _scheduleAggregateProgress(session);
             }
@@ -4590,6 +4606,7 @@ class _ParallelSession {
   DateTime? lastStatusAt;
   String? lastDiagnosticStatus;
   DateTime? lastDiagnosticAdvanceAt;
+  DateTime? lastDiagnosticHeartbeatAt;
   int lastDiagnosticLiveBytes = -1;
   int lastDiagnosticDurableBytes = -1;
   int lastDiagnosticCheckpointBytes = -1;
@@ -4644,6 +4661,7 @@ class _ParallelSession {
     cancelPartRetries();
     activeDiagnosticAnomalies.clear();
     lastDiagnosticAdvanceAt = DateTime.now();
+    lastDiagnosticHeartbeatAt = null;
     connectionCeiling = kDownloadPartsMin;
     lastHealthyConnections = 0;
     slowStartComplete = false;
@@ -4736,6 +4754,7 @@ class _DownloadPart {
   bool needsCredibleProgressRepair;
   int lastNativeBridgeBytes = -1;
   DateTime? lastNativeBridgeAt;
+  DateTime? lastProgressAdvanceAt;
 
   int get size => to - from + 1;
 
