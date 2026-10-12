@@ -17,11 +17,15 @@ final class DownloadSourceMetadataV2 {
     required this.size,
     required this.mimeType,
     required this.supportsRanges,
+    this.filename,
   });
 
   final int? size;
   final String? mimeType;
   final bool supportsRanges;
+
+  /// Safe server-supplied leaf, kept exactly as provided after HTTP decoding.
+  final String? filename;
 
   String get sizeString {
     if (size == null) return 'Unknown size';
@@ -39,6 +43,8 @@ Future<DownloadSourceMetadataV2?> probeDownloadSourceV2(
   try {
     int? size;
     String? mimeType;
+    String? filename;
+    var finalUri = Uri.tryParse(url);
     var supportsRanges = false;
 
     try {
@@ -53,6 +59,10 @@ Future<DownloadSourceMetadataV2?> probeDownloadSourceV2(
           .timeout(const Duration(seconds: 10));
       size = int.tryParse(response.headers.value('content-length') ?? '');
       mimeType = response.headers.value('content-type');
+      filename = _dispositionFilenameV2(
+        response.headers['content-disposition']?.firstOrNull,
+      );
+      finalUri = response.realUri;
       supportsRanges =
           response.headers
               .value('accept-ranges')
@@ -91,6 +101,12 @@ Future<DownloadSourceMetadataV2?> probeDownloadSourceV2(
         if (contentLength != null && contentLength > 1) size ??= contentLength;
       }
       mimeType ??= response.headers.value('content-type');
+      filename =
+          _dispositionFilenameV2(
+            response.headers['content-disposition']?.firstOrNull,
+          ) ??
+          filename;
+      finalUri = response.realUri;
       final body = response.data;
       if (body is ResponseBody) {
         final subscription = body.stream.listen(null);
@@ -98,14 +114,75 @@ Future<DownloadSourceMetadataV2?> probeDownloadSourceV2(
       }
     } catch (_) {}
 
+    if (filename == null) {
+      try {
+        filename = _safeServerFilenameV2(finalUri?.pathSegments.lastOrNull);
+      } on FormatException {
+        // A non-UTF8 URL leaf cannot become a filename, but size stays useful.
+      }
+    }
     return DownloadSourceMetadataV2(
       size: size,
       mimeType: mimeType,
       supportsRanges: supportsRanges,
+      filename: filename,
     );
   } catch (_) {
     return null;
   }
+}
+
+String? _dispositionFilenameV2(String? disposition) {
+  if (disposition == null) return null;
+  try {
+    final parameters = HeaderValue.parse(
+      disposition,
+      preserveBackslash: true,
+    ).parameters;
+    final extended = parameters['filename*'];
+    if (extended != null) {
+      final match = RegExp(r"^([^']*)'[^']*'(.*)$").firstMatch(extended);
+      final encoding = switch (match?.group(1)?.toLowerCase()) {
+        'utf-8' => utf8,
+        'iso-8859-1' => latin1,
+        _ => null,
+      };
+      if (match != null && encoding != null) {
+        try {
+          final filename = _safeServerFilenameV2(
+            Uri.decodeQueryComponent(
+              match.group(2)!.replaceAll('+', '%2B'),
+              encoding: encoding,
+            ),
+          );
+          if (filename != null) return filename;
+        } catch (_) {
+          // A malformed extended value can still have a valid plain filename.
+        }
+      }
+    }
+    return _safeServerFilenameV2(parameters['filename']);
+  } on HttpException {
+    return null;
+  }
+}
+
+String? _safeServerFilenameV2(String? value) {
+  if (value == null ||
+      value.isEmpty ||
+      value == '.' ||
+      value == '..' ||
+      RegExp(r'[\\/:*?"<>|\x00-\x1f\x7f-\x9f]').hasMatch(value) ||
+      RegExp(r'[. ]$').hasMatch(value) ||
+      RegExp(
+        r'^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)',
+        caseSensitive: false,
+      ).hasMatch(value))
+    return null;
+  final bytes = utf8.encode(value);
+  // Existing staging paths append ".assembling" to this leaf (11 bytes).
+  if (bytes.length > 244 || utf8.decode(bytes) != value) return null;
+  return value;
 }
 
 String _downloadFolderName(String value, {required String fallback}) {

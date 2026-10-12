@@ -124,6 +124,7 @@ final class DownloadManagerV2 {
   final Map<DownloadLogicalId, int> _lastPositiveSpeedAtMillis =
       <DownloadLogicalId, int>{};
   final Map<String, int> _lastNativeSpeedProjectionAtMillis = <String, int>{};
+  final Map<String, int> _lastParentSpeedAtMillis = <String, int>{};
   final Map<DownloadLogicalId, int> _sourceRefreshAttempts =
       <DownloadLogicalId, int>{};
   final Map<DownloadLogicalId, Set<int>> _mangaSourceRefreshVerifiedPages =
@@ -1093,6 +1094,14 @@ final class DownloadManagerV2 {
     // samples arrive in a burst and used to create up to 16 parent snapshots,
     // diagnostic writes, and presentation updates in the same second.
     final now = _nowMillis();
+    final parentSampleAt = _lastParentSpeedAtMillis[taskId];
+    // Parent telemetry already aggregates every child. Native rates are a
+    // fallback, not a second writer that can replace a fresh aggregate ETA.
+    if (parentSampleAt != null &&
+        now >= parentSampleAt &&
+        now - parentSampleAt < 3000) {
+      return;
+    }
     if (bytesPerSecond > 0) {
       final lastProjection = _lastNativeSpeedProjectionAtMillis[taskId];
       if (lastProjection != null &&
@@ -2250,6 +2259,7 @@ final class DownloadManagerV2 {
     }
     for (final id in ids) {
       _handlesByTaskId.remove(id);
+      _lastParentSpeedAtMillis.remove(id);
       final subscription = _subscriptionsByTaskId.remove(id);
       if (subscription != null) unawaited(subscription.cancel());
     }
@@ -2313,6 +2323,7 @@ final class DownloadManagerV2 {
       return;
     }
     if (snapshot.isFinal) {
+      _lastParentSpeedAtMillis.remove(snapshot.taskId);
       _lastNativeSpeedProjectionAtMillis.remove(snapshot.taskId);
     }
 
@@ -2389,6 +2400,12 @@ final class DownloadManagerV2 {
       return false;
     }
 
+    if (snapshot.status != DownloadTransportStatus.running) {
+      _lastParentSpeedAtMillis.remove(snapshot.taskId);
+    } else if (snapshot.networkSpeedMBps > 0) {
+      _lastParentSpeedAtMillis[snapshot.taskId] = _nowMillis();
+    }
+
     var accepted = snapshot;
     final record = _recordsByLogicalId[logicalId];
     final current = _snapshots[logicalId];
@@ -2448,7 +2465,7 @@ final class DownloadManagerV2 {
     // "fake paused" state that explicit Resume correctly refuses to trust.
     final projected = accepted;
     _snapshots[logicalId] = projected;
-    if (projected.networkSpeedMBps > 0) {
+    if (snapshot.networkSpeedMBps > 0) {
       _lastPositiveSpeedAtMillis[logicalId] = _nowMillis();
     }
     _recordDiagnostic(logicalId, projected);
@@ -2466,6 +2483,7 @@ final class DownloadManagerV2 {
       return;
     }
     _handlesByTaskId.remove(taskId);
+    _lastParentSpeedAtMillis.remove(taskId);
     final subscription = _subscriptionsByTaskId.remove(taskId);
     if (subscription != null) await subscription.cancel();
   }
@@ -2806,6 +2824,7 @@ final class DownloadManagerV2 {
     _recordsByLogicalId.clear();
     _lastPositiveSpeedAtMillis.clear();
     _lastNativeSpeedProjectionAtMillis.clear();
+    _lastParentSpeedAtMillis.clear();
     _firstRenewedPositiveSample.clear();
     _mangaSourceRefreshVerifiedPages.clear();
     await _recordChanges.close();
