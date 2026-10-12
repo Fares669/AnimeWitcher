@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:animewitcher/core/domain/entity/manga.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_v2/download_file_planner_v2.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -123,6 +124,63 @@ void main() {
       expect(leaf, matches(RegExp(r'-[a-f0-9]{12}-[a-f0-9]{12}$')));
       await Directory(destination).create(recursive: true);
     }
+  });
+
+  for (final oldTitle in <String>['Foo.', List<String>.filled(110, 'ش').join()]) {
+    for (final hasIdentitySuffix in <bool>[false, true]) {
+      test('matching manifest preserves old title ${oldTitle.runes.first} identity suffix $hasIdentitySuffix', () async {
+        final temp = await _useTestDownloads();
+        const chapter = MangaChapter(id: 'c1', mangaId: 'm1', url: '/chapter', name: 'Chapter');
+        final chapterName = hasIdentitySuffix ? 'Chapter-${logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c1').value.substring(5, 17)}' : 'Chapter';
+        final oldPath = p.join(temp.path, 'manga', oldTitle, chapterName);
+        await MangaChapterManifestV2(
+          version: MangaChapterManifestV2.currentVersion,
+          mangaId: 'm1', chapterId: 'c1', pageCount: 1,
+          completedIndexes: const <int>{0}, isComplete: true,
+        ).writeTo(Directory(oldPath));
+        final planned = await mangaChapterDestinationDirectoryV2(
+          MultimediaItem(title: oldTitle, url: '/manga', posterUrl: ''), chapter,
+        );
+        expect(planned, oldPath);
+        expect(p.isWithin(p.join(temp.path, 'manga'), p.normalize(planned)), isTrue);
+      });
+    }
+  }
+
+  test('matching manifest keeps prior 90-unit identity-suffixed chapter directory', () async {
+    final temp = await _useTestDownloads();
+    final name = List<String>.filled(120, 'a').join();
+    final chapter = MangaChapter(id: 'c1', mangaId: 'm1', url: '/chapter', name: name);
+    final suffix = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c1').value.substring(5, 17);
+    final oldPath = p.join(temp.path, 'manga', 'Example', '${name.substring(0, 90)}-$suffix');
+    final page = File(p.join(oldPath, '0001.webp'));
+    await page.create(recursive: true);
+    await page.writeAsBytes(<int>[1, 2, 3]);
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'm1', chapterId: 'c1', pageCount: 1,
+      completedIndexes: const <int>{0}, isComplete: true,
+    ).writeTo(Directory(oldPath));
+    expect(await mangaChapterDestinationDirectoryV2(
+      MultimediaItem(title: 'Example', url: '/manga', posterUrl: ''), chapter,
+    ), oldPath);
+    expect(await page.readAsBytes(), <int>[1, 2, 3]);
+  });
+
+  test('legacy path lookup never adopts a dot-title manifest outside manga', () async {
+    final temp = await _useTestDownloads();
+    final unsafeLegacy = Directory(p.join(temp.path, 'Chapter'));
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'm1', chapterId: 'c1', pageCount: 1,
+      completedIndexes: const <int>{0}, isComplete: true,
+    ).writeTo(unsafeLegacy);
+    final planned = await mangaChapterDestinationDirectoryV2(
+      MultimediaItem(title: '..', url: '/manga', posterUrl: ''),
+      const MangaChapter(id: 'c1', mangaId: 'm1', url: '/chapter', name: 'Chapter'),
+    );
+    expect(planned, isNot(unsafeLegacy.path));
+    expect(p.isWithin(p.join(temp.path, 'manga'), p.normalize(planned)), isTrue);
   });
 
   test('chapters sharing a display number have distinct destinations', () async {

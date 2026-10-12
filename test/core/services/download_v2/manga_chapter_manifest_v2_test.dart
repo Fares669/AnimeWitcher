@@ -90,6 +90,30 @@ void main() {
     expect(counted.digestReads, 0);
   });
 
+  test('incomplete checkpoint retains expected digests for rejected pages', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-invalid-provenance-');
+    addTearDown(() => directory.delete(recursive: true));
+    final page = File(p.join(directory.path, '0001.webp'));
+    await page.writeAsString('<html>expired source</html>', flush: true);
+    final digest = await MangaChapterManifestV2.pageDigest(page);
+    await _singlePageManifest(digest: digest)
+        .copyWith(completedIndexes: <int>{}, isComplete: false)
+        .writeTo(directory);
+    final restored = (await MangaChapterManifestV2.readFrom(directory))!;
+    expect(restored.completedIndexes, isEmpty);
+    expect(restored.pageDigests, <int, String>{0: digest});
+    expect(await restored.isPageValid(0, page), isFalse);
+  });
+
+  test('uncompleted digest provenance stays bounded and malformed hashes stay invalid', () {
+    final hash = List<String>.filled(64, 'a').join();
+    final raw = _singlePageManifest().copyWith(completedIndexes: <int>{}, isComplete: false).toJson()
+      ..['pageDigests'] = <String, Object?>{'-1': hash, '0': 'bad-hash', '1': hash, '9999': hash};
+    final restored = MangaChapterManifestV2.fromJson(raw)!;
+    expect(restored.completedIndexes, isEmpty);
+    expect(restored.pageDigests, <int, String>{0: 'invalid'});
+  });
+
   test('legacy pages without digests keep nonempty offline compatibility', () async {
     final directory = await Directory.systemTemp.createTemp('aw-legacy-page-');
     addTearDown(() => directory.delete(recursive: true));
@@ -278,7 +302,7 @@ final class _CountedHeaderFile implements RandomAccessFile {
   }
 
   @override
-  Future<RandomAccessFile> close() => file.close();
+  Future<void> close() => file.close();
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

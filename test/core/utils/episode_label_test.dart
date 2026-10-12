@@ -7,6 +7,29 @@ import 'package:animewitcher/core/services/anizip_service.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
 
 void main() {
+  test('matches bounded Unicode episode base with visible quality suffix', () {
+    final title = List<String>.filled(100, '🧙').join();
+    for (final quality in <String>['720p', '1080p', '1234p']) {
+      final boundedBase = sanitizeDownloadFileName(formatEpisodeFileName(
+        episode: 12, serverName: 'الحلقة 12', title: title,
+      ));
+      final filename = '$boundedBase ($quality).mp4';
+      expect(utf8.encode(filename).length, lessThanOrEqualTo(212));
+      expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'الحلقة 12', title: title), isTrue);
+      expect(isDownloadedEpisodeFileName(filename, 13, serverName: 'الحلقة 13', title: title), isFalse);
+    }
+  });
+
+  test('matches a legal old long episode filename without rewriting its quality', () {
+    final title = List<String>.filled(100, 'ش').join();
+    final label = formatEpisodeFileName(episode: 12, serverName: 'الحلقة 12', title: title);
+    final filename = '${label.replaceAll(':', '_')} (720p).mp4';
+    expect(utf8.encode(filename).length, greaterThan(200));
+    expect(utf8.encode(filename).length, lessThanOrEqualTo(255));
+    expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'الحلقة 12', title: title), isTrue);
+    expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'حلقة 12', title: title), isFalse);
+  });
+
   group('portable download filename stems', () {
     test('dot-only and empty stems leave fallback choice to the caller', () {
       for (final value in <String>['', ' ', '.', '..', '...', ' . . ']) {

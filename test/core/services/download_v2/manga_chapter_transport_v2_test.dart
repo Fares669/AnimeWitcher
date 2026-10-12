@@ -89,6 +89,48 @@ void main() {
     expect(await validPage.readAsBytes(), tinyMangaPng);
   });
 
+  test('failed restores keep rejected digest until a valid replacement completes', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-rejected-hash-retry-');
+    addTearDown(() => temp.delete(recursive: true));
+    final file = File(p.join(temp.path, '0001.webp'));
+    final html = utf8.encode('<html>expired source</html>');
+    await file.writeAsBytes(html, flush: true);
+    final rejectedDigest = await MangaChapterManifestV2.pageDigest(file);
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'm1', chapterId: 'c1', pageCount: 1,
+      completedIndexes: const <int>{0}, isComplete: true,
+      pageDigests: <int, String>{0: rejectedDigest},
+    ).writeTo(temp);
+    for (var attempt = 0; attempt < 3; attempt++) {
+      final starter = _FakePageStarter();
+      final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+        MangaChapterTransportSpecV2(
+          taskId: 'rejected-retry-$attempt', mangaId: 'm1', chapterId: 'c1',
+          destinationDirectory: temp.path,
+          pages: const <MangaPage>[MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp')],
+          retries: 1,
+        ),
+      );
+      await starter.waitUntilStarted(0);
+      final before = (await MangaChapterManifestV2.readFrom(temp))!;
+      expect(before.completedIndexes, isEmpty);
+      expect(before.pageDigests, <int, String>{0: rejectedDigest});
+      await starter.complete(0, bytes: attempt < 2 ? html : tinyMangaPng);
+      await _waitForTerminal(handle);
+      final after = (await MangaChapterManifestV2.readFrom(temp))!;
+      if (attempt < 2) {
+        expect(handle.current.failureCategory, DownloadFailureCategory.sourceExpired);
+        expect(after.completedIndexes, isEmpty);
+        expect(after.pageDigests, <int, String>{0: rejectedDigest});
+      } else {
+        expect(handle.current.status, DownloadTransportStatus.complete);
+        expect(after.pageDigests[0], await MangaChapterManifestV2.pageDigest(file));
+        expect(after.pageDigests[0], isNot(rejectedDigest));
+      }
+    }
+  });
+
   test('restored hash-matching HTML page is fetched again', () async {
     final temp = await Directory.systemTemp.createTemp('aw-restore-html-page-');
     addTearDown(() => temp.delete(recursive: true));
