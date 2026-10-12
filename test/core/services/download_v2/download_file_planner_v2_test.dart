@@ -185,6 +185,33 @@ void main() {
     expect(await page.readAsBytes(), <int>[1, 2, 3]);
   });
 
+  test('historical split emoji chapter reuses its actual UTF-8 legacy directory', () async {
+    final temp = await _useTestDownloads();
+    final name = 'A${List<String>.filled(100, '🧙').join()}';
+    final chapter = MangaChapter(id: 'c1', mangaId: 'm1', url: '/chapter', name: name);
+    final suffix = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c1').value.substring(5, 17);
+    final oldLeaf = '${name.substring(0, 90)}-$suffix';
+    final oldRawPath = p.join(temp.path, 'manga', 'Example', oldLeaf);
+    final actualPath = p.join(temp.path, 'manga', 'Example', utf8.decode(utf8.encode(oldLeaf)));
+    expect(oldRawPath, isNot(actualPath));
+    expect(p.basename(actualPath).runes, contains(0xfffd));
+    final page = File(p.join(oldRawPath, '0001.webp'));
+    await page.create(recursive: true);
+    await page.writeAsBytes(<int>[1, 2, 3], flush: true);
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'm1', chapterId: 'c1', pageCount: 1,
+      completedIndexes: const <int>{0}, isComplete: true,
+    ).writeTo(Directory(oldRawPath));
+    expect(await Directory(actualPath).exists(), isTrue);
+    final planned = await mangaChapterDestinationDirectoryV2(
+      MultimediaItem(title: 'Example', url: '/manga', posterUrl: ''), chapter,
+    );
+    expect(planned, actualPath);
+    expect(p.isWithin(p.join(temp.path, 'manga'), p.normalize(planned)), isTrue);
+    expect(await File(p.join(actualPath, '0001.webp')).readAsBytes(), <int>[1, 2, 3]);
+  });
+
   test('legacy path lookup never adopts a dot-title manifest outside manga', () async {
     final temp = await _useTestDownloads();
     final unsafeLegacy = Directory(p.join(temp.path, 'Chapter'));

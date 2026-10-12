@@ -36,8 +36,9 @@ void main() {
       await _until(() async => gateway.pageHandles.length >= generation + 1);
       final page = gateway.pageHandles.last;
       page.progress(0.25);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.25);
       page.progress(0.50);
-      await Future<void>.delayed(Duration.zero);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.50);
       await page.complete(utf8.encode('<html>expired source</html>'));
       if (generation < 3) {
         await _until(() async => gateway.startedSpecs.length >= generation + 2);
@@ -56,6 +57,55 @@ void main() {
     expect(manifest.isComplete, isFalse);
     expect(manifest.completedIndexes, isEmpty);
     expect(manifest.pageDigests, isEmpty);
+  });
+
+  test('temporarily missing checkpoint cannot count an old verified page as new progress', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-monotonic-manga-evidence-');
+    addTearDown(() => temp.delete(recursive: true));
+    final gateway = _PageGateway();
+    final resolver = _PagesResolver(2);
+    final store = InMemoryLogicalDownloadStoreV2();
+    final manager = DownloadManagerV2(
+      store: store, gateway: gateway, sourceResolver: _UnusedVideoResolver(),
+      mangaChapterPageResolver: resolver,
+    );
+    addTearDown(() async {
+      await gateway.settle();
+      await manager.dispose();
+    });
+    final request = _request(temp.path);
+    await manager.start(request);
+    await _until(() async => gateway.hasCurrentPage(0));
+    await gateway.currentPage(0).complete(tinyMangaPng);
+    await _until(() async =>
+        (await MangaChapterManifestV2.readFrom(temp))!.completedIndexes.contains(0));
+    final saved = (await MangaChapterManifestV2.readFrom(temp))!;
+    gateway.beforeStart = (number) async {
+      // The expiry handler already observed the missing checkpoint when it
+      // requests this generation; restore only the previously verified page.
+      if (number == 3) await saved.writeTo(temp);
+    };
+    for (var generation = 0; generation < 4; generation++) {
+      await _until(() async => gateway.hasCurrentPage(1));
+      if (generation == 1) {
+        await File('${temp.path}/${MangaChapterManifestV2.fileName}').delete();
+      }
+      gateway.currentPage(1).progress(0.25);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.625);
+      gateway.currentPage(1).progress(0.50);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.75);
+      await gateway.currentPage(1).complete(utf8.encode('<html>expired source</html>'));
+      await _until(() async => gateway.startedSpecs.length > generation + 1 ||
+          (await store.get(request.logicalId))?.intent == DownloadUserIntent.failed);
+    }
+    expect(gateway.startedSpecs, hasLength(4));
+    expect(resolver.calls, 4);
+    expect((await store.get(request.logicalId))?.failureCategory, DownloadFailureCategory.sourceExpired);
+    expect((await store.get(request.logicalId))?.completedAtMillis, isNull);
+    final restored = (await MangaChapterManifestV2.readFrom(temp))!;
+    expect(restored.completedIndexes, <int>{0});
+    expect(restored.pageDigests, saved.pageDigests);
+    expect(await File('${temp.path}/0001.webp').readAsBytes(), tinyMangaPng);
   });
 
   test('new verified pages replenish manga renewal budget for long chapters', () async {
@@ -91,8 +141,9 @@ void main() {
       await _until(() async => gateway.hasCurrentPage(5));
       final before = gateway.startedSpecs.length;
       gateway.currentPage(5).progress(0.25);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.65625);
       gateway.currentPage(5).progress(0.50);
-      await Future<void>.delayed(Duration.zero);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.6875);
       await gateway.currentPage(5).complete(utf8.encode('<html>expired source</html>'));
       await _until(() async => gateway.startedSpecs.length > before ||
           (await store.get(request.logicalId))?.intent == DownloadUserIntent.failed);
@@ -154,6 +205,7 @@ final class _PageGateway implements BackgroundDownloaderGateway, MangaChapterGat
   final List<_PageHandle> pageHandles = <_PageHandle>[];
   final Map<String, DownloadTransportHandle> parents = <String, DownloadTransportHandle>{};
   final List<Future<DownloadTransportHandle>> pendingStarts = <Future<DownloadTransportHandle>>[];
+  Future<void> Function(int startNumber)? beforeStart;
 
   @override
   Future<void> initialize() async {}
@@ -163,14 +215,21 @@ final class _PageGateway implements BackgroundDownloaderGateway, MangaChapterGat
       throw StateError('manga must not start a video task');
 
   @override
-  Future<DownloadTransportHandle> startMangaChapter(MangaChapterTransportSpecV2 spec) async {
+  Future<DownloadTransportHandle> startMangaChapter(MangaChapterTransportSpecV2 spec) {
+    final start = _startMangaChapter(spec);
+    pendingStarts.add(start);
+    return start;
+  }
+
+  Future<DownloadTransportHandle> _startMangaChapter(MangaChapterTransportSpecV2 spec) async {
     startedSpecs.add(spec);
+    final prepare = beforeStart;
+    if (prepare != null) await prepare(startedSpecs.length);
     final start = MangaChapterTransportV2(startPage: (task) async {
       final page = _PageHandle(task);
       pageHandles.add(page);
       return page;
     }).start(spec);
-    pendingStarts.add(start);
     final parent = await start;
     parents[parent.taskId] = parent;
     return parent;
