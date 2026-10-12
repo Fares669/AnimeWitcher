@@ -26,12 +26,12 @@ void main() {
       'lib/features/library/presentation/downloads_provider.dart',
     ).readAsStringSync();
 
-    final start = provider.indexOf('Future<void> removeDownloads(');
+    final start = provider.indexOf('Future<bool> removeDownloads(');
+    expect(start, greaterThanOrEqualTo(0));
     final end = provider.indexOf(
       '\n  Future<void> pauseDownload(',
       start,
     );
-    expect(start, greaterThanOrEqualTo(0));
     expect(end, greaterThan(start));
     final body = provider.substring(start, end);
 
@@ -42,6 +42,10 @@ void main() {
     expect(body, isNot(contains('_deletingIds')));
     expect(body, contains("state.value!.where((item) => !droppedIds.contains(item.id))"));
     expect(body, contains('storage.removeDownloadMetadata('));
+    expect(body, contains('if (!await manager.deleteLegacyDownloadedVideo(file))'));
+    expect(body, contains('droppedIds.add(item.id)'));
+    expect(body, contains('return droppedIds.length == toRemove.length'));
+    expect(body, isNot(contains('final droppedIds = toRemove.keys.toSet()')));
     expect(body, isNot(contains('FileDownloader().database.deleteRecordWithId')));
     expect(body, isNot(contains('.deleteDownloadOutcome(')));
     expect(body, isNot(contains('.cancelDownloadOutcome(')));
