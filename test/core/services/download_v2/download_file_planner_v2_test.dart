@@ -12,6 +12,64 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 void main() {
+  test('new manga chapter folder contains only its readable number', () async {
+    final temp = await _useTestDownloads();
+    final destination = await mangaChapterDestinationDirectoryV2(
+      MultimediaItem(title: 'Example', url: '/manga', posterUrl: ''),
+      const MangaChapter(id: 'c357', mangaId: 'm1', url: '/chapter', name: 'Chapter 357', number: 357),
+    );
+    expect(destination, p.join(temp.path, 'manga', 'Example', 'الفصل 357'));
+  });
+
+  for (final occupation in ['foreign manifest', 'user file', 'file', 'symlink', 'title symlink']) {
+    test('readable manga destination refuses $occupation without changing it', () async {
+      if (Platform.isWindows && occupation.contains('symlink')) return;
+      final temp = await _useTestDownloads();
+      final title = Directory(p.join(temp.path, 'manga', 'Example'));
+      final target = Directory(p.join(title.path, 'الفصل 357'));
+      final outside = Directory(p.join(temp.path, 'outside'));
+      await outside.create();
+      await File(p.join(outside.path, 'keep')).writeAsString('keep');
+      if (occupation == 'file') {
+        await title.create(recursive: true);
+        await File(target.path).writeAsString('keep');
+      } else if (occupation == 'symlink') {
+        await title.create(recursive: true);
+        await Link(target.path).create(outside.path);
+      } else if (occupation == 'title symlink') {
+        await title.parent.create(recursive: true);
+        await Link(title.path).create(outside.path);
+      } else {
+        await target.create(recursive: true);
+        if (occupation == 'foreign manifest') {
+          await MangaChapterManifestV2(version: 1, mangaId: 'other', chapterId: 'other',
+            pageCount: 1, completedIndexes: {}, isComplete: false).writeTo(target);
+        } else {
+          await File(p.join(target.path, 'notes.txt')).writeAsString('keep');
+        }
+      }
+      await expectLater(mangaChapterDestinationDirectoryV2(
+        MultimediaItem(title: 'Example', url: '/manga', posterUrl: ''),
+        const MangaChapter(id: 'c357', mangaId: 'm1', url: '/chapter', name: 'Chapter 357', number: 357),
+      ), throwsStateError);
+      expect(await File(p.join(outside.path, 'keep')).readAsString(), 'keep');
+      if (occupation == 'file') expect(await File(target.path).readAsString(), 'keep');
+      if (occupation == 'user file') expect(await File(p.join(target.path, 'notes.txt')).readAsString(), 'keep');
+    });
+  }
+
+  test('modern hashed chapter remains discoverable under sanitized title', () async {
+    final temp = await _useTestDownloads();
+    const chapter = MangaChapter(id: 'c357', mangaId: 'm1', url: '/chapter', name: 'Chapter', number: 357);
+    final suffix = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c357').value.substring(6, 18);
+    final oldPath = p.join(temp.path, 'manga', '_CON', 'الفصل 357-$suffix');
+    await MangaChapterManifestV2(version: 1, mangaId: 'm1', chapterId: 'c357',
+      pageCount: 1, completedIndexes: {}, isComplete: false).writeTo(Directory(oldPath));
+    expect(await mangaChapterDestinationDirectoryV2(
+      MultimediaItem(title: 'CON', url: '/manga', posterUrl: ''), chapter,
+    ), oldPath);
+  });
+
   test('planned bounded episode base keeps visible uncommon quality and matches identity', () async {
     await _useTestDownloads();
     final title = List<String>.filled(100, '🧙').join();

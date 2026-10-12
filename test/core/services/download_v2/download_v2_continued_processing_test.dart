@@ -21,6 +21,34 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
+  for (final chapterNumber in [357, 12.5]) {
+    testWidgets('manga banner uses chapter number $chapterNumber instead of stored hash', (tester) async {
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return true;
+      });
+      final observer = IosDownloadContinuedProcessingObserverV2(service: DownloadContinuedProcessingService(
+        onSystemCancel: (_) async {}, forceAvailableForTesting: true,
+      ));
+      final record = LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2, logicalId: const DownloadLogicalId('manga-label'),
+        mediaKind: DownloadMediaKind.mangaChapter, mediaId: 'm1', unitKey: 'c1', variantKey: 'pages', generation: 1,
+        taskId: 'aw_v2_manga_label_g1', intent: DownloadUserIntent.active,
+        destinationPath: 'Downloads/manga/Example/الفصل $chapterNumber-124733e7da94',
+        sourceDescriptor: {'chapterNumber': chapterNumber, 'chapterName': 'Chapter $chapterNumber'}, updatedAtMillis: 1,
+      );
+      try {
+        await observer.observe(record, DownloadTransportSnapshot(
+          taskId: record.taskId, status: DownloadTransportStatus.running, progress: .25,
+        ));
+        expect((calls.singleWhere((call) => call.method == 'start').arguments as Map)['displayName'], 'الفصل $chapterNumber');
+      } finally {
+        await observer.dispose();
+      }
+    });
+  }
+
   testWidgets('successful terminal observer flushes final progress before native finish inside the sample window', (tester) async {
     final calls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
