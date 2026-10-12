@@ -225,6 +225,7 @@ final class DownloadManagerV2 {
               snapshot,
               integrityResult: DownloadV2IntegrityResult.valid,
             );
+            await _forgetCompletedTransport(record.taskId);
             continue;
           }
 
@@ -2306,6 +2307,21 @@ final class DownloadManagerV2 {
     return true;
   }
 
+  Future<void> _forgetCompletedTransport(String taskId) async {
+    try {
+      await _gateway.removeTracking(taskId);
+    } catch (error) {
+      // Keep the verified final file and retry metadata cleanup on startup.
+      _diagnostics.recordTransport('completion.trackingCleanupFailed', {
+        'errorType': error.runtimeType.toString(),
+      });
+      return;
+    }
+    _handlesByTaskId.remove(taskId);
+    final subscription = _subscriptionsByTaskId.remove(taskId);
+    if (subscription != null) await subscription.cancel();
+  }
+
   void _scheduleCompletionVerification(
     DownloadLogicalId logicalId,
     DownloadTransportSnapshot completedSnapshot,
@@ -2335,6 +2351,7 @@ final class DownloadManagerV2 {
             snapshot,
             integrityResult: DownloadV2IntegrityResult.valid,
           );
+          await _forgetCompletedTransport(record.taskId);
           _scheduleAdmissionPromotion();
           return;
         }
@@ -2403,6 +2420,7 @@ final class DownloadManagerV2 {
             snapshot,
             integrityResult: DownloadV2IntegrityResult.valid,
           );
+          await _forgetCompletedTransport(updated.taskId);
           _scheduleAdmissionPromotion();
           return;
         }
