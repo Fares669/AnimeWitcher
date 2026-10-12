@@ -113,7 +113,7 @@ void main() {
     await tester.runAsync(() async {
       for (final chapter in chapters) {
         final dir = await Directory('${root.path}/${chapter.id}').create();
-        final page = await File('${dir.path}/0001.png').writeAsBytes(tinyMangaPng);
+        final page = await File('${dir.path}/0001.jpg').writeAsBytes(tinyMangaJpeg);
         await MangaChapterManifestV2(
           version: MangaChapterManifestV2.currentVersion, mangaId: chapter.mangaId,
           chapterId: chapter.id, pageCount: 1, completedIndexes: const {0}, isComplete: true,

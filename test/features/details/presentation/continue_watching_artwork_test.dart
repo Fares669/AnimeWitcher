@@ -29,10 +29,14 @@ class _ArtworkSettings extends AnimeDataSourceSettingsNotifier {
 }
 
 class _Downloads extends DownloadedFiles {
+  _Downloads(this.local);
+  final bool local;
   @override
   Map<String, File?> build() => {};
   @override
-  Future<File?> resolveFileForTrackingUrl(String trackingUrl, {MultimediaItem? item, Episode? episode}) async => File('/tmp/episode.mp4');
+  Future<File?> resolveFileForTrackingUrl(String trackingUrl, {MultimediaItem? item, Episode? episode}) async => local ? File('/tmp/episode.mp4') : null;
+  @override
+  Future<File?> resolveFile(MultimediaItem item, {Episode? episode, String? logicalId}) async => null;
 }
 
 class _History extends WatchHistory {
@@ -99,19 +103,21 @@ class _Provider extends AnimeWitcherProvider {
 }
 
 void main() {
-  for (final existingCatalog in [false, true]) {
-    for (final enabled in [false, true]) {
-      testWidgets('resume enriches artwork enabled=$enabled existingCatalog=$existingCatalog', (tester) async {
-        await _resume(tester, enabled: enabled, existingCatalog: existingCatalog);
-      });
+  for (final local in [false, true]) {
+    for (final existingCatalog in [false, true]) {
+      for (final enabled in [false, true]) {
+        testWidgets('resume local=$local artwork=$enabled existingCatalog=$existingCatalog', (tester) async {
+          await _resume(tester, enabled: enabled, existingCatalog: existingCatalog, local: local);
+        });
+      }
     }
   }
   testWidgets('AniZip failure preserves the playable catalog', (tester) async {
-    await _resume(tester, enabled: true, existingCatalog: false, failArtwork: true);
+    await _resume(tester, enabled: true, existingCatalog: false, failArtwork: true, local: false);
   });
 }
 
-Future<void> _resume(WidgetTester tester, {required bool enabled, required bool existingCatalog, bool failArtwork = false}) async {
+Future<void> _resume(WidgetTester tester, {required bool enabled, required bool existingCatalog, bool failArtwork = false, required bool local}) async {
   final provider = _Provider(failArtwork: failArtwork);
   final history = _History();
   PlayerRouteExtra? player;
@@ -119,7 +125,15 @@ Future<void> _resume(WidgetTester tester, {required bool enabled, required bool 
   final saved = HistoryItem(item: item, position: 30, duration: 100, timestamp: 0, lastEpisodeUrl: 'show|2', episode: 2, season: 1, episodePosterUrl: 'old-2');
   final router = GoRouter(routes: [
     GoRoute(path: '/', builder: (context, state) => Scaffold(body: TextButton(
-      onPressed: () => unawaited(ProviderScope.containerOf(context).read(playbackLauncherProvider).playFromContinueWatching(context, saved)),
+      onPressed: () {
+        final launcher = ProviderScope.containerOf(context).read(playbackLauncherProvider);
+        unawaited(local
+          ? launcher.playFromContinueWatching(context, saved)
+          : launcher.play(context, 'show|2', baseItem: item,
+              episode: launcher.episodeFromContinueWatching(saved),
+              preselectedSource: StreamResult(url: 'https://example.test/video.mp4', source: 'direct'),
+              loadEpisodeArtwork: true));
+      },
       child: const Text('resume'),
     ))),
     GoRoute(path: '/player', builder: (context, state) {
@@ -130,7 +144,7 @@ Future<void> _resume(WidgetTester tester, {required bool enabled, required bool 
   await tester.pumpWidget(ProviderScope(overrides: [
     playerSettingsProvider.overrideWith(_Settings.new),
     animeDataSourceSettingsProvider.overrideWith(() => _ArtworkSettings(enabled)),
-    downloadedFilesProvider.overrideWith(_Downloads.new),
+    downloadedFilesProvider.overrideWith(() => _Downloads(local)),
     watchHistoryProvider.overrideWith(() => history),
     extensionManagerProvider.overrideWith(() => _Extensions(provider)),
     activeProviderProvider.overrideWithValue(provider),
@@ -139,18 +153,27 @@ Future<void> _resume(WidgetTester tester, {required bool enabled, required bool 
   await tester.tap(find.text('resume'));
   await tester.pumpAndSettle();
   expect(find.text('player'), findsOneWidget);
-  expect(provider.catalogCalls, existingCatalog ? 0 : 1);
-  expect(provider.artworkCalls, enabled ? 1 : 0);
-  final prefix = enabled && !failArtwork ? 'anizip' : 'source';
-  expect(player!.item.episodes!.map((e) => e.posterUrl), ['$prefix-1', '$prefix-2']);
-  expect(player!.episode!.posterUrl, '$prefix-2');
-  expect(player!.episode!.url, 'show|2');
-  expect(player!.episode!.name, 'Two');
-  expect(player!.episode!.episode, 2);
-  expect(player!.episode!.season, 1);
-  expect(player!.episode!.serverName, 'الحلقة 2');
-  expect(player!.episode!.isFinal, isTrue);
-  expect(history.opened!.posterUrl, '$prefix-2');
+  expect(provider.catalogCalls, local || existingCatalog ? 0 : 1);
+  expect(provider.artworkCalls, !local && enabled ? 1 : 0);
+  final expectedEpisode = local && !existingCatalog
+      ? Episode(name: '', url: 'show|2', episode: 2, season: 1, posterUrl: 'old-2')
+      : provider.episodes.last.copyWith(
+          posterUrl: !local && enabled && !failArtwork ? 'anizip-2' : 'source-2',
+        );
+  if (local && !existingCatalog) {
+    expect(player!.item.episodes!.map((e) => e.posterUrl), ['old-2']);
+  } else {
+    final prefix = !local && enabled && !failArtwork ? 'anizip' : 'source';
+    expect(player!.item.episodes!.map((e) => e.posterUrl), ['$prefix-1', '$prefix-2']);
+  }
+  expect(player!.episode!.posterUrl, expectedEpisode.posterUrl);
+  expect(player!.episode!.url, expectedEpisode.url);
+  expect(player!.episode!.name, expectedEpisode.name);
+  expect(player!.episode!.episode, expectedEpisode.episode);
+  expect(player!.episode!.season, expectedEpisode.season);
+  expect(player!.episode!.serverName, expectedEpisode.serverName);
+  expect(player!.episode!.isFinal, expectedEpisode.isFinal);
+  expect(history.opened!.posterUrl, expectedEpisode.posterUrl);
   expect(player!.progressUrl, 'show|2');
   router.pop();
   await tester.pumpAndSettle();

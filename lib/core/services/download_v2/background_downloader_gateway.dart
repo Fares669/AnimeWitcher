@@ -11,6 +11,8 @@ import '../download_parallel.dart';
 import '../persistent_parallel_download.dart';
 import 'download_v2_diagnostics.dart';
 import 'download_v2_models.dart';
+import 'download_v2_identity.dart';
+import 'manga_chapter_manifest_v2.dart';
 import 'manga_chapter_transport_v2.dart';
 
 /// Package-neutral description of one V2 parent transfer.
@@ -109,6 +111,26 @@ List<String> durableChildTaskIdsForParentV2(
   return ids;
 }
 
+/// Exact generated Manga pages, including the older notification group.
+List<String> mangaChildTaskIdsForParentV2(
+  Iterable<TaskRecord> records, String parentTaskId,
+) {
+  final parent = parseDownloadTaskIdentityV2(parentTaskId);
+  if (parent == null || parent.pageIndex != null ||
+      !parent.logicalId.value.startsWith('manga_')) return [];
+  final ids = <String>[
+    for (final record in records)
+      if ((record.task.group == kDownloadV2SilentPackageGroup ||
+              record.task.group == kDownloadV2PackageGroup) &&
+          record.taskId.startsWith('${parentTaskId}_p') &&
+          parseDownloadTaskIdentityV2(record.taskId)?.pageIndex != null &&
+          parseDownloadTaskIdentityV2(record.taskId)?.logicalId == parent.logicalId &&
+          parseDownloadTaskIdentityV2(record.taskId)?.generation == parent.generation)
+        record.taskId,
+  ]..sort();
+  return ids;
+}
+
 Future<void> configurePackageNotificationsV2(
   FileDownloader downloader,
   DownloadNotificationPrefs prefs,
@@ -191,6 +213,7 @@ final class PackageBackgroundDownloaderGateway
       <String, _PackageDownloadTransportHandle>{};
   final Map<String, _DurableParallelDownloadTransportHandle> _durableHandles =
       <String, _DurableParallelDownloadTransportHandle>{};
+  final _mangaHandles = <String, MangaChapterTransportHandleV2>{};
   PersistentParallelDownload? _durableParallel;
   StreamSubscription<TaskUpdate>? _durableUpdatesSubscription;
 
@@ -275,7 +298,32 @@ final class PackageBackgroundDownloaderGateway
       _notificationPreferences(),
     );
     final transport = MangaChapterTransportV2(startPage: _startMangaPageTaskV2);
-    return transport.start(spec);
+    final handle = await transport.start(spec);
+    final previous = _mangaHandles[spec.taskId];
+    _mangaHandles[spec.taskId] = handle;
+    await previous?.dispose();
+    return handle;
+  }
+
+  @override
+  Future<MangaChapterTransportHandleV2?> attachMangaChapterOwnershipV2(
+    String parentTaskId, {required int configuredConnections}
+  ) async {
+    await initialize();
+    final cached = _mangaHandles[parentTaskId];
+    if (cached != null) return cached;
+    final records = await _downloader.database.allRecords();
+    final children = <DownloadTransportHandle>[];
+    for (final id in mangaChildTaskIdsForParentV2(records, parentTaskId)) {
+      final handle = await attach(id);
+      if (handle != null) children.add(handle);
+    }
+    if (children.isEmpty) return null;
+    final handle = _RecoveredMangaChapterHandleV2(
+      parentTaskId, children, configuredConnections,
+    );
+    _mangaHandles[parentTaskId] = handle;
+    return handle;
   }
 
   Future<DownloadTransportHandle> _startMangaPageTaskV2(
@@ -283,19 +331,7 @@ final class PackageBackgroundDownloaderGateway
   ) async {
     await initialize();
 
-    // Older Manga builds placed page children in the normal V2 group, which
-    // makes them inherit user-facing notifications. Replace such an exact
-    // child once so upgraded installs also become notification-silent.
-    final tracked = _downloader.transfers.forId(page.taskId);
-    final persisted = await _downloader.database.recordForId(page.taskId);
-    final existingTask = tracked?.task ?? persisted?.task;
-    if (existingTask != null &&
-        existingTask.group != kDownloadV2SilentPackageGroup) {
-      final legacy = await attach(page.taskId);
-      await legacy?.cancel();
-      await removeTracking(page.taskId);
-    }
-
+    // Preserve exact current children, including the legacy notification group.
     final existing = await attach(page.taskId);
     final reusable = await reusableMangaPageHandleV2(
       existing: existing,
@@ -371,6 +407,9 @@ final class PackageBackgroundDownloaderGateway
   Future<DownloadTransportHandle?> attach(String taskId) async {
     await initialize();
 
+    final manga = _mangaHandles[taskId];
+    if (manga != null) return manga;
+
     final durable = _durableHandles[taskId];
     if (durable != null) return durable;
 
@@ -407,6 +446,10 @@ final class PackageBackgroundDownloaderGateway
   Future<List<DownloadTransportHandle>> rehydrate() async {
     await initialize();
     final result = <DownloadTransportHandle>[];
+    for (final handle in _mangaHandles.values) {
+      await handle.dispose();
+    }
+    _mangaHandles.clear();
 
     for (final record in await _downloader.database.allRecords()) {
       if (record.task is ParallelDownloadTask &&
@@ -464,6 +507,8 @@ final class PackageBackgroundDownloaderGateway
   @override
   Future<void> removeTracking(String taskId) async {
     await initialize();
+    await _cleanupMangaChildTracking(taskId);
+    await _mangaHandles.remove(taskId)?.dispose();
     final durable = _durableHandles.remove(taskId);
     if (durable != null) {
       durable.dispose();
@@ -472,6 +517,37 @@ final class PackageBackgroundDownloaderGateway
     _downloader.transfers.remove(taskId);
     _handles.remove(taskId)?.dispose();
     await _downloader.database.deleteRecordWithId(taskId);
+  }
+
+  Future<void> _cleanupMangaChildTracking(String parentTaskId) async {
+    final records = await _downloader.database.allRecords();
+    final ids = mangaChildTaskIdsForParentV2(records, parentTaskId);
+    if (ids.isEmpty) return;
+    // Paused recovery rows are not active native writers.
+    // ignore: invalid_use_of_visible_for_testing_member
+    final pausedIds = (await _downloader.database.storage.retrieveAllPausedTasks())
+        .map((task) => task.taskId).toSet();
+    final nativeIds = (await _downloader.allTasks(allGroups: true))
+        .map((task) => task.taskId).where((id) => !pausedIds.contains(id)).toSet();
+    for (final record in records.where((record) => ids.contains(record.taskId))) {
+      final transfer = _downloader.transfers.forId(record.taskId);
+      final status = transfer?.status ?? record.status;
+      if (nativeIds.contains(record.taskId) ||
+          !{TaskStatus.complete, TaskStatus.failed, TaskStatus.canceled, TaskStatus.notFound}.contains(status)) {
+        throw StateError('Manga page ownership has not settled: ${record.taskId}');
+      }
+    }
+    for (final id in ids) {
+      _handles.remove(id)?.dispose();
+      _downloader.transfers.remove(id);
+    }
+    await Future.wait<void>([
+      _downloader.database.deleteRecordsWithIds(ids),
+      // ignore: invalid_use_of_visible_for_testing_member
+      ...ids.map(_downloader.database.storage.removeResumeData),
+      // ignore: invalid_use_of_visible_for_testing_member
+      ...ids.map(_downloader.database.storage.removePausedTask),
+    ]);
   }
 
   Future<void> _cleanupDurableChildTracking(String parentTaskId) async {
@@ -784,7 +860,7 @@ Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
   final status = existing.current.status;
   if (status == DownloadTransportStatus.complete) {
     final file = File(destinationPath);
-    if (await file.exists() && await file.length() > 0) return existing;
+    if (await isMangaPageImageV2(file)) return existing;
     await removeTracking();
     return null;
   }
@@ -1276,6 +1352,89 @@ final class _DurableParallelDownloadTransportHandle
     if (_disposed) return;
     _disposed = true;
     unawaited(_snapshots.close());
+  }
+}
+
+final class _RecoveredMangaChapterHandleV2 implements MangaChapterTransportHandleV2 {
+  _RecoveredMangaChapterHandleV2(this.taskId, this.children, this.configuredConnections) {
+    for (final child in children) {
+      _subscriptions.add(child.snapshots.listen((_) => _publish()));
+    }
+  }
+
+  @override
+  final String taskId;
+  final List<DownloadTransportHandle> children;
+  final int configuredConnections;
+  final _controller = StreamController<DownloadTransportSnapshot>.broadcast();
+  final _subscriptions = <StreamSubscription<DownloadTransportSnapshot>>[];
+  bool _cancelRequested = false;
+  bool _disposed = false;
+
+  @override
+  bool get recoveryOnly => true;
+  @override
+  Stream<DownloadTransportSnapshot> get snapshots => _controller.stream;
+  @override
+  DownloadTransportSnapshot get current {
+    final live = children.where((child) => !child.current.isFinal &&
+        child.current.status != DownloadTransportStatus.missing).toList();
+    final running = live.where((child) => child.current.status != DownloadTransportStatus.paused).toList();
+    final status = running.isNotEmpty
+        ? DownloadTransportStatus.running
+        : live.isNotEmpty
+          ? DownloadTransportStatus.paused
+          : _cancelRequested ? DownloadTransportStatus.canceled : DownloadTransportStatus.missing;
+    return DownloadTransportSnapshot(
+      taskId: taskId, status: status, progress: 0,
+      configuredConnections: configuredConnections,
+      activeConnections: running.where((child) => child.current.status == DownloadTransportStatus.running).length,
+    );
+  }
+
+  void _publish() {
+    if (!_disposed) _controller.add(current);
+  }
+
+  @override
+  Future<bool> pause() async {
+    if (_disposed) return false;
+    final results = await Future.wait<bool>([
+      for (final child in children)
+        if (!child.current.isFinal &&
+            child.current.status != DownloadTransportStatus.missing &&
+            child.current.status != DownloadTransportStatus.paused) child.pause(),
+    ]);
+    _publish();
+    return results.every((accepted) => accepted);
+  }
+
+  @override
+  Future<bool> resume() async => false;
+
+  @override
+  Future<bool> cancel() async {
+    if (_disposed) return false;
+    final results = await Future.wait<bool>([
+      for (final child in children)
+        if (!child.current.isFinal &&
+            child.current.status != DownloadTransportStatus.missing) child.cancel(),
+    ]);
+    final accepted = results.every((result) => result);
+    if (accepted) _cancelRequested = true;
+    _publish();
+    return accepted;
+  }
+
+  @override
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    for (final subscription in _subscriptions) {
+      await subscription.cancel();
+    }
+    _subscriptions.clear();
+    await _controller.close();
   }
 }
 

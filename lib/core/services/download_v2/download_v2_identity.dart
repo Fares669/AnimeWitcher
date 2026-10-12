@@ -87,3 +87,24 @@ String taskIdForGeneration(DownloadLogicalId logicalId, int generation) {
   }
   return 'aw_v2_${logicalId.value}_g$generation';
 }
+
+/// Parses only application-generated parent and Manga page identities.
+({DownloadLogicalId logicalId, int generation, int? pageIndex})?
+parseDownloadTaskIdentityV2(String taskId) {
+  final match = RegExp(
+    r'^aw_v2_((dl|manga)_[0-9a-f]{32})_g([1-9][0-9]*)(?:_p([0-9]{4,}))?$',
+  ).firstMatch(taskId);
+  if (match == null) return null;
+  final generation = int.tryParse(match.group(3)!);
+  final page = match.group(4);
+  final pageNumber = page == null ? null : int.tryParse(page);
+  if (generation == null ||
+      (page != null && (match.group(2) != 'manga' || pageNumber == null || pageNumber <= 0))) {
+    return null;
+  }
+  return (
+    logicalId: DownloadLogicalId(match.group(1)!),
+    generation: generation,
+    pageIndex: pageNumber == null ? null : pageNumber - 1,
+  );
+}

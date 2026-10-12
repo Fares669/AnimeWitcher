@@ -86,4 +86,31 @@ void main() {
     expect(first.value, startsWith('manga_'));
   });
 
+  test('generated task parser preserves exact parents and zero-based manga pages', () {
+    final video = logicalDownloadIdFor(animeId: 'a', episodeKey: 'e', variantKey: 'sub');
+    final manga = logicalDownloadIdForMangaChapter(mangaId: 'm', chapterId: 'c');
+    expect(parseDownloadTaskIdentityV2(taskIdForGeneration(video, 3)),
+        (logicalId: video, generation: 3, pageIndex: null));
+    expect(parseDownloadTaskIdentityV2(taskIdForGeneration(manga, 7)),
+        (logicalId: manga, generation: 7, pageIndex: null));
+    expect(parseDownloadTaskIdentityV2('${taskIdForGeneration(manga, 7)}_p0001'),
+        (logicalId: manga, generation: 7, pageIndex: 0));
+    expect(parseDownloadTaskIdentityV2('${taskIdForGeneration(manga, 7)}_p12345'),
+        (logicalId: manga, generation: 7, pageIndex: 12344));
+  });
+
+  test('generated task parser rejects malformed IDs without broad prefix ownership', () {
+    final manga = taskIdForGeneration(logicalDownloadIdForMangaChapter(mangaId: 'm', chapterId: 'c'), 1);
+    final video = taskIdForGeneration(logicalDownloadIdFor(animeId: 'a', episodeKey: 'e', variantKey: 'sub'), 1);
+    for (final id in [
+      'unrelated', 'prefix_$manga', '${manga}_suffix', '${manga}_p0000',
+      '${manga}_p001', '${manga}_p0001_extra', '${video}_p0001',
+      manga.replaceFirst('_g1', '_g0'), manga.replaceFirst('_g1', '_g-1'),
+      manga.replaceFirst('_g1', '_g01'), manga.toUpperCase(),
+      manga.replaceFirst('_g1', '_g99999999999999999999999999999999999'),
+    ]) {
+      expect(parseDownloadTaskIdentityV2(id), isNull, reason: id);
+    }
+  });
+
 }

@@ -303,11 +303,16 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     // Progress is ephemeral manager state. Project it from memory every second;
     // do not scan both Hive boxes on the UI isolate for every progress tick.
     _refreshTimer = Timer.periodic(_refreshInterval, (_) {
-      if (_records.any(
-        (record) =>
-            record.intent == DownloadUserIntent.active &&
-            record.completedAtMillis == null,
-      )) {
+      if (_records.any((record) {
+        if (record.completedAtMillis != null ||
+            record.intent == DownloadUserIntent.failed ||
+            record.intent == DownloadUserIntent.canceled) return false;
+        final snapshot = manager.snapshotFor(record.logicalId);
+        return snapshot?.taskId == record.taskId &&
+            (snapshot?.status == DownloadTransportStatus.queued ||
+                snapshot?.status == DownloadTransportStatus.running ||
+                snapshot?.status == DownloadTransportStatus.held);
+      })) {
         _refreshPresentationState();
       }
     });
@@ -555,9 +560,15 @@ TaskStatus _taskStatusFor(
   if (record.completedAtMillis != null) return TaskStatus.complete;
   if (record.intent == DownloadUserIntent.canceled) return TaskStatus.canceled;
   if (record.intent == DownloadUserIntent.failed) return TaskStatus.failed;
-  if (record.intent == DownloadUserIntent.paused) return TaskStatus.paused;
+  final currentSnapshot = snapshot?.taskId == record.taskId ? snapshot : null;
+  if (record.intent == DownloadUserIntent.paused &&
+      (currentSnapshot == null ||
+          currentSnapshot.status == DownloadTransportStatus.paused ||
+          currentSnapshot.status == DownloadTransportStatus.missing)) {
+    return TaskStatus.paused;
+  }
 
-  return switch (snapshot?.status) {
+  return switch (currentSnapshot?.status) {
     DownloadTransportStatus.queued => TaskStatus.enqueued,
     DownloadTransportStatus.running => TaskStatus.running,
     DownloadTransportStatus.held => TaskStatus.waitingToRetry,
@@ -577,7 +588,7 @@ double _progressFor(
   DownloadTransportSnapshot? snapshot,
 ) {
   if (record.completedAtMillis != null) return 1;
-  final progress = snapshot?.progress ?? 0;
+  final progress = snapshot?.taskId == record.taskId ? snapshot?.progress ?? 0 : 0;
   return progress.clamp(0.0, 1.0).toDouble();
 }
 

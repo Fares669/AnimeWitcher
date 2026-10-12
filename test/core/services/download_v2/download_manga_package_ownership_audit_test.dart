@@ -13,6 +13,7 @@ import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2
 import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v2.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../support/manga_image_fixtures.dart';
@@ -117,6 +118,49 @@ void main() {
     expect(await File(p.join(f.directory.path, '0001.png')).readAsBytes(), tinyMangaPng);
   });
 
+  test('recovered manga parent refuses subset resume and disposal preserves native ownership', () async {
+    final f = await _Fixture.create(intent: DownloadUserIntent.paused);
+    addTearDown(f.dispose);
+    final child = await f.addPage(1, TaskStatus.paused);
+    final parent = await f.gateway.attachMangaChapterOwnershipV2(
+      f.parentId, configuredConnections: 4,
+    );
+    expect(parent, isNotNull);
+    expect(parent!.recoveryOnly, isTrue);
+    expect(parent.taskId, f.parentId);
+    expect(parent.current.status, DownloadTransportStatus.paused);
+    expect(parent.current.configuredConnections, 4);
+    expect(await parent.resume(), isFalse);
+    expect(f.downloader.testTransfers.started, isEmpty);
+    await parent.dispose();
+    expect(f.downloader.transfers.forId(child.taskId)!.status, TaskStatus.paused);
+    expect(f.downloader.canceledIds, isEmpty);
+    expect(f.downloader.storage.records, contains(child.taskId));
+    await f.gateway.rehydrate();
+    final reattached = await f.gateway.attachMangaChapterOwnershipV2(
+      f.parentId, configuredConnections: 4,
+    );
+    expect(reattached, isNot(same(parent)));
+    expect(reattached!.current.status, DownloadTransportStatus.paused);
+  });
+
+  test('normal manga parent disposal does not cancel its running native children', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    final child = await f.addPage(1, TaskStatus.running);
+    await f.manager.initialize();
+    await _until(() async => f.manager.snapshotFor(f.logicalId)?.activeConnections == 1);
+    final parent = await f.gateway.attach(f.parentId);
+    expect(parent, isA<MangaChapterTransportHandleV2>());
+    final chapter = parent! as MangaChapterTransportHandleV2;
+    expect(chapter.recoveryOnly, isFalse);
+    await chapter.dispose();
+    expect(f.downloader.transfers.forId(child.taskId)!.status, TaskStatus.running);
+    expect(f.downloader.canceledIds, isEmpty);
+    expect(await chapter.cancel(), isFalse);
+    expect(chapter.current.isFinal, isFalse);
+  });
+
   test('package manga cleanup removes only exact terminal children and their recovery tracking', () async {
     final f = await _Fixture.create(intent: DownloadUserIntent.paused);
     addTearDown(f.dispose);
@@ -176,6 +220,71 @@ void main() {
     expect(f.downloader.transfers.forId(child.taskId)?.status, TaskStatus.running);
     expect(await File(await child.filePath()).readAsBytes(), tinyMangaPng);
     expect(await MangaChapterManifestV2.readFrom(f.directory), isNotNull);
+  });
+
+  test('unresumable manga child waits for native cancel settlement before forgetting ownership', () async {
+    final f = await _Fixture.create(intent: DownloadUserIntent.paused);
+    addTearDown(f.dispose);
+    final child = await f.addPage(1, TaskStatus.paused);
+    final handle = await f.gateway.attach(child.taskId);
+    f.downloader.rejectResume = true;
+    f.downloader.deferCancelSettlement = true;
+    var completed = false;
+    final reuse = reusableMangaPageHandleV2(
+      existing: handle, destinationPath: await child.filePath(),
+      removeTracking: () => f.gateway.removeTracking(child.taskId),
+    ).whenComplete(() => completed = true);
+    await _until(() async => f.downloader.canceledIds.contains(child.taskId));
+    await Future<void>.delayed(Duration.zero);
+    try {
+      expect(completed, isFalse, reason: 'cancel acceptance is not native settlement');
+      expect(f.downloader.storage.records, contains(child.taskId));
+      expect(f.downloader.testTransfers.handles, contains(child.taskId));
+    } finally {
+      f.downloader.deferCancelSettlement = false;
+      await f.downloader.cancelTaskWithId(child.taskId);
+      await reuse;
+    }
+    expect(f.downloader.storage.records, isNot(contains(child.taskId)));
+    expect(await File(await child.filePath()).readAsBytes(), tinyMangaPng);
+  });
+
+  test('rejected unresumable manga child cancel preserves exact recovery tracking', () async {
+    final f = await _Fixture.create(intent: DownloadUserIntent.paused);
+    addTearDown(f.dispose);
+    final child = await f.addPage(1, TaskStatus.paused);
+    final handle = await f.gateway.attach(child.taskId);
+    f.downloader.rejectResume = true;
+    f.downloader.rejectCancel = true;
+    await expectLater(reusableMangaPageHandleV2(
+      existing: handle, destinationPath: await child.filePath(),
+      removeTracking: () => f.gateway.removeTracking(child.taskId),
+    ), throwsStateError);
+    expect(f.downloader.storage.records, contains(child.taskId));
+    expect(f.downloader.testTransfers.handles, contains(child.taskId));
+    expect(f.downloader.transfers.forId(child.taskId)!.status, TaskStatus.paused);
+    expect(await File(await child.filePath()).readAsBytes(), tinyMangaPng);
+  });
+
+  test('completed real image child cannot overwrite a different retained expected digest', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    final child = await f.addPage(1, TaskStatus.complete);
+    final expected = sha256.convert(tinyMangaGif89a).toString();
+    final manifest = (await MangaChapterManifestV2.readFrom(f.directory))!;
+    await manifest.copyWith(
+      completedIndexes: const {0, 1}, pageDigests: {1: expected}, isComplete: false,
+    ).writeTo(f.directory);
+    await f.manager.initialize();
+    await _until(() async => f.downloader.testTransfers.started.isNotEmpty ||
+        f.manager.snapshotFor(f.logicalId)?.isFinal == true);
+    expect(f.downloader.testTransfers.started.map((task) => task.taskId), [child.taskId]);
+    expect((await f.store.get(f.logicalId))?.completedAtMillis, isNull);
+    final checkpoint = (await MangaChapterManifestV2.readFrom(f.directory))!;
+    expect(checkpoint.completedIndexes, const {0});
+    expect(checkpoint.pageDigests, {1: expected});
+    expect(checkpoint.isComplete, isFalse);
+    expect(await File(await child.filePath()).readAsBytes(), tinyMangaPng);
   });
 
   test('completed package HTML child is rejected before fresh-page reuse', () async {
@@ -277,6 +386,9 @@ final class _Fixture {
 
   Future<void> dispose() async {
     downloader.rejectPause = false;
+    downloader.rejectResume = false;
+    downloader.rejectCancel = false;
+    downloader.deferCancelSettlement = false;
     for (final saved in await store.all()) {
       try {
         await manager.cancel(saved.logicalId);
@@ -322,6 +434,9 @@ final class _Downloader implements FileDownloader {
   final canceledIds = <String>[];
   final overlappingPaths = <String>[];
   bool rejectPause = false;
+  bool rejectResume = false;
+  bool rejectCancel = false;
+  bool deferCancelSettlement = false;
   @override
   Stream<TaskUpdate> get updates => updatesController.stream;
   @override
@@ -334,6 +449,7 @@ final class _Downloader implements FileDownloader {
   }
   @override
   Future<bool> resume(DownloadTask task) async {
+    if (rejectResume) return false;
     storage.paused.remove(task.taskId);
     await _status(task.taskId, TaskStatus.running);
     return true;
@@ -341,6 +457,8 @@ final class _Downloader implements FileDownloader {
   @override
   Future<bool> cancelTaskWithId(String taskId) async {
     canceledIds.add(taskId);
+    if (rejectCancel) return false;
+    if (deferCancelSettlement) return true;
     storage.paused.remove(taskId);
     await _status(taskId, TaskStatus.canceled);
     return true;

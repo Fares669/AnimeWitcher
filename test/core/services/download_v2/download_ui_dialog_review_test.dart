@@ -69,6 +69,8 @@ Future<void> _openDialog(
     ),
   ));
   await pumpUntil(tester, () => find.text('Details route').evaluate().isNotEmpty, 'details launch route');
+  final container = ProviderScope.containerOf(tester.element(find.text('Details route')));
+  await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'dialog command download rows');
   await tester.tap(find.text('Details route'));
   await pumpUntil(tester, () => find.byType(Dialog).evaluate().isNotEmpty, 'selected progress dialog');
 }
@@ -156,6 +158,7 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(notifications.toasts, hasLength(1));
       expect(notifications.toasts.single.message, contains('cancel rejected'));
+      expect(handle.cancelCalls, 1);
       expect(find.byType(DownloadProgressDialog), findsOneWidget);
       notifications.clearToasts();
       handle.reject = false;

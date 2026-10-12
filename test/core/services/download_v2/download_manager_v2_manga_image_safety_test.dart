@@ -108,6 +108,41 @@ void main() {
     expect(await File('${temp.path}/0001.webp').readAsBytes(), tinyMangaPng);
   });
 
+  test('unreadable settled checkpoint provides no renewal evidence without escaping the command', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-unreadable-manga-checkpoint-');
+    addTearDown(() => temp.delete(recursive: true));
+    final gateway = _PageGateway();
+    final resolver = _PagesResolver(1);
+    final store = InMemoryLogicalDownloadStoreV2();
+    final manager = DownloadManagerV2(
+      store: store, gateway: gateway, sourceResolver: _UnusedVideoResolver(),
+      mangaChapterPageResolver: resolver,
+    );
+    addTearDown(() async {
+      await gateway.settle();
+      await manager.dispose();
+    });
+    final io = _UnreadableCheckpointIO(temp.path);
+    final request = _request(temp.path);
+    await IOOverrides.runWithIOOverrides(() async {
+      await manager.start(request);
+      await _until(() async => gateway.hasCurrentPage(0));
+      io.failListing = true;
+      try {
+        await gateway.currentPage(0).complete(utf8.encode('<html>expired source</html>'));
+        await _until(() async => gateway.startedSpecs.length >= 2 ||
+            (await store.get(request.logicalId))?.intent == DownloadUserIntent.failed);
+      } finally {
+        io.failListing = false;
+      }
+      expect(io.failedListings, 1);
+      expect(gateway.startedSpecs, hasLength(2));
+      expect(resolver.calls, 2);
+      expect((await store.get(request.logicalId))?.intent, DownloadUserIntent.active);
+      expect((await store.get(request.logicalId))?.completedAtMillis, isNull);
+    }, io);
+  });
+
   test('new verified pages replenish manga renewal budget for long chapters', () async {
     final temp = await Directory.systemTemp.createTemp('aw-valid-renewal-budget-');
     addTearDown(() => temp.delete(recursive: true));
@@ -215,6 +250,11 @@ final class _PageGateway implements BackgroundDownloaderGateway, MangaChapterGat
       throw StateError('manga must not start a video task');
 
   @override
+  Future<MangaChapterTransportHandleV2?> attachMangaChapterOwnershipV2(
+    String parentTaskId, {required int configuredConnections}
+  ) async => null;
+
+  @override
   Future<DownloadTransportHandle> startMangaChapter(MangaChapterTransportSpecV2 spec) {
     final start = _startMangaChapter(spec);
     pendingStarts.add(start);
@@ -308,4 +348,43 @@ final class _PageHandle implements DownloadTransportHandle {
     ));
     return true;
   }
+}
+
+final class _UnreadableCheckpointIO extends IOOverrides {
+  _UnreadableCheckpointIO(this.chapterPath);
+  final String chapterPath;
+  bool failListing = false;
+  int failedListings = 0;
+  @override
+  Directory createDirectory(String path) {
+    final directory = super.createDirectory(path);
+    return path == chapterPath ? _UnreadableCheckpointDirectory(directory, this) : directory;
+  }
+}
+
+final class _UnreadableCheckpointDirectory implements Directory {
+  _UnreadableCheckpointDirectory(this.delegate, this.io);
+  final Directory delegate;
+  final _UnreadableCheckpointIO io;
+  @override
+  String get path => delegate.path;
+  @override
+  Future<bool> exists() => delegate.exists();
+  @override
+  Future<Directory> create({bool recursive = false}) async {
+    await delegate.create(recursive: recursive);
+    return this;
+  }
+  @override
+  Stream<FileSystemEntity> list({bool recursive = false, bool followLinks = true}) {
+    if (io.failListing) {
+      io.failedListings++;
+      return Stream.error(FileSystemException(
+        'test-only unreadable checkpoint', path, const OSError('Permission denied', 13),
+      ));
+    }
+    return delegate.list(recursive: recursive, followLinks: followLinks);
+  }
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

@@ -188,7 +188,7 @@ void main() {
     final saved = File('${cacheRoot.path}/download_artwork_v2/$key/poster.img');
     await tester.runAsync(() async {
       await saved.parent.create(recursive: true);
-      await saved.writeAsBytes(tinyMangaPng);
+      await saved.writeAsBytes(tinyMangaJpeg);
     });
     final rows = _Rows([_row('retained-poster', status: TaskStatus.complete)]);
     final container = ProviderContainer(overrides: [
@@ -201,7 +201,7 @@ void main() {
       await tester.pumpWidget(UncontrolledProviderScope(container: container, child: _app(const DownloadsTab())));
       await pumpUntil(tester, () => find.text('المكتملة').evaluate().isNotEmpty, 'offline completed tab');
       await tester.tap(find.text('المكتملة'));
-      await pumpUntil(tester, () => find.text('Variant show').evaluate().isNotEmpty, 'offline completed show');
+      await pumpUntil(tester, () => find.text('Variant show').hitTestable().evaluate().isNotEmpty, 'visible offline completed show');
       bool usesSavedPoster() => tester.widgetList<Image>(find.byType(Image)).any((widget) {
         final provider = widget.image;
         final image = provider is ResizeImage ? provider.imageProvider : provider;
@@ -242,11 +242,13 @@ void main() {
     await tester.pumpWidget(UncontrolledProviderScope(container: container, child: _app(const DownloadsTab())));
     await pumpUntil(tester, () => find.text('المكتملة').evaluate().isNotEmpty, 'completed downloads tab');
     await tester.tap(find.text('المكتملة'));
-    await pumpUntil(tester, () => find.text('Variant show').evaluate().isNotEmpty, 'completed show group');
+    await pumpUntil(tester, () => find.text('Variant show').hitTestable().evaluate().isNotEmpty, 'visible completed show group');
     await tester.tap(find.text('Variant show'));
     await pumpUntil(tester, () => find.byKey(const ValueKey('task-selected')).evaluate().isNotEmpty, 'selected completed variant card');
     final selected = find.byKey(const ValueKey('task-selected'));
     expect(selected, findsOneWidget);
+    await tester.ensureVisible(selected);
+    await pumpUntil(tester, () => selected.hitTestable().evaluate().isNotEmpty, 'visible selected completed card');
     await tester.tap(selected);
     await pumpUntil(tester, () => playback.played.isNotEmpty, 'selected completed playback');
     expect(playback.played, [files.first.path]);

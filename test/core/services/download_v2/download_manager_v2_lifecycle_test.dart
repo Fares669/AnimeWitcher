@@ -651,7 +651,7 @@ void main() {
     },
   );
 
-  test('cancel fences old generation before late callback', () async {
+  test('canceled intent fences the real generation before late callback', () async {
     final f = _fixture();
     await f.manager.start(f.request);
     final oldTaskId = f.gateway.startedSpecs.single.taskId;
@@ -660,7 +660,8 @@ void main() {
     final canceledRecord = await f.store.get(f.request.logicalId);
     expect(canceledRecord, isNotNull);
     expect(canceledRecord!.intent, DownloadUserIntent.canceled);
-    expect(canceledRecord.taskId, isNot(oldTaskId));
+    expect(canceledRecord.taskId, oldTaskId);
+    expect(canceledRecord.generation, 1);
 
     f.gateway.emit(oldTaskId, DownloadTransportStatus.complete);
     await Future<void>.delayed(Duration.zero);

@@ -156,6 +156,94 @@ void main() {
     }
   });
 
+  for (final matchesCurrentTask in [false, true]) {
+    test('progress telemetry accepts only the frozen row task matches=$matchesCurrentTask', () async {
+      final store = InMemoryLogicalDownloadStoreV2();
+      const logical = DownloadLogicalId('frozen-generation');
+      final gateway = _ReaddGateway();
+      final manager = DownloadManagerV2(store: store, gateway: gateway, sourceResolver: StaticSourceResolverV2());
+      ProviderContainer? container;
+      try {
+        await manager.start(DownloadStartRequestV2(
+          logicalId: logical, mediaId: 'show', unitKey: 'episode://frozen', variantKey: '480p',
+          destinationPath: '/tmp/frozen-generation.mp4', sourceDescriptor: const {},
+          allowPause: true, retries: 0, parallelChunks: 1,
+        ));
+        final original = (await store.get(logical))!;
+        await manager.restart(logical);
+        final current = (await store.get(logical))!;
+        gateway.handles[current.taskId]!.setSnapshot(DownloadTransportSnapshot(
+          taskId: current.taskId, status: DownloadTransportStatus.running, progress: .7,
+          transferredBytes: 700, totalBytes: 1000, networkSpeedMBps: 2,
+          timeRemaining: const Duration(seconds: 3),
+        ));
+        final taskId = matchesCurrentTask ? current.taskId : original.taskId;
+        final row = DownloadItem(
+          task: DownloadTask(taskId: taskId, url: 'https://example.test/frozen', filename: 'frozen.mp4'),
+          status: TaskStatus.paused, progress: .2, item: MultimediaItem(title: 'Show', url: 'show', posterUrl: ''),
+          logicalId: logical.value, timestamp: 1, totalBytes: 100,
+          networkSpeedMBps: .5, timeRemaining: const Duration(seconds: 8),
+        );
+        container = ProviderContainer(overrides: [
+          downloadsProvider.overrideWith(() => _ProjectedRows([row])),
+          downloadManagerV2Provider.overrideWithValue(manager),
+        ]);
+        await container.read(downloadsProvider.future);
+        final data = container.read(downloadProgressProvider)[logical.value]!;
+        expect(data.taskId, taskId);
+        expect(data.progress, matchesCurrentTask ? .7 : .2);
+        expect(data.totalSize, matchesCurrentTask ? 1000 : 100);
+        expect(data.networkSpeed, matchesCurrentTask ? 2 : .5);
+        expect(data.timeRemaining, Duration(seconds: matchesCurrentTask ? 3 : 8));
+      } finally {
+        container?.dispose();
+        await manager.dispose();
+      }
+    });
+  }
+
+  test('list telemetry ignores a newer task snapshot while durable row remains older', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    const logical = DownloadLogicalId('frozen-list-generation');
+    final gateway = _ReaddGateway();
+    final manager = DownloadManagerV2(store: store, gateway: gateway, sourceResolver: StaticSourceResolverV2());
+    ProviderContainer? container;
+    try {
+      await manager.start(DownloadStartRequestV2(
+        logicalId: logical, mediaId: 'show', unitKey: 'episode://frozen-list', variantKey: '480p',
+        destinationPath: '/tmp/frozen-list-generation.mp4', sourceDescriptor: const {},
+        allowPause: true, retries: 0, parallelChunks: 1, expectedBytes: 100,
+      ));
+      final original = (await store.get(logical))!;
+      await manager.restart(logical);
+      final current = (await store.get(logical))!;
+      gateway.handles[current.taskId]!.setSnapshot(DownloadTransportSnapshot(
+        taskId: current.taskId, status: DownloadTransportStatus.running, progress: .7,
+        transferredBytes: 700, totalBytes: 1000, networkSpeedMBps: 2,
+        timeRemaining: const Duration(seconds: 3),
+      ));
+      await store.put(original.copyWith(intent: DownloadUserIntent.paused));
+      final storage = _DownloadMetadataStorage();
+      storage.metadata[logical.value] = {'logicalId': logical.value, 'item': MultimediaItem(title: 'Show', url: 'show', posterUrl: '').toJson()};
+      container = ProviderContainer(overrides: [
+        downloadManagerV2Provider.overrideWithValue(manager), logicalDownloadStoreV2Provider.overrideWithValue(store),
+        storageServiceProvider.overrideWithValue(storage),
+      ]);
+      container.listen(downloadsProvider, (_, __) {});
+      final row = (await container.read(downloadsProvider.future)).single;
+      expect(row.id, original.taskId);
+      expect(row.status, TaskStatus.paused);
+      expect(row.progress, 0);
+      expect(row.totalBytes, 100);
+      expect(row.transferredBytes, isNull);
+      expect(row.networkSpeedMBps, -1);
+      expect(row.timeRemaining, Duration.zero);
+    } finally {
+      container?.dispose();
+      await manager.dispose();
+    }
+  });
+
 }
 
 final class _DownloadMetadataStorage extends MemoryStorageService {
@@ -220,6 +308,11 @@ final class _ReaddHandle implements DownloadTransportHandle {
   Stream<DownloadTransportSnapshot> get snapshots => _changes.stream;
 
   bool rejectPause = false;
+
+  void setSnapshot(DownloadTransportSnapshot snapshot) {
+    _current = snapshot;
+    _changes.add(snapshot);
+  }
 
   void setProgress(double progress) {
     _current = DownloadTransportSnapshot(

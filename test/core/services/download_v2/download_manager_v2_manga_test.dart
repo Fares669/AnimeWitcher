@@ -371,6 +371,11 @@ final class _Gateway
   }
 
   @override
+  Future<MangaChapterTransportHandleV2?> attachMangaChapterOwnershipV2(
+    String parentTaskId, {required int configuredConnections}
+  ) async => null;
+
+  @override
   Future<DownloadTransportHandle> startMangaChapter(
     MangaChapterTransportSpecV2 spec,
   ) async {
