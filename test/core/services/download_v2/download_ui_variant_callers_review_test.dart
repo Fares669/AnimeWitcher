@@ -26,6 +26,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 class _Rows extends DownloadsNotifier {
@@ -215,6 +216,8 @@ void main() {
       expect(usesSavedPoster(), isTrue);
       await tester.pumpWidget(const SizedBox.shrink());
     }
+    await pumpUntilFuture(tester, DefaultCacheManager().dispose(), 'completed poster fallback cache disposal');
+    await tester.pump();
   });
 
   testWidgets('completed Downloads row plays its selected variant instead of newest file', (tester) async {

@@ -18,7 +18,7 @@ void main() {
     test('selected completed file is exact and never substituted invalid=$invalidSelected', () async {
       final root = await Directory.systemTemp.createTemp('aw-selected-file-');
       final store = InMemoryLogicalDownloadStoreV2();
-      final selected = await File('${root.path}/selected.mp4').writeAsBytes(invalidSelected ? [1] : [1, 2]);
+      final selected = await File('${root.path}/selected.mp4').writeAsBytes([1, 2]);
       final newer = await File('${root.path}/newer.mp4').writeAsBytes([3, 4]);
       final otherUnit = await File('${root.path}/other.mp4').writeAsBytes([5, 6]);
       for (final entry in [(id: 'selected', file: selected, unit: 'episode://saved', timestamp: 1),
@@ -34,6 +34,10 @@ void main() {
       final manager = DownloadManagerV2(store: store, gateway: _Gateway(), sourceResolver: StaticSourceResolverV2());
       final container = ProviderContainer(overrides: [downloadManagerV2Provider.overrideWithValue(manager)]);
       try {
+        // Startup owns repair of invalid completed artifacts. Mutate only after
+        // recovery to exercise the resolver's live validation without repair.
+        await manager.initialize();
+        if (invalidSelected) await selected.writeAsBytes([1]);
         final files = container.read(downloadedFilesProvider.notifier);
         final item = MultimediaItem(title: 'Saved show', url: 'show://saved', posterUrl: '');
         final episode = Episode(name: 'Saved', url: 'episode://saved', episode: 1);

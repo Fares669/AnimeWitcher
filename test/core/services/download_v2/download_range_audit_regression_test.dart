@@ -7,7 +7,7 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RangeHarness {
-  _RangeHarness(this.directory, {this.hasLiveness = true}) {
+  _RangeHarness(this.directory, {this.hasLiveness = true, int maxConnections = 1}) {
     parent = ParallelDownloadTask(
       taskId: 'range-audit',
       url: 'https://example.com/video',
@@ -56,7 +56,7 @@ class _RangeHarness {
       tailStallDelay: const Duration(days: 1),
       pendingStartLeaseDelay: const Duration(days: 1),
       diskProgressPollInterval: const Duration(days: 1),
-      maxActiveConnections: 1,
+      maxActiveConnections: maxConnections,
     );
   }
 
@@ -240,11 +240,64 @@ void main() {
     expect(harness.coordinator.isActive(harness.parent.taskId), isFalse);
   });
 
+  test('source_renewal_waits_for_unresolved_sibling_settlement', () async {
+    await harness.close();
+    harness = _RangeHarness(
+      await Directory.systemTemp.createTemp('range-audit-renewal-settlement-'),
+      maxConnections: 2,
+    );
+    expect(await harness.coordinator.start(harness.parent, 20), isTrue);
+    final expired = harness.starts.single;
+    harness.coordinator.handleUpdate(TaskStatusUpdate(expired, TaskStatus.running));
+    for (var i = 0; i < 200 && harness.starts.length < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(harness.starts, hasLength(2));
+    final sibling = harness.starts.last;
+    harness.live.remove(expired.taskId);
+    harness.rejectPause = true;
+    harness.failedLookups.add(harness.lookupCalls + 1);
+    harness.coordinator.handleUpdate(
+      TaskStatusUpdate(expired, TaskStatus.notFound).copyWith(responseStatusCode: 404),
+    );
+    await harness.barrier();
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+
+    expect(harness.refreshRequests, 0);
+    expect(harness.coordinator.activeConnectionCount, 1);
+    expect(harness.starts, hasLength(2));
+
+    harness.rejectPause = false;
+    harness.live.remove(sibling.taskId);
+    harness.coordinator.handleUpdate(TaskStatusUpdate(sibling, TaskStatus.paused));
+    await harness.barrier();
+    for (var i = 0; i < 200 && harness.refreshRequests == 0; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(harness.refreshRequests, 1);
+    expect(harness.coordinator.activeConnectionCount, 0);
+    expect(harness.coordinator.isActive(harness.parent.taskId), isFalse);
+    expect(harness.starts, hasLength(2));
+  });
+
   test('full_body_fallback_negative_cancel_preserves_source_and_sibling_ownership', () async {
+    await harness.close();
+    harness = _RangeHarness(
+      await Directory.systemTemp.createTemp('range-audit-full-body-'),
+      maxConnections: 2,
+    );
     expect(await harness.coordinator.start(harness.parent, 20), isTrue);
     final source = harness.starts.single;
+    harness.coordinator.handleUpdate(TaskStatusUpdate(source, TaskStatus.running));
+    for (var i = 0; i < 200 && harness.starts.length < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(harness.starts, hasLength(2));
+    final sibling = harness.starts.last;
+    final siblingFile = await harness.writePart(sibling, <int>[99]);
     final payload = List<int>.generate(20, (i) => i);
     final file = await harness.writePart(source, payload);
+    harness.live.remove(source.taskId);
     harness.rejectCancel = true;
     harness.coordinator.handleUpdate(
       TaskStatusUpdate(source, TaskStatus.complete).copyWith(responseStatusCode: 200),
@@ -252,6 +305,8 @@ void main() {
     await harness.barrier();
 
     expect(harness.cancelCalls, 1);
+    expect(harness.coordinator.activeConnectionCount, 1);
+    expect(await siblingFile.readAsBytes(), <int>[99]);
     expect(harness.statuses, isNot(contains(TaskStatus.complete)));
     expect(await file.exists(), isTrue);
     expect(await file.readAsBytes(), payload);

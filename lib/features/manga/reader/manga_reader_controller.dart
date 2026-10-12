@@ -169,7 +169,8 @@ class MangaReaderController extends ChangeNotifier {
           final pages = local.isNotEmpty
               ? local
               : cached ?? await provider.getMangaChapterPages(manga.url, chapter);
-          if (pages.isNotEmpty) {
+          // Local pages must be validated again when actually navigating.
+          if (pages.isNotEmpty && local.isEmpty) {
             _preloadedChapterPages[id] = List<MangaPage>.unmodifiable(pages);
             if (local.isEmpty && cached == null) {
               await _pageCache.put(mangaId, chapter, pages);

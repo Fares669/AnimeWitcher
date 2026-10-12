@@ -244,6 +244,41 @@ void main() {
     }
   });
 
+  test('logical metadata wins over a recycled task key identifying another variant', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    const logical = DownloadLogicalId('exact-metadata-variant');
+    final record = LogicalDownloadRecordV2(
+      schemaVersion: kLogicalDownloadSchemaVersionV2, logicalId: logical,
+      mediaId: 'show', unitKey: 'episode://metadata', variantKey: '480p',
+      generation: 1, taskId: 'reused-metadata-task', intent: DownloadUserIntent.paused,
+      destinationPath: '/tmp/ui-exact-metadata.mp4', sourceDescriptor: const {}, updatedAtMillis: 1,
+    );
+    await store.put(record);
+    final manager = DownloadManagerV2(store: store, gateway: _ReaddGateway(), sourceResolver: StaticSourceResolverV2());
+    final storage = _DownloadMetadataStorage();
+    storage.metadata[record.taskId] = {
+      'logicalId': 'another-variant',
+      'item': MultimediaItem(title: 'Wrong variant metadata', url: 'show', posterUrl: '').toJson(),
+    };
+    storage.metadata[logical.value] = {
+      'logicalId': logical.value,
+      'item': MultimediaItem(title: 'Exact variant metadata', url: 'show', posterUrl: '').toJson(),
+    };
+    final container = ProviderContainer(overrides: [
+      downloadManagerV2Provider.overrideWithValue(manager), logicalDownloadStoreV2Provider.overrideWithValue(store),
+      storageServiceProvider.overrideWithValue(storage),
+    ]);
+    try {
+      container.listen(downloadsProvider, (_, __) {});
+      final row = (await container.read(downloadsProvider.future)).single;
+      expect(row.logicalId, logical.value);
+      expect(row.item.title, 'Exact variant metadata');
+    } finally {
+      container.dispose();
+      await manager.dispose();
+    }
+  });
+
 }
 
 final class _DownloadMetadataStorage extends MemoryStorageService {

@@ -112,6 +112,9 @@ final class DownloadArtworkStoreV2 {
 
   Future<File?> existing(String logicalId, DownloadArtworkKindV2 kind) async {
     try {
+      // A replaced observer may still have an issued rename in flight. Never
+      // return its bytes before the publication's obsolete-file cleanup settles.
+      await _waitForPublication(logicalId);
       final directory = await _ownedDirectory(logicalId);
       if (directory == null) return null;
       final file = File(p.join(directory.path, '${kind.name}.img'));
