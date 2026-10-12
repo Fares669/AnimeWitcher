@@ -469,8 +469,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     await removeDownloads(<DownloadItem>[item]);
   }
 
-  Future<void> removeDownloads(List<DownloadItem> items) async {
-    if (items.isEmpty) return;
+  Future<bool> removeDownloads(List<DownloadItem> items) async {
+    if (items.isEmpty) {
+      return true;
+    }
     final current = List<DownloadItem>.from(state.value ?? items);
     final toRemove = <String, DownloadItem>{};
 
@@ -485,7 +487,11 @@ class DownloadsNotifier extends _$DownloadsNotifier {
 
     final manager = ref.read(downloadManagerV2Provider);
     final storage = ref.read(storageServiceProvider);
-    for (final item in toRemove.values) {
+    final droppedIds = <String>{};
+    final orderedItems = toRemove.values.toList()
+      ..sort((a, b) => (a.logicalId?.trim().isNotEmpty == true ? 0 : 1)
+          .compareTo(b.logicalId?.trim().isNotEmpty == true ? 0 : 1));
+    for (final item in orderedItems) {
       final logical = item.logicalId?.trim();
       if (logical != null && logical.isNotEmpty) {
         await manager.delete(DownloadLogicalId(logical));
@@ -500,14 +506,18 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         if (path.isNotEmpty) {
           try {
             final file = File(path);
-            if (await file.exists()) await file.delete();
-          } catch (_) {}
+            if (!await manager.deleteLegacyDownloadedVideo(file)) {
+              continue;
+            }
+          } catch (_) {
+            continue;
+          }
         }
         await storage.removeDownloadMetadata(item.id);
       }
+      droppedIds.add(item.id);
     }
 
-    final droppedIds = toRemove.keys.toSet();
     if (state.value != null) {
       state = AsyncData(
         state.value!.where((item) => !droppedIds.contains(item.id)).toList(),
@@ -516,6 +526,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     // The persisted records, not taskId tombstones, own visibility. New
     // downloads may legitimately reuse the deleted task's generation-one ID.
     await _reloadDurableState();
+    return droppedIds.length == toRemove.length;
   }
 
   Future<void> pauseDownload(String taskId) async {

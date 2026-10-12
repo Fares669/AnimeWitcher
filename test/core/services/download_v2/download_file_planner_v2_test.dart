@@ -144,7 +144,7 @@ void main() {
     );
     expect(p.basename(p.dirname(anime)), '_CON.jpg');
     expect(p.basename(p.dirname(manga)), '_CON.jpg');
-    expect(p.basename(manga), startsWith('_aux-'));
+    expect(p.basename(manga), '_aux');
     await Directory(p.dirname(anime)).create(recursive: true);
     await Directory(manga).create(recursive: true);
   });
@@ -184,7 +184,7 @@ void main() {
     });
   }
 
-  test('long chapter label keeps whole Unicode code points and identity suffix', () async {
+  test('long chapter label stays bounded without an extra identity suffix', () async {
     await _useTestDownloads();
     final name = 'A${List<String>.filled(100, '🧙').join()}';
     final manga = MultimediaItem(title: 'Example', url: '/manga', posterUrl: '');
@@ -194,13 +194,13 @@ void main() {
     final second = await mangaChapterDestinationDirectoryV2(
       manga, MangaChapter(id: 'second', mangaId: 'm1', url: '/second', name: name),
     );
-    expect(first, isNot(second));
+    expect(first, second);
     for (final destination in <String>[first, second]) {
       final leaf = p.basename(destination);
       expect(utf8.encode(leaf).length, lessThanOrEqualTo(213));
       expect(leaf.runes, isNot(contains(0xfffd)));
       expect(utf8.decode(utf8.encode(leaf)), leaf);
-      expect(leaf, matches(RegExp(r'-[a-f0-9]{12}-[a-f0-9]{12}$')));
+      expect(leaf, matches(RegExp(r'-[a-f0-9]{12}$')));
       await Directory(destination).create(recursive: true);
     }
   });
@@ -289,7 +289,7 @@ void main() {
     expect(p.isWithin(p.join(temp.path, 'manga'), p.normalize(planned)), isTrue);
   });
 
-  test('chapters sharing a display number have distinct destinations', () async {
+  test('chapters sharing a display number cannot reuse a foreign readable folder', () async {
     final temp = await Directory.systemTemp.createTemp('aw-chapter-identity-');
     addTearDown(() => temp.delete(recursive: true));
     final previous = PathProviderPlatform.instance;
@@ -307,10 +307,11 @@ void main() {
     );
 
     final firstPath = await mangaChapterDestinationDirectoryV2(manga, first);
-    final secondPath = await mangaChapterDestinationDirectoryV2(manga, second);
-    expect(firstPath, isNot(secondPath));
-    expect(p.basename(firstPath), contains('الفصل 1'));
-    expect(p.basename(secondPath), contains('الفصل 1'));
+    await MangaChapterManifestV2(version: 1, mangaId: 'm1', chapterId: first.id,
+      pageCount: 1, completedIndexes: {}, isComplete: false).writeTo(Directory(firstPath));
+    await expectLater(mangaChapterDestinationDirectoryV2(manga, second), throwsStateError);
+    expect(p.basename(firstPath), 'الفصل 1');
+    expect((await MangaChapterManifestV2.readFrom(Directory(firstPath)))!.chapterId, first.id);
   });
 
   test('existing chapter manifest keeps its legacy destination', () async {

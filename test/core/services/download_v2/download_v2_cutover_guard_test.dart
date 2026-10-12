@@ -52,7 +52,7 @@ void main() {
       );
 
       expect(logDialog, contains('downloadDiagnosticsFileV2Provider'));
-      expect(managementDialog, contains('deleteDownloadedVideo(file)'));
+      expect(managementDialog, contains('deleteLegacyDownloadedVideo(file)'));
     });
 
     test('presentation metadata is durable before a V2 writer can start', () {

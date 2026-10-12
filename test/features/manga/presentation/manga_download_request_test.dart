@@ -9,6 +9,7 @@ import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
+import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_state.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,6 +34,41 @@ void main() {
   tearDown(() {
     PathProviderPlatform.instance = originalPathProvider;
   });
+  test('existing completed hashed chapter keeps its stored path in refreshed metadata', () async {
+    final root = await Directory.systemTemp.createTemp('aw-manga-stored-path-');
+    PathProviderPlatform.instance = _FakePathProviderPlatform(root.path);
+    Hive.init(root.path);
+    final box = await Hive.openBox<dynamic>(StorageService.kDownloadMetadataBox);
+    addTearDown(() async { await box.close(); await root.delete(recursive: true); });
+    final manga = MultimediaItem(title: 'Renamed title', url: '/manga', posterUrl: '',
+      contentType: MultimediaContentType.manga, provider: 'animewitcher.native', syncData: const {'mangaId': 'm1'});
+    const chapter = MangaChapter(id: '357', mangaId: 'm1', url: '/chapter', name: 'Chapter 357', number: 357);
+    final id = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: '357');
+    final oldPath = p.join(root.path, 'manga', 'Old title', 'الفصل 357-124733e7da94');
+    await MangaChapterManifestV2(version: 1, mangaId: 'm1', chapterId: '357',
+      pageCount: 1, completedIndexes: {0}, isComplete: true).writeTo(Directory(oldPath));
+    await File(p.join(oldPath, '0001.webp')).writeAsBytes([1, 2, 3]);
+    final store = InMemoryLogicalDownloadStoreV2();
+    await store.put(LogicalDownloadRecordV2(schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: id, mediaKind: DownloadMediaKind.mangaChapter, mediaId: 'm1', unitKey: '357', variantKey: 'pages',
+      generation: 1, taskId: taskIdForGeneration(id, 1), intent: DownloadUserIntent.active,
+      destinationPath: oldPath, sourceDescriptor: const {}, completedAtMillis: 1, updatedAtMillis: 1));
+    final storage = MemoryStorageService();
+    await storage.saveDownloadMetadata(id.value, manga, trackingUrl: chapter.url,
+      filePath: oldPath, logicalId: id.value);
+    final manager = DownloadManagerV2(store: store, gateway: _MissingChapterGateway(), sourceResolver: StaticSourceResolverV2());
+    final container = ProviderContainer(overrides: [
+      storageServiceProvider.overrideWithValue(storage), downloadManagerV2Provider.overrideWithValue(manager),
+      mangaDetailsControllerProvider(manga.url).overrideWith(() => _ReadyMangaController(manga)),
+    ]);
+    addTearDown(() async { container.dispose(); await manager.dispose(); });
+    container.listen(mangaDetailsControllerProvider(manga.url), (_, _) {});
+    await container.read(mangaDetailsControllerProvider(manga.url).notifier).downloadChapter(chapter);
+    expect((await store.get(id))!.destinationPath, oldPath);
+    expect((await storage.getDownloadMetadata(id.value))!['filePath'], oldPath);
+    expect(await File(p.join(oldPath, '0001.webp')).readAsBytes(), [1, 2, 3]);
+  });
+
   for (final hasMetadata in [true, false]) {
     test(
       hasMetadata
@@ -238,13 +274,9 @@ void main() {
     expect(manualRequest.parallelChunks, 16);
     expect(request.sourceDescriptor['chapterUrl'], chapter.url);
     expect(request.sourceDescriptor['mangaUrl'], manga.url);
-    final suffix = request.logicalId.value.substring(
-      'manga_'.length,
-      'manga_'.length + 12,
-    );
     expect(
       p.normalize(request.destinationPath),
-      endsWith(p.join('manga', 'Manga', 'الفصل 12.5-$suffix')),
+      endsWith(p.join('manga', 'Manga', 'الفصل 12.5')),
     );
   });
 

@@ -14,6 +14,37 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../../support/manga_image_fixtures.dart';
 
 void main() {
+  test('simultaneous chapters with the same readable path retain one canonical writer', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-clean-collision-');
+    addTearDown(() => temp.delete(recursive: true));
+    final gateway = _Gateway();
+    final store = InMemoryLogicalDownloadStoreV2();
+    final manager = DownloadManagerV2(store: store, gateway: gateway, sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver());
+    addTearDown(manager.dispose);
+    final results = await Future.wait([
+      for (final chapter in ['first', 'second'])
+        () async {
+          try {
+            await manager.start(DownloadStartRequestV2(
+              logicalId: logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: chapter),
+              mediaKind: DownloadMediaKind.mangaChapter, mediaId: 'm1', unitKey: chapter, variantKey: 'pages',
+              destinationPath: '${temp.path}/الفصل 357', sourceDescriptor: const {},
+              allowPause: true, retries: 1, parallelChunks: 1,
+            ));
+            return true;
+          } on StateError catch (error) {
+            expect(error.message, contains('Canonical destination is already owned'));
+            return false;
+          }
+        }(),
+    ]);
+    expect(results.where((started) => started), hasLength(1));
+    expect(gateway.mangaSpecs, hasLength(1));
+    expect(await store.all(), hasLength(1));
+    expect(gateway.mangaSpecs.single.destinationDirectory, '${temp.path}/الفصل 357');
+  });
+
   test('startup orphan chapters respect admission without changing generation or pages', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-orphans-');
     addTearDown(() => temp.delete(recursive: true));

@@ -13,6 +13,66 @@ import 'package:path/path.dart' as p;
 import '../../../support/manga_image_fixtures.dart';
 
 void main() {
+  for (final symlink in ['title', 'manifest']) {
+    test('stored chapter destination refuses a $symlink symlink before writing', () async {
+      if (Platform.isWindows) return;
+      final root = await Directory.systemTemp.createTemp('aw-manga-linked-owner-');
+      addTearDown(() => root.delete(recursive: true));
+      final outside = Directory(p.join(root.path, 'outside'));
+      await outside.create();
+      final title = Directory(p.join(root.path, 'manga', 'Example'));
+      if (symlink == 'title') {
+        await title.parent.create();
+        await Link(title.path).create(outside.path);
+      }
+      final chapter = Directory(p.join(title.path, 'Chapter'));
+      await chapter.create(recursive: true);
+      final manifestDirectory = symlink == 'manifest' ? outside : chapter;
+      await MangaChapterManifestV2(version: 1, mangaId: 'm1', chapterId: 'c1',
+        pageCount: 1, completedIndexes: {}, isComplete: false).writeTo(manifestDirectory);
+      if (symlink == 'manifest') {
+        await Link(p.join(chapter.path, 'manifest.json')).create(p.join(outside.path, 'manifest.json'));
+      }
+      final starter = _FakePageStarter();
+      await expectLater(MangaChapterTransportV2(startPage: starter.start).start(
+        MangaChapterTransportSpecV2(taskId: 'linked-owner', mangaId: 'm1', chapterId: 'c1',
+          destinationDirectory: chapter.path, pages: const [MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp')], retries: 1),
+      ), throwsStateError);
+      expect(starter.startedPageIndexes, isEmpty);
+      expect((await MangaChapterManifestV2.readFrom(manifestDirectory))!.completedIndexes, isEmpty);
+    });
+  }
+
+  for (final foreignManifest in [false, true]) {
+    test('transport refuses ${foreignManifest ? 'foreign' : 'unowned'} content arriving after planning', () async {
+      final temp = await Directory.systemTemp.createTemp('aw-manga-write-boundary-');
+      addTearDown(() => temp.delete(recursive: true));
+      final page = File(p.join(temp.path, '0001.webp'));
+      await page.writeAsBytes(tinyMangaPng);
+      if (foreignManifest) {
+        await MangaChapterManifestV2(version: 1, mangaId: 'other', chapterId: 'other',
+          pageCount: 1, completedIndexes: {0}, isComplete: true).writeTo(temp);
+      }
+      final starter = _FakePageStarter();
+      MangaChapterTransportHandleV2? handle;
+      try {
+        await expectLater(() async {
+          handle = await MangaChapterTransportV2(startPage: starter.start).start(
+            MangaChapterTransportSpecV2(taskId: 'write-boundary', mangaId: 'm1', chapterId: 'c1',
+              destinationDirectory: temp.path, pages: const [MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp')], retries: 1),
+          );
+        }, throwsStateError);
+        expect(starter.startedPageIndexes, isEmpty);
+        expect(await page.readAsBytes(), tinyMangaPng);
+        final manifest = await MangaChapterManifestV2.readFrom(temp);
+        expect(manifest?.mangaId, foreignManifest ? 'other' : null);
+      } finally {
+        await handle?.cancel();
+        await handle?.dispose();
+      }
+    });
+  }
+
   test('dispose joins an issued manifest publication before chapter reconstruction', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-dispose-publication-');
     addTearDown(() => temp.delete(recursive: true));

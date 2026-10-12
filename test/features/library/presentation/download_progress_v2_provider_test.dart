@@ -16,7 +16,7 @@ import '../../../support/memory_storage_service.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:background_downloader/background_downloader.dart' show TaskStatus;
+import 'package:background_downloader/background_downloader.dart' show TaskStatus, DownloadTask;
 import 'package:flutter_test/flutter_test.dart';
 
 final class _EmptyDownloadsNotifier extends DownloadsNotifier {
@@ -62,6 +62,39 @@ void main() {
       container.dispose();
       await manager.dispose();
     }
+  });
+
+  test('refused legacy deletion keeps its metadata and reports failure', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-legacy-owner-');
+    final file = File('${temp.path}/episode.mp4');
+    await file.writeAsBytes([1, 2, 3]);
+    final store = InMemoryLogicalDownloadStoreV2();
+    final id = logicalDownloadIdFor(animeId: 'a1', episodeKey: '1', variantKey: 'original');
+    await store.put(LogicalDownloadRecordV2(schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: id, mediaId: 'a1', unitKey: '1', variantKey: 'original', generation: 1,
+      taskId: taskIdForGeneration(id, 1), intent: DownloadUserIntent.paused,
+      destinationPath: file.path, sourceDescriptor: const {}, updatedAtMillis: 1));
+    final media = MultimediaItem(title: 'Example', url: '/anime', posterUrl: '');
+    final storage = _DownloadMetadataStorage();
+    storage.metadata['legacy-row'] = {'item': media.toJson(), 'filePath': file.path, 'timestamp': 1};
+    final manager = DownloadManagerV2(store: store, gateway: _EmptyGateway(), sourceResolver: StaticSourceResolverV2());
+    final container = ProviderContainer(overrides: [
+      downloadManagerV2Provider.overrideWithValue(manager), logicalDownloadStoreV2Provider.overrideWithValue(store),
+      storageServiceProvider.overrideWithValue(storage),
+    ]);
+    final subscription = container.listen(downloadsProvider, (_, __) {});
+    addTearDown(() async {
+      subscription.close(); container.dispose(); await manager.dispose(); await temp.delete(recursive: true);
+    });
+    await container.read(downloadsProvider.future);
+    final removed = await container.read(downloadsProvider.notifier).removeDownloads([
+      DownloadItem(task: DownloadTask(url: 'https://cdn.test/episode.mp4', taskId: 'legacy-row'),
+        status: TaskStatus.complete, progress: 1, item: media, timestamp: 1, destinationPath: file.path),
+    ]);
+    expect(removed, isFalse);
+    expect(storage.metadata.containsKey('legacy-row'), isTrue);
+    expect(await file.readAsBytes(), [1, 2, 3]);
+    expect((await store.get(id))!.intent, DownloadUserIntent.paused);
   });
 
   test('a re-downloaded episode is visible without rebuilding the downloads provider', () async {
