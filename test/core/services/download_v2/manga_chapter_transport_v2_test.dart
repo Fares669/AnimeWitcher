@@ -63,6 +63,51 @@ void main() {
     },
   );
 
+  test('corrupted completed manga page is downloaded again on reopen', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-rehash-');
+    addTearDown(() => temp.delete(recursive: true));
+    const page = MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp');
+    const spec = MangaChapterTransportSpecV2(
+      taskId: 'page-hash-generation-one',
+      mangaId: 'm1',
+      chapterId: 'sha-test',
+      destinationDirectory: '',
+      pages: <MangaPage>[page],
+      retries: 1,
+    );
+    final starter = _FakePageStarter();
+    final initial = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: spec.taskId,
+        mangaId: spec.mangaId,
+        chapterId: spec.chapterId,
+        destinationDirectory: temp.path,
+        pages: spec.pages,
+        retries: spec.retries,
+      ),
+    );
+    await starter.complete(0);
+    await _waitForStatus(initial, DownloadTransportStatus.complete);
+    final stored = (await MangaChapterManifestV2.readFrom(temp))!;
+    expect(stored.pageDigests[0], hasLength(64));
+    final savedFile = File(p.join(temp.path, '0001.webp'));
+    await savedFile.writeAsBytes(<int>[1], flush: true);
+
+    final reopenedStarter = _FakePageStarter();
+    await MangaChapterTransportV2(startPage: reopenedStarter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'page-hash-generation-two',
+        mangaId: 'm1',
+        chapterId: 'sha-test',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[page],
+        retries: 1,
+      ),
+    );
+    await reopenedStarter.waitUntilStarted(0);
+    expect(reopenedStarter.startedPageIndexes, <int>[0]);
+  });
+
   test('manga chapter starts only as many pages as it has', () async {
     final temp = await Directory.systemTemp.createTemp(
       'aw_manga_small_chapter_',
