@@ -208,12 +208,13 @@ class MangaReaderController extends ChangeNotifier {
       final prefix = (index + 1).toString().padLeft(4, '0');
       File? pageFile;
       for (final file in files) {
-        if (p.basename(file.path).startsWith('$prefix.')) {
+        if (p.basename(file.path).startsWith('$prefix.') &&
+            await manifest.isPageValid(index, file)) {
           pageFile = file;
           break;
         }
       }
-      if (pageFile == null || !await manifest.isPageValid(index, pageFile)) {
+      if (pageFile == null) {
         return const <MangaPage>[];
       }
       pages.add(MangaPage(index: index, imageUrl: pageFile.uri.toString()));
