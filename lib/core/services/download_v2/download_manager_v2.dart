@@ -551,6 +551,8 @@ final class DownloadManagerV2 {
       }
 
       _sourceRefreshAttempts.remove(request.logicalId);
+
+      _firstRenewedPositiveSample.remove(request.logicalId);
       return _startFreshGeneration(request, currentRecord);
     });
   }
@@ -565,6 +567,7 @@ final class DownloadManagerV2 {
       }
       final request = _requestFromRecord(currentRecord);
       _sourceRefreshAttempts.remove(logicalId);
+      _firstRenewedPositiveSample.remove(logicalId);
       return _startFreshGeneration(request, currentRecord);
     });
   }
@@ -1895,6 +1898,7 @@ final class DownloadManagerV2 {
     final sub = _subscriptionsByTaskId.remove(obsoleteTaskId);
     if (sub != null) unawaited(sub.cancel());
     _sourceRefreshAttempts.remove(logicalId);
+    _firstRenewedPositiveSample.remove(logicalId);
     _scheduleAdmissionPromotion();
   }
 
@@ -2406,6 +2410,7 @@ final class DownloadManagerV2 {
         _rememberRecord(updated);
         if (result.isValid) {
           _sourceRefreshAttempts.remove(logicalId);
+          _firstRenewedPositiveSample.remove(logicalId);
           final bytes = result.bytes!;
           final snapshot = DownloadTransportSnapshot(
             taskId: completedSnapshot.taskId,
