@@ -369,6 +369,8 @@ final class _UnreadableCheckpointDirectory implements Directory {
   @override
   String get path => delegate.path;
   @override
+  Directory get parent => delegate.parent;
+  @override
   Future<bool> exists() => delegate.exists();
   @override
   Future<Directory> create({bool recursive = false}) async {
