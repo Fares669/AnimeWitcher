@@ -114,7 +114,7 @@ final class MangaChapterTransportV2 {
       final file = File(
         p.join(directory.path, _pageFileName(index, spec.pages[index])),
       );
-      if (await file.exists() && await file.length() > 0) verified.add(index);
+      if (await manifest.isPageValid(index, file)) verified.add(index);
     }
     manifest = manifest.copyWith(
       completedIndexes: verified,
@@ -370,11 +370,14 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         );
         return;
       }
-      if (_canceled || generation != _generation || _current.isFinal) return;
+      final digest = await MangaChapterManifestV2.pageDigest(file);
+      if (_canceled || _failing || generation != _generation || _current.isFinal) return;
 
       final completed = Set<int>.from(_manifest.completedIndexes)..add(index);
+      final digests = Map<int, String>.from(_manifest.pageDigests)..[index] = digest;
       _manifest = _manifest.copyWith(
         completedIndexes: completed,
+        pageDigests: digests,
         isComplete: completed.length == spec.pages.length,
       );
       await _manifest.writeTo(directory);
@@ -618,7 +621,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> resume() async {
-    if (_canceled || _current.isFinal) return false;
+    if (_canceled || _canceling || _failing || _current.isFinal) return false;
     _paused = false;
     final handles = _pageHandles.values
         .where((handle) =>
@@ -639,6 +642,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> cancel() async {
+    if (_failing) return false;
     if (_canceled) return true;
     if (_current.isFinal) return false;
     if (_canceling) return false;

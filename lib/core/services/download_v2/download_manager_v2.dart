@@ -2051,9 +2051,9 @@ final class DownloadManagerV2 {
       final pageFile = await _mangaPageFile(directory, index);
       if (pageFile == null || !await pageFile.exists()) continue;
       final length = await pageFile.length();
-      if (length > 0) {
+      if (length > 0 && await manifest.isPageValid(index, pageFile)) {
         valid.add(index);
-      } else {
+      } else if (length == 0) {
         try {
           await pageFile.delete();
         } catch (_) {}
@@ -2063,6 +2063,11 @@ final class DownloadManagerV2 {
     await manifest
         .copyWith(
           completedIndexes: valid,
+          pageDigests: {
+            for (final index in valid)
+              if (manifest.pageDigests[index] != null)
+                index: manifest.pageDigests[index]!,
+          },
           isComplete: valid.length == manifest.pageCount,
         )
         .writeTo(directory);
@@ -2096,6 +2101,9 @@ final class DownloadManagerV2 {
       final length = await pageFile.length();
       if (length <= 0) {
         return const DownloadIntegrityResult.invalid('empty-page');
+      }
+      if (!await manifest.isPageValid(index, pageFile)) {
+        return const DownloadIntegrityResult.invalid('corrupt-page');
       }
       bytes += length;
     }

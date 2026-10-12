@@ -71,7 +71,7 @@ void main() {
       taskId: 'page-hash-generation-one',
       mangaId: 'm1',
       chapterId: 'sha-test',
-      destinationDirectory: '',
+      destinationDirectory: 'unused',
       pages: <MangaPage>[page],
       retries: 1,
     );

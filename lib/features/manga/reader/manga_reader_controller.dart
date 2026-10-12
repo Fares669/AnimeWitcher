@@ -213,7 +213,7 @@ class MangaReaderController extends ChangeNotifier {
           break;
         }
       }
-      if (pageFile == null || await pageFile.length() <= 0) {
+      if (pageFile == null || !await manifest.isPageValid(index, pageFile)) {
         return const <MangaPage>[];
       }
       pages.add(MangaPage(index: index, imageUrl: pageFile.uri.toString()));
