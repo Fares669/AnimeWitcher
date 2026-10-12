@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 import 'digit_normalization.dart';
 
 String _normalizeEpisodeLabel(String value) {
@@ -202,7 +206,7 @@ String formatEpisodeLabel({
 }
 
 /// Characters that break or get rewritten on common mobile filesystems.
-final RegExp _illegalDownloadFileChars = RegExp(r'[\\/:*?"<>|]');
+final RegExp _illegalDownloadFileChars = RegExp(r'[\x00-\x1f\x7f-\x9f\\/:*?"<>|]');
 
 /// Compose common Arabic NFD sequences (e.g. ا + ٔ → أ) so filenames match
 /// across iOS (often NFD) and Android/Linux (often NFC).
@@ -216,10 +220,37 @@ String normalizeDownloadText(String value) {
 
 /// Sanitize a display label into a stable on-disk filename stem.
 String sanitizeDownloadFileName(String name) {
-  return normalizeDownloadText(name)
+  var stem = normalizeDownloadText(name)
       .replaceAll(_illegalDownloadFileChars, '_')
       .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+      .trim()
+      .replaceAll(RegExp(r'[. ]+$'), '');
+  if (stem.isEmpty) return '';
+  if (RegExp(
+    r'^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)',
+    caseSensitive: false,
+  ).hasMatch(stem)) {
+    stem = '_$stem';
+  }
+
+  final bytes = utf8.encode(stem);
+  if (bytes.length <= 200) return stem;
+  final suffix = '-${sha256.convert(bytes).toString().substring(0, 12)}';
+  final prefix = StringBuffer();
+  var prefixBytes = 0;
+  for (final rune in stem.runes) {
+    final runeBytes = rune <= 0x7f
+        ? 1
+        : rune <= 0x7ff
+        ? 2
+        : rune <= 0xffff
+        ? 3
+        : 4;
+    if (prefixBytes + runeBytes > 200 - suffix.length) break;
+    prefix.writeCharCode(rune);
+    prefixBytes += runeBytes;
+  }
+  return '$prefix$suffix';
 }
 
 /// Normalize stream quality for download filenames as `{height}p`.

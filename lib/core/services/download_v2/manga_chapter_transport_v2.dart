@@ -370,6 +370,13 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
         );
         return;
       }
+      if (!await isMangaPageImageV2(file)) {
+        await _fail(
+          category: DownloadFailureCategory.sourceExpired,
+          message: 'Manga page source returned an unsupported image body',
+        );
+        return;
+      }
       final digest = await MangaChapterManifestV2.pageDigest(file);
       if (_canceled || _failing || generation != _generation || _current.isFinal) return;
 

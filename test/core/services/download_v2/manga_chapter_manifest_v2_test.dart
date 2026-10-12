@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -60,6 +61,34 @@ void main() {
       expect(await restored.isPageValid(0, page), isFalse);
     });
   }
+
+  test('digest-bearing validation reads at most 64 header bytes and hashes once', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-bounded-header-');
+    addTearDown(() => directory.delete(recursive: true));
+    final page = File(p.join(directory.path, 'page'));
+    await page.writeAsBytes(tinyMangaJpeg, flush: true);
+    final manifest = _singlePageManifest(
+      digest: await MangaChapterManifestV2.pageDigest(page),
+    );
+    final counted = _CountedPageFile(page);
+    expect(await manifest.isPageValid(0, counted), isTrue);
+    expect(counted.headerReads, <int>[64]);
+    expect(counted.digestReads, 1);
+  });
+
+  test('unsupported image header is rejected before hashing the body', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-no-html-hash-');
+    addTearDown(() => directory.delete(recursive: true));
+    final page = File(p.join(directory.path, 'page'));
+    await page.writeAsString('<html>expired</html>', flush: true);
+    final manifest = _singlePageManifest(
+      digest: await MangaChapterManifestV2.pageDigest(page),
+    );
+    final counted = _CountedPageFile(page);
+    expect(await manifest.isPageValid(0, counted), isFalse);
+    expect(counted.headerReads, <int>[64]);
+    expect(counted.digestReads, 0);
+  });
 
   test('legacy pages without digests keep nonempty offline compatibility', () async {
     final directory = await Directory.systemTemp.createTemp('aw-legacy-page-');
@@ -210,3 +239,47 @@ MangaChapterManifestV2 _singlePageManifest({String? digest}) => MangaChapterMani
   isComplete: true,
   pageDigests: digest == null ? const <int, String>{} : <int, String>{0: digest},
 );
+
+final class _CountedPageFile implements File {
+  _CountedPageFile(this.file);
+  final File file;
+  final List<int> headerReads = <int>[];
+  int digestReads = 0;
+
+  @override
+  Future<bool> exists() => file.exists();
+
+  @override
+  Future<int> length() => file.length();
+
+  @override
+  Future<RandomAccessFile> open({FileMode mode = FileMode.read}) async =>
+      _CountedHeaderFile(await file.open(mode: mode), headerReads);
+
+  @override
+  Stream<List<int>> openRead([int? start, int? end]) {
+    digestReads++;
+    return file.openRead(start, end);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _CountedHeaderFile implements RandomAccessFile {
+  _CountedHeaderFile(this.file, this.reads);
+  final RandomAccessFile file;
+  final List<int> reads;
+
+  @override
+  Future<Uint8List> read(int count) {
+    reads.add(count);
+    return file.read(count);
+  }
+
+  @override
+  Future<RandomAccessFile> close() => file.close();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}

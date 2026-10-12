@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -150,24 +151,37 @@ Future<String> firstWritableDownloadDirectoryV2(
   );
 }
 
+String _pathBelowDownloadDirectoryV2(String directory, List<String> segments) {
+  final result = p.joinAll(<String>[directory, ...segments]);
+  if (!p.isWithin(p.normalize(directory), p.normalize(result))) {
+    throw ArgumentError.value(segments, 'segments', 'Path escapes media directory');
+  }
+  return result;
+}
+
 Future<String> _downloadMediaDirectoryV2(
   String mediaType,
   List<String> segments,
 ) async {
   if (Platform.isIOS) {
-    return p.joinAll(<String>['Downloads', mediaType, ...segments]);
+    return _pathBelowDownloadDirectoryV2(p.join('Downloads', mediaType), segments);
   }
   if (Platform.isAndroid) {
     final directories = <Directory>[
       Directory(
-        p.joinAll(['/storage/emulated/0/Download', mediaType, ...segments]),
+        _pathBelowDownloadDirectoryV2(
+          p.join('/storage/emulated/0/Download', mediaType),
+          segments,
+        ),
       ),
     ];
     try {
       final external = await getExternalStorageDirectory();
       if (external != null) {
         directories.add(
-          Directory(p.joinAll([external.path, mediaType, ...segments])),
+          Directory(
+            _pathBelowDownloadDirectoryV2(p.join(external.path, mediaType), segments),
+          ),
         );
       }
     } catch (_) {}
@@ -175,7 +189,10 @@ Future<String> _downloadMediaDirectoryV2(
       final documents = await getApplicationDocumentsDirectory();
       directories.add(
         Directory(
-          p.joinAll([documents.path, 'Downloads', mediaType, ...segments]),
+          _pathBelowDownloadDirectoryV2(
+            p.join(documents.path, 'Downloads', mediaType),
+            segments,
+          ),
         ),
       );
     } catch (_) {}
@@ -186,7 +203,7 @@ Future<String> _downloadMediaDirectoryV2(
   final root =
       downloads?.path ??
       p.join((await getApplicationDocumentsDirectory()).path, 'Downloads');
-  return p.joinAll(<String>[root, mediaType, ...segments]);
+  return _pathBelowDownloadDirectoryV2(p.join(root, mediaType), segments);
 }
 
 /// Produces the final Anime path expected by V2. iOS keeps an
@@ -198,9 +215,19 @@ Future<String> downloadDestinationPathV2(
   Episode? episode,
   required String filename,
 }) async {
+  if (filename.isEmpty ||
+      filename == '.' ||
+      filename == '..' ||
+      filename.contains('/') ||
+      filename.contains('\\') ||
+      p.isAbsolute(filename) ||
+      p.windows.basename(filename) != filename ||
+      utf8.encode(filename).length > 255) {
+    throw ArgumentError.value(filename, 'filename', 'Expected one filename leaf');
+  }
   final title = _downloadFolderName(item.title, fallback: 'Unknown');
   final directory = await _downloadMediaDirectoryV2('anime', <String>[title]);
-  return p.join(directory, filename);
+  return _pathBelowDownloadDirectoryV2(directory, <String>[filename]);
 }
 
 /// Produces a readable chapter directory:
@@ -236,7 +263,7 @@ Future<String> mangaChapterDestinationDirectoryV2(
   final suffix = identity.value.substring('manga_'.length, 'manga_'.length + 12);
   return _downloadMediaDirectoryV2('manga', <String>[
     title,
-    '${chapterFolder.length > 90 ? chapterFolder.substring(0, 90) : chapterFolder}-$suffix',
+    '$chapterFolder-$suffix',
   ]);
 }
 
