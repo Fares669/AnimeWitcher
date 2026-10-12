@@ -2024,13 +2024,23 @@ final class DownloadManagerV2 {
     return result;
   }
 
-  Future<File?> _mangaPageFile(Directory directory, int index) async {
+  Future<File?> _mangaPageFile(
+    Directory directory,
+    int index, {
+    MangaChapterManifestV2? manifest,
+  }) async {
     final prefix = (index + 1).toString().padLeft(4, '0');
+    File? fallback;
     await for (final entity in directory.list(followLinks: false)) {
-      if (entity is! File) continue;
-      if (p.basename(entity.path).startsWith('$prefix.')) return entity;
+      if (entity is! File ||
+          !p.basename(entity.path).startsWith('$prefix.')) continue;
+      fallback ??= entity;
+      if (manifest?.pageDigests[index] != null &&
+          await manifest!.isPageValid(index, entity)) {
+        return entity;
+      }
     }
-    return null;
+    return fallback;
   }
 
   Future<void> _reconcileMangaDirectory(LogicalDownloadRecordV2 record) async {
@@ -2048,7 +2058,7 @@ final class DownloadManagerV2 {
 
     final valid = <int>{};
     for (var index = 0; index < manifest.pageCount; index++) {
-      final pageFile = await _mangaPageFile(directory, index);
+      final pageFile = await _mangaPageFile(directory, index, manifest: manifest);
       if (pageFile == null || !await pageFile.exists()) continue;
       final length = await pageFile.length();
       if (length > 0 && await manifest.isPageValid(index, pageFile)) {
@@ -2094,7 +2104,7 @@ final class DownloadManagerV2 {
 
     var bytes = 0;
     for (final index in manifest.completedIndexes) {
-      final pageFile = await _mangaPageFile(directory, index);
+      final pageFile = await _mangaPageFile(directory, index, manifest: manifest);
       if (pageFile == null || !await pageFile.exists()) {
         return const DownloadIntegrityResult.invalid('missing-page');
       }
