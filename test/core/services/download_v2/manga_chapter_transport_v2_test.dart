@@ -317,6 +317,39 @@ void main() {
     expect(starter.startedPageIndexes, <int>[1, 2]);
   });
 
+  test('failed chapter retains ownership until uncancellable sibling settles', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_manga_failure_owner_');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final transport = MangaChapterTransportV2(startPage: starter.start);
+    final handle = await transport.start(
+      MangaChapterTransportSpecV2(
+        taskId: 'chapter-failure-owner',
+        mangaId: 'm1',
+        chapterId: 'failure-owner',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.webp'),
+        ],
+        retries: 2,
+        maxConcurrentPages: 2,
+      ),
+    );
+    await starter.waitUntilStarted(1);
+    starter.handles[1]!.cancelAccepted = false;
+    starter.handles[0]!.missing();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(handle.current.isFinal, isFalse);
+    expect(handle.current.status, DownloadTransportStatus.held);
+    expect(starter.handles[1]!.current.status, DownloadTransportStatus.running);
+
+    starter.handles[1]!.complete();
+    await _waitForStatus(handle, DownloadTransportStatus.failed);
+    expect(handle.current.failureCategory, DownloadFailureCategory.sourceExpired);
+  });
+
   test('manga page 404 requests a fresh chapter source', () async {
     final temp = await Directory.systemTemp.createTemp('aw_manga_page_404_');
     addTearDown(() => temp.delete(recursive: true));
