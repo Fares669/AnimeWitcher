@@ -126,6 +126,119 @@ void main() {
     expect(snapshot?.activeConnections, 8);
   });
 
+  test('fresh parent metrics win over child speed and stale metrics allow native fallback', () async {
+    var now = 1000;
+    final id = logicalDownloadIdFor(
+      animeId: 'anime:1',
+      episodeKey: 'authority',
+      variantKey: 'sub:1080p',
+    );
+    final taskId = taskIdForGeneration(id, 1);
+    final store = InMemoryLogicalDownloadStoreV2();
+    await store.put(
+      _record(
+        id: id,
+        destinationPath: 'downloads/authority.mp4',
+        expectedBytes: 100000000,
+        parallelChunks: 16,
+      ),
+    );
+    final handle = _Handle(
+      taskId,
+      initial: DownloadTransportSnapshot(
+        taskId: taskId,
+        status: DownloadTransportStatus.running,
+        progress: .5,
+        transferredBytes: 50000000,
+        totalBytes: 100000000,
+        networkSpeedMBps: 1,
+        timeRemaining: const Duration(seconds: 50),
+      ),
+    );
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: _Gateway(rehydrated: [handle]),
+      sourceResolver: StaticSourceResolverV2(),
+      diagnostics: diagnostics,
+      nowMillis: () => now,
+    );
+    addTearDown(manager.dispose);
+    await manager.initialize();
+    final baseline = diagnostics.events.length;
+    for (final speed in <double>[100000, 0]) {
+      now += 1000;
+      manager.observeNativeNetworkSpeed(taskId: taskId, bytesPerSecond: speed);
+      expect(manager.snapshotFor(id)!.networkSpeedMBps, 1);
+      expect(
+        manager.snapshotFor(id)!.timeRemaining,
+        const Duration(seconds: 50),
+      );
+    }
+    expect(diagnostics.events.length, baseline);
+    now += 1001;
+    manager.observeNativeNetworkSpeed(taskId: taskId, bytesPerSecond: 500000);
+    expect(manager.snapshotFor(id)!.networkSpeedMBps, .5);
+    expect(
+      manager.snapshotFor(id)!.timeRemaining,
+      const Duration(seconds: 100),
+    );
+  });
+
+  test(
+    'repeated zero-speed handoffs expire instead of keeping old speed alive',
+    () async {
+      var now = 1000;
+      final id = logicalDownloadIdFor(
+        animeId: 'anime:1',
+        episodeKey: 'zero-expiry',
+        variantKey: 'sub:1080p',
+      );
+      final taskId = taskIdForGeneration(id, 1);
+      final store = InMemoryLogicalDownloadStoreV2();
+      await store.put(
+        _record(
+          id: id,
+          destinationPath: 'downloads/zero-expiry.mp4',
+          expectedBytes: 100,
+          parallelChunks: 16,
+        ),
+      );
+      final handle = _Handle(
+        taskId,
+        initial: DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.running,
+          progress: .5,
+          networkSpeedMBps: 1,
+          totalBytes: 100,
+        ),
+      );
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: _Gateway(rehydrated: [handle]),
+        sourceResolver: StaticSourceResolverV2(),
+        nowMillis: () => now,
+      );
+      addTearDown(manager.dispose);
+      await manager.initialize();
+      for (var i = 0; i < 4; i++) {
+        now += 1000;
+        handle.emit(
+          DownloadTransportSnapshot(
+            taskId: taskId,
+            status: DownloadTransportStatus.running,
+            progress: .5,
+            networkSpeedMBps: 0,
+            totalBytes: 100,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(manager.snapshotFor(id)!.networkSpeedMBps, 0);
+    },
+  );
+
   test('native speed telemetry is projected at most once per second', () async {
     var now = 1000;
     final id = logicalDownloadIdFor(

@@ -8,6 +8,7 @@ import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/services/notification_service.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/network/dio_client_provider.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
@@ -49,6 +50,7 @@ class _Downloads extends DownloadedFiles {
 
 class _CapturedDownload extends MemoryStorageService {
   String? filePath;
+  String? logicalId;
   @override
   Future<Map<String, dynamic>?> getDownloadMetadata(String taskId) async =>
       null;
@@ -67,6 +69,7 @@ class _CapturedDownload extends MemoryStorageService {
     int? lastExpectedBytes,
   }) async {
     this.filePath = filePath;
+    this.logicalId = logicalId;
     throw StateError('captured destination before starting transport');
   }
 }
@@ -433,16 +436,31 @@ void main() {
     );
   }
 
-  for (final title in [
-    'العنوان العربي',
-    '日本語の映画',
-    'Mix العربية 日本語',
-    '',
-    '...',
-    List.filled(100, '🧙').join(),
+  for (final scenario in <({String title, String url, String? filename})>[
+    for (final title in <String>[
+      'العنوان العربي',
+      '日本語の映画',
+      'Mix العربية 日本語',
+      '',
+      '...',
+      List.filled(100, '🧙').join(),
+    ])
+      (title: title, url: 'https://cdn.test/stream/', filename: null),
+    (
+      title: 'Ignored title',
+      url: 'https://cdn.test/fallback.mp4',
+      filename: 'One  Piece; الحلقة 0100 1080p.mkv',
+    ),
+    (
+      title: 'Ignored title',
+      url: 'https://cdn.test/one%20piece%200100%201080p',
+      filename: '',
+    ),
   ]) {
+    final title = scenario.title;
+
     testWidgets(
-      'actual title-only download launch keeps a visible Unicode filename title=$title',
+      'actual launch preserves server name or uses safe fallback title=$title filename=${scenario.filename}',
       (tester) async {
         final previous = PathProviderPlatform.instance;
         PathProviderPlatform.instance = _Paths();
@@ -465,6 +483,10 @@ void main() {
                     headers: Headers.fromMap({
                       'content-length': ['4096'],
                       'content-type': ['video/mp4'],
+                      if (scenario.filename?.isNotEmpty == true)
+                        'content-disposition': [
+                          'attachment; filename="${scenario.filename}"',
+                        ],
                     }),
                     data: options.method == 'HEAD'
                         ? null
@@ -493,7 +515,9 @@ void main() {
           ),
         );
         await tester.pump();
-        provider.pending.single.complete(_list('movie'));
+        provider.pending.single.complete([
+          StreamResult(url: scenario.url, source: 'movie'),
+        ]);
         await pumpUntil(
           tester,
           () => find.byType(ElevatedButton).evaluate().length == 1,
@@ -511,12 +535,29 @@ void main() {
         );
         final filename = p.basename(storage.filePath!);
         final stem = p.basenameWithoutExtension(filename);
-        expect(p.extension(filename), '.mp4');
+        if (scenario.filename == null) expect(p.extension(filename), '.mp4');
         expect(stem, isNotEmpty);
         expect(stem.startsWith('.'), isFalse);
         expect(utf8.encode(filename).length, lessThanOrEqualTo(255));
         final original = sanitizeDownloadFileName(title);
-        expect(stem, original.isEmpty ? 'video' : original);
+        if (scenario.filename == null) {
+          expect(stem, original.isEmpty ? 'video' : original);
+        } else {
+          expect(
+            filename,
+            scenario.filename!.isEmpty
+                ? 'one piece 0100 1080p'
+                : scenario.filename,
+          );
+        }
+        expect(
+          storage.logicalId,
+          logicalDownloadIdFor(
+            animeId: 'https://example.test/movie',
+            episodeKey: 'https://example.test/movie',
+            variantKey: 'default',
+          ).value,
+        );
         expect(tester.takeException(), isNull);
         notifications.clearToasts();
         await tester.pumpWidget(const SizedBox.shrink());
