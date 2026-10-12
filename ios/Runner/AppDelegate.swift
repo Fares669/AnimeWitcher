@@ -195,6 +195,30 @@ import UserNotifications
 
     channel.setMethodCallHandler { call, result in
 #if os(iOS)
+      if call.method == "promoteCompletedFile" {
+        guard let arguments = call.arguments as? [String: Any],
+              let source = arguments["sourcePath"] as? String,
+              let target = arguments["targetPath"] as? String,
+              let expected = arguments["expectedBytes"] as? NSNumber,
+              CFGetTypeID(expected) != CFBooleanGetTypeID(),
+              expected.int64Value >= 0,
+              expected.doubleValue == Double(expected.int64Value) else {
+          result(FlutterError(code: "INVALID_ARGUMENTS", message: "Absolute source/target paths and nonnegative expectedBytes are required", details: nil))
+          return
+        }
+        do {
+          try DownloadFilePromotion.promoteCompletedFile(
+            sourcePath: source, targetPath: target, expectedBytes: expected.int64Value
+          )
+          result(true)
+        } catch let error as DownloadFilePromotionError {
+          let details = error.errnoValue.map { ["errno": Int($0)] }
+          result(FlutterError(code: error.code, message: "Completed download could not be published safely", details: details))
+        } catch {
+          result(FlutterError(code: "PROMOTION_FAILED", message: "Completed download could not be published safely", details: nil))
+        }
+        return
+      }
       if call.method == "availableDiskBytes" {
         guard let arguments = call.arguments as? [String: Any],
               let path = arguments["path"] as? String, !path.isEmpty else {
