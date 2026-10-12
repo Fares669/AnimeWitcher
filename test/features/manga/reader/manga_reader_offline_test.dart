@@ -62,6 +62,46 @@ final class _MemoryStorage extends StorageService {
 }
 
 void main() {
+  test('offline reader selects the page matching its checksum', () async {
+    final dir = await Directory.systemTemp.createTemp('aw_manga_duplicate_');
+    addTearDown(() => dir.delete(recursive: true));
+    await File('${dir.path}/0001.webp').writeAsBytes(<int>[9], flush: true);
+    final good = File('${dir.path}/0001.jpg');
+    await good.writeAsBytes(<int>[1, 2, 3], flush: true);
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'm1',
+      chapterId: '1',
+      pageCount: 1,
+      completedIndexes: const <int>{0},
+      isComplete: true,
+      pageDigests: <int, String>{
+        0: await MangaChapterManifestV2.pageDigest(good),
+      },
+    ).writeTo(dir);
+
+    final provider = _Provider();
+    final controller = MangaReaderController(
+      provider: provider,
+      progressRepository: MangaReadingRepository(_MemoryStorage()),
+      manga: MultimediaItem(
+        title: 'Manga', url: 'manga://m1', posterUrl: '',
+        contentType: MultimediaContentType.manga,
+        syncData: const {'mangaId': 'm1'},
+      ),
+      chapter: const MangaChapter(
+        id: '1', mangaId: 'm1', url: 'chapter://1', name: 'Chapter 1',
+      ),
+      chapters: const [],
+      localChapterDirectory: dir.path,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.load();
+    expect(provider.pageCalls, 0);
+    expect(controller.pages.single.imageUrl, good.uri.toString());
+  });
+
   test('reader prefers complete local manga chapter without network', () async {
     final dir = await Directory.systemTemp.createTemp('aw_manga_offline_');
     addTearDown(() => dir.delete(recursive: true));
