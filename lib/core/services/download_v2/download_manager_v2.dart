@@ -529,6 +529,7 @@ final class DownloadManagerV2 {
         _recordDiagnostic(current.logicalId, failed);
       }
     }
+    await _cleanupEmptyDownloadFolders(sweepOrphans: true);
     await _publishRecords();
     _scheduleAdmissionPromotion();
   }
@@ -1013,6 +1014,7 @@ final class DownloadManagerV2 {
         _admissionReservations.add(logicalId);
         try {
           await _cancelRecord(record);
+          await _cleanupEmptyDownloadFolders(removed: record);
         } finally {
           _admissionReservations.remove(logicalId);
           _scheduleAdmissionPromotion();
@@ -1051,12 +1053,33 @@ final class DownloadManagerV2 {
           _recordsByLogicalId.remove(logicalId);
           _snapshots.remove(logicalId);
           _lastPositiveSpeedAtMillis.remove(logicalId);
+          await _cleanupEmptyDownloadFolders(removed: record);
           await _publishRecords();
         } finally {
           _admissionReservations.remove(logicalId);
           _scheduleAdmissionPromotion();
         }
       });
+    });
+  }
+
+  /// Legacy files still share title folders with current V2 downloads.
+  Future<bool> deleteLegacyDownloadedVideo(File file) async {
+    await initialize();
+    final destinationKey = await _canonicalDestinationPath(file.path);
+    return _destinationCommands.run(destinationKey, () async {
+      if (_hasUnmappedDownloadWriter() ||
+          await _findDestinationConflict(destinationKey, null) != null) {
+        return false;
+      }
+      final deleted = await deleteDownloadedVideo(
+        file,
+        isProtected: (_) => true,
+      );
+      if (deleted) {
+        await _cleanupEmptyDownloadFolders(deletedFile: file);
+      }
+      return deleted;
     });
   }
 
@@ -2057,7 +2080,7 @@ final class DownloadManagerV2 {
 
   Future<LogicalDownloadRecordV2?> _findDestinationConflict(
     String canonicalDestination,
-    DownloadLogicalId logicalId,
+    DownloadLogicalId? logicalId,
   ) async {
     final records = await _store.all();
     for (final record in records) {
@@ -2078,6 +2101,133 @@ final class DownloadManagerV2 {
     if (p.isAbsolute(destinationPath)) return File(destinationPath);
     final documents = await getApplicationDocumentsDirectory();
     return File(p.join(documents.path, destinationPath));
+  }
+
+  bool _hasUnmappedDownloadWriter() {
+    for (final handle in _handlesByTaskId.values) {
+      if (!_hasLiveOwnership(handle.current)) {
+        continue;
+      }
+      final identity = parseDownloadTaskIdentityV2(handle.taskId);
+      final owner = identity == null ? null : _recordsByLogicalId[identity.logicalId];
+      if (identity == null || owner == null ||
+          owner.generation != identity.generation || owner.taskId != handle.taskId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<void> _cleanupEmptyDownloadFolders({
+    LogicalDownloadRecordV2? removed,
+    File? deletedFile,
+    bool sweepOrphans = false,
+  }) async {
+    try {
+      final roots = await platformConfiguredAppDownloadRoots();
+      if (roots.isEmpty) {
+        return;
+      }
+      String key(String path) {
+        final normalized = p.normalize(p.absolute(path));
+        return Platform.isWindows ? normalized.toLowerCase() : normalized;
+      }
+
+      bool needsFolder(LogicalDownloadRecordV2 record) =>
+          (record.intent != DownloadUserIntent.canceled &&
+              record.completedAtMillis == null) ||
+          _hasLiveOwnership(_snapshots[record.logicalId]) ||
+          _hasLiveOwnership(_handlesByTaskId[record.taskId]?.current);
+
+      final records = _recordsByLogicalId.values.toList();
+      final protectedPaths = <DownloadLogicalId, (String, String)>{};
+      for (final record in records.where(needsFolder)) {
+        protectedPaths[record.logicalId] = (
+          record.destinationPath,
+          await _canonicalDestinationPath(
+            (await _destinationFile(record.destinationPath)).path,
+          ),
+        );
+      }
+      final canonicalRoots = <String, String>{};
+      for (final root in roots) {
+        if (await FileSystemEntity.type(root, followLinks: false) ==
+            FileSystemEntityType.directory) {
+          canonicalRoots[key(root)] = key(
+            await Directory(root).resolveSymbolicLinks(),
+          );
+        }
+      }
+      bool isProtected(String directory) {
+        if (_hasUnmappedDownloadWriter()) {
+          return true;
+        }
+        final lexical = key(directory);
+        String? canonical;
+        for (final root in canonicalRoots.entries) {
+          if (p.isWithin(root.key, lexical)) {
+            canonical = key(
+              p.join(root.value, p.relative(lexical, from: root.key)),
+            );
+            break;
+          }
+        }
+        if (canonical == null) {
+          return true;
+        }
+        // Recheck current state immediately before rmdir, after all filesystem awaits.
+        for (final record in _recordsByLogicalId.values.where(needsFolder)) {
+          final saved = protectedPaths[record.logicalId];
+          if (saved == null || saved.$1 != record.destinationPath) {
+            return true;
+          }
+          if (saved.$2 == canonical || p.isWithin(canonical, saved.$2)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      final candidates = <String>{if (deletedFile != null) deletedFile.path};
+      for (final record in <LogicalDownloadRecordV2>[
+        ...records.where(
+          (record) => record.intent == DownloadUserIntent.canceled,
+        ),
+        if (removed != null) removed,
+      ]) {
+        final destination = (await _destinationFile(record.destinationPath))
+            .path;
+        candidates.add(
+          record.mediaKind == DownloadMediaKind.mangaChapter
+              ? p.join(destination, '.empty-folder-check')
+              : destination,
+        );
+      }
+      if (sweepOrphans) {
+        // Public Downloads/anime and manga can contain unrelated user folders.
+        for (final root in await platformConfiguredAppDownloadRoots(
+          includeSharedRoots: false,
+        )) {
+          if (!canonicalRoots.containsKey(key(root))) {
+            continue;
+          }
+          await for (final child in Directory(root).list(followLinks: false)) {
+            if (child is Directory) {
+              candidates.add(p.join(child.path, '.empty-folder-check'));
+            }
+          }
+        }
+      }
+      for (final candidate in candidates) {
+        await deleteSeriesFolderIfNoVideosRemain(
+          File(candidate),
+          appDownloadRoots: roots,
+          isProtected: isProtected,
+        );
+      }
+    } catch (_) {
+      // Cosmetic cleanup must not fail a settled download or delete operation.
+    }
   }
 
   Future<void> _deleteDestination(

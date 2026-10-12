@@ -199,7 +199,9 @@ String? _configuredAppDownloadsRootForPath(
 
 /// Exact media roots used by V2 plus the legacy app-owned download root.
 /// A general Documents/Downloads directory is never recursive-delete authority.
-Future<List<String>> platformConfiguredAppDownloadRoots() async {
+Future<List<String>> platformConfiguredAppDownloadRoots({
+  bool includeSharedRoots = true,
+}) async {
   final roots = <String>[];
   void addMediaRoots(String base) {
     roots.addAll([p.join(base, 'anime'), p.join(base, 'manga')]);
@@ -208,7 +210,7 @@ Future<List<String>> platformConfiguredAppDownloadRoots() async {
   try {
     if (Platform.isAndroid) {
       const publicDownloads = '/storage/emulated/0/Download';
-      addMediaRoots(publicDownloads);
+      if (includeSharedRoots) addMediaRoots(publicDownloads);
       roots.add(p.join(publicDownloads, 'AnimeWitcher', 'Downloads'));
       final external = await getExternalStorageDirectory();
       if (external != null) addMediaRoots(external.path);
@@ -221,11 +223,12 @@ Future<List<String>> platformConfiguredAppDownloadRoots() async {
     } else {
       final downloads = await getDownloadsDirectory();
       if (downloads != null) {
-        addMediaRoots(downloads.path);
+        if (includeSharedRoots) addMediaRoots(downloads.path);
         roots.add(p.join(downloads.path, 'AnimeWitcher', 'Downloads'));
       } else {
         final documents = await getApplicationDocumentsDirectory();
-        addMediaRoots(p.join(documents.path, 'Downloads'));
+        if (includeSharedRoots)
+          addMediaRoots(p.join(documents.path, 'Downloads'));
         roots.add(p.join(documents.path, 'AnimeWitcher', 'Downloads'));
       }
     }
@@ -256,8 +259,23 @@ Future<bool> _resolvesInsideConfiguredAppDownloads(
     directory.path,
     appDownloadRoots,
   );
-  if (lexicalRoot == null) return false;
+  if (lexicalRoot == null) {
+    return false;
+  }
   try {
+    var current = lexicalRoot;
+    for (final segment in <String>[
+      '',
+      ...p.split(p.relative(directory.path, from: lexicalRoot)),
+    ]) {
+      if (segment.isNotEmpty && segment != '.') {
+        current = p.join(current, segment);
+      }
+      if (await FileSystemEntity.type(current, followLinks: false) !=
+          FileSystemEntityType.directory) {
+        return false;
+      }
+    }
     final canonicalRoot = p.normalize(
       await Directory(lexicalRoot).resolveSymbolicLinks(),
     );
@@ -313,76 +331,45 @@ Future<bool> directoryContainsVideoFiles(Directory directory) async {
   return false;
 }
 
-Future<void> _deleteEmptyAncestorsUpTo(
-  Directory start,
-  Directory stopAt,
-) async {
-  var dir = start;
-  final stop = _normalizedAbsoluteDownloadPath(stopAt.path);
-  while (true) {
-    final current = _normalizedAbsoluteDownloadPath(dir.path);
-    if (_downloadPathsEqual(current, stop)) return;
-    if (!_downloadPathIsWithin(stop, current)) return;
-    if (!await dir.exists()) {
-      dir = dir.parent;
-      continue;
-    }
-    final children = await dir.list(followLinks: false).toList();
-    if (children.isNotEmpty) return;
-    await dir.delete();
-    if (dir.parent.path == dir.path) return;
-    dir = dir.parent;
-  }
-}
-
-/// A recursive series-directory delete is safe only when no file evidence is
-/// left at all. A `.part`, `.assembling`, manifest, or other recognized name is
-/// not proof that the artifact is obsolete; it may be the only durable recovery
-/// evidence after process death. Proven obsolete artifacts are deleted by their
-/// owning lifecycle/reconciliation path, not by this filename-only cleanup.
-Future<bool> _directoryContainsOnlyEmptyDirectories(Directory directory) async {
-  if (!await directory.exists()) return true;
-  await for (final entity in directory.list(followLinks: false)) {
-    if (entity is Link || entity is File) return false;
-    if (entity is Directory &&
-        !await _directoryContainsOnlyEmptyDirectories(entity)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/// After a video is gone: remove the series folder only when no videos and no
-/// durable recovery/user evidence remain.
-///
-/// Temp/resume artifacts are deliberately preserved unless their owning
-/// lifecycle has already proved them obsolete. Never deletes outside a
-/// configured app Downloads root.
+/// Prune only the deleted artifact's empty ancestors, up to its title folder.
+/// Nonrecursive deletes preserve files arriving between the checks and rmdir.
 Future<void> deleteSeriesFolderIfNoVideosRemain(
   File deletedFile, {
   Iterable<String>? appDownloadRoots,
+  bool Function(String directoryPath)? isProtected,
 }) async {
   final roots = await _effectiveAppDownloadRoots(appDownloadRoots);
-  if (roots.isEmpty) return;
-
-  final seriesDir = seriesFolderForDownloadedFile(
+  final series = seriesFolderForDownloadedFile(
     deletedFile,
     appDownloadRoots: roots,
   );
-  if (seriesDir == null) return;
-  if (!await seriesDir.exists()) return;
-  if (!await _resolvesInsideConfiguredAppDownloads(seriesDir, roots)) return;
-
-  if (await directoryContainsVideoFiles(seriesDir)) {
-    await _deleteEmptyAncestorsUpTo(deletedFile.parent, seriesDir);
+  if (series == null) {
     return;
   }
-
-  if (!await _directoryContainsOnlyEmptyDirectories(seriesDir)) {
-    await _deleteEmptyAncestorsUpTo(deletedFile.parent, seriesDir);
-    return;
+  var directory = deletedFile.parent;
+  while (_downloadPathIsWithin(series.path, directory.path)) {
+    try {
+      final type = await FileSystemEntity.type(
+        directory.path,
+        followLinks: false,
+      );
+      if (type != FileSystemEntityType.notFound) {
+        if (type != FileSystemEntityType.directory ||
+            !await _resolvesInsideConfiguredAppDownloads(directory, roots) ||
+            isProtected?.call(directory.path) == true) {
+          return;
+        }
+        await directory.delete();
+      }
+    } on FileSystemException {
+      // A nonempty directory, permission error, or concurrent writer stays put.
+      return;
+    }
+    if (_downloadPathsEqual(directory.path, series.path)) {
+      return;
+    }
+    directory = directory.parent;
   }
-  await seriesDir.delete(recursive: true);
 }
 
 Future<void> deleteSiblingTempFiles(
@@ -432,10 +419,18 @@ Future<bool> deleteFileWithRetry(File file, {int attempts = 3}) async {
 Future<bool> deleteDownloadedVideo(
   File file, {
   Iterable<String>? appDownloadRoots,
+  bool Function(String directoryPath)? isProtected,
 }) async {
   try {
     final roots = await _effectiveAppDownloadRoots(appDownloadRoots);
-    if (!await file.exists()) return true;
+    if (!await file.exists()) {
+      await deleteSeriesFolderIfNoVideosRemain(
+        file,
+        appDownloadRoots: roots,
+        isProtected: isProtected,
+      );
+      return true;
+    }
     if (roots.isEmpty ||
         !pathIsInsideConfiguredAppDownloads(file.path, roots) ||
         !await _resolvesInsideConfiguredAppDownloads(file.parent, roots)) {
@@ -444,7 +439,11 @@ Future<bool> deleteDownloadedVideo(
 
     await deleteSiblingTempFiles(file, appDownloadRoots: roots);
     final deleted = await deleteFileWithRetry(file);
-    await deleteSeriesFolderIfNoVideosRemain(file, appDownloadRoots: roots);
+    await deleteSeriesFolderIfNoVideosRemain(
+      file,
+      appDownloadRoots: roots,
+      isProtected: isProtected,
+    );
     return deleted;
   } catch (_) {
     return false;

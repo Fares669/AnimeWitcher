@@ -101,13 +101,40 @@ final class MangaChapterTransportV2 {
     MangaChapterTransportSpecV2 spec,
   ) async {
     final directory = await resolveDirectory(spec.destinationDirectory);
+    // V2 owns media/title/chapter; OS aliases above the media root are allowed.
+    for (final component in [
+      directory.parent.parent,
+      directory.parent,
+      directory,
+    ]) {
+      final type = await FileSystemEntity.type(
+        component.path,
+        followLinks: false,
+      );
+      if (type != FileSystemEntityType.notFound &&
+          type != FileSystemEntityType.directory) {
+        throw StateError('Chapter destination is not a regular directory');
+      }
+    }
+    if (await FileSystemEntity.type(
+          p.join(directory.path, MangaChapterManifestV2.fileName),
+          followLinks: false,
+        ) ==
+        FileSystemEntityType.link) {
+      throw StateError('Chapter manifest is not a regular file');
+    }
     await directory.create(recursive: true);
 
     var manifest = await MangaChapterManifestV2.readFrom(directory);
-    if (manifest == null ||
-        manifest.mangaId != spec.mangaId ||
-        manifest.chapterId != spec.chapterId ||
-        manifest.pageCount != spec.pages.length) {
+    // Planning can precede transport start; never replace content arriving later.
+    if ((manifest != null &&
+            (manifest.mangaId != spec.mangaId ||
+                manifest.chapterId != spec.chapterId)) ||
+        (manifest == null &&
+            !await directory.list(followLinks: false).isEmpty)) {
+      throw StateError('Chapter destination is already occupied');
+    }
+    if (manifest == null || manifest.pageCount != spec.pages.length) {
       manifest = MangaChapterManifestV2(
         version: MangaChapterManifestV2.currentVersion,
         mangaId: spec.mangaId,
@@ -121,7 +148,9 @@ final class MangaChapterTransportV2 {
 
     final verified = <int>{};
     for (final index in manifest.completedIndexes) {
-      if (index < 0 || index >= spec.pages.length) continue;
+      if (index < 0 || index >= spec.pages.length) {
+        continue;
+      }
       final file = File(
         p.join(directory.path, _pageFileName(index, spec.pages[index])),
       );
@@ -142,6 +171,8 @@ final class MangaChapterTransportV2 {
     unawaited(handle.start());
     return handle;
   }
+
+
 }
 
 String _pageFileName(int index, MangaPage page) {

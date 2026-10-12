@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
-import 'package:animewitcher/core/utils/download_cleanup.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
 import 'package:animewitcher/shared/widgets/custom_widgets.dart';
 import '../../../library/presentation/downloads_provider.dart';
 import '../playback_launcher.dart';
@@ -156,10 +156,11 @@ class DownloadManagementDialog extends HookConsumerWidget {
     );
 
     if (confirmed == true) {
-      if (matchingItems.isNotEmpty) {
-        await ref.read(downloadsProvider.notifier).removeDownloads(matchingItems);
-      } else {
-        await deleteDownloadedVideo(file);
+      final deleted = matchingItems.isNotEmpty
+          ? await ref.read(downloadsProvider.notifier).removeDownloads(matchingItems)
+          : await ref.read(downloadManagerV2Provider).deleteLegacyDownloadedVideo(file);
+      if (!deleted) {
+        return;
       }
 
       ref

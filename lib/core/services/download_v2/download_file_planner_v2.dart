@@ -323,35 +323,104 @@ Future<String> mangaChapterDestinationDirectoryV2(
     mangaId: mangaId,
     chapterId: chapter.id,
   );
-  final suffix = identity.value.substring('manga_'.length, 'manga_'.length + 12);
+  final suffix = identity.value.substring(
+    'manga_'.length,
+    'manga_'.length + 12,
+  );
   final oldTitle = _legacyDownloadFolderNameV2(manga.title, fallback: 'Manga');
   final oldChapter = _legacyDownloadFolderNameV2(chapterLabel, fallback: 'فصل');
   // Legacy UTF-16 truncation may have an on-disk replacement character.
-  final oldBoundedChapter = utf8.decode(utf8.encode(
-    oldChapter.length > 90 ? oldChapter.substring(0, 90) : oldChapter,
-  ));
+  final oldBoundedChapter = utf8.decode(
+    utf8.encode(
+      oldChapter.length > 90 ? oldChapter.substring(0, 90) : oldChapter,
+    ),
+  );
   final candidates = <List<String>>[
     <String>[oldTitle, oldChapter],
     <String>[oldTitle, '$oldBoundedChapter-$suffix'],
+    <String>[title, '$chapterFolder-$suffix'],
     <String>[title, chapterFolder],
   ];
-  // Probe only existing safe legacy paths; never create them with old naming.
-  for (final root in await _downloadMediaRootsV2('manga')) {
+  final roots = await _downloadMediaRootsV2('manga');
+  // Existing chapter checkpoints retain their paths; new chapters have no ID suffix.
+  for (final root in roots) {
     for (final segments in candidates) {
-      if (!segments.every(_safeLegacyDownloadLeafV2)) continue;
+      if (!segments.every(_safeLegacyDownloadLeafV2)) {
+        continue;
+      }
       final path = _pathBelowDownloadDirectoryV2(root, segments);
-      final manifest = await MangaChapterManifestV2.readFrom(
-        Directory(await absoluteDownloadDestinationPathV2(path)),
-      );
-      if (manifest != null && manifest.mangaId == mangaId &&
-          manifest.chapterId == chapter.id.trim()) return path;
+      try {
+        if (!await _mangaChapterPathIsUnlinkedV2(root, path)) {
+          continue;
+        }
+        final manifest = await MangaChapterManifestV2.readFrom(
+          Directory(await absoluteDownloadDestinationPathV2(path)),
+        );
+        if (manifest != null &&
+            manifest.mangaId == mangaId &&
+            manifest.chapterId == chapter.id.trim()) {
+          return path;
+        }
+      } on FileSystemException {
+        // An inaccessible legacy candidate is not a usable checkpoint.
+      }
     }
   }
 
-  return _downloadMediaDirectoryV2('manga', <String>[
-    title,
-    '$chapterFolder-$suffix',
-  ]);
+  for (final root in roots) {
+    final path = _pathBelowDownloadDirectoryV2(root, <String>[
+      title,
+      chapterFolder,
+    ]);
+    try {
+      if (!await _mangaChapterPathIsUnlinkedV2(root, path)) {
+        throw StateError('Chapter destination is not a regular directory');
+      }
+      final directory = Directory(
+        await absoluteDownloadDestinationPathV2(path),
+      );
+      if (await directory.exists() &&
+          !await directory.list(followLinks: false).isEmpty) {
+        throw StateError('Chapter destination is already occupied');
+      }
+      if (!Platform.isAndroid) {
+        return path;
+      }
+      return await firstWritableDownloadDirectoryV2([directory]);
+    } on FileSystemException {
+      if (!Platform.isAndroid) {
+        rethrow;
+      }
+      // Public Android Downloads may be read-only; try app-specific storage.
+    }
+  }
+  throw const FileSystemException(
+    'No writable download directory is available',
+  );
+}
+
+Future<bool> _mangaChapterPathIsUnlinkedV2(String root, String path) async {
+  final absoluteRoot = await absoluteDownloadDestinationPathV2(root);
+  final absolutePath = await absoluteDownloadDestinationPathV2(path);
+  var current = absoluteRoot;
+  for (final segment in <String>[
+    '',
+    ...p.split(p.relative(absolutePath, from: absoluteRoot)),
+  ]) {
+    if (segment.isNotEmpty && segment != '.') {
+      current = p.join(current, segment);
+    }
+    final type = await FileSystemEntity.type(current, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type != FileSystemEntityType.directory) {
+      return false;
+    }
+  }
+  return await FileSystemEntity.type(
+        p.join(absolutePath, MangaChapterManifestV2.fileName),
+        followLinks: false,
+      ) !=
+      FileSystemEntityType.link;
 }
 
 Future<String> absoluteDownloadDestinationPathV2(String destinationPath) async {

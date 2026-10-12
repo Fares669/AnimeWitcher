@@ -554,6 +554,33 @@ final class IosDownloadContinuedProcessingObserverV2
   }
 
   String _displayName(LogicalDownloadRecordV2 record) {
+    if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+      final number = double.tryParse(
+        record.sourceDescriptor['chapterNumber']?.toString() ?? '',
+      );
+      if (number != null && number.isFinite) {
+        final label = number == number.truncateToDouble()
+            ? number.toInt().toString()
+            : number.toString();
+        return 'الفصل $label';
+      }
+      final chapterName =
+          record.sourceDescriptor['chapterName']?.toString().trim() ?? '';
+      if (chapterName.isNotEmpty) {
+        return chapterName;
+      }
+      // Old records may have no chapter metadata; directory dots are not extensions.
+      final name = p.basename(record.destinationPath).trim();
+      final id = record.logicalId.value;
+      final suffix = id.startsWith('manga_') && id.length >= 18
+          ? '-${id.substring(6, 18)}'
+          : '';
+      return name.isEmpty
+          ? 'Download'
+          : suffix.isNotEmpty && name.endsWith(suffix)
+          ? name.substring(0, name.length - suffix.length)
+          : name;
+    }
     final name = p.basenameWithoutExtension(record.destinationPath).trim();
     return name.isEmpty ? 'Download' : name;
   }
