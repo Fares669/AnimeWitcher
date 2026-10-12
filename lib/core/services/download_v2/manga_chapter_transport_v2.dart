@@ -577,7 +577,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> pause() async {
-    if (_current.isFinal) return false;
+    if (_current.isFinal || _failing || _canceling) return false;
     _paused = true;
     await Future.wait(_startingPages.values.toList(growable: false));
     if (_current.isFinal) return false;

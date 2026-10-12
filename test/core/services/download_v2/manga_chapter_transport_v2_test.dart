@@ -416,6 +416,9 @@ void main() {
     expect(handle.current.isFinal, isFalse);
     expect(handle.current.status, DownloadTransportStatus.held);
     expect(starter.handles[1]!.current.status, DownloadTransportStatus.running);
+    expect(await handle.pause(), isFalse);
+    expect(await handle.resume(), isFalse);
+    expect(await handle.cancel(), isFalse);
 
     starter.handles[1]!.complete();
     await _waitForStatus(handle, DownloadTransportStatus.failed);
