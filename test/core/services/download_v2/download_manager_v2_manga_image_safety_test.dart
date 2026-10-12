@@ -26,7 +26,10 @@ void main() {
       store: store, gateway: gateway, sourceResolver: _UnusedVideoResolver(),
       mangaChapterPageResolver: resolver,
     );
-    addTearDown(manager.dispose);
+    addTearDown(() async {
+      await gateway.settle();
+      await manager.dispose();
+    });
     final request = _request(temp.path);
     await manager.start(request);
     for (var generation = 0; generation < 4; generation++) {
@@ -65,7 +68,10 @@ void main() {
       store: store, gateway: gateway, sourceResolver: _UnusedVideoResolver(),
       mangaChapterPageResolver: resolver,
     );
-    addTearDown(manager.dispose);
+    addTearDown(() async {
+      await gateway.settle();
+      await manager.dispose();
+    });
     final request = _request(temp.path);
     await manager.start(request);
     for (var pageIndex = 0; pageIndex < 5; pageIndex++) {
@@ -147,6 +153,7 @@ final class _PageGateway implements BackgroundDownloaderGateway, MangaChapterGat
   final List<MangaChapterTransportSpecV2> startedSpecs = <MangaChapterTransportSpecV2>[];
   final List<_PageHandle> pageHandles = <_PageHandle>[];
   final Map<String, DownloadTransportHandle> parents = <String, DownloadTransportHandle>{};
+  final List<Future<DownloadTransportHandle>> pendingStarts = <Future<DownloadTransportHandle>>[];
 
   @override
   Future<void> initialize() async {}
@@ -158,13 +165,21 @@ final class _PageGateway implements BackgroundDownloaderGateway, MangaChapterGat
   @override
   Future<DownloadTransportHandle> startMangaChapter(MangaChapterTransportSpecV2 spec) async {
     startedSpecs.add(spec);
-    final parent = await MangaChapterTransportV2(startPage: (task) async {
+    final start = MangaChapterTransportV2(startPage: (task) async {
       final page = _PageHandle(task);
       pageHandles.add(page);
       return page;
     }).start(spec);
+    pendingStarts.add(start);
+    final parent = await start;
     parents[parent.taskId] = parent;
     return parent;
+  }
+
+  Future<void> settle() async {
+    for (final parent in await Future.wait(pendingStarts)) {
+      await parent.cancel();
+    }
   }
 
   bool hasCurrentPage(int index) => pageHandles.any((page) =>

@@ -125,6 +125,8 @@ final class DownloadManagerV2 {
   final Map<String, int> _lastNativeSpeedProjectionAtMillis = <String, int>{};
   final Map<DownloadLogicalId, int> _sourceRefreshAttempts =
       <DownloadLogicalId, int>{};
+  final Map<DownloadLogicalId, Set<int>> _mangaSourceRefreshVerifiedPages =
+      <DownloadLogicalId, Set<int>>{};
   final Map<DownloadLogicalId, DownloadTransportSnapshot>
       _firstRenewedPositiveSample = <DownloadLogicalId, DownloadTransportSnapshot>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
@@ -551,6 +553,7 @@ final class DownloadManagerV2 {
       }
 
       _sourceRefreshAttempts.remove(request.logicalId);
+      _mangaSourceRefreshVerifiedPages.remove(request.logicalId);
 
       _firstRenewedPositiveSample.remove(request.logicalId);
       return _startFreshGeneration(request, currentRecord);
@@ -567,6 +570,7 @@ final class DownloadManagerV2 {
       }
       final request = _requestFromRecord(currentRecord);
       _sourceRefreshAttempts.remove(logicalId);
+      _mangaSourceRefreshVerifiedPages.remove(logicalId);
       _firstRenewedPositiveSample.remove(logicalId);
       return _startFreshGeneration(request, currentRecord);
     });
@@ -1898,6 +1902,7 @@ final class DownloadManagerV2 {
     final sub = _subscriptionsByTaskId.remove(obsoleteTaskId);
     if (sub != null) unawaited(sub.cancel());
     _sourceRefreshAttempts.remove(logicalId);
+    _mangaSourceRefreshVerifiedPages.remove(logicalId);
     _firstRenewedPositiveSample.remove(logicalId);
     _scheduleAdmissionPromotion();
   }
@@ -2070,14 +2075,10 @@ final class DownloadManagerV2 {
       }
     }
 
+    // Keep rejected hashes so later repair cannot treat those files as legacy.
     await manifest
         .copyWith(
           completedIndexes: valid,
-          pageDigests: {
-            for (final index in valid)
-              if (manifest.pageDigests[index] != null)
-                index: manifest.pageDigests[index]!,
-          },
           isComplete: valid.length == manifest.pageCount,
         )
         .writeTo(directory);
@@ -2201,9 +2202,10 @@ final class DownloadManagerV2 {
     if (!accepted) return;
 
     // A resumed transfer may initially report *old* positive progress.
-    // Only progress beyond its first positive sample proves the new source
-    // delivered bytes; stale callbacks must not replenish the expiry budget.
-    if (_sourceRefreshAttempts.containsKey(logicalId) &&
+    // For video, progress beyond the first sample proves new source bytes.
+    // Manga replenishes only from validated page checkpoints after settlement.
+    if (_recordsByLogicalId[logicalId]?.mediaKind != DownloadMediaKind.mangaChapter &&
+        _sourceRefreshAttempts.containsKey(logicalId) &&
         snapshot.status == DownloadTransportStatus.running &&
         (snapshot.progress > 0 || (snapshot.transferredBytes ?? 0) > 0)) {
       final baseline = _firstRenewedPositiveSample.putIfAbsent(
@@ -2428,6 +2430,7 @@ final class DownloadManagerV2 {
         _rememberRecord(updated);
         if (result.isValid) {
           _sourceRefreshAttempts.remove(logicalId);
+          _mangaSourceRefreshVerifiedPages.remove(logicalId);
           _firstRenewedPositiveSample.remove(logicalId);
           final bytes = result.bytes!;
           final snapshot = DownloadTransportSnapshot(
@@ -2468,6 +2471,33 @@ final class DownloadManagerV2 {
     );
   }
 
+  Future<Set<int>> _verifiedMangaCheckpointIndexes(
+    LogicalDownloadRecordV2 record,
+  ) async {
+    final verified = <int>{};
+    try {
+      final directory = Directory((await _destinationFile(record.destinationPath)).path);
+      final manifest = await MangaChapterManifestV2.readFrom(directory);
+      if (manifest == null ||
+          manifest.mangaId != record.mediaId ||
+          manifest.chapterId != record.unitKey) return verified;
+      await for (final entity in directory.list(followLinks: false)) {
+        if (entity is! File) continue;
+        final match = RegExp(r'^(\d+)\.').firstMatch(p.basename(entity.path));
+        final number = match == null ? null : int.tryParse(match.group(1)!);
+        if (number == null) continue;
+        final index = number - 1;
+        if (verified.contains(index) ||
+            !manifest.completedIndexes.contains(index) ||
+            manifest.pageDigests[index] == null) continue;
+        if (await manifest.isPageValid(index, entity)) verified.add(index);
+      }
+    } on FileSystemException {
+      // Missing/unreadable checkpoints cannot replenish a source retry budget.
+    }
+    return verified;
+  }
+
   void _scheduleSourceRefresh(
     DownloadLogicalId logicalId,
     String failedTaskId,
@@ -2479,6 +2509,15 @@ final class DownloadManagerV2 {
             record.intent != DownloadUserIntent.active ||
             record.taskId != failedTaskId) {
           return;
+        }
+        if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+          // Source-expiry callbacks arrive after all page writers settle.
+          final verified = await _verifiedMangaCheckpointIndexes(record);
+          final previous = _mangaSourceRefreshVerifiedPages[logicalId];
+          if (previous != null && verified.any((index) => !previous.contains(index))) {
+            _sourceRefreshAttempts.remove(logicalId);
+          }
+          _mangaSourceRefreshVerifiedPages[logicalId] = verified;
         }
         final attempts = _sourceRefreshAttempts[logicalId] ?? 0;
         if (attempts >= 3) {
@@ -2639,6 +2678,7 @@ final class DownloadManagerV2 {
     _lastPositiveSpeedAtMillis.clear();
     _lastNativeSpeedProjectionAtMillis.clear();
     _firstRenewedPositiveSample.clear();
+    _mangaSourceRefreshVerifiedPages.clear();
     await _recordChanges.close();
   }
 }

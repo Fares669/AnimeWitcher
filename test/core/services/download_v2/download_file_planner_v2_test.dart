@@ -6,11 +6,29 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_v2/download_file_planner_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
+import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 void main() {
+  test('planned bounded episode base keeps visible uncommon quality and matches identity', () async {
+    await _useTestDownloads();
+    final title = List<String>.filled(100, '🧙').join();
+    final base = sanitizeDownloadFileName(formatEpisodeFileName(
+      episode: 12, serverName: 'الحلقة 12', title: title,
+    ));
+    final destination = await downloadDestinationPathV2(
+      MultimediaItem(title: 'Example', url: '/anime', posterUrl: ''),
+      filename: '$base (1234p).mp4',
+    );
+    expect(utf8.encode(p.basename(destination)).length, lessThanOrEqualTo(212));
+    expect(isDownloadedEpisodeFileName(p.basename(destination), 12,
+        serverName: 'الحلقة 12', title: title), isTrue);
+    expect(isDownloadedEpisodeFileName(p.basename(destination), 13,
+        serverName: 'الحلقة 13', title: title), isFalse);
+  });
+
   for (final title in <String>['.', '..', '...', '', 'a/b', r'a\b']) {
     test('anime title ${jsonEncode(title)} stays in a title folder below anime', () async {
       final temp = await _useTestDownloads();

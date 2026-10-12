@@ -159,7 +159,7 @@ final class MangaChapterManifestV2 {
       final validDigest = RegExp(r'^[a-f0-9]{64}$');
       for (final entry in rawDigests.entries) {
         final index = int.tryParse(entry.key.toString());
-        if (index == null || !completed.contains(index)) continue;
+        if (index == null || index < 0 || index >= pageCount) continue;
         final value = entry.value;
         pageDigests[index] = value is String && validDigest.hasMatch(value)
             ? value

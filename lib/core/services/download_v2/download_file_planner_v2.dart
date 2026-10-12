@@ -113,16 +113,30 @@ String _downloadFolderName(String value, {required String fallback}) {
   return sanitized.isEmpty ? fallback : sanitized;
 }
 
-String _mangaChapterFolderName(MangaChapter chapter) {
+String _mangaChapterLabelV2(MangaChapter chapter) {
   final number = chapter.number;
-  if (number != null) {
-    final value = number == number.truncateToDouble()
-        ? number.toInt().toString()
-        : number.toString();
-    return _downloadFolderName('الفصل $value', fallback: 'فصل');
-  }
-  return _downloadFolderName(chapter.name, fallback: 'فصل');
+  if (number == null) return chapter.name;
+  final value = number == number.truncateToDouble()
+      ? number.toInt().toString()
+      : number.toString();
+  return 'الفصل $value';
 }
+
+String _legacyDownloadFolderNameV2(String value, {required String fallback}) {
+  final stem = normalizeDownloadText(value)
+      .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  return stem.isEmpty ? fallback : stem;
+}
+
+bool _safeLegacyDownloadLeafV2(String value) =>
+    value.isNotEmpty && value != '.' && value != '..' &&
+    !value.contains('/') && !value.contains('\\') &&
+    !RegExp(r'[\x00-\x1f\x7f-\x9f]').hasMatch(value) &&
+    p.windows.basename(value) == value &&
+    utf8.encode(value).length <= 255 &&
+    utf8.decode(utf8.encode(value)) == value;
 
 /// Keep the preferred location when it permits actual writes. Scoped Android
 /// storage can expose a public directory while refusing new files within it.
@@ -159,51 +173,36 @@ String _pathBelowDownloadDirectoryV2(String directory, List<String> segments) {
   return result;
 }
 
+Future<List<String>> _downloadMediaRootsV2(String mediaType) async {
+  if (Platform.isIOS) return <String>[p.join('Downloads', mediaType)];
+  if (Platform.isAndroid) {
+    final roots = <String>[p.join('/storage/emulated/0/Download', mediaType)];
+    try {
+      final external = await getExternalStorageDirectory();
+      if (external != null) roots.add(p.join(external.path, mediaType));
+    } catch (_) {}
+    try {
+      final documents = await getApplicationDocumentsDirectory();
+      roots.add(p.join(documents.path, 'Downloads', mediaType));
+    } catch (_) {}
+    return roots;
+  }
+  final downloads = await getDownloadsDirectory();
+  final root = downloads?.path ??
+      p.join((await getApplicationDocumentsDirectory()).path, 'Downloads');
+  return <String>[p.join(root, mediaType)];
+}
+
 Future<String> _downloadMediaDirectoryV2(
   String mediaType,
   List<String> segments,
 ) async {
-  if (Platform.isIOS) {
-    return _pathBelowDownloadDirectoryV2(p.join('Downloads', mediaType), segments);
-  }
+  final roots = await _downloadMediaRootsV2(mediaType);
+  final paths = roots.map((root) => _pathBelowDownloadDirectoryV2(root, segments));
   if (Platform.isAndroid) {
-    final directories = <Directory>[
-      Directory(
-        _pathBelowDownloadDirectoryV2(
-          p.join('/storage/emulated/0/Download', mediaType),
-          segments,
-        ),
-      ),
-    ];
-    try {
-      final external = await getExternalStorageDirectory();
-      if (external != null) {
-        directories.add(
-          Directory(
-            _pathBelowDownloadDirectoryV2(p.join(external.path, mediaType), segments),
-          ),
-        );
-      }
-    } catch (_) {}
-    try {
-      final documents = await getApplicationDocumentsDirectory();
-      directories.add(
-        Directory(
-          _pathBelowDownloadDirectoryV2(
-            p.join(documents.path, 'Downloads', mediaType),
-            segments,
-          ),
-        ),
-      );
-    } catch (_) {}
-    return firstWritableDownloadDirectoryV2(directories);
+    return firstWritableDownloadDirectoryV2(paths.map(Directory.new));
   }
-
-  final downloads = await getDownloadsDirectory();
-  final root =
-      downloads?.path ??
-      p.join((await getApplicationDocumentsDirectory()).path, 'Downloads');
-  return _pathBelowDownloadDirectoryV2(p.join(root, mediaType), segments);
+  return paths.first;
 }
 
 /// Produces the final Anime path expected by V2. iOS keeps an
@@ -237,30 +236,38 @@ Future<String> mangaChapterDestinationDirectoryV2(
   MangaChapter chapter,
 ) async {
   final title = _downloadFolderName(manga.title, fallback: 'Manga');
-  final chapterFolder = _mangaChapterFolderName(chapter);
+  final chapterLabel = _mangaChapterLabelV2(chapter);
+  final chapterFolder = _downloadFolderName(chapterLabel, fallback: 'فصل');
   final mangaId = manga.syncData?['mangaId']?.trim().isNotEmpty == true
       ? manga.syncData!['mangaId']!.trim()
       : chapter.mangaId.trim();
-
-  // Existing chapters keep their directory when its manifest proves identity.
-  final legacyPath = await _downloadMediaDirectoryV2('manga', <String>[
-    title,
-    chapterFolder,
-  ]);
-  final legacyManifest = await MangaChapterManifestV2.readFrom(
-    Directory(await absoluteDownloadDestinationPathV2(legacyPath)),
-  );
-  if (legacyManifest != null &&
-      legacyManifest.mangaId == mangaId &&
-      legacyManifest.chapterId == chapter.id.trim()) {
-    return legacyPath;
-  }
 
   final identity = logicalDownloadIdForMangaChapter(
     mangaId: mangaId,
     chapterId: chapter.id,
   );
   final suffix = identity.value.substring('manga_'.length, 'manga_'.length + 12);
+  final oldTitle = _legacyDownloadFolderNameV2(manga.title, fallback: 'Manga');
+  final oldChapter = _legacyDownloadFolderNameV2(chapterLabel, fallback: 'فصل');
+  final oldBoundedChapter = oldChapter.length > 90 ? oldChapter.substring(0, 90) : oldChapter;
+  final candidates = <List<String>>[
+    <String>[oldTitle, oldChapter],
+    <String>[oldTitle, '$oldBoundedChapter-$suffix'],
+    <String>[title, chapterFolder],
+  ];
+  // Probe only existing safe legacy paths; never create them with old naming.
+  for (final root in await _downloadMediaRootsV2('manga')) {
+    for (final segments in candidates) {
+      if (!segments.every(_safeLegacyDownloadLeafV2)) continue;
+      final path = _pathBelowDownloadDirectoryV2(root, segments);
+      final manifest = await MangaChapterManifestV2.readFrom(
+        Directory(await absoluteDownloadDestinationPathV2(path)),
+      );
+      if (manifest != null && manifest.mangaId == mangaId &&
+          manifest.chapterId == chapter.id.trim()) return path;
+    }
+  }
+
   return _downloadMediaDirectoryV2('manga', <String>[
     title,
     '$chapterFolder-$suffix',
