@@ -305,6 +305,21 @@ String formatEpisodeFileName({
   return qualityLabel == null ? base : '$base ($qualityLabel)';
 }
 
+/// Bound the base before adding quality, so it stays readable and matchable.
+String formatEpisodeDownloadFileName({
+  required int episode,
+  String? title,
+  String? quality,
+  bool isFinal = false,
+  String? serverName,
+}) {
+  final stem = sanitizeDownloadFileName(formatEpisodeFileName(
+    episode: episode, title: title, isFinal: isFinal, serverName: serverName,
+  ));
+  final qualityLabel = formatDownloadQualityLabel(quality);
+  return stem.isEmpty || qualityLabel == null ? stem : '$stem ($qualityLabel)';
+}
+
 /// True when this episode should be saved/looked up by its own label instead
 /// of the series title.
 ///
@@ -337,23 +352,19 @@ bool isDownloadedEpisodeFileName(
   String? serverName,
   bool isFinal = false,
 }) {
-  final stem = sanitizeDownloadFileName(
-    fileName.contains('.')
-        ? fileName.substring(0, fileName.lastIndexOf('.'))
-        : fileName,
-  );
-  final label = sanitizeDownloadFileName(
-    formatEpisodeFileName(
-      episode: episode,
-      title: title,
-      isFinal: isFinal,
-      serverName: serverName,
-    ),
+  final rawStem = fileName.contains('.')
+      ? fileName.substring(0, fileName.lastIndexOf('.'))
+      : fileName;
+  final label = formatEpisodeDownloadFileName(
+    episode: episode, title: title, isFinal: isFinal, serverName: serverName,
   );
   if (label.isEmpty) return false;
-  if (stem.toLowerCase() == label.toLowerCase()) return true;
-  return stem.toLowerCase().startsWith('${label.toLowerCase()} (') &&
-      RegExp(r'\(\d{3,4}p\)$', caseSensitive: false).hasMatch(stem);
+  final normalizedLabel = label.toLowerCase();
+  if (sanitizeDownloadFileName(rawStem).toLowerCase() == normalizedLabel) return true;
+  final quality = RegExp(r' \(\d{3,4}p\)$', caseSensitive: false).firstMatch(rawStem);
+  // Old legal files can have an unbounded base; strip quality before hashing it.
+  return quality != null &&
+      sanitizeDownloadFileName(rawStem.substring(0, quality.start)).toLowerCase() == normalizedLabel;
 }
 
 /// Title persisted in watch history / sync. Keeps a final-episode marker when

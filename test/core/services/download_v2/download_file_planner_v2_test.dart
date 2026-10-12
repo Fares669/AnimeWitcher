@@ -20,8 +20,11 @@ void main() {
     ));
     final destination = await downloadDestinationPathV2(
       MultimediaItem(title: 'Example', url: '/anime', posterUrl: ''),
-      filename: '$base (1234p).mp4',
+      filename: '${formatEpisodeDownloadFileName(
+        episode: 12, serverName: 'الحلقة 12', title: title, quality: '1234p',
+      )}.mp4',
     );
+    expect(p.basename(destination), '$base (1234p).mp4');
     expect(utf8.encode(p.basename(destination)).length, lessThanOrEqualTo(212));
     expect(isDownloadedEpisodeFileName(p.basename(destination), 12,
         serverName: 'الحلقة 12', title: title), isTrue);
@@ -149,7 +152,7 @@ void main() {
       test('matching manifest preserves old title ${oldTitle.runes.first} identity suffix $hasIdentitySuffix', () async {
         final temp = await _useTestDownloads();
         const chapter = MangaChapter(id: 'c1', mangaId: 'm1', url: '/chapter', name: 'Chapter');
-        final chapterName = hasIdentitySuffix ? 'Chapter-${logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c1').value.substring(5, 17)}' : 'Chapter';
+        final chapterName = hasIdentitySuffix ? 'Chapter-${logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c1').value.substring('manga_'.length, 'manga_'.length + 12)}' : 'Chapter';
         final oldPath = p.join(temp.path, 'manga', oldTitle, chapterName);
         await MangaChapterManifestV2(
           version: MangaChapterManifestV2.currentVersion,
@@ -169,7 +172,7 @@ void main() {
     final temp = await _useTestDownloads();
     final name = List<String>.filled(120, 'a').join();
     final chapter = MangaChapter(id: 'c1', mangaId: 'm1', url: '/chapter', name: name);
-    final suffix = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c1').value.substring(5, 17);
+    final suffix = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c1').value.substring('manga_'.length, 'manga_'.length + 12);
     final oldPath = p.join(temp.path, 'manga', 'Example', '${name.substring(0, 90)}-$suffix');
     final page = File(p.join(oldPath, '0001.webp'));
     await page.create(recursive: true);
@@ -189,20 +192,20 @@ void main() {
     final temp = await _useTestDownloads();
     final name = 'A${List<String>.filled(100, '🧙').join()}';
     final chapter = MangaChapter(id: 'c1', mangaId: 'm1', url: '/chapter', name: name);
-    final suffix = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c1').value.substring(5, 17);
+    final suffix = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: 'c1').value.substring('manga_'.length, 'manga_'.length + 12);
     final oldLeaf = '${name.substring(0, 90)}-$suffix';
     final oldRawPath = p.join(temp.path, 'manga', 'Example', oldLeaf);
     final actualPath = p.join(temp.path, 'manga', 'Example', utf8.decode(utf8.encode(oldLeaf)));
     expect(oldRawPath, isNot(actualPath));
     expect(p.basename(actualPath).runes, contains(0xfffd));
-    final page = File(p.join(oldRawPath, '0001.webp'));
+    final page = File(p.join(actualPath, '0001.webp'));
     await page.create(recursive: true);
     await page.writeAsBytes(<int>[1, 2, 3], flush: true);
     await MangaChapterManifestV2(
       version: MangaChapterManifestV2.currentVersion,
       mangaId: 'm1', chapterId: 'c1', pageCount: 1,
       completedIndexes: const <int>{0}, isComplete: true,
-    ).writeTo(Directory(oldRawPath));
+    ).writeTo(Directory(actualPath));
     expect(await Directory(actualPath).exists(), isTrue);
     final planned = await mangaChapterDestinationDirectoryV2(
       MultimediaItem(title: 'Example', url: '/manga', posterUrl: ''), chapter,

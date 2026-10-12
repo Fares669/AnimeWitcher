@@ -2513,11 +2513,13 @@ final class DownloadManagerV2 {
         if (record.mediaKind == DownloadMediaKind.mangaChapter) {
           // Source-expiry callbacks arrive after all page writers settle.
           final verified = await _verifiedMangaCheckpointIndexes(record);
-          final previous = _mangaSourceRefreshVerifiedPages[logicalId];
-          if (previous != null && verified.any((index) => !previous.contains(index))) {
+          final previous = _mangaSourceRefreshVerifiedPages.putIfAbsent(
+            logicalId, () => <int>{},
+          );
+          if (verified.any((index) => !previous.contains(index))) {
             _sourceRefreshAttempts.remove(logicalId);
           }
-          _mangaSourceRefreshVerifiedPages[logicalId] = verified;
+          previous.addAll(verified);
         }
         final attempts = _sourceRefreshAttempts[logicalId] ?? 0;
         if (attempts >= 3) {

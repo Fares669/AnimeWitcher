@@ -13,11 +13,25 @@ void main() {
       final boundedBase = sanitizeDownloadFileName(formatEpisodeFileName(
         episode: 12, serverName: 'الحلقة 12', title: title,
       ));
-      final filename = '$boundedBase ($quality).mp4';
+      final produced = formatEpisodeDownloadFileName(
+        episode: 12, serverName: 'الحلقة 12', title: title, quality: quality,
+      );
+      expect(produced, '$boundedBase ($quality)');
+      final filename = '$produced.mp4';
       expect(utf8.encode(filename).length, lessThanOrEqualTo(212));
       expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'الحلقة 12', title: title), isTrue);
       expect(isDownloadedEpisodeFileName(filename, 13, serverName: 'الحلقة 13', title: title), isFalse);
     }
+  });
+
+  test('keeps exact creative titles that themselves end with a quality-like suffix', () {
+    final base = formatEpisodeDownloadFileName(
+      episode: 12, serverName: 'الحلقة 12', title: 'Story (720p)',
+    );
+    expect(isDownloadedEpisodeFileName('$base.mp4', 12,
+        serverName: 'الحلقة 12', title: 'Story (720p)'), isTrue);
+    expect(isDownloadedEpisodeFileName('$base (1080p).mp4', 12,
+        serverName: 'الحلقة 12', title: 'Story (720p)'), isTrue);
   });
 
   test('matches a legal old long episode filename without rewriting its quality', () {

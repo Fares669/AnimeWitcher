@@ -360,14 +360,12 @@ class DownloadLauncher {
                           title: episodeData.name,
                           serverName: episodeData.serverName,
                         )) {
-                      final episodeLabel = sanitizeDownloadFileName(
-                        formatEpisodeFileName(
-                          episode: episodeData.episode,
-                          title: episodeData.name,
-                          quality: stream.quality,
-                          isFinal: episodeData.isFinal,
-                          serverName: episodeData.serverName,
-                        ),
+                      final episodeLabel = formatEpisodeDownloadFileName(
+                        episode: episodeData.episode,
+                        title: episodeData.name,
+                        quality: stream.quality,
+                        isFinal: episodeData.isFinal,
+                        serverName: episodeData.serverName,
                       );
                       filename = '$episodeLabel$extension';
                     } else {
