@@ -238,9 +238,13 @@ void main() {
     expect(manualRequest.parallelChunks, 16);
     expect(request.sourceDescriptor['chapterUrl'], chapter.url);
     expect(request.sourceDescriptor['mangaUrl'], manga.url);
+    final suffix = request.logicalId.value.substring(
+      'manga_'.length,
+      'manga_'.length + 12,
+    );
     expect(
       p.normalize(request.destinationPath),
-      endsWith(p.join('manga', 'Manga', 'الفصل 12.5')),
+      endsWith(p.join('manga', 'Manga', 'الفصل 12.5-$suffix')),
     );
   });
 
