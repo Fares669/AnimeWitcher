@@ -1,9 +1,69 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/anizip_service.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
 
 void main() {
+  group('portable download filename stems', () {
+    test('dot-only and empty stems leave fallback choice to the caller', () {
+      for (final value in <String>['', ' ', '.', '..', '...', ' . . ']) {
+        expect(sanitizeDownloadFileName(value), isEmpty, reason: value);
+      }
+    });
+
+    test('replaces control characters and removes terminal dots and spaces', () {
+      expect(sanitizeDownloadFileName('chapter\u0000\u001f\u007fend.  '), 'chapter___end');
+      expect(sanitizeDownloadFileName('chapter. .. '), 'chapter');
+      expect(sanitizeDownloadFileName(' chapter\t  name '), 'chapter_ name');
+    });
+
+    test('protects Windows device stems with optional extensions', () {
+      for (final value in <String>[
+        'CON', 'con.jpg', 'PRN', 'aux.txt', 'NUL',
+        for (var index = 1; index <= 9; index++) 'COM$index',
+        for (var index = 1; index <= 9; index++) 'lpt$index.webp',
+      ]) {
+        expect(sanitizeDownloadFileName(value), '_$value');
+      }
+      expect(sanitizeDownloadFileName('COM10'), 'COM10');
+      expect(sanitizeDownloadFileName('console'), 'console');
+    });
+
+    test('leaves ordinary short Unicode labels unchanged', () {
+      const value = 'الفصل الأخير 🧙';
+      expect(sanitizeDownloadFileName(value), value);
+    });
+
+    test('long Unicode stems are bounded and retain distinct SHA-256 suffixes', () {
+      for (final repeated in <String>['ش', '🧙']) {
+        final common = List<String>.filled(128, repeated).join();
+        final firstLabel = '${common}A';
+        final secondLabel = '${common}B';
+        final first = sanitizeDownloadFileName(firstLabel);
+        final second = sanitizeDownloadFileName(secondLabel);
+        expect(first, isNot(second));
+        for (final entry in <String, String>{firstLabel: first, secondLabel: second}.entries) {
+          final stem = entry.value;
+          expect(utf8.encode(stem).length, lessThanOrEqualTo(200));
+          expect(stem, endsWith('-${sha256.convert(utf8.encode(entry.key)).toString().substring(0, 12)}'));
+          expect(stem.runes, isNot(contains(0xfffd)));
+          expect(utf8.decode(utf8.encode(stem)), stem);
+        }
+      }
+    });
+
+    test('truncation hashes the full normalized sanitized stem', () {
+      final raw = '${List<String>.filled(128, 'ا\u0654').join()}/tail. ';
+      final normalized = '${List<String>.filled(128, 'أ').join()}_tail';
+      final expectedHash = sha256.convert(utf8.encode(normalized)).toString().substring(0, 12);
+      expect(sanitizeDownloadFileName(raw), endsWith('-$expectedHash'));
+      expect(utf8.encode(sanitizeDownloadFileName(raw)).length, lessThanOrEqualTo(200));
+    });
+  });
+
   group('isGenericEpisodeTitle', () {
     test('detects Arabic placeholders', () {
       expect(isGenericEpisodeTitle('الحلقة 16'), isTrue);

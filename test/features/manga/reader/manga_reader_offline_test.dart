@@ -10,6 +10,8 @@ import 'package:animewitcher/features/manga/reader/manga_reader_controller.dart'
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/manga_image_fixtures.dart';
+
 final class _Provider extends AnimeWitcherProvider {
   int pageCalls = 0;
 
@@ -67,7 +69,7 @@ void main() {
     addTearDown(() => dir.delete(recursive: true));
     await File('${dir.path}/0001.webp').writeAsBytes(<int>[9], flush: true);
     final good = File('${dir.path}/0001.jpg');
-    await good.writeAsBytes(<int>[1, 2, 3], flush: true);
+    await good.writeAsBytes(tinyMangaJpeg, flush: true);
     await MangaChapterManifestV2(
       version: MangaChapterManifestV2.currentVersion,
       mangaId: 'm1',
@@ -115,8 +117,8 @@ void main() {
       isComplete: true,
     );
     await manifest.writeTo(dir);
-    await File('${dir.path}/0001.webp').writeAsBytes([1]);
-    await File('${dir.path}/0002.png').writeAsBytes([2]);
+    await File('${dir.path}/0001.webp').writeAsBytes(tinyMangaWebp);
+    await File('${dir.path}/0002.png').writeAsBytes(tinyMangaPng);
 
     final provider = _Provider();
     final controller = MangaReaderController(

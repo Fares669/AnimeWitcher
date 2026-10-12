@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
@@ -9,7 +10,113 @@ import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../support/manga_image_fixtures.dart';
+
 void main() {
+  test('fresh extensionless real image completes and records its digest', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-extensionless-page-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'extensionless', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[MangaPage(index: 0, imageUrl: 'https://cdn.test/page?token=1')],
+        retries: 1,
+      ),
+    );
+    await starter.waitUntilStarted(0);
+    await starter.complete(0, bytes: tinyMangaJpeg);
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
+    final page = File(p.join(temp.path, '0001.img'));
+    final manifest = (await MangaChapterManifestV2.readFrom(temp))!;
+    expect(manifest.isComplete, isTrue);
+    expect(manifest.completedIndexes, <int>{0});
+    expect(manifest.pageDigests[0], await MangaChapterManifestV2.pageDigest(page));
+    expect(await manifest.isPageValid(0, page), isTrue);
+  });
+
+  test('HTTP-200 HTML body never completes and valid siblings survive source renewal', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-html-page-');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'html-page', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.webp'),
+        ],
+        retries: 1,
+      ),
+    );
+    final statuses = <DownloadTransportStatus>[];
+    final subscription = handle.snapshots.listen((snapshot) => statuses.add(snapshot.status));
+    addTearDown(subscription.cancel);
+    await starter.waitUntilStarted(1);
+    await starter.complete(0);
+    await _waitUntilManifestContains(temp, 0);
+    final validPage = File(p.join(temp.path, '0001.webp'));
+    final validDigest = await MangaChapterManifestV2.pageDigest(validPage);
+    await starter.complete(1, bytes: utf8.encode('<html><body>Session expired</body></html>'));
+    await _waitForTerminal(handle);
+    expect(handle.current.status, DownloadTransportStatus.failed);
+    expect(handle.current.failureCategory, DownloadFailureCategory.sourceExpired);
+    expect(statuses, isNot(contains(DownloadTransportStatus.complete)));
+    final rejected = (await MangaChapterManifestV2.readFrom(temp))!;
+    expect(rejected.isComplete, isFalse);
+    expect(rejected.completedIndexes, <int>{0});
+    expect(rejected.pageDigests, <int, String>{0: validDigest});
+    expect(await validPage.readAsBytes(), tinyMangaPng);
+
+    final renewedStarter = _FakePageStarter();
+    final renewed = await MangaChapterTransportV2(startPage: renewedStarter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'renewed-html-page', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp?fresh=1'),
+          MangaPage(index: 1, imageUrl: 'https://cdn.test/1.webp?fresh=1'),
+        ],
+        retries: 1,
+      ),
+    );
+    await renewedStarter.waitUntilStarted(1);
+    expect(renewedStarter.startedPageIndexes, <int>[1]);
+    await renewedStarter.complete(1);
+    await _waitForStatus(renewed, DownloadTransportStatus.complete);
+    expect(await validPage.readAsBytes(), tinyMangaPng);
+  });
+
+  test('restored hash-matching HTML page is fetched again', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-restore-html-page-');
+    addTearDown(() => temp.delete(recursive: true));
+    final file = File(p.join(temp.path, '0001.webp'));
+    await file.writeAsString('<html>expired source</html>', flush: true);
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'm1', chapterId: 'c1', pageCount: 1,
+      completedIndexes: const <int>{0}, isComplete: true,
+      pageDigests: <int, String>{0: await MangaChapterManifestV2.pageDigest(file)},
+    ).writeTo(temp);
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'restore-html', mangaId: 'm1', chapterId: 'c1',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp')],
+        retries: 1,
+      ),
+    );
+    expect(handle.current.status, isNot(DownloadTransportStatus.complete));
+    await starter.waitUntilStarted(0);
+    expect(starter.startedPageIndexes, <int>[0]);
+    await starter.complete(0);
+    await _waitForStatus(handle, DownloadTransportStatus.complete);
+    expect(await file.readAsBytes(), tinyMangaPng);
+  });
+
   test(
     'manga chapter fills 16 page connections and reuses freed slots',
     () async {
@@ -367,7 +474,7 @@ void main() {
       isComplete: false,
     ).writeTo(temp);
 
-    await File('${temp.path}/0001.webp').writeAsBytes(<int>[1, 2, 3]);
+    await File('${temp.path}/0001.webp').writeAsBytes(tinyMangaPng);
 
     final starter = _FakePageStarter();
     final transport = MangaChapterTransportV2(startPage: starter.start);
@@ -524,7 +631,7 @@ final class _DelayedAlreadyCompleteStarter {
       await releaseFirst.future;
       File(task.destinationPath)
         ..createSync(recursive: true)
-        ..writeAsBytesSync(<int>[1, 2, 3]);
+        ..writeAsBytesSync(tinyMangaPng);
       final handle = _FakePageHandle(
         taskId: task.taskId,
         pageIndex: task.pageIndex,
@@ -569,16 +676,16 @@ final class _FakePageStarter {
     return handle;
   }
 
-  Future<void> complete(int pageIndex) async {
+  Future<void> complete(int pageIndex, {List<int>? bytes}) async {
     final handle = handles[pageIndex]!;
-    await File(handle.destinationPath).writeAsBytes(<int>[1, 2, 3]);
+    await File(handle.destinationPath).writeAsBytes(bytes ?? tinyMangaPng);
     handle.complete();
     await Future<void>.delayed(Duration.zero);
   }
 
   Future<void> completeTwice(int pageIndex) async {
     final handle = handles[pageIndex]!;
-    await File(handle.destinationPath).writeAsBytes(<int>[1, 2, 3]);
+    await File(handle.destinationPath).writeAsBytes(tinyMangaPng);
     handle.complete(times: 2);
     await Future<void>.delayed(Duration.zero);
   }
@@ -689,4 +796,12 @@ final class _FakePageHandle implements DownloadTransportHandle {
     );
     _controller.add(_current);
   }
+}
+
+Future<void> _waitForTerminal(DownloadTransportHandle handle) async {
+  for (var attempt = 0; attempt < 500; attempt++) {
+    if (handle.current.isFinal) return;
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+  }
+  throw StateError('parent did not reach a terminal status; current=${handle.current.status}');
 }

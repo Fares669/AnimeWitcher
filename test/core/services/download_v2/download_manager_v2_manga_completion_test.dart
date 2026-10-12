@@ -12,6 +12,8 @@ import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2
 import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/manga_image_fixtures.dart';
+
 void main() {
   test('manga completion validates manifest directory instead of video file', () async {
     final temp = await Directory.systemTemp.createTemp('aw_manga_complete_');
@@ -25,8 +27,8 @@ void main() {
       completedIndexes: const <int>{0, 1},
       isComplete: true,
     ).writeTo(temp);
-    await File('${temp.path}/0001.webp').writeAsBytes(<int>[1]);
-    await File('${temp.path}/0002.webp').writeAsBytes(<int>[2]);
+    await File('${temp.path}/0001.webp').writeAsBytes(tinyMangaPng);
+    await File('${temp.path}/0002.webp').writeAsBytes(tinyMangaPng);
 
     final gateway = _Gateway();
     final store = InMemoryLogicalDownloadStoreV2();
@@ -73,7 +75,7 @@ void main() {
 
     await File('${temp.path}/0001.webp').writeAsBytes(<int>[9], flush: true);
     final good = File('${temp.path}/0001.jpg');
-    await good.writeAsBytes(<int>[1, 2, 3], flush: true);
+    await good.writeAsBytes(tinyMangaPng, flush: true);
     await MangaChapterManifestV2(
       version: MangaChapterManifestV2.currentVersion,
       mangaId: 'm1',
@@ -114,7 +116,7 @@ void main() {
     await manager.initialize();
 
     expect(await manager.hasCompletedDownload(logicalId), isTrue);
-    expect(await good.readAsBytes(), <int>[1, 2, 3]);
+    expect(await good.readAsBytes(), tinyMangaPng);
   });
 
   test('invalid manga completion preserves valid pages and repairs manifest', () async {
@@ -130,7 +132,7 @@ void main() {
       isComplete: true,
     ).writeTo(temp);
     final firstPage = File('${temp.path}/0001.webp');
-    await firstPage.writeAsBytes(<int>[1, 2, 3]);
+    await firstPage.writeAsBytes(tinyMangaPng);
 
     final gateway = _Gateway();
     final store = InMemoryLogicalDownloadStoreV2();

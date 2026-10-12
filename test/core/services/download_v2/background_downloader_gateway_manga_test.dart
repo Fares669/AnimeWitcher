@@ -8,6 +8,8 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
+import '../../../support/manga_image_fixtures.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final originalPathProvider = PathProviderPlatform.instance;
@@ -46,7 +48,7 @@ void main() {
     final temp = await Directory.systemTemp.createTemp('aw_manga_valid_child_');
     addTearDown(() => temp.delete(recursive: true));
     final file = File('${temp.path}/0001.webp');
-    await file.writeAsBytes(<int>[1, 2, 3]);
+    await file.writeAsBytes(tinyMangaPng);
     var removed = 0;
     final handle = _CompleteHandle('chapter_p0001');
 

@@ -5,7 +5,73 @@ import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../support/manga_image_fixtures.dart';
+
 void main() {
+  for (final image in tinyMangaImages.entries) {
+    test('digest-bearing extensionless ${image.key} page is valid', () async {
+      final directory = await Directory.systemTemp.createTemp('aw-image-header-');
+      addTearDown(() => directory.delete(recursive: true));
+      final page = File(p.join(directory.path, 'page'));
+      await page.writeAsBytes(image.value, flush: true);
+      final manifest = _singlePageManifest(
+        digest: await MangaChapterManifestV2.pageDigest(page),
+      );
+      expect(await manifest.isPageValid(0, page), isTrue);
+    });
+  }
+
+  for (final brand in <String>['avif', 'avis']) {
+    test('digest-bearing AVIF compatible $brand brand is recognized', () async {
+      final directory = await Directory.systemTemp.createTemp('aw-avif-brand-');
+      addTearDown(() => directory.delete(recursive: true));
+      final bytes = List<int>.from(tinyMangaAvif)
+        ..setRange(8, 12, ascii.encode('mif1'))
+        ..setRange(16, 20, ascii.encode(brand));
+      final page = File(p.join(directory.path, 'page'));
+      await page.writeAsBytes(bytes, flush: true);
+      final manifest = _singlePageManifest(
+        digest: await MangaChapterManifestV2.pageDigest(page),
+      );
+      expect(await manifest.isPageValid(0, page), isTrue);
+    });
+  }
+
+  for (final body in <String, List<int>>{
+    'HTML': utf8.encode('<html><body>Session expired</body></html>'),
+    'unknown': <int>[1, 2, 3, 4],
+    'non-WebP RIFF': ascii.encode('RIFFxxxxAVI '),
+    'non-AVIF ftyp': <int>[0, 0, 0, 20, ...ascii.encode('ftypheic'), 0, 0, 0, 0, ...ascii.encode('mif1')],
+    'AVIF brand outside ftyp box': <int>[0, 0, 0, 16, ...ascii.encode('ftypmif1'), 0, 0, 0, 0, ...ascii.encode('avif')],
+    'truncated PNG signature': tinyMangaPng.take(7).toList(),
+    'empty': <int>[],
+  }.entries) {
+    test('digest-bearing ${body.key} page fails even with a matching hash', () async {
+      final directory = await Directory.systemTemp.createTemp('aw-image-reject-');
+      addTearDown(() => directory.delete(recursive: true));
+      final page = File(p.join(directory.path, '0001.webp'));
+      await page.writeAsBytes(body.value, flush: true);
+      final manifest = _singlePageManifest(
+        digest: await MangaChapterManifestV2.pageDigest(page),
+      );
+      await manifest.writeTo(directory);
+      final restored = (await MangaChapterManifestV2.readFrom(directory))!;
+      expect(restored.version, 1);
+      expect(await restored.isPageValid(0, page), isFalse);
+    });
+  }
+
+  test('legacy pages without digests keep nonempty offline compatibility', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-legacy-page-');
+    addTearDown(() => directory.delete(recursive: true));
+    final page = File(p.join(directory.path, '0001.webp'));
+    await page.writeAsString('<html>old nonempty artifact</html>', flush: true);
+    final manifest = _singlePageManifest();
+    expect(await manifest.isPageValid(0, page), isTrue);
+    await page.writeAsBytes(<int>[], flush: true);
+    expect(await manifest.isPageValid(0, page), isFalse);
+  });
+
   test(
     'failed manifest rename preserves the last durable chapter checkpoint',
     () async {
@@ -54,7 +120,7 @@ void main() {
     final directory = await Directory.systemTemp.createTemp('aw_hash_page_');
     addTearDown(() => directory.delete(recursive: true));
     final page = File(p.join(directory.path, '0001.webp'));
-    await page.writeAsBytes(<int>[10, 20, 30, 40], flush: true);
+    await page.writeAsBytes(tinyMangaPng, flush: true);
     final hash = await MangaChapterManifestV2.pageDigest(page);
     const original = MangaChapterManifestV2(
       version: MangaChapterManifestV2.currentVersion,
@@ -134,3 +200,13 @@ final class _RenameFailingFile implements File {
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
+
+MangaChapterManifestV2 _singlePageManifest({String? digest}) => MangaChapterManifestV2(
+  version: MangaChapterManifestV2.currentVersion,
+  mangaId: 'm1',
+  chapterId: 'c1',
+  pageCount: 1,
+  completedIndexes: const <int>{0},
+  isComplete: true,
+  pageDigests: digest == null ? const <int, String>{} : <int, String>{0: digest},
+);
