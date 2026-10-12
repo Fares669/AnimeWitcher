@@ -8,6 +8,8 @@ import '../../domain/entity/manga.dart';
 import '../../domain/entity/multimedia_item.dart';
 import '../../utils/episode_label.dart';
 import '../download_parallel.dart';
+import 'download_v2_identity.dart';
+import 'manga_chapter_manifest_v2.dart';
 
 final class DownloadSourceMetadataV2 {
   const DownloadSourceMetadataV2({
@@ -209,7 +211,33 @@ Future<String> mangaChapterDestinationDirectoryV2(
 ) async {
   final title = _downloadFolderName(manga.title, fallback: 'Manga');
   final chapterFolder = _mangaChapterFolderName(chapter);
-  return _downloadMediaDirectoryV2('manga', <String>[title, chapterFolder]);
+  final mangaId = manga.syncData?['mangaId']?.trim().isNotEmpty == true
+      ? manga.syncData!['mangaId']!.trim()
+      : chapter.mangaId.trim();
+
+  // Existing chapters keep their directory when its manifest proves identity.
+  final legacyPath = await _downloadMediaDirectoryV2('manga', <String>[
+    title,
+    chapterFolder,
+  ]);
+  final legacyManifest = await MangaChapterManifestV2.readFrom(
+    Directory(await absoluteDownloadDestinationPathV2(legacyPath)),
+  );
+  if (legacyManifest != null &&
+      legacyManifest.mangaId == mangaId &&
+      legacyManifest.chapterId == chapter.id.trim()) {
+    return legacyPath;
+  }
+
+  final identity = logicalDownloadIdForMangaChapter(
+    mangaId: mangaId,
+    chapterId: chapter.id,
+  );
+  final suffix = identity.value.substring('manga_'.length, 'manga_'.length + 12);
+  return _downloadMediaDirectoryV2('manga', <String>[
+    title,
+    '${chapterFolder.length > 90 ? chapterFolder.substring(0, 90) : chapterFolder}-$suffix',
+  ]);
 }
 
 Future<String> absoluteDownloadDestinationPathV2(String destinationPath) async {
