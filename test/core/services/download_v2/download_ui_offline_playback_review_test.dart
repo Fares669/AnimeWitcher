@@ -82,12 +82,15 @@ class _OfflineProvider extends AnimeWitcherProvider {
 }
 
 void main() {
-  for (final directFile in [false, true]) {
+  for (final (filename, directFile) in const [
+    ('episode.mp4', false), ('episode.mp4', true),
+    ('videoplayback', false), ('videoplayback', true),
+  ]) {
     for (final throwOffline in [false, true]) {
-      testWidgets('local playback direct=$directFile offline=$throwOffline opens without catalog dependency', (tester) async {
+      testWidgets('local playback $filename direct=$directFile offline=$throwOffline opens without catalog dependency', (tester) async {
         final root = (await tester.runAsync(() => Directory.systemTemp.createTemp('aw-offline-play-')))!;
         addTearDown(() => root.delete(recursive: true));
-        final file = (await tester.runAsync(() => File('${root.path}/episode.mp4').writeAsBytes([1, 2, 3])))!;
+        final file = (await tester.runAsync(() => File('${root.path}/$filename').writeAsBytes([1, 2, 3])))!;
         final provider = _OfflineProvider(throwOffline);
         final episode = Episode(name: 'Saved episode', url: 'episode://saved', episode: 2, season: 1);
         final item = MultimediaItem(
@@ -119,7 +122,7 @@ void main() {
           await tester.tap(find.text('Open saved download'));
           await pumpUntil(tester, () => opened != null, 'local player route without network', timeout: const Duration(seconds: 2));
           expect(provider.catalogCalls, 0);
-          expect(opened!.videoUrl, endsWith('/episode.mp4'));
+          expect(opened!.videoUrl, endsWith('/$filename'));
           expect(opened!.progressUrl, episode.url);
           expect(opened!.episode?.url, episode.url);
           expect(opened!.item.episodes?.map((value) => value.url), contains(episode.url));

@@ -183,6 +183,22 @@ void main() {
       manager.snapshotFor(id)!.timeRemaining,
       const Duration(seconds: 100),
     );
+
+    now += 1000;
+    handle.emit(DownloadTransportSnapshot(
+      taskId: taskId, status: DownloadTransportStatus.running,
+      progress: .5, networkSpeedMBps: 1,
+    ));
+    handle.emit(DownloadTransportSnapshot(
+      taskId: taskId, status: DownloadTransportStatus.paused, progress: .5,
+    ));
+    handle.emit(DownloadTransportSnapshot(
+      taskId: taskId, status: DownloadTransportStatus.running, progress: .5,
+    ));
+    await Future<void>.delayed(Duration.zero);
+    manager.observeNativeNetworkSpeed(taskId: taskId, bytesPerSecond: 250000);
+    expect(manager.snapshotFor(id)!.networkSpeedMBps, .25,
+      reason: 'resuming the same task clears the previous parent speed authority');
   });
 
   test(

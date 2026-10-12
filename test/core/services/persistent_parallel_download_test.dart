@@ -356,6 +356,22 @@ void main() {
     }, probes);
   });
 
+  test('fresh native completion bytes still allow immediate disk adoption', () async {
+    await coordinator.dispose();
+    coordinator = create(diskProgressPollInterval: const Duration(milliseconds: 10));
+    expect(await coordinator.start(parent, 100), isTrue);
+    final child = starts.first;
+    await coordinator.handleNativeChunkUpdate(
+      parentTaskId: parent.taskId, chunkTaskId: child.taskId, writtenBytes: 20,
+    );
+    final file = File(await child.filePath());
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(List<int>.filled(20, 1), flush: true);
+    await waitUntil(() => records[child.taskId]?.status == TaskStatus.complete);
+    expect(pauses, contains(child.taskId));
+    expect(coordinator.durableBytesFor(parent.taskId), 20);
+  });
+
   test('intermediate child completion does not fsync the full manifest', () async {
     expect(await coordinator.start(parent, 100), isTrue);
     await expandFreshTo(5);

@@ -468,7 +468,9 @@ void main() {
         final provider = _Sources();
         final storage = _CapturedDownload();
         final notifications = NotificationService();
-        addTearDown(() {
+        addTearDown(() async {
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump();
           notifications.clearToasts();
           notifications.dispose();
         });
