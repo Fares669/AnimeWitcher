@@ -62,6 +62,7 @@ class WatchHistory extends _$WatchHistory {
     int? episode,
     String? episodeTitle,
     String? episodeServerName,
+    String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
     final repository = ref.read(historyRepositoryProvider);
@@ -72,6 +73,7 @@ class WatchHistory extends _$WatchHistory {
       episode: episode,
       episodeTitle: episodeTitle,
       episodeServerName: episodeServerName,
+      episodeServerNumber: episodeServerNumber,
       episodePosterUrl: episodePosterUrl,
     );
     refresh();
@@ -115,6 +117,7 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
     int? episode,
     String? episodeTitle,
     String? episodeServerName,
+    String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
     await ref
@@ -129,6 +132,7 @@ class ContinueWatchingNotifier extends Notifier<List<HistoryItem>> {
           episode: episode,
           episodeTitle: episodeTitle,
           episodeServerName: episodeServerName,
+          episodeServerNumber: episodeServerNumber,
           episodePosterUrl: episodePosterUrl,
         );
     refresh();

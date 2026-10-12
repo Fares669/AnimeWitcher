@@ -20,6 +20,7 @@ class HistoryItem {
   final int? episode;
   final String? episodeTitle;
   final String? episodeServerName;
+  final String? episodeServerNumber;
   final String? episodePosterUrl;
   final int timestamp;
 
@@ -33,6 +34,7 @@ class HistoryItem {
     this.episode,
     this.episodeTitle,
     this.episodeServerName,
+    this.episodeServerNumber,
     this.episodePosterUrl,
     required this.timestamp,
     this.progressPercentage,
@@ -75,6 +77,7 @@ class HistoryItem {
       episode: map['episode'] as int?,
       episodeTitle: map['episodeTitle'] as String?,
       episodeServerName: map['episodeServerName'] as String?,
+      episodeServerNumber: map['episodeServerNumber'] as String?,
       episodePosterUrl: map['episodePosterUrl'] as String?,
       timestamp: (map['timestamp'] as int?) ?? 0,
     );
@@ -142,6 +145,7 @@ class HistoryRepository {
     int? episode,
     String? episodeTitle,
     String? episodeServerName,
+    String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
     await _storageService.recordHistoryOpen(
@@ -151,6 +155,7 @@ class HistoryRepository {
       episode: episode,
       episodeTitle: episodeTitle,
       episodeServerName: episodeServerName,
+      episodeServerNumber: episodeServerNumber,
       episodePosterUrl: episodePosterUrl,
     );
     _syncInBackground(
@@ -169,6 +174,7 @@ class HistoryRepository {
     int? episode,
     String? episodeTitle,
     String? episodeServerName,
+    String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
     await _storageService.saveContinueWatchingProgress(
@@ -181,6 +187,7 @@ class HistoryRepository {
       episode: episode,
       episodeTitle: episodeTitle,
       episodeServerName: episodeServerName,
+      episodeServerNumber: episodeServerNumber,
       episodePosterUrl: episodePosterUrl,
     );
     _syncInBackground(
@@ -191,6 +198,8 @@ class HistoryRepository {
         episodeUrl: lastEpisodeUrl,
         episodeNumber: episode,
         episodeTitle: episodeTitle,
+        episodeServerName: episodeServerName,
+        episodeServerNumber: episodeServerNumber,
         episodePosterUrl: episodePosterUrl,
       ),
       'save continue-watching progress',
