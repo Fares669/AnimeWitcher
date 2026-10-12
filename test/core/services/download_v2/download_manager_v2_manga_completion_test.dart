@@ -67,6 +67,56 @@ void main() {
     final record = await store.get(logicalId);
     expect(record?.completedAtMillis, isNotNull);
   });
+  test('verified page hash wins over stale same-index extension', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_manga_dupe_ext_');
+    addTearDown(() => temp.delete(recursive: true));
+
+    await File('${temp.path}/0001.webp').writeAsBytes(<int>[9], flush: true);
+    final good = File('${temp.path}/0001.jpg');
+    await good.writeAsBytes(<int>[1, 2, 3], flush: true);
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion,
+      mangaId: 'm1',
+      chapterId: '1',
+      pageCount: 1,
+      completedIndexes: const <int>{0},
+      isComplete: true,
+      pageDigests: <int, String>{
+        0: await MangaChapterManifestV2.pageDigest(good),
+      },
+    ).writeTo(temp);
+
+    final logicalId = logicalDownloadIdForMangaChapter(
+      mangaId: 'm1', chapterId: '1',
+    );
+    final store = InMemoryLogicalDownloadStoreV2();
+    await store.put(LogicalDownloadRecordV2(
+      schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: logicalId,
+      mediaKind: DownloadMediaKind.mangaChapter,
+      mediaId: 'm1',
+      unitKey: '1',
+      variantKey: 'pages',
+      generation: 1,
+      taskId: taskIdForGeneration(logicalId, 1),
+      intent: DownloadUserIntent.active,
+      destinationPath: temp.path,
+      sourceDescriptor: const <String, Object?>{'chapterId': '1'},
+      completedAtMillis: 1,
+      updatedAtMillis: 1,
+    ));
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: _Gateway(),
+      sourceResolver: _VideoResolver(),
+    );
+    addTearDown(manager.dispose);
+    await manager.initialize();
+
+    expect(await manager.hasCompletedDownload(logicalId), isTrue);
+    expect(await good.readAsBytes(), <int>[1, 2, 3]);
+  });
+
   test('invalid manga completion preserves valid pages and repairs manifest', () async {
     final temp = await Directory.systemTemp.createTemp('aw_manga_preserve_');
     addTearDown(() => temp.delete(recursive: true));
