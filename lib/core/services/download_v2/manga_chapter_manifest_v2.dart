@@ -35,7 +35,7 @@ final class MangaChapterManifestV2 {
     try {
       if (!await file.exists() || await file.length() <= 0) return false;
       final expected = pageDigests[index];
-      // Legacy checkpoints have no hash; do not discard offline chapters.
+      // Legacy checkpoints have no hash; retain existing offline chapters.
       return expected == null || await pageDigest(file) == expected;
     } on FileSystemException {
       return false;
@@ -96,40 +96,16 @@ final class MangaChapterManifestV2 {
 
     final pageDigests = <int, String>{};
     final rawDigests = map['pageDigests'];
+    if (rawDigests != null && rawDigests is! Map) return null;
     if (rawDigests is Map) {
-      final validDigest = RegExp(r'^[a-f0-9]{64}
-  }
-
-  static Future<MangaChapterManifestV2?> readFrom(Directory directory) async {
-    final file = File(p.join(directory.path, fileName));
-    if (!await file.exists()) return null;
-    try {
-      return fromJson(jsonDecode(await file.readAsString()));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> writeTo(Directory directory) async {
-    await directory.create(recursive: true);
-    final file = File(p.join(directory.path, fileName));
-    final temp = File('${file.path}.tmp');
-    await temp.writeAsString(jsonEncode(toJson()), flush: true);
-    // Same-directory rename replaces the checkpoint atomically. Retain the
-    // previous file if the OS cannot publish the new one.
-    await temp.rename(file.path);
-  }
-}
-);
+      final validDigest = RegExp(r'^[a-f0-9]{64}$');
       for (final entry in rawDigests.entries) {
         final index = int.tryParse(entry.key.toString());
-        final digest = entry.value;
-        if (index != null &&
-            completed.contains(index) &&
-            digest is String &&
-            validDigest.hasMatch(digest)) {
-          pageDigests[index] = digest;
-        }
+        if (index == null || !completed.contains(index)) continue;
+        final value = entry.value;
+        pageDigests[index] = value is String && validDigest.hasMatch(value)
+            ? value
+            : 'invalid';
       }
     }
 
