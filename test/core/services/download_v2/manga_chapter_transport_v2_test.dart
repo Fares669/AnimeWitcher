@@ -257,6 +257,33 @@ void main() {
     expect(starter.handles[1]!.current.status, DownloadTransportStatus.running);
   });
 
+  test('accepted page cancel waits for actual native settlement', () async {
+    final temp = await Directory.systemTemp.createTemp('aw_manga_cancel_settle_');
+    addTearDown(() => temp.delete(recursive: true));
+    final starter = _FakePageStarter();
+    final handle = await MangaChapterTransportV2(startPage: starter.start).start(
+      MangaChapterTransportSpecV2(
+        taskId: 'chapter-cancel-ack',
+        mangaId: 'm1',
+        chapterId: 'cancel-ack',
+        destinationDirectory: temp.path,
+        pages: const <MangaPage>[
+          MangaPage(index: 0, imageUrl: 'https://cdn.test/0.webp'),
+        ],
+        retries: 1,
+      ),
+    );
+    await starter.waitUntilStarted(0);
+    starter.handles[0]!.cancelAcknowledgesWithoutSettling = true;
+    final cancel = handle.cancel();
+    await Future<void>.delayed(Duration.zero);
+    expect(handle.current.status, isNot(DownloadTransportStatus.canceled));
+
+    starter.handles[0]!.complete();
+    expect(await cancel, isTrue);
+    expect(handle.current.status, DownloadTransportStatus.canceled);
+  });
+
   test('completed child page never reports the whole chapter complete early', () async {
     final temp = await Directory.systemTemp.createTemp('aw_manga_child_complete_');
     addTearDown(() => temp.delete(recursive: true));
@@ -578,6 +605,7 @@ final class _FakePageHandle implements DownloadTransportHandle {
   bool pauseAccepted = true;
   bool resumeAccepted = true;
   bool cancelAccepted = true;
+  bool cancelAcknowledgesWithoutSettling = false;
   int resumeCalls = 0;
 
   DownloadTransportSnapshot _current = const DownloadTransportSnapshot(
@@ -644,6 +672,7 @@ final class _FakePageHandle implements DownloadTransportHandle {
   @override
   Future<bool> cancel() async {
     if (!cancelAccepted) return false;
+    if (cancelAcknowledgesWithoutSettling) return true;
     _setStatus(DownloadTransportStatus.canceled);
     onTerminal();
     return true;
