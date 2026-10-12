@@ -35,6 +35,66 @@ void main() {
     );
     expect(resolver.calls, 1);
   });
+
+  test('duplicate queued start cannot replace its durable destination', () async {
+    final store = InMemoryLogicalDownloadStoreV2();
+    final gateway = _FakeGateway();
+    final resolver = StaticSourceResolverV2();
+    var capacity = 1;
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: resolver,
+      maxConcurrentDownloads: () => capacity,
+    );
+    addTearDown(manager.dispose);
+
+    final owner = _request();
+    final blocker = DownloadStartRequestV2(
+      logicalId: logicalDownloadIdFor(
+        animeId: 'anilist:22',
+        episodeKey: '13',
+        variantKey: 'sub:1080p',
+      ),
+      mediaId: 'anilist:22',
+      unitKey: '13',
+      variantKey: 'sub:1080p',
+      destinationPath: 'downloads/anime/blocker.mp4',
+      sourceDescriptor: const <String, Object?>{'providerId': 'other'},
+      allowPause: true,
+      retries: 2,
+      parallelChunks: 1,
+    );
+    final conflictingStart = DownloadStartRequestV2(
+      logicalId: owner.logicalId,
+      mediaId: owner.mediaId,
+      unitKey: owner.unitKey,
+      variantKey: owner.variantKey,
+      destinationPath: 'downloads/anime/WRONG.mp4',
+      sourceDescriptor: const <String, Object?>{'providerId': 'different'},
+      allowPause: owner.allowPause,
+      retries: owner.retries,
+      parallelChunks: owner.parallelChunks,
+    );
+
+    await manager.start(blocker);
+    expect((await manager.start(owner)).status, DownloadTransportStatus.queued);
+    expect(
+      (await manager.start(conflictingStart)).status,
+      DownloadTransportStatus.queued,
+    );
+
+    capacity = 2;
+    await manager.reconcileAdmission();
+
+    expect(gateway.startedSpecs, hasLength(2));
+    expect(gateway.startedSpecs.last.destinationPath, owner.destinationPath);
+    expect(
+      (await store.get(owner.logicalId))?.destinationPath,
+      owner.destinationPath,
+    );
+  });
+
 }
 
 DownloadStartRequestV2 _request() {
