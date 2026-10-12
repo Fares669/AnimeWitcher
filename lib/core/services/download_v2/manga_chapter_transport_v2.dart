@@ -181,6 +181,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   DownloadTransportSnapshot _current;
   Future<void> _pageCompletionTail = Future<void>.value();
   bool _paused = false;
+  bool _failing = false;
   bool _canceled = false;
   bool _canceling = false;
   bool _scheduling = false;
@@ -346,6 +347,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
   ) async {
     if (_canceled ||
         _canceling ||
+        _failing ||
         generation != _generation ||
         _current.isFinal) {
       return;
@@ -430,20 +432,33 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     required DownloadFailureCategory category,
     required String? message,
   }) async {
-    if (_current.isFinal) return;
-    final aggregate = _aggregate(DownloadTransportStatus.failed);
-    _emit(
-      DownloadTransportSnapshot(
-        taskId: taskId,
-        status: DownloadTransportStatus.failed,
-        progress: aggregate.progress,
-        configuredConnections: _pageConnectionLimit,
-        activeConnections: aggregate.activeConnections,
-        failureCategory: category,
-        failureMessage: message,
-      ),
-    );
-    await _cancelActivePages();
+    if (_current.isFinal || _failing) return;
+    _failing = true;
+    _paused = true;
+    final progress = _aggregate(DownloadTransportStatus.held).progress;
+    // Do not publish a terminal parent while a sibling still owns a page file.
+    _emitAggregate(DownloadTransportStatus.held, progress: progress);
+    try {
+      await Future.wait(_startingPages.values.toList(growable: false));
+      await Future.wait(
+        _pageHandles.values.map(_cancelPageAndWaitForSettlement),
+      );
+      if (_current.isFinal) return;
+      await _releasePageHandles();
+      _emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.failed,
+          progress: progress,
+          configuredConnections: _pageConnectionLimit,
+          activeConnections: 0,
+          failureCategory: category,
+          failureMessage: message,
+        ),
+      );
+    } finally {
+      _failing = false;
+    }
   }
 
   DownloadTransportSnapshot _aggregate(
@@ -510,19 +525,32 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
             handle.current.status == DownloadTransportStatus.paused,
       );
 
-  Future<void> _cancelActivePages() async {
-    final subscriptions =
-        List<StreamSubscription<DownloadTransportSnapshot>>.from(
-          _pageSubscriptions.values,
-        );
-    _pageSubscriptions.clear();
-    for (final subscription in subscriptions) {
+  Future<void> _cancelPageAndWaitForSettlement(
+    DownloadTransportHandle handle,
+  ) async {
+    bool settled() =>
+        handle.current.isFinal ||
+        handle.current.status == DownloadTransportStatus.missing;
+    if (settled()) return;
+
+    final done = Completer<void>();
+    final subscription = handle.snapshots.listen((snapshot) {
+      if ((snapshot.isFinal ||
+              snapshot.status == DownloadTransportStatus.missing) &&
+          !done.isCompleted) {
+        done.complete();
+      }
+    });
+    try {
+      try {
+        await handle.cancel();
+      } catch (_) {
+        // Rejection is not proof that the page writer has stopped.
+      }
+      if (!settled()) await done.future;
+    } finally {
       await subscription.cancel();
     }
-
-    final handles = List<DownloadTransportHandle>.from(_pageHandles.values);
-    _pageHandles.clear();
-    await Future.wait(handles.map((handle) async => handle.cancel()));
   }
 
   Future<void> _releasePageHandles() async {
