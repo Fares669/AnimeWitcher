@@ -1564,43 +1564,60 @@ final class DownloadManagerV2 {
     int? expectedBytes,
     ResolvedDownloadSourceV2? videoSource,
   }) async {
-    if (request.mediaKind == DownloadMediaKind.mangaChapter) {
-      final resolver = _mangaChapterPageResolver;
-      final gateway = _gateway;
-      if (resolver == null || gateway is! MangaChapterGatewayV2) {
-        throw StateError('Manga chapter transport is unavailable.');
-      }
-      final mangaGateway = gateway as MangaChapterGatewayV2;
-      final pages = await resolver.resolve(request.sourceDescriptor);
-      return mangaGateway.startMangaChapter(
-        MangaChapterTransportSpecV2(
-          taskId: taskId,
-          mangaId: request.mediaId,
-          chapterId: request.unitKey,
-          destinationDirectory: request.destinationPath,
-          pages: pages,
-          retries: request.retries,
-          maxConcurrentPages: mangaChapterPageConnectionsFromPreference(
-            parallelChunks,
+    try {
+      if (request.mediaKind == DownloadMediaKind.mangaChapter) {
+        final resolver = _mangaChapterPageResolver;
+        final gateway = _gateway;
+        if (resolver == null || gateway is! MangaChapterGatewayV2) {
+          throw StateError('Manga chapter transport is unavailable.');
+        }
+        final mangaGateway = gateway as MangaChapterGatewayV2;
+        final pages = await resolver.resolve(request.sourceDescriptor);
+        return mangaGateway.startMangaChapter(
+          MangaChapterTransportSpecV2(
+            taskId: taskId,
+            mangaId: request.mediaId,
+            chapterId: request.unitKey,
+            destinationDirectory: request.destinationPath,
+            pages: pages,
+            retries: request.retries,
+            maxConcurrentPages: mangaChapterPageConnectionsFromPreference(
+              parallelChunks,
+            ),
           ),
+        );
+      }
+
+      final source =
+          videoSource ?? await _sourceResolver.resolve(request.sourceDescriptor);
+      return _gateway.start(
+        DownloadTaskSpecV2(
+          taskId: taskId,
+          url: source.url,
+          destinationPath: request.destinationPath,
+          headers: source.headers,
+          allowPause: request.allowPause,
+          retries: request.retries,
+          parallelChunks: parallelChunks,
+          expectedBytes: expectedBytes ?? source.expectedBytes,
         ),
       );
+    } catch (_) {
+      // A native writer may begin before its start acknowledgement fails.
+      // Adopt that exact generation instead of freeing admission for a live writer.
+      DownloadTransportHandle? started;
+      try {
+        started = await _gateway.attach(taskId);
+      } catch (_) {
+        // Without proven ownership the original failure remains authoritative.
+      }
+      if (started != null &&
+          !started.current.isFinal &&
+          started.current.status != DownloadTransportStatus.missing) {
+        return started;
+      }
+      rethrow;
     }
-
-    final source =
-        videoSource ?? await _sourceResolver.resolve(request.sourceDescriptor);
-    return _gateway.start(
-      DownloadTaskSpecV2(
-        taskId: taskId,
-        url: source.url,
-        destinationPath: request.destinationPath,
-        headers: source.headers,
-        allowPause: request.allowPause,
-        retries: request.retries,
-        parallelChunks: parallelChunks,
-        expectedBytes: expectedBytes ?? source.expectedBytes,
-      ),
-    );
   }
 
   Future<void> _preservePausedResumeFailure(
