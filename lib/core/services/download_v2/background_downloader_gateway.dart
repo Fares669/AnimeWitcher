@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../download_concurrency.dart';
 import '../download_parallel.dart';
@@ -174,13 +176,22 @@ Set<String> activeDurablePartTaskIdsV2({
   required Iterable<Task> packageTasks,
   required Iterable<Task> pausedTasks,
 }) {
-  final pausedIds = pausedTasks.map((task) => task.taskId).toSet();
-  return <String>{
-    for (final task in packageTasks)
-      if (task.group == kPersistentDownloadChunkGroup &&
-          !pausedIds.contains(task.taskId))
-        task.taskId,
-  };
+  final pausedOccurrences = <String, int>{};
+  for (final task in pausedTasks) {
+    pausedOccurrences.update(task.taskId, (count) => count + 1, ifAbsent: () => 1);
+  }
+  final active = <String>{};
+  for (final task in packageTasks) {
+    if (task.group != kPersistentDownloadChunkGroup) continue;
+    final paused = pausedOccurrences[task.taskId] ?? 0;
+    if (paused > 0) {
+      // allTasks concatenates stored paused rows and independently live native tasks.
+      pausedOccurrences[task.taskId] = paused - 1;
+    } else {
+      active.add(task.taskId);
+    }
+  }
+  return active;
 }
 
 final class PackageBackgroundDownloaderGateway
@@ -414,7 +425,17 @@ final class PackageBackgroundDownloaderGateway
     final durable = _durableHandles[taskId];
     if (durable != null) return durable;
 
-    final record = await _downloader.database.recordForId(taskId);
+    final tracked = _downloader.transfers.forId(taskId);
+    if (tracked != null && !_isDurableInternalTask(tracked.task)) {
+      return _handleFor(tracked);
+    }
+
+    var record = await _downloader.database.recordForId(taskId);
+    if (record == null && _isIOS() &&
+        !(parseDownloadTaskIdentityV2(taskId)?.logicalId.value.startsWith('manga_') ?? false)) {
+      await _discoverDurableCheckpointRecordsV2(exactTaskId: taskId);
+      record = await _downloader.database.recordForId(taskId);
+    }
     if (record != null &&
         record.task is ParallelDownloadTask &&
         record.task.group == kDownloadV2DurableParallelGroup) {
@@ -425,11 +446,6 @@ final class PackageBackgroundDownloaderGateway
         initialStatus: _snapshotStatusFromRecord(record),
         restoreOnly: true,
       );
-    }
-
-    final tracked = _downloader.transfers.forId(taskId);
-    if (tracked != null && !_isDurableInternalTask(tracked.task)) {
-      return _handleFor(tracked);
     }
 
     // Rehydrate package persistence first, then select only by the exact
@@ -451,6 +467,7 @@ final class PackageBackgroundDownloaderGateway
       await handle.dispose();
     }
     _mangaHandles.clear();
+    if (_isIOS()) await _discoverDurableCheckpointRecordsV2();
 
     for (final record in await _downloader.database.allRecords()) {
       if (record.task is ParallelDownloadTask &&
@@ -472,6 +489,46 @@ final class PackageBackgroundDownloaderGateway
       result.add(_handleFor(transfer));
     }
     return List<DownloadTransportHandle>.unmodifiable(result);
+  }
+
+  Future<void> _discoverDurableCheckpointRecordsV2({
+    String? exactTaskId,
+  }) async {
+    final roots = <Directory>[await _privateParallelCheckpointRootV2()];
+    final documents = await getApplicationDocumentsDirectory();
+    final legacyRoot = Directory(p.join(documents.path, 'Downloads'));
+    final legacyType = await FileSystemEntity.type(
+      legacyRoot.path,
+      followLinks: false,
+    );
+    if (legacyType != FileSystemEntityType.notFound &&
+        legacyType != FileSystemEntityType.directory) {
+      throw FileSystemException(
+        'Legacy checkpoint inventory root is not an owned directory',
+        legacyRoot.path,
+      );
+    }
+    roots.add(legacyRoot);
+    final evidence = await discoverParallelManifestRecoveryEvidence(
+      roots,
+      manifestFileResolver: privateParallelManifestFileV2,
+    );
+    for (final checkpoint in evidence) {
+      final parent = checkpoint.parentTask;
+      if (parent == null ||
+          parent.group != kDownloadV2DurableParallelGroup ||
+          (exactTaskId != null && parent.taskId != exactTaskId) ||
+          await _downloader.database.recordForId(parent.taskId) != null)
+        continue;
+      await _downloader.database.updateRecord(
+        TaskRecord(
+          parent,
+          TaskStatus.paused,
+          checkpoint.durableBytes / checkpoint.expectedBytes,
+          checkpoint.expectedBytes,
+        ),
+      );
+    }
   }
 
   Future<void> _recordStartupInventory() async {
@@ -634,12 +691,32 @@ final class PackageBackgroundDownloaderGateway
         }
       },
       cancelParts: (ids) async {
-        await _downloader.cancelTasksWithIds(ids);
+        if (!await _downloader.cancelTasksWithIds(ids)) {
+          throw StateError('Native ranges rejected cancellation');
+        }
+        final deadline = DateTime.now().add(const Duration(seconds: 10));
+        while (true) {
+          final remaining = deadline.difference(DateTime.now());
+          if (remaining <= Duration.zero) {
+            throw StateError('Native ranges did not settle after cancellation');
+          }
+          Set<String> live;
+          try {
+            live = await _activeDurablePartTaskIds().timeout(remaining);
+          } on TimeoutException {
+            throw StateError('Native range ownership could not be established');
+          }
+          if (!live.any(ids.contains)) return;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
       },
       saveRecord: _saveDurableRecord,
       recordForId: _downloader.database.recordForId,
       livePartIds: _activeDurablePartTaskIds,
       availableStorageBytes: availableDownloadStorageBytesV2,
+      verifyPartSource: verifySavedRangeSourceV2,
+      manifestFileResolver: privateParallelManifestFileV2,
+      promoteFile: promoteCompletedDownloadFileV2,
       shouldDrainPartOnPause: (_) => _isIOS(),
       onUpdate: (update) {
         _durableHandles[update.task.taskId]?.accept(update);
@@ -798,7 +875,7 @@ final class PackageBackgroundDownloaderGateway
       parent: parent,
       totalBytes: totalBytes,
       coordinator: coordinator,
-      initialStatus: restored
+      initialStatus: restored || initialStatus == DownloadTransportStatus.complete
           ? initialStatus
           : (restoreOnly
                 ? DownloadTransportStatus.missing
@@ -822,10 +899,225 @@ final class PackageBackgroundDownloaderGateway
     }
     existing?.dispose();
     final handle = transfer.task is ParallelDownloadTask
-        ? _PackageDownloadTransportHandle(transfer, _downloader)
-        : _SelfSettlingPackageDownloadTransportHandle(transfer, _downloader);
+        ? _PackageDownloadTransportHandle(transfer, _downloader, isIOS: _isIOS())
+        : _SelfSettlingPackageDownloadTransportHandle(
+            transfer, _downloader, isIOS: _isIOS(),
+          );
     _handles[transfer.taskId] = handle;
     return handle;
+  }
+}
+
+Future<Directory> _privateParallelCheckpointRootV2() async {
+  final support = await getApplicationSupportDirectory();
+  if (!p.isAbsolute(support.path)) {
+    throw FileSystemException(
+      'Private ApplicationSupport path is not absolute',
+      support.path,
+    );
+  }
+  final root = Directory(p.join(support.path, 'download_v2', 'ranges'));
+  for (final path in [
+    support.path,
+    p.join(support.path, 'download_v2'),
+    root.path,
+  ]) {
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type != FileSystemEntityType.directory) {
+      throw FileSystemException(
+        'Private checkpoint ancestor is not an owned directory',
+        path,
+      );
+    }
+  }
+  return root;
+}
+
+/// Credential-bearing range state is never placed beside Files-visible media.
+Future<File> privateParallelManifestFileV2(DownloadTask task) async {
+  final root = await _privateParallelCheckpointRootV2();
+  final directory = Directory(
+    p.join(root.path, sha256.convert(utf8.encode(task.taskId)).toString()),
+  );
+  final type = await FileSystemEntity.type(directory.path, followLinks: false);
+  if (type != FileSystemEntityType.notFound &&
+      type != FileSystemEntityType.directory) {
+    throw FileSystemException(
+      'Private checkpoint owner is not an owned directory',
+      directory.path,
+    );
+  }
+  final manifest = File(p.join(directory.path, 'manifest.json'));
+  for (final path in [manifest.path, '${manifest.path}.tmp']) {
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type != FileSystemEntityType.file) {
+      throw FileSystemException(
+        'Private checkpoint leaf is not a regular file',
+        path,
+      );
+    }
+  }
+  return manifest;
+}
+
+/// The native bridge is the publication authority; unsupported hosts fail closed.
+Future<bool> promoteCompletedDownloadFileV2(
+  File source,
+  File target,
+  int expectedBytes,
+) async {
+  if (!p.isAbsolute(source.path) ||
+      !p.isAbsolute(target.path) ||
+      expectedBytes < 0) {
+    throw ArgumentError(
+      'Exclusive publication needs absolute paths and a nonnegative size',
+    );
+  }
+  try {
+    final promoted =
+        await const MethodChannel(
+          'com.animewitcher.app/download_continued_processing',
+        ).invokeMethod<bool>('promoteCompletedFile', <String, Object>{
+          'sourcePath': source.path,
+          'targetPath': target.path,
+          'expectedBytes': expectedBytes,
+        });
+    if (promoted != true) {
+      throw FileSystemException(
+        'Native exclusive publication was not committed',
+        target.path,
+      );
+    }
+    return true;
+  } on MissingPluginException {
+    throw FileSystemException(
+      'Native exclusive publication is unavailable',
+      target.path,
+      const OSError('Operation not supported', 95),
+    );
+  } on PlatformException catch (error) {
+    final details = error.details;
+    final errno = details is Map && details['errno'] is num
+        ? (details['errno'] as num).toInt()
+        : null;
+    throw FileSystemException(
+      error.message ?? error.code,
+      target.path,
+      errno == null ? null : OSError(error.code, errno),
+    );
+  }
+}
+
+/// Verifies saved range bytes against the current authorized identity response.
+Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
+  DownloadTask task,
+  File file,
+  int bytes,
+  int resourceSize,
+) async {
+  const rejected = (matches: false, validator: null);
+  final range = _diagnosticRangeBoundsV2(task);
+  if (range == null ||
+      bytes <= 0 ||
+      resourceSize <= 0 ||
+      range.$2 >= resourceSize ||
+      bytes > range.$2 - range.$1 + 1) {
+    return rejected;
+  }
+  final client = HttpClient()..autoUncompress = false;
+  RandomAccessFile? saved;
+  try {
+    return await (() async {
+      if (await FileSystemEntity.type(file.path, followLinks: false) !=
+              FileSystemEntityType.file ||
+          await file.length() < bytes) {
+        return rejected;
+      }
+      saved = await file.open();
+      final request = await client.getUrl(Uri.parse(task.url));
+      for (final header in task.headers.entries) {
+        if (!{'range', 'accept-encoding'}.contains(header.key.toLowerCase())) {
+          request.headers.set(header.key, header.value);
+        }
+      }
+      final from = range.$1;
+      final to = from + bytes - 1;
+      request.headers.set(HttpHeaders.rangeHeader, 'bytes=$from-$to');
+      request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+      final response = await request.close();
+      final encoding = response.headers.value(
+        HttpHeaders.contentEncodingHeader,
+      );
+      if (encoding != null && encoding.toLowerCase().trim() != 'identity')
+        return rejected;
+      if (response.contentLength >= 0 && response.contentLength != bytes)
+        return rejected;
+      if (response.statusCode == HttpStatus.partialContent) {
+        final match =
+            RegExp(
+              r'^bytes\s+(\d+)\s*-\s*(\d+)\s*/\s*(\d+)$',
+              caseSensitive: false,
+            ).firstMatch(
+              response.headers.value(HttpHeaders.contentRangeHeader)?.trim() ??
+                  '',
+            );
+        if (match == null ||
+            int.tryParse(match[1]!) != from ||
+            int.tryParse(match[2]!) != to ||
+            int.tryParse(match[3]!) != resourceSize) {
+          return rejected;
+        }
+      } else if (response.statusCode != HttpStatus.ok ||
+          from != 0 ||
+          to != resourceSize - 1 ||
+          bytes != resourceSize ||
+          response.headers.value(HttpHeaders.contentRangeHeader) != null) {
+        return rejected;
+      }
+      String? validator;
+      final etag = response.headers.value(HttpHeaders.etagHeader)?.trim();
+      if (etag != null && RegExp(r'^"[^"\r\n]*"$').hasMatch(etag)) {
+        validator = etag;
+      } else {
+        final modified = response.headers.value(HttpHeaders.lastModifiedHeader);
+        if (modified != null) {
+          try {
+            HttpDate.parse(modified);
+            validator = modified;
+          } on FormatException {
+            /* Unknown validator. */
+          }
+        }
+      }
+      for (final header in task.headers.entries) {
+        if (header.key.toLowerCase() == 'if-range' && header.value != validator)
+          return rejected;
+      }
+      var received = 0;
+      await for (final chunk in response) {
+        if (received + chunk.length > bytes) return rejected;
+        for (var offset = 0; offset < chunk.length;) {
+          final end = offset + 65536 < chunk.length
+              ? offset + 65536
+              : chunk.length;
+          final local = await saved!.read(end - offset);
+          if (local.length != end - offset) return rejected;
+          for (var index = 0; index < local.length; index++) {
+            if (local[index] != chunk[offset + index]) return rejected;
+          }
+          offset = end;
+        }
+        received += chunk.length;
+      }
+      return (matches: received == bytes, validator: validator);
+    })().timeout(const Duration(seconds: 20));
+  } catch (_) {
+    return rejected;
+  } finally {
+    client.close(force: true);
+    await saved?.close();
   }
 }
 
@@ -932,15 +1224,15 @@ Future<DownloadTask> packageMangaPageTaskForV2(
     ),
     userInitiated: userInitiated,
     group: kDownloadV2SilentPackageGroup,
-    notificationConfig: TaskNotificationConfig(
-      running: showRunningNotification
-          ? const TaskNotification(
+    notificationConfig: showRunningNotification
+        ? TaskNotificationConfig(
+            running: const TaskNotification(
               'Downloading manga chapter',
               'Pages are downloading',
-            )
-          : null,
-      groupNotificationId: 'manga_$parentId',
-    ),
+            ),
+            groupNotificationId: 'manga_$parentId',
+          )
+        : null,
     // Manga page children are implementation details, never user notifications.
     isIOS: false,
   );
@@ -1462,7 +1754,11 @@ final class _RecoveredMangaChapterHandleV2 implements MangaChapterTransportHandl
 }
 
 class _PackageDownloadTransportHandle implements DownloadTransportHandle {
-  _PackageDownloadTransportHandle(this.transfer, this._downloader) {
+  _PackageDownloadTransportHandle(
+    this.transfer,
+    this._downloader, {
+    required this.isIOS,
+  }) {
     _updatesSubscription = transfer.updates.listen(_onUpdate);
     _holdReasonListener = _emitCurrent;
     transfer.holdReasonNotifier.addListener(_holdReasonListener);
@@ -1470,6 +1766,7 @@ class _PackageDownloadTransportHandle implements DownloadTransportHandle {
 
   final Transfer transfer;
   final FileDownloader _downloader;
+  final bool isIOS;
   final StreamController<DownloadTransportSnapshot> _snapshots =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
 
@@ -1498,7 +1795,7 @@ class _PackageDownloadTransportHandle implements DownloadTransportHandle {
     // Transfer.resume() intentionally falls back to enqueueing from byte zero
     // when resume data is unavailable. Explicit V2 Resume must never do that:
     // use the package's lower-level resume-only path for the exact task.
-    if (Platform.isIOS && task is ParallelDownloadTask) {
+    if (isIOS && task is ParallelDownloadTask) {
       final ready = await waitForPackageParallelResumeDataV2(
         task: task,
         // background_downloader 9.6.2 has no public awaitable signal for
@@ -1531,7 +1828,9 @@ class _PackageDownloadTransportHandle implements DownloadTransportHandle {
   }
 
   DownloadTransportSnapshot _snapshot() =>
-      packageTransportSnapshotForV2(transfer, totalBytes: _totalBytes);
+      packageTransportSnapshotForV2(
+        transfer, totalBytes: _totalBytes, isIOS: isIOS,
+      );
 
   void dispose() {
     if (_disposed) return;
@@ -1547,8 +1846,9 @@ final class _SelfSettlingPackageDownloadTransportHandle
     implements SelfSettlingParallelDownloadTransportHandleV2 {
   _SelfSettlingPackageDownloadTransportHandle(
     Transfer transfer,
-    FileDownloader downloader,
-  ) : super(transfer, downloader);
+    FileDownloader downloader, {
+    required bool isIOS,
+  }) : super(transfer, downloader, isIOS: isIOS);
 }
 
 /// Projects one package Transfer into V2 without maintaining a second metric
@@ -1558,6 +1858,7 @@ final class _SelfSettlingPackageDownloadTransportHandle
 DownloadTransportSnapshot packageTransportSnapshotForV2(
   Transfer transfer, {
   int? totalBytes,
+  bool? isIOS,
 }) {
   final progress =
       transfer.progress ?? (transfer.status == TaskStatus.complete ? 1.0 : 0.0);
@@ -1600,9 +1901,11 @@ DownloadTransportSnapshot packageTransportSnapshotForV2(
     // background_downloader derives ParallelDownloadTask parent speed from
     // aggregate child-progress jumps. Those callbacks can arrive in bursts and
     // report impossible transient rates (for example 200+ MB/s) followed by 0.
-    // V2 uses read-only native child throughput for parallel presentation.
-    networkSpeedMBps: parallelParent ? -1 : transfer.networkSpeed,
-    timeRemaining: parallelParent
+    // iOS uses read-only native child throughput for parallel presentation.
+    networkSpeedMBps: parallelParent && (isIOS ?? Platform.isIOS)
+        ? -1
+        : transfer.networkSpeed,
+    timeRemaining: parallelParent && (isIOS ?? Platform.isIOS)
         ? Duration.zero
         : transfer.timeRemainingNotifier.value,
     configuredConnections: configuredConnections,
@@ -1628,7 +1931,7 @@ DownloadTransportStatus transportStatusFromPackage(
     TaskStatus.enqueued => DownloadTransportStatus.queued,
     TaskStatus.running => DownloadTransportStatus.running,
     TaskStatus.complete => DownloadTransportStatus.complete,
-    TaskStatus.notFound => DownloadTransportStatus.missing,
+    TaskStatus.notFound => DownloadTransportStatus.failed,
     TaskStatus.failed => DownloadTransportStatus.failed,
     TaskStatus.canceled => DownloadTransportStatus.canceled,
     TaskStatus.waitingToRetry => DownloadTransportStatus.held,
@@ -1640,6 +1943,7 @@ DownloadFailureCategory? _failureCategory(
   TaskStatus status,
   TaskException? exception,
 ) {
+  if (status == TaskStatus.notFound) return DownloadFailureCategory.sourceExpired;
   if (status != TaskStatus.failed) {
     return null;
   }

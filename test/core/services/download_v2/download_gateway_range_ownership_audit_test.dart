@@ -7,10 +7,26 @@ import 'package:animewitcher/core/services/download_v2/background_downloader_gat
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
+import 'package:crypto/crypto.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  late Directory pathRoot;
+  late PathProviderPlatform previousPaths;
+  setUp(() async {
+    pathRoot = await Directory.systemTemp.createTemp('aw-gateway-platform-paths-');
+    previousPaths = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _PrivatePaths(
+      p.join(pathRoot.path, 'support'), p.join(pathRoot.path, 'documents'), pathRoot.path,
+    );
+  });
+  tearDown(() async {
+    PathProviderPlatform.instance = previousPaths;
+    await pathRoot.delete(recursive: true);
+  });
 
   for (final unknown in [false, true]) {
     test('gateway ${unknown ? 'unknown native settlement' : 'negative cancel ACK'} preserves owned range bytes and checkpoint', () async {
@@ -31,7 +47,15 @@ void main() {
     addTearDown(f.dispose);
     f.downloader.keepCanceledWriterLive = true;
     var finished = false;
-    final cancellation = f.handle.cancel().whenComplete(() => finished = true);
+    Object? cancellationFailure;
+    final cancellation = f.handle.cancel().then((accepted) {
+      finished = true;
+      return accepted;
+    }, onError: (Object error, StackTrace _) {
+      finished = true;
+      cancellationFailure = error;
+      return false;
+    });
     try {
       await f.downloader.cancelEntered.future.timeout(const Duration(seconds: 5));
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -46,8 +70,55 @@ void main() {
       await cancellation;
     }
     expect(finished, isTrue);
+    expect(cancellationFailure, isNull, reason: 'the bounded gateway barrier must wait for actual settlement');
     expect(f.handle.current.status, DownloadTransportStatus.canceled);
     expect(await f.manifest.exists(), isFalse);
+  });
+
+  test('gateway stale paused row cannot hide its same-ID live native writer during cancellation', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    f.downloader.keepCanceledWriterLive = true;
+    f.downloader.testStorage.paused.add(f.child);
+    var finished = false;
+    Object? cancellationFailure;
+    final cancellation = f.handle.cancel().then((accepted) {
+      finished = true;
+      return accepted;
+    }, onError: (Object error, StackTrace _) {
+      finished = true;
+      cancellationFailure = error;
+      return false;
+    });
+    try {
+      await f.downloader.cancelEntered.future.timeout(const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(finished, isFalse, reason: 'a paused persistence occurrence cannot erase the separate native writer occurrence');
+      expect(f.handle.current.status, isNot(DownloadTransportStatus.canceled));
+      expect(f.downloader.native.map((task) => task.taskId), contains(f.child.taskId));
+      expect(await f.part.readAsBytes(), [1, 2]);
+      expect(await f.manifest.exists(), isTrue);
+    } finally {
+      f.downloader.keepCanceledWriterLive = false;
+      f.downloader.native.clear();
+      await cancellation;
+    }
+    expect(finished, isTrue);
+    expect(cancellationFailure, isNull, reason: 'the bounded gateway barrier must wait for actual settlement');
+    expect(f.handle.current.status, DownloadTransportStatus.canceled);
+    expect(await f.manifest.exists(), isFalse);
+  });
+
+  test('gateway rejects a negative cancellation ACK even after raw native inventory becomes empty', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    f.downloader.native.clear();
+    f.downloader.cancelAccepted = false;
+    await expectLater(f.handle.cancel(), throwsA(isA<StateError>()));
+    expect(f.downloader.cancelCalls, 1);
+    expect(f.handle.current.status, isNot(DownloadTransportStatus.canceled));
+    expect(await f.part.readAsBytes(), [1, 2]);
+    expect(await f.manifest.exists(), isTrue);
   });
 
   for (final completed in [true, false]) {
@@ -102,6 +173,98 @@ void main() {
     });
   }
 
+  test('actual iOS gateway stores signed range checkpoint only in private ApplicationSupport', () async {
+    final f = await _startPrivateCheckpoint();
+    expect(await File('${f.destination}.parts/manifest.json').exists(), isFalse);
+    expect(await File('${f.destination}.parts/manifest.json.tmp').exists(), isFalse);
+    expect(await f.privateManifest.exists(), isTrue);
+    final checkpoint = await f.privateManifest.readAsString();
+    expect(checkpoint, contains('signed-secret'));
+    expect(checkpoint, contains('session-cookie-secret'));
+    await for (final entry in f.visible.list(recursive: true, followLinks: false)) {
+      if (entry is File) {
+        expect(utf8.decode(await entry.readAsBytes(), allowMalformed: true), isNot(contains('session-cookie-secret')));
+      }
+    }
+  });
+
+  test('actual iOS gateway reconstructs exact private checkpoint when package parent DB record is absent', () async {
+    final f = await _startPrivateCheckpoint();
+    await f.downloader.database.deleteRecordsWithIds([f.handle.taskId]);
+    final replacement = _gateway(f.downloader);
+    final restored = await replacement.rehydrate();
+    final matching = restored.where((handle) => handle.taskId == f.handle.taskId).toList();
+    try {
+      expect(matching, hasLength(1), reason: 'private recovery inventory must be a production gateway input');
+      expect(matching.single.current.totalBytes, 8);
+      expect(matching.single.current.status, isNot(DownloadTransportStatus.complete));
+      expect(await f.privateManifest.exists(), isTrue);
+      expect(f.downloader.native.map((task) => task.taskId).toSet().length, 2);
+    } finally {
+      for (final handle in matching) { await handle.cancel(); }
+    }
+  });
+
+  for (final linked in ['ancestor', 'owner', 'leaf']) {
+    test('private resolver rejects a linked $linked without touching foreign bytes', () async {
+      final root = await Directory.systemTemp.createTemp('aw-private-linked-owner-');
+      final previousPaths = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _PrivatePaths(root.path, root.path, root.path);
+      try {
+        final foreign = await Directory(p.join(root.path, 'foreign')).create();
+        final sentinel = await File(p.join(foreign.path, 'manifest.json')).writeAsString('foreign-secret');
+        final task = DownloadTask(taskId: 'linked-owner', url: 'https://example.test/video', filename: 'video.mp4');
+        final ranges = Directory(p.join(root.path, 'download_v2', 'ranges'));
+        if (linked == 'ancestor') {
+          await Link(p.join(root.path, 'download_v2')).create(foreign.path);
+        } else {
+          await ranges.create(recursive: true);
+          final owner = p.join(ranges.path, sha256.convert(utf8.encode(task.taskId)).toString());
+          if (linked == 'owner') {
+            await Link(owner).create(foreign.path);
+          } else {
+            await Directory(owner).create();
+            await Link(p.join(owner, 'manifest.json')).create(sentinel.path);
+          }
+        }
+        await expectLater(privateParallelManifestFileV2(task), throwsA(isA<FileSystemException>()));
+        expect(await sentinel.readAsString(), 'foreign-secret');
+      } finally {
+        PathProviderPlatform.instance = previousPaths;
+        await root.delete(recursive: true);
+      }
+    });
+  }
+
+  for (final errno in <Object?>[17, 28, 95, 18, null, false]) {
+    test('exclusive bridge ${errno ?? 'unavailable'} preserves source and foreign final', () async {
+      final root = await Directory.systemTemp.createTemp('aw-native-promotion-contract-');
+      final source = await File(p.join(root.path, 'verified.tmp')).writeAsBytes([1, 2, 3]);
+      final target = await File(p.join(root.path, 'foreign.mp4')).writeAsBytes([]);
+      const channel = MethodChannel('com.animewitcher.app/download_continued_processing');
+      final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      var invoked = false;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        invoked = true;
+        expect(call.method, 'promoteCompletedFile');
+        expect(call.arguments, {'sourcePath': source.path, 'targetPath': target.path, 'expectedBytes': 3});
+        if (errno == false) return false;
+        if (errno == null) throw MissingPluginException();
+        throw PlatformException(code: 'PROMOTION_FAILED', details: {'errno': errno});
+      });
+      try {
+        await expectLater(promoteCompletedDownloadFileV2(source, target, 3),
+          throwsA(isA<FileSystemException>().having((error) => error.osError?.errorCode, 'errno', errno == false ? null : errno ?? 95)));
+        expect(invoked, isTrue);
+        expect(await source.readAsBytes(), [1, 2, 3]);
+        expect(await target.readAsBytes(), isEmpty);
+      } finally {
+        messenger.setMockMethodCallHandler(channel, null);
+        await root.delete(recursive: true);
+      }
+    });
+  }
+
   test('ordinary package HTTP404 is terminal source expiry rather than missing local identity', () {
     final task = DownloadTask(taskId: 'http404-exact-task', url: 'https://example.test/video', filename: 'video.mp4');
     final transfer = Transfer(task);
@@ -149,7 +312,7 @@ final class _Fixture {
       ),
     ];
     final part = await File(await children.first.filePath()).writeAsBytes([1, 2]);
-    final manifest = await File(p.join(parts.path, 'manifest.json')).writeAsString(jsonEncode({
+    await File(p.join(parts.path, 'manifest.json')).writeAsString(jsonEncode({
       'schemaVersion': 2, 'parentTaskId': parent.taskId, 'generation': 1,
       'checkpointSequence': 1, 'expectedBytes': 8, 'totalBytes': 8,
       'parts': [
@@ -163,7 +326,8 @@ final class _Fixture {
     final downloader = _Downloader()..native.add(children.first);
     await downloader.database.updateRecord(TaskRecord(parent, TaskStatus.paused, .25, 8));
     final handle = (await _gateway(downloader).attach(parent.taskId))!;
-    return _Fixture(root, downloader, children.first, part, manifest, handle);
+    final checkpoint = await privateParallelManifestFileV2(parent);
+    return _Fixture(root, downloader, children.first, part, checkpoint, handle);
   }
   Future<void> dispose() async {
     downloader.cancelAccepted = true;
@@ -184,6 +348,7 @@ final class _Downloader implements FileDownloader {
   @override
   late Transfers transfers;
   _Transfers get testTransfers => transfers as _Transfers;
+  _Storage get testStorage => database.storage as _Storage;
   final updatesController = StreamController<TaskUpdate>.broadcast();
   final native = <Task>[];
   bool cancelAccepted = true;
@@ -191,6 +356,7 @@ final class _Downloader implements FileDownloader {
   bool unknownLiveness = false;
   int cancelCalls = 0;
   final cancelEntered = Completer<void>();
+  final twoNativeStarts = Completer<void>();
   @override
   Stream<TaskUpdate> get updates => updatesController.stream;
   @override
@@ -201,11 +367,21 @@ final class _Downloader implements FileDownloader {
     return cancelAccepted;
   }
   @override
+  Future<bool> taskCanResume(Task task) async => false;
+  @override
+  Future<bool> enqueue(Task task) async {
+    native.add(task);
+    if (native.length >= 2 && !twoNativeStarts.isCompleted) twoNativeStarts.complete();
+    return true;
+  }
+  @override
   Future<List<Task>> allTasks({String group = FileDownloader.defaultGroup,
     bool includeTasksWaitingToRetry = true, bool allGroups = false,
   }) async {
     if (unknownLiveness) throw StateError('test-only raw native ownership unavailable');
-    return [for (final task in native) if (allGroups || task.group == group) task];
+    // The package concatenates persisted paused tasks before native tasks.
+    return [for (final task in [...testStorage.paused, ...native])
+      if (allGroups || task.group == group) task];
   }
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -216,6 +392,9 @@ final class _Transfers implements Transfers {
   @override
   final _Downloader downloader;
   final handles = <String, Transfer>{};
+  @override
+  Future<List<Transfer>> rehydrateFromDatabase({String? group}) async =>
+      [for (final handle in handles.values) if (group == null || handle.task.group == group) handle];
   @override
   Transfer? forId(String taskId) => handles[taskId];
   @override
@@ -230,6 +409,7 @@ final class _Transfers implements Transfers {
 
 final class _Storage implements PersistentStorage {
   final records = <String, TaskRecord>{};
+  final paused = <Task>[];
   @override
   Future<void> storeTaskRecord(TaskRecord record) async { records[record.taskId] = record; }
   @override
@@ -241,11 +421,76 @@ final class _Storage implements PersistentStorage {
     if (id == null) { records.clear(); } else { records.remove(id); }
   }
   @override
-  Future<List<Task>> retrieveAllPausedTasks() async => [];
+  Future<List<Task>> retrieveAllPausedTasks() async => [...paused];
+  @override
+  Future<ResumeData?> retrieveResumeData(String id) async => null;
+  @override
+  Future<Task?> retrievePausedTask(String id) async =>
+      paused.where((task) => task.taskId == id).firstOrNull;
   @override
   Future<void> removeResumeData(String? id) async {}
   @override
-  Future<void> removePausedTask(String? id) async {}
+  Future<void> removePausedTask(String? id) async {
+    if (id == null) { paused.clear(); } else { paused.removeWhere((task) => task.taskId == id); }
+  }
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+Future<({Directory visible, String destination, File privateManifest, _Downloader downloader, DownloadTransportHandle handle})> _startPrivateCheckpoint() async {
+  final root = await Directory.systemTemp.createTemp('aw-private-gateway-');
+  final support = await Directory(p.join(root.path, 'support')).create();
+  final visible = await Directory(p.join(root.path, 'visible')).create();
+  final previousPaths = PathProviderPlatform.instance;
+  PathProviderPlatform.instance = _PrivatePaths(support.path, visible.path, root.path);
+  const id = 'private-gateway-exact-parent';
+  final destination = p.join(visible.path, 'video.mp4');
+  final downloader = _Downloader();
+  final gateway = PackageBackgroundDownloaderGateway(
+    downloader: downloader, initializePackage: () async {}, isIOS: () => true,
+    notificationPreferences: () => DownloadNotificationPrefs.disabled,
+    rangeCapabilityProbe: (_) async => (supportsRanges: true, totalBytes: 8),
+  );
+  DownloadTransportHandle? handle;
+  addTearDown(() async {
+    try {
+      downloader.keepCanceledWriterLive = false;
+      downloader.native.clear();
+      await handle?.cancel();
+      await downloader.updatesController.close();
+      downloader.database.destroy();
+    } finally {
+      PathProviderPlatform.instance = previousPaths;
+      await root.delete(recursive: true);
+    }
+  });
+  handle = await gateway.start(DownloadTaskSpecV2(
+    taskId: id, url: 'https://example.test/video?signed-secret',
+    destinationPath: destination, headers: const {'Cookie': 'session-cookie-secret'},
+    allowPause: true, retries: 2, parallelChunks: 2, expectedBytes: 8,
+  ));
+  downloader.updatesController.add(TaskStatusUpdate(downloader.native.single, TaskStatus.running));
+  await downloader.twoNativeStarts.future.timeout(const Duration(seconds: 5));
+  return (visible: visible, destination: destination,
+    privateManifest: File(p.join(support.path, 'download_v2', 'ranges', sha256.convert(utf8.encode(id)).toString(), 'manifest.json')),
+    downloader: downloader, handle: handle);
+}
+
+final class _PrivatePaths extends PathProviderPlatform {
+  _PrivatePaths(this.support, this.documents, this.temporary);
+  final String support;
+  final String documents;
+  final String temporary;
+  @override
+  Future<String?> getApplicationSupportPath() async => support;
+  @override
+  Future<String?> getApplicationDocumentsPath() async => documents;
+  @override
+  Future<String?> getTemporaryPath() async => temporary;
+  @override
+  Future<String?> getApplicationCachePath() async => temporary;
+  @override
+  Future<String?> getDownloadsPath() async => documents;
+  @override
+  Future<String?> getLibraryPath() async => support;
 }

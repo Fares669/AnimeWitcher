@@ -92,7 +92,7 @@ void main() {
     expect(snapshot.networkSpeedMBps, 12.5);
     expect(snapshot.timeRemaining, const Duration(seconds: 24));
   });
-  test('parallel parent ignores burst-derived package speed and ETA', () {
+  test('iOS parallel parent ignores burst-derived package speed and ETA', () {
     final task = ParallelDownloadTask(
       taskId: 'aw_v2_parallel_speed_g1',
       url: 'https://example.invalid/video.mp4',
@@ -116,6 +116,7 @@ void main() {
     final snapshot = packageTransportSnapshotForV2(
       transfer,
       totalBytes: 1200000000,
+      isIOS: true,
     );
 
     expect(snapshot.status, DownloadTransportStatus.running);
@@ -502,13 +503,13 @@ void main() {
     expect(ready, isFalse);
   });
 
-  test('package notFound maps to missing transport instead of failure', () {
+  test('package HTTP404 maps to terminal failure', () {
     expect(
       transportStatusFromPackage(
         TaskStatus.notFound,
         TransferHoldReason.none,
       ),
-      DownloadTransportStatus.missing,
+      DownloadTransportStatus.failed,
     );
   });
 }
