@@ -640,6 +640,40 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
     return true;
   }
 
+  Future<bool> _cancelPageWithSettlement(DownloadTransportHandle handle) async {
+    bool settled() =>
+        handle.current.isFinal ||
+        handle.current.status == DownloadTransportStatus.missing;
+    if (settled()) return true;
+
+    final stopped = Completer<void>();
+    final subscription = handle.snapshots.listen((snapshot) {
+      if ((snapshot.isFinal ||
+              snapshot.status == DownloadTransportStatus.missing) &&
+          !stopped.isCompleted) {
+        stopped.complete();
+      }
+    });
+    try {
+      bool accepted;
+      try {
+        accepted = await handle.cancel();
+      } catch (_) {
+        return false;
+      }
+      if (!accepted) return false;
+      if (settled()) return true;
+      try {
+        await stopped.future.timeout(const Duration(seconds: 10));
+        return true;
+      } on TimeoutException {
+        return false;
+      }
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
   @override
   Future<bool> cancel() async {
     if (_failing) return false;
@@ -655,14 +689,7 @@ final class _MangaChapterTransportHandle implements DownloadTransportHandle {
 
     final entries = _pageHandles.entries.toList(growable: false);
     final results = await Future.wait<bool>(
-      entries.map((entry) async {
-        if (entry.value.current.isFinal) return true;
-        try {
-          return await entry.value.cancel();
-        } catch (_) {
-          return false;
-        }
-      }),
+      entries.map((entry) => _cancelPageWithSettlement(entry.value)),
     );
     if (results.any((accepted) => !accepted)) {
       _canceling = false;
