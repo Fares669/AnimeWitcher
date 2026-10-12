@@ -1,5 +1,9 @@
 import '../../../support/widget_completion.dart';
 import 'dart:io';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+import '../../../support/manga_image_fixtures.dart';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/providers/episode_sort_provider.dart';
@@ -179,6 +183,36 @@ void main() {
     }
   }
 
+  testWidgets('completed group uses its permanent poster after UI recreation offline', (tester) async {
+    final key = sha256.convert(utf8.encode('retained-poster')).toString();
+    final saved = File('${cacheRoot.path}/download_artwork_v2/$key/poster.img');
+    await tester.runAsync(() async {
+      await saved.parent.create(recursive: true);
+      await saved.writeAsBytes(tinyMangaPng);
+    });
+    final rows = _Rows([_row('retained-poster', status: TaskStatus.complete)]);
+    final container = ProviderContainer(overrides: [
+      downloadsProvider.overrideWith(() => rows),
+      downloadProgressProvider.overrideWithValue(const {}),
+      episodeSortAscendingProvider.overrideWith(_Sort.new),
+    ]);
+    addTearDown(container.dispose);
+    for (var recreation = 0; recreation < 2; recreation++) {
+      await tester.pumpWidget(UncontrolledProviderScope(container: container, child: _app(const DownloadsTab())));
+      await pumpUntil(tester, () => find.text('المكتملة').evaluate().isNotEmpty, 'offline completed tab');
+      await tester.tap(find.text('المكتملة'));
+      await pumpUntil(tester, () => find.text('Variant show').evaluate().isNotEmpty, 'offline completed show');
+      bool usesSavedPoster() => tester.widgetList<Image>(find.byType(Image)).any((widget) {
+        final provider = widget.image;
+        final image = provider is ResizeImage ? provider.imageProvider : provider;
+        return image is FileImage && image.file.path == saved.path;
+      });
+      await pumpUntil(tester, usesSavedPoster, 'durable poster file after UI recreation');
+      expect(usesSavedPoster(), isTrue);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
   testWidgets('completed Downloads row plays its selected variant instead of newest file', (tester) async {
     final root = (await tester.runAsync(() => Directory.systemTemp.createTemp('aw-ui-variants-')))!;
     addTearDown(() => root.delete(recursive: true));
@@ -214,8 +248,7 @@ void main() {
     final selected = find.byKey(const ValueKey('task-selected'));
     expect(selected, findsOneWidget);
     await tester.tap(selected);
-    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pump();
+    await pumpUntil(tester, () => playback.played.isNotEmpty, 'selected completed playback');
     expect(playback.played, [files.first.path]);
   });
 }

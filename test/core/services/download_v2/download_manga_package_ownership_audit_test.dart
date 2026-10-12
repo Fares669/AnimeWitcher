@@ -29,7 +29,7 @@ void main() {
       final child = await f.addPage(1, TaskStatus.running);
       await f.manager.initialize();
       expect(f.resolver.calls, 0);
-      expect(f.downloader.transfers.started, isEmpty);
+      expect(f.downloader.testTransfers.started, isEmpty);
       expect(f.downloader.transfers.forId(child.taskId)?.status,
           intent == DownloadUserIntent.paused ? TaskStatus.paused : anyOf(isNull, TaskStatus.canceled));
       expect(intent == DownloadUserIntent.paused
@@ -52,7 +52,7 @@ void main() {
     expect(f.downloader.pausedIds, contains(child.taskId));
     final waiting = await f.manager.start(_videoRequest(f.directory.path));
     expect(waiting.status, DownloadTransportStatus.queued);
-    expect(f.downloader.transfers.started, isEmpty);
+    expect(f.downloader.testTransfers.started, isEmpty);
     expect((await f.store.get(f.logicalId))?.intent, DownloadUserIntent.paused);
   });
 
@@ -69,7 +69,7 @@ void main() {
     expect((await f.store.get(f.logicalId))?.completedAtMillis, isNull);
     expect(f.downloader.transfers.forId(child.taskId)!.status, TaskStatus.running);
     expect((await f.manager.start(_videoRequest(f.directory.path))).status, DownloadTransportStatus.queued);
-    expect(f.downloader.transfers.started, isEmpty);
+    expect(f.downloader.testTransfers.started, isEmpty);
   });
 
   test('Retry after failed manga reconstruction settles the old child before generation four', () async {
@@ -80,7 +80,7 @@ void main() {
     await f.manager.initialize();
     f.resolver.fail = false;
     await f.manager.restart(f.logicalId);
-    await _until(() async => f.downloader.transfers.started.any((task) => task.taskId.endsWith('_g4_p0002')));
+    await _until(() async => f.downloader.testTransfers.started.any((task) => task.taskId.endsWith('_g4_p0002')));
     expect(f.downloader.canceledIds, contains(child.taskId));
     expect(f.downloader.overlappingPaths, isEmpty);
     expect((await f.store.get(f.logicalId))?.generation, 4);
@@ -98,7 +98,7 @@ void main() {
     expect((await f.store.get(f.logicalId))?.generation, 3);
     expect((await f.store.get(f.logicalId))?.taskId, f.parentId);
     expect(f.downloader.canceledIds, isEmpty);
-    expect(f.downloader.transfers.started, isEmpty);
+    expect(f.downloader.testTransfers.started, isEmpty);
     expect(f.downloader.transfers.forId(child.taskId)!.status, TaskStatus.running);
     expect(await File(p.join(f.directory.path, '0001.png')).readAsBytes(), tinyMangaPng);
     expect((await MangaChapterManifestV2.readFrom(f.directory))?.completedIndexes, {0});
@@ -147,7 +147,7 @@ void main() {
     expect(f.downloader.storage.records.keys, unorderedEquals(retained.map((task) => task.taskId)));
     expect(f.downloader.storage.paused.keys, unorderedEquals(retained.map((task) => task.taskId)));
     expect(f.downloader.storage.resume.keys, unorderedEquals(retained.map((task) => task.taskId)));
-    expect(f.downloader.transfers.handles.keys, unorderedEquals(retained.map((task) => task.taskId)));
+    expect(f.downloader.testTransfers.handles.keys, unorderedEquals(retained.map((task) => task.taskId)));
     await _until(() async => observerClosed);
     expect((await MangaChapterManifestV2.readFrom(f.directory))?.completedIndexes, {0});
     for (final task in selected) {
@@ -163,7 +163,7 @@ void main() {
       expect(f.downloader.storage.records, hasLength(retained.length));
       expect(f.downloader.storage.paused, hasLength(retained.length));
       expect(f.downloader.storage.resume, hasLength(retained.length));
-      expect(f.downloader.transfers.handles, hasLength(retained.length));
+      expect(f.downloader.testTransfers.handles, hasLength(retained.length));
     }
   });
 
@@ -271,7 +271,7 @@ final class _Fixture {
     );
     await File(await task.filePath()).writeAsBytes(tinyMangaPng);
     await downloader.database.updateRecord(TaskRecord(task, status, .5, tinyMangaPng.length));
-    downloader.transfers.adopt(task, status);
+    downloader.testTransfers.adopt(task, status);
     return task;
   }
 
@@ -283,12 +283,12 @@ final class _Fixture {
       } catch (_) {}
     }
     await manager.dispose();
-    for (final transfer in downloader.transfers.handles.values.toList()) {
+    for (final transfer in downloader.testTransfers.handles.values.toList()) {
       await downloader.cancelTaskWithId(transfer.taskId);
       await gateway.removeTracking(transfer.taskId);
     }
     await downloader.updatesController.close();
-    await downloader.database.destroy();
+    downloader.database.destroy();
     await directory.delete(recursive: true);
   }
 }
@@ -315,7 +315,8 @@ final class _Downloader implements FileDownloader {
   final Database database;
   _Storage get storage => database.storage as _Storage;
   @override
-  late final _Transfers transfers;
+  late Transfers transfers;
+  _Transfers get testTransfers => transfers as _Transfers;
   final updatesController = StreamController<TaskUpdate>.broadcast();
   final pausedIds = <String>[];
   final canceledIds = <String>[];

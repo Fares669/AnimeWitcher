@@ -14,13 +14,14 @@ import 'download_v2_test_support.dart';
 import '../../../support/memory_storage_service.dart';
 
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
+import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:background_downloader/background_downloader.dart' show TaskStatus;
+import 'package:background_downloader/background_downloader.dart' show TaskStatus, DownloadTask;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets('paused intent exposes a live writer and refreshes progress without durable reads', (tester) async {
-    final store = InMemoryLogicalDownloadStoreV2();
+    final store = _CountingStore();
     const logical = DownloadLogicalId('paused-live-writer');
     final record = LogicalDownloadRecordV2(
       schemaVersion: kLogicalDownloadSchemaVersionV2,
@@ -53,13 +54,105 @@ void main() {
       expect(manager.snapshotFor(logical)?.status, DownloadTransportStatus.running);
       expect(container.read(downloadsProvider).requireValue.single.status, TaskStatus.running);
       final reads = storage.metadataReads;
+      final storeReads = store.allReads;
       handle.setProgress(.7);
       await tester.pump(const Duration(seconds: 1));
       expect(container.read(downloadsProvider).requireValue.single.progress, .7);
       expect(storage.metadataReads, reads);
+      expect(store.allReads, storeReads);
     } finally {
       container.dispose();
       await pumpUntilFuture(tester, manager.dispose(), 'paused writer manager disposal');
+    }
+  });
+
+  for (final withHandle in [false, true]) {
+    testWidgets('paused intent with ${withHandle ? 'paused' : 'missing'} transport remains paused and idle', (tester) async {
+      final store = _CountingStore();
+      const logical = DownloadLogicalId('genuinely-paused');
+      final record = LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2, logicalId: logical,
+        mediaId: 'show', unitKey: 'episode://paused', variantKey: '480p',
+        generation: 1, taskId: 'genuinely-paused-task', intent: DownloadUserIntent.paused,
+        destinationPath: '/tmp/ui-genuinely-paused.mp4', sourceDescriptor: const {}, updatedAtMillis: 1,
+      );
+      await store.put(record);
+      final gateway = _ReaddGateway();
+      if (withHandle) {
+        final handle = _ReaddHandle(record.taskId);
+        await handle.pause();
+        gateway.handles[record.taskId] = handle;
+      }
+      final manager = DownloadManagerV2(store: store, gateway: gateway, sourceResolver: StaticSourceResolverV2());
+      final storage = _DownloadMetadataStorage();
+      storage.metadata[logical.value] = {
+        'logicalId': logical.value,
+        'item': MultimediaItem(title: 'Show', url: 'show://1', posterUrl: '').toJson(),
+      };
+      final container = ProviderContainer(overrides: [
+        downloadManagerV2Provider.overrideWithValue(manager), logicalDownloadStoreV2Provider.overrideWithValue(store),
+        storageServiceProvider.overrideWithValue(storage),
+      ]);
+      try {
+        var publications = 0;
+        container.listen(downloadsProvider, (_, next) { if (next.hasValue) publications++; });
+        await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'acceptance downloads projection');
+        await tester.pump();
+        expect(container.read(downloadsProvider).requireValue.single.status, TaskStatus.paused);
+        final before = publications;
+        final metadataReads = storage.metadataReads;
+        final storeReads = store.allReads;
+        await tester.pump(const Duration(seconds: 2));
+        expect(publications, before);
+        expect(storage.metadataReads, metadataReads);
+        expect(store.allReads, storeReads);
+      } finally {
+        container.dispose();
+        await pumpUntilFuture(tester, manager.dispose(), 'acceptance manager disposal');
+      }
+    });
+  }
+
+  for (final otherStatus in [TaskStatus.running, TaskStatus.complete]) {
+    test('two logical variants beside $otherStatus have no ambiguous URL alias', () async {
+      final store = InMemoryLogicalDownloadStoreV2();
+      final manager = DownloadManagerV2(store: store, gateway: _ReaddGateway(), sourceResolver: StaticSourceResolverV2());
+      final rows = [
+        _projectionRow('selected', TaskStatus.running), _projectionRow('other', otherStatus),
+      ];
+      final container = ProviderContainer(overrides: [
+        downloadsProvider.overrideWith(() => _ProjectedRows(rows)),
+        downloadManagerV2Provider.overrideWithValue(manager),
+      ]);
+      try {
+        await container.read(downloadsProvider.future);
+        final progress = container.read(downloadProgressProvider);
+        expect(progress.keys, containsAll(['selected', 'other']));
+        expect(progress, isNot(contains('episode://same')));
+        expect(progress['selected']?.taskId, 'selected-task');
+        expect(progress['other']?.taskId, 'other-task');
+      } finally {
+        container.dispose();
+        await manager.dispose();
+      }
+    });
+  }
+
+  test('one logical variant preserves the legacy tracking URL alias', () async {
+    final manager = DownloadManagerV2(
+      store: InMemoryLogicalDownloadStoreV2(), gateway: _ReaddGateway(), sourceResolver: StaticSourceResolverV2(),
+    );
+    final container = ProviderContainer(overrides: [
+      downloadsProvider.overrideWith(() => _ProjectedRows([_projectionRow('selected', TaskStatus.running)])),
+      downloadManagerV2Provider.overrideWithValue(manager),
+    ]);
+    try {
+      await container.read(downloadsProvider.future);
+      final progress = container.read(downloadProgressProvider);
+      expect(identical(progress['selected'], progress['episode://same']), isTrue);
+    } finally {
+      container.dispose();
+      await manager.dispose();
     }
   });
 
@@ -158,3 +251,32 @@ final class _ReaddHandle implements DownloadTransportHandle {
     return true;
   }
 }
+
+class _CountingStore implements LogicalDownloadStoreV2 {
+  final _store = InMemoryLogicalDownloadStoreV2();
+  int allReads = 0;
+  @override
+  Future<List<LogicalDownloadRecordV2>> all() { allReads++; return _store.all(); }
+  @override
+  Future<LogicalDownloadRecordV2?> get(DownloadLogicalId id) => _store.get(id);
+  @override
+  Future<void> put(LogicalDownloadRecordV2 record) => _store.put(record);
+  @override
+  Future<void> remove(DownloadLogicalId id) => _store.remove(id);
+  @override
+  Future<LogicalDownloadRecordV2?> mutate(DownloadLogicalId id, LogicalDownloadRecordV2? Function(LogicalDownloadRecordV2?) change) => _store.mutate(id, change);
+}
+
+class _ProjectedRows extends DownloadsNotifier {
+  _ProjectedRows(this.rows);
+  final List<DownloadItem> rows;
+  @override
+  Future<List<DownloadItem>> build() async => rows;
+}
+
+DownloadItem _projectionRow(String id, TaskStatus status) => DownloadItem(
+  task: DownloadTask(taskId: '$id-task', url: 'https://example.test/$id', filename: '$id.mp4'),
+  status: status, progress: .4,
+  item: MultimediaItem(title: 'Show', url: 'show://1', posterUrl: ''),
+  logicalId: id, trackingUrl: 'episode://same', timestamp: 1,
+);
