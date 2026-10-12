@@ -1,3 +1,4 @@
+import '../../../support/widget_completion.dart';
 import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -18,8 +19,10 @@ import 'package:animewitcher/features/player/presentation/widgets/player_side_pa
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 class _Rows extends DownloadsNotifier {
   _Rows(this.items);
@@ -116,7 +119,15 @@ Widget _app(Widget home) => MaterialApp(
 );
 
 void main() {
-  for (final caller in ['episode', 'player']) {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  final originalPaths = PathProviderPlatform.instance;
+  late Directory cacheRoot;
+  setUpAll(() { cacheRoot = Directory.systemTemp.createTempSync('aw-ui-cache-'); });
+  setUp(() { PathProviderPlatform.instance = _Paths(cacheRoot.path); });
+  tearDown(() { PathProviderPlatform.instance = originalPaths; });
+  tearDownAll(() => cacheRoot.delete(recursive: true));
+
+  for (final caller in ['episode', 'episode-key', 'player']) {
     for (final otherStatus in [TaskStatus.running, TaskStatus.complete]) {
       testWidgets('$caller opens the selected active logical variant beside $otherStatus', (tester) async {
         final selected = _row('selected');
@@ -130,7 +141,9 @@ void main() {
         final container = ProviderContainer(overrides: [
           downloadsProvider.overrideWith(() => rows),
           downloadProgressProvider.overrideWithValue(map),
-          downloadedFilesProvider.overrideWith(() => _Files()),
+          downloadedFilesProvider.overrideWith(() => _Files(
+            cached: otherStatus == TaskStatus.complete ? File('/tmp/retained-complete.mp4') : null,
+          )),
           detailsControllerProvider.overrideWith(() => _Details(_show)),
           playerControllerProvider.overrideWith(_Player.new),
           historyRepositoryProvider.overrideWithValue(_History()),
@@ -138,16 +151,25 @@ void main() {
           episodeSortAscendingProvider.overrideWith(_Sort.new),
         ]);
         addTearDown(container.dispose);
-        await container.read(downloadsProvider.future);
+        await pumpUntilFuture(tester, container.read(downloadsProvider.future), '$caller download rows');
         await tester.pumpWidget(UncontrolledProviderScope(
           container: container,
-          child: _app(caller == 'episode'
+          child: _app(caller.startsWith('episode')
               ? EpisodeCard(episode: _episode, parentItem: _show)
               : PlayerEpisodesPanel(item: _show, onClose: () {})),
         ));
-        await tester.pumpAndSettle();
-        await tester.tap(find.byTooltip('جارٍ التنزيل'));
-        await tester.pumpAndSettle();
+        await pumpUntil(tester, () => find.byTooltip('جارٍ التنزيل').evaluate().isNotEmpty, '$caller active download control');
+        if (caller == 'episode-key') {
+          final bodyFocus = tester.widget<Focus>(find.byWidgetPredicate(
+            (widget) => widget is Focus && widget.focusNode?.debugLabel == 'ep_body',
+          ));
+          bodyFocus.focusNode!.requestFocus();
+          await tester.pump();
+          await tester.sendKeyEvent(LogicalKeyboardKey.f10);
+        } else {
+          await tester.tap(find.byTooltip('جارٍ التنزيل'));
+        }
+        await pumpUntil(tester, () => find.byType(Dialog).evaluate().isNotEmpty, '$caller selected variant dialog');
         expect(find.byType(DownloadProgressDialog), findsOneWidget);
         expect(tester.widget<DownloadProgressDialog>(find.byType(DownloadProgressDialog)).trackingUrl, 'selected');
         await tester.tap(find.text('إيقاف مؤقت'));
@@ -181,14 +203,14 @@ void main() {
       episodeWatchRepositoryProvider.overrideWithValue(_Watch()),
     ]);
     addTearDown(container.dispose);
-    await container.read(downloadsProvider.future);
+    await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'completed variant rows');
     container.read(playbackLauncherProvider);
     await tester.pumpWidget(UncontrolledProviderScope(container: container, child: _app(const DownloadsTab())));
-    await tester.pumpAndSettle();
+    await pumpUntil(tester, () => find.text('المكتملة').evaluate().isNotEmpty, 'completed downloads tab');
     await tester.tap(find.text('المكتملة'));
-    await tester.pumpAndSettle();
+    await pumpUntil(tester, () => find.text('Variant show').evaluate().isNotEmpty, 'completed show group');
     await tester.tap(find.text('Variant show'));
-    await tester.pumpAndSettle();
+    await pumpUntil(tester, () => find.byKey(const ValueKey('task-selected')).evaluate().isNotEmpty, 'selected completed variant card');
     final selected = find.byKey(const ValueKey('task-selected'));
     expect(selected, findsOneWidget);
     await tester.tap(selected);
@@ -196,4 +218,15 @@ void main() {
     await tester.pump();
     expect(playback.played, [files.first.path]);
   });
+}
+
+class _Paths extends PathProviderPlatform {
+  _Paths(this.root);
+  final String root;
+  @override
+  Future<String?> getTemporaryPath() async => root;
+  @override
+  Future<String?> getApplicationSupportPath() async => root;
+  @override
+  Future<String?> getApplicationDocumentsPath() async => root;
 }

@@ -1,3 +1,4 @@
+import '../../../support/widget_completion.dart';
 import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/manga.dart';
@@ -84,10 +85,14 @@ class _ProgressStorage extends StorageService {
   }
 }
 
-Future<void> _settleFiles(WidgetTester tester) async {
-  await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 80)));
-  await tester.pump();
-}
+Future<void> _waitForChapter(WidgetTester tester, String pageUri) => pumpUntil(
+  tester, () {
+    final readers = find.byType(MangaPagedReader).evaluate();
+    if (readers.length != 1) return false;
+    final reader = readers.single.widget as MangaPagedReader;
+    return reader.pages.length == 1 && reader.pages.single.imageUrl == pageUri;
+  }, 'local chapter page $pageUri',
+);
 
 void main() {
   testWidgets('reader screen opens Next and Previous downloaded chapters without provider calls', (tester) async {
@@ -129,7 +134,7 @@ void main() {
       mangaReadingRepositoryProvider.overrideWithValue(MangaReadingRepository(_ProgressStorage())),
     ]);
     addTearDown(container.dispose);
-    await container.read(downloadsProvider.future);
+    await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'completed chapter rows');
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
       child: MaterialApp(
@@ -139,17 +144,17 @@ void main() {
           localChapterDirectory: rows.first.destinationPath),
       ),
     ));
-    await _settleFiles(tester);
+    await _waitForChapter(tester, pageUris.first);
     expect(tester.widget<MangaPagedReader>(find.byType(MangaPagedReader)).pages.single.imageUrl, pageUris.first);
     expect(provider.requests, isEmpty, reason: 'adjacent downloaded chapters must preload locally');
     await tester.sendKeyEvent(LogicalKeyboardKey.pageDown);
-    await _settleFiles(tester);
+    await _waitForChapter(tester, pageUris.last);
     expect(tester.widget<MangaPagedReader>(find.byType(MangaPagedReader)).pages.single.imageUrl, pageUris.last);
     await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);
-    await _settleFiles(tester);
+    await _waitForChapter(tester, pageUris.first);
     expect(tester.widget<MangaPagedReader>(find.byType(MangaPagedReader)).pages.single.imageUrl, pageUris.first);
     expect(provider.requests, isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
-    await _settleFiles(tester);
+    await tester.pump();
   });
 }

@@ -1,3 +1,4 @@
+import '../../../support/widget_completion.dart';
 import 'dart:async';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -67,9 +68,9 @@ Future<void> _openDialog(
       ))),
     ),
   ));
-  await tester.pumpAndSettle();
+  await pumpUntil(tester, () => find.text('Details route').evaluate().isNotEmpty, 'details launch route');
   await tester.tap(find.text('Details route'));
-  await tester.pumpAndSettle();
+  await pumpUntil(tester, () => find.byType(Dialog).evaluate().isNotEmpty, 'selected progress dialog');
 }
 
 DownloadProgressData _progress(TaskStatus status, double progress) =>
@@ -148,11 +149,10 @@ void main() {
     )]);
     final notifications = NotificationService();
     try {
-      await manager.initialize();
+      await pumpUntilFuture(tester, manager.initialize(), 'cancel manager initialization');
       await _openDialog(tester, _progress(TaskStatus.paused, .4), commands, notifications, manager: manager);
       await tester.tap(find.text('إلغاء'));
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-      await tester.pump();
+      await pumpUntil(tester, () => notifications.toasts.isNotEmpty, 'cancel rejection error toast');
       expect(tester.takeException(), isNull);
       expect(notifications.toasts, hasLength(1));
       expect(notifications.toasts.single.message, contains('cancel rejected'));
@@ -160,8 +160,7 @@ void main() {
       notifications.clearToasts();
       handle.reject = false;
       await tester.tap(find.text('إلغاء'));
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-      await tester.pumpAndSettle();
+      await pumpUntil(tester, () => find.byType(DownloadProgressDialog).evaluate().isEmpty, 'successful cancel dialog dismissal');
       expect(find.byType(DownloadProgressDialog), findsNothing);
       expect(find.text('Details route'), findsOneWidget);
       expect(handle.cancelCalls, 2);
@@ -169,7 +168,7 @@ void main() {
       notifications.clearToasts();
       notifications.dispose();
       await tester.pumpWidget(const SizedBox.shrink());
-      await manager.dispose();
+      await pumpUntilFuture(tester, manager.dispose(), 'cancel manager disposal');
     }
   });
 

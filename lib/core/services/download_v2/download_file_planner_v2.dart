@@ -249,7 +249,10 @@ Future<String> mangaChapterDestinationDirectoryV2(
   final suffix = identity.value.substring('manga_'.length, 'manga_'.length + 12);
   final oldTitle = _legacyDownloadFolderNameV2(manga.title, fallback: 'Manga');
   final oldChapter = _legacyDownloadFolderNameV2(chapterLabel, fallback: 'فصل');
-  final oldBoundedChapter = oldChapter.length > 90 ? oldChapter.substring(0, 90) : oldChapter;
+  // Legacy UTF-16 truncation may have an on-disk replacement character.
+  final oldBoundedChapter = utf8.decode(utf8.encode(
+    oldChapter.length > 90 ? oldChapter.substring(0, 90) : oldChapter,
+  ));
   final candidates = <List<String>>[
     <String>[oldTitle, oldChapter],
     <String>[oldTitle, '$oldBoundedChapter-$suffix'],

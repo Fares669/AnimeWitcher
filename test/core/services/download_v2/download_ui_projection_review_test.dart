@@ -1,3 +1,4 @@
+import '../../../support/widget_completion.dart';
 import 'dart:async';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -47,7 +48,7 @@ void main() {
     ]);
     try {
       container.listen(downloadsProvider, (_, __) {});
-      await container.read(downloadsProvider.future);
+      await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'paused writer downloads projection');
       await tester.pump();
       expect(manager.snapshotFor(logical)?.status, DownloadTransportStatus.running);
       expect(container.read(downloadsProvider).requireValue.single.status, TaskStatus.running);
@@ -58,7 +59,7 @@ void main() {
       expect(storage.metadataReads, reads);
     } finally {
       container.dispose();
-      await manager.dispose();
+      await pumpUntilFuture(tester, manager.dispose(), 'paused writer manager disposal');
     }
   });
 

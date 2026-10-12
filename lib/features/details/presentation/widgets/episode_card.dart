@@ -193,6 +193,9 @@ class EpisodeCard extends HookConsumerWidget {
 
     final progressMap = ref.watch(downloadProgressProvider);
     final logicalId = activeDownload?.logicalId?.trim();
+    final downloadIdentity = logicalId != null && logicalId.isNotEmpty
+        ? logicalId
+        : episode.url;
     final downloadProgressData = logicalId != null && logicalId.isNotEmpty
         ? progressMap[logicalId]
         : null;
@@ -235,9 +238,9 @@ class EpisodeCard extends HookConsumerWidget {
     );
 
     void triggerDownload() {
-      if (completedDownload != null) {
+      if (completedDownload != null && !isDownloading) {
         unawaited(_deleteCompletedDownload(context, ref, completedDownload));
-      } else if (downloadedFile != null) {
+      } else if (downloadedFile != null && !isDownloading) {
         DownloadManagementDialog.show(
           context,
           details ?? parentItem,
@@ -248,7 +251,7 @@ class EpisodeCard extends HookConsumerWidget {
         DownloadProgressDialog.show(
           context,
           _downloadDialogTitle(parentItem, episode),
-          episode.url,
+          downloadIdentity,
         );
       } else {
         ref
@@ -481,6 +484,7 @@ class EpisodeCard extends HookConsumerWidget {
                         isDownloading,
                         downloadProgress,
                         downloadProgressData,
+                        downloadIdentity,
                         details,
                         downloadFocusNode,
                         bodyFocusNode,
@@ -521,6 +525,7 @@ class EpisodeCard extends HookConsumerWidget {
     bool isDownloading,
     double downloadProgress,
     DownloadProgressData? downloadProgressData,
+    String downloadIdentity,
     MultimediaItem? details,
     FocusNode focusNode,
     FocusNode bodyFocusNode,
@@ -533,6 +538,7 @@ class EpisodeCard extends HookConsumerWidget {
       isDownloading,
       downloadProgress,
       downloadProgressData,
+      downloadIdentity,
       details,
     );
     if (rawDownload == null) return const SizedBox.shrink();
@@ -589,9 +595,10 @@ class EpisodeCard extends HookConsumerWidget {
     bool isDownloading,
     double downloadProgress,
     DownloadProgressData? downloadProgressData,
+    String downloadIdentity,
     MultimediaItem? details,
   ) {
-    if (completedDownload != null) {
+    if (completedDownload != null && !isDownloading) {
       return EpisodeActionChip(
         tooltip: appText(
           context,
@@ -604,7 +611,7 @@ class EpisodeCard extends HookConsumerWidget {
           _deleteCompletedDownload(context, ref, completedDownload),
         ),
       );
-    } else if (downloadedFile != null) {
+    } else if (downloadedFile != null && !isDownloading) {
       return EpisodeActionChip(
         tooltip: appText(
           context,
@@ -632,7 +639,7 @@ class EpisodeCard extends HookConsumerWidget {
         onPressed: () => DownloadProgressDialog.show(
           context,
           _downloadDialogTitle(parentItem, episode),
-          episode.url,
+          downloadIdentity,
         ),
         child: Padding(
           padding: const EdgeInsets.all(4.0),
