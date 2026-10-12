@@ -27,3 +27,19 @@ Future<({bool matches, String? validator})> verifiedSavedTestRange(
     validator: validator,
   );
 }
+
+/// A test-only publisher for coordinator lifecycle tests. This does not prove
+/// cross-process no-replace atomicity; the production Darwin helper tests do.
+Future<bool> publishCompletedTestFile(
+  File source,
+  File target,
+  int expectedBytes,
+) async {
+  if (await FileSystemEntity.type(target.path, followLinks: false) !=
+          FileSystemEntityType.notFound ||
+      !await source.exists() ||
+      await source.length() != expectedBytes)
+    return false;
+  await source.rename(target.path);
+  return true;
+}
