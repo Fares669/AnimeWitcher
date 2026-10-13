@@ -274,6 +274,8 @@ enum DownloadNativeWaitingQueue {
     var sessionProgress: Double
     var sessionTotalBytes: Int64
     var sessionTransferredBytes: Int64
+    var sessionCompletedPages: Int?
+    var sessionTotalPages: Int?
     var sessionSpeedBytesPerSecond: Double
     var sessionCurrentIndex: Int
     var runningSamples: [String: RunningSample]
@@ -295,6 +297,8 @@ enum DownloadNativeWaitingQueue {
       sessionProgress: Double = 0,
       sessionTotalBytes: Int64 = -1,
       sessionTransferredBytes: Int64 = 0,
+      sessionCompletedPages: Int? = nil,
+      sessionTotalPages: Int? = nil,
       sessionSpeedBytesPerSecond: Double = 0,
       sessionCurrentIndex: Int = 0,
       runningSamples: [String: RunningSample] = [:],
@@ -315,6 +319,8 @@ enum DownloadNativeWaitingQueue {
       self.sessionProgress = sessionProgress
       self.sessionTotalBytes = sessionTotalBytes
       self.sessionTransferredBytes = sessionTransferredBytes
+      self.sessionCompletedPages = sessionCompletedPages
+      self.sessionTotalPages = sessionTotalPages
       self.sessionSpeedBytesPerSecond = sessionSpeedBytesPerSecond
       self.sessionCurrentIndex = sessionCurrentIndex
       self.runningSamples = runningSamples
@@ -338,6 +344,8 @@ enum DownloadNativeWaitingQueue {
       sessionProgress = try container.decodeIfPresent(Double.self, forKey: .sessionProgress) ?? 0
       sessionTotalBytes = try container.decodeIfPresent(Int64.self, forKey: .sessionTotalBytes) ?? -1
       sessionTransferredBytes = try container.decodeIfPresent(Int64.self, forKey: .sessionTransferredBytes) ?? 0
+      sessionCompletedPages = try container.decodeIfPresent(Int.self, forKey: .sessionCompletedPages)
+      sessionTotalPages = try container.decodeIfPresent(Int.self, forKey: .sessionTotalPages)
       sessionSpeedBytesPerSecond = try container.decodeIfPresent(Double.self, forKey: .sessionSpeedBytesPerSecond) ?? 0
       sessionCurrentIndex = try container.decodeIfPresent(Int.self, forKey: .sessionCurrentIndex) ?? 0
       runningSamples = try container.decodeIfPresent([String: RunningSample].self, forKey: .runningSamples) ?? [:]
@@ -577,7 +585,7 @@ enum DownloadNativeWaitingQueue {
           return dart.isEmpty ? current.sessionDisplayName : dart
         }(),
         sessionProgress: {
-          if switchedFile { return (arguments["sessionProgress"] as? NSNumber)?.doubleValue ?? 0 }
+          if switchedFile || arguments["sessionCompletedPages"] != nil { return (arguments["sessionProgress"] as? NSNumber)?.doubleValue ?? 0 }
           let dart = (arguments["sessionProgress"] as? NSNumber)?.doubleValue
           if let dart, dart > 0 { return dart }
           return current.sessionProgress
@@ -595,6 +603,8 @@ enum DownloadNativeWaitingQueue {
           if let dart, dart > 0 { return dart }
           return current.sessionTransferredBytes
         }(),
+        sessionCompletedPages: intValue(arguments["sessionCompletedPages"]),
+        sessionTotalPages: intValue(arguments["sessionTotalPages"]),
         sessionSpeedBytesPerSecond: {
           let dart = (arguments["sessionSpeedBytesPerSecond"] as? NSNumber)?.doubleValue
           if switchedFile { return dart ?? 0 }
@@ -2665,17 +2675,22 @@ enum DownloadNativeWaitingQueue {
       && currentTaskId != state.sessionCurrentTaskId
       && currentTaskId != "session"
     let resetOnSwitch = switched && state.transferringTaskIds.count <= 1
+    let keepPages = currentTaskId == state.sessionCurrentTaskId
+    state.sessionCompletedPages = keepPages ? state.sessionCompletedPages : nil
+    state.sessionTotalPages = keepPages ? state.sessionTotalPages : nil
+    let pageProgress = keepPages && state.sessionCompletedPages != nil
+      ? state.sessionProgress : progress
     state.sessionCurrentTaskId = currentTaskId
     if !displayName.isEmpty {
       state.sessionDisplayName = displayName
     }
     if resetOnSwitch {
-      state.sessionProgress = progress
+      state.sessionProgress = pageProgress
       state.sessionTotalBytes = totalBytes > 0 ? totalBytes : -1
       state.sessionTransferredBytes = transferredBytes
       state.sessionSpeedBytesPerSecond = max(speedBytesPerSecond, 0)
     } else {
-      state.sessionProgress = progress
+      state.sessionProgress = pageProgress
       if totalBytes > 0 {
         state.sessionTotalBytes = totalBytes
       }
@@ -2700,13 +2715,15 @@ enum DownloadNativeWaitingQueue {
         _ = try? DownloadContinuedProcessingManager.shared.start(
           taskId: currentTaskId,
           displayName: displayName.isEmpty ? snapshot.sessionDisplayName : displayName,
-          progress: progress,
+          progress: pageProgress,
           totalBytes: totalBytes > 0 ? totalBytes : snapshot.sessionTotalBytes,
           transferredBytes: transferredBytes,
           completedCount: snapshot.sessionCompletedCount,
           batchTotal: max(snapshot.sessionBatchTotal, 1),
           speedBytesPerSecond: snapshot.sessionSpeedBytesPerSecond,
-          currentIndex: snapshot.sessionCurrentIndex
+          currentIndex: snapshot.sessionCurrentIndex,
+          completedPages: snapshot.sessionCompletedPages,
+          totalPages: snapshot.sessionTotalPages
         )
       }
     }

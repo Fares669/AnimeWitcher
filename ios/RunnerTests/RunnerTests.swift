@@ -4,6 +4,29 @@ import XCTest
 @testable import Runner
 
 class RunnerTests: XCTestCase {
+  func testMangaPageCheckpointSurvivesReloadAndClearsForVideo() throws {
+    DownloadNativeWaitingQueue.resetForTests()
+    DownloadNativeWaitingQueue.persist(from: [
+      "maxConcurrent": 1, "transferringTaskIds": ["chapter"], "waiters": [],
+      "sessionTaskIds": ["chapter"], "sessionBatchTotal": 1,
+      "sessionCurrentTaskId": "chapter", "sessionProgress": 12.0 / 23.0,
+      "sessionCompletedPages": 12, "sessionTotalPages": 23,
+    ])
+    var encoded = try JSONEncoder().encode(DownloadNativeWaitingQueue.load())
+    var state = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    XCTAssertEqual(state["sessionCompletedPages"] as? Int, 12)
+    XCTAssertEqual(state["sessionTotalPages"] as? Int, 23)
+    DownloadNativeWaitingQueue.persist(from: [
+      "maxConcurrent": 1, "transferringTaskIds": ["video"], "waiters": [],
+      "sessionTaskIds": ["video"], "sessionBatchTotal": 1,
+      "sessionCurrentTaskId": "video", "sessionProgress": 0.2,
+    ])
+    encoded = try JSONEncoder().encode(DownloadNativeWaitingQueue.load())
+    state = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    XCTAssertNil(state["sessionCompletedPages"])
+    XCTAssertNil(state["sessionTotalPages"])
+  }
+
   override func setUp() {
     super.setUp()
     DownloadNativeWaitingQueue.installUrlSessionHook()

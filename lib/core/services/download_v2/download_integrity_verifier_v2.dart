@@ -2,13 +2,13 @@ import 'dart:io';
 
 /// Result of validating the final artifact produced by the transport package.
 final class DownloadIntegrityResult {
-  const DownloadIntegrityResult.valid(int bytes)
+  const DownloadIntegrityResult.valid(int bytes, {this.completedPages, this.totalPages})
     : assert(bytes > 0),
       isValid = true,
       bytes = bytes,
       reason = null;
 
-  const DownloadIntegrityResult.invalid(String reason)
+  const DownloadIntegrityResult.invalid(String reason, {this.completedPages, this.totalPages})
     : assert(reason != ''),
       isValid = false,
       bytes = null,
@@ -17,6 +17,8 @@ final class DownloadIntegrityResult {
   final bool isValid;
   final int? bytes;
   final String? reason;
+  final int? completedPages;
+  final int? totalPages;
 }
 
 /// Verifies only stable final-file properties owned by AnimeWitcher.
