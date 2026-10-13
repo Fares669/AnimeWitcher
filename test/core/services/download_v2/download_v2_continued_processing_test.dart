@@ -21,6 +21,54 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
+  testWidgets('Manga page counts reach start, updates, checkpoint and verified finish', (tester) async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'persistNativeQueue') {
+        return {'acceptedVersion': (call.arguments as Map)['snapshotVersion'], 'nativePromotionAvailable': true};
+      }
+      return true;
+    });
+    final observer = IosDownloadContinuedProcessingObserverV2(
+      service: DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true),
+      nativeBackgroundPlans: () => [],
+    );
+    final record = _terminalProgressRecord().copyWith(mediaKind: DownloadMediaKind.mangaChapter);
+    try {
+      await observer.observe(record, DownloadTransportSnapshot(
+        taskId: record.taskId, status: DownloadTransportStatus.running, progress: .9,
+        completedPages: 12, totalPages: 23, transferredBytes: 234500, totalBytes: 500000,
+      ));
+      final start = calls.singleWhere((call) => call.method == 'start').arguments as Map;
+      expect(start['completedPages'], 12);
+      expect(start['totalPages'], 23);
+      expect(start['progress'], 12 / 23);
+      expect(start['transferredBytes'], 234500);
+      expect(start['totalBytes'], 500000);
+      await observer.observe(record, DownloadTransportSnapshot(
+        taskId: record.taskId, status: DownloadTransportStatus.running, progress: .9,
+        completedPages: 13, totalPages: 23,
+      ));
+      final checkpoints = calls.where((call) => call.method == 'persistNativeQueue').toList();
+      expect(checkpoints, hasLength(2), reason: 'page changes must invalidate the native checkpoint signature');
+      expect((checkpoints.last.arguments as Map)['sessionCompletedPages'], 13);
+      expect((checkpoints.last.arguments as Map)['sessionTotalPages'], 23);
+      await observer.observe(record.copyWith(completedAtMillis: 1), DownloadTransportSnapshot(
+        taskId: record.taskId, status: DownloadTransportStatus.complete, progress: 1,
+        completedPages: 23, totalPages: 23,
+      ));
+      final updates = calls.where((call) => call.method == 'update').toList();
+      final finalUpdate = updates.last.arguments as Map;
+      expect(finalUpdate['completedPages'], 23);
+      expect(finalUpdate['totalPages'], 23);
+      expect(finalUpdate['progress'], 1);
+      expect(calls.last.method, 'finish');
+    } finally {
+      await observer.dispose();
+    }
+  });
+
   for (final chapterNumber in [357, 12.5]) {
     testWidgets('manga banner uses chapter number $chapterNumber instead of stored hash', (tester) async {
       final calls = <MethodCall>[];
@@ -43,6 +91,9 @@ void main() {
           taskId: record.taskId, status: DownloadTransportStatus.running, progress: .25,
         ));
         expect((calls.singleWhere((call) => call.method == 'start').arguments as Map)['displayName'], 'الفصل $chapterNumber');
+        final arguments = calls.singleWhere((call) => call.method == 'start').arguments as Map;
+        expect(arguments['completedPages'], 0);
+        expect(arguments['totalPages'], -1, reason: 'unknown Manga totals must stay page-based');
       } finally {
         await observer.dispose();
       }

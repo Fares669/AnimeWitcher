@@ -36,9 +36,11 @@ void main() {
       await _until(() async => gateway.pageHandles.length >= generation + 1);
       final page = gateway.pageHandles.last;
       page.progress(0.25);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.25);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.25);
+      expect(manager.snapshotFor(request.logicalId)?.progress, 0);
       page.progress(0.50);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.50);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.50);
+      expect(manager.snapshotFor(request.logicalId)?.progress, 0);
       await page.complete(utf8.encode('<html>expired source</html>'));
       if (generation < 3) {
         await _until(() async => gateway.startedSpecs.length >= generation + 2);
@@ -91,9 +93,11 @@ void main() {
         await File('${temp.path}/${MangaChapterManifestV2.fileName}').delete();
       }
       gateway.currentPage(1).progress(0.25);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.625);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.25);
+      expect(manager.snapshotFor(request.logicalId)?.progress, .5);
       gateway.currentPage(1).progress(0.50);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.75);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.50);
+      expect(manager.snapshotFor(request.logicalId)?.progress, .5);
       await gateway.currentPage(1).complete(utf8.encode('<html>expired source</html>'));
       await _until(() async => gateway.startedSpecs.length > generation + 1 ||
           (await store.get(request.logicalId))?.intent == DownloadUserIntent.failed);
@@ -176,9 +180,11 @@ void main() {
       await _until(() async => gateway.hasCurrentPage(5));
       final before = gateway.startedSpecs.length;
       gateway.currentPage(5).progress(0.25);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.65625);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.25);
+      expect(manager.snapshotFor(request.logicalId)?.progress, 5 / 8);
       gateway.currentPage(5).progress(0.50);
-      await _until(() async => manager.snapshotFor(request.logicalId)?.progress == 0.6875);
+      await _until(() async => manager.snapshotFor(request.logicalId)?.networkSpeedMBps == 0.50);
+      expect(manager.snapshotFor(request.logicalId)?.progress, 5 / 8);
       await gateway.currentPage(5).complete(utf8.encode('<html>expired source</html>'));
       await _until(() async => gateway.startedSpecs.length > before ||
           (await store.get(request.logicalId))?.intent == DownloadUserIntent.failed);
@@ -319,7 +325,7 @@ final class _PageHandle implements DownloadTransportHandle {
 
   void progress(double progress) => _emit(DownloadTransportSnapshot(
     taskId: taskId, status: DownloadTransportStatus.running, progress: progress,
-    transferredBytes: (progress * 100).toInt(), totalBytes: 100,
+    transferredBytes: (progress * 100).toInt(), totalBytes: 100, networkSpeedMBps: progress,
   ));
 
   Future<void> complete(List<int> bytes) async {

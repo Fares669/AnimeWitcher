@@ -209,8 +209,10 @@ void main() {
           .readAsStringSync();
       expect(
         appDelegate,
-        contains('if !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates()'),
+        contains('if !manager.acceptsDartUpdate('),
       );
+      expect(appDelegate, contains('inForeground: DownloadNativeWaitingQueue.acceptsDartOverlayUpdates()'));
+      expect(appDelegate, contains('completedPages: (arguments["completedPages"] as? NSNumber)?.intValue'));
     });
 
     test(

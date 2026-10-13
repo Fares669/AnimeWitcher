@@ -6,6 +6,7 @@ import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_v2/download_file_planner_v2.dart';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
+import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_source_resolver_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
@@ -19,6 +20,75 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import '../../../support/manga_image_fixtures.dart';
 
 void main() {
+  test('pause racing final Manga page cannot publish completion before integrity', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-pause-final-');
+    addTearDown(() => temp.delete(recursive: true));
+    await File('${temp.path}/0001.png').writeAsBytes(tinyMangaPng);
+    await MangaChapterManifestV2(
+      version: MangaChapterManifestV2.currentVersion, mangaId: 'm1', chapterId: '1',
+      pageCount: 2, completedIndexes: {0, 1}, isComplete: true,
+    ).writeTo(temp);
+    final gateway = _Gateway()..handle.completeOnPause = true;
+    final store = InMemoryLogicalDownloadStoreV2();
+    final observer = _SnapshotObserver();
+    final manager = DownloadManagerV2(
+      store: store, gateway: gateway, sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver(), presentationObservers: [observer],
+    );
+    addTearDown(manager.dispose);
+    final id = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: '1');
+    await manager.start(DownloadStartRequestV2(
+      logicalId: id, mediaKind: DownloadMediaKind.mangaChapter,
+      mediaId: 'm1', unitKey: '1', variantKey: 'pages', destinationPath: temp.path,
+      sourceDescriptor: const {'chapterId': '1'}, allowPause: true, retries: 1, parallelChunks: 1,
+    ));
+    await manager.pause(id);
+    expect(manager.snapshotFor(id)!.progress, lessThan(1));
+    for (var attempt = 0; attempt < 100; attempt++) {
+      if ((await store.get(id))?.intent == DownloadUserIntent.failed) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect((await store.get(id))!.completedAtMillis, isNull);
+    expect(observer.snapshots, isNotEmpty);
+    expect(observer.snapshots.every((snapshot) => snapshot.progress < 1 &&
+        snapshot.status != DownloadTransportStatus.complete), isTrue,
+        reason: 'the iOS observer must not finish from a control-command race');
+  });
+
+  for (final intent in [DownloadUserIntent.paused, DownloadUserIntent.failed]) {
+    test('reopened $intent manga counts only valid completed checkpoints', () async {
+      final temp = await Directory.systemTemp.createTemp('aw-manga-page-recovery-');
+      addTearDown(() => temp.delete(recursive: true));
+      final good = File('${temp.path}/0001.png');
+      await good.writeAsBytes(tinyMangaPng);
+      // A live/partial file without a completed checkpoint is not a page.
+      await File('${temp.path}/0002.png').writeAsBytes(tinyMangaPng);
+      await MangaChapterManifestV2(
+        version: MangaChapterManifestV2.currentVersion,
+        mangaId: 'm1', chapterId: '1', pageCount: 3,
+        completedIndexes: {0, 2}, isComplete: false,
+        pageDigests: {0: await MangaChapterManifestV2.pageDigest(good)},
+      ).writeTo(temp);
+      final id = logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: '1');
+      final store = InMemoryLogicalDownloadStoreV2();
+      await store.put(LogicalDownloadRecordV2(
+        schemaVersion: kLogicalDownloadSchemaVersionV2, logicalId: id,
+        mediaKind: DownloadMediaKind.mangaChapter, mediaId: 'm1', unitKey: '1',
+        variantKey: 'pages', generation: 1, taskId: taskIdForGeneration(id, 1),
+        intent: intent, destinationPath: temp.path,
+        sourceDescriptor: const {}, updatedAtMillis: 1,
+      ));
+      final manager = DownloadManagerV2(
+        store: store, gateway: _Gateway(), sourceResolver: _VideoResolver(),
+      );
+      addTearDown(manager.dispose);
+      await manager.initialize();
+      expect(manager.snapshotFor(id)!.progress, 1 / 3);
+      expect(manager.snapshotFor(id)!.completedPages, 1);
+      expect(manager.snapshotFor(id)!.totalPages, 3);
+    });
+  }
+
   test('repeated startup repair never reclassifies hashed HTML as legacy', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-html-repair-');
     addTearDown(() => temp.delete(recursive: true));
@@ -105,6 +175,8 @@ void main() {
     expect((await store.get(id))!.completedAtMillis, isNull);
     expect(manager.snapshotFor(id)!.progress, lessThan(1),
         reason: 'failed integrity must never leave a 100% Manga download');
+    expect(manager.snapshotFor(id)!.completedPages, 1);
+    expect(manager.snapshotFor(id)!.totalPages, 2);
     expect(await manager.hasCompletedDownload(id), isFalse);
     expect((await MangaChapterManifestV2.readFrom(temp))!.pageDigests,
         <int, String>{0: goodDigest, 1: badDigest});
@@ -379,6 +451,7 @@ final class _Handle implements DownloadTransportHandle {
   _Handle(this.taskIdValue);
 
   String taskIdValue;
+  bool completeOnPause = false;
   DownloadTransportSnapshot? _current;
   final StreamController<DownloadTransportSnapshot> _controller =
       StreamController<DownloadTransportSnapshot>.broadcast();
@@ -403,12 +476,16 @@ final class _Handle implements DownloadTransportHandle {
       taskId: taskId,
       status: DownloadTransportStatus.complete,
       progress: 1,
+      completedPages: 2, totalPages: 2,
     );
     _controller.add(_current!);
   }
 
   @override
-  Future<bool> pause() async => true;
+  Future<bool> pause() async {
+    if (completeOnPause) complete();
+    return true;
+  }
   @override
   Future<bool> resume() async => true;
   @override
@@ -424,4 +501,14 @@ final class _LegacyPaths extends PathProviderPlatform {
 
   @override
   Future<String?> getApplicationDocumentsPath() async => path;
+}
+
+final class _SnapshotObserver implements DownloadPresentationObserverV2 {
+  final snapshots = <DownloadTransportSnapshot>[];
+  @override
+  Future<void> observe(LogicalDownloadRecordV2 record, DownloadTransportSnapshot snapshot) async {
+    snapshots.add(snapshot);
+  }
+  @override
+  Future<void> dispose() async {}
 }

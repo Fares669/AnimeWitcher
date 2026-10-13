@@ -3,6 +3,27 @@ import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 
 void main() {
+  test('Manga snapshot progress counts pages without changing byte telemetry', () {
+    const snapshot = DownloadTransportSnapshot(
+      taskId: 'manga', status: DownloadTransportStatus.running, progress: .9,
+      completedPages: 12, totalPages: 23,
+      transferredBytes: 900000, totalBytes: 1000000,
+    );
+    expect(snapshot.progress, 12 / 23);
+    expect(snapshot.transferredBytes, 900000);
+    expect(snapshot.totalBytes, 1000000);
+    const unverified = DownloadTransportSnapshot(
+      taskId: 'manga', status: DownloadTransportStatus.failed, progress: 1,
+      completedPages: 23, totalPages: 23,
+    );
+    expect(unverified.progress, lessThan(1));
+    const unknown = DownloadTransportSnapshot(
+      taskId: 'manga', status: DownloadTransportStatus.running, progress: .9,
+      completedPages: 0,
+    );
+    expect(unknown.progress, 0);
+  });
+
   LogicalDownloadRecordV2 record({
     DownloadUserIntent intent = DownloadUserIntent.active,
     int? completedAtMillis,

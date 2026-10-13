@@ -82,6 +82,19 @@ DownloadProgressData _progress(TaskStatus status, double progress) =>
     );
 
 void main() {
+  testWidgets('Manga dialog displays completed pages instead of file size', (tester) async {
+    final notifications = NotificationService();
+    addTearDown(notifications.dispose);
+    await _openDialog(tester, const DownloadProgressData(
+      taskId: 'selected-task', progress: 12 / 23,
+      completedPages: 12, totalPages: 23, totalSize: 1000000,
+      networkSpeed: -1, timeRemaining: Duration.zero, status: TaskStatus.running,
+    ), _Commands(), notifications);
+    expect(find.text('12/23 صفحة'), findsOneWidget);
+    expect(find.textContaining(' MB'), findsNothing);
+    expect(find.text('52%'), findsOneWidget);
+  });
+
   for (final progress in [.4, 1.0]) {
     testWidgets('failed progress $progress retains Retry and Cancel', (tester) async {
       final commands = _Commands();

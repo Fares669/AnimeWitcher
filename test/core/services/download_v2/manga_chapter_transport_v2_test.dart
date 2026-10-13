@@ -38,6 +38,8 @@ void main() {
     await _waitUntilManifestContains(temp, 0);
     await Future<void>.delayed(const Duration(milliseconds: 10));
     expect(handle.current.progress, .5);
+    expect(handle.current.completedPages, 1);
+    expect(handle.current.totalPages, 2);
     await starter.complete(1);
     await _waitForStatus(handle, DownloadTransportStatus.complete);
     expect(handle.current.progress, 1);
@@ -122,6 +124,11 @@ void main() {
       io.delayNextPublication = true;
       await starter.complete(0);
       await io.entered.future.timeout(const Duration(seconds: 2));
+      await handle.pause();
+      expect(handle.current.progress, 0,
+        reason: 'manifest publication has not succeeded yet');
+      expect(handle.current.completedPages, 0);
+      expect(handle.current.totalPages, 1);
       var disposed = false;
       final disposal = handle.dispose().whenComplete(() => disposed = true);
       await Future<void>.delayed(Duration.zero);
@@ -664,7 +671,7 @@ void main() {
 
     final starter = _FakePageStarter();
     final transport = MangaChapterTransportV2(startPage: starter.start);
-    await transport.start(
+    final handle = await transport.start(
       MangaChapterTransportSpecV2(
         taskId: 'chapter-parent',
         mangaId: 'm1',
@@ -680,6 +687,9 @@ void main() {
     );
 
     expect(starter.startedPageIndexes, <int>[1, 2]);
+    expect(handle.current.progress, 1 / 3);
+    await handle.cancel();
+    await handle.dispose();
   });
 
   test('failed chapter retains ownership until uncancellable sibling settles', () async {

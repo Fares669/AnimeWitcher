@@ -725,7 +725,7 @@ class _DownloadItemTile extends ConsumerWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        _downloadedSizeText(),
+                        _downloadedSizeText(context),
                         textDirection: TextDirection.ltr,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -887,8 +887,15 @@ class _DownloadItemTile extends ConsumerWidget {
     }
   }
 
-  String _downloadedSizeText() {
+  String _downloadedSizeText(BuildContext context) {
     final data = progressData;
+    if (item.mediaKind == DownloadMediaKind.mangaChapter) {
+      return formatDownloadPageCount(
+        completedPages: data?.completedPages ?? item.completedPages,
+        totalPages: data?.totalPages ?? item.totalPages,
+        pageLabel: appText(context, english: 'pages', arabic: 'صفحة'),
+      );
+    }
     return formatDownloadSizePair(
       totalBytes: data?.totalSize ?? -1,
       progress: progress,

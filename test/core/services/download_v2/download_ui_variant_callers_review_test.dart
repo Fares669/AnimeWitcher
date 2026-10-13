@@ -10,6 +10,8 @@ import 'package:animewitcher/core/providers/episode_sort_provider.dart';
 import 'package:animewitcher/core/storage/episode_watch_repository.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/utils/download_time_remaining.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
+import 'package:animewitcher/features/library/presentation/widgets/segmented_download_progress.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
 import 'package:animewitcher/features/details/presentation/downloaded_file_provider.dart';
 import 'package:animewitcher/features/details/presentation/playback_launcher.dart';
@@ -135,6 +137,40 @@ void main() {
   setUp(() { PathProviderPlatform.instance = _Paths(cacheRoot.path); });
   tearDown(() { PathProviderPlatform.instance = originalPaths; });
   tearDownAll(() => cacheRoot.delete(recursive: true));
+
+  for (final manga in [true, false]) {
+    testWidgets('${manga ? 'Manga pages' : 'video bytes'} agree with the downloads tile bar', (tester) async {
+      await tester.runAsync(() async {
+        await DefaultCacheManager().getFileFromCache('page-progress-fixture-lifecycle');
+      });
+      final progress = manga ? 12 / 23 : .4;
+      final row = DownloadItem(
+        task: DownloadTask(taskId: 'progress-tile', url: 'https://example.test/tile', filename: 'tile'),
+        status: TaskStatus.running, progress: progress, item: _show,
+        mediaKind: manga ? DownloadMediaKind.mangaChapter : DownloadMediaKind.videoEpisode,
+        logicalId: 'progress-tile', timestamp: 1,
+        completedPages: manga ? 12 : null, totalPages: manga ? 23 : null,
+      );
+      final container = ProviderContainer(overrides: [
+        downloadsProvider.overrideWith(() => _Rows([row])),
+        downloadProgressProvider.overrideWithValue({
+          'progress-tile': DownloadProgressData(
+            taskId: row.id, progress: progress, networkSpeed: -1,
+            timeRemaining: Duration.zero, status: TaskStatus.running, totalSize: 1000000,
+            completedPages: manga ? 12 : null, totalPages: manga ? 23 : null,
+          ),
+        }),
+      ]);
+      addTearDown(container.dispose);
+      await tester.pumpWidget(UncontrolledProviderScope(container: container, child: _app(const DownloadsTab())));
+      final label = manga ? '12/23 صفحة' : '0.4 MB / 1.0 MB';
+      await pumpUntil(tester, () => find.text(label).evaluate().isNotEmpty, 'download tile units');
+      expect(find.text(label), findsOneWidget);
+      expect(find.text(manga ? '52%' : '40%'), findsOneWidget);
+      expect(tester.widget<SegmentedDownloadProgress>(find.byType(SegmentedDownloadProgress)).value, progress);
+      if (manga) expect(find.textContaining(' MB'), findsNothing);
+    });
+  }
 
   for (final caller in ['episode', 'episode-key', 'player']) {
     for (final otherStatus in [TaskStatus.running, TaskStatus.complete]) {
