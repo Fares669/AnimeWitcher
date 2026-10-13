@@ -321,7 +321,9 @@ import UserNotifications
               completedCount: completedCount,
               batchTotal: batchTotal,
               speedBytesPerSecond: speedBytesPerSecond,
-              currentIndex: currentIndex
+              currentIndex: currentIndex,
+              completedPages: (arguments["completedPages"] as? NSNumber)?.intValue,
+              totalPages: (arguments["totalPages"] as? NSNumber)?.intValue
             )
             if let identifier {
               result(identifier)
@@ -330,7 +332,10 @@ import UserNotifications
             }
 
           case "update":
-            if !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates() {
+            if !manager.acceptsDartUpdate(
+              inForeground: DownloadNativeWaitingQueue.acceptsDartOverlayUpdates(),
+              completedPages: (arguments["completedPages"] as? NSNumber)?.intValue
+            ) {
               result(true)
               return
             }
@@ -347,7 +352,9 @@ import UserNotifications
               batchTotal: (arguments["batchTotal"] as? NSNumber)?.intValue ?? -1,
               speedBytesPerSecond: (arguments["speedBytesPerSecond"] as? NSNumber)?.doubleValue ?? -1,
               displayName: arguments["displayName"] as? String ?? "",
-              currentIndex: (arguments["currentIndex"] as? NSNumber)?.intValue ?? -1
+              currentIndex: (arguments["currentIndex"] as? NSNumber)?.intValue ?? -1,
+              completedPages: (arguments["completedPages"] as? NSNumber)?.intValue,
+              totalPages: (arguments["totalPages"] as? NSNumber)?.intValue
             )
             result(active)
 
