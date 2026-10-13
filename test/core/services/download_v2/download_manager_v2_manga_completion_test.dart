@@ -103,6 +103,8 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     expect((await store.get(id))!.completedAtMillis, isNull);
+    expect(manager.snapshotFor(id)!.progress, lessThan(1),
+        reason: 'failed integrity must never leave a 100% Manga download');
     expect(await manager.hasCompletedDownload(id), isFalse);
     expect((await MangaChapterManifestV2.readFrom(temp))!.pageDigests,
         <int, String>{0: goodDigest, 1: badDigest});
