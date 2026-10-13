@@ -10,6 +10,8 @@ class DownloadProgressData {
     required this.timeRemaining,
     required this.status,
     this.totalSize = -1,
+    this.completedPages,
+    this.totalPages,
   });
 
   final String taskId;
@@ -17,6 +19,8 @@ class DownloadProgressData {
   final double networkSpeed;
   final Duration timeRemaining;
   final int totalSize;
+  final int? completedPages;
+  final int? totalPages;
   final TaskStatus status;
 }
 
@@ -26,7 +30,7 @@ String formatDownloadTimeRemaining(
   AppLocalizations l10n,
 ) {
   if (data.status == TaskStatus.paused) return '---';
-  if (data.progress >= 1.0) return l10n.statusFinished;
+  if (data.status == TaskStatus.complete) return l10n.statusFinished;
   if (data.timeRemaining.isNegative || data.timeRemaining.inSeconds <= 0) return l10n.calculating;
 
   final duration = data.timeRemaining;
@@ -87,7 +91,7 @@ String formatDownloadTimeRemaining(
 /// Status / throughput line shown on download tiles and the progress dialog.
 String formatDownloadSpeed(DownloadProgressData data, AppLocalizations l10n) {
   if (data.status == TaskStatus.paused) return l10n.statusPaused;
-  if (data.progress >= 1.0) return l10n.statusFinished;
+  if (data.status == TaskStatus.complete) return l10n.statusFinished;
   if (!data.networkSpeed.isFinite || data.networkSpeed < 0) return l10n.calculating;
   if (data.networkSpeed == 0) return '0 MB/s';
 

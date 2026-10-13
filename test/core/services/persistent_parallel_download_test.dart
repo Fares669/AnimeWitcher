@@ -6,6 +6,8 @@ import 'package:animewitcher/core/services/persistent_parallel_download.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/parallel_download_fixtures.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory directory;
@@ -21,6 +23,7 @@ void main() {
   Set<String> liveIds = {};
 
   PersistentParallelDownload create({
+    Future<bool> Function(File source, File target, int bytes) publishFile = publishCompletedTestFile,
     int maxActiveConnections = 16,
     Duration diskProgressPollInterval = const Duration(seconds: 1),
     bool preserveNativeParts = false,
@@ -28,6 +31,8 @@ void main() {
     void Function(String event, Map<String, Object?> fields)? diagnosticEvent,
     Future<int?> Function(String path)? availableStorageBytes,
   }) => PersistentParallelDownload(
+    verifyPartSource: verifiedSavedTestRange,
+    promoteFile: publishFile,
     startPart: (task, progress, size) async {
       starts.add(task);
       if (throwStarts) throw StateError('native enqueue failed');
@@ -254,6 +259,117 @@ void main() {
           'slow-start expansion must reuse the attempt metadata persisted '
           'before native IO instead of rewriting the whole manifest per child',
     );
+  });
+
+  for (final native in <bool>[false, true]) {
+    test(
+      'live ${native ? 'native' : 'plugin'} progress does not rewrite durable checkpoints',
+      () async {
+        final events = <String>[];
+        await coordinator.dispose();
+        coordinator = create(diagnosticEvent: (event, _) => events.add(event));
+        expect(await coordinator.start(parent, 100), isTrue);
+        await expandFreshTo(5);
+        final child = starts.first;
+        final manifest = File('${await parent.filePath()}.parts/manifest.json');
+        final before = jsonDecode(await manifest.readAsString()) as Map;
+        for (final bytes in <int>[5, 10]) {
+          if (native) {
+            await coordinator.handleNativeChunkUpdate(
+              parentTaskId: parent.taskId,
+              chunkTaskId: child.taskId,
+              writtenBytes: bytes,
+            );
+          } else {
+            coordinator.handleUpdate(TaskProgressUpdate(child, bytes / 20, 20));
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 1150));
+        }
+        final after = jsonDecode(await manifest.readAsString()) as Map;
+        expect(coordinator.progressFor(parent.taskId), closeTo(.1, .001));
+        expect(coordinator.durableBytesFor(parent.taskId), 0);
+        expect(after['checkpointSequence'], before['checkpointSequence']);
+        expect(records[parent.taskId]!.progress, closeTo(.1, .001));
+        expect(
+          events.where((event) => event == 'parallel.heartbeat'),
+          hasLength(1),
+        );
+
+        await coordinator.pause(parent);
+        final paused = jsonDecode(await manifest.readAsString()) as Map;
+        expect(
+          paused['checkpointSequence'],
+          greaterThan(after['checkpointSequence'] as int),
+        );
+      },
+    );
+  }
+
+  test('disk fallback skips advancing children individually and resumes after a callback gap', () async {
+    final probes = _FileProbeCounter();
+    await IOOverrides.runWithIOOverrides(() async {
+      await coordinator.dispose();
+      coordinator = create(
+        diskProgressPollInterval: const Duration(milliseconds: 10),
+      );
+      expect(await coordinator.start(parent, 100), isTrue);
+      await expandFreshTo(5);
+      final busy = starts[0];
+      final silent = starts[1];
+      coordinator.handleUpdate(TaskProgressUpdate(busy, .25, 20));
+      await waitUntil(() => (coordinator.progressFor(parent.taskId) ?? 0) > 0);
+      for (final child in <DownloadTask>[busy, silent]) {
+        final file = File(await child.filePath());
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(List<int>.filled(10, 1), flush: true);
+      }
+      final busyPath = await busy.filePath();
+      final silentPath = await silent.filePath();
+      probes.paths.clear();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(probes.paths[busyPath] ?? 0, 0);
+      expect(probes.paths[silentPath] ?? 0, greaterThan(0));
+      expect(
+        coordinator.durableBytesFor(parent.taskId),
+        10,
+        reason: 'only the silent child needs filesystem fallback while its sibling advances',
+      );
+      // Repeated identical callbacks must not postpone fallback forever.
+      for (var i = 0; i < 5; i++) {
+        coordinator.handleUpdate(TaskProgressUpdate(busy, .25, 20));
+        await Future<void>.delayed(const Duration(milliseconds: 450));
+      }
+      await waitUntil(() => coordinator.durableBytesFor(parent.taskId) == 20);
+      expect(probes.paths[busyPath] ?? 0, greaterThan(0));
+      await Future<void>.delayed(kParallelProgressPersistInterval);
+      final manifest = jsonDecode(
+        await File('${await parent.filePath()}.parts/manifest.json')
+            .readAsString(),
+      ) as Map;
+      expect(
+        (manifest['parts'] as List).fold<int>(
+          0,
+          (sum, part) => sum + (part['durableBytes'] as int),
+        ),
+        20,
+      );
+    }, probes);
+  });
+
+  test('fresh native completion bytes still allow immediate disk adoption', () async {
+    await coordinator.dispose();
+    coordinator = create(diskProgressPollInterval: const Duration(milliseconds: 10));
+    expect(await coordinator.start(parent, 100), isTrue);
+    final child = starts.first;
+    await coordinator.handleNativeChunkUpdate(
+      parentTaskId: parent.taskId, chunkTaskId: child.taskId, writtenBytes: 20,
+    );
+    final file = File(await child.filePath());
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(List<int>.filled(20, 1), flush: true);
+    await waitUntil(() => records[child.taskId]?.status == TaskStatus.complete);
+    expect(pauses, contains(child.taskId));
+    expect(coordinator.durableBytesFor(parent.taskId), 20);
   });
 
   test('intermediate child completion does not fsync the full manifest', () async {
@@ -1060,7 +1176,7 @@ void main() {
   );
 
   test(
-    'restart recovers an interrupted exclusive final-file reservation',
+    'restart preserves an ambiguous legacy empty final-file reservation',
     () async {
       expect(await coordinator.start(parent, 25), isTrue);
       await expandFreshTo(5);
@@ -1092,101 +1208,69 @@ void main() {
 
       starts.clear();
       coordinator = create();
-      expect(await coordinator.start(parent, 25), isTrue);
-      await waitUntil(() => target.existsSync() && target.lengthSync() == 25);
-
+      expect(await coordinator.start(parent, 25), isFalse);
       expect(starts, isEmpty);
-      expect(await target.readAsBytes(), List<int>.generate(25, (i) => i));
-      expect(await marker.exists(), isFalse);
+      expect(await target.length(), 0);
+      expect(await staging.readAsBytes(), List<int>.generate(25, (i) => i));
+      expect(await marker.exists(), isTrue);
     },
   );
 
-  test(
-    'foreign replacement of a reserved destination preserves parts',
-    () async {
+  test('publisher refusal retains a durable ready source without reserving the target', () async {
+    await coordinator.dispose();
+    coordinator = create(publishFile: (_, _, _) async => false);
+    expect(await coordinator.start(parent, 25), isTrue);
+    await expandFreshTo(5);
+    final original = List<DownloadTask>.from(starts);
+    for (var i = 0; i < original.length; i++) {
+      await completePart(original[i], List<int>.generate(5, (j) => i * 5 + j));
+    }
+    await waitUntil(() => records[parent.taskId]?.status == TaskStatus.paused);
+    final target = File(await parent.filePath());
+    final source = File('${target.path}.assembling');
+    expect(await target.exists(), isFalse);
+    expect(await source.readAsBytes(), List<int>.generate(25, (i) => i));
+    final manifest = File('${target.path}.parts/manifest.json');
+    expect((jsonDecode(await manifest.readAsString()) as Map)['readyToPublish'], isNotNull);
+    expect(await File('${target.path}.promoting').exists(), isFalse);
+    await coordinator.dispose();
+    starts.clear();
+    coordinator = create();
+    expect(await coordinator.start(parent, 25), isTrue);
+    expect(starts, isEmpty);
+    expect(await target.readAsBytes(), List<int>.generate(25, (i) => i));
+  });
+
+  for (final foreignBytes in <List<int>>[[], List<int>.filled(25, 77)]) {
+    test('a competing final-file creator preserves ${foreignBytes.length}-byte target and verified source', () async {
       await coordinator.dispose();
       final target = File(await parent.filePath());
-      var replaced = false;
-      coordinator = create(
-        diagnosticEvent: (event, fields) {
-          if (event == 'assembly.destinationReserved') {
-            replaced = true;
-            target.writeAsBytesSync(List<int>.filled(25, 77), flush: true);
-          }
-        },
-      );
+      coordinator = create(publishFile: (_, target, _) async {
+        await target.writeAsBytes(foreignBytes, flush: true);
+        return false;
+      });
       expect(await coordinator.start(parent, 25), isTrue);
       await expandFreshTo(5);
       final original = List<DownloadTask>.from(starts);
       for (var i = 0; i < original.length; i++) {
-        await completePart(
-          original[i],
-          List<int>.generate(5, (j) => i * 5 + j),
-        );
+        await completePart(original[i], List<int>.generate(5, (j) => i * 5 + j));
       }
-      await waitUntil(
-        () => records[parent.taskId]?.status == TaskStatus.paused,
-      );
-      expect(replaced, isTrue);
+      await waitUntil(() => records[parent.taskId]?.status == TaskStatus.paused);
       expect(statuses, isNot(contains(TaskStatus.complete)));
-      expect(await target.readAsBytes(), List<int>.filled(25, 77));
-      expect(
-        await File('${target.path}.assembling').readAsBytes(),
-        List<int>.generate(25, (i) => i),
-      );
+      expect(await target.readAsBytes(), foreignBytes);
+      expect(await File('${target.path}.assembling').readAsBytes(), List<int>.generate(25, (i) => i));
       for (final part in original) {
         expect(await File(await part.filePath()).length(), 5);
       }
       await coordinator.dispose();
       starts.clear();
-      statuses.clear();
       coordinator = create();
       expect(await coordinator.start(parent, 25), isFalse);
       expect(starts, isEmpty);
-      expect(statuses, isNot(contains(TaskStatus.complete)));
-      expect(await target.readAsBytes(), List<int>.filled(25, 77));
-      expect(
-        await File('${target.path}.assembling').readAsBytes(),
-        List<int>.generate(25, (i) => i),
-      );
-      for (final part in original) {
-        expect(await File(await part.filePath()).length(), 5);
-      }
-    },
-  );
-
-  test(
-    'exclusive reservation rejects a competing final-file creator',
-    () async {
-      await coordinator.dispose();
-      final target = File(await parent.filePath());
-      var competingCreatorRejected = false;
-      coordinator = create(
-        diagnosticEvent: (event, fields) {
-          if (event == 'assembly.destinationReserved') {
-            try {
-              target.createSync(exclusive: true);
-            } on FileSystemException {
-              competingCreatorRejected = true;
-            }
-          }
-        },
-      );
-      expect(await coordinator.start(parent, 25), isTrue);
-      await expandFreshTo(5);
-      final original = List<DownloadTask>.from(starts);
-      for (var i = 0; i < original.length; i++) {
-        await completePart(
-          original[i],
-          List<int>.generate(5, (j) => i * 5 + j),
-        );
-      }
-      await waitUntil(() => statuses.contains(TaskStatus.complete));
-      expect(competingCreatorRejected, isTrue);
-      expect(await target.readAsBytes(), List<int>.generate(25, (i) => i));
-      expect(await File('${target.path}.promoting').exists(), isFalse);
-    },
-  );
+      expect(await target.readAsBytes(), foreignBytes);
+      expect(await File('${target.path}.assembling').readAsBytes(), List<int>.generate(25, (i) => i));
+    });
+  }
 
   for (final markerKind in ['owned', 'foreign', 'torn']) {
     test(
@@ -1211,7 +1295,7 @@ void main() {
           flush: true,
         );
         await coordinator.cancel(parent);
-        expect(await target.exists(), !ownedMarker);
+        expect(await target.exists(), isTrue);
         expect(await marker.exists(), !ownedMarker);
       },
     );
@@ -1234,7 +1318,7 @@ void main() {
     await target.create(exclusive: true);
     starts.clear();
     coordinator = create();
-    expect(await coordinator.start(parent, 25), isTrue);
+    expect(await coordinator.start(parent, 25), isFalse);
     expect(starts, isEmpty);
     expect(records[parent.taskId]?.status, TaskStatus.paused);
     expect(await target.length(), 0);
@@ -1533,4 +1617,15 @@ void main() {
       );
     },
   );
+}
+
+final class _FileProbeCounter extends IOOverrides {
+  final Map<String, int> paths = {};
+
+  @override
+  File createFile(String path) {
+    if (path.endsWith('.part'))
+      paths.update(path, (count) => count + 1, ifAbsent: () => 1);
+    return super.createFile(path);
+  }
 }

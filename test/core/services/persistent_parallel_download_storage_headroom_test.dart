@@ -4,6 +4,8 @@ import 'package:animewitcher/core/services/persistent_parallel_download.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/parallel_download_fixtures.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -33,6 +35,8 @@ void main() {
 
       late final PersistentParallelDownload coordinator;
       coordinator = PersistentParallelDownload(
+        verifyPartSource: verifiedSavedTestRange,
+        promoteFile: publishCompletedTestFile,
         startPart: (task, progress, size) async {
           starts.add(task);
           return true;

@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../../core/services/download_v2/download_v2_provider.dart';
+import '../../../../core/services/notification_service.dart';
+import '../../../../core/utils/localized_text.dart';
 import '../../../../core/utils/download_time_remaining.dart';
 import '../../../../core/utils/file_size_formatter.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
@@ -13,6 +15,7 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
 class DownloadProgressDialog extends ConsumerStatefulWidget {
   final String title;
+  /// Logical download identity, with tracking URL compatibility for old rows.
   final String trackingUrl;
 
   const DownloadProgressDialog({
@@ -37,6 +40,7 @@ class DownloadProgressDialog extends ConsumerStatefulWidget {
 class _DownloadProgressDialogState
     extends ConsumerState<DownloadProgressDialog> {
   bool _dismissRequested = false;
+  bool _commandInFlight = false;
 
   void _dismissOnce() {
     if (_dismissRequested) return;
@@ -57,12 +61,15 @@ class _DownloadProgressDialogState
   }
 
   Future<void> _cancelDownload(DownloadProgressData data) async {
-    if (_dismissRequested) return;
+    if (_dismissRequested || _commandInFlight) return;
     final item = _itemForTask(data.taskId);
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
 
-    _dismissRequested = true;
+    setState(() {
+      _dismissRequested = true;
+      _commandInFlight = true;
+    });
     final navigator = Navigator.of(context);
     try {
       await ref
@@ -71,21 +78,43 @@ class _DownloadProgressDialogState
       if (mounted && ModalRoute.of(context)?.isCurrent == true) {
         navigator.pop();
       }
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
         setState(() => _dismissRequested = false);
+        _showCommandError(error);
       }
-      rethrow;
+    } finally {
+      if (mounted) setState(() => _commandInFlight = false);
     }
   }
 
   Future<void> _togglePause(DownloadProgressData data) async {
-    final notifier = ref.read(downloadsProvider.notifier);
-    if (data.status == TaskStatus.paused) {
-      await notifier.resumeDownload(data.taskId);
-    } else {
-      await notifier.pauseDownload(data.taskId);
+    if (_commandInFlight || _dismissRequested) return;
+    setState(() => _commandInFlight = true);
+    try {
+      final notifier = ref.read(downloadsProvider.notifier);
+      if (data.status == TaskStatus.failed || data.status == TaskStatus.notFound) {
+        await notifier.retryDownload(data.taskId);
+      } else if (data.status == TaskStatus.paused) {
+        await notifier.resumeDownload(data.taskId);
+      } else {
+        await notifier.pauseDownload(data.taskId);
+      }
+    } catch (error) {
+      if (mounted) _showCommandError(error);
+    } finally {
+      if (mounted) setState(() => _commandInFlight = false);
     }
+  }
+
+  void _showCommandError(Object error) {
+    var message = error.toString().trim();
+    const stateErrorPrefix = 'Bad state: ';
+    if (message.startsWith(stateErrorPrefix)) {
+      message = message.substring(stateErrorPrefix.length).trim();
+    }
+    if (message.isEmpty) message = 'Unable to control download';
+    ref.read(notificationServiceProvider).showError(message);
   }
 
   @override
@@ -116,9 +145,15 @@ class _DownloadProgressDialogState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  data.status == TaskStatus.paused
-                      ? l10n.downloadPaused
-                      : l10n.downloading,
+                  switch (data.status) {
+                    TaskStatus.failed || TaskStatus.notFound => appText(
+                      context, english: 'Download failed', arabic: 'فشل التنزيل',
+                    ),
+                    TaskStatus.paused => l10n.downloadPaused,
+                    TaskStatus.complete => l10n.statusFinished,
+                    TaskStatus.canceled => l10n.statusCanceled,
+                    _ => l10n.downloading,
+                  },
                   style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
@@ -162,7 +197,13 @@ class _DownloadProgressDialogState
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      formatDownloadSizePair(
+                      data.completedPages != null
+                          ? formatDownloadPageCount(
+                              completedPages: data.completedPages,
+                              totalPages: data.totalPages,
+                              pageLabel: appText(context, english: 'pages', arabic: 'صفحة'),
+                            )
+                          : formatDownloadSizePair(
                         totalBytes: data.totalSize,
                         progress: data.progress,
                         fractionDigits: 2,
@@ -198,9 +239,10 @@ class _DownloadProgressDialogState
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    if (data.progress < 1.0) ...[
+                    if (data.status != TaskStatus.complete &&
+                        data.status != TaskStatus.canceled) ...[
                       TextButton(
-                        onPressed: () => _cancelDownload(data),
+                        onPressed: _commandInFlight ? null : () => _cancelDownload(data),
                         style: TextButton.styleFrom(
                           foregroundColor: theme.colorScheme.error,
                         ),
@@ -208,11 +250,13 @@ class _DownloadProgressDialogState
                       ),
                       const SizedBox(width: 8),
                       TextButton(
-                        onPressed: () => _togglePause(data),
+                        onPressed: _commandInFlight ? null : () => _togglePause(data),
                         child: Text(
-                          data.status == TaskStatus.paused
-                              ? l10n.resume
-                              : l10n.pause,
+                          switch (data.status) {
+                            TaskStatus.failed || TaskStatus.notFound => l10n.retry,
+                            TaskStatus.paused => l10n.resume,
+                            _ => l10n.pause,
+                          },
                         ),
                       ),
                       const SizedBox(width: 8),

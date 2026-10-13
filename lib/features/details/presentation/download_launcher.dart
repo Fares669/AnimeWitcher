@@ -97,7 +97,7 @@ class DownloadLauncher {
     }
 
     bool isCanceled = false;
-    bool dialogDismissed = false;
+    bool loadingDialogShown = false;
 
     try {
       final sourceFuture = provider.loadStreamSources(resolveUrl);
@@ -125,27 +125,25 @@ class DownloadLauncher {
         );
       }
       if (selected == null || !context.mounted) return;
-      dialogDismissed = true;
-
       StreamResult stream = selected;
       if (selected.requiresResolution) {
         isCanceled = false;
-        dialogDismissed = false;
+        loadingDialogShown = true;
         unawaited(
           LoadingDialog.show(
             context,
             message: l10n.loading,
             onCancel: () {
               isCanceled = true;
-              dialogDismissed = true;
+              loadingDialogShown = false;
             },
           ),
         );
         final resolved = await provider.loadStreams(selected.url);
         if (isCanceled || !context.mounted) return;
-        if (!dialogDismissed) {
-          Navigator.of(context).pop();
-          dialogDismissed = true;
+        if (loadingDialogShown) {
+          Navigator.of(context, rootNavigator: true).pop();
+          loadingDialogShown = false;
         }
         if (resolved.isEmpty) {
           throw Exception('تعذر استخراج رابط صالح من هذا المصدر.');
@@ -165,8 +163,9 @@ class DownloadLauncher {
       );
     } catch (e) {
       if (!context.mounted) return;
-      if (!isCanceled && !dialogDismissed) {
-        Navigator.of(context).pop();
+      if (!isCanceled && loadingDialogShown) {
+        Navigator.of(context, rootNavigator: true).pop();
+        loadingDialogShown = false;
       }
       _ref
           .read(notificationServiceProvider)
@@ -354,27 +353,27 @@ class DownloadLauncher {
                       metadata.mimeType,
                     );
                     final String filename;
-                    if (episodeData != null &&
+                    if (metadata.filename != null) {
+                      filename = metadata.filename!;
+                    } else if (episodeData != null &&
                         usesEpisodeDownloadFileName(
                           episode: episodeData.episode,
                           title: episodeData.name,
                           serverName: episodeData.serverName,
                         )) {
-                      final episodeLabel = sanitizeDownloadFileName(
-                        formatEpisodeFileName(
-                          episode: episodeData.episode,
-                          title: episodeData.name,
-                          quality: stream.quality,
-                          isFinal: episodeData.isFinal,
-                          serverName: episodeData.serverName,
-                        ),
+                      final episodeLabel = formatEpisodeDownloadFileName(
+                        episode: episodeData.episode,
+                        title: episodeData.name,
+                        quality: stream.quality,
+                        isFinal: episodeData.isFinal,
+                        serverName: episodeData.serverName,
                       );
                       filename = '$episodeLabel$extension';
                     } else {
                       final sanitizedTitle = sanitizeDownloadFileName(
-                        item.title.replaceAll(RegExp(r'[^\w\s-]'), '').trim(),
+                        item.title,
                       );
-                      filename = '$sanitizedTitle$extension';
+                      filename = '${sanitizedTitle.isEmpty ? 'video' : sanitizedTitle}$extension';
                     }
 
                     final destinationPath = await downloadDestinationPathV2(

@@ -11,7 +11,40 @@ import 'package:animewitcher/core/services/download_v2/logical_download_store_v2
 import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/manga_image_fixtures.dart';
+
 void main() {
+  test('simultaneous chapters with the same readable path retain one canonical writer', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-manga-clean-collision-');
+    addTearDown(() => temp.delete(recursive: true));
+    final gateway = _Gateway();
+    final store = InMemoryLogicalDownloadStoreV2();
+    final manager = DownloadManagerV2(store: store, gateway: gateway, sourceResolver: _VideoResolver(),
+      mangaChapterPageResolver: _MangaResolver());
+    addTearDown(manager.dispose);
+    final results = await Future.wait([
+      for (final chapter in ['first', 'second'])
+        () async {
+          try {
+            await manager.start(DownloadStartRequestV2(
+              logicalId: logicalDownloadIdForMangaChapter(mangaId: 'm1', chapterId: chapter),
+              mediaKind: DownloadMediaKind.mangaChapter, mediaId: 'm1', unitKey: chapter, variantKey: 'pages',
+              destinationPath: '${temp.path}/الفصل 357', sourceDescriptor: const {},
+              allowPause: true, retries: 1, parallelChunks: 1,
+            ));
+            return true;
+          } on StateError catch (error) {
+            expect(error.message, contains('Canonical destination is already owned'));
+            return false;
+          }
+        }(),
+    ]);
+    expect(results.where((started) => started), hasLength(1));
+    expect(gateway.mangaSpecs, hasLength(1));
+    expect(await store.all(), hasLength(1));
+    expect(gateway.mangaSpecs.single.destinationDirectory, '${temp.path}/الفصل 357');
+  });
+
   test('startup orphan chapters respect admission without changing generation or pages', () async {
     final temp = await Directory.systemTemp.createTemp('aw-manga-orphans-');
     addTearDown(() => temp.delete(recursive: true));
@@ -26,7 +59,7 @@ void main() {
       ids.add(id);
       final dir = Directory('${temp.path}/$chapter');
       await dir.create();
-      await File('${dir.path}/0001.webp').writeAsBytes([1, 2, 3]);
+      await File('${dir.path}/0001.webp').writeAsBytes(tinyMangaPng);
       await store.put(
         LogicalDownloadRecordV2(
           schemaVersion: kLogicalDownloadSchemaVersionV2,
@@ -64,11 +97,7 @@ void main() {
     );
     expect(waiting.generation, 3);
     expect(waiting.taskId, taskIdForGeneration(waiting.logicalId, 3));
-    expect(await File('${waiting.destinationPath}/0001.webp').readAsBytes(), [
-      1,
-      2,
-      3,
-    ]);
+    expect(await File('${waiting.destinationPath}/0001.webp').readAsBytes(), tinyMangaPng);
     expect(
       (await manager.resume(waiting.logicalId)).status,
       DownloadTransportStatus.queued,
@@ -81,11 +110,7 @@ void main() {
     expect(gateway.mangaSpecs, hasLength(2));
     expect(gateway.mangaSpecs.last.taskId, waiting.taskId);
     expect((await store.get(waiting.logicalId))?.generation, 3);
-    expect(await File('${waiting.destinationPath}/0001.webp').readAsBytes(), [
-      1,
-      2,
-      3,
-    ]);
+    expect(await File('${waiting.destinationPath}/0001.webp').readAsBytes(), tinyMangaPng);
   });
 
   test('manga start resolves pages and never uses video parallelism', () async {
@@ -375,6 +400,11 @@ final class _Gateway
     videoSpecs.add(spec);
     return handles.putIfAbsent(spec.taskId, () => _Handle(spec.taskId));
   }
+
+  @override
+  Future<MangaChapterTransportHandleV2?> attachMangaChapterOwnershipV2(
+    String parentTaskId, {required int configuredConnections}
+  ) async => null;
 
   @override
   Future<DownloadTransportHandle> startMangaChapter(

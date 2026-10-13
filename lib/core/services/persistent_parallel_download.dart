@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import 'download_connection_governor.dart';
@@ -19,7 +20,7 @@ import '../utils/download_resume.dart';
 const Duration kParallelProgressCoalesceDelay = Duration(seconds: 1);
 
 /// Progress manifests are durable recovery checkpoints, not a telemetry bus.
-/// Persist live-byte hints at a low cadence while bytes are flowing; exact
+/// Persist changes to recoverable disk bytes at a low cadence; exact
 /// pause/cancel boundaries and the final all-parts-complete boundary still
 /// persist synchronously. Individual child completions are already durable in
 /// their part file + TaskRecord and are coalesced here so 5-16 workers cannot
@@ -51,9 +52,13 @@ class ParallelAssemblyFailure {
 /// after its parent source URL was refreshed. Version 5 adds exact per-part
 /// durable byte counters. Version 6 also persists the complete logical parent
 /// task descriptor so a manifest can participate in startup inventory even if
-/// executor/JobStore projections were lost. Floating-point progress remains
+/// executor/JobStore projections were lost. Version 7 adds a hashed private
+/// ready-to-publish checkpoint for exclusive final-file crash recovery.
+/// Floating-point progress remains
 /// presentation/history only and is never recovery byte authority.
-const int kParallelManifestSchemaVersion = 6;
+const int kParallelManifestSchemaVersion = 7;
+
+typedef ParallelManifestFileResolver = Future<File> Function(DownloadTask task);
 
 class ParallelManifestRecoveryEvidence {
   const ParallelManifestRecoveryEvidence({
@@ -98,7 +103,10 @@ class _DiscoveredParallelManifestCandidate {
 /// remain visible as unresolved evidence so startup can avoid silently
 /// discarding their children without fabricating a parent.
 Future<List<ParallelManifestRecoveryEvidence>>
-discoverParallelManifestRecoveryEvidence(Iterable<Directory> roots) async {
+discoverParallelManifestRecoveryEvidence(
+  Iterable<Directory> roots, {
+  ParallelManifestFileResolver? manifestFileResolver,
+}) async {
   final grouped = <String, List<_DiscoveredParallelManifestCandidate>>{};
 
   for (final root in roots) {
@@ -139,8 +147,35 @@ discoverParallelManifestRecoveryEvidence(Iterable<Directory> roots) async {
               (snapshot['checkpointSequence'] as num?)?.toInt() ?? 0;
           if (checkpointSequence < 0) continue;
           final rawParts = snapshot['parts'];
-          if (rawParts is! List || rawParts.isEmpty) continue;
+          if (rawParts is! List ||
+              rawParts.isEmpty ||
+              rawParts.length > kDownloadLegacyWorkUnitsMax)
+            continue;
 
+          ParallelDownloadTask? parentTask;
+          final rawParent = snapshot['parentTask'];
+          if (schemaVersion >= 6) {
+            if (rawParent is! Map) continue;
+            final restored = Task.createFromJson(
+              Map<String, dynamic>.from(rawParent),
+            );
+            if (restored is! ParallelDownloadTask ||
+                restored.taskId != parentTaskId)
+              continue;
+            final legacyManifest = p.normalize(
+              '${await restored.filePath()}.parts/manifest.json',
+            );
+            final privateManifest = manifestFileResolver == null
+                ? null
+                : p.normalize((await manifestFileResolver(restored)).path);
+            if (canonicalPath != legacyManifest &&
+                canonicalPath != privateManifest)
+              continue;
+            parentTask = restored;
+          }
+          final ownedPartsDirectory = parentTask == null
+              ? p.normalize(p.dirname(canonicalPath))
+              : p.normalize('${await parentTask.filePath()}.parts');
           final childTasks = <DownloadTask>[];
           var layoutValid = true;
           var nextByte = 0;
@@ -172,7 +207,6 @@ discoverParallelManifestRecoveryEvidence(Iterable<Directory> roots) async {
               break;
             }
             final childPath = p.normalize(await restored.filePath());
-            final ownedPartsDirectory = p.normalize(p.dirname(canonicalPath));
             if (!p.equals(p.dirname(childPath), ownedPartsDirectory)) {
               layoutValid = false;
               break;
@@ -207,27 +241,6 @@ discoverParallelManifestRecoveryEvidence(Iterable<Directory> roots) async {
               ? declaredBytes
               : calculatedBytes;
 
-          ParallelDownloadTask? parentTask;
-          final rawParent = snapshot['parentTask'];
-          if (schemaVersion >= 6 && rawParent is Map) {
-            try {
-              final restored = Task.createFromJson(
-                Map<String, dynamic>.from(rawParent),
-              );
-              if (restored is ParallelDownloadTask &&
-                  restored.taskId == parentTaskId) {
-                final expectedManifest = p.normalize(
-                  '${await restored.filePath()}.parts/manifest.json',
-                );
-                if (expectedManifest == canonicalPath) {
-                  parentTask = restored;
-                }
-              }
-            } catch (_) {
-              parentTask = null;
-            }
-          }
-
           final stat = await entity.stat();
           final evidence = ParallelManifestRecoveryEvidence(
             manifestFile: File(canonicalPath),
@@ -242,7 +255,7 @@ discoverParallelManifestRecoveryEvidence(Iterable<Directory> roots) async {
           );
           grouped
               .putIfAbsent(
-                canonicalPath,
+                parentTask == null ? canonicalPath : 'parent:$parentTaskId',
                 () => <_DiscoveredParallelManifestCandidate>[],
               )
               .add(
@@ -423,6 +436,8 @@ class PersistentParallelDownload {
     this.onHostSample,
     this.availableStorageBytes,
     this.onAssemblyFailure,
+    this.manifestFileResolver,
+    this.promoteFile,
     this.assemblyStorageReserveBytes = kParallelAssemblyStorageReserveBytes,
   });
 
@@ -446,6 +461,7 @@ class PersistentParallelDownload {
     DownloadTask task,
     File file,
     int bytes,
+    int resourceSize,
   )?
   verifyPartSource;
 
@@ -469,6 +485,10 @@ class PersistentParallelDownload {
   final Future<int?> Function(String path)? availableStorageBytes;
   final void Function(ParallelAssemblyFailure failure)? onAssemblyFailure;
   final int assemblyStorageReserveBytes;
+  final ParallelManifestFileResolver? manifestFileResolver;
+  final Future<bool> Function(File source, File target, int expectedBytes)?
+  promoteFile;
+  final Set<String> _unresolvedCheckpointIds = <String>{};
 
   final Map<String, _ParallelSession> _sessions = {};
   final Map<String, _ParallelSession> _children = {};
@@ -726,7 +746,12 @@ class PersistentParallelDownload {
         probeHeaders['Range'] = 'bytes=${part.from}-${part.to}';
         probeHeaders['Accept-Encoding'] = 'identity';
         final probeTask = part.task.copyWith(url: url, headers: probeHeaders);
-        final probe = await verifier(probeTask, localFile, localBytes);
+        final probe = await verifier(
+          probeTask,
+          localFile,
+          localBytes,
+          session.size,
+        );
         if (!probe.matches) return null;
         final observed = probe.validator;
         if (observed != null) {
@@ -742,6 +767,7 @@ class PersistentParallelDownload {
         headers: Map<String, String>.from(headers),
       );
       session.task = updated;
+      session.sourceRefreshPending = false;
       session.resourceValidator = refreshedValidator;
       for (final part in session.parts) {
         final childHeaders = Map<String, String>.from(headers)
@@ -791,18 +817,33 @@ class PersistentParallelDownload {
   int get _connectionBudget =>
       maxActiveConnections.clamp(1, kDownloadGlobalConnectionBudget).toInt();
 
+  Future<Directory> _partsDirectory(DownloadTask task) async =>
+      Directory('${await task.filePath()}.parts');
+
+  Future<File> _legacyManifest(DownloadTask task) async =>
+      File(p.join((await _partsDirectory(task)).path, 'manifest.json'));
+
   Future<File> _manifest(DownloadTask task) async =>
-      File('${await task.filePath()}.parts/manifest.json');
+      manifestFileResolver == null
+      ? await _legacyManifest(task)
+      : await manifestFileResolver!(task);
 
   Future<List<File>> _orderedManifestCandidates(
     File manifest,
     File temp,
-    String taskId,
-  ) async {
+    String taskId, {
+    File? legacy,
+  }) async {
     final ranked = <_ManifestRestoreCandidate>[];
-    for (final file in <File>[manifest, temp]) {
+    final files = <File>[manifest, temp];
+    if (legacy != null && !p.equals(legacy.path, manifest.path)) {
+      files.addAll(<File>[legacy, File('${legacy.path}.tmp')]);
+    }
+    for (final file in files) {
       try {
-        if (!await file.exists()) continue;
+        if (await FileSystemEntity.type(file.path, followLinks: false) !=
+            FileSystemEntityType.file)
+          continue;
         final decoded = jsonDecode(await file.readAsString());
         if (decoded is! Map) continue;
         final snapshot = Map<String, dynamic>.from(decoded);
@@ -820,7 +861,7 @@ class PersistentParallelDownload {
             file: file,
             sequence: sequence,
             modifiedMillis: stat.modified.millisecondsSinceEpoch,
-            isTemp: file.path == temp.path,
+            isTemp: file.path.endsWith('.tmp'),
           ),
         );
       } catch (_) {
@@ -849,6 +890,69 @@ class PersistentParallelDownload {
     }
     if (total <= 0) return false;
     return declaredTotalBytes <= 0 || declaredTotalBytes == total;
+  }
+
+  Future<bool> _validRestoredOwnership(
+    ParallelDownloadTask task,
+    List<_DownloadPart> parts,
+  ) async {
+    final directory = p.normalize((await _partsDirectory(task)).path);
+    final directoryType = await FileSystemEntity.type(
+      directory,
+      followLinks: false,
+    );
+    if (directoryType != FileSystemEntityType.notFound &&
+        directoryType != FileSystemEntityType.directory)
+      return false;
+    final ids = <String>{};
+    final paths = <String>{};
+    for (final part in parts) {
+      final path = p.normalize(await part.task.filePath());
+      if (await FileSystemEntity.type(path, followLinks: false) ==
+          FileSystemEntityType.link)
+        return false;
+      if (!part.task.taskId.startsWith('${task.taskId}.part.') ||
+          !p.equals(p.dirname(path), directory) ||
+          !ids.add(part.task.taskId) ||
+          !paths.add(path))
+        return false;
+    }
+    return true;
+  }
+
+  Future<void> _deleteLegacyCheckpoint(_ParallelSession session) async {
+    final legacy = await _legacyManifest(session.task);
+    if (p.equals(legacy.path, session.manifest.path)) return;
+    for (final file in <File>[legacy, File('${legacy.path}.tmp')]) {
+      try {
+        if (await FileSystemEntity.type(file.path, followLinks: false) !=
+            FileSystemEntityType.file) continue;
+        final snapshot = jsonDecode(await file.readAsString());
+        if (snapshot is! Map || snapshot['parentTaskId'] != session.task.taskId)
+          continue;
+        final rawParent = snapshot['parentTask'];
+        if (rawParent is Map) {
+          final parent = Task.createFromJson(Map<String, dynamic>.from(rawParent));
+          if (parent is! ParallelDownloadTask ||
+              parent.taskId != session.task.taskId ||
+              !p.equals(await parent.filePath(), await session.task.filePath()))
+            continue;
+        } else if ((snapshot['schemaVersion'] as num? ?? 1) >= 6) {
+          continue;
+        }
+        final rawParts = snapshot['parts'];
+        if (rawParts is! List || rawParts.length > kDownloadLegacyWorkUnitsMax)
+          continue;
+        final parts = rawParts.map((raw) => _DownloadPart.fromJson(
+          Map<String, dynamic>.from(raw as Map),
+        )).toList(growable: false);
+        if (!_validRestoredLayout(parts, session.size) ||
+            !await _validRestoredOwnership(session.task, parts)) continue;
+        await file.delete();
+      } catch (_) {
+        // Unreadable or foreign legacy evidence is never ours to remove.
+      }
+    }
   }
 
   int? _taskAttemptGeneration(Task task) {
@@ -901,6 +1005,7 @@ class PersistentParallelDownload {
   }
 
   void _invalidatePartAttempt(_ParallelSession session, _DownloadPart part) {
+    part.lastProgressAdvanceAt = null;
     part.attemptGeneration = part.attemptGeneration <= 0
         ? 1
         : part.attemptGeneration + 1;
@@ -933,10 +1038,22 @@ class PersistentParallelDownload {
     if (_sessions.containsKey(task.taskId)) return true;
     final manifest = await _manifest(task);
     final temp = File('${manifest.path}.tmp');
+    final legacy = await _legacyManifest(task);
+    for (final file in <File>[
+      manifest,
+      temp,
+      legacy,
+      File('${legacy.path}.tmp'),
+    ]) {
+      if (await FileSystemEntity.type(file.path, followLinks: false) !=
+          FileSystemEntityType.notFound)
+        _unresolvedCheckpointIds.add(task.taskId);
+    }
     final candidates = await _orderedManifestCandidates(
       manifest,
       temp,
       task.taskId,
+      legacy: legacy,
     );
 
     for (final candidate in candidates) {
@@ -954,6 +1071,17 @@ class PersistentParallelDownload {
             parentTaskId.isNotEmpty &&
             parentTaskId != task.taskId) {
           continue;
+        }
+        if (schemaVersion >= 6) {
+          final rawParent = json['parentTask'];
+          if (rawParent is! Map) continue;
+          final restoredParent = Task.createFromJson(
+            Map<String, dynamic>.from(rawParent),
+          );
+          if (restoredParent is! ParallelDownloadTask ||
+              restoredParent.taskId != task.taskId ||
+              !p.equals(await restoredParent.filePath(), await task.filePath()))
+            continue;
         }
         final savedGeneration = (json['generation'] as num?)?.toInt() ?? 0;
         final checkpointSequence =
@@ -974,7 +1102,8 @@ class PersistentParallelDownload {
             .toList(growable: false);
         if (parts.length > kDownloadLegacyWorkUnitsMax ||
             parts.any((part) => part.from < 0 || part.to < part.from) ||
-            !_validRestoredLayout(parts, declaredTotalBytes)) {
+            !_validRestoredLayout(parts, declaredTotalBytes) ||
+            !await _validRestoredOwnership(task, parts)) {
           continue;
         }
         var contiguous = parts.first.from == 0;
@@ -994,26 +1123,52 @@ class PersistentParallelDownload {
         final savedValidator = json['resourceValidator'] is String
             ? (json['resourceValidator'] as String).trim()
             : '';
-        final session = _ParallelSession(
-          task,
-          manifest,
-          parts,
-          generation: savedGeneration,
-          resourceValidator: savedValidator.isEmpty ? null : savedValidator,
-        )..checkpointSequence = checkpointSequence;
+        final session =
+            _ParallelSession(
+                task,
+                manifest,
+                parts,
+                generation: savedGeneration,
+                resourceValidator: savedValidator.isEmpty
+                    ? null
+                    : savedValidator,
+              )
+              ..checkpointSequence = checkpointSequence
+              ..sourceRefreshPending = json['sourceRefreshPending'] == true
+              ..fullBodyCancellationPending =
+                  json['fullBodyCancellationPending'] == true;
+        final rawReady = json['readyToPublish'];
+        if (rawReady != null) {
+          session.readyToPublish = await _readReadyPromotion(
+            session,
+            rawReady as Object,
+          );
+          if (session.readyToPublish == null) continue;
+          session.publicationOwnershipKnown = false;
+        }
         _applyPinnedValidatorToPendingParts(session);
         _register(session);
         await _restoreNativeOwnership(session);
 
-        // A kill can happen after the durable .tmp write and before rename.
-        // Recover that checkpoint instead of throwing all saved ranges away.
-        if (candidate.path == temp.path) {
-          await manifest.parent.create(recursive: true);
-          await manifest.writeAsString(raw, flush: true);
+        if (!p.equals(candidate.path, manifest.path)) {
           try {
-            if (await temp.exists()) await temp.delete();
-          } catch (_) {}
+            if (p.equals(candidate.path, temp.path)) {
+              await candidate.rename(manifest.path);
+            } else {
+              await _persist(session);
+            }
+            await _deleteLegacyCheckpoint(session);
+          } catch (_) {
+            // Keep this registered descriptor/owner set and every old checkpoint;
+            // failure must never fall through to creating a replacement session.
+            session.checkpointMigrationFailed = true;
+            _recordDiagnostic('parallel.checkpointMigrationFailed', {
+              'taskId': task.taskId,
+            });
+            return true;
+          }
         }
+        _unresolvedCheckpointIds.remove(task.taskId);
 
         // Manifests written before credibleProgress existed may contain 0.999
         // for an unfinished child. That value is background_downloader's tail
@@ -1032,10 +1187,11 @@ class PersistentParallelDownload {
               );
               final bytes = partial == null ? 0 : await partial.length();
               if (bytes == part.size && part.size > 0) {
-                part.complete = true;
-                part.progress = 1;
-                part.credibleProgress = 1;
-                part.durableBytes = part.size;
+                await _adoptExactSizePart(
+                  session,
+                  part,
+                  settleNativeOwner: false,
+                );
               } else if (bytes > 0 && bytes < part.size) {
                 part.credibleProgress = bytes / part.size;
                 part.durableBytes = bytes;
@@ -1094,7 +1250,10 @@ class PersistentParallelDownload {
   }
 
   Future<void> _restoreNativeOwnership(_ParallelSession session) async {
-    final live = await livePartIds?.call() ?? <String>{};
+    final lookup = livePartIds;
+    if (lookup == null) return;
+    final live = await lookup();
+    session.publicationOwnershipKnown = true;
     for (final part in session.parts) {
       part.launched = !part.complete && live.contains(part.task.taskId);
       if (part.launched) {
@@ -1150,6 +1309,14 @@ class PersistentParallelDownload {
     if (_disposed) return false;
     final restored = await restore(task);
     if (!restored) {
+      if (_unresolvedCheckpointIds.contains(task.taskId)) return false;
+      final partsType = await FileSystemEntity.type(
+        (await _partsDirectory(task)).path,
+        followLinks: false,
+      );
+      if (partsType != FileSystemEntityType.notFound &&
+          partsType != FileSystemEntityType.directory)
+        return false;
       if (totalBytes <= 0) return false;
       final requestedConnections = task.chunks
           .clamp(kDownloadPartsMin, kDownloadPartsMax)
@@ -1194,7 +1361,47 @@ class PersistentParallelDownload {
     final session = _sessions[task.taskId]!;
     return session.serialize(() async {
       if (_disposed) return false;
+      if (session.checkpointMigrationFailed) {
+        try {
+          await _persist(session);
+          await _deleteLegacyCheckpoint(session);
+          session.checkpointMigrationFailed = false;
+        } catch (_) {
+          return false;
+        }
+      }
+      if (session.readyToPublish != null) {
+        session.active = true;
+        session.pauseRequested = true;
+        try {
+          await _restoreNativeOwnership(session);
+        } catch (_) {
+          _scheduleCoordinatorRecovery(session);
+          return false;
+        }
+        return _recoverReadyPublication(session);
+      }
       if (session.active) return true;
+      if (session.fullBodyCancellationPending) {
+        session.active = true;
+        session.pauseRequested = true;
+        await _restoreNativeOwnership(session);
+        await _settlePendingFullBodyCancellation(session);
+        return false;
+      }
+      if (session.sourceRefreshPending) {
+        session.active = true;
+        session.pauseRequested = true;
+        await _restoreNativeOwnership(session);
+        if (await _pause(session)) {
+          session.sourceRefreshPending = false;
+          onSourceRefreshNeeded?.call(session.task.taskId);
+        } else {
+          session.pauseRequested = true;
+          _scheduleCoordinatorRecovery(session);
+        }
+        return true;
+      }
       session.cancelAggregateProgress();
       session.generation++;
       session.pauseRequested = false;
@@ -1244,16 +1451,17 @@ class PersistentParallelDownload {
           );
           final file = saved?.file ?? File(await part.task.filePath());
           if (await file.exists() && await file.length() == part.size) {
-            part.complete = true;
-            part.progress = 1;
-            part.credibleProgress = 1;
-            part.durableBytes = part.size;
-            _activeConnectionIds.remove(part.task.taskId);
-            part.launched = false;
-            await saveRecord(
-              TaskRecord(part.task, TaskStatus.complete, 1, part.size),
-            );
-            continue;
+            if (await _adoptExactSizePart(
+              session,
+              part,
+              settleNativeOwner: false,
+            )) {
+              continue;
+            }
+            // Exact size is not resource identity. Preserve unverified bytes
+            // until response evidence or a successful source probe is available.
+            await _pause(session);
+            return false;
           }
           if (saved != null && saved.bytes > 0 && saved.bytes < part.size) {
             final diskProgress = saved.bytes / part.size;
@@ -1711,6 +1919,7 @@ class PersistentParallelDownload {
   }
 
   void _releaseConnection(_DownloadPart part) {
+    part.lastProgressAdvanceAt = null;
     part.recoveryTimer?.cancel();
     part.recoveryTimer = null;
     _cancelPendingStartLease(part);
@@ -1719,6 +1928,42 @@ class PersistentParallelDownload {
     part.launched = false;
     part.speed = 0;
     _schedulePumpAll();
+    final session = _children[part.task.taskId];
+    if (session != null && _activeConnectionsForSession(session) == 0 &&
+        (session.sourceRefreshPending || session.fullBodyCancellationPending)) {
+      unawaited(
+        session
+            .serialize(() async {
+              if (session.fullBodyCancellationPending) {
+                await _settlePendingFullBodyCancellation(session);
+              } else {
+                await _completePendingSourceRefresh(session);
+              }
+            })
+            .catchError((Object _, StackTrace __) {}),
+      );
+    }
+  }
+
+  Future<void> _settlePendingFullBodyCancellation(
+    _ParallelSession session,
+  ) async {
+    if (_disposed ||
+        session.deleted ||
+        !session.fullBodyCancellationPending ||
+        _activeConnectionsForSession(session) != 0)
+      return;
+    // Retain the full body and checkpoint until exclusive publication can retry.
+    // A held fallback must not keep publishing running truth with no owners.
+    await _pause(session);
+  }
+
+  Future<void> _completePendingSourceRefresh(_ParallelSession session) async {
+    if (_disposed || session.deleted || !session.sourceRefreshPending ||
+        _activeConnectionsForSession(session) != 0) return;
+    if (!await _pause(session)) return;
+    session.sourceRefreshPending = false;
+    onSourceRefreshNeeded?.call(session.task.taskId);
   }
 
   void _armTailStallWatch(_ParallelSession session, _DownloadPart part) {
@@ -1843,8 +2088,17 @@ class PersistentParallelDownload {
         return;
       }
 
+      if (!await _pausedNativeOwnerSettled(part)) {
+        _armTailStallWatch(session, part);
+        return;
+      }
       if (await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
         await _afterAdoptedPart(session);
+        return;
+      }
+      final file = File(await part.task.filePath());
+      if (await file.exists() && await file.length() == part.size) {
+        await _pause(session);
         return;
       }
 
@@ -1863,22 +2117,31 @@ class PersistentParallelDownload {
     _DownloadPart part,
   ) async {
     final destinationPath = await part.task.filePath();
-    final partial = await canonicalizePartialDownloadFile(
+    final candidate = await findPartialDownloadFile(
       destinationPath: destinationPath,
     );
+    final partial = candidate == null
+        ? null
+        : (file: candidate, bytes: await candidate.length());
     var savedBytes = partial?.bytes ?? 0;
+    final priorBackup = File('$destinationPath.aw-tail-recovery');
     File? backup;
+    if (await priorBackup.exists()) {
+      final bytes = await priorBackup.length();
+      if (bytes > 0 && bytes <= part.size) backup = priorBackup;
+    }
 
     // cancelTasksWithIds may remove URLSession's child file. Preserve a visible
     // prefix outside the plugin's temp names, then restore it under the same
     // child path so DownloadRangeTransfer can append only the missing suffix.
     if (savedBytes > 0 && savedBytes < part.size && partial != null) {
-      backup = File('$destinationPath.aw-tail-recovery');
       try {
-        if (await backup.exists()) await backup.delete();
-        await partial.file.copy(backup.path);
+        if (backup == null || await backup.length() < savedBytes) {
+          await partial.file.copy(priorBackup.path);
+          backup = priorBackup;
+        }
       } catch (_) {
-        backup = null;
+        // An earlier failed-cancel snapshot remains recovery evidence.
       }
     } else if (savedBytes > part.size) {
       // An oversized child is not a safe prefix of its immutable Range.
@@ -1890,11 +2153,6 @@ class PersistentParallelDownload {
     } catch (_) {
       // Unknown cancellation outcome means ownership is still unsettled.
       // Preserve the active lease and never expose this Range to a new writer.
-      if (backup != null) {
-        try {
-          if (await backup.exists()) await backup.delete();
-        } catch (_) {}
-      }
       _armTailStallWatch(session, part);
       return;
     }
@@ -1921,15 +2179,11 @@ class PersistentParallelDownload {
     );
     savedBytes = restored?.bytes ?? 0;
     if (savedBytes == part.size && part.size > 0) {
-      part.complete = true;
-      part.progress = 1;
-      part.credibleProgress = 1;
-      part.durableBytes = part.size;
-      await saveRecord(
-        TaskRecord(part.task, TaskStatus.complete, 1, part.size),
-      );
-      onPartProgress(session.task.taskId, part.task.taskId, 1);
-      await _afterAdoptedPart(session);
+      if (await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
+        await _afterAdoptedPart(session);
+      } else {
+        await _pause(session);
+      }
       return;
     }
     if (savedBytes < 0 || savedBytes > part.size) savedBytes = 0;
@@ -1959,27 +2213,71 @@ class PersistentParallelDownload {
   /// already reached the destination file. If native still owns the task, ask
   /// it to pause/finalize first; then verify the exact byte count again before
   /// changing durable state. Never infer completion from 99% alone.
+  Future<bool> _pausedNativeOwnerSettled(_DownloadPart part) async {
+    final lookup = livePartIds;
+    if (lookup == null) return true;
+    try {
+      return !(await lookup()).contains(part.task.taskId);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _savedRangeEvidenceMatches(
+    _ParallelSession session,
+    _DownloadPart part,
+    File file,
+  ) async {
+    final verifier = verifyPartSource;
+    if (verifier == null) return false;
+    try {
+      final evidence = await verifier(part.task, file, part.size, session.size);
+      if (!evidence.matches) return false;
+      final pinned = session.resourceValidator;
+      if (pinned != null && evidence.validator != pinned) return false;
+      if (pinned == null && evidence.validator != null) {
+        session.resourceValidator = evidence.validator;
+        _applyPinnedValidatorToPendingParts(session);
+      }
+      return true;
+    } catch (_) {
+      // Offline/unknown verification never consumes saved bytes.
+      return false;
+    }
+  }
+
   Future<bool> _adoptExactSizePart(
     _ParallelSession session,
     _DownloadPart part, {
     required bool settleNativeOwner,
   }) async {
-    if (part.complete || session.deleted) return part.complete;
-
+    if (session.deleted) return false;
     final path = await part.task.filePath();
-    final file = File(path);
-    if (!await file.exists() || await file.length() != part.size) return false;
+    final saved = part.launched
+        ? null
+        : await canonicalizePartialDownloadFile(destinationPath: path);
+    final file = saved?.file ?? File(path);
+    if (await FileSystemEntity.type(file.path, followLinks: false) !=
+            FileSystemEntityType.file ||
+        await file.length() != part.size) {
+      return false;
+    }
+    // Persisted complete checkpoints retain their legacy completion authority.
+    if (!part.complete && verifyPartSource == null) return false;
 
     if (settleNativeOwner) {
       try {
         await pausePart(part.task);
       } catch (_) {
-        // Exact bytes prove content, not that the prior writer relinquished
-        // ownership. Fail closed until native ownership is acknowledged settled.
         return false;
       }
+      if (!await _pausedNativeOwnerSettled(part)) return false;
     }
 
+    if (!await file.exists() || await file.length() != part.size) return false;
+    if (!part.complete && !await _savedRangeEvidenceMatches(session, part, file)) {
+      return false;
+    }
     if (!await file.exists() || await file.length() != part.size) return false;
 
     _markConnectionReady(session, part);
@@ -2092,6 +2390,7 @@ class PersistentParallelDownload {
 
   Future<void> _pollDiskProgress(_ParallelSession session) async {
     var changed = false;
+    final now = DateTime.now();
 
     for (final part in session.parts) {
       // Only a native-owned child can change while the parent is active.
@@ -2099,6 +2398,15 @@ class PersistentParallelDownload {
       // during start/restore, so probing them every second only multiplies file
       // system calls by the total queued work-unit count.
       if (part.complete || !part.launched) continue;
+      final lastAdvance = part.lastProgressAdvanceAt;
+      // Disk probes are a per-child fallback. Repeated identical callbacks do
+      // not postpone recovery, and a completion sentinel always gets checked.
+      if (part.progress < kParallelNativeCompletionSentinel &&
+          lastAdvance != null &&
+          !now.isBefore(lastAdvance) &&
+          now.difference(lastAdvance) < const Duration(seconds: 2)) {
+        continue;
+      }
       try {
         final file = File(await part.task.filePath());
         if (!await file.exists()) continue;
@@ -2115,6 +2423,7 @@ class PersistentParallelDownload {
           continue;
         }
 
+        if (bytes == part.size) continue;
         final diskProgress = (bytes / part.size).clamp(0.0, 1.0).toDouble();
         if (diskProgress <= part.credibleProgress) continue;
 
@@ -2138,7 +2447,6 @@ class PersistentParallelDownload {
       }
     }
 
-    final now = DateTime.now();
     final creditedBytes = session.creditedBytes;
     final previousBytes = session.lastDiskObservedBytes;
     final previousAt = session.lastDiskObservedAt;
@@ -2326,27 +2634,32 @@ class PersistentParallelDownload {
     final lastNativeAgeMs = ageMs(latestNativeAt);
     final stalledForMs = ageMs(session.lastDiagnosticAdvanceAt);
 
-    _recordDiagnostic('parallel.heartbeat', {
-      'taskId': task.taskId,
-      'liveBytes': liveBytes,
-      'durableBytes': durableBytes,
-      'diskBytes': session.lastDiskObservedBytes >= 0
-          ? session.lastDiskObservedBytes
-          : durableBytes,
-      if (hasNativeByteEvidence) 'nativeWrittenBytes': nativeWrittenBytes,
-      'totalBytes': expectedBytes,
-      'checkpointSequence': session.checkpointSequence,
-      'configuredConnections': task.chunks,
-      'activeConnections': activeConnections,
-      'lastByteAgeMs': stalledForMs,
-      'lastNativeCallbackAgeMs': lastNativeAgeMs,
-      'lastCheckpointAgeMs': ageMs(session.lastCheckpointAt),
-      'lastStatusAgeMs': ageMs(session.lastStatusAt),
-      'parentActive': session.active,
-      'pauseRequested': session.pauseRequested,
-      'speedMBps': speed,
-      'diskObservedSpeedMBps': session.diskObservedSpeed,
-    });
+    final lastHeartbeat = session.lastDiagnosticHeartbeatAt;
+    if (lastHeartbeat == null ||
+        timestamp.difference(lastHeartbeat) >= const Duration(seconds: 5)) {
+      session.lastDiagnosticHeartbeatAt = timestamp;
+      _recordDiagnostic('parallel.heartbeat', {
+        'taskId': task.taskId,
+        'liveBytes': liveBytes,
+        'durableBytes': durableBytes,
+        'diskBytes': session.lastDiskObservedBytes >= 0
+            ? session.lastDiskObservedBytes
+            : durableBytes,
+        if (hasNativeByteEvidence) 'nativeWrittenBytes': nativeWrittenBytes,
+        'totalBytes': expectedBytes,
+        'checkpointSequence': session.checkpointSequence,
+        'configuredConnections': task.chunks,
+        'activeConnections': activeConnections,
+        'lastByteAgeMs': stalledForMs,
+        'lastNativeCallbackAgeMs': lastNativeAgeMs,
+        'lastCheckpointAgeMs': ageMs(session.lastCheckpointAt),
+        'lastStatusAgeMs': ageMs(session.lastStatusAt),
+        'parentActive': session.active,
+        'pauseRequested': session.pauseRequested,
+        'speedMBps': speed,
+        'diskObservedSpeedMBps': session.diskObservedSpeed,
+      });
+    }
 
     final progressRegressed =
         session.lastDiagnosticLiveBytes >= 0 &&
@@ -2448,7 +2761,25 @@ class PersistentParallelDownload {
           }
           try {
             await _restoreNativeOwnership(session);
-          } catch (_) {}
+          } catch (_) {
+            _scheduleCoordinatorRecovery(session);
+            return;
+          }
+          if (session.readyToPublish != null) {
+            await _recoverReadyPublication(session);
+            if (session.active) _scheduleCoordinatorRecovery(session);
+            return;
+          }
+          if (session.fullBodyCancellationPending) {
+            await _settlePendingFullBodyCancellation(session);
+            if (!session.active) return;
+            _scheduleCoordinatorRecovery(session);
+          }
+          if (session.sourceRefreshPending) {
+            await _completePendingSourceRefresh(session);
+            if (!session.active) return;
+            _scheduleCoordinatorRecovery(session);
+          }
           _scheduleDiskProgressPoll(session);
           try {
             if (!session.parentRunningReported) {
@@ -2512,7 +2843,7 @@ class PersistentParallelDownload {
   }
 
   bool _hasImmediatelyPumpableWork(_ParallelSession session) {
-    if (_disposed || !session.active || session.deleted) return false;
+    if (_disposed || !session.active || session.pauseRequested || session.deleted) return false;
     if (_activeConnectionsForSession(session) >= session.connectionCeiling) {
       return false;
     }
@@ -2609,6 +2940,7 @@ class PersistentParallelDownload {
       final previousCredible = part.credibleProgress;
       final now = DateTime.now();
       if (credible > previousCredible) {
+        part.lastProgressAdvanceAt = now;
         if (speedBytesPerSecond != null && speedBytesPerSecond > 0) {
           part.speed = speedBytesPerSecond / 1000 / 1000;
         } else if (observedBytes != null &&
@@ -2656,7 +2988,6 @@ class PersistentParallelDownload {
           part.task.taskId,
           part.credibleProgress,
         );
-        _scheduleProgressPersist(session);
       }
 
       if (!session.active) return;
@@ -2777,6 +3108,7 @@ class PersistentParallelDownload {
             }
 
             if (part.credibleProgress > previousCredibleProgress) {
+              part.lastProgressAdvanceAt = DateTime.now();
               // A recovered connection that actually writes bytes is healthy
               // again. Future interruptions start from the short backoff and
               // the tail watchdog gets a fresh grace period.
@@ -2807,7 +3139,6 @@ class PersistentParallelDownload {
               part.task.taskId,
               part.credibleProgress,
             );
-            _scheduleProgressPersist(session);
             if (session.active) {
               _scheduleAggregateProgress(session);
             }
@@ -2935,6 +3266,23 @@ class PersistentParallelDownload {
               _applyConnectionPressure(session, update);
             }
 
+            if (session.fullBodyCancellationPending) {
+              _markConnectionReady(session, part);
+              _releaseConnection(part);
+              _invalidatePartAttempt(session, part);
+              await _persist(session);
+              await _settlePendingFullBodyCancellation(session);
+              return;
+            }
+
+            if (session.sourceRefreshPending) {
+              _markConnectionReady(session, part);
+              _releaseConnection(part);
+              _invalidatePartAttempt(session, part);
+              await _persist(session);
+              return;
+            }
+
             if (_shouldAutomaticallyRecoverPart(update)) {
               // A native child finishing/pausing is not the same thing as the
               // logical episode stopping. Release only this child's connection
@@ -2957,12 +3305,24 @@ class PersistentParallelDownload {
                 (exception is TaskHttpException
                     ? exception.httpResponseCode
                     : null);
-            if (isDownloadUrlRefreshStatus(statusCode, include404: false)) {
-              onSourceRefreshNeeded?.call(session.task.taskId);
-            }
+            final refresh = update.status == TaskStatus.notFound ||
+                isDownloadUrlRefreshStatus(statusCode, include404: true);
+            session.sourceRefreshPending = refresh;
+            session.pauseRequested = true;
             _markConnectionReady(session, part);
             _releaseConnection(part);
-            await _pause(session);
+            if (await _pause(session)) {
+              if (refresh) {
+                session.sourceRefreshPending = false;
+                onSourceRefreshNeeded?.call(session.task.taskId);
+              }
+            } else if (refresh) {
+              // A renewal must not create another generation while siblings
+              // still own this source's ranges. Terminal callbacks/reconcile
+              // release this hold only after the last native owner settles.
+              session.pauseRequested = true;
+              _scheduleCoordinatorRecovery(session);
+            }
           }
         } catch (_) {
           if (!_disposed && session.active && !session.deleted) {
@@ -2994,8 +3354,9 @@ class PersistentParallelDownload {
     switch (update.status) {
       case TaskStatus.paused:
       case TaskStatus.canceled:
-      case TaskStatus.notFound:
         return true;
+      case TaskStatus.notFound:
+        return false;
       case TaskStatus.failed:
         final exception = update.exception;
         final statusCode =
@@ -3101,7 +3462,11 @@ class PersistentParallelDownload {
           _stabilizeSessionForRecovery(session);
           recovering = _schedulePartRecovery(session, part) || recovering;
         }
-        if (session.parts.every((part) => part.complete)) {
+        if (session.fullBodyCancellationPending) {
+          await _settlePendingFullBodyCancellation(session);
+        } else if (session.sourceRefreshPending) {
+          await _completePendingSourceRefresh(session);
+        } else if (session.parts.every((part) => part.complete)) {
           await _assemble(session);
         } else {
           if (recovering) {
@@ -3205,9 +3570,11 @@ class PersistentParallelDownload {
           .toList(growable: false);
     }
 
-    if (stillUnexpected.isNotEmpty ||
-        (lookupLive == null && pauseFailed && drainIds.isEmpty)) {
-      final stillIds = stillUnexpected.map((part) => part.task.taskId).toSet()
+    final ownershipUnknown =
+        !liveLookupSucceeded || (lookupLive == null && pauseFailed);
+    final unresolved = ownershipUnknown ? pauseCandidates : stillUnexpected;
+    if (unresolved.isNotEmpty) {
+      final stillIds = unresolved.map((part) => part.task.taskId).toSet()
         ..addAll(drainIds);
       session.pauseRequested = false;
       session.active = true;
@@ -3223,6 +3590,10 @@ class PersistentParallelDownload {
         }
       }
       _scheduleDiskProgressPoll(session);
+      _scheduleCoordinatorRecovery(session);
+      for (final part in unresolved) {
+        _armTailStallWatch(session, part);
+      }
       await _persist(session);
       await _status(session, TaskStatus.running);
       return false;
@@ -3276,33 +3647,76 @@ class PersistentParallelDownload {
     if (_disposed) return;
     if (!await restore(task)) return;
     final session = _sessions[task.taskId]!;
-    session.deleted = true;
-    session.active = false;
+    final wasActive = session.active;
+    final wasPauseRequested = session.pauseRequested;
+    // Fence admission immediately, but retain callbacks, bytes and writer leases
+    // until the gateway proves accepted cancellation and native settlement.
+    session.pauseRequested = true;
     session.cancelAggregateProgress();
     session.cancelProgressPersist();
     session.cancelDiskProgressPoll();
     session.cancelCoordinatorRecovery();
-    _speedTelemetry.remove(task.taskId);
-    session.resetRamp();
     await session.serialize(() async {
+      try {
+        await cancelParts(
+          session.parts.map((part) => part.task.taskId).toList(),
+        );
+      } catch (_) {
+        session.active = wasActive;
+        session.pauseRequested = wasPauseRequested;
+        if (session.active) {
+          _scheduleDiskProgressPoll(session);
+          _scheduleCoordinatorRecovery(session);
+          for (final part in session.parts) {
+            if (part.launched) _armTailStallWatch(session, part);
+          }
+        }
+        rethrow;
+      }
+      session.deleted = true;
+      session.active = false;
+      _speedTelemetry.remove(task.taskId);
+      session.resetRamp();
       for (final part in session.parts) {
         _activeConnectionIds.remove(part.task.taskId);
+        part.launched = false;
       }
-      await cancelParts(session.parts.map((part) => part.task.taskId).toList());
       await _clearOwnedPromotion(session, removeReservation: true);
       for (final part in session.parts) {
         _children.remove(part.task.taskId);
         final file = File(await part.task.filePath());
         if (await file.exists()) await file.delete();
       }
-      if (await session.manifest.parent.exists()) {
-        await session.manifest.parent.delete(recursive: true);
-      }
+      await _cleanupCheckpointDirectories(session);
       final staging = File('${await task.filePath()}.assembling');
       if (await staging.exists()) await staging.delete();
       _sessions.remove(task.taskId);
     });
     _schedulePumpAll();
+  }
+
+  Future<void> _cleanupCheckpointDirectories(_ParallelSession session) async {
+    for (final file in <File>[
+      session.manifest,
+      File('${session.manifest.path}.tmp'),
+    ]) {
+      if (await FileSystemEntity.type(file.path, followLinks: false) ==
+          FileSystemEntityType.file)
+        await file.delete();
+    }
+    final bytes = await _partsDirectory(session.task);
+    final directories = <Directory>[session.manifest.parent];
+    if (!p.equals(bytes.path, session.manifest.parent.path))
+      directories.add(bytes);
+    for (final directory in directories) {
+      try {
+        if (await FileSystemEntity.type(directory.path, followLinks: false) ==
+            FileSystemEntityType.directory)
+          await directory.delete();
+      } on FileSystemException {
+        // A foreign/unknown artifact never makes its directory ours to sweep.
+      }
+    }
   }
 
   Future<void> _status(_ParallelSession session, TaskStatus status) async {
@@ -3352,6 +3766,21 @@ class PersistentParallelDownload {
 
   Future<void> _persist(_ParallelSession session) async {
     if (session.deleted) return;
+    // Recheck the trusted resolver and no-follow leaves on every credential write.
+    if (!p.equals((await _manifest(session.task)).path, session.manifest.path)) {
+      throw FileSystemException('Checkpoint location changed', session.manifest.path);
+    }
+    final temp = File('${session.manifest.path}.tmp');
+    for (final file in <File>[session.manifest, temp]) {
+      final type = await FileSystemEntity.type(file.path, followLinks: false);
+      if (type != FileSystemEntityType.notFound && type != FileSystemEntityType.file) {
+        throw FileSystemException('Unsafe checkpoint leaf', file.path);
+      }
+    }
+    final parentType = await FileSystemEntity.type(session.manifest.parent.path, followLinks: false);
+    if (parentType != FileSystemEntityType.notFound && parentType != FileSystemEntityType.directory) {
+      throw FileSystemException('Unsafe checkpoint directory', session.manifest.parent.path);
+    }
     await session.manifest.parent.create(recursive: true);
     session.checkpointSequence++;
     final payload = jsonEncode({
@@ -3363,18 +3792,14 @@ class PersistentParallelDownload {
       'expectedBytes': session.size,
       'totalBytes': session.size,
       'resourceValidator': session.resourceValidator,
+      'sourceRefreshPending': session.sourceRefreshPending,
+      'fullBodyCancellationPending': session.fullBodyCancellationPending,
+      if (session.readyToPublish != null)
+        'readyToPublish': session.readyToPublish!.toJson(session),
       'parts': session.parts.map((part) => part.toJson()).toList(),
     });
-    final temp = File('${session.manifest.path}.tmp');
     await temp.writeAsString(payload, flush: true);
-    try {
-      await temp.rename(session.manifest.path);
-    } on FileSystemException {
-      await session.manifest.writeAsString(payload, flush: true);
-      try {
-        if (await temp.exists()) await temp.delete();
-      } catch (_) {}
-    }
+    await temp.rename(session.manifest.path);
     session.lastCheckpointAt = DateTime.now();
     final durableBytes = session.creditedBytes;
     if (durableBytes != session.lastDiagnosticCheckpointBytes) {
@@ -3424,12 +3849,6 @@ class PersistentParallelDownload {
     final target = File(await session.task.filePath());
     if (await _promotionSourcePath(session, target) == null) return;
     try {
-      if (removeReservation &&
-          await FileSystemEntity.type(target.path, followLinks: false) ==
-              FileSystemEntityType.file &&
-          await target.length() == 0) {
-        await target.delete();
-      }
       await File('${target.path}.promoting').delete();
     } catch (_) {
       // Keep a locked reservation's marker so later cleanup can prove ownership.
@@ -3474,6 +3893,8 @@ class PersistentParallelDownload {
   }
 
   Future<bool> _adoptCompletedTarget(_ParallelSession session) async {
+    if (session.readyToPublish != null)
+      return _recoverReadyPublication(session);
     final target = File(await session.task.filePath());
     if (await FileSystemEntity.type(target.path, followLinks: false) !=
         FileSystemEntityType.file) {
@@ -3508,31 +3929,10 @@ class PersistentParallelDownload {
       await _finishCompleteSession(session);
       return true;
     }
-    if (length != 0 || sourcePath == null) return false;
-
-    final source = File(sourcePath);
-    if (await FileSystemEntity.type(source.path, followLinks: false) !=
-            FileSystemEntityType.file ||
-        await source.length() != session.size) {
-      return false;
-    }
-    if (p.equals(source.path, '${target.path}.assembling')) {
-      for (final part in session.parts) {
-        final file = File(await part.task.filePath());
-        if (part.launched ||
-            await FileSystemEntity.type(file.path, followLinks: false) !=
-                FileSystemEntityType.file ||
-            await file.length() != part.size) {
-          return false;
-        }
-      }
-    }
-    // The marker is flushed only after the complete source is flushed/closed.
-    // Its matching identity, empty reservation and exact retained bytes allow
-    // recovery without trusting a merely preallocated .assembling file.
-    if (!await _promoteCompletedFile(session, source, target)) return false;
-    await _finishCompleteSession(session);
-    return true;
+    // Legacy markers have no inode token. Even an empty matching target may
+    // be foreign, so retain it and every recovery source for a manual choice.
+    if (length == 0) await _pause(session);
+    return false;
   }
 
   bool _requestedByteRange(_DownloadPart part) => part.task.headers.entries.any(
@@ -3617,6 +4017,17 @@ class PersistentParallelDownload {
     _DownloadPart part,
     TaskStatusUpdate update,
   ) async {
+    if (update.responseStatusCode == null && update.responseHeaders == null) {
+      if (await _savedRangeEvidenceMatches(
+        session, part, File(await part.task.filePath()),
+      )) {
+        return true;
+      }
+      _markConnectionReady(session, part);
+      _releaseConnection(part);
+      await _pause(session);
+      return false;
+    }
     if (!downloadPartResponseMatchesRequestedRange(
       from: part.from,
       to: part.to,
@@ -3666,18 +4077,14 @@ class PersistentParallelDownload {
       return false;
     }
     final target = File(await session.task.filePath());
-    // An unexpected existing target is user-visible state. Never overwrite it
-    // during an automatic fallback. Exact-size targets are adopted earlier in
-    // start(); any other target remains untouched and the parent is paused.
-    if (await target.exists()) return false;
-
-    session.active = false;
-    session.cancelAggregateProgress();
-    session.resetRamp();
-    for (final part in session.parts) {
-      _activeConnectionIds.remove(part.task.taskId);
-      part.launched = false;
-      part.speed = 0;
+    session.pauseRequested = true;
+    _markConnectionReady(session, sourcePart);
+    _releaseConnection(sourcePart);
+    if (!await _prepareReadyPublication(session, source)) return true;
+    if (await FileSystemEntity.type(target.path, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      await _pause(session);
+      return true;
     }
 
     final siblings = session.parts
@@ -3688,12 +4095,31 @@ class PersistentParallelDownload {
       try {
         await cancelParts(siblings);
       } catch (_) {
-        // The full source body is already durable. Late sibling callbacks are
-        // swallowed after _finishCompleteSession removes child mappings.
+        // Consume this completion without ordinary range rejection deleting
+        // the valid full body. Unresolved siblings retain their writer leases.
+        session.fullBodyCancellationPending = true;
+        _scheduleCoordinatorRecovery(session);
+        await _persist(session);
+        if (_activeConnectionsForSession(session) > 0) {
+          await _status(session, TaskStatus.running);
+        } else {
+          await _pause(session);
+        }
+        return true;
       }
     }
 
-    if (!await _promoteCompletedFile(session, source, target)) return false;
+    session.fullBodyCancellationPending = false;
+    session.active = false;
+    session.cancelAggregateProgress();
+    session.resetRamp();
+    for (final part in session.parts) {
+      _activeConnectionIds.remove(part.task.taskId);
+      part.launched = false;
+      part.speed = 0;
+    }
+    if (!await _promoteCompletedFile(session, source, target)) return true;
+
     sourcePart.complete = true;
     sourcePart.progress = 1;
     sourcePart.credibleProgress = 1;
@@ -3723,9 +4149,7 @@ class PersistentParallelDownload {
       final file = File(await part.task.filePath());
       if (await file.exists()) await file.delete();
     }
-    if (await session.manifest.parent.exists()) {
-      await session.manifest.parent.delete(recursive: true);
-    }
+    await _cleanupCheckpointDirectories(session);
     _sessions.remove(session.task.taskId);
     _schedulePumpAll();
   }
@@ -3818,97 +4242,210 @@ class PersistentParallelDownload {
     await _parkForStorageFailure(session);
   }
 
+  Future<String> _fileDigest(File file) async =>
+      (await sha256.bind(file.openRead()).first).toString();
+
+  Future<bool> _ownedPublicationSource(
+    _ParallelSession session,
+    String path,
+  ) async {
+    final normalized = p.normalize(path);
+    if (!p.isAbsolute(path)) return false;
+    final target = await session.task.filePath();
+    if (p.equals(normalized, '$target.assembling')) return true;
+    for (final part in session.parts) {
+      if (p.equals(normalized, await part.task.filePath())) return true;
+    }
+    return false;
+  }
+
+  Future<_ReadyPromotion?> _readReadyPromotion(
+    _ParallelSession session,
+    Object raw,
+  ) async {
+    if (raw is! Map ||
+        raw['parentTaskId'] != session.task.taskId ||
+        raw['generation'] != session.generation ||
+        raw['expectedBytes'] != session.size ||
+        raw['sourcePath'] is! String ||
+        raw['sha256'] is! String ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(raw['sha256'] as String))
+      return null;
+    final sourcePath = raw['sourcePath'] as String;
+    if (!await _ownedPublicationSource(session, sourcePath)) return null;
+    return _ReadyPromotion(sourcePath, raw['sha256'] as String);
+  }
+
+  Future<void> _parkPublication(
+    _ParallelSession session, [
+    Object? error,
+  ]) async {
+    if (error is FileSystemException && _isInsufficientStorageError(error)) {
+      onAssemblyFailure?.call(
+        ParallelAssemblyFailure(
+          parentTaskId: session.task.taskId,
+          reason: ParallelAssemblyFailureReason.insufficientStorage,
+        ),
+      );
+    }
+    if (_activeConnectionsForSession(session) > 0) {
+      try {
+        await _pause(session);
+      } catch (_) {}
+    } else {
+      await _parkForStorageFailure(session);
+    }
+  }
+
+  Future<bool> _prepareReadyPublication(
+    _ParallelSession session,
+    File source,
+  ) async {
+    try {
+      if (!await _ownedPublicationSource(session, source.path) ||
+          await FileSystemEntity.type(source.path, followLinks: false) !=
+              FileSystemEntityType.file ||
+          await source.length() != session.size) {
+        await _parkPublication(session);
+        return false;
+      }
+      final existing = session.readyToPublish;
+      if (existing != null && !p.equals(existing.sourcePath, source.path)) {
+        await _parkPublication(session);
+        return false;
+      }
+      final writer = await source.open(mode: FileMode.writeOnlyAppend);
+      try {
+        await writer.flush();
+      } finally {
+        await writer.close();
+      }
+      final digest = await _fileDigest(source);
+      if (existing != null && existing.sha256Digest != digest) {
+        await _parkPublication(session);
+        return false;
+      }
+      session.readyToPublish = _ReadyPromotion(source.path, digest);
+      await _persist(session);
+      return true;
+    } catch (error) {
+      await _parkPublication(session, error);
+      return false;
+    }
+  }
+
+  Future<bool> _recoverReadyPublication(_ParallelSession session) async {
+    final ready = session.readyToPublish;
+    if (ready == null) return false;
+    if (!session.publicationOwnershipKnown) {
+      _scheduleCoordinatorRecovery(session);
+      return false;
+    }
+    final source = File(ready.sourcePath);
+    final target = File(await session.task.filePath());
+    final sourceType = await FileSystemEntity.type(
+      source.path,
+      followLinks: false,
+    );
+    final targetType = await FileSystemEntity.type(
+      target.path,
+      followLinks: false,
+    );
+    if (targetType != FileSystemEntityType.notFound) {
+      if (sourceType == FileSystemEntityType.notFound &&
+          targetType == FileSystemEntityType.file &&
+          await target.length() == session.size &&
+          await _fileDigest(target) == ready.sha256Digest &&
+          _activeConnectionsForSession(session) == 0) {
+        await _finishCompleteSession(session);
+        return true;
+      }
+      await _parkPublication(session);
+      return false;
+    }
+    if (sourceType != FileSystemEntityType.file ||
+        await source.length() != session.size ||
+        await _fileDigest(source) != ready.sha256Digest) {
+      await _parkPublication(session);
+      return false;
+    }
+    // The retained source was closed before the ready checkpoint. A conflicting
+    // live source owner cannot be discarded or re-paused to force publication.
+    final sourceOwners = <_DownloadPart>[];
+    for (final part in session.parts) {
+      if (part.launched && p.equals(await part.task.filePath(), source.path)) {
+        sourceOwners.add(part);
+      }
+    }
+    if (sourceOwners.isNotEmpty) {
+      _scheduleCoordinatorRecovery(session);
+      return false;
+    }
+    final siblings = <String>[];
+    for (final part in session.parts) {
+      if (!part.complete &&
+          !p.equals(await part.task.filePath(), source.path)) {
+        siblings.add(part.task.taskId);
+      }
+    }
+    try {
+      if (siblings.isNotEmpty) await cancelParts(siblings);
+    } catch (_) {
+      session.fullBodyCancellationPending = true;
+      session.pauseRequested = true;
+      _scheduleCoordinatorRecovery(session);
+      await _persist(session);
+      return false;
+    }
+    for (final part in session.parts) {
+      _activeConnectionIds.remove(part.task.taskId);
+      part.launched = false;
+    }
+    session.fullBodyCancellationPending = false;
+    if (!await _promoteCompletedFile(session, source, target)) return false;
+    await _finishCompleteSession(session);
+    return true;
+  }
+
   Future<bool> _promoteCompletedFile(
     _ParallelSession session,
     File source,
     File target,
   ) async {
-    final marker = File('${target.path}.promoting');
-    var reserved = false;
-    for (var attempt = 0; attempt < 4; attempt++) {
-      if (session.deleted || _disposed) return false;
-      try {
-        if (!reserved) {
-          final markerType = await FileSystemEntity.type(
-            marker.path,
-            followLinks: false,
-          );
-          final savedSource = await _promotionSourcePath(session, target);
-          if (markerType != FileSystemEntityType.notFound &&
-              (savedSource == null || !p.equals(savedSource, source.path))) {
-            await _pause(session);
-            return false;
-          }
-          final interruptedReservation =
-              savedSource != null &&
-              await FileSystemEntity.type(target.path, followLinks: false) ==
-                  FileSystemEntityType.file &&
-              await target.length() == 0;
-          if (!interruptedReservation) {
-            // Atomic create fails if a cooperating creator won the destination.
-            // Unlike a check followed by rename, this reserves the actual path.
-            await target.create(exclusive: true);
-          }
-          if (markerType == FileSystemEntityType.notFound) {
-            await marker.create(exclusive: true);
-            await marker.writeAsString(
-              jsonEncode({
-                'parentTaskId': session.task.taskId,
-                'expectedBytes': session.size,
-                'sourcePath': source.path,
-              }),
-              flush: true,
-            );
-          }
-          // A crash before the marker is flushed parks safely: an unmarked
-          // empty file is never removed or treated as our reservation.
-          reserved = true;
-          _recordDiagnostic('assembly.destinationReserved', {
-            'taskId': session.task.taskId,
-          });
-        }
-        // Detect writers that ignore the exclusive reservation. The stdlib
-        // cannot prevent another process replacing the path after this check.
-        if (await FileSystemEntity.type(target.path, followLinks: false) !=
-                FileSystemEntityType.file ||
-            await target.length() != 0) {
-          await _pause(session);
-          return false;
-        }
-        await source.rename(target.path);
-        try {
-          await marker.delete();
-        } catch (_) {
-          // Restart can adopt the committed target and remove this marker.
-        }
-        return true;
-      } on FileSystemException catch (error) {
-        if (_isInsufficientStorageError(error)) {
-          // Keep the flushed source and any owned reservation for retry.
-          onAssemblyFailure?.call(
-            ParallelAssemblyFailure(
-              parentTaskId: session.task.taskId,
-              reason: ParallelAssemblyFailureReason.insufficientStorage,
-            ),
-          );
-          await _parkForStorageFailure(session);
-          return false;
-        }
-        if (attempt == 3) {
-          _recordDiagnostic('assembly.renameFailed', {
-            'taskId': session.task.taskId,
-            'osError': error.osError?.errorCode,
-          });
-          await _pause(session);
-          return false;
-        }
-        await Future<void>.delayed(Duration(milliseconds: 75 * (attempt + 1)));
-      }
+    if (session.deleted || _disposed) return false;
+    if (!await _prepareReadyPublication(session, source)) return false;
+    if (await FileSystemEntity.type(target.path, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      await _parkPublication(session);
+      return false;
     }
-    return false;
+    final publisher = promoteFile;
+    if (publisher == null) {
+      await _parkPublication(session);
+      return false;
+    }
+    try {
+      if (!await publisher(source, target, session.size) ||
+          await FileSystemEntity.type(source.path, followLinks: false) !=
+              FileSystemEntityType.notFound ||
+          await FileSystemEntity.type(target.path, followLinks: false) !=
+              FileSystemEntityType.file ||
+          await target.length() != session.size) {
+        await _parkPublication(session);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      await _parkPublication(session, error);
+      return false;
+    }
   }
 
   Future<void> _assemble(_ParallelSession session) async {
+    if (session.readyToPublish != null) {
+      await _recoverReadyPublication(session);
+      return;
+    }
     _recordDiagnostic('assembly.begin', {
       'taskId': session.task.taskId,
       'total': session.size,
@@ -4041,6 +4578,11 @@ class _ParallelSession {
   // an explicit start/resume begins a new generation.
   bool pauseRequested = false;
   bool deleted = false;
+  bool sourceRefreshPending = false;
+  bool fullBodyCancellationPending = false;
+  bool checkpointMigrationFailed = false;
+  _ReadyPromotion? readyToPublish;
+  bool publicationOwnershipKnown = true;
   int generation;
   int checkpointSequence = 0;
   String? resourceValidator;
@@ -4064,6 +4606,7 @@ class _ParallelSession {
   DateTime? lastStatusAt;
   String? lastDiagnosticStatus;
   DateTime? lastDiagnosticAdvanceAt;
+  DateTime? lastDiagnosticHeartbeatAt;
   int lastDiagnosticLiveBytes = -1;
   int lastDiagnosticDurableBytes = -1;
   int lastDiagnosticCheckpointBytes = -1;
@@ -4118,6 +4661,7 @@ class _ParallelSession {
     cancelPartRetries();
     activeDiagnosticAnomalies.clear();
     lastDiagnosticAdvanceAt = DateTime.now();
+    lastDiagnosticHeartbeatAt = null;
     connectionCeiling = kDownloadPartsMin;
     lastHealthyConnections = 0;
     slowStartComplete = false;
@@ -4210,6 +4754,7 @@ class _DownloadPart {
   bool needsCredibleProgressRepair;
   int lastNativeBridgeBytes = -1;
   DateTime? lastNativeBridgeAt;
+  DateTime? lastProgressAdvanceAt;
 
   int get size => to - from + 1;
 
@@ -4256,6 +4801,20 @@ class _DownloadPart {
     'complete': complete,
     'attemptGeneration': attemptGeneration,
     'sourceValidationRequired': sourceValidationRequired,
+  };
+}
+
+class _ReadyPromotion {
+  const _ReadyPromotion(this.sourcePath, this.sha256Digest);
+  final String sourcePath;
+  final String sha256Digest;
+
+  Map<String, Object> toJson(_ParallelSession session) => <String, Object>{
+    'parentTaskId': session.task.taskId,
+    'generation': session.generation,
+    'sourcePath': sourcePath,
+    'expectedBytes': session.size,
+    'sha256': sha256Digest,
   };
 }
 

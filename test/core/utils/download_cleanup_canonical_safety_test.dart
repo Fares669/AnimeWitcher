@@ -6,6 +6,32 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 void main() {
+  test('series cleanup preserves a file created immediately before directory deletion', () async {
+    final sandbox = await Directory.systemTemp.createTemp('aw-cleanup-race-');
+    addTearDown(() => sandbox.delete(recursive: true));
+    final root = Directory(p.join(sandbox.path, 'anime'));
+    final title = Directory(p.join(root.path, 'Example'));
+    await title.create(recursive: true);
+    final race = _InjectFileBeforeDelete(title.path);
+    await IOOverrides.runWithIOOverrides(() => deleteSeriesFolderIfNoVideosRemain(
+      File(p.join(title.path, 'deleted.mp4')), appDownloadRoots: [root.path],
+    ), race);
+    expect(race.deletes, greaterThan(0));
+    expect(await File(p.join(title.path, 'arrived.txt')).readAsString(), 'keep');
+  });
+
+  test('series cleanup does not remove unknown empty child directories', () async {
+    final sandbox = await Directory.systemTemp.createTemp('aw-cleanup-user-folder-');
+    addTearDown(() => sandbox.delete(recursive: true));
+    final root = Directory(p.join(sandbox.path, 'anime'));
+    final title = Directory(p.join(root.path, 'Example'));
+    final userFolder = Directory(p.join(title.path, 'User folder'));
+    await userFolder.create(recursive: true);
+    await deleteSeriesFolderIfNoVideosRemain(File(p.join(title.path, 'deleted.mp4')),
+      appDownloadRoots: [root.path]);
+    expect(await userFolder.exists(), isTrue);
+  });
+
   test('default cleanup preserves unrelated Downloads subtree', () async {
     if (Platform.isAndroid || Platform.isIOS) return;
     final root = await Directory.systemTemp.createTemp('aw-cleanup-platform-');
@@ -268,4 +294,42 @@ final class _CleanupPathProvider extends PathProviderPlatform {
 
   @override
   Future<String?> getDownloadsPath() async => downloads;
+}
+
+final class _InjectFileBeforeDelete extends IOOverrides {
+  _InjectFileBeforeDelete(this.target);
+  final String target;
+  int deletes = 0;
+  @override
+  Directory createDirectory(String path) => _RaceDirectory(super.createDirectory(path), this);
+}
+
+final class _RaceDirectory implements Directory {
+  _RaceDirectory(this.delegate, this.race);
+  final Directory delegate;
+  final _InjectFileBeforeDelete race;
+  @override
+  String get path => delegate.path;
+  @override
+  Directory get parent => race.createDirectory(p.dirname(path));
+  @override
+  Directory get absolute => race.createDirectory(delegate.absolute.path);
+  @override
+  Future<bool> exists() => delegate.exists();
+  @override
+  Future<String> resolveSymbolicLinks() => delegate.resolveSymbolicLinks();
+  @override
+  Stream<FileSystemEntity> list({bool recursive = false, bool followLinks = true}) =>
+      delegate.list(recursive: recursive, followLinks: followLinks);
+  @override
+  Future<Directory> delete({bool recursive = false}) async {
+    if (p.normalize(path) == p.normalize(race.target)) {
+      race.deletes++;
+      await File(p.join(path, 'arrived.txt')).writeAsString('keep');
+    }
+    await delegate.delete(recursive: recursive);
+    return this;
+  }
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

@@ -8,6 +8,7 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -69,6 +70,9 @@ void main() {
         'aw_gateway_storage_',
       );
       addTearDown(() => directory.delete(recursive: true));
+      final previousPaths = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _PrivateSupportPaths('${directory.path}/support');
+      addTearDown(() { PathProviderPlatform.instance = previousPaths; });
       final downloader = _StartupDownloader();
       addTearDown(downloader.database.destroy);
       final parent = ParallelDownloadTask(
@@ -203,10 +207,14 @@ void main() {
 }
 
 final class _StartupDownloader implements FileDownloader {
-  _StartupDownloader() : database = Database(_StartupStorage());
+  _StartupDownloader() : database = Database(_StartupStorage()) {
+    transfers = _StartupTransfers(this);
+  }
 
   @override
   final Database database;
+  @override
+  late Transfers transfers;
   final updatesController = StreamController<TaskUpdate>.broadcast();
   bool listenerPresentAtReplay = false;
 
@@ -276,4 +284,25 @@ final class _StartupStorage implements PersistentStorage {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _StartupTransfers implements Transfers {
+  _StartupTransfers(this.downloader);
+  @override
+  final _StartupDownloader downloader;
+  @override
+  Transfer? forId(String taskId) => null;
+  @override
+  Future<List<Transfer>> rehydrateFromDatabase({String? group}) async => [];
+  @override
+  Transfer? remove(String taskId, {bool dispose = true}) => null;
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _PrivateSupportPaths extends PathProviderPlatform {
+  _PrivateSupportPaths(this.path);
+  final String path;
+  @override
+  Future<String?> getApplicationSupportPath() async => path;
 }

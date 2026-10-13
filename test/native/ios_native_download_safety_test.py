@@ -25,6 +25,16 @@ gate = manager[manager.index("private final class DownloadContinuedProcessingCom
 service = "com.animewitcher.native-safety-test." + str(uuid.uuid4())
 encryption = encryption.replace("com.animewitcher.download.nativeQueueEncryption", service)
 checks = r'''
+assert(DownloadPageProgress.acceptsDartUpdate(inForeground: false, incomingPages: 12, currentPages: nil))
+assert(DownloadPageProgress.acceptsDartUpdate(inForeground: false, incomingPages: nil, currentPages: 23), "Manga to video must switch out of page mode while background")
+assert(!DownloadPageProgress.acceptsDartUpdate(inForeground: false, incomingPages: nil, currentPages: nil), "Video keeps native background precedence")
+assert(DownloadPageProgress.acceptsDartUpdate(inForeground: true, incomingPages: nil, currentPages: nil))
+assert(abs(DownloadPageProgress.fraction(completed: 12, total: 23, progress: 0.9) - 12.0 / 23.0) < 0.000001)
+assert(DownloadPageProgress.fraction(completed: 23, total: 23, progress: 0.999) < 1)
+assert(DownloadPageProgress.fraction(completed: 23, total: 23, progress: 1) == 1)
+assert(DownloadPageProgress.fraction(completed: 0, total: -1, progress: 0.9) == 0)
+assert(DownloadPageProgress.label(completed: 12, total: 23) == "12/23 pages")
+assert(DownloadPageProgress.label(completed: 0, total: -1) == "0/? pages")
 let payload = Data(#"{\"url\":\"https://example.test/video?sig=secret\",\"headers\":{\"Authorization\":\"Bearer secret\",\"Cookie\":\"session=secret\"},\"taskJson\":\"embedded credentials\",\"resumeDataBase64\":\"resume payload\"}"#.utf8)
 guard let encrypted = DownloadNativeQueueEncryption.encrypt(payload) else {
   fatalError("Cannot create the isolated test Keychain item")
@@ -60,4 +70,14 @@ with tempfile.TemporaryDirectory(prefix="ios-native-safety-") as directory:
     swift.write_text("import Foundation\nimport CryptoKit\nimport Security\n" + encryption + gate + checks + cleanup)
     executable = Path(directory) / "checks"
     subprocess.run(["swiftc", str(swift), "-o", str(executable)], check=True)
+    subprocess.run([str(executable)], check=True)
+
+with tempfile.TemporaryDirectory(prefix="ios-download-promotion-") as directory:
+    main = Path(directory) / "main.swift"
+    main.write_text((root / "test/native/download_file_promotion_test.swift").read_text())
+    executable = Path(directory) / "promotion-checks"
+    subprocess.run([
+        "swiftc", str(root / "ios/Runner/DownloadCallbackCompatibility.swift"),
+        str(main), "-o", str(executable),
+    ], check=True)
     subprocess.run([str(executable)], check=True)

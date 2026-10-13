@@ -918,6 +918,7 @@ class StorageService {
     int? episode,
     String? episodeTitle,
     String? episodeServerName,
+    String? episodeServerNumber,
     String? episodePosterUrl,
     int? timestamp,
     String? syncedAccountUid,
@@ -953,6 +954,7 @@ class StorageService {
       'episode': episode,
       'episodeTitle': episodeTitle,
       'episodeServerName': episodeServerName,
+      'episodeServerNumber': episodeServerNumber,
       'episodePosterUrl': episodePosterUrl,
       'timestamp': timestamp ?? DateTime.now().millisecondsSinceEpoch,
       if (syncedAccountUid != null)
@@ -1006,6 +1008,7 @@ class StorageService {
     int? episode,
     String? episodeTitle,
     String? episodeServerName,
+    String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
     final canonicalUrl = _canonicalMediaUrl(item.url);
@@ -1035,6 +1038,7 @@ class StorageService {
       episode: episode,
       episodeTitle: episodeTitle,
       episodeServerName: episodeServerName,
+      episodeServerNumber: episodeServerNumber,
       episodePosterUrl: episodePosterUrl,
       timestamp: DateTime.now().millisecondsSinceEpoch,
     );
@@ -1050,6 +1054,7 @@ class StorageService {
     int? episode,
     String? episodeTitle,
     String? episodeServerName,
+    String? episodeServerNumber,
     String? episodePosterUrl,
     int? progressPercent,
     int? timestamp,
@@ -1087,6 +1092,7 @@ class StorageService {
       'episode': episode,
       'episodeTitle': episodeTitle,
       'episodeServerName': episodeServerName,
+      'episodeServerNumber': episodeServerNumber,
       'episodePosterUrl': episodePosterUrl,
       'timestamp': timestamp ?? DateTime.now().millisecondsSinceEpoch,
       if (syncedAccountUid != null)

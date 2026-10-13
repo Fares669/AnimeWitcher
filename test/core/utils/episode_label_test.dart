@@ -1,9 +1,106 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/anizip_service.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
 
 void main() {
+  test('matches bounded Unicode episode base with visible quality suffix', () {
+    final title = List<String>.filled(100, '🧙').join();
+    for (final quality in <String>['720p', '1080p', '1234p']) {
+      final boundedBase = sanitizeDownloadFileName(formatEpisodeFileName(
+        episode: 12, serverName: 'الحلقة 12', title: title,
+      ));
+      final produced = formatEpisodeDownloadFileName(
+        episode: 12, serverName: 'الحلقة 12', title: title, quality: quality,
+      );
+      expect(produced, '$boundedBase ($quality)');
+      final filename = '$produced.mp4';
+      expect(utf8.encode(filename).length, lessThanOrEqualTo(212));
+      expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'الحلقة 12', title: title), isTrue);
+      expect(isDownloadedEpisodeFileName(filename, 13, serverName: 'الحلقة 13', title: title), isFalse);
+    }
+  });
+
+  test('keeps exact creative titles that themselves end with a quality-like suffix', () {
+    final base = formatEpisodeDownloadFileName(
+      episode: 12, serverName: 'الحلقة 12', title: 'Story (720p)',
+    );
+    expect(isDownloadedEpisodeFileName('$base.mp4', 12,
+        serverName: 'الحلقة 12', title: 'Story (720p)'), isTrue);
+    expect(isDownloadedEpisodeFileName('$base (1080p).mp4', 12,
+        serverName: 'الحلقة 12', title: 'Story (720p)'), isTrue);
+  });
+
+  test('matches a legal old long episode filename without rewriting its quality', () {
+    final title = List<String>.filled(100, 'ش').join();
+    final label = formatEpisodeFileName(episode: 12, serverName: 'الحلقة 12', title: title);
+    final filename = '${label.replaceAll(':', '_')} (720p).mp4';
+    expect(utf8.encode(filename).length, greaterThan(200));
+    expect(utf8.encode(filename).length, lessThanOrEqualTo(255));
+    expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'الحلقة 12', title: title), isTrue);
+    expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'حلقة 12', title: title), isFalse);
+  });
+
+  group('portable download filename stems', () {
+    test('dot-only and empty stems leave fallback choice to the caller', () {
+      for (final value in <String>['', ' ', '.', '..', '...', ' . . ']) {
+        expect(sanitizeDownloadFileName(value), isEmpty, reason: value);
+      }
+    });
+
+    test('replaces control characters and removes terminal dots and spaces', () {
+      expect(sanitizeDownloadFileName('chapter\u0000\u001f\u007fend.  '), 'chapter___end');
+      expect(sanitizeDownloadFileName('chapter. .. '), 'chapter');
+      expect(sanitizeDownloadFileName(' chapter\t  name '), 'chapter_ name');
+    });
+
+    test('protects Windows device stems with optional extensions', () {
+      for (final value in <String>[
+        'CON', 'con.jpg', 'PRN', 'aux.txt', 'NUL',
+        for (var index = 1; index <= 9; index++) 'COM$index',
+        for (var index = 1; index <= 9; index++) 'lpt$index.webp',
+      ]) {
+        expect(sanitizeDownloadFileName(value), '_$value');
+      }
+      expect(sanitizeDownloadFileName('COM10'), 'COM10');
+      expect(sanitizeDownloadFileName('console'), 'console');
+    });
+
+    test('leaves ordinary short Unicode labels unchanged', () {
+      const value = 'الفصل الأخير 🧙';
+      expect(sanitizeDownloadFileName(value), value);
+    });
+
+    test('long Unicode stems are bounded and retain distinct SHA-256 suffixes', () {
+      for (final repeated in <String>['ش', '🧙']) {
+        final common = List<String>.filled(128, repeated).join();
+        final firstLabel = '${common}A';
+        final secondLabel = '${common}B';
+        final first = sanitizeDownloadFileName(firstLabel);
+        final second = sanitizeDownloadFileName(secondLabel);
+        expect(first, isNot(second));
+        for (final entry in <String, String>{firstLabel: first, secondLabel: second}.entries) {
+          final stem = entry.value;
+          expect(utf8.encode(stem).length, lessThanOrEqualTo(200));
+          expect(stem, endsWith('-${sha256.convert(utf8.encode(entry.key)).toString().substring(0, 12)}'));
+          expect(stem.runes, isNot(contains(0xfffd)));
+          expect(utf8.decode(utf8.encode(stem)), stem);
+        }
+      }
+    });
+
+    test('truncation hashes the full normalized sanitized stem', () {
+      final raw = '${List<String>.filled(128, 'ا\u0654').join()}/tail. ';
+      final normalized = '${List<String>.filled(128, 'أ').join()}_tail';
+      final expectedHash = sha256.convert(utf8.encode(normalized)).toString().substring(0, 12);
+      expect(sanitizeDownloadFileName(raw), endsWith('-$expectedHash'));
+      expect(utf8.encode(sanitizeDownloadFileName(raw)).length, lessThanOrEqualTo(200));
+    });
+  });
+
   group('isGenericEpisodeTitle', () {
     test('detects Arabic placeholders', () {
       expect(isGenericEpisodeTitle('الحلقة 16'), isTrue);
@@ -703,7 +800,8 @@ void main() {
         'الحلقة 12 والأخيرة',
       );
       expect(episodeTitleForStorage(episode: 1, serverName: 'مترجم'), 'مترجم');
-      expect(episodeTitleForStorage(episode: 11, title: 'الحلقة 11'), '');
+      // The source label is now retained even without a creative/final title.
+      expect(episodeTitleForStorage(episode: 11, title: 'الحلقة 11'), 'الحلقة 11');
     });
 
     test('keeps the label of numberless episodes', () {

@@ -82,6 +82,33 @@ void main() {
     expect(diagnostics.events, <DownloadDiagnosticEventV2>[event]);
   });
 
+  test('a single diagnostic file still rotates at its size limit', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-v2-one-log-');
+    addTearDown(() => directory.delete(recursive: true));
+    final diagnostics = FileDownloadDiagnosticsV2(
+      directoryProvider: () async => directory,
+      enabled: () => true,
+      maxFiles: 1,
+      maxBytes: 450,
+      sessionId: 'one',
+    );
+    for (var index = 0; index < 20; index++) {
+      diagnostics.recordTransport('parallel.heartbeat', {
+        'taskId': 'episode',
+        'liveBytes': index,
+      });
+    }
+    await diagnostics.flush();
+    final files = await diagnostics.listFiles();
+    expect(files, hasLength(1));
+    expect(await files.single.length(), lessThanOrEqualTo(450));
+    final rows = (await files.single.readAsLines())
+        .map((line) => jsonDecode(line) as Map)
+        .toList();
+    expect(rows.last['liveBytes'], 19);
+    expect(diagnostics.lastError, isNull);
+  });
+
   test('file diagnostics exposes support directory and files without V1', () async {
     final directory = await Directory.systemTemp.createTemp('aw-v2-support-log-');
     addTearDown(() => directory.delete(recursive: true));

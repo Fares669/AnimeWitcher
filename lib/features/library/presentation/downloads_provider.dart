@@ -8,6 +8,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/entity/manga.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/download_concurrency.dart';
+import '../../../core/services/download_v2/download_artwork_store_v2.dart';
 import '../../../core/services/download_v2/download_v2_identity.dart';
 import '../../../core/services/download_v2/download_v2_models.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
@@ -25,12 +26,15 @@ class DownloadItem {
   final MangaChapter? chapter;
   final DownloadMediaKind mediaKind;
   final String? logicalId;
+  final bool artworkMetadataVerified;
   final int timestamp;
   final String trackingUrl;
   final String destinationPath;
   final int parallelChunks;
   final int? transferredBytes;
   final int? totalBytes;
+  final int? completedPages;
+  final int? totalPages;
   final double networkSpeedMBps;
   final Duration timeRemaining;
 
@@ -43,12 +47,15 @@ class DownloadItem {
     this.chapter,
     this.mediaKind = DownloadMediaKind.videoEpisode,
     this.logicalId,
+    this.artworkMetadataVerified = false,
     required this.timestamp,
     String? trackingUrl,
     String? destinationPath,
     int? parallelChunks,
     this.transferredBytes,
     this.totalBytes,
+    this.completedPages,
+    this.totalPages,
     this.networkSpeedMBps = -1,
     this.timeRemaining = Duration.zero,
   }) : trackingUrl = trackingUrl ?? task.metaData,
@@ -303,11 +310,16 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     // Progress is ephemeral manager state. Project it from memory every second;
     // do not scan both Hive boxes on the UI isolate for every progress tick.
     _refreshTimer = Timer.periodic(_refreshInterval, (_) {
-      if (_records.any(
-        (record) =>
-            record.intent == DownloadUserIntent.active &&
-            record.completedAtMillis == null,
-      )) {
+      if (_records.any((record) {
+        if (record.completedAtMillis != null ||
+            record.intent == DownloadUserIntent.failed ||
+            record.intent == DownloadUserIntent.canceled) return false;
+        final snapshot = manager.snapshotFor(record.logicalId);
+        return snapshot?.taskId == record.taskId &&
+            (snapshot?.status == DownloadTransportStatus.queued ||
+                snapshot?.status == DownloadTransportStatus.running ||
+                snapshot?.status == DownloadTransportStatus.held);
+      })) {
         _refreshPresentationState();
       }
     });
@@ -382,8 +394,9 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     for (final record in _records) {
       if (record.intent == DownloadUserIntent.canceled) continue;
       final metadata =
-          metadataByTaskId[record.taskId] ??
-          metadataByLogicalId[record.logicalId.value];
+          metadataByTaskId[record.logicalId.value] ??
+          metadataByLogicalId[record.logicalId.value] ??
+          metadataByTaskId[record.taskId];
       if (metadata == null || metadata['item'] is! Map) continue;
 
       final item = MultimediaItem.fromJson(
@@ -399,7 +412,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           : const <String, dynamic>{};
       final chapter = MangaChapter.fromJson(taskSnapshot['chapter']);
       final trackingUrl = _trackingUrlFor(metadata, item, episode, chapter);
-      final snapshot = manager.snapshotFor(record.logicalId);
+      final observed = manager.snapshotFor(record.logicalId);
+      final snapshot = observed?.taskId == record.taskId ? observed : null;
       final task = _presentationTaskFor(record, trackingUrl: trackingUrl);
       final projected = DownloadItem(
         task: task,
@@ -410,22 +424,28 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         chapter: chapter,
         mediaKind: record.mediaKind,
         logicalId: record.logicalId.value,
+        artworkMetadataVerified: downloadArtworkMetadataMatchesRecordV2(metadata, record),
         timestamp: (metadata['timestamp'] as int?) ?? record.updatedAtMillis,
         trackingUrl: trackingUrl,
         destinationPath: record.destinationPath,
         parallelChunks: record.parallelChunks,
         transferredBytes: snapshot?.transferredBytes,
         totalBytes: snapshot?.totalBytes ?? record.expectedBytes,
+        completedPages: snapshot?.completedPages,
+        totalPages: snapshot?.totalPages,
         networkSpeedMBps: snapshot?.networkSpeedMBps ?? -1,
         timeRemaining: snapshot?.timeRemaining ?? Duration.zero,
       );
       items.add(projected);
       if (projected.status == TaskStatus.complete &&
           projected.mediaKind == DownloadMediaKind.videoEpisode &&
+          projected.artworkMetadataVerified &&
           _artworkScheduledIds.add(projected.id)) {
         unawaited(
-          ensureDownloadedEpisodeArtwork(
+          retainDownloadedArtwork(
             taskId: projected.id,
+            logicalId: projected.logicalId!,
+            item: projected.item,
             episode: projected.episode,
           ),
         );
@@ -455,8 +475,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     await removeDownloads(<DownloadItem>[item]);
   }
 
-  Future<void> removeDownloads(List<DownloadItem> items) async {
-    if (items.isEmpty) return;
+  Future<bool> removeDownloads(List<DownloadItem> items) async {
+    if (items.isEmpty) {
+      return true;
+    }
     final current = List<DownloadItem>.from(state.value ?? items);
     final toRemove = <String, DownloadItem>{};
 
@@ -471,7 +493,11 @@ class DownloadsNotifier extends _$DownloadsNotifier {
 
     final manager = ref.read(downloadManagerV2Provider);
     final storage = ref.read(storageServiceProvider);
-    for (final item in toRemove.values) {
+    final droppedIds = <String>{};
+    final orderedItems = toRemove.values.toList()
+      ..sort((a, b) => (a.logicalId?.trim().isNotEmpty == true ? 0 : 1)
+          .compareTo(b.logicalId?.trim().isNotEmpty == true ? 0 : 1));
+    for (final item in orderedItems) {
       final logical = item.logicalId?.trim();
       if (logical != null && logical.isNotEmpty) {
         await manager.delete(DownloadLogicalId(logical));
@@ -486,14 +512,18 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         if (path.isNotEmpty) {
           try {
             final file = File(path);
-            if (await file.exists()) await file.delete();
-          } catch (_) {}
+            if (!await manager.deleteLegacyDownloadedVideo(file)) {
+              continue;
+            }
+          } catch (_) {
+            continue;
+          }
         }
         await storage.removeDownloadMetadata(item.id);
       }
+      droppedIds.add(item.id);
     }
 
-    final droppedIds = toRemove.keys.toSet();
     if (state.value != null) {
       state = AsyncData(
         state.value!.where((item) => !droppedIds.contains(item.id)).toList(),
@@ -502,6 +532,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     // The persisted records, not taskId tombstones, own visibility. New
     // downloads may legitimately reuse the deleted task's generation-one ID.
     await _reloadDurableState();
+    return droppedIds.length == toRemove.length;
   }
 
   Future<void> pauseDownload(String taskId) async {
@@ -555,9 +586,15 @@ TaskStatus _taskStatusFor(
   if (record.completedAtMillis != null) return TaskStatus.complete;
   if (record.intent == DownloadUserIntent.canceled) return TaskStatus.canceled;
   if (record.intent == DownloadUserIntent.failed) return TaskStatus.failed;
-  if (record.intent == DownloadUserIntent.paused) return TaskStatus.paused;
+  final currentSnapshot = snapshot?.taskId == record.taskId ? snapshot : null;
+  if (record.intent == DownloadUserIntent.paused &&
+      (currentSnapshot == null ||
+          currentSnapshot.status == DownloadTransportStatus.paused ||
+          currentSnapshot.status == DownloadTransportStatus.missing)) {
+    return TaskStatus.paused;
+  }
 
-  return switch (snapshot?.status) {
+  return switch (currentSnapshot?.status) {
     DownloadTransportStatus.queued => TaskStatus.enqueued,
     DownloadTransportStatus.running => TaskStatus.running,
     DownloadTransportStatus.held => TaskStatus.waitingToRetry,
@@ -577,7 +614,7 @@ double _progressFor(
   DownloadTransportSnapshot? snapshot,
 ) {
   if (record.completedAtMillis != null) return 1;
-  final progress = snapshot?.progress ?? 0;
+  final progress = snapshot?.taskId == record.taskId ? snapshot?.progress ?? 0 : 0;
   return progress.clamp(0.0, 1.0).toDouble();
 }
 

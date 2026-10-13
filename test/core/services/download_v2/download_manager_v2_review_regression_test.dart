@@ -565,6 +565,34 @@ void main() {
       },
     );
 
+
+    test('native writer stays owned if start acknowledgement throws', () async {
+      final store = InMemoryLogicalDownloadStoreV2();
+      final gateway = _Gateway()..failAcknowledgementAfterStart = true;
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: gateway,
+        sourceResolver: StaticSourceResolverV2(),
+        maxConcurrentDownloads: () => 1,
+      );
+      addTearDown(manager.dispose);
+      final first = _request(
+        logicalId: _logicalId('ack-lost'),
+        destinationPath: '/tmp/aw-v2-ack-lost.mp4',
+      );
+      final second = _request(
+        logicalId: _logicalId('ack-waiter'),
+        destinationPath: '/tmp/aw-v2-ack-waiter.mp4',
+      );
+
+      final recovered = await manager.start(first);
+      expect(recovered.status, DownloadTransportStatus.running);
+      expect((await store.get(first.logicalId))?.intent, DownloadUserIntent.active);
+      expect(manager.snapshotFor(first.logicalId)?.status, DownloadTransportStatus.running);
+      expect((await manager.start(second)).status, DownloadTransportStatus.queued);
+      expect(gateway.startedSpecs, hasLength(1));
+    });
+
     test(
       'scheduled admission promotion retries one transient coordinator error',
       () async {
@@ -690,6 +718,7 @@ Future<void> _waitFor(Future<bool> Function() predicate) async {
 final class _Gateway implements BackgroundDownloaderGateway {
   final List<DownloadTaskSpecV2> startedSpecs = <DownloadTaskSpecV2>[];
   final Map<String, _Handle> _handles = <String, _Handle>{};
+  bool failAcknowledgementAfterStart = false;
 
   @override
   Future<void> initialize() async {}
@@ -706,6 +735,10 @@ final class _Gateway implements BackgroundDownloaderGateway {
       ),
     );
     _handles[spec.taskId] = handle;
+    if (failAcknowledgementAfterStart) {
+      failAcknowledgementAfterStart = false;
+      throw StateError('native start acknowledgement lost');
+    }
     return handle;
   }
 

@@ -3294,6 +3294,8 @@ class AnimeWitcherAccountService {
     String? episodeUrl,
     int? episodeNumber,
     String? episodeTitle,
+    String? episodeServerName,
+    String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
     if (!isSignedIn) return;
@@ -3315,6 +3317,8 @@ class AnimeWitcherAccountService {
         episodeUrl: episodeUrl,
         episodeNumber: episodeNumber,
         episodeTitle: episodeTitle,
+        episodeServerName: episodeServerName,
+        episodeServerNumber: episodeServerNumber,
         episodePosterUrl: episodePosterUrl,
       ),
     );
@@ -3327,6 +3331,8 @@ class AnimeWitcherAccountService {
     String? episodeUrl,
     int? episodeNumber,
     String? episodeTitle,
+    String? episodeServerName,
+    String? episodeServerNumber,
     String? episodePosterUrl,
   }) async {
     if (!isSignedIn) return;
@@ -3348,6 +3354,8 @@ class AnimeWitcherAccountService {
         episodeUrl: episodeUrl,
         episodeNumber: episodeNumber,
         episodeTitle: episodeTitle,
+        episodeServerName: episodeServerName,
+        episodeServerNumber: episodeServerNumber,
         episodePosterUrl: episodePosterUrl,
         updateLastWatched: false,
       ),
@@ -3364,6 +3372,8 @@ class AnimeWitcherAccountService {
     required String? episodeUrl,
     required int? episodeNumber,
     required String? episodeTitle,
+    required String? episodeServerName,
+    required String? episodeServerNumber,
     required String? episodePosterUrl,
     bool updateLastWatched = true,
   }) async {
@@ -3374,6 +3384,16 @@ class AnimeWitcherAccountService {
     // AnimeWitcher rewinds the cloud resume point by two seconds. This avoids
     // reopening immediately after the last spoken line or scene transition.
     final cloudStopPosition = (position - 2000).clamp(0, position).toInt();
+    final episodeName =
+        _originalEpisodeText(episodeServerName) ??
+        episodeTitle ??
+        (episodeNumber == null
+            ? ''
+            : formatEpisodeNumberLabel(
+                episode: episodeNumber,
+                isArabic: true,
+                isFinal: hasFinalEpisodeSuffix(episodeTitle),
+              ));
     final operations = <Future<void>>[];
 
     if (episodeId != null) {
@@ -3398,15 +3418,15 @@ class AnimeWitcherAccountService {
               'users/${profile.documentId}/continue_watching/$animeId',
               <String, dynamic>{
                 'episode_id': episodeId ?? '',
-                'episode_name':
-                    episodeTitle ??
-                    (episodeNumber == null
-                        ? ''
-                        : formatEpisodeNumberLabel(
-                            episode: episodeNumber,
-                            isArabic: true,
-                            isFinal: hasFinalEpisodeSuffix(episodeTitle),
-                          )),
+                'episode_name': episodeName,
+                'episode_metadata_key': jsonEncode([
+                  episodeId ?? '',
+                  episodeName,
+                  episodeNumber ?? 0,
+                ]),
+                'episode_title': episodeTitle ?? '',
+                'episode_server_name': episodeServerName ?? '',
+                'episode_number_raw': episodeServerNumber ?? '',
                 'anime_name': item.title,
                 'anime_type': item.contentType.name,
                 'anime_id': animeId,
@@ -3627,7 +3647,9 @@ class AnimeWitcherAccountService {
       duration: _intValue(raw['duration']),
       episodeUrl: _optionalString(raw['lastEpisodeUrl']),
       episodeNumber: _nullableInt(raw['episode']),
-      episodeTitle: _optionalString(raw['episodeTitle']),
+      episodeTitle: _originalEpisodeText(raw['episodeTitle']),
+      episodeServerName: _originalEpisodeText(raw['episodeServerName']),
+      episodeServerNumber: rawEpisodeNumberForDisplay(raw['episodeServerNumber']),
       episodePosterUrl: _optionalString(raw['episodePosterUrl']),
     );
   }
@@ -3643,6 +3665,17 @@ class AnimeWitcherAccountService {
         await _itemForAnimeId(animeId);
     if (item == null || !_isCurrentProfile(profile)) return;
     final episodeId = _optionalString(fields['episode_id']);
+    // Older clients merge official fields without clearing newer metadata.
+    final hasOriginalMetadata =
+        fields['episode_id'] is String &&
+        fields['episode_name'] is String &&
+        fields['episode_number'] is int &&
+        fields['episode_metadata_key'] ==
+            jsonEncode([
+              fields['episode_id'],
+              fields['episode_name'],
+              fields['episode_number'],
+            ]);
     final episodeUrl =
         _optionalString(fields['episode_url']) ??
         (episodeId == null
@@ -3714,7 +3747,17 @@ class AnimeWitcherAccountService {
       duration,
       lastEpisodeUrl: episodeUrl,
       episode: _cloudEpisodeNumber(fields),
-      episodeTitle: _optionalString(fields['episode_name']),
+      episodeTitle: hasOriginalMetadata && fields['episode_title'] is String
+          ? fields['episode_title'] as String
+          : _originalEpisodeText(fields['episode_name']),
+      episodeServerName: hasOriginalMetadata
+          ? (fields['episode_server_name'] is String
+              ? fields['episode_server_name'] as String
+              : null)
+          : _originalEpisodeText(fields['episode_name']),
+      episodeServerNumber: hasOriginalMetadata
+          ? rawEpisodeNumberForDisplay(fields['episode_number_raw'])
+          : rawEpisodeNumberForDisplay(fields['episode_number']),
       episodePosterUrl: _optionalString(fields['poster']),
       progressPercent: remoteProgress,
       timestamp: syncedAt,
@@ -3978,6 +4021,9 @@ Map<String, dynamic> _map(dynamic raw) {
   if (raw is Map) return Map<String, dynamic>.from(raw);
   return <String, dynamic>{};
 }
+
+String? _originalEpisodeText(dynamic raw) =>
+    raw is String && raw.trim().isNotEmpty ? raw : null;
 
 String? _optionalString(dynamic raw) {
   final value = raw?.toString().trim() ?? '';

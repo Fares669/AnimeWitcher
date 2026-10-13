@@ -4,6 +4,8 @@ import 'package:animewitcher/core/services/persistent_parallel_download.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/parallel_download_fixtures.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -35,6 +37,7 @@ void main() {
       final canceled = <List<String>>[];
       final statuses = <TaskStatus>[];
       final coordinator = PersistentParallelDownload(
+        promoteFile: publishCompletedTestFile,
         startPart: (task, progress, size) async {
           starts.add(task);
           return true;
@@ -120,6 +123,7 @@ void main() {
       final records = <String, TaskRecord>{};
       final starts = <DownloadTask>[];
       final coordinator = PersistentParallelDownload(
+        promoteFile: publishCompletedTestFile,
         startPart: (task, progress, size) async {
           starts.add(task);
           return true;
@@ -182,6 +186,7 @@ void main() {
       final records = <String, TaskRecord>{};
       final starts = <DownloadTask>[];
       final coordinator = PersistentParallelDownload(
+        promoteFile: publishCompletedTestFile,
         startPart: (task, progress, size) async {
           starts.add(task);
           return true;
@@ -244,6 +249,7 @@ void main() {
       final records = <String, TaskRecord>{};
       final starts = <DownloadTask>[];
       final coordinator = PersistentParallelDownload(
+        promoteFile: publishCompletedTestFile,
         startPart: (task, progress, size) async {
           starts.add(task);
           return true;
@@ -304,6 +310,7 @@ void main() {
       final records = <String, TaskRecord>{};
       final starts = <DownloadTask>[];
       final coordinator = PersistentParallelDownload(
+        promoteFile: publishCompletedTestFile,
         startPart: (task, progress, size) async {
           starts.add(task);
           return true;

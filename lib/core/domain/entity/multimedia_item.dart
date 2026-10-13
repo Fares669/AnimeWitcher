@@ -684,6 +684,9 @@ class Episode {
   /// Used for the primary list label and must survive AniZip image enrichment.
   final String serverName;
 
+  /// Original numeric server value for display; [episode] stays the identity.
+  final String? serverNumber;
+
   // Parity fields
   final double? rating;
   final int? runtime;
@@ -703,6 +706,7 @@ class Episode {
     this.isFiller = false,
     this.isFinal = false,
     this.serverName = '',
+    this.serverNumber,
     this.rating,
     this.runtime,
     this.airDate,
@@ -722,6 +726,7 @@ class Episode {
     bool? isFiller,
     bool? isFinal,
     String? serverName,
+    String? serverNumber,
     double? rating,
     int? runtime,
     String? airDate,
@@ -740,6 +745,7 @@ class Episode {
       isFiller: isFiller ?? this.isFiller,
       isFinal: isFinal ?? this.isFinal,
       serverName: serverName ?? this.serverName,
+      serverNumber: serverNumber ?? this.serverNumber,
       rating: rating ?? this.rating,
       runtime: runtime ?? this.runtime,
       airDate: airDate ?? this.airDate,
@@ -775,6 +781,7 @@ class Episode {
         json['isFinal'] ?? json['is_final'] ?? json['final'],
       ),
       serverName: serverName,
+      serverNumber: json['serverNumber'] as String?,
       rating: (json['rating'] as num?)?.toDouble(),
       runtime: (json['runtime'] as int?) ?? (json['duration'] as int?),
       airDate: json['airDate'] as String?,
@@ -844,6 +851,7 @@ class Episode {
       'isFiller': isFiller,
       'isFinal': isFinal,
       'serverName': serverName,
+      if (serverNumber != null) 'serverNumber': serverNumber,
       'rating': rating,
       'runtime': runtime,
       'airDate': airDate,

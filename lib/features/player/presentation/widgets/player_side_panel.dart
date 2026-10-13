@@ -557,7 +557,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
-    if (downloadedFile != null) {
+    if (downloadedFile != null && !isDownloading) {
       return EpisodeActionChip(
         tooltip: isArabic ? 'تم التنزيل' : 'Downloaded',
         icon: Icons.download_done_rounded,
@@ -637,7 +637,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     });
 
     void triggerDownload() {
-      if (downloadedFile != null) {
+      if (downloadedFile != null && !isDownloading) {
         DownloadManagementDialog.show(
           context,
           widget.parentItem,
@@ -648,7 +648,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
         DownloadProgressDialog.show(
           context,
           _playerEpisodeDownloadTitle(widget.parentItem, ep),
-          ep.url,
+          logicalId != null && logicalId.isNotEmpty ? logicalId : ep.url,
         );
       } else {
         ref.read(downloadLauncherProvider).launch(

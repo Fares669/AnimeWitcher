@@ -246,6 +246,10 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
     if (!await active.exists()) return;
     final length = await active.length();
     if (length == 0 || length + incomingBytes <= maxBytes) return;
+    if (maxFiles == 1) {
+      await active.delete();
+      return;
+    }
 
     for (var index = maxFiles - 1; index >= 1; index--) {
       final target = _rotatedLogFile(directory, index);

@@ -59,6 +59,7 @@ Future<DownloadStartRequestV2> mangaChapterDownloadRequest(
   MultimediaItem manga,
   MangaChapter chapter, {
   int parallelChunks = 4,
+  Iterable<LogicalDownloadRecordV2> existingDownloads = const [],
 }) async {
   final mangaId = manga.syncData?['mangaId']?.trim().isNotEmpty == true
       ? manga.syncData!['mangaId']!.trim()
@@ -73,7 +74,11 @@ Future<DownloadStartRequestV2> mangaChapterDownloadRequest(
     mangaId: mangaId,
     chapterId: chapterId,
   );
-  final destination = await mangaChapterDestinationDirectoryV2(manga, chapter);
+  final existing = existingDownloads
+      .where((record) => record.logicalId == logicalId)
+      .firstOrNull;
+  final destination = existing?.destinationPath ??
+      await mangaChapterDestinationDirectoryV2(manga, chapter);
 
   return DownloadStartRequestV2(
     logicalId: logicalId,
@@ -161,9 +166,12 @@ class MangaDetailsController extends _$MangaDetailsController {
       throw StateError('Manga details are not loaded.');
     }
     final storage = ref.read(storageServiceProvider);
+    final manager = ref.read(downloadManagerV2Provider);
+    final existingDownloads = await manager.records.first;
     final request = await mangaChapterDownloadRequest(
       item,
       chapter,
+      existingDownloads: existingDownloads,
       parallelChunks: mangaChapterPageConnectionsFromPreference(
         storage.getDownloadParallelParts(),
       ),
@@ -193,7 +201,7 @@ class MangaDetailsController extends _$MangaDetailsController {
     }
 
     try {
-      await ref.read(downloadManagerV2Provider).start(request);
+      await manager.start(request);
       if (hasExistingMetadata) {
         await storage.saveDownloadMetadata(
           request.logicalId.value,

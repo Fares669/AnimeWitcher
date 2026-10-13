@@ -3395,6 +3395,7 @@ class PlayerController extends Notifier<PlayerState> {
             serverName: episode.serverName,
           ),
           episodeServerName: episode.serverName,
+          episodeServerNumber: episode.serverNumber,
           episodePosterUrl: _episodeArtwork(episode),
         );
   }
@@ -3678,6 +3679,7 @@ class PlayerController extends Notifier<PlayerState> {
                 serverName: nextEpisode.serverName,
               ),
               episodeServerName: nextEpisode.serverName,
+              episodeServerNumber: nextEpisode.serverNumber,
               episodePosterUrl: _episodeArtwork(nextEpisode),
             );
             return;
@@ -3715,6 +3717,7 @@ class PlayerController extends Notifier<PlayerState> {
                       serverName: currentEpisode.serverName,
                     ),
               episodeServerName: currentEpisode?.serverName,
+              episodeServerNumber: currentEpisode?.serverNumber,
               episodePosterUrl: _episodeArtwork(currentEpisode),
             );
       }

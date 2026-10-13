@@ -40,10 +40,18 @@ void main() {
       l10n.statusPaused,
     );
     expect(
-      formatDownloadSpeed(_data(progress: 1, networkSpeed: 2), l10n),
+      formatDownloadSpeed(_data(status: TaskStatus.complete, progress: 1, networkSpeed: 2), l10n),
       l10n.statusFinished,
     );
     expect(formatDownloadSpeed(_data(networkSpeed: 1.5), l10n), '1.50 MB/s');
+  });
+
+  test('full progress does not replace authoritative running or failed status', () {
+    for (final status in [TaskStatus.running, TaskStatus.failed, TaskStatus.notFound]) {
+      final data = _data(status: status, progress: 1, networkSpeed: 2);
+      expect(formatDownloadSpeed(data, l10n), '2.00 MB/s');
+      expect(formatDownloadTimeRemaining(data, l10n), l10n.calculating);
+    }
   });
 
   test('nonfinite speed displays calculating', () {

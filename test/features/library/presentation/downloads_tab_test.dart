@@ -18,10 +18,44 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../support/test_fonts.dart';
 import '../../../support/debug_shots.dart';
+import '../../../support/widget_completion.dart';
+
+class _ArtworkPaths extends PathProviderPlatform {
+  _ArtworkPaths(this.root);
+  final String root;
+  @override
+  Future<String?> getApplicationSupportPath() async => root;
+  @override
+  Future<String?> getTemporaryPath() async => root;
+  @override
+  Future<String?> getApplicationDocumentsPath() async => root;
+}
+
+late Directory _artworkFixtureRoot;
+
+Future<void> _prepareArtworkStorage(WidgetTester tester) async {
+  final original = PathProviderPlatform.instance;
+  PathProviderPlatform.instance = _ArtworkPaths(_artworkFixtureRoot.path);
+  addTearDown(() {
+    PathProviderPlatform.instance = original;
+  });
+}
+
+Future<void> _awaitArtworkLookups(WidgetTester tester) async {
+  for (final builder in tester.widgetList<FutureBuilder<File?>>(
+    find.byWidgetPredicate((widget) => widget is FutureBuilder<File?>),
+  )) {
+    final future = builder.future;
+    if (future != null) await pumpUntilFuture(tester, future, 'completed downloads artwork lookup');
+  }
+  await tester.pump();
+}
 
 MultimediaItem _blackTorch() {
   return MultimediaItem(
@@ -149,6 +183,19 @@ Widget _downloadsApp(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(() async {
+    _artworkFixtureRoot = await Directory.systemTemp.createTemp('aw-downloads-tab-artwork-');
+    final original = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _ArtworkPaths(_artworkFixtureRoot.path);
+    try {
+      // Initialize the singleton before any widget fake zone can own its I/O.
+      await DefaultCacheManager().getFileFromCache('downloads-tab-artwork-fixture')
+          .timeout(const Duration(seconds: 5));
+    } finally {
+      PathProviderPlatform.instance = original;
+    }
+  });
+  tearDownAll(() => _artworkFixtureRoot.delete(recursive: true));
 
   testWidgets('resume failure is caught and surfaced as an error toast', (
     tester,
@@ -403,6 +450,7 @@ void main() {
   testWidgets(
     'two complete records for the same episode collapse into one grouped episode',
     (tester) async {
+      await _prepareArtworkStorage(tester);
       final older = _item(taskId: 'old-complete', timestamp: 100);
       final newer = _item(taskId: 'new-complete', timestamp: 200);
       expect(older.task.taskId, isNot(newer.task.taskId));
@@ -441,6 +489,7 @@ void main() {
 
       await tester.tap(find.text('Black Torch'));
       await tester.pumpAndSettle();
+      await _awaitArtworkLookups(tester);
 
       expect(find.text('الحلقة 9'), findsOneWidget);
       expect(find.byIcon(Icons.play_circle_fill_rounded), findsNothing);
@@ -794,6 +843,7 @@ void main() {
   testWidgets('completed episodes follow the details-page sort direction', (
     tester,
   ) async {
+    await _prepareArtworkStorage(tester);
     final show = MultimediaItem(
       title: 'Scrambled',
       url: 'https://animewitcher.test/scrambled',
@@ -833,6 +883,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Scrambled'));
     await tester.pumpAndSettle();
+    await _awaitArtworkLookups(tester);
 
     final episode12Y = tester.getTopLeft(find.text('الحلقة 12')).dy;
     final episode11Y = tester.getTopLeft(find.text('الحلقة 11')).dy;

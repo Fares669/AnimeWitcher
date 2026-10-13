@@ -86,8 +86,33 @@ void main() {
       },
     );
 
-    test('valid final file is the only path that commits completion', () async {
-      final file = File('${temp.path}/valid.mp4');
+    test('verified completion cleans transport metadata but keeps the file', () async {
+      final file = File('${temp.path}/cleaned.mp4');
+      await file.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
+      final f = _fixture(file.path, expectedBytes: 4);
+      addTearDown(f.manager.dispose);
+      await f.manager.start(f.request);
+      final taskId = f.gateway.startedSpecs.single.taskId;
+
+      f.gateway.emitComplete(taskId);
+      await _waitForRecord(
+        f.store,
+        f.request.logicalId,
+        (record) => record?.completedAtMillis != null,
+      );
+      for (var attempt = 0; attempt < 50; attempt++) {
+        if (await f.gateway.attach(taskId) == null) break;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+
+      expect(await f.gateway.attach(taskId), isNull);
+      expect(await file.readAsBytes(), <int>[1, 2, 3, 4]);
+      expect((await f.store.get(f.request.logicalId))?.completedAtMillis, isNotNull);
+    });
+
+    for (final filename in ['valid.mp4', 'videoplayback']) {
+    test('valid final file $filename commits completion', () async {
+      final file = File('${temp.path}/$filename');
       await file.writeAsBytes(<int>[1, 2, 3, 4], flush: true);
       final f = _fixture(file.path, expectedBytes: 4, nowMillis: () => 777);
       await f.manager.start(f.request);
@@ -99,6 +124,8 @@ void main() {
         (value) => value?.completedAtMillis != null,
       );
 
+      expect(record?.destinationPath, file.path);
+      expect(f.gateway.startedSpecs.single.destinationPath, file.path);
       expect(record?.completedAtMillis, 777);
       expect(record?.failureCategory, isNull);
       expect(record?.failureMessage, isNull);
@@ -107,6 +134,7 @@ void main() {
         DownloadTransportStatus.complete,
       );
     });
+    }
   });
 }
 

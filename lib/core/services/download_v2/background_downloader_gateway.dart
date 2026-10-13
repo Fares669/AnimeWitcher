@@ -3,14 +3,18 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../download_concurrency.dart';
 import '../download_parallel.dart';
 import '../persistent_parallel_download.dart';
 import 'download_v2_diagnostics.dart';
 import 'download_v2_models.dart';
+import 'download_v2_identity.dart';
+import 'manga_chapter_manifest_v2.dart';
 import 'manga_chapter_transport_v2.dart';
 
 /// Package-neutral description of one V2 parent transfer.
@@ -109,6 +113,26 @@ List<String> durableChildTaskIdsForParentV2(
   return ids;
 }
 
+/// Exact generated Manga pages, including the older notification group.
+List<String> mangaChildTaskIdsForParentV2(
+  Iterable<TaskRecord> records, String parentTaskId,
+) {
+  final parent = parseDownloadTaskIdentityV2(parentTaskId);
+  if (parent == null || parent.pageIndex != null ||
+      !parent.logicalId.value.startsWith('manga_')) return [];
+  final ids = <String>[
+    for (final record in records)
+      if ((record.task.group == kDownloadV2SilentPackageGroup ||
+              record.task.group == kDownloadV2PackageGroup) &&
+          record.taskId.startsWith('${parentTaskId}_p') &&
+          parseDownloadTaskIdentityV2(record.taskId)?.pageIndex != null &&
+          parseDownloadTaskIdentityV2(record.taskId)?.logicalId == parent.logicalId &&
+          parseDownloadTaskIdentityV2(record.taskId)?.generation == parent.generation)
+        record.taskId,
+  ]..sort();
+  return ids;
+}
+
 Future<void> configurePackageNotificationsV2(
   FileDownloader downloader,
   DownloadNotificationPrefs prefs,
@@ -152,13 +176,22 @@ Set<String> activeDurablePartTaskIdsV2({
   required Iterable<Task> packageTasks,
   required Iterable<Task> pausedTasks,
 }) {
-  final pausedIds = pausedTasks.map((task) => task.taskId).toSet();
-  return <String>{
-    for (final task in packageTasks)
-      if (task.group == kPersistentDownloadChunkGroup &&
-          !pausedIds.contains(task.taskId))
-        task.taskId,
-  };
+  final pausedOccurrences = <String, int>{};
+  for (final task in pausedTasks) {
+    pausedOccurrences.update(task.taskId, (count) => count + 1, ifAbsent: () => 1);
+  }
+  final active = <String>{};
+  for (final task in packageTasks) {
+    if (task.group != kPersistentDownloadChunkGroup) continue;
+    final paused = pausedOccurrences[task.taskId] ?? 0;
+    if (paused > 0) {
+      // allTasks concatenates stored paused rows and independently live native tasks.
+      pausedOccurrences[task.taskId] = paused - 1;
+    } else {
+      active.add(task.taskId);
+    }
+  }
+  return active;
 }
 
 final class PackageBackgroundDownloaderGateway
@@ -191,6 +224,7 @@ final class PackageBackgroundDownloaderGateway
       <String, _PackageDownloadTransportHandle>{};
   final Map<String, _DurableParallelDownloadTransportHandle> _durableHandles =
       <String, _DurableParallelDownloadTransportHandle>{};
+  final _mangaHandles = <String, MangaChapterTransportHandleV2>{};
   PersistentParallelDownload? _durableParallel;
   StreamSubscription<TaskUpdate>? _durableUpdatesSubscription;
 
@@ -275,7 +309,32 @@ final class PackageBackgroundDownloaderGateway
       _notificationPreferences(),
     );
     final transport = MangaChapterTransportV2(startPage: _startMangaPageTaskV2);
-    return transport.start(spec);
+    final handle = await transport.start(spec);
+    final previous = _mangaHandles[spec.taskId];
+    _mangaHandles[spec.taskId] = handle;
+    await previous?.dispose();
+    return handle;
+  }
+
+  @override
+  Future<MangaChapterTransportHandleV2?> attachMangaChapterOwnershipV2(
+    String parentTaskId, {required int configuredConnections}
+  ) async {
+    await initialize();
+    final cached = _mangaHandles[parentTaskId];
+    if (cached != null) return cached;
+    final records = await _downloader.database.allRecords();
+    final children = <DownloadTransportHandle>[];
+    for (final id in mangaChildTaskIdsForParentV2(records, parentTaskId)) {
+      final handle = await attach(id);
+      if (handle != null) children.add(handle);
+    }
+    if (children.isEmpty) return null;
+    final handle = _RecoveredMangaChapterHandleV2(
+      parentTaskId, children, configuredConnections,
+    );
+    _mangaHandles[parentTaskId] = handle;
+    return handle;
   }
 
   Future<DownloadTransportHandle> _startMangaPageTaskV2(
@@ -283,23 +342,12 @@ final class PackageBackgroundDownloaderGateway
   ) async {
     await initialize();
 
-    // Older Manga builds placed page children in the normal V2 group, which
-    // makes them inherit user-facing notifications. Replace such an exact
-    // child once so upgraded installs also become notification-silent.
-    final tracked = _downloader.transfers.forId(page.taskId);
-    final persisted = await _downloader.database.recordForId(page.taskId);
-    final existingTask = tracked?.task ?? persisted?.task;
-    if (existingTask != null &&
-        existingTask.group != kDownloadV2SilentPackageGroup) {
-      final legacy = await attach(page.taskId);
-      await legacy?.cancel();
-      await removeTracking(page.taskId);
-    }
-
+    // Preserve exact current children, including the legacy notification group.
     final existing = await attach(page.taskId);
     final reusable = await reusableMangaPageHandleV2(
       existing: existing,
       destinationPath: page.destinationPath,
+      expectedDigest: page.expectedDigest,
       removeTracking: () => removeTracking(page.taskId),
     );
     if (reusable != null) return reusable;
@@ -371,10 +419,23 @@ final class PackageBackgroundDownloaderGateway
   Future<DownloadTransportHandle?> attach(String taskId) async {
     await initialize();
 
+    final manga = _mangaHandles[taskId];
+    if (manga != null) return manga;
+
     final durable = _durableHandles[taskId];
     if (durable != null) return durable;
 
-    final record = await _downloader.database.recordForId(taskId);
+    final tracked = _downloader.transfers.forId(taskId);
+    if (tracked != null && !_isDurableInternalTask(tracked.task)) {
+      return _handleFor(tracked);
+    }
+
+    var record = await _downloader.database.recordForId(taskId);
+    if (record == null && _isIOS() &&
+        !(parseDownloadTaskIdentityV2(taskId)?.logicalId.value.startsWith('manga_') ?? false)) {
+      await _discoverDurableCheckpointRecordsV2(exactTaskId: taskId);
+      record = await _downloader.database.recordForId(taskId);
+    }
     if (record != null &&
         record.task is ParallelDownloadTask &&
         record.task.group == kDownloadV2DurableParallelGroup) {
@@ -385,11 +446,6 @@ final class PackageBackgroundDownloaderGateway
         initialStatus: _snapshotStatusFromRecord(record),
         restoreOnly: true,
       );
-    }
-
-    final tracked = _downloader.transfers.forId(taskId);
-    if (tracked != null && !_isDurableInternalTask(tracked.task)) {
-      return _handleFor(tracked);
     }
 
     // Rehydrate package persistence first, then select only by the exact
@@ -407,6 +463,11 @@ final class PackageBackgroundDownloaderGateway
   Future<List<DownloadTransportHandle>> rehydrate() async {
     await initialize();
     final result = <DownloadTransportHandle>[];
+    for (final handle in _mangaHandles.values) {
+      await handle.dispose();
+    }
+    _mangaHandles.clear();
+    if (_isIOS()) await _discoverDurableCheckpointRecordsV2();
 
     for (final record in await _downloader.database.allRecords()) {
       if (record.task is ParallelDownloadTask &&
@@ -428,6 +489,46 @@ final class PackageBackgroundDownloaderGateway
       result.add(_handleFor(transfer));
     }
     return List<DownloadTransportHandle>.unmodifiable(result);
+  }
+
+  Future<void> _discoverDurableCheckpointRecordsV2({
+    String? exactTaskId,
+  }) async {
+    final roots = <Directory>[await _privateParallelCheckpointRootV2()];
+    final documents = await getApplicationDocumentsDirectory();
+    final legacyRoot = Directory(p.join(documents.path, 'Downloads'));
+    final legacyType = await FileSystemEntity.type(
+      legacyRoot.path,
+      followLinks: false,
+    );
+    if (legacyType != FileSystemEntityType.notFound &&
+        legacyType != FileSystemEntityType.directory) {
+      throw FileSystemException(
+        'Legacy checkpoint inventory root is not an owned directory',
+        legacyRoot.path,
+      );
+    }
+    roots.add(legacyRoot);
+    final evidence = await discoverParallelManifestRecoveryEvidence(
+      roots,
+      manifestFileResolver: privateParallelManifestFileV2,
+    );
+    for (final checkpoint in evidence) {
+      final parent = checkpoint.parentTask;
+      if (parent == null ||
+          parent.group != kDownloadV2DurableParallelGroup ||
+          (exactTaskId != null && parent.taskId != exactTaskId) ||
+          await _downloader.database.recordForId(parent.taskId) != null)
+        continue;
+      await _downloader.database.updateRecord(
+        TaskRecord(
+          parent,
+          TaskStatus.paused,
+          checkpoint.durableBytes / checkpoint.expectedBytes,
+          checkpoint.expectedBytes,
+        ),
+      );
+    }
   }
 
   Future<void> _recordStartupInventory() async {
@@ -464,6 +565,8 @@ final class PackageBackgroundDownloaderGateway
   @override
   Future<void> removeTracking(String taskId) async {
     await initialize();
+    await _cleanupMangaChildTracking(taskId);
+    await _mangaHandles.remove(taskId)?.dispose();
     final durable = _durableHandles.remove(taskId);
     if (durable != null) {
       durable.dispose();
@@ -472,6 +575,37 @@ final class PackageBackgroundDownloaderGateway
     _downloader.transfers.remove(taskId);
     _handles.remove(taskId)?.dispose();
     await _downloader.database.deleteRecordWithId(taskId);
+  }
+
+  Future<void> _cleanupMangaChildTracking(String parentTaskId) async {
+    final records = await _downloader.database.allRecords();
+    final ids = mangaChildTaskIdsForParentV2(records, parentTaskId);
+    if (ids.isEmpty) return;
+    // Paused recovery rows are not active native writers.
+    // ignore: invalid_use_of_visible_for_testing_member
+    final pausedIds = (await _downloader.database.storage.retrieveAllPausedTasks())
+        .map((task) => task.taskId).toSet();
+    final nativeIds = (await _downloader.allTasks(allGroups: true))
+        .map((task) => task.taskId).where((id) => !pausedIds.contains(id)).toSet();
+    for (final record in records.where((record) => ids.contains(record.taskId))) {
+      final transfer = _downloader.transfers.forId(record.taskId);
+      final status = transfer?.status ?? record.status;
+      if (nativeIds.contains(record.taskId) ||
+          !{TaskStatus.complete, TaskStatus.failed, TaskStatus.canceled, TaskStatus.notFound}.contains(status)) {
+        throw StateError('Manga page ownership has not settled: ${record.taskId}');
+      }
+    }
+    for (final id in ids) {
+      _handles.remove(id)?.dispose();
+      _downloader.transfers.remove(id);
+    }
+    await Future.wait<void>([
+      _downloader.database.deleteRecordsWithIds(ids),
+      // ignore: invalid_use_of_visible_for_testing_member
+      ...ids.map(_downloader.database.storage.removeResumeData),
+      // ignore: invalid_use_of_visible_for_testing_member
+      ...ids.map(_downloader.database.storage.removePausedTask),
+    ]);
   }
 
   Future<void> _cleanupDurableChildTracking(String parentTaskId) async {
@@ -557,12 +691,32 @@ final class PackageBackgroundDownloaderGateway
         }
       },
       cancelParts: (ids) async {
-        await _downloader.cancelTasksWithIds(ids);
+        if (!await _downloader.cancelTasksWithIds(ids)) {
+          throw StateError('Native ranges rejected cancellation');
+        }
+        final deadline = DateTime.now().add(const Duration(seconds: 10));
+        while (true) {
+          final remaining = deadline.difference(DateTime.now());
+          if (remaining <= Duration.zero) {
+            throw StateError('Native ranges did not settle after cancellation');
+          }
+          Set<String> live;
+          try {
+            live = await _activeDurablePartTaskIds().timeout(remaining);
+          } on TimeoutException {
+            throw StateError('Native range ownership could not be established');
+          }
+          if (!live.any(ids.contains)) return;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
       },
       saveRecord: _saveDurableRecord,
       recordForId: _downloader.database.recordForId,
       livePartIds: _activeDurablePartTaskIds,
       availableStorageBytes: availableDownloadStorageBytesV2,
+      verifyPartSource: verifySavedRangeSourceV2,
+      manifestFileResolver: privateParallelManifestFileV2,
+      promoteFile: promoteCompletedDownloadFileV2,
       shouldDrainPartOnPause: (_) => _isIOS(),
       onUpdate: (update) {
         _durableHandles[update.task.taskId]?.accept(update);
@@ -721,7 +875,7 @@ final class PackageBackgroundDownloaderGateway
       parent: parent,
       totalBytes: totalBytes,
       coordinator: coordinator,
-      initialStatus: restored
+      initialStatus: restored || initialStatus == DownloadTransportStatus.complete
           ? initialStatus
           : (restoreOnly
                 ? DownloadTransportStatus.missing
@@ -745,10 +899,225 @@ final class PackageBackgroundDownloaderGateway
     }
     existing?.dispose();
     final handle = transfer.task is ParallelDownloadTask
-        ? _PackageDownloadTransportHandle(transfer, _downloader)
-        : _SelfSettlingPackageDownloadTransportHandle(transfer, _downloader);
+        ? _PackageDownloadTransportHandle(transfer, _downloader, isIOS: _isIOS())
+        : _SelfSettlingPackageDownloadTransportHandle(
+            transfer, _downloader, isIOS: _isIOS(),
+          );
     _handles[transfer.taskId] = handle;
     return handle;
+  }
+}
+
+Future<Directory> _privateParallelCheckpointRootV2() async {
+  final support = await getApplicationSupportDirectory();
+  if (!p.isAbsolute(support.path)) {
+    throw FileSystemException(
+      'Private ApplicationSupport path is not absolute',
+      support.path,
+    );
+  }
+  final root = Directory(p.join(support.path, 'download_v2', 'ranges'));
+  for (final path in [
+    support.path,
+    p.join(support.path, 'download_v2'),
+    root.path,
+  ]) {
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type != FileSystemEntityType.directory) {
+      throw FileSystemException(
+        'Private checkpoint ancestor is not an owned directory',
+        path,
+      );
+    }
+  }
+  return root;
+}
+
+/// Credential-bearing range state is never placed beside Files-visible media.
+Future<File> privateParallelManifestFileV2(DownloadTask task) async {
+  final root = await _privateParallelCheckpointRootV2();
+  final directory = Directory(
+    p.join(root.path, sha256.convert(utf8.encode(task.taskId)).toString()),
+  );
+  final type = await FileSystemEntity.type(directory.path, followLinks: false);
+  if (type != FileSystemEntityType.notFound &&
+      type != FileSystemEntityType.directory) {
+    throw FileSystemException(
+      'Private checkpoint owner is not an owned directory',
+      directory.path,
+    );
+  }
+  final manifest = File(p.join(directory.path, 'manifest.json'));
+  for (final path in [manifest.path, '${manifest.path}.tmp']) {
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type != FileSystemEntityType.file) {
+      throw FileSystemException(
+        'Private checkpoint leaf is not a regular file',
+        path,
+      );
+    }
+  }
+  return manifest;
+}
+
+/// The native bridge is the publication authority; unsupported hosts fail closed.
+Future<bool> promoteCompletedDownloadFileV2(
+  File source,
+  File target,
+  int expectedBytes,
+) async {
+  if (!p.isAbsolute(source.path) ||
+      !p.isAbsolute(target.path) ||
+      expectedBytes < 0) {
+    throw ArgumentError(
+      'Exclusive publication needs absolute paths and a nonnegative size',
+    );
+  }
+  try {
+    final promoted =
+        await const MethodChannel(
+          'com.animewitcher.app/download_continued_processing',
+        ).invokeMethod<bool>('promoteCompletedFile', <String, Object>{
+          'sourcePath': source.path,
+          'targetPath': target.path,
+          'expectedBytes': expectedBytes,
+        });
+    if (promoted != true) {
+      throw FileSystemException(
+        'Native exclusive publication was not committed',
+        target.path,
+      );
+    }
+    return true;
+  } on MissingPluginException {
+    throw FileSystemException(
+      'Native exclusive publication is unavailable',
+      target.path,
+      const OSError('Operation not supported', 95),
+    );
+  } on PlatformException catch (error) {
+    final details = error.details;
+    final errno = details is Map && details['errno'] is num
+        ? (details['errno'] as num).toInt()
+        : null;
+    throw FileSystemException(
+      error.message ?? error.code,
+      target.path,
+      errno == null ? null : OSError(error.code, errno),
+    );
+  }
+}
+
+/// Verifies saved range bytes against the current authorized identity response.
+Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
+  DownloadTask task,
+  File file,
+  int bytes,
+  int resourceSize,
+) async {
+  const rejected = (matches: false, validator: null);
+  final range = _diagnosticRangeBoundsV2(task);
+  if (range == null ||
+      bytes <= 0 ||
+      resourceSize <= 0 ||
+      range.$2 >= resourceSize ||
+      bytes > range.$2 - range.$1 + 1) {
+    return rejected;
+  }
+  final client = HttpClient()..autoUncompress = false;
+  RandomAccessFile? saved;
+  try {
+    return await (() async {
+      if (await FileSystemEntity.type(file.path, followLinks: false) !=
+              FileSystemEntityType.file ||
+          await file.length() < bytes) {
+        return rejected;
+      }
+      saved = await file.open();
+      final request = await client.getUrl(Uri.parse(task.url));
+      for (final header in task.headers.entries) {
+        if (!{'range', 'accept-encoding'}.contains(header.key.toLowerCase())) {
+          request.headers.set(header.key, header.value);
+        }
+      }
+      final from = range.$1;
+      final to = from + bytes - 1;
+      request.headers.set(HttpHeaders.rangeHeader, 'bytes=$from-$to');
+      request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+      final response = await request.close();
+      final encoding = response.headers.value(
+        HttpHeaders.contentEncodingHeader,
+      );
+      if (encoding != null && encoding.toLowerCase().trim() != 'identity')
+        return rejected;
+      if (response.contentLength >= 0 && response.contentLength != bytes)
+        return rejected;
+      if (response.statusCode == HttpStatus.partialContent) {
+        final match =
+            RegExp(
+              r'^bytes\s+(\d+)\s*-\s*(\d+)\s*/\s*(\d+)$',
+              caseSensitive: false,
+            ).firstMatch(
+              response.headers.value(HttpHeaders.contentRangeHeader)?.trim() ??
+                  '',
+            );
+        if (match == null ||
+            int.tryParse(match[1]!) != from ||
+            int.tryParse(match[2]!) != to ||
+            int.tryParse(match[3]!) != resourceSize) {
+          return rejected;
+        }
+      } else if (response.statusCode != HttpStatus.ok ||
+          from != 0 ||
+          to != resourceSize - 1 ||
+          bytes != resourceSize ||
+          response.headers.value(HttpHeaders.contentRangeHeader) != null) {
+        return rejected;
+      }
+      String? validator;
+      final etag = response.headers.value(HttpHeaders.etagHeader)?.trim();
+      if (etag != null && RegExp(r'^"[^"\r\n]*"$').hasMatch(etag)) {
+        validator = etag;
+      } else {
+        final modified = response.headers.value(HttpHeaders.lastModifiedHeader);
+        if (modified != null) {
+          try {
+            HttpDate.parse(modified);
+            validator = modified;
+          } on FormatException {
+            /* Unknown validator. */
+          }
+        }
+      }
+      for (final header in task.headers.entries) {
+        if (header.key.toLowerCase() == 'if-range' && header.value != validator)
+          return rejected;
+      }
+      var received = 0;
+      await for (final chunk in response) {
+        if (received + chunk.length > bytes) return rejected;
+        for (var offset = 0; offset < chunk.length;) {
+          final end = offset + 65536 < chunk.length
+              ? offset + 65536
+              : chunk.length;
+          final local = await saved!.read(end - offset);
+          if (local.length != end - offset) return rejected;
+          for (var index = 0; index < local.length; index++) {
+            if (local[index] != chunk[offset + index]) return rejected;
+          }
+          offset = end;
+        }
+        received += chunk.length;
+      }
+      return (matches: received == bytes, validator: validator);
+    })().timeout(const Duration(seconds: 20));
+  } catch (_) {
+    return rejected;
+  } finally {
+    client.close(force: true);
+    await saved?.close();
   }
 }
 
@@ -778,13 +1147,18 @@ Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
   required DownloadTransportHandle? existing,
   required String destinationPath,
   required Future<void> Function() removeTracking,
+  String? expectedDigest,
 }) async {
   if (existing == null) return null;
 
   final status = existing.current.status;
   if (status == DownloadTransportStatus.complete) {
     final file = File(destinationPath);
-    if (await file.exists() && await file.length() > 0) return existing;
+    if (await isMangaPageImageV2(file) &&
+        (expectedDigest == null ||
+            await MangaChapterManifestV2.pageDigest(file) == expectedDigest)) {
+      return existing;
+    }
     await removeTracking();
     return null;
   }
@@ -793,10 +1167,27 @@ Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
     final resumed = await existing.resume();
     if (resumed) return existing;
 
-    // A recovered Manga page must never leave an active chapter parked on a
-    // stale paused package task. Cancel/forget it and let the caller recreate
-    // only this page from its fresh chapter-page descriptor.
-    await existing.cancel();
+    // Cancel acceptance does not release the exact native writer's ownership.
+    final settled = Completer<void>();
+    final subscription = existing.snapshots.listen((snapshot) {
+      if ((snapshot.isFinal || snapshot.status == DownloadTransportStatus.missing) &&
+          !settled.isCompleted) settled.complete();
+    });
+    try {
+      if (!await existing.cancel()) {
+        throw StateError('Could not stop unresumable manga page ${existing.taskId}');
+      }
+      if (!existing.current.isFinal &&
+          existing.current.status != DownloadTransportStatus.missing) {
+        try {
+          await settled.future.timeout(const Duration(seconds: 10));
+        } on TimeoutException {
+          throw StateError('Manga page ${existing.taskId} did not settle after cancel');
+        }
+      }
+    } finally {
+      await subscription.cancel();
+    }
     await removeTracking();
     return null;
   }
@@ -833,15 +1224,15 @@ Future<DownloadTask> packageMangaPageTaskForV2(
     ),
     userInitiated: userInitiated,
     group: kDownloadV2SilentPackageGroup,
-    notificationConfig: TaskNotificationConfig(
-      running: showRunningNotification
-          ? const TaskNotification(
+    notificationConfig: showRunningNotification
+        ? TaskNotificationConfig(
+            running: const TaskNotification(
               'Downloading manga chapter',
               'Pages are downloading',
-            )
-          : null,
-      groupNotificationId: 'manga_$parentId',
-    ),
+            ),
+            groupNotificationId: 'manga_$parentId',
+          )
+        : null,
     // Manga page children are implementation details, never user notifications.
     isIOS: false,
   );
@@ -1279,8 +1670,95 @@ final class _DurableParallelDownloadTransportHandle
   }
 }
 
+final class _RecoveredMangaChapterHandleV2 implements MangaChapterTransportHandleV2 {
+  _RecoveredMangaChapterHandleV2(this.taskId, this.children, this.configuredConnections) {
+    for (final child in children) {
+      _subscriptions.add(child.snapshots.listen((_) => _publish()));
+    }
+  }
+
+  @override
+  final String taskId;
+  final List<DownloadTransportHandle> children;
+  final int configuredConnections;
+  final _controller = StreamController<DownloadTransportSnapshot>.broadcast();
+  final _subscriptions = <StreamSubscription<DownloadTransportSnapshot>>[];
+  bool _cancelRequested = false;
+  bool _disposed = false;
+
+  @override
+  bool get recoveryOnly => true;
+  @override
+  Stream<DownloadTransportSnapshot> get snapshots => _controller.stream;
+  @override
+  DownloadTransportSnapshot get current {
+    final live = children.where((child) => !child.current.isFinal &&
+        child.current.status != DownloadTransportStatus.missing).toList();
+    final running = live.where((child) => child.current.status != DownloadTransportStatus.paused).toList();
+    final status = running.isNotEmpty
+        ? DownloadTransportStatus.running
+        : live.isNotEmpty
+          ? DownloadTransportStatus.paused
+          : _cancelRequested ? DownloadTransportStatus.canceled : DownloadTransportStatus.missing;
+    return DownloadTransportSnapshot(
+      taskId: taskId, status: status, progress: 0,
+      configuredConnections: configuredConnections,
+      activeConnections: running.where((child) => child.current.status == DownloadTransportStatus.running).length,
+    );
+  }
+
+  void _publish() {
+    if (!_disposed) _controller.add(current);
+  }
+
+  @override
+  Future<bool> pause() async {
+    if (_disposed) return false;
+    final results = await Future.wait<bool>([
+      for (final child in children)
+        if (!child.current.isFinal &&
+            child.current.status != DownloadTransportStatus.missing &&
+            child.current.status != DownloadTransportStatus.paused) child.pause(),
+    ]);
+    _publish();
+    return results.every((accepted) => accepted);
+  }
+
+  @override
+  Future<bool> resume() async => false;
+
+  @override
+  Future<bool> cancel() async {
+    if (_disposed) return false;
+    final results = await Future.wait<bool>([
+      for (final child in children)
+        if (!child.current.isFinal &&
+            child.current.status != DownloadTransportStatus.missing) child.cancel(),
+    ]);
+    final accepted = results.every((result) => result);
+    if (accepted) _cancelRequested = true;
+    _publish();
+    return accepted;
+  }
+
+  @override
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    for (final subscription in _subscriptions) {
+      await subscription.cancel();
+    }
+    _subscriptions.clear();
+    await _controller.close();
+  }
+}
+
 class _PackageDownloadTransportHandle implements DownloadTransportHandle {
-  _PackageDownloadTransportHandle(this.transfer, this._downloader) {
+  _PackageDownloadTransportHandle(
+    this.transfer,
+    this._downloader, {
+    required this.isIOS,
+  }) {
     _updatesSubscription = transfer.updates.listen(_onUpdate);
     _holdReasonListener = _emitCurrent;
     transfer.holdReasonNotifier.addListener(_holdReasonListener);
@@ -1288,6 +1766,7 @@ class _PackageDownloadTransportHandle implements DownloadTransportHandle {
 
   final Transfer transfer;
   final FileDownloader _downloader;
+  final bool isIOS;
   final StreamController<DownloadTransportSnapshot> _snapshots =
       StreamController<DownloadTransportSnapshot>.broadcast(sync: true);
 
@@ -1316,7 +1795,7 @@ class _PackageDownloadTransportHandle implements DownloadTransportHandle {
     // Transfer.resume() intentionally falls back to enqueueing from byte zero
     // when resume data is unavailable. Explicit V2 Resume must never do that:
     // use the package's lower-level resume-only path for the exact task.
-    if (Platform.isIOS && task is ParallelDownloadTask) {
+    if (isIOS && task is ParallelDownloadTask) {
       final ready = await waitForPackageParallelResumeDataV2(
         task: task,
         // background_downloader 9.6.2 has no public awaitable signal for
@@ -1349,7 +1828,9 @@ class _PackageDownloadTransportHandle implements DownloadTransportHandle {
   }
 
   DownloadTransportSnapshot _snapshot() =>
-      packageTransportSnapshotForV2(transfer, totalBytes: _totalBytes);
+      packageTransportSnapshotForV2(
+        transfer, totalBytes: _totalBytes, isIOS: isIOS,
+      );
 
   void dispose() {
     if (_disposed) return;
@@ -1365,8 +1846,9 @@ final class _SelfSettlingPackageDownloadTransportHandle
     implements SelfSettlingParallelDownloadTransportHandleV2 {
   _SelfSettlingPackageDownloadTransportHandle(
     Transfer transfer,
-    FileDownloader downloader,
-  ) : super(transfer, downloader);
+    FileDownloader downloader, {
+    required bool isIOS,
+  }) : super(transfer, downloader, isIOS: isIOS);
 }
 
 /// Projects one package Transfer into V2 without maintaining a second metric
@@ -1376,6 +1858,7 @@ final class _SelfSettlingPackageDownloadTransportHandle
 DownloadTransportSnapshot packageTransportSnapshotForV2(
   Transfer transfer, {
   int? totalBytes,
+  bool? isIOS,
 }) {
   final progress =
       transfer.progress ?? (transfer.status == TaskStatus.complete ? 1.0 : 0.0);
@@ -1418,9 +1901,11 @@ DownloadTransportSnapshot packageTransportSnapshotForV2(
     // background_downloader derives ParallelDownloadTask parent speed from
     // aggregate child-progress jumps. Those callbacks can arrive in bursts and
     // report impossible transient rates (for example 200+ MB/s) followed by 0.
-    // V2 uses read-only native child throughput for parallel presentation.
-    networkSpeedMBps: parallelParent ? -1 : transfer.networkSpeed,
-    timeRemaining: parallelParent
+    // iOS uses read-only native child throughput for parallel presentation.
+    networkSpeedMBps: parallelParent && (isIOS ?? Platform.isIOS)
+        ? -1
+        : transfer.networkSpeed,
+    timeRemaining: parallelParent && (isIOS ?? Platform.isIOS)
         ? Duration.zero
         : transfer.timeRemainingNotifier.value,
     configuredConnections: configuredConnections,
@@ -1446,7 +1931,7 @@ DownloadTransportStatus transportStatusFromPackage(
     TaskStatus.enqueued => DownloadTransportStatus.queued,
     TaskStatus.running => DownloadTransportStatus.running,
     TaskStatus.complete => DownloadTransportStatus.complete,
-    TaskStatus.notFound => DownloadTransportStatus.missing,
+    TaskStatus.notFound => DownloadTransportStatus.failed,
     TaskStatus.failed => DownloadTransportStatus.failed,
     TaskStatus.canceled => DownloadTransportStatus.canceled,
     TaskStatus.waitingToRetry => DownloadTransportStatus.held,
@@ -1458,6 +1943,7 @@ DownloadFailureCategory? _failureCategory(
   TaskStatus status,
   TaskException? exception,
 ) {
+  if (status == TaskStatus.notFound) return DownloadFailureCategory.sourceExpired;
   if (status != TaskStatus.failed) {
     return null;
   }

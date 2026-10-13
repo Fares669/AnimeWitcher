@@ -16,7 +16,6 @@ import '../../settings/presentation/general_settings_provider.dart';
 import 'package:collection/collection.dart';
 import 'details_controller.dart';
 import 'source_picker.dart';
-import 'stream_source_prefetch.dart';
 import 'downloaded_file_provider.dart';
 import '../../../shared/widgets/loading_dialog.dart';
 import '../../../core/utils/app_utils.dart';
@@ -140,13 +139,11 @@ class PlaybackLauncher {
     Future<List<StreamResult>> Function()? loadSources,
   }) async {
     if (!context.mounted) return null;
-    // Hands over the warm fetch when the player started one as the credits
-    // rolled, so the picker opens with its list already in hand.
+    // Each chooser owns a fresh request; a dismissed picker's result cannot
+    // replace the next picker's list.
     final future = loadSources != null
         ? loadSources()
-        : _ref
-              .read(streamSourcePrefetchProvider)
-              .sources(provider, episodeDataUrl);
+        : provider.loadStreamSources(episodeDataUrl);
     final preferences = _ref.read(generalSettingsProvider);
     if (preferences.autoSelectStreamSource) {
       var canceled = false;
@@ -220,13 +217,14 @@ class PlaybackLauncher {
       episode: history.episode ?? 0,
       posterUrl: history.episodePosterUrl,
       serverName: history.episodeServerName ?? '',
+      serverNumber: history.episodeServerNumber,
     );
   }
 
   /// Opens Continue Watching directly on Home. A completed download is looked
   /// up by the canonical episode tracking URL first, so it bypasses the server
-  /// picker. Online entries still use normal source selection, while both paths
-  /// hydrate the episode catalog before the internal player is shown.
+  /// picker and use saved episode context offline. Online entries still use
+  /// normal source selection and hydrate the catalog before opening the player.
   Future<void> playFromContinueWatching(
     BuildContext context,
     HistoryItem history,
@@ -413,6 +411,7 @@ class PlaybackLauncher {
             serverName: episode.serverName,
           ),
           episodeServerName: episode.serverName,
+          episodeServerNumber: episode.serverNumber,
           episodePosterUrl: episode.posterUrl,
         );
   }
@@ -430,12 +429,6 @@ class PlaybackLauncher {
     if (!context.mounted) return;
 
     final item = detailedItem ?? baseItem;
-    // Start this immediately so episode metadata loads in parallel with local
-    // file detection / source selection instead of adding another serial wait.
-    final playerItemFuture = _hydratePlayerEpisodes(
-      item,
-      loadArtwork: loadEpisodeArtwork,
-    );
     final resolvedEpisode =
         episode ?? item.episodes?.firstWhereOrNull((e) => e.url == url);
     final resolvedEpisodeUrl = resolvedEpisode?.url.trim() ?? '';
@@ -459,8 +452,15 @@ class PlaybackLauncher {
 
     // Downloaded files are already playable and do not need a source list.
     if (AppUtils.isLocalFile(localOrEpisodeUrl)) {
-      final playerItem = await playerItemFuture;
-      if (!context.mounted) return;
+      // A provider or artwork request must never gate an already saved video.
+      final savedEpisodes = <Episode>[...?item.episodes];
+      if (resolvedEpisode != null &&
+          !savedEpisodes.any((value) => value.url == resolvedEpisode.url)) {
+        savedEpisodes.add(resolvedEpisode);
+      }
+      final playerItem = savedEpisodes.isEmpty
+          ? item
+          : item.copyWith(episodes: savedEpisodes);
       final playerEpisode = _canonicalEpisode(
         playerItem,
         resolvedEpisode,
@@ -468,6 +468,7 @@ class PlaybackLauncher {
       );
 
       await _recordEpisodeOpened(playerItem, playerEpisode);
+      if (!context.mounted) return;
       if (settings.preferredPlayer != null) {
         final stream = StreamResult(url: localOrEpisodeUrl, source: 'محلي');
         await _launchStream(
@@ -492,6 +493,11 @@ class PlaybackLauncher {
       return;
     }
 
+    // Remote playback can enrich metadata in parallel with source selection.
+    final playerItemFuture = _hydratePlayerEpisodes(
+      item,
+      loadArtwork: loadEpisodeArtwork,
+    );
     final provider = _resolveProvider(item);
     if (provider == null) {
       _ref

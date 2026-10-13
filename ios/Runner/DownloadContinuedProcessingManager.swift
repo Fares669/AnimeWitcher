@@ -36,6 +36,23 @@ private final class DownloadContinuedProcessingCompletion: @unchecked Sendable {
   }
 }
 
+/// Only Dart's validated page checkpoints can advance Manga presentation.
+private enum DownloadPageProgress {
+  static func acceptsDartUpdate(inForeground: Bool, incomingPages: Int?, currentPages: Int?) -> Bool {
+    inForeground || incomingPages != nil || currentPages != nil
+  }
+
+  static func fraction(completed: Int, total: Int, progress: Double) -> Double {
+    guard total > 0 else { return 0 }
+    return min(max(Double(completed) / Double(total), 0), progress < 1 ? 0.999 : 1)
+  }
+
+  static func label(completed: Int, total: Int) -> String {
+    let count = min(max(completed, 0), max(total, 0))
+    return "\(count)/\(total > 0 ? String(total) : "?") pages"
+  }
+}
+
 /// Owns the **one** iOS 26 BGContinuedProcessingTask for an active download
 /// session (the whole queue), not one task per episode.
 ///
@@ -55,6 +72,8 @@ final class DownloadContinuedProcessingManager {
     var progress: Double
     var totalBytes: Int64
     var transferredBytes: Int64
+    var completedPages: Int?
+    var totalPages: Int?
     var completedCount: Int
     var batchTotal: Int
     var speedBytesPerSecond: Double
@@ -99,7 +118,9 @@ final class DownloadContinuedProcessingManager {
     completedCount: Int = 0,
     batchTotal: Int = 1,
     speedBytesPerSecond: Double = 0,
-    currentIndex: Int = 0
+    currentIndex: Int = 0,
+    completedPages: Int? = nil,
+    totalPages: Int? = nil
   ) throws -> String? {
     // BGContinuedProcessingTaskRequest itself validates that submission is
     // associated with the foreground app. Avoid an additional UIApplication
@@ -129,6 +150,8 @@ final class DownloadContinuedProcessingManager {
       progress: normalized,
       totalBytes: totalBytes,
       transferredBytes: transferred,
+      completedPages: completedPages,
+      totalPages: totalPages,
       completedCount: max(completedCount, 0),
       batchTotal: max(batchTotal, 1),
       speedBytesPerSecond: keepSpeed,
@@ -197,6 +220,12 @@ final class DownloadContinuedProcessingManager {
     return sessionId
   }
 
+  func acceptsDartUpdate(inForeground: Bool, completedPages: Int?) -> Bool {
+    DownloadPageProgress.acceptsDartUpdate(
+      inForeground: inForeground, incomingPages: completedPages, currentPages: snapshot?.completedPages
+    )
+  }
+
   func update(
     taskId: String,
     progress: Double,
@@ -207,6 +236,8 @@ final class DownloadContinuedProcessingManager {
     speedBytesPerSecond: Double = -1,
     displayName: String = "",
     currentIndex: Int = -1,
+    completedPages: Int? = nil,
+    totalPages: Int? = nil,
     preserveNativeAggregateBaseline: Bool = false
   ) -> Bool {
     let previousEpisodeTaskId = currentEpisodeTaskId
@@ -223,6 +254,8 @@ final class DownloadContinuedProcessingManager {
       && taskId != previousEpisodeTaskId
 
     snapshot.progress = min(max(progress, 0.0), 1.0)
+    snapshot.completedPages = completedPages
+    snapshot.totalPages = totalPages
     if totalBytes > 0 {
       snapshot.totalBytes = totalBytes
     } else if switched {
@@ -277,6 +310,8 @@ final class DownloadContinuedProcessingManager {
     guard taskId == currentEpisodeTaskId,
           let current = snapshot
     else { return false }
+
+    guard current.completedPages == nil else { return false }
 
     let totalBytes = current.totalBytes > 0
       ? current.totalBytes
@@ -373,6 +408,9 @@ final class DownloadContinuedProcessingManager {
     if let snapshot {
       snapshotLooksComplete = snapshot.progress >= 0.999_999
         && snapshot.completedCount + 1 >= max(snapshot.batchTotal, 1)
+        && (snapshot.completedPages == nil
+          || ((snapshot.totalPages ?? 0) > 0
+            && (snapshot.completedPages ?? 0) >= (snapshot.totalPages ?? 0)))
     } else {
       snapshotLooksComplete = false
     }
@@ -456,7 +494,13 @@ final class DownloadContinuedProcessingManager {
   ) {
     let normalized = min(max(snapshot.progress, 0.0), 1.0)
 
-    if snapshot.totalBytes > 0 {
+    if let completed = snapshot.completedPages {
+      let progress = DownloadPageProgress.fraction(
+        completed: completed, total: snapshot.totalPages ?? -1, progress: normalized
+      )
+      task.progress.totalUnitCount = 1000
+      task.progress.completedUnitCount = Int64((progress * 1000).rounded(.down))
+    } else if snapshot.totalBytes > 0 {
       task.progress.totalUnitCount = snapshot.totalBytes
       let completed = snapshot.transferredBytes >= 0
         ? snapshot.transferredBytes
@@ -529,7 +573,9 @@ final class DownloadContinuedProcessingManager {
     if !speed.isEmpty {
       parts.append(speed)
     }
-    if snapshot.totalBytes > 0 {
+    if let completed = snapshot.completedPages {
+      parts.append(DownloadPageProgress.label(completed: completed, total: snapshot.totalPages ?? -1))
+    } else if snapshot.totalBytes > 0 {
       parts.append(
         "\(formatCompactBytes(snapshot.transferredBytes))/\(formatCompactBytes(snapshot.totalBytes))"
       )

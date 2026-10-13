@@ -2,6 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:animewitcher/core/utils/file_size_formatter.dart';
 
 void main() {
+  test('page counts use localized units and honest unknown totals', () {
+    expect(formatDownloadPageCount(completedPages: 12, totalPages: 23, pageLabel: 'صفحة'), '12/23 صفحة');
+    expect(formatDownloadPageCount(completedPages: null, totalPages: null, pageLabel: 'pages'), '0/? pages');
+    expect(formatDownloadPageCount(completedPages: 24, totalPages: 23, pageLabel: 'pages'), '23/23 pages');
+  });
+
   group('formatFileSize', () {
     test('uses decimal megabytes like iOS ByteCountFormatter', () {
       expect(formatFileSize(542900000, fractionDigits: 1), '542.9 MB');

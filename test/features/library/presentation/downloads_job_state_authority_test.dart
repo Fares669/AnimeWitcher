@@ -83,7 +83,7 @@ void main() {
       expect(commandBody, contains('.pause(DownloadLogicalId(logical))'));
       expect(commandBody, contains('.resume(DownloadLogicalId(logical))'));
 
-      final remove = source.indexOf('Future<void> removeDownloads(');
+      final remove = source.indexOf('Future<bool> removeDownloads(');
       expect(remove, greaterThanOrEqualTo(0));
       final removeBody = source.substring(remove, pause);
       expect(removeBody, contains('manager.delete(DownloadLogicalId(logical))'));

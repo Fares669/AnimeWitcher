@@ -298,7 +298,18 @@ final class IosDownloadContinuedProcessingObserverV2
     LogicalDownloadRecordV2 record,
     DownloadTransportSnapshot snapshot,
   ) async {
-    if (_disposed || record.taskId != snapshot.taskId) return;
+    if (record.taskId != snapshot.taskId) return;
+    final terminal = switch (snapshot.status) {
+      DownloadTransportStatus.complete ||
+      DownloadTransportStatus.failed ||
+      DownloadTransportStatus.paused ||
+      DownloadTransportStatus.canceled ||
+      DownloadTransportStatus.missing => true,
+      _ => false,
+    };
+    // Drain accepted terminal events on shutdown only while this lease still
+    // owns the overlay. New events are rejected synchronously by observe().
+    if (_disposed && (!terminal || !_service.ownsCurrentHandler)) return;
     final logicalId = record.logicalId.value;
     final entry = _ContinuedEntryV2(record, snapshot);
 
@@ -333,6 +344,8 @@ final class IosDownloadContinuedProcessingObserverV2
         taskId: snapshot.taskId,
         displayName: _displayName(record),
         progress: 1,
+        completedPages: record.mediaKind == DownloadMediaKind.mangaChapter ? snapshot.completedPages ?? 0 : null,
+        totalPages: record.mediaKind == DownloadMediaKind.mangaChapter ? snapshot.totalPages ?? -1 : null,
         totalBytes: snapshot.totalBytes ?? record.expectedBytes ?? -1,
         transferredBytes:
             snapshot.transferredBytes ??
@@ -364,7 +377,7 @@ final class IosDownloadContinuedProcessingObserverV2
           currentSnapshot.totalBytes ?? currentRecord.expectedBytes ?? -1;
       final transferredBytes =
           currentSnapshot.transferredBytes ??
-          (totalBytes > 0
+          (currentRecord.mediaKind != DownloadMediaKind.mangaChapter && totalBytes > 0
               ? (totalBytes * currentSnapshot.progress).round()
               : 0);
 
@@ -381,6 +394,8 @@ final class IosDownloadContinuedProcessingObserverV2
           taskId: currentSnapshot.taskId,
           displayName: _displayName(currentRecord),
           progress: currentSnapshot.progress,
+          completedPages: currentRecord.mediaKind == DownloadMediaKind.mangaChapter ? currentSnapshot.completedPages ?? 0 : null,
+          totalPages: currentRecord.mediaKind == DownloadMediaKind.mangaChapter ? currentSnapshot.totalPages ?? -1 : null,
           totalBytes: totalBytes,
           transferredBytes: transferredBytes,
           completedCount: completedCount,
@@ -393,6 +408,8 @@ final class IosDownloadContinuedProcessingObserverV2
           taskId: currentSnapshot.taskId,
           displayName: _displayName(currentRecord),
           progress: currentSnapshot.progress,
+          completedPages: currentRecord.mediaKind == DownloadMediaKind.mangaChapter ? currentSnapshot.completedPages ?? 0 : null,
+          totalPages: currentRecord.mediaKind == DownloadMediaKind.mangaChapter ? currentSnapshot.totalPages ?? -1 : null,
           totalBytes: totalBytes,
           transferredBytes: transferredBytes,
           completedCount: completedCount,
@@ -459,7 +476,10 @@ final class IosDownloadContinuedProcessingObserverV2
       final signature = activeEntries.isEmpty
           ? 'clear:${current.snapshot.taskId}:${paused ? 'paused' : 'idle'}'
           : 'active:${_nativePlanSignature(plans)}:${activeTaskIds.join(',')}';
-      if (signature == _nativeQueueSignature) return;
+      final pageSignature = current.record.mediaKind == DownloadMediaKind.mangaChapter
+          ? '$signature:${current.snapshot.taskId}:${current.snapshot.completedPages}:${current.snapshot.totalPages}'
+          : signature;
+      if (pageSignature == _nativeQueueSignature) return;
 
       var maxConcurrent = 1;
       for (final active in activeEntries) {
@@ -474,7 +494,7 @@ final class IosDownloadContinuedProcessingObserverV2
       final totalBytes = snapshot.totalBytes ?? record.expectedBytes ?? -1;
       final transferredBytes =
           snapshot.transferredBytes ??
-          (totalBytes > 0 ? (totalBytes * snapshot.progress).round() : 0);
+          (record.mediaKind != DownloadMediaKind.mangaChapter && totalBytes > 0 ? (totalBytes * snapshot.progress).round() : 0);
       final accepted = await _service.persistNativeQueue(
         maxConcurrent: maxConcurrent,
         waiters: const <Map<String, Object>>[],
@@ -488,6 +508,8 @@ final class IosDownloadContinuedProcessingObserverV2
         sessionProgress: snapshot.progress,
         sessionTotalBytes: totalBytes,
         sessionTransferredBytes: transferredBytes,
+        sessionCompletedPages: record.mediaKind == DownloadMediaKind.mangaChapter ? snapshot.completedPages ?? 0 : null,
+        sessionTotalPages: record.mediaKind == DownloadMediaKind.mangaChapter ? snapshot.totalPages ?? -1 : null,
         sessionSpeedBytesPerSecond: _speedBytesPerSecond(snapshot),
         sessionCurrentIndex: currentIndex,
         multipartPlans: plans,
@@ -499,7 +521,7 @@ final class IosDownloadContinuedProcessingObserverV2
       // regardless of current hook availability.
       if (accepted != null &&
           (activeEntries.isEmpty || _service.nativePromotionAvailable)) {
-        _nativeQueueSignature = signature;
+        _nativeQueueSignature = pageSignature;
       }
     } finally {
       // Exporting a plan temporarily fences those children in Dart. Once the
@@ -543,6 +565,33 @@ final class IosDownloadContinuedProcessingObserverV2
   }
 
   String _displayName(LogicalDownloadRecordV2 record) {
+    if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+      final number = double.tryParse(
+        record.sourceDescriptor['chapterNumber']?.toString() ?? '',
+      );
+      if (number != null && number.isFinite) {
+        final label = number == number.truncateToDouble()
+            ? number.toInt().toString()
+            : number.toString();
+        return 'الفصل $label';
+      }
+      final chapterName =
+          record.sourceDescriptor['chapterName']?.toString().trim() ?? '';
+      if (chapterName.isNotEmpty) {
+        return chapterName;
+      }
+      // Old records may have no chapter metadata; directory dots are not extensions.
+      final name = p.basename(record.destinationPath).trim();
+      final id = record.logicalId.value;
+      final suffix = id.startsWith('manga_') && id.length >= 18
+          ? '-${id.substring(6, 18)}'
+          : '';
+      return name.isEmpty
+          ? 'Download'
+          : suffix.isNotEmpty && name.endsWith(suffix)
+          ? name.substring(0, name.length - suffix.length)
+          : name;
+    }
     final name = p.basenameWithoutExtension(record.destinationPath).trim();
     return name.isEmpty ? 'Download' : name;
   }

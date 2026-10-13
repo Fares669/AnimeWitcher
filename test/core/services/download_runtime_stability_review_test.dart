@@ -99,7 +99,7 @@ void main() {
         final source = File(
           'lib/core/services/persistent_parallel_download.dart',
         ).readAsStringSync();
-        expect(source, contains('kParallelManifestSchemaVersion = 6'));
+        expect(source, contains('kParallelManifestSchemaVersion = 7'));
         expect(
           source,
           contains("'schemaVersion': kParallelManifestSchemaVersion"),
@@ -119,12 +119,21 @@ void main() {
           ),
         );
         expect(
-          source,
+          source.replaceAll(RegExp(r'\s+'), ' '),
           contains(
             'resourceValidator: savedValidator.isEmpty ? null : savedValidator',
           ),
         );
         expect(source, contains('if (!contiguous) continue;'));
+        expect(source, contains("'readyToPublish': session.readyToPublish!.toJson(session)"));
+        expect(source, contains("raw['parentTaskId'] != session.task.taskId"));
+        expect(source, contains("raw['generation'] != session.generation"));
+        expect(source, contains("raw['expectedBytes'] != session.size"));
+        expect(source, contains("'sha256': sha256Digest"));
+        expect(source, contains('sha256.bind(file.openRead()).first'));
+        expect(source, contains('await _fileDigest(target) == ready.sha256Digest'));
+        expect(source, contains('!session.publicationOwnershipKnown'));
+
       },
     );
 
@@ -200,8 +209,10 @@ void main() {
           .readAsStringSync();
       expect(
         appDelegate,
-        contains('if !DownloadNativeWaitingQueue.acceptsDartOverlayUpdates()'),
+        contains('if !manager.acceptsDartUpdate('),
       );
+      expect(appDelegate, contains('inForeground: DownloadNativeWaitingQueue.acceptsDartOverlayUpdates()'));
+      expect(appDelegate, contains('completedPages: (arguments["completedPages"] as? NSNumber)?.intValue'));
     });
 
     test(
@@ -254,7 +265,7 @@ void main() {
       },
     );
 
-    test('final assembly promotion reserves the destination before rename', () {
+    test('final assembly publication requires the exclusive native publisher and fails closed', () {
       final source = File('lib/core/services/persistent_parallel_download.dart')
           .readAsStringSync();
       final start = source.indexOf('Future<bool> _promoteCompletedFile(');
@@ -262,12 +273,39 @@ void main() {
       expect(start, greaterThanOrEqualTo(0));
       expect(end, greaterThan(start));
       final section = source.substring(start, end);
-      expect(section, contains('create(exclusive: true)'));
-      expect(section, contains('.promoting'));
+      expect(section, contains('await _prepareReadyPublication(session, source)'));
+      expect(section, contains('FileSystemEntity.type(target.path, followLinks: false)'));
+      expect(section, contains('FileSystemEntityType.notFound'));
+      expect(section, contains('final publisher = promoteFile;'));
+      expect(section, contains('await publisher(source, target, session.size)'));
       expect(
-        section.indexOf('create(exclusive: true)'),
-        lessThan(section.indexOf('source.rename(target.path)')),
+        section.indexOf('await _prepareReadyPublication(session, source)'),
+        lessThan(section.indexOf('await publisher(source, target, session.size)')),
       );
+      final unsupportedStart = section.indexOf('if (publisher == null)');
+      final unsupportedEnd = section.indexOf('try {', unsupportedStart);
+      expect(unsupportedStart, greaterThanOrEqualTo(0));
+      expect(unsupportedEnd, greaterThan(unsupportedStart));
+      final unsupported = section.substring(unsupportedStart, unsupportedEnd);
+      expect(unsupported, contains('await _parkPublication(session);'));
+      expect(unsupported, contains('return false;'));
+      expect(section, isNot(contains('create(exclusive: true)')));
+      expect(section, isNot(contains('.promoting')));
+      expect(section, isNot(contains('source.rename(')));
+      expect(section, isNot(contains('source.copy(')));
+      expect(section, isNot(contains('target.delete(')));
+
+      final swift = File('ios/Runner/DownloadCallbackCompatibility.swift').readAsStringSync();
+      final nativeStart = swift.indexOf('enum DownloadFilePromotion {');
+      expect(nativeStart, greaterThanOrEqualTo(0));
+      final promotion = swift.substring(nativeStart);
+      expect(promotion, contains('renamex_np(sourceFS, targetFS, UInt32(RENAME_EXCL))'));
+      expect(promotion, contains('failure == EEXIST ? "DESTINATION_EXISTS"'));
+      expect(promotion, contains('guard result == 0 else'));
+      expect(promotion, isNot(contains(RegExp(r'\brename\s*\('))));
+      expect(promotion, isNot(contains('copyItem')));
+      expect(promotion, isNot(contains('removeItem')));
+      expect(promotion, isNot(contains('unlink(')));
     });
   });
 }

@@ -625,7 +625,11 @@ void main() {
       await f.manager.start(f.request);
       final taskId = f.gateway.startedSpecs.single.taskId;
       final handle = f.gateway.handleFor(taskId)!;
-      handle.onCancel = () async => true;
+      final cancelEntered = Completer<void>();
+      handle.onCancel = () async {
+        cancelEntered.complete();
+        return true;
+      };
 
       var completed = false;
       final cancelFuture = f.manager.cancel(f.request.logicalId).whenComplete(
@@ -633,14 +637,15 @@ void main() {
           completed = true;
         },
       );
-      await Future<void>.delayed(Duration.zero);
-
-      expect(handle.cancelCalls, 1);
-      expect(completed, isFalse);
-      expect(f.gateway.removedTracking, isNot(contains(taskId)));
-
-      f.gateway.emit(taskId, DownloadTransportStatus.canceled);
-      await cancelFuture;
+      try {
+        await cancelEntered.future.timeout(const Duration(seconds: 5));
+        expect(handle.cancelCalls, 1);
+        expect(completed, isFalse);
+        expect(f.gateway.removedTracking, isNot(contains(taskId)));
+      } finally {
+        f.gateway.emit(taskId, DownloadTransportStatus.canceled);
+        await cancelFuture;
+      }
 
       expect(completed, isTrue);
       expect(f.gateway.removedTracking, contains(taskId));
@@ -651,7 +656,7 @@ void main() {
     },
   );
 
-  test('cancel fences old generation before late callback', () async {
+  test('canceled intent fences the real generation before late callback', () async {
     final f = _fixture();
     await f.manager.start(f.request);
     final oldTaskId = f.gateway.startedSpecs.single.taskId;
@@ -660,7 +665,8 @@ void main() {
     final canceledRecord = await f.store.get(f.request.logicalId);
     expect(canceledRecord, isNotNull);
     expect(canceledRecord!.intent, DownloadUserIntent.canceled);
-    expect(canceledRecord.taskId, isNot(oldTaskId));
+    expect(canceledRecord.taskId, oldTaskId);
+    expect(canceledRecord.generation, 1);
 
     f.gateway.emit(oldTaskId, DownloadTransportStatus.complete);
     await Future<void>.delayed(Duration.zero);

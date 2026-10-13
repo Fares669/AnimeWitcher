@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/services/download_v2/download_v2_identity.dart';
+import '../../../core/services/download_v2/download_v2_models.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
 import '../../../core/utils/download_time_remaining.dart' show DownloadProgressData;
 import 'downloads_provider.dart';
@@ -20,16 +21,20 @@ final downloadProgressProvider = Provider<Map<String, DownloadProgressData>>((
   for (final item in downloads) {
     final logicalId = item.logicalId?.trim();
     if (logicalId == null || logicalId.isEmpty) continue;
-    final snapshot = manager?.snapshotFor(DownloadLogicalId(logicalId));
+    final observed = manager?.snapshotFor(DownloadLogicalId(logicalId));
+    final snapshot = observed?.taskId == item.id ? observed : null;
     final progress = (snapshot?.progress ?? item.progress).clamp(0.0, 1.0);
     final key = logicalId;
 
     result[key] = DownloadProgressData(
       taskId: item.id,
       progress: progress.toDouble(),
-      networkSpeed: snapshot?.networkSpeedMBps ?? -1,
-      timeRemaining: snapshot?.timeRemaining ?? Duration.zero,
+      networkSpeed: snapshot?.networkSpeedMBps ?? item.networkSpeedMBps,
+      timeRemaining: snapshot?.timeRemaining ?? item.timeRemaining,
       totalSize: snapshot?.totalBytes ?? item.totalBytes ?? -1,
+      completedPages: item.mediaKind == DownloadMediaKind.mangaChapter
+          ? (snapshot?.completedPages ?? item.completedPages ?? 0) : null,
+      totalPages: snapshot?.totalPages ?? item.totalPages,
       status: item.status,
     );
 

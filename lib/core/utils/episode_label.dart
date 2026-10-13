@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 import 'digit_normalization.dart';
 
 String _normalizeEpisodeLabel(String value) {
@@ -5,18 +9,26 @@ String _normalizeEpisodeLabel(String value) {
       .replaceAll(RegExp(r'\s+'), ' ');
 }
 
+/// Preserve a supplied numeric display value without changing episode identity.
+String? rawEpisodeNumberForDisplay(Object? value) {
+  if (value is! String && value is! num) return null;
+  final raw = value.toString();
+  final normalized = normalizeLocalizedDigits(raw.trim());
+  return RegExp(r'^-?\d+(?:[.,٫]\d+)?$').hasMatch(normalized) ? raw : null;
+}
+
 /// True when [value] is only a generic episode placeholder such as
 /// "الحلقة 12", "حلقة 12 والأخيرة", or "Episode 3".
 bool isGenericEpisodeTitle(String? value) {
   final title = _normalizeEpisodeLabel(value ?? '');
   if (title.isEmpty) return true;
-  return RegExp(r'^(?:ال)?حلق[ةه]\s*\d+(?:\s+(?:والأخيرة|والاخيرة))?$')
+  return RegExp(r'^(?:ال)?حلق[ةه]\s*\d+(?:[.,٫]\d+)?(?:\s+(?:والأخيرة|والاخيرة))?$')
           .hasMatch(title) ||
       RegExp(
-        r'^(?:episode|ep\.?)\s*\d+(?:\s+(?:final|last))?$',
+        r'^(?:episode|ep\.?)\s*\d+(?:[.,٫]\d+)?(?:\s+(?:final|last))?$',
         caseSensitive: false,
       ).hasMatch(title) ||
-      RegExp(r'^\d+$').hasMatch(title);
+      RegExp(r'^\d+(?:[.,٫]\d+)?$').hasMatch(title);
 }
 
 /// True when [value] ends with a final-episode suffix such as "والأخيرة".
@@ -202,7 +214,7 @@ String formatEpisodeLabel({
 }
 
 /// Characters that break or get rewritten on common mobile filesystems.
-final RegExp _illegalDownloadFileChars = RegExp(r'[\\/:*?"<>|]');
+final RegExp _illegalDownloadFileChars = RegExp(r'[\x00-\x1f\x7f-\x9f\\/:*?"<>|]');
 
 /// Compose common Arabic NFD sequences (e.g. ا + ٔ → أ) so filenames match
 /// across iOS (often NFD) and Android/Linux (often NFC).
@@ -216,10 +228,37 @@ String normalizeDownloadText(String value) {
 
 /// Sanitize a display label into a stable on-disk filename stem.
 String sanitizeDownloadFileName(String name) {
-  return normalizeDownloadText(name)
+  var stem = normalizeDownloadText(name)
       .replaceAll(_illegalDownloadFileChars, '_')
       .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+      .trim()
+      .replaceAll(RegExp(r'[. ]+$'), '');
+  if (stem.isEmpty) return '';
+  if (RegExp(
+    r'^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)',
+    caseSensitive: false,
+  ).hasMatch(stem)) {
+    stem = '_$stem';
+  }
+
+  final bytes = utf8.encode(stem);
+  if (bytes.length <= 200) return stem;
+  final suffix = '-${sha256.convert(bytes).toString().substring(0, 12)}';
+  final prefix = StringBuffer();
+  var prefixBytes = 0;
+  for (final rune in stem.runes) {
+    final runeBytes = rune <= 0x7f
+        ? 1
+        : rune <= 0x7ff
+        ? 2
+        : rune <= 0xffff
+        ? 3
+        : 4;
+    if (prefixBytes + runeBytes > 200 - suffix.length) break;
+    prefix.writeCharCode(rune);
+    prefixBytes += runeBytes;
+  }
+  return '$prefix$suffix';
 }
 
 /// Normalize stream quality for download filenames as `{height}p`.
@@ -274,6 +313,21 @@ String formatEpisodeFileName({
   return qualityLabel == null ? base : '$base ($qualityLabel)';
 }
 
+/// Bound the base before adding quality, so it stays readable and matchable.
+String formatEpisodeDownloadFileName({
+  required int episode,
+  String? title,
+  String? quality,
+  bool isFinal = false,
+  String? serverName,
+}) {
+  final stem = sanitizeDownloadFileName(formatEpisodeFileName(
+    episode: episode, title: title, isFinal: isFinal, serverName: serverName,
+  ));
+  final qualityLabel = formatDownloadQualityLabel(quality);
+  return stem.isEmpty || qualityLabel == null ? stem : '$stem ($qualityLabel)';
+}
+
 /// True when this episode should be saved/looked up by its own label instead
 /// of the series title.
 ///
@@ -306,47 +360,37 @@ bool isDownloadedEpisodeFileName(
   String? serverName,
   bool isFinal = false,
 }) {
-  final stem = sanitizeDownloadFileName(
-    fileName.contains('.')
-        ? fileName.substring(0, fileName.lastIndexOf('.'))
-        : fileName,
-  );
-  final label = sanitizeDownloadFileName(
-    formatEpisodeFileName(
-      episode: episode,
-      title: title,
-      isFinal: isFinal,
-      serverName: serverName,
-    ),
+  final rawStem = fileName.contains('.')
+      ? fileName.substring(0, fileName.lastIndexOf('.'))
+      : fileName;
+  final label = formatEpisodeDownloadFileName(
+    episode: episode, title: title, isFinal: isFinal, serverName: serverName,
   );
   if (label.isEmpty) return false;
-  if (stem.toLowerCase() == label.toLowerCase()) return true;
-  return stem.toLowerCase().startsWith('${label.toLowerCase()} (') &&
-      RegExp(r'\(\d{3,4}p\)$', caseSensitive: false).hasMatch(stem);
+  final normalizedLabel = label.toLowerCase();
+  if (sanitizeDownloadFileName(rawStem).toLowerCase() == normalizedLabel) return true;
+  final quality = RegExp(r' \(\d{3,4}p\)$', caseSensitive: false).firstMatch(rawStem);
+  // Old legal files can have an unbounded base; strip quality before hashing it.
+  return quality != null &&
+      sanitizeDownloadFileName(rawStem.substring(0, quality.start)).toLowerCase() == normalizedLabel;
 }
 
-/// Title persisted in watch history / sync. Keeps a final-episode marker when
-/// there is no creative title so "والأخيرة" survives round-trips.
+/// Original display title persisted in history, independently of file names.
 String episodeTitleForStorage({
   required int episode,
   String? title,
   bool isFinal = false,
   String? serverName,
 }) {
-  final label = resolveEpisodeLabel(
-    episode: episode,
-    isArabic: true,
-    title: title,
-    serverName: serverName,
-    isFinal: isFinal,
-  );
-  if (label.secondary.isNotEmpty) return label.secondary;
-  // Numberless episodes have nothing else to identify them, so keep their
-  // label (الحلقة الخاصة, OVA, مترجم, …) in history.
-  if (episode <= 0 ||
-      isStandaloneEpisodeLabel(label.primary) ||
-      hasFinalEpisodeSuffix(label.primary)) {
-    return label.primary;
+  if (title?.trim().isNotEmpty ?? false) return title!;
+  if (serverName?.trim().isNotEmpty ?? false) return serverName!;
+  // Legacy callers may only know the final marker, with no original text.
+  if (isFinal) {
+    return resolveEpisodeLabel(
+      episode: episode,
+      isArabic: true,
+      isFinal: true,
+    ).primary;
   }
   return '';
 }
@@ -360,15 +404,16 @@ String continueWatchingPrimaryLabel({
   required bool isArabic,
   String? episodeTitle,
   String? episodeServerName,
+  String? episodeServerNumber,
 }) {
   final number = episode ?? 0;
-  final server = (episodeServerName ?? '').trim();
-  final stored = (episodeTitle ?? '').trim();
+  final server = episodeServerName ?? '';
+  final stored = episodeTitle ?? '';
   // A stored creative title is a secondary line while there is a number to
   // show; without one it is all the row has.
-  final catalogLabel = server.isNotEmpty
+  final catalogLabel = server.trim().isNotEmpty
       ? server
-      : (stored.isNotEmpty &&
+      : (stored.trim().isNotEmpty &&
             (number <= 0 ||
                 isGenericEpisodeTitle(stored) ||
                 isStandaloneEpisodeLabel(stored) ||
@@ -383,6 +428,9 @@ String continueWatchingPrimaryLabel({
       catalogLabel: catalogLabel,
       isFinal: hasFinalEpisodeSuffix(catalogLabel),
     );
+  }
+  if (episodeServerNumber?.trim().isNotEmpty ?? false) {
+    return episodeServerNumber!;
   }
   if (number > 0) {
     return formatEpisodeNumberLabel(episode: number, isArabic: isArabic);

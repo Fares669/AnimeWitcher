@@ -14,8 +14,8 @@ class DownloadedFiles extends _$DownloadedFiles {
   @override
   Map<String, File?> build() => const <String, File?>{};
 
-  Future<File?> resolveFile(MultimediaItem item, {Episode? episode}) {
-    return _resolveFileForKey(episode?.url ?? item.url);
+  Future<File?> resolveFile(MultimediaItem item, {Episode? episode, String? logicalId}) {
+    return _resolveFileForKey(episode?.url ?? item.url, logicalId: logicalId);
   }
 
   Future<File?> resolveFileForTrackingUrl(
@@ -29,7 +29,10 @@ class DownloadedFiles extends _$DownloadedFiles {
     );
   }
 
-  Future<File?> _resolveFileForKey(String key) async {
+  Future<File?> _resolveFileForKey(String key, {String? logicalId}) async {
+    final selected = logicalId?.trim();
+    if (selected != null && selected.isEmpty) return null;
+    final unitKey = key.trim();
     final manager = ref.read(downloadManagerV2Provider);
     final records = await manager.records.first;
 
@@ -38,7 +41,8 @@ class DownloadedFiles extends _$DownloadedFiles {
         records
             .where(
               (record) =>
-                  record.completedAtMillis != null && record.unitKey == key,
+                  record.completedAtMillis != null && record.unitKey == unitKey &&
+                  (selected == null || record.logicalId.value == selected),
             )
             .toList(growable: false)
           ..sort((a, b) => b.updatedAtMillis.compareTo(a.updatedAtMillis));

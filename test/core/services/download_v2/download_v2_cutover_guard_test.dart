@@ -52,7 +52,7 @@ void main() {
       );
 
       expect(logDialog, contains('downloadDiagnosticsFileV2Provider'));
-      expect(managementDialog, contains('deleteDownloadedVideo(file)'));
+      expect(managementDialog, contains('deleteLegacyDownloadedVideo(file)'));
     });
 
     test('presentation metadata is durable before a V2 writer can start', () {
@@ -223,9 +223,12 @@ void main() {
           contains('saveDownloadMetadata'),
         );
 
-        final mangaStart = manga.indexOf(
-          'await ref.read(downloadManagerV2Provider).start(request)',
+        final mangaManager = manga.indexOf(
+          'final manager = ref.read(downloadManagerV2Provider)',
         );
+        final mangaStart = manga.indexOf('await manager.start(request)');
+        expect(mangaManager, greaterThanOrEqualTo(0));
+        expect(mangaStart, greaterThan(mangaManager));
         final mangaRefresh = manga.indexOf('if (hasExistingMetadata)', mangaStart);
         expect(mangaStart, greaterThanOrEqualTo(0));
         expect(mangaRefresh, greaterThan(mangaStart));

@@ -10,10 +10,12 @@ import '../../domain/entity/manga.dart';
 import '../../extensions/base_provider.dart';
 import '../../extensions/extension_manager.dart';
 import '../../storage/settings_repository.dart';
+import '../../storage/storage_service.dart';
 import '../download_continued_processing_service.dart';
 import '../download_url_refresh.dart';
 import 'background_downloader_gateway.dart';
 import 'download_continued_processing_v2.dart';
+import 'download_artwork_store_v2.dart';
 import 'download_manager_v2.dart';
 import 'download_integrity_verifier_v2.dart';
 import 'download_source_resolver_v2.dart';
@@ -134,6 +136,23 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
           );
         },
   );
+  final artwork = DownloadArtworkObserverV2(sourceFor: (record) async {
+    final storage = ref.read(storageServiceProvider);
+    var metadata = await storage.getDownloadMetadata(record.logicalId.value);
+    if (metadata == null || !downloadArtworkMetadataMatchesRecordV2(metadata, record)) {
+      metadata = await storage.getDownloadMetadata(record.taskId);
+      if (metadata == null || !downloadArtworkMetadataMatchesRecordV2(metadata, record)) return null;
+    }
+    final item = metadata['item'];
+    final episode = metadata['episode'];
+    final poster = item is Map ? item['posterUrl'] : null;
+    final thumbnail = episode is Map ? episode['posterUrl'] : null;
+    return DownloadArtworkSourceV2(
+      posterUrl: poster is String ? poster : null,
+      episodeUrl: thumbnail is String ? thumbnail : null,
+      legacyTaskId: record.taskId,
+    );
+  });
   manager = DownloadManagerV2(
     store: ref.read(logicalDownloadStoreV2Provider),
     gateway: ref.read(backgroundDownloaderGatewayV2Provider),
@@ -143,6 +162,7 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
     diagnostics: ref.read(downloadDiagnosticsV2Provider),
     presentationObservers: <DownloadPresentationObserverV2>[
       continuedProcessing,
+      artwork,
     ],
     parallelPauseReadiness: pauseReadiness,
     maxConcurrentDownloads: () =>

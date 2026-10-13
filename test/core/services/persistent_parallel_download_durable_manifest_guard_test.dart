@@ -7,7 +7,7 @@ void main() {
     final source = File('lib/core/services/persistent_parallel_download.dart')
         .readAsStringSync();
 
-    expect(source, contains('kParallelManifestSchemaVersion = 6'));
+    expect(source, contains('kParallelManifestSchemaVersion = 7'));
     expect(source, contains("'parentTask': session.task.toJson()"));
     expect(source, contains("'durableBytes': durableBytes"));
     expect(source, contains('sum + part.durableBytes'));
