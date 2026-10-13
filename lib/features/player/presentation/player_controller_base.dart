@@ -15,7 +15,7 @@ import 'package:video_view/video_view.dart'
 
 import '../../../../core/logger/app_logger.dart';
 
-import 'package:animewitcher/core/account/account_providers.dart';
+import '../../../../core/providers/anime_data_source_settings_provider.dart';
 
 import '../../details/presentation/downloaded_file_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -128,6 +128,7 @@ class PlayerState {
   final int sourceSessionId;
 
   final List<SkipSegment> skipSegments;
+  final List<Episode> episodes;
 
   const PlayerState({
     this.errorMessage,
@@ -164,6 +165,7 @@ class PlayerState {
     this.sourceAttempts = const [],
     this.sourceSessionId = 0,
     this.skipSegments = const [],
+    this.episodes = const [],
   });
 
   // Derived from uiPhase — no separate field needed.
@@ -216,6 +218,7 @@ class PlayerState {
     List<SourceAttemptEntry>? sourceAttempts,
     int? sourceSessionId,
     List<SkipSegment>? skipSegments,
+    List<Episode>? episodes,
   }) {
     return PlayerState(
       errorMessage: errorMessage ?? this.errorMessage,
@@ -253,6 +256,7 @@ class PlayerState {
       sourceAttempts: sourceAttempts ?? this.sourceAttempts,
       sourceSessionId: sourceSessionId ?? this.sourceSessionId,
       skipSegments: skipSegments ?? this.skipSegments,
+      episodes: episodes ?? this.episodes,
     );
   }
 }
@@ -270,7 +274,7 @@ class PlayerController extends Notifier<PlayerState> {
   int _sourceSessionSerial = 0;
 
   bool _hasMarkedWatched = false;
-  bool _hasRefreshedCloudProgress = false;
+  int _catalogGeneration = 0;
 
   Player get player => _player;
   VideoController? get videoViewController => _videoViewController;
@@ -721,7 +725,7 @@ class PlayerController extends Notifier<PlayerState> {
     _pendingResumeSeekPosition = null;
     _isApplyingPendingResumeSeek = false;
     _hasMarkedWatched = false;
-    _hasRefreshedCloudProgress = false;
+    ++_catalogGeneration;
     _item = item;
 
     String initialTitle = item.title;
@@ -737,6 +741,7 @@ class PlayerController extends Notifier<PlayerState> {
 
     state = state.copyWith(
       playerTitle: initialTitle,
+      episodes: item.episodes ?? const [],
       activeEpisodeUrl: _progressUrl,
       imdbId: imdbId,
       tmdbId: tmdbId,
@@ -758,6 +763,7 @@ class PlayerController extends Notifier<PlayerState> {
     );
 
     _isInitialized = true;
+    _refreshEpisodeCatalog();
     _maybeFetchSkipSegments();
 
     if (selectedSource != null && !selectedSource.requiresResolution) {
@@ -788,6 +794,86 @@ class PlayerController extends Notifier<PlayerState> {
     final defaultSpeed = settings?.defaultPlaybackSpeed ?? 1.0;
     if (defaultSpeed != 1.0 && !state.isLive) {
       await setPlaybackSpeed(defaultSpeed);
+    }
+  }
+
+  void _refreshEpisodeCatalog() {
+    if (_item.url.trim().isEmpty ||
+        _item.provider == 'Local' ||
+        _item.provider == 'Remote' ||
+        _item.contentType == MultimediaContentType.livestream ||
+        _item.contentType == MultimediaContentType.manga) {
+      return;
+    }
+    final provider = _resolveProvider();
+    if (provider == null) return;
+    final generation = _catalogGeneration;
+    final url = _item.url;
+    var episodes = _item.episodes ?? const <Episode>[];
+    final posters = <String, String>{};
+    bool isCurrent() => !_isDisposed && generation == _catalogGeneration;
+
+    void publish() {
+      if (!isCurrent()) return;
+      final updated = episodes
+          .map((episode) {
+            final poster = posters[episode.url];
+            return poster == null
+                ? episode
+                : episode.copyWith(posterUrl: poster);
+          })
+          .toList(growable: false);
+      _item = _item.copyWith(episodes: updated);
+      // Reconcile the episode that is active now, never the one that started
+      // this request or a same-number entry from a different dub/server.
+      _episode =
+          updated.firstWhereOrNull((e) => e.url == _currentProgressUrl) ??
+          _episode;
+      // Item/episode equality omits artwork; a new list notifies the drawer.
+      state = state.copyWith(episodes: updated);
+    }
+
+    Future<void> loadCatalog() async {
+      try {
+        final fetched = await provider.getEpisodes(url);
+        if (!isCurrent() || fetched.isEmpty) return;
+        final saved = {for (final episode in episodes) episode.url: episode};
+        final merged = <String, Episode>{
+          for (final episode in fetched)
+            episode.url: episode.copyWith(
+              posterUrl: episode.posterUrl ?? saved[episode.url]?.posterUrl,
+            ),
+        };
+        // An unavailable server entry must not hide its saved offline variant.
+        for (final episode in episodes) {
+          merged.putIfAbsent(episode.url, () => episode);
+        }
+        episodes = merged.values.toList(growable: false);
+        publish();
+      } catch (error) {
+        if (kDebugMode) debugPrint('Player catalog refresh skipped: $error');
+      }
+    }
+
+    Future<void> loadArtwork() async {
+      try {
+        final metadata = await provider.getEpisodeMetadata(url);
+        if (!isCurrent()) return;
+        for (final episode in metadata) {
+          final poster = episode.posterUrl?.trim() ?? '';
+          if (episode.url.isNotEmpty && poster.isNotEmpty) {
+            posters[episode.url] = poster;
+          }
+        }
+        if (posters.isNotEmpty) publish();
+      } catch (error) {
+        if (kDebugMode) debugPrint('Player artwork refresh skipped: $error');
+      }
+    }
+
+    unawaited(loadCatalog());
+    if (ref.read(animeDataSourceSettingsProvider).episodeImagesFromAniZip) {
+      unawaited(loadArtwork());
     }
   }
 
@@ -4497,9 +4583,9 @@ class PlayerController extends Notifier<PlayerState> {
     return false;
   }
 
-  Future<void> _safeSeekTo(int position) async {
+  Future<int?> _safeSeekTo(int position) async {
     final sourceSessionId = state.sourceSessionId;
-    if (position <= 0 || !_isCurrentSourceSession(sourceSessionId)) return;
+    if (position <= 0 || !_isCurrentSourceSession(sourceSessionId)) return null;
 
     // ExoPlayer path: wait until the item reports a duration, then seek.
     if (state.useExoPlayer && _videoViewController != null) {
@@ -4526,15 +4612,16 @@ class PlayerController extends Notifier<PlayerState> {
           }
           durationMs = controller.mediaInfo.value?.duration ?? 0;
         }
-        if (!_isCurrentSourceSession(sourceSessionId)) return;
+        if (!_isCurrentSourceSession(sourceSessionId)) return null;
         final targetMs = durationMs > 0
             ? position.clamp(0, durationMs)
             : position;
         controller.seekTo(targetMs);
+        return targetMs;
       } catch (e) {
         if (kDebugMode) debugPrint("ExoPlayer seek failed: $e");
       }
-      return;
+      return null;
     }
 
     // media_kit path: wait for duration to be known before seeking.
@@ -4546,12 +4633,13 @@ class PlayerController extends Notifier<PlayerState> {
             .timeout(const Duration(seconds: 8));
       }
 
-      if (!_isCurrentSourceSession(sourceSessionId)) return;
+      if (!_isCurrentSourceSession(sourceSessionId)) return null;
       final maxMs = duration.inMilliseconds;
-      if (maxMs <= 0) return;
+      if (maxMs <= 0) return null;
 
       final targetMs = position.clamp(0, maxMs);
       await _player.seek(Duration(milliseconds: targetMs));
+      return targetMs;
     } on TimeoutException catch (e) {
       if (kDebugMode) {
         debugPrint("Timeout waiting for duration: $e");
@@ -4559,8 +4647,9 @@ class PlayerController extends Notifier<PlayerState> {
 
       // Best-effort fallback: some streams can seek before duration is reported.
       try {
-        if (!_isCurrentSourceSession(sourceSessionId)) return;
+        if (!_isCurrentSourceSession(sourceSessionId)) return null;
         await _player.seek(Duration(milliseconds: position));
+        return position;
       } catch (seekError) {
         if (kDebugMode) {
           debugPrint("Fallback seek failed: $seekError");
@@ -4571,6 +4660,7 @@ class PlayerController extends Notifier<PlayerState> {
         debugPrint("Seek failed: $e");
       }
     }
+    return null;
   }
 
   Future<void> _seekThenPlay(int positionMs) async {
@@ -4578,13 +4668,13 @@ class PlayerController extends Notifier<PlayerState> {
     if (positionMs <= 0 || !_isCurrentSourceSession(sourceSessionId)) return;
     await pause();
     if (!_isCurrentSourceSession(sourceSessionId)) return;
-    await _safeSeekTo(positionMs);
+    final targetMs = await _safeSeekTo(positionMs) ?? positionMs;
     if (!_isCurrentSourceSession(sourceSessionId)) return;
-    await _waitUntilNearResumePosition(positionMs);
+    await _waitUntilNearResumePosition(targetMs);
     if (!_isCurrentSourceSession(sourceSessionId)) return;
     await play();
     if (!_isCurrentSourceSession(sourceSessionId)) return;
-    await _waitUntilNearResumePosition(positionMs);
+    await _waitUntilNearResumePosition(targetMs);
   }
 
   Future<void> _flushPendingResumeSeek() async {
@@ -4625,77 +4715,25 @@ class PlayerController extends Notifier<PlayerState> {
     while (_isCurrentSourceSession(sourceSessionId) &&
         DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      if (near()) return;
+      if (!_isCurrentSourceSession(sourceSessionId) || near()) return;
     }
   }
 
   Future<int> _resolveResumePosition({required bool isLive}) async {
     if (isLive) return 0;
-
-    final historyRepo = ref.read(historyRepositoryProvider);
-    final account = ref.read(animeWitcherAccountServiceProvider);
-    final mainUrl = _item.url;
-    final progressUrl = _currentProgressUrl;
+    // Account sync already restores local history. Importing cloud progress
+    // here delays playback and can overwrite progress saved after opening.
+    final history = ref.read(historyRepositoryProvider);
     final episode = _resolveCurrentEpisode();
-    final isSeries =
-        _item.contentType == MultimediaContentType.series ||
-        _item.contentType == MultimediaContentType.anime;
-
-    int localPosition() {
-      if (isSeries) {
-        return historyRepo.getEpisodePosition(
-          progressUrl,
-          mainUrl: mainUrl,
-          season: episode?.season,
-          episode: episode?.episode,
-        );
-      }
-      return historyRepo.getPosition(mainUrl);
+    if (isSeries) {
+      return history.getEpisodePosition(
+        _currentProgressUrl,
+        mainUrl: _item.url,
+        season: episode?.season,
+        episode: episode?.episode,
+      );
     }
-
-    final local = localPosition();
-    if (!_hasRefreshedCloudProgress &&
-        PlaybackResume.shouldHoldUntilSeeked(local)) {
-      _hasRefreshedCloudProgress = true;
-      unawaited(_syncContinueWatchingInBackground());
-    }
-    return PlaybackResume.resolveStartupPosition(
-      localPositionMs: local,
-      cloudPositionMs: () async {
-        _hasRefreshedCloudProgress = true;
-        try {
-          await account.syncContinueWatchingItem(mainUrl);
-        } catch (error) {
-          if (kDebugMode) {
-            debugPrint('[Player] Cloud progress sync deferred: $error');
-          }
-        }
-        final afterSync = localPosition();
-        if (PlaybackResume.shouldHoldUntilSeeked(afterSync)) {
-          return afterSync;
-        }
-        if (isSeries && episode != null) {
-          return account.remoteEpisodePosition(
-            mainUrl: mainUrl,
-            episodeUrl: progressUrl,
-            refresh: true,
-          );
-        }
-        return afterSync;
-      },
-    );
-  }
-
-  Future<void> _syncContinueWatchingInBackground() async {
-    try {
-      await ref
-          .read(animeWitcherAccountServiceProvider)
-          .syncContinueWatchingItem(_item.url);
-    } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[Player] Cloud progress sync deferred: $error');
-      }
-    }
+    return history.getPosition(_item.url);
   }
 
   /// [persist] = true marks this as a user-driven speed change that should

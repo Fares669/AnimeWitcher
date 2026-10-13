@@ -7,13 +7,14 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
 import '../../../core/router/app_router.dart';
-import '../../../core/providers/anime_data_source_settings_provider.dart';
 import '../../../core/services/external_player_service.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../settings/presentation/player_settings_provider.dart';
 import '../../settings/presentation/general_settings_provider.dart';
+
 import 'package:collection/collection.dart';
+
 import 'details_controller.dart';
 import 'source_picker.dart';
 import 'downloaded_file_provider.dart';
@@ -21,7 +22,9 @@ import '../../../shared/widgets/loading_dialog.dart';
 import '../../../core/utils/app_utils.dart';
 import '../../../core/utils/episode_label.dart';
 import '../../../core/utils/resume_episode.dart';
+
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+
 import '../../../core/services/notification_service.dart';
 import '../../library/presentation/history_provider.dart';
 
@@ -51,67 +54,6 @@ class PlaybackLauncher {
       }
     }
     return provider ?? _ref.read(activeProviderProvider);
-  }
-
-  bool _needsPlayerEpisodes(MultimediaItem item) {
-    return item.contentType == MultimediaContentType.series ||
-        item.contentType == MultimediaContentType.anime;
-  }
-
-  /// Continue-watching storage intentionally keeps a lightweight media item,
-  /// so series/anime entries usually reach this launcher without `episodes`.
-  /// Hydrate them before opening the internal player so its episode drawer,
-  /// next/previous navigation and next-episode overlay all have the catalog.
-  /// Failure is non-fatal: playback must still work when the catalog is
-  /// temporarily unavailable (especially for an already downloaded episode).
-  Future<MultimediaItem> _hydratePlayerEpisodes(
-    MultimediaItem item, {
-    AnimeWitcherProvider? provider,
-    bool loadArtwork = false,
-  }) async {
-    if (((item.episodes?.isNotEmpty ?? false) && !loadArtwork) ||
-        !_needsPlayerEpisodes(item) ||
-        item.url.trim().isEmpty) {
-      return item;
-    }
-
-    final resolvedProvider = provider ?? _resolveProvider(item);
-    if (resolvedProvider == null) return item;
-
-    var hydrated = item;
-    try {
-      if (!(hydrated.episodes?.isNotEmpty ?? false)) {
-        final episodes = await resolvedProvider.getEpisodes(item.url);
-        if (episodes.isEmpty) return item;
-        hydrated = item.copyWith(
-          episodes: episodes,
-          provider: item.provider ?? resolvedProvider.packageName,
-        );
-      }
-      if (loadArtwork &&
-          _ref.read(animeDataSourceSettingsProvider).episodeImagesFromAniZip) {
-        // History omits sync IDs. The provider resolves AniZip using the anime
-        // URL, just as it does for the details page's episode artwork.
-        final metadata = await resolvedProvider.getEpisodeMetadata(item.url);
-        final posters = <String, String>{
-          for (final episode in metadata)
-            if (episode.url.isNotEmpty &&
-                (episode.posterUrl?.trim().isNotEmpty ?? false))
-              episode.url: episode.posterUrl!.trim(),
-        };
-        hydrated = hydrated.copyWith(
-          episodes: hydrated.episodes!.map((episode) {
-            final poster = posters[episode.url];
-            return poster == null ? episode : episode.copyWith(posterUrl: poster);
-          }).toList(growable: false),
-        );
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('PlaybackLauncher._hydratePlayerEpisodes: $e');
-      }
-    }
-    return hydrated;
   }
 
   Episode? _canonicalEpisode(
@@ -189,9 +131,8 @@ class PlaybackLauncher {
           _ref
               .read(notificationServiceProvider)
               .showError(
-                AppLocalizations.of(
-                  context,
-                )!.usingInternalPlayerError(error.toString()),
+                AppLocalizations.of(context)!
+                    .usingInternalPlayerError(error.toString()),
               );
         }
         return null;
@@ -224,7 +165,7 @@ class PlaybackLauncher {
   /// Opens Continue Watching directly on Home. A completed download is looked
   /// up by the canonical episode tracking URL first, so it bypasses the server
   /// picker and use saved episode context offline. Online entries still use
-  /// normal source selection and hydrate the catalog before opening the player.
+  /// normal source selection; the player fills its catalog in the background.
   Future<void> playFromContinueWatching(
     BuildContext context,
     HistoryItem history,
@@ -248,7 +189,6 @@ class PlaybackLauncher {
         localFile?.path ?? savedUrl,
         baseItem: item,
         episode: hintEpisode,
-        loadEpisodeArtwork: true,
       );
       return;
     }
@@ -307,7 +247,6 @@ class PlaybackLauncher {
       detailedItem: detailedItem,
       episode: resolvedEpisode,
       preselectedSource: selected,
-      loadEpisodeArtwork: true,
     );
   }
 
@@ -383,9 +322,8 @@ class PlaybackLauncher {
         _ref
             .read(notificationServiceProvider)
             .showError(
-              AppLocalizations.of(
-                context,
-              )!.usingInternalPlayerError(e.toString()),
+              AppLocalizations.of(context)!
+                  .usingInternalPlayerError(e.toString()),
             );
       }
       return null;
@@ -450,23 +388,23 @@ class PlaybackLauncher {
       downloadedPath: downloadedPath,
     );
 
+    // A provider or artwork request must never gate an already saved video.
+    final savedEpisodes = <Episode>[...?item.episodes];
+    if (resolvedEpisode != null &&
+        !savedEpisodes.any((value) => value.url == resolvedEpisode.url)) {
+      savedEpisodes.add(resolvedEpisode);
+    }
+    final playerItem = savedEpisodes.isEmpty
+        ? item
+        : item.copyWith(episodes: savedEpisodes);
+    final playerEpisode = _canonicalEpisode(
+      playerItem,
+      resolvedEpisode,
+      canonicalProgressUrl,
+    );
+
     // Downloaded files are already playable and do not need a source list.
     if (AppUtils.isLocalFile(localOrEpisodeUrl)) {
-      // A provider or artwork request must never gate an already saved video.
-      final savedEpisodes = <Episode>[...?item.episodes];
-      if (resolvedEpisode != null &&
-          !savedEpisodes.any((value) => value.url == resolvedEpisode.url)) {
-        savedEpisodes.add(resolvedEpisode);
-      }
-      final playerItem = savedEpisodes.isEmpty
-          ? item
-          : item.copyWith(episodes: savedEpisodes);
-      final playerEpisode = _canonicalEpisode(
-        playerItem,
-        resolvedEpisode,
-        canonicalProgressUrl,
-      );
-
       await _recordEpisodeOpened(playerItem, playerEpisode);
       if (!context.mounted) return;
       if (settings.preferredPlayer != null) {
@@ -493,11 +431,6 @@ class PlaybackLauncher {
       return;
     }
 
-    // Remote playback can enrich metadata in parallel with source selection.
-    final playerItemFuture = _hydratePlayerEpisodes(
-      item,
-      loadArtwork: loadEpisodeArtwork,
-    );
     final provider = _resolveProvider(item);
     if (provider == null) {
       _ref
@@ -519,14 +452,6 @@ class PlaybackLauncher {
           episode: resolvedEpisode,
         );
     if (selected == null || !context.mounted) return;
-
-    final playerItem = await playerItemFuture;
-    if (!context.mounted) return;
-    final playerEpisode = _canonicalEpisode(
-      playerItem,
-      resolvedEpisode,
-      canonicalProgressUrl,
-    );
 
     if (settings.preferredPlayer == null) {
       await _recordEpisodeOpened(playerItem, playerEpisode);
@@ -558,6 +483,7 @@ class PlaybackLauncher {
         );
         if (resolved == null || !context.mounted) return;
         await _recordEpisodeOpened(playerItem, playerEpisode);
+        if (!context.mounted) return;
         await _launchStream(
           context,
           resolved,
