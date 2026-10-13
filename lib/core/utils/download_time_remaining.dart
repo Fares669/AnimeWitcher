@@ -10,6 +10,8 @@ class DownloadProgressData {
     required this.timeRemaining,
     required this.status,
     this.totalSize = -1,
+    this.completedPages,
+    this.totalPages,
   });
 
   final String taskId;
@@ -17,6 +19,8 @@ class DownloadProgressData {
   final double networkSpeed;
   final Duration timeRemaining;
   final int totalSize;
+  final int? completedPages;
+  final int? totalPages;
   final TaskStatus status;
 }
 

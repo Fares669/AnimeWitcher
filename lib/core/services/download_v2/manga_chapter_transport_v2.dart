@@ -202,7 +202,9 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
          status: manifest.isComplete
              ? DownloadTransportStatus.complete
              : DownloadTransportStatus.queued,
-         progress: manifest.isComplete ? 1 : _baseProgress(manifest),
+         progress: 0,
+         completedPages: manifest.completedIndexes.length,
+         totalPages: manifest.pageCount,
          configuredConnections: _boundedPageConnections(spec.maxConcurrentPages),
          activeConnections: 0,
        );
@@ -436,14 +438,15 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
 
       final completed = Set<int>.from(_manifest.completedIndexes)..add(index);
       final digests = Map<int, String>.from(_manifest.pageDigests)..[index] = digest;
-      _manifest = _manifest.copyWith(
+      final nextManifest = _manifest.copyWith(
         completedIndexes: completed,
         pageDigests: digests,
         isComplete: completed.length == spec.pages.length,
       );
-      final publication = _manifest.writeTo(directory);
+      final publication = nextManifest.writeTo(directory);
       _manifestPublication = publication;
       await publication;
+      _manifest = nextManifest;
       if (_disposed || _canceled || generation != _generation || _current.isFinal) return;
       await _pageSubscriptions.remove(index)?.cancel();
       _pageHandles.remove(index);
@@ -518,6 +521,8 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
           taskId: taskId,
           status: DownloadTransportStatus.failed,
           progress: progress,
+          completedPages: _manifest.completedIndexes.length,
+          totalPages: spec.pages.length,
           configuredConnections: _pageConnectionLimit,
           activeConnections: 0,
           failureCategory: category,
@@ -534,7 +539,6 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
     double? progress,
   }) {
     final pageCount = spec.pages.length;
-    var completedProgress = _manifest.completedIndexes.length.toDouble();
     var activeConnections = _startingIndexes.length;
     var networkSpeed = 0.0;
     var hasNetworkSpeed = false;
@@ -542,7 +546,6 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
 
     for (final handle in _pageHandles.values) {
       final page = handle.current;
-      completedProgress += page.progress.clamp(0.0, 1.0).toDouble();
       if (page.status == DownloadTransportStatus.running) activeConnections++;
       if (page.networkSpeedMBps >= 0) {
         networkSpeed += page.networkSpeedMBps;
@@ -553,14 +556,12 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
       }
     }
 
-    final aggregateProgress = progress ??
-        (pageCount == 0
-            ? 1.0
-            : (completedProgress / pageCount).clamp(0.0, 1.0).toDouble());
     return DownloadTransportSnapshot(
       taskId: taskId,
       status: status,
-      progress: aggregateProgress,
+      progress: progress ?? 0,
+      completedPages: _manifest.completedIndexes.length,
+      totalPages: pageCount,
       networkSpeedMBps: hasNetworkSpeed ? networkSpeed : -1,
       timeRemaining: timeRemaining ?? Duration.zero,
       configuredConnections: _pageConnectionLimit,
@@ -577,13 +578,6 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
 
   static int _boundedPageConnections(int value) =>
       value.clamp(kDownloadPartsMin, kDownloadPartsMax).toInt();
-
-  static double _baseProgress(MangaChapterManifestV2 manifest) {
-    if (manifest.pageCount <= 0) return manifest.isComplete ? 1 : 0;
-    return (manifest.completedIndexes.length / manifest.pageCount)
-        .clamp(0.0, 1.0)
-        .toDouble();
-  }
 
   bool _allPagesPaused() =>
       _startingIndexes.isEmpty &&

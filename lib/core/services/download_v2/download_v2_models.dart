@@ -34,22 +34,38 @@ final class DownloadTransportSnapshot {
   const DownloadTransportSnapshot({
     required this.taskId,
     required this.status,
-    required this.progress,
+    required double progress,
     this.transferredBytes,
     this.totalBytes,
+    this.completedPages,
+    this.totalPages,
     this.networkSpeedMBps = -1,
     this.timeRemaining = Duration.zero,
     this.configuredConnections,
     this.activeConnections,
     this.failureCategory,
     this.failureMessage,
-  }) : assert(progress >= 0 && progress <= 1),
+  }) : _progress = progress,
+       assert(progress >= 0 && progress <= 1),
        assert(configuredConnections == null || configuredConnections > 0),
        assert(activeConnections == null || activeConnections >= 0);
 
   final String taskId;
   final DownloadTransportStatus status;
-  final double progress;
+  final double _progress;
+
+  /// Manga progress counts durable, validated pages, never partial image bytes.
+  double get progress {
+    if (completedPages == null) return _progress;
+    if (totalPages == 0 && status == DownloadTransportStatus.complete) return 1;
+    if (totalPages == null || totalPages! <= 0) return 0;
+    return (completedPages! / totalPages!)
+        .clamp(0.0, status == DownloadTransportStatus.complete ? 1.0 : .999)
+        .toDouble();
+  }
+
+  final int? completedPages;
+  final int? totalPages;
   final int? transferredBytes;
   final int? totalBytes;
   final double networkSpeedMBps;

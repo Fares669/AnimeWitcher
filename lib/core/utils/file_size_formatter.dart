@@ -56,3 +56,14 @@ String formatDownloadSizePair({
   return '${downloaded.toStringAsFixed(digits)} $unit / '
       '${total.toStringAsFixed(digits)} $unit';
 }
+
+/// Page counts stay independent of byte size and partial image transfers.
+String formatDownloadPageCount({
+  required int? completedPages,
+  required int? totalPages,
+  required String pageLabel,
+}) {
+  final total = totalPages != null && totalPages > 0 ? totalPages : null;
+  final completed = (completedPages ?? 0).clamp(0, total ?? 0);
+  return '$completed/${total ?? '?'} $pageLabel';
+}

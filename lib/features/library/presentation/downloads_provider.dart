@@ -33,6 +33,8 @@ class DownloadItem {
   final int parallelChunks;
   final int? transferredBytes;
   final int? totalBytes;
+  final int? completedPages;
+  final int? totalPages;
   final double networkSpeedMBps;
   final Duration timeRemaining;
 
@@ -52,6 +54,8 @@ class DownloadItem {
     int? parallelChunks,
     this.transferredBytes,
     this.totalBytes,
+    this.completedPages,
+    this.totalPages,
     this.networkSpeedMBps = -1,
     this.timeRemaining = Duration.zero,
   }) : trackingUrl = trackingUrl ?? task.metaData,
@@ -427,6 +431,8 @@ class DownloadsNotifier extends _$DownloadsNotifier {
         parallelChunks: record.parallelChunks,
         transferredBytes: snapshot?.transferredBytes,
         totalBytes: snapshot?.totalBytes ?? record.expectedBytes,
+        completedPages: snapshot?.completedPages,
+        totalPages: snapshot?.totalPages,
         networkSpeedMBps: snapshot?.networkSpeedMBps ?? -1,
         timeRemaining: snapshot?.timeRemaining ?? Duration.zero,
       );

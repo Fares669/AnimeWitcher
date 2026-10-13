@@ -197,7 +197,13 @@ class _DownloadProgressDialogState
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      formatDownloadSizePair(
+                      data.completedPages != null
+                          ? formatDownloadPageCount(
+                              completedPages: data.completedPages,
+                              totalPages: data.totalPages,
+                              pageLabel: appText(context, english: 'pages', arabic: 'صفحة'),
+                            )
+                          : formatDownloadSizePair(
                         totalBytes: data.totalSize,
                         progress: data.progress,
                         fractionDigits: 2,
