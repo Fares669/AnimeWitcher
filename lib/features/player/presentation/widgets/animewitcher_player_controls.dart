@@ -1351,6 +1351,7 @@ class AnimeWitcherPlayerControlsState
   Widget build(BuildContext context) {
     // Watch relevant player state selectively, falling back to props for initial frame
     final playerNotifier = ref.read(playerControllerProvider.notifier);
+    ref.watch(playerControllerProvider.select((s) => s.episodes));
     final controllerTitle = ref.watch(
       playerControllerProvider.select((s) => s.playerTitle),
     );

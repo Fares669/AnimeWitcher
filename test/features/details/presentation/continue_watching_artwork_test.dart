@@ -27,7 +27,8 @@ class _ArtworkSettings extends AnimeDataSourceSettingsNotifier {
   _ArtworkSettings(this.enabled);
   final bool enabled;
   @override
-  AnimeDataSourceSettings build() => AnimeDataSourceSettings(episodeImagesFromAniZip: enabled);
+  AnimeDataSourceSettings build() =>
+      AnimeDataSourceSettings(episodeImagesFromAniZip: enabled);
 }
 
 class _Downloads extends DownloadedFiles {
@@ -36,9 +37,17 @@ class _Downloads extends DownloadedFiles {
   @override
   Map<String, File?> build() => {};
   @override
-  Future<File?> resolveFileForTrackingUrl(String trackingUrl, {MultimediaItem? item, Episode? episode}) async => local ? File('/tmp/episode.mp4') : null;
+  Future<File?> resolveFileForTrackingUrl(
+    String trackingUrl, {
+    MultimediaItem? item,
+    Episode? episode,
+  }) async => local ? File('/tmp/episode.mp4') : null;
   @override
-  Future<File?> resolveFile(MultimediaItem item, {Episode? episode, String? logicalId}) async => null;
+  Future<File?> resolveFile(
+    MultimediaItem item, {
+    Episode? episode,
+    String? logicalId,
+  }) async => null;
 }
 
 class _History extends WatchHistory {
@@ -49,7 +58,16 @@ class _History extends WatchHistory {
   @override
   List<HistoryItem> build() => [];
   @override
-  Future<void> recordOpened(MultimediaItem item, {String? lastEpisodeUrl, int? season, int? episode, String? episodeTitle, String? episodeServerName, String? episodeServerNumber, String? episodePosterUrl}) async {
+  Future<void> recordOpened(
+    MultimediaItem item, {
+    String? lastEpisodeUrl,
+    int? season,
+    int? episode,
+    String? episodeTitle,
+    String? episodeServerName,
+    String? episodeServerNumber,
+    String? episodePosterUrl,
+  }) async {
     opened = item.episodes!.firstWhere((e) => e.url == lastEpisodeUrl);
     storedTitle = episodeTitle;
     storedServerName = episodeServerName;
@@ -65,13 +83,33 @@ class _Extensions extends ExtensionManager {
 }
 
 class _Provider extends AnimeWitcherProvider {
-  _Provider({this.failArtwork = false});
+  _Provider({
+    this.failArtwork = false,
+    this.hangCatalog = false,
+    this.hangArtwork = false,
+  });
+  final bool hangCatalog;
+  final bool hangArtwork;
   final bool failArtwork;
   int catalogCalls = 0;
   int artworkCalls = 0;
   final episodes = [
-    Episode(name: 'One', url: 'show|1', episode: 1, season: 1, posterUrl: 'source-1'),
-    Episode(name: 'Two', url: 'show|2', episode: 2, season: 1, posterUrl: 'source-2', serverName: 'الحلقة 2', isFinal: true),
+    Episode(
+      name: 'One',
+      url: 'show|1',
+      episode: 1,
+      season: 1,
+      posterUrl: 'source-1',
+    ),
+    Episode(
+      name: 'Two',
+      url: 'show|2',
+      episode: 2,
+      season: 1,
+      posterUrl: 'source-2',
+      serverName: 'الحلقة 2',
+      isFinal: true,
+    ),
   ];
   @override
   String get packageName => 'test.artwork';
@@ -88,24 +126,44 @@ class _Provider extends AnimeWitcherProvider {
   @override
   Future<Map<String, List<MultimediaItem>>> getHome() async => {};
   @override
-  Future<List<MultimediaItem>> search(String query, {CancelToken? cancelToken}) async => [];
+  Future<List<MultimediaItem>> search(
+    String query, {
+    CancelToken? cancelToken,
+  }) async => [];
   @override
-  Future<MultimediaItem> getDetails(String url) async => MultimediaItem(title: 'Show', url: url, posterUrl: '');
+  Future<MultimediaItem> getDetails(String url) async =>
+      MultimediaItem(title: 'Show', url: url, posterUrl: '');
   @override
   Future<List<Episode>> getEpisodes(String url) async {
     catalogCalls++;
+    if (hangCatalog) return Completer<List<Episode>>().future;
     return episodes;
   }
+
   @override
   Future<List<Episode>> getEpisodeMetadata(String url) async {
     artworkCalls++;
+    if (hangArtwork) return Completer<List<Episode>>().future;
     if (failArtwork) throw StateError('AniZip unavailable');
     // Deliberately reordered metadata with conflicting identity fields.
     return [
-      Episode(name: 'Wrong', url: 'show|2', episode: 99, season: 9, posterUrl: 'anizip-2'),
-      Episode(name: 'Wrong', url: 'show|1', episode: 99, season: 9, posterUrl: 'anizip-1'),
+      Episode(
+        name: 'Wrong',
+        url: 'show|2',
+        episode: 99,
+        season: 9,
+        posterUrl: 'anizip-2',
+      ),
+      Episode(
+        name: 'Wrong',
+        url: 'show|1',
+        episode: 99,
+        season: 9,
+        posterUrl: 'anizip-1',
+      ),
     ];
   }
+
   @override
   Future<List<StreamResult>> loadStreams(String url) async => [];
 }
@@ -114,81 +172,203 @@ void main() {
   for (final local in [false, true]) {
     for (final existingCatalog in [false, true]) {
       for (final enabled in [false, true]) {
-        testWidgets('resume local=$local artwork=$enabled existingCatalog=$existingCatalog', (tester) async {
-          await _resume(tester, enabled: enabled, existingCatalog: existingCatalog, local: local);
-        });
+        testWidgets(
+          'resume local=$local artwork=$enabled existingCatalog=$existingCatalog',
+          (tester) async {
+            await _resume(
+              tester,
+              enabled: enabled,
+              existingCatalog: existingCatalog,
+              local: local,
+            );
+          },
+        );
       }
     }
   }
   for (final local in [false, true]) {
     for (final label in ['الحلقة ٢.٥', 'الحلقة الخاصة: العودة / الجزء؟']) {
-      testWidgets('history resume renders original server label local=$local label=$label', (tester) async {
-        await _resume(tester, enabled: true, existingCatalog: false, local: local,
-          originalEpisode: Episode(name: '', url: 'show|2', episode: 2, season: 1,
-            posterUrl: 'source-2', serverName: label, serverNumber: '٢.٥'));
-      });
+      testWidgets(
+        'history resume renders original server label local=$local label=$label',
+        (tester) async {
+          await _resume(
+            tester,
+            enabled: true,
+            existingCatalog: false,
+            local: local,
+            originalEpisode: Episode(
+              name: '',
+              url: 'show|2',
+              episode: 2,
+              season: 1,
+              posterUrl: 'source-2',
+              serverName: label,
+              serverNumber: '٢.٥',
+            ),
+          );
+        },
+      );
     }
   }
+  testWidgets('pending catalog cannot block a selected stream', (tester) async {
+    await _resume(
+      tester,
+      enabled: true,
+      existingCatalog: false,
+      local: false,
+      hangCatalog: true,
+    );
+  });
+  testWidgets('pending artwork cannot block a selected stream', (tester) async {
+    await _resume(
+      tester,
+      enabled: true,
+      existingCatalog: true,
+      local: false,
+      hangArtwork: true,
+    );
+  });
   testWidgets('AniZip failure preserves the playable catalog', (tester) async {
-    await _resume(tester, enabled: true, existingCatalog: false, failArtwork: true, local: false);
+    await _resume(
+      tester,
+      enabled: true,
+      existingCatalog: false,
+      failArtwork: true,
+      local: false,
+    );
   });
 }
 
-Future<void> _resume(WidgetTester tester, {required bool enabled, required bool existingCatalog, bool failArtwork = false, required bool local, Episode? originalEpisode}) async {
-  final provider = _Provider(failArtwork: failArtwork);
+Future<void> _resume(
+  WidgetTester tester, {
+  required bool enabled,
+  required bool existingCatalog,
+  bool failArtwork = false,
+  required bool local,
+  Episode? originalEpisode,
+  bool hangCatalog = false,
+  bool hangArtwork = false,
+}) async {
+  final provider = _Provider(
+    failArtwork: failArtwork,
+    hangCatalog: hangCatalog,
+    hangArtwork: hangArtwork,
+  );
   if (originalEpisode != null) provider.episodes[1] = originalEpisode;
   final history = _History();
   PlayerRouteExtra? player;
-  final item = MultimediaItem(title: 'Show', url: 'show', posterUrl: '', provider: provider.packageName, contentType: MultimediaContentType.anime, episodes: existingCatalog ? provider.episodes : null);
-  final saved = HistoryItem(item: item, position: 30, duration: 100, timestamp: 0, lastEpisodeUrl: 'show|2', episode: 2, season: 1, episodePosterUrl: 'old-2',
-    episodeTitle: originalEpisode?.name, episodeServerName: originalEpisode?.serverName,
-    episodeServerNumber: originalEpisode?.serverNumber);
-  final router = GoRouter(routes: [
-    GoRoute(path: '/', builder: (context, state) => Scaffold(body: TextButton(
-      onPressed: () {
-        final launcher = ProviderScope.containerOf(context).read(playbackLauncherProvider);
-        unawaited(local
-          ? launcher.playFromContinueWatching(context, saved)
-          : launcher.play(context, 'show|2', baseItem: item,
-              episode: launcher.episodeFromContinueWatching(saved),
-              preselectedSource: StreamResult(url: 'https://example.test/video.mp4', source: 'direct'),
-              loadEpisodeArtwork: true));
-      },
-      child: const Text('resume'),
-    ))),
-    GoRoute(path: '/player', builder: (context, state) {
-      player = state.extra! as PlayerRouteExtra;
-      return Scaffold(body: Column(children: [
-        const Text('player'),
-        if (originalEpisode != null) PlayerTopBar(title: player!.item.title, episodeLabel: formatEpisodeLabel(
-          episode: player!.episode!.episode, isArabic: true, title: player!.episode!.name, serverName: player!.episode!.serverName)),
-      ]));
-    }),
-  ]);
-  await tester.pumpWidget(ProviderScope(overrides: [
-    playerSettingsProvider.overrideWith(_Settings.new),
-    animeDataSourceSettingsProvider.overrideWith(() => _ArtworkSettings(enabled)),
-    downloadedFilesProvider.overrideWith(() => _Downloads(local)),
-    watchHistoryProvider.overrideWith(() => history),
-    extensionManagerProvider.overrideWith(() => _Extensions(provider)),
-    activeProviderProvider.overrideWithValue(provider),
-  ], child: MaterialApp.router(routerConfig: router)));
+  final item = MultimediaItem(
+    title: 'Show',
+    url: 'show',
+    posterUrl: '',
+    provider: provider.packageName,
+    contentType: MultimediaContentType.anime,
+    episodes: existingCatalog ? provider.episodes : null,
+  );
+  final saved = HistoryItem(
+    item: item,
+    position: 30,
+    duration: 100,
+    timestamp: 0,
+    lastEpisodeUrl: 'show|2',
+    episode: 2,
+    season: 1,
+    episodePosterUrl: 'old-2',
+    episodeTitle: originalEpisode?.name,
+    episodeServerName: originalEpisode?.serverName,
+    episodeServerNumber: originalEpisode?.serverNumber,
+  );
+  final router = GoRouter(
+    routes: [
+      GoRoute(
+        path: '/',
+        builder: (context, state) => Scaffold(
+          body: TextButton(
+            onPressed: () {
+              final launcher = ProviderScope.containerOf(context)
+                  .read(playbackLauncherProvider);
+              unawaited(
+                local
+                    ? launcher.playFromContinueWatching(context, saved)
+                    : launcher.play(
+                        context,
+                        'show|2',
+                        baseItem: item,
+                        episode: launcher.episodeFromContinueWatching(saved),
+                        preselectedSource: const StreamResult(
+                          url: 'https://example.test/video.mp4',
+                          source: 'direct',
+                        ),
+                      ),
+              );
+            },
+            child: const Text('resume'),
+          ),
+        ),
+      ),
+      GoRoute(
+        path: '/player',
+        builder: (context, state) {
+          player = state.extra! as PlayerRouteExtra;
+          return Scaffold(
+            body: Column(
+              children: [
+                const Text('player'),
+                if (originalEpisode != null)
+                  PlayerTopBar(
+                    title: player!.item.title,
+                    episodeLabel: formatEpisodeLabel(
+                      episode: player!.episode!.episode,
+                      isArabic: true,
+                      title: player!.episode!.name,
+                      serverName: player!.episode!.serverName,
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    ],
+  );
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        playerSettingsProvider.overrideWith(_Settings.new),
+        animeDataSourceSettingsProvider.overrideWith(
+          () => _ArtworkSettings(enabled),
+        ),
+        downloadedFilesProvider.overrideWith(() => _Downloads(local)),
+        watchHistoryProvider.overrideWith(() => history),
+        extensionManagerProvider.overrideWith(() => _Extensions(provider)),
+        activeProviderProvider.overrideWithValue(provider),
+      ],
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
   await tester.pumpAndSettle();
   await tester.tap(find.text('resume'));
   await tester.pumpAndSettle();
   expect(find.text('player'), findsOneWidget);
-  expect(provider.catalogCalls, local || existingCatalog ? 0 : 1);
-  expect(provider.artworkCalls, !local && enabled ? 1 : 0);
-  final expectedEpisode = local && !existingCatalog
-      ? originalEpisode?.copyWith(posterUrl: 'old-2') ?? Episode(name: '', url: 'show|2', episode: 2, season: 1, posterUrl: 'old-2')
-      : provider.episodes.last.copyWith(
-          posterUrl: !local && enabled && !failArtwork ? 'anizip-2' : 'source-2',
-        );
-  if (local && !existingCatalog) {
+  expect(provider.catalogCalls, 0);
+  expect(provider.artworkCalls, 0);
+  final expectedEpisode = !existingCatalog
+      ? originalEpisode?.copyWith(posterUrl: 'old-2') ??
+            Episode(
+              name: '',
+              url: 'show|2',
+              episode: 2,
+              season: 1,
+              posterUrl: 'old-2',
+            )
+      : provider.episodes.last.copyWith(posterUrl: 'source-2');
+  if (!existingCatalog) {
     expect(player!.item.episodes!.map((e) => e.posterUrl), ['old-2']);
   } else {
-    final prefix = !local && enabled && !failArtwork ? 'anizip' : 'source';
-    expect(player!.item.episodes!.map((e) => e.posterUrl), ['$prefix-1', '$prefix-2']);
+    expect(player!.item.episodes!.map((e) => e.posterUrl), [
+      'source-1',
+      'source-2',
+    ]);
   }
   expect(player!.episode!.posterUrl, expectedEpisode.posterUrl);
   expect(player!.episode!.url, expectedEpisode.url);
