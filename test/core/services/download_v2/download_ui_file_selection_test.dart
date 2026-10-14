@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
@@ -32,7 +33,10 @@ void main() {
         ));
       }
       final manager = DownloadManagerV2(store: store, gateway: _Gateway(), sourceResolver: StaticSourceResolverV2());
-      final container = ProviderContainer(overrides: [downloadManagerV2Provider.overrideWithValue(manager)]);
+      final container = ProviderContainer(overrides: [
+        downloadManagerV2Provider.overrideWithValue(manager),
+        logicalDownloadStoreV2Provider.overrideWithValue(store),
+      ]);
       try {
         // Startup owns repair of invalid completed artifacts. Mutate only after
         // recovery to exercise the resolver's live validation without repair.
@@ -56,11 +60,79 @@ void main() {
       }
     });
   }
+
+  test('completed video resolves from disk while transport initialization is hung', () async {
+    final root = await Directory.systemTemp.createTemp('aw-offline-file-');
+    final file = await File('${root.path}/saved.mp4').writeAsBytes([1, 2]);
+    final store = InMemoryLogicalDownloadStoreV2();
+    const logicalId = DownloadLogicalId('offline-selected');
+    await store.put(LogicalDownloadRecordV2(
+      schemaVersion: kLogicalDownloadSchemaVersionV2,
+      logicalId: logicalId,
+      mediaId: 'saved-show',
+      unitKey: 'episode://saved',
+      variantKey: 'original',
+      generation: 1,
+      taskId: 'task-offline',
+      intent: DownloadUserIntent.active,
+      destinationPath: file.path,
+      sourceDescriptor: const {},
+      updatedAtMillis: 1,
+      completedAtMillis: 1,
+      expectedBytes: 2,
+    ));
+    final pending = Completer<void>();
+    final gateway = _Gateway(pendingInitialization: pending);
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: gateway,
+      sourceResolver: StaticSourceResolverV2(),
+    );
+    var initialized = false;
+    final initialization = manager.initialize().then((_) => initialized = true);
+    final container = ProviderContainer(overrides: [
+      downloadManagerV2Provider.overrideWithValue(manager),
+      logicalDownloadStoreV2Provider.overrideWithValue(store),
+    ]);
+    try {
+      expect(gateway.initializationCalls, 1);
+      final files = container.read(downloadedFilesProvider.notifier);
+      final item = MultimediaItem(title: 'Saved show', url: 'show://saved', posterUrl: '');
+      final episode = Episode(name: 'Saved', url: 'episode://saved', episode: 1);
+      final result = await files.resolveFile(
+        item,
+        episode: episode,
+        logicalId: logicalId.value,
+      ).timeout(const Duration(seconds: 1));
+      expect(result?.path, file.path);
+      expect(initialized, isFalse);
+      expect(await file.readAsBytes(), [1, 2]);
+      // The offline resolver must retain live integrity checks, not trust the
+      // completed timestamp or substitute another variant after corruption.
+      await file.writeAsBytes([1]);
+      expect(await files.resolveFile(item, episode: episode, logicalId: logicalId.value)
+          .timeout(const Duration(seconds: 1)), isNull);
+      expect(initialized, isFalse);
+    } finally {
+      pending.complete();
+      await initialization;
+      container.dispose();
+      await manager.dispose();
+      await root.delete(recursive: true);
+    }
+  });
+
 }
 
 class _Gateway implements BackgroundDownloaderGateway {
+  _Gateway({this.pendingInitialization});
+  final Completer<void>? pendingInitialization;
+  int initializationCalls = 0;
   @override
-  Future<void> initialize() async {}
+  Future<void> initialize() async {
+    initializationCalls++;
+    await pendingInitialization?.future;
+  }
   @override
   Future<List<DownloadTransportHandle>> rehydrate() async => const [];
   @override

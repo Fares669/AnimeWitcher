@@ -1,4 +1,6 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
+import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
@@ -16,6 +18,10 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../../support/memory_storage_service.dart';
 
 final class _Storage extends MemoryStorageService {
+  @override
+  Future<Map<String, Map<String, dynamic>>> getAllDownloadMetadata() async =>
+      const <String, Map<String, dynamic>>{};
+
   @override
   String? getString(String key) => settings[key] as String?;
 
@@ -107,6 +113,9 @@ void main() {
       ProviderScope(
         overrides: [
           storageServiceProvider.overrideWithValue(_Storage()),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
           libraryProvider.overrideWith(_EmptyLibrary.new),
           detailsControllerProvider(movie.url).overrideWith(
             () => _MovieController(movie),
@@ -176,6 +185,9 @@ void main() {
       ProviderScope(
         overrides: [
           storageServiceProvider.overrideWithValue(_Storage()),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
           detailsControllerProvider(movie.url).overrideWith(
             () => _MovieController(movie),
           ),

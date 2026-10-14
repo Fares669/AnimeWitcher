@@ -9,10 +9,12 @@ import 'downloads_provider.dart';
 final downloadProgressProvider = Provider<Map<String, DownloadProgressData>>((
   ref,
 ) {
-  final downloads = ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
-  final manager = downloads.any(
-    (item) => item.logicalId?.trim().isNotEmpty == true,
-  )
+  final downloadsAsync = ref.watch(downloadsProvider);
+  final downloads = downloadsAsync.hasValue
+      ? downloadsAsync.value ?? const <DownloadItem>[]
+      : const <DownloadItem>[];
+  final manager =
+      downloads.any((item) => item.logicalId?.trim().isNotEmpty == true)
       ? ref.read(downloadManagerV2Provider)
       : null;
   final result = <String, DownloadProgressData>{};

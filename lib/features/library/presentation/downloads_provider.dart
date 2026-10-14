@@ -295,17 +295,24 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   @override
   Future<List<DownloadItem>> build() async {
     final manager = ref.read(downloadManagerV2Provider);
-    await manager.initialize();
+    final store = ref.read(logicalDownloadStoreV2Provider);
+    final storage = ref.read(storageServiceProvider);
+    // Completed rows are local. Transport recovery may wait for the network.
+    _records = await store.all();
+    _metadataByTaskId = await storage.getAllDownloadMetadata();
+    if (!ref.mounted) return const <DownloadItem>[];
 
-    _records = await ref.read(logicalDownloadStoreV2Provider).all();
-    _metadataByTaskId = await ref
-        .read(storageServiceProvider)
-        .getAllDownloadMetadata();
-
-    _recordsSubscription = manager.records.listen((records) {
-      _records = records;
-      unawaited(_reloadMetadataAndRefresh());
-    });
+    _recordsSubscription = manager.records.listen(
+      (records) {
+        if (!ref.mounted) return;
+        _records = records;
+        unawaited(_reloadMetadataAndRefresh());
+      },
+      onError: (Object error, StackTrace stack) {
+        if (!ref.mounted) return;
+        state = AsyncError<List<DownloadItem>>(error, stack);
+      },
+    );
 
     // Progress is ephemeral manager state. Project it from memory every second;
     // do not scan both Hive boxes on the UI isolate for every progress tick.
@@ -313,7 +320,9 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       if (_records.any((record) {
         if (record.completedAtMillis != null ||
             record.intent == DownloadUserIntent.failed ||
-            record.intent == DownloadUserIntent.canceled) return false;
+            record.intent == DownloadUserIntent.canceled) {
+          return false;
+        }
         final snapshot = manager.snapshotFor(record.logicalId);
         return snapshot?.taskId == record.taskId &&
             (snapshot?.status == DownloadTransportStatus.queued ||
@@ -352,6 +361,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     _metadataByTaskId = await ref
         .read(storageServiceProvider)
         .getAllDownloadMetadata();
+    if (!ref.mounted) return;
     _refreshPresentationState();
   }
 
@@ -359,11 +369,14 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final existing = _durableReloadInFlight;
     if (existing != null) return existing;
 
+    final store = ref.read(logicalDownloadStoreV2Provider);
+    final storage = ref.read(storageServiceProvider);
     final task = () async {
-      _records = await ref.read(logicalDownloadStoreV2Provider).all();
-      _metadataByTaskId = await ref
-          .read(storageServiceProvider)
-          .getAllDownloadMetadata();
+      final records = await store.all();
+      final metadata = await storage.getAllDownloadMetadata();
+      if (!ref.mounted) return;
+      _records = records;
+      _metadataByTaskId = metadata;
       _refreshPresentationState();
     }();
     _durableReloadInFlight = task;

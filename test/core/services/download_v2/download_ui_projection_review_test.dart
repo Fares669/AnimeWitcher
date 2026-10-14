@@ -48,6 +48,7 @@ void main() {
       storageServiceProvider.overrideWithValue(storage),
     ]);
     try {
+      await pumpUntilFuture(tester, manager.initialize(), 'paused writer transport startup');
       container.listen(downloadsProvider, (_, __) {});
       await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'paused writer downloads projection');
       await tester.pump();
@@ -94,6 +95,7 @@ void main() {
         storageServiceProvider.overrideWithValue(storage),
       ]);
       try {
+        await pumpUntilFuture(tester, manager.initialize(), 'idle paused transport startup');
         var publications = 0;
         container.listen(downloadsProvider, (_, next) { if (next.hasValue) publications++; });
         await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'acceptance downloads projection');

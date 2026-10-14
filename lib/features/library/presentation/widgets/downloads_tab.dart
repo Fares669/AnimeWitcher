@@ -92,75 +92,77 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
     final activeProgress = ref.watch(downloadProgressProvider);
     final l10n = AppLocalizations.of(context)!;
 
-    return downloadsAsync.when(
-      data: (downloads) {
-        // Collapse leftover complete records for the same episode/file so a
-        // re-download cannot render الحلقة 9 twice.
-        final visibleDownloads = collapseDuplicateDownloads(downloads).visible;
-        final active = visibleDownloads
-            .where((item) => isActiveDownloadStatus(item.status))
-            .toList();
-        final completed = visibleDownloads
-            .where((item) => !isActiveDownloadStatus(item.status))
-            .toList();
+    // Keep local completed rows available through refreshes and transport errors.
+    final visibleDownloads = collapseDuplicateDownloads(
+      downloadsAsync.hasValue
+          ? downloadsAsync.value ?? const <DownloadItem>[]
+          : const <DownloadItem>[],
+    ).visible;
+    final completed = visibleDownloads
+        .where((item) => !isActiveDownloadStatus(item.status))
+        .toList();
 
-        // RTL only for the tab strip + pager swipe (like المواسم). Each
-        // pane is LTR so cards stay poster-left — do not mirror the page.
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Directionality(
-              textDirection: TextDirection.rtl,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: FilterStyleTabBar(
-                      controller: _tabs,
-                      isScrollable: false,
-                      tabs: [
-                        FilterStyleTab(label: l10n.downloads),
-                        FilterStyleTab(label: l10n.downloadsTabCompleted),
-                      ],
-                    ),
-                  ),
-                  // The side menu's button, in the corner it comes from.
-                  const AppSideMenuButton(
-                    padding: EdgeInsetsDirectional.only(start: 4, end: 12),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Directionality(
-                textDirection: TextDirection.rtl,
-                child: TabBarView(
+    // RTL only for the tab strip + pager swipe (like المواسم). Each
+    // pane is LTR so cards stay poster-left — do not mirror the page.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Directionality(
+          textDirection: TextDirection.rtl,
+          child: Row(
+            children: [
+              Expanded(
+                child: FilterStyleTabBar(
                   controller: _tabs,
-                  children: [
-                    Directionality(
-                      textDirection: TextDirection.ltr,
-                      child: _ActiveDownloadsList(
-                        items: active,
-                        activeProgress: activeProgress,
-                        emptyMessage: l10n.noDownloadsYet,
-                      ),
-                    ),
-                    Directionality(
-                      textDirection: TextDirection.ltr,
-                      child: _CompletedDownloadsList(
-                        items: completed,
-                        emptyMessage: l10n.noCompletedDownloadsYet,
-                      ),
-                    ),
+                  isScrollable: false,
+                  tabs: [
+                    FilterStyleTab(label: l10n.downloads),
+                    FilterStyleTab(label: l10n.downloadsTabCompleted),
                   ],
                 ),
               ),
+              // The side menu's button, in the corner it comes from.
+              const AppSideMenuButton(
+                padding: EdgeInsetsDirectional.only(start: 4, end: 12),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: TabBarView(
+              controller: _tabs,
+              children: [
+                Directionality(
+                  textDirection: TextDirection.ltr,
+                  child: downloadsAsync.when(
+                    skipLoadingOnRefresh: false,
+                    skipLoadingOnReload: false,
+                    data: (_) => _ActiveDownloadsList(
+                      items: visibleDownloads
+                          .where((item) => isActiveDownloadStatus(item.status))
+                          .toList(),
+                      activeProgress: activeProgress,
+                      emptyMessage: l10n.noDownloadsYet,
+                    ),
+                    loading: () => const Center(child: AppLoadingIndicator()),
+                    error: (err, stack) =>
+                        Center(child: Text(l10n.errorPrefix(err.toString()))),
+                  ),
+                ),
+                Directionality(
+                  textDirection: TextDirection.ltr,
+                  child: _CompletedDownloadsList(
+                    items: completed,
+                    emptyMessage: l10n.noCompletedDownloadsYet,
+                  ),
+                ),
+              ],
             ),
-          ],
-        );
-      },
-      loading: () => const Center(child: AppLoadingIndicator()),
-      error: (err, stack) =>
-          Center(child: Text(l10n.errorPrefix(err.toString()))),
+          ),
+        ),
+      ],
     );
   }
 }

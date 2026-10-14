@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/services/download_v2/download_file_planner_v2.dart';
+import '../../../core/services/download_v2/download_v2_models.dart';
 import '../../../core/services/download_v2/download_v2_provider.dart';
 
 part 'downloaded_file_provider.g.dart';
@@ -33,14 +34,18 @@ class DownloadedFiles extends _$DownloadedFiles {
     final selected = logicalId?.trim();
     if (selected != null && selected.isEmpty) return null;
     final unitKey = key.trim();
-    final manager = ref.read(downloadManagerV2Provider);
-    final records = await manager.records.first;
+    // Completed playback depends only on durable local metadata and bytes,
+    // never on transport startup or remote download recovery.
+    final store = ref.read(logicalDownloadStoreV2Provider);
+    final verifier = ref.read(downloadIntegrityVerifierV2Provider);
+    final records = await store.all();
 
     File? resolved;
     final matching =
         records
             .where(
               (record) =>
+                  record.mediaKind == DownloadMediaKind.videoEpisode &&
                   record.completedAtMillis != null && record.unitKey == unitKey &&
                   (selected == null || record.logicalId.value == selected),
             )
@@ -51,12 +56,12 @@ class DownloadedFiles extends _$DownloadedFiles {
       // completedAtMillis is a logical claim, not sufficient byte evidence.
       // Re-check the final artifact through the same V2 integrity authority
       // before returning it to playback.
-      if (!await manager.hasCompletedDownload(record.logicalId)) continue;
       final path = await absoluteDownloadDestinationPathV2(
         record.destinationPath,
       );
       final file = File(path);
-      if (await file.exists()) {
+      if ((await verifier.verify(file, expectedBytes: record.expectedBytes))
+          .isValid) {
         resolved = file;
         break;
       }
