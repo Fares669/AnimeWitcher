@@ -13,6 +13,7 @@ import 'download_parallel.dart';
 import 'download_retry_policy.dart';
 import 'download_telemetry.dart';
 import '../utils/download_resume.dart';
+import '../utils/local_file_io.dart';
 
 /// Child connections can report progress independently and in bursts. The
 /// logical episode, Flutter UI and iOS continued-processing task all publish
@@ -111,11 +112,9 @@ discoverParallelManifestRecoveryEvidence(
 
   for (final root in roots) {
     try {
-      if (!await root.exists()) continue;
-      await for (final entity in root.list(
-        recursive: true,
-        followLinks: false,
-      )) {
+      if (await localPathType(root.path) != FileSystemEntityType.directory) continue;
+      final entries = await localDirectoryEntries(root.path, recursive: true);
+      for (final entity in entries) {
         if (entity is! File) continue;
         final name = p.basename(entity.path);
         if (name != 'manifest.json' && name != 'manifest.json.tmp') {
@@ -129,7 +128,7 @@ discoverParallelManifestRecoveryEvidence(
         );
 
         try {
-          final decoded = jsonDecode(await entity.readAsString());
+          final decoded = jsonDecode(await localReadString(entity));
           if (decoded is! Map) continue;
           final snapshot = Map<String, dynamic>.from(decoded);
           final schemaVersion =
@@ -241,7 +240,7 @@ discoverParallelManifestRecoveryEvidence(
               ? declaredBytes
               : calculatedBytes;
 
-          final stat = await entity.stat();
+          final stat = await localStat(entity);
           final evidence = ParallelManifestRecoveryEvidence(
             manifestFile: File(canonicalPath),
             schemaVersion: schemaVersion,
