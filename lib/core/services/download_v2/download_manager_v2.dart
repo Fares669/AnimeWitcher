@@ -2346,11 +2346,13 @@ final class DownloadManagerV2 {
   Future<DownloadIntegrityResult> _verifyRecordDestination(
     LogicalDownloadRecordV2 record, {
     required bool repairManga,
+    bool rejectNonVideoPayload = false,
   }) async {
     if (record.mediaKind != DownloadMediaKind.mangaChapter) {
       return _integrityVerifier.verify(
         await _destinationFile(record.destinationPath),
         expectedBytes: record.expectedBytes,
+        rejectNonVideoPayload: rejectNonVideoPayload,
       );
     }
 
@@ -2747,6 +2749,10 @@ final class DownloadManagerV2 {
         final result = await _verifyRecordDestination(
           record,
           repairManga: true,
+          // Only a newly completed transfer may reject these payloads here.
+          // Existing completion claims use the original byte-only verification
+          // on startup; playback can report a recoverable error without cleanup.
+          rejectNonVideoPayload: true,
         );
         if (!result.isValid &&
             record.mediaKind != DownloadMediaKind.mangaChapter) {

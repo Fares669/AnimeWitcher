@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import '../../utils/local_video_payload_probe.dart';
+
 /// Result of validating the final artifact produced by the transport package.
 final class DownloadIntegrityResult {
   const DownloadIntegrityResult.valid(int bytes, {this.completedPages, this.totalPages})
@@ -31,6 +33,10 @@ final class DownloadIntegrityVerifierV2 {
   Future<DownloadIntegrityResult> verify(
     File file, {
     int? expectedBytes,
+    // Opt in only for newly completed transfers. Existing completed records
+    // retain their original integrity semantics and must not be deleted by a
+    // startup migration; playback separately checks recognizable text payloads.
+    bool rejectNonVideoPayload = false,
   }) async {
     if (!await file.exists()) {
       return const DownloadIntegrityResult.invalid('missing');
@@ -43,6 +49,13 @@ final class DownloadIntegrityVerifierV2 {
 
     if (expectedBytes != null && expectedBytes > 0 && bytes != expectedBytes) {
       return const DownloadIntegrityResult.invalid('size-mismatch');
+    }
+
+    if (rejectNonVideoPayload) {
+      final problem = await probeLocalVideoPayload(file);
+      if (problem != null) {
+        return DownloadIntegrityResult.invalid(problem.reason);
+      }
     }
 
     return DownloadIntegrityResult.valid(bytes);
