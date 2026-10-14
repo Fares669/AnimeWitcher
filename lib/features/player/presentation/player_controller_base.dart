@@ -14,6 +14,7 @@ import 'package:video_view/video_view.dart'
     show VideoController, SubtitleTrackConfig, VideoControllerPlaybackState;
 
 import '../../../../core/logger/app_logger.dart';
+import '../../../../core/logger/app_diagnostics.dart';
 
 import '../../../../core/providers/anime_data_source_settings_provider.dart';
 
@@ -289,6 +290,34 @@ class PlayerController extends Notifier<PlayerState> {
 
   PlayerState get currentState => state;
 
+  void _recordPlaybackDiagnostic(
+    String event, {
+    int? sourceSessionId,
+    Map<String, Object?> fields = const {},
+  }) {
+    if (!appDiagnostics.enabled) return;
+    appDiagnostics.record(
+      event,
+      fields: {
+        'sourceSessionId': sourceSessionId ?? state.sourceSessionId,
+        if (sourceSessionId == null || _isCurrentSourceSession(sourceSessionId))
+          'engine': state.useExoPlayer ? 'video_view' : 'media_kit',
+        ...fields,
+      },
+    );
+  }
+
+  Stopwatch? _diagnosticClock() =>
+      appDiagnostics.enabled ? (Stopwatch()..start()) : null;
+
+  void _recordStaleSession(int sourceSessionId, String reason) {
+    _recordPlaybackDiagnostic(
+      'player.session_stale',
+      sourceSessionId: sourceSessionId,
+      fields: {'reason': reason, 'result': 'stale'},
+    );
+  }
+
   String? _episodeArtwork(Episode? episode) {
     return AppImageFallbacks.episode(
       episodeUrl: episode?.posterUrl,
@@ -522,12 +551,26 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   void _setUiPhase(PlaybackUiPhase phase) {
+    final changed =
+        state.uiPhase.kind != phase.kind ||
+        state.uiPhase.fullscreenBlocking != phase.fullscreenBlocking;
     state = state.copyWith(uiPhase: phase);
+    if (changed) {
+      _recordPlaybackDiagnostic(
+        'player.phase',
+        fields: {
+          'phase': phase.kind.name,
+          'buffering':
+              phase.kind == PlaybackUiPhaseKind.bufferingInitial ||
+              phase.kind == PlaybackUiPhaseKind.bufferingRuntime,
+        },
+      );
+    }
   }
 
   void _setIdlePhase() {
     if (!state.uiPhase.isIdle) {
-      state = state.copyWith(uiPhase: const PlaybackUiPhase.idle());
+      _setUiPhase(const PlaybackUiPhase.idle());
     }
   }
 
@@ -555,6 +598,7 @@ class PlayerController extends Notifier<PlayerState> {
       sourceSessionId: nextSessionId,
       sourceAttempts: resetAttempts ? const [] : state.sourceAttempts,
     );
+    _recordPlaybackDiagnostic('player.source_session');
     return nextSessionId;
   }
 
@@ -588,6 +632,14 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   void _confirmPlaybackStarted() {
+    // Position advancing confirms the timeline, not that a frame was rendered.
+    _recordPlaybackDiagnostic(
+      'player.first_position',
+      fields: {
+        'positionMs': _currentPosition.inMilliseconds,
+        'durationMs': _lastKnownPlaybackDurationMs,
+      },
+    );
     _hasConfirmedPlaybackFrame = true;
     _manualSelectionPending = false; // source played — no longer pending
     // Do NOT reset _suppressNextEpisodeDetection here. At the moment position
@@ -597,7 +649,7 @@ class PlayerController extends Notifier<PlayerState> {
     // overlay for the newly loaded episode. It is reset in _setupDurationListener
     // once a valid non-zero duration for the new episode arrives.
     _markSourceAttempt(state.currentStreamIndex, SourceAttemptStatus.playing);
-    state = state.copyWith(uiPhase: const PlaybackUiPhase.idle());
+    _setUiPhase(const PlaybackUiPhase.idle());
   }
 
   void _maybeConfirmPlaybackStarted(int positionMs) {
@@ -734,6 +786,13 @@ class PlayerController extends Notifier<PlayerState> {
     _hasMarkedWatched = false;
     ++_catalogGeneration;
     _item = item;
+    _recordPlaybackDiagnostic(
+      'player.start',
+      fields: {
+        'local': AppUtils.isLocalFile(videoUrl),
+        'phase': state.uiPhase.kind.name,
+      },
+    );
 
     String initialTitle = item.title;
     final activeEpisode =
@@ -1933,6 +1992,10 @@ class PlayerController extends Notifier<PlayerState> {
         return;
       }
       if (_isReconnectingCurrentStream || buffering || waitingOnBackoff) {
+        _recordPlaybackDiagnostic(
+          'player.network_restored',
+          fields: {'buffering': buffering},
+        );
         if (kDebugMode) {
           debugPrint(
             '[Player] Network restored — triggering immediate stream reconnect.',
@@ -1991,6 +2054,11 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     _isReconnectingCurrentStream = true;
+    final clock = _diagnosticClock();
+    _recordPlaybackDiagnostic(
+      'player.reconnect.begin',
+      sourceSessionId: sourceSessionId,
+    );
     if (consumeRetryBudget) {
       _midPlaybackRetryCount++;
     }
@@ -2004,8 +2072,16 @@ class PlayerController extends Notifier<PlayerState> {
       hasConnection = true;
     }
 
-    if (!_isCurrentSourceSession(sourceSessionId)) return;
+    if (!_isCurrentSourceSession(sourceSessionId)) {
+      _recordStaleSession(sourceSessionId, 'reconnect');
+      return;
+    }
     if (!hasConnection) {
+      _recordPlaybackDiagnostic(
+        'player.reconnect.end',
+        sourceSessionId: sourceSessionId,
+        fields: {'result': 'offline', 'elapsedMs': clock?.elapsedMilliseconds},
+      );
       if (kDebugMode) {
         debugPrint(
           '[Player] Device is offline — waiting for network reconnection.',
@@ -2070,8 +2146,25 @@ class PlayerController extends Notifier<PlayerState> {
         );
       }
       _isReconnectingCurrentStream = false;
-    } catch (e) {
-      if (!_isCurrentSourceSession(sourceSessionId)) return;
+      _recordPlaybackDiagnostic(
+        'player.reconnect.end',
+        sourceSessionId: sourceSessionId,
+        fields: {'result': 'success', 'elapsedMs': clock?.elapsedMilliseconds},
+      );
+    } catch (e, stack) {
+      appDiagnostics.recordError(
+        'player.reconnect.error',
+        e,
+        stack,
+        fields: {
+          'sourceSessionId': sourceSessionId,
+          'elapsedMs': clock?.elapsedMilliseconds,
+        },
+      );
+      if (!_isCurrentSourceSession(sourceSessionId)) {
+        _recordStaleSession(sourceSessionId, 'reconnect');
+        return;
+      }
       if (e is LocalVideoPayloadProblem) {
         _showLocalVideoPayloadError(e);
         return;
@@ -2557,11 +2650,81 @@ class PlayerController extends Notifier<PlayerState> {
 
   Future<void> _checkLocalVideoPayload(String url) async {
     if (!AppUtils.isLocalFile(url)) return;
-    final file = url.startsWith('file:')
-        ? File.fromUri(Uri.parse(url))
-        : File(url);
-    final problem = await probeLocalVideoPayload(file);
-    if (problem != null) throw problem;
+    final sourceSessionId = state.sourceSessionId;
+    final clock = _diagnosticClock();
+    _recordPlaybackDiagnostic(
+      'player.local_resolve.begin',
+      fields: const {'local': true, 'reason': 'probe'},
+    );
+    try {
+      final file = url.startsWith('file:')
+          ? File.fromUri(Uri.parse(url))
+          : File(url);
+      final problem = await probeLocalVideoPayload(file);
+      if (problem != null) throw problem;
+      _recordPlaybackDiagnostic(
+        'player.local_resolve.end',
+        sourceSessionId: sourceSessionId,
+        fields: {
+          'local': true,
+          'reason': 'probe',
+          'result': _isCurrentSourceSession(sourceSessionId)
+              ? 'success'
+              : 'stale',
+          'elapsedMs': clock?.elapsedMilliseconds,
+        },
+      );
+    } catch (error, stack) {
+      appDiagnostics.recordError(
+        'player.local_resolve.error',
+        error,
+        stack,
+        fields: {
+          'sourceSessionId': sourceSessionId,
+          'local': true,
+          'reason': 'probe',
+        },
+      );
+      rethrow;
+    }
+  }
+
+  Future<File?> _resolveLocalEpisodeFile(
+    Episode episode,
+    int sourceSessionId,
+  ) async {
+    final clock = _diagnosticClock();
+    _recordPlaybackDiagnostic(
+      'player.local_resolve.begin',
+      sourceSessionId: sourceSessionId,
+      fields: const {'reason': 'lookup'},
+    );
+    try {
+      final file = await ref
+          .read(downloadedFilesProvider.notifier)
+          .resolveFile(_item, episode: episode);
+      _recordPlaybackDiagnostic(
+        'player.local_resolve.end',
+        sourceSessionId: sourceSessionId,
+        fields: {
+          'reason': 'lookup',
+          'local': file != null,
+          'result': _isCurrentSourceSession(sourceSessionId)
+              ? 'success'
+              : 'stale',
+          'elapsedMs': clock?.elapsedMilliseconds,
+        },
+      );
+      return file;
+    } catch (error, stack) {
+      appDiagnostics.recordError(
+        'player.local_resolve.error',
+        error,
+        stack,
+        fields: {'sourceSessionId': sourceSessionId, 'reason': 'lookup'},
+      );
+      rethrow;
+    }
   }
 
   void _showLocalVideoPayloadError(LocalVideoPayloadProblem problem) {
@@ -2590,10 +2753,58 @@ class PlayerController extends Notifier<PlayerState> {
     final native = player.platform;
     if (native is NativePlayer) {
       // Native public operations wait for the renderer inside a shared lock.
-      await native.waitForPlayerInitialization;
-      if (!isActive()) return false;
-      await native.waitForVideoControllerInitializationIfAttached;
+      final clock = _diagnosticClock();
+      var waitingForRenderer = false;
+      _recordPlaybackDiagnostic(
+        'player.native_ready.begin',
+        sourceSessionId: sourceSessionId,
+        fields: const {'engine': 'media_kit'},
+      );
+      try {
+        await native.waitForPlayerInitialization;
+        _recordPlaybackDiagnostic(
+          'player.native_ready.end',
+          sourceSessionId: sourceSessionId,
+          fields: {
+            'engine': 'media_kit',
+            'elapsedMs': clock?.elapsedMilliseconds,
+            'result': isActive() ? 'success' : 'stale',
+          },
+        );
+        if (!isActive()) {
+          _recordStaleSession(sourceSessionId, 'readiness');
+          return false;
+        }
+        clock?.reset();
+        waitingForRenderer = true;
+        _recordPlaybackDiagnostic(
+          'player.renderer_ready.begin',
+          sourceSessionId: sourceSessionId,
+          fields: const {'engine': 'media_kit'},
+        );
+        await native.waitForVideoControllerInitializationIfAttached;
+        _recordPlaybackDiagnostic(
+          'player.renderer_ready.end',
+          sourceSessionId: sourceSessionId,
+          fields: {
+            'engine': 'media_kit',
+            'elapsedMs': clock?.elapsedMilliseconds,
+            'result': isActive() ? 'success' : 'stale',
+          },
+        );
+      } catch (error, stack) {
+        appDiagnostics.recordError(
+          waitingForRenderer
+              ? 'player.renderer_ready.error'
+              : 'player.native_ready.error',
+          error,
+          stack,
+          fields: {'sourceSessionId': sourceSessionId, 'engine': 'media_kit'},
+        );
+        rethrow;
+      }
     }
+    if (!isActive()) _recordStaleSession(sourceSessionId, 'readiness');
     return isActive();
   }
 
@@ -2647,21 +2858,50 @@ class PlayerController extends Notifier<PlayerState> {
       }
 
       final subs = state.externalSubtitles;
-      if (subs.isNotEmpty && _videoViewSupportsMergedExternalSubtitles) {
-        _videoViewController!.openWithSubtitles(
-          finalUrl,
-          headers: headers,
-          subtitles: _buildSubtitleConfigs(subs),
-          drmKey: stream.drmKey,
-          drmKid: stream.drmKid,
+      final clock = _diagnosticClock();
+      _recordPlaybackDiagnostic(
+        'player.engine_open.begin',
+        sourceSessionId: sourceSessionId,
+        fields: {
+          'engine': 'video_view',
+          'local': AppUtils.isLocalFile(playUrl),
+        },
+      );
+      try {
+        if (subs.isNotEmpty && _videoViewSupportsMergedExternalSubtitles) {
+          _videoViewController!.openWithSubtitles(
+            finalUrl,
+            headers: headers,
+            subtitles: _buildSubtitleConfigs(subs),
+            drmKey: stream.drmKey,
+            drmKid: stream.drmKid,
+          );
+        } else {
+          _videoViewController!.open(
+            finalUrl,
+            headers: headers,
+            drmKey: stream.drmKey,
+            drmKid: stream.drmKid,
+          );
+        }
+        // This backend dispatches open; position is the later readiness signal.
+        _recordPlaybackDiagnostic(
+          'player.engine_open.end',
+          sourceSessionId: sourceSessionId,
+          fields: {
+            'engine': 'video_view',
+            'result': 'dispatch',
+            'elapsedMs': clock?.elapsedMilliseconds,
+          },
         );
-      } else {
-        _videoViewController!.open(
-          finalUrl,
-          headers: headers,
-          drmKey: stream.drmKey,
-          drmKid: stream.drmKid,
+      } catch (error, stack) {
+        appDiagnostics.recordError(
+          'player.engine_open.error',
+          error,
+          stack,
+          fields: {'sourceSessionId': sourceSessionId, 'engine': 'video_view'},
         );
+        rethrow;
       }
       final isLivePlayback = state.isLive || _detectResolvedLiveState(playUrl);
       state = state.copyWith(useExoPlayer: true, isSeekable: !isLivePlayback);
@@ -2731,8 +2971,38 @@ class PlayerController extends Notifier<PlayerState> {
 
     if (!_isCurrentSourceSession(sourceSessionId)) return;
     if (!await _waitForNativePlayerReady(player, sourceSessionId)) return;
-    await player.open(Media(mediaKitUrl, httpHeaders: headers), play: play);
-    if (!_isCurrentSourceSession(sourceSessionId)) return;
+    final clock = _diagnosticClock();
+    _recordPlaybackDiagnostic(
+      'player.engine_open.begin',
+      sourceSessionId: sourceSessionId,
+      fields: {'engine': 'media_kit', 'local': AppUtils.isLocalFile(playUrl)},
+    );
+    try {
+      await player.open(Media(mediaKitUrl, httpHeaders: headers), play: play);
+      _recordPlaybackDiagnostic(
+        'player.engine_open.end',
+        sourceSessionId: sourceSessionId,
+        fields: {
+          'engine': 'media_kit',
+          'elapsedMs': clock?.elapsedMilliseconds,
+          'result': _isCurrentSourceSession(sourceSessionId)
+              ? 'success'
+              : 'stale',
+        },
+      );
+    } catch (error, stack) {
+      appDiagnostics.recordError(
+        'player.engine_open.error',
+        error,
+        stack,
+        fields: {'sourceSessionId': sourceSessionId, 'engine': 'media_kit'},
+      );
+      rethrow;
+    }
+    if (!_isCurrentSourceSession(sourceSessionId)) {
+      _recordStaleSession(sourceSessionId, 'open');
+      return;
+    }
     state = state.copyWith(useExoPlayer: false, isSeekable: true);
     unawaited(applyAnime4kShaders());
     _scheduleAutoSubtitleSelection();
@@ -3646,9 +3916,10 @@ class PlayerController extends Notifier<PlayerState> {
     if (nextEpisode.url != this.nextEpisode?.url) selectedSource = null;
 
     // Smart Next Episode: downloaded files bypass network source selection.
-    final localFile = await ref
-        .read(downloadedFilesProvider.notifier)
-        .resolveFile(_item, episode: nextEpisode);
+    final localFile = await _resolveLocalEpisodeFile(
+      nextEpisode,
+      sourceSessionId,
+    );
 
     if (!_isCurrentSourceSession(sourceSessionId)) return;
     final bool isLocal = localFile != null;
@@ -3725,9 +3996,7 @@ class PlayerController extends Notifier<PlayerState> {
 
     saveProgress();
 
-    final localFile = await ref
-        .read(downloadedFilesProvider.notifier)
-        .resolveFile(_item, episode: episode);
+    final localFile = await _resolveLocalEpisodeFile(episode, sourceSessionId);
 
     if (!_isCurrentSourceSession(sourceSessionId)) return;
     final bool isLocal = localFile != null;
@@ -4136,6 +4405,62 @@ class PlayerController extends Notifier<PlayerState> {
 
   /// Applies per-playback MPV properties (headers, cookies, DRM).
   Future<void> _applyPlaybackProperties(
+    Map<String, String> headers,
+    StreamResult stream, {
+    required bool useVideoView,
+  }) {
+    if (!appDiagnostics.enabled) {
+      return _applyPlaybackPropertiesImpl(
+        headers,
+        stream,
+        useVideoView: useVideoView,
+      );
+    }
+    final sourceSessionId = state.sourceSessionId;
+    final clock = Stopwatch()..start();
+    final native = _player.platform is NativePlayer;
+    _recordPlaybackDiagnostic(
+      'player.properties.begin',
+      sourceSessionId: sourceSessionId,
+      fields: const {'engine': 'media_kit'},
+    );
+    return _applyPlaybackPropertiesImpl(
+      headers,
+      stream,
+      useVideoView: useVideoView,
+    ).then<void>(
+      (_) {
+        _recordPlaybackDiagnostic(
+          'player.properties.end',
+          sourceSessionId: sourceSessionId,
+          fields: {
+            'engine': 'media_kit',
+            'elapsedMs': clock.elapsedMilliseconds,
+            'result': !_isCurrentSourceSession(sourceSessionId)
+                ? 'stale'
+                : native
+                ? 'success'
+                : 'skipped',
+          },
+        );
+      },
+      onError: (Object error, StackTrace stack) {
+        appDiagnostics.recordError(
+          'player.properties.error',
+          error,
+          stack,
+          fields: {
+            'sourceSessionId': sourceSessionId,
+            'engine': 'media_kit',
+            'elapsedMs': clock.elapsedMilliseconds,
+          },
+        );
+        Error.throwWithStackTrace(error, stack);
+      },
+    );
+  }
+
+  Future<void> _applyPlaybackPropertiesImpl(
     Map<String, String> headers,
     StreamResult stream, {
     required bool useVideoView,
@@ -4809,9 +5134,38 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     _isApplyingPendingResumeSeek = true;
+    final clock = _diagnosticClock();
+    _recordPlaybackDiagnostic(
+      'player.resume_seek.begin',
+      sourceSessionId: sourceSessionId,
+      fields: {'positionMs': pos},
+    );
     try {
       await _seekThenPlay(pos);
-    } catch (e) {
+      _recordPlaybackDiagnostic(
+        'player.resume_seek.end',
+        sourceSessionId: sourceSessionId,
+        fields: {
+          'positionMs': pos,
+          'elapsedMs': clock?.elapsedMilliseconds,
+          'result': _isCurrentSourceSession(sourceSessionId)
+              ? 'success'
+              : 'stale',
+        },
+      );
+      if (!_isCurrentSourceSession(sourceSessionId)) {
+        _recordStaleSession(sourceSessionId, 'resume');
+      }
+    } catch (e, stack) {
+      appDiagnostics.recordError(
+        'player.resume_seek.error',
+        e,
+        stack,
+        fields: {
+          'sourceSessionId': sourceSessionId,
+          'elapsedMs': clock?.elapsedMilliseconds,
+        },
+      );
       if (kDebugMode) debugPrint('Resume seek failed: $e');
     } finally {
       if (_isCurrentSourceSession(sourceSessionId)) {
