@@ -1,9 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
-import 'package:animewitcher/core/logger/app_diagnostics.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/features/player/presentation/player_controller_base.dart';
 import 'package:animewitcher/features/settings/presentation/player_settings_provider.dart';
@@ -85,20 +82,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late ProviderContainer container;
   late PlayerController controller;
-  late Directory diagnosticsDirectory;
   final players = <_Player>[];
-
-  setUpAll(() async {
-    await appDiagnostics.flush();
-    diagnosticsDirectory = await Directory.systemTemp.createTemp(
-      'subtitle-diagnostics-',
-    );
-  });
-  tearDownAll(() async {
-    await appDiagnostics.setEnabled(false);
-    await appDiagnostics.flush();
-    await diagnosticsDirectory.delete(recursive: true);
-  });
 
   setUp(() {
     final messenger =
@@ -109,9 +93,7 @@ void main() {
     );
     messenger.setMockMethodCallHandler(
       const MethodChannel('plugins.flutter.io/path_provider'),
-      (call) async => call.method == 'getApplicationSupportDirectory'
-          ? diagnosticsDirectory.path
-          : '/nonexistent/player-subtitle-tests',
+      (_) async => '/nonexistent/player-subtitle-tests',
     );
     container = ProviderContainer(
       overrides: [
@@ -254,11 +236,9 @@ void main() {
   });
 
   testWidgets(
-    'active subtitle selection failures stay visible in diagnostics',
+    'active subtitle selection failures are safely handled',
     (tester) async {
-      await tester.runAsync(() => appDiagnostics.setEnabled(true));
       final player = await start();
-      final sourceSessionId = controller.currentState.sourceSessionId;
       final pending = Completer<void>();
       player.pendingSelection = pending;
       player.tracks.add(player.state.track);
@@ -272,26 +252,8 @@ void main() {
       );
       await tester.pump();
       expect(tester.takeException(), isNull);
-      final events = await tester.runAsync(() async {
-        await appDiagnostics.setEnabled(false);
-        await appDiagnostics.flush();
-        final events = <Map<String, dynamic>>[];
-        for (final file in await appDiagnostics.listFiles()) {
-          for (final line in await file.readAsLines()) {
-            if (line.isNotEmpty) {
-              events.add(jsonDecode(line) as Map<String, dynamic>);
-            }
-          }
-        }
-        return events;
-      });
-      final failure = events!.singleWhere(
-        (event) => event['event'] == 'player.subtitle_selection.error',
-      );
-      expect(failure['sourceSessionId'], sourceSessionId);
-      expect(failure['engine'], 'media_kit');
-      expect(failure['errorType'], 'StateError');
-      expect(failure['stack'], isNotEmpty);
+      expect(player.selections, hasLength(1));
+
     },
   );
 

@@ -4,9 +4,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('download diagnostic setting no longer needs the v1 transport service', () {
+    // Formatting must not change the persistence or native-toggle contracts.
     final settings = File(
       'lib/features/settings/presentation/general_settings_provider.dart',
-    ).readAsStringSync();
+    ).readAsStringSync().replaceAll(RegExp(r'\s+'), '');
     final repository = File(
       'lib/core/storage/settings_repository.dart',
     ).readAsStringSync();

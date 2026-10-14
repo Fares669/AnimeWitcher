@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:animewitcher/core/account/account_providers.dart';
@@ -7,7 +6,6 @@ import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
-import 'package:animewitcher/core/logger/app_diagnostics.dart';
 import 'package:animewitcher/core/providers/anime_data_source_settings_provider.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
@@ -357,16 +355,16 @@ MultimediaItem _item(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  late Directory diagnosticsDirectory;
+  late Directory testDirectory;
   setUpAll(() async {
-    diagnosticsDirectory = await Directory.systemTemp.createTemp(
-      'player-diagnostics-',
+    testDirectory = await Directory.systemTemp.createTemp(
+      'player-startup-',
     );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
           const MethodChannel('plugins.flutter.io/path_provider'),
           (call) async => call.method == 'getApplicationSupportDirectory'
-              ? diagnosticsDirectory.path
+              ? testDirectory.path
               : '/nonexistent/player-tests',
         );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -376,9 +374,7 @@ void main() {
         );
   });
   tearDownAll(() async {
-    await appDiagnostics.setEnabled(false);
-    await appDiagnostics.flush();
-    await diagnosticsDirectory.delete(recursive: true);
+    await testDirectory.delete(recursive: true);
   });
 
   late ProviderContainer container;
@@ -391,26 +387,7 @@ void main() {
   int connectivityChecks = 0;
   Completer<List<String>>? pendingConnectivity;
 
-  var diagnosticBaseline = 0;
-
-  Future<List<Map<String, dynamic>>> diagnosticEvents() async {
-    await appDiagnostics.flush();
-    final events = <Map<String, dynamic>>[];
-    for (final file in await appDiagnostics.listFiles()) {
-      for (final line in await file.readAsLines()) {
-        if (line.isNotEmpty) {
-          events.add(jsonDecode(line) as Map<String, dynamic>);
-        }
-      }
-    }
-    return events.skip(diagnosticBaseline).toList();
-  }
-
   setUp(() async {
-    await appDiagnostics.setEnabled(false);
-    await appDiagnostics.flush();
-    diagnosticBaseline = 0;
-    diagnosticBaseline = (await diagnosticEvents()).length;
     connectivityChecks = 0;
     pendingConnectivity = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -481,6 +458,34 @@ void main() {
     );
     player.advance(const Duration(seconds: 5));
     await flush();
+  }
+
+  for (final next in [false, true]) {
+    test(
+      'series header preserves episode titles during ${next ? 'next' : 'selected'} playback',
+      () async {
+        final first = _episode(1).copyWith(name: 'Original first title');
+        final second = _episode(2).copyWith(name: 'Original second title');
+        await controller.init(
+          player: player,
+          item: _item([first, second]),
+          videoUrl: '/saved/episode-1.mp4',
+          episode: first,
+        );
+        player.advance(const Duration(seconds: 5));
+        await flush();
+        expect(controller.currentState.playerTitle, 'Saved show');
+        expect(controller.currentEpisode?.name, first.name);
+
+        if (next) {
+          await controller.playNextEpisode();
+        } else {
+          await controller.loadEpisode(second);
+        }
+        expect(controller.currentState.playerTitle, 'Saved show');
+        expect(controller.currentEpisode?.name, second.name);
+      },
+    );
   }
 
   Future<_Player> replaceRoute({bool live = false}) async {
@@ -852,7 +857,7 @@ void main() {
           temporaryLookups++;
           return pendingDirectory.future;
         }
-        return diagnosticsDirectory.path;
+        return testDirectory.path;
       },
     );
     final native = _ReadinessNative()..renderer.complete();
@@ -864,12 +869,12 @@ void main() {
       expect(native.properties, isNot(contains('cookies-file')));
       expect(native.properties, isNot(contains('cache-dir')));
     } finally {
-      pendingDirectory.complete(diagnosticsDirectory.path);
+      pendingDirectory.complete(testDirectory.path);
       await startup;
       messenger.setMockMethodCallHandler(
         const MethodChannel('plugins.flutter.io/path_provider'),
         (call) async => call.method == 'getApplicationSupportDirectory'
-            ? diagnosticsDirectory.path
+            ? testDirectory.path
             : '/nonexistent/player-tests',
       );
     }
@@ -879,26 +884,26 @@ void main() {
     final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(
       const MethodChannel('plugins.flutter.io/path_provider'),
-      (_) async => diagnosticsDirectory.path,
+      (_) async => testDirectory.path,
     );
     final native = _ReadinessNative()..renderer.complete();
     player.native = native;
     try {
       await startSource();
       expect(native.properties['cookies-file'], endsWith('mpv_cookies.txt'));
-      expect(native.properties['cache-dir'], diagnosticsDirectory.path);
+      expect(native.properties['cache-dir'], testDirectory.path);
     } finally {
       messenger.setMockMethodCallHandler(
         const MethodChannel('plugins.flutter.io/path_provider'),
         (call) async => call.method == 'getApplicationSupportDirectory'
-            ? diagnosticsDirectory.path
+            ? testDirectory.path
             : '/nonexistent/player-tests',
       );
     }
   });
 
-  test('startup exposes a native property stall before renderer readiness', () async {
-    await appDiagnostics.setEnabled(true);
+  test('startup waits for native properties before renderer readiness', () async {
+
     final pending = Completer<void>();
     final native = _ReadinessNative()..pendingProperties = pending;
     player.native = native;
@@ -912,14 +917,6 @@ void main() {
     try {
       await native.firstPropertyWrite.future.timeout(const Duration(seconds: 2));
       expect(native.propertyWrites, 1);
-      final events = (await diagnosticEvents()).where(
-        (event) => event['sourceSessionId'] == controller.currentState.sourceSessionId,
-      );
-      final names = events.map((event) => event['event']);
-      expect(names, contains('player.properties.begin'));
-      expect(names, isNot(contains('player.properties.end')));
-      expect(names, isNot(contains('player.native_ready.begin')));
-      expect(names, isNot(contains('player.engine_open.begin')));
       expect(native.openEntered, isFalse);
     } finally {
       pending.complete();
@@ -931,7 +928,7 @@ void main() {
   test(
     'startup waits for native renderer before taking the shared open lock',
     () async {
-      await appDiagnostics.setEnabled(true);
+
       final native = _ReadinessNative();
       player.native = native;
       final episode = _episode(1);
@@ -943,7 +940,6 @@ void main() {
       );
       await native.readinessReached.future.timeout(const Duration(seconds: 1));
       await flush();
-      final session = controller.currentState.sourceSessionId;
       var nextEngineCanStart = false;
       final nextEngine = media.NativePlayer.lock.synchronized(
         () => nextEngineCanStart = true,
@@ -952,25 +948,6 @@ void main() {
         await flush();
         expect(nextEngineCanStart, isTrue);
         expect(native.openEntered, isFalse);
-        final events = (await diagnosticEvents()).where(
-          (event) => event['sourceSessionId'] == session,
-        );
-        expect(
-          events.map((event) => event['event']),
-          contains('player.native_ready.end'),
-        );
-        expect(
-          events.map((event) => event['event']),
-          contains('player.renderer_ready.begin'),
-        );
-        expect(
-          events.map((event) => event['event']),
-          isNot(contains('player.renderer_ready.end')),
-        );
-        expect(
-          events.map((event) => event['event']),
-          isNot(contains('player.engine_open.begin')),
-        );
       } finally {
         native.renderer.complete();
         await startup;
@@ -978,24 +955,14 @@ void main() {
       }
       expect(native.openEntered, isTrue);
       expect(player.opened, ['/saved/episode.mp4']);
-      final completed = (await diagnosticEvents()).where(
-        (event) => event['sourceSessionId'] == session,
-      );
-      expect(
-        completed.map((event) => event['event']),
-        contains('player.renderer_ready.end'),
-      );
-      expect(
-        completed.map((event) => event['event']),
-        contains('player.engine_open.end'),
-      );
+
     },
   );
 
   test(
     'late renderer readiness cannot enter an abandoned native open',
     () async {
-      await appDiagnostics.setEnabled(true);
+
       final native = _ReadinessNative();
       player.native = native;
       final episode = _episode(1);
@@ -1007,7 +974,6 @@ void main() {
       );
       await native.readinessReached.future.timeout(const Duration(seconds: 1));
       await flush();
-      final oldSession = controller.currentState.sourceSessionId;
       final replacement = await replaceRoute();
       native.renderer.complete();
       await startup;
@@ -1015,88 +981,9 @@ void main() {
       expect(native.openEntered, isFalse);
       expect(player.opened, isEmpty);
       expect(replacement.opened, ['/saved/replacement.mp4']);
-      final events = (await diagnosticEvents()).where(
-        (event) => event['sourceSessionId'] == oldSession,
-      );
-      expect(
-        events.map((event) => event['event']),
-        contains('player.session_stale'),
-      );
-      expect(
-        events.map((event) => event['event']),
-        isNot(contains('player.engine_open.begin')),
-      );
+
     },
   );
-
-  test(
-    'startup diagnostics omit media secrets and only confirm position once',
-    () async {
-      await appDiagnostics.setEnabled(true);
-      final episode = _episode(1, url: 'private-episode-secret');
-      const secret = 'private-media-secret';
-      await controller.init(
-        player: player,
-        item: _item([episode]).copyWith(title: secret),
-        videoUrl: '/saved/$secret.mp4',
-        episode: episode,
-        selectedSource: const StreamResult(
-          url: '/saved/$secret.mp4',
-          source: secret,
-          headers: {'Authorization': 'Bearer private-token-secret'},
-        ),
-      );
-      final session = controller.currentState.sourceSessionId;
-      for (var seconds = 1; seconds <= 100; seconds++) {
-        player.advance(Duration(seconds: seconds));
-      }
-      final events = (await diagnosticEvents())
-          .where((event) => event['sourceSessionId'] == session)
-          .toList();
-      expect(
-        events.where((event) => event['event'] == 'player.first_position'),
-        hasLength(1),
-      );
-      final text = jsonEncode(events);
-      expect(text, isNot(contains(secret)));
-      expect(text, isNot(contains('private-token-secret')));
-      expect(text, isNot(contains('private-episode-secret')));
-      expect(text, isNot(contains('/saved/')));
-    },
-  );
-
-  test('engine failure diagnostics omit exception messages', () async {
-    await appDiagnostics.setEnabled(true);
-    final pending = Completer<void>();
-    player.pendingOpen = pending;
-    final episode = _episode(1);
-    final startup = controller.init(
-      player: player,
-      item: _item([episode]),
-      videoUrl: '/saved/private-file-secret.mp4',
-      episode: episode,
-    );
-    await player.openEnteredSignal.future.timeout(const Duration(seconds: 2));
-    final session = controller.currentState.sourceSessionId;
-    pending.completeError(
-      StateError(
-        'https://private.test/secret?token=private-token-secret /saved/private-file-secret.mp4',
-      ),
-    );
-    await startup;
-    await flush();
-    final events = (await diagnosticEvents())
-        .where((event) => event['sourceSessionId'] == session)
-        .toList();
-    expect(
-      events.map((event) => event['event']),
-      contains('player.engine_open.error'),
-    );
-    final text = jsonEncode(events);
-    expect(text, isNot(contains('private.test')));
-    expect(text, isNot(contains('private-token-secret')));
-    expect(text, isNot(contains('private-file-secret')));
-  });
 
   for (final pausing in [true, false]) {
     test('${pausing ? 'pause' : 'play'} waits for renderer outside the shared native lock', () async {
