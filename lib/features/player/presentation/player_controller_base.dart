@@ -414,6 +414,9 @@ class PlayerController extends Notifier<PlayerState> {
   StreamSubscription<dynamic>? _rateSub;
   StreamSubscription<dynamic>? _logSub;
   StreamSubscription<dynamic>? _trackSub;
+  StreamSubscription<dynamic>? _autoSubtitleSub;
+  Timer? _autoSubtitleTimer;
+  int _autoSubtitleGeneration = 0;
 
   // Stall Watchdog state
   Duration? _lastPosition;
@@ -592,6 +595,7 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   int _beginSourceSession({bool resetAttempts = false}) {
+    _cancelAutoSubtitleSelection();
     final nextSessionId = ++_sourceSessionSerial;
     _userDismissedOverlay = false;
     state = state.copyWith(
@@ -671,6 +675,7 @@ class PlayerController extends Notifier<PlayerState> {
     // disposeController() being called, clean up subscriptions.
     ref.onDispose(() {
       _isDisposed = true;
+      _cancelAutoSubtitleSelection();
       _disableAnime4kMetal();
       ++_sourceSessionSerial;
       _stallTimer?.cancel();
@@ -749,6 +754,7 @@ class PlayerController extends Notifier<PlayerState> {
     StreamResult? selectedSource,
     VideoController? videoViewController,
   }) async {
+    _cancelAutoSubtitleSelection();
     _isDisposed = false;
     // The provider survives routes. Never reuse a previous route's source ID.
     state = PlayerState(sourceSessionId: ++_sourceSessionSerial);
@@ -2817,6 +2823,7 @@ class PlayerController extends Notifier<PlayerState> {
     bool play = true,
   }) async {
     if (!_isCurrentSourceSession(sourceSessionId)) return;
+    _cancelAutoSubtitleSelection();
     final player = _player;
     if (useVideoView) {
       // Pause media_kit so it stops consuming bandwidth while video_view plays.
@@ -3340,7 +3347,8 @@ class PlayerController extends Notifier<PlayerState> {
     }
   }
 
-  Future<void> _selectSubtitleTrack(String? id) async {
+  Future<void> _selectSubtitleTrack(String? id, Player player) async {
+    if (_isDisposed || !identical(_player, player)) return;
     if (state.useExoPlayer && _videoViewController != null) {
       if (id == null) {
         _videoViewController!.setShowSubtitle(false);
@@ -3356,7 +3364,7 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     if (id == null) {
-      await _player.setSubtitleTrack(SubtitleTrack.no());
+      await player.setSubtitleTrack(SubtitleTrack.no());
       return;
     }
 
@@ -3366,7 +3374,7 @@ class PlayerController extends Notifier<PlayerState> {
         (sub) => sub.url == url,
       );
       if (subtitle != null) {
-        await _player.setSubtitleTrack(
+        await player.setSubtitleTrack(
           SubtitleTrack.uri(
             subtitle.url,
             title: subtitle.label,
@@ -3380,14 +3388,14 @@ class PlayerController extends Notifier<PlayerState> {
     final embeddedKey = id.startsWith('embedded:')
         ? id.substring('embedded:'.length)
         : id;
-    final track = _findEmbeddedSubtitleTrack(embeddedKey);
+    final track = _findEmbeddedSubtitleTrack(embeddedKey, player);
     if (track != null) {
-      await _player.setSubtitleTrack(track);
+      await player.setSubtitleTrack(track);
     }
   }
 
-  SubtitleTrack? _findEmbeddedSubtitleTrack(String key) {
-    final tracks = _player.state.tracks.subtitle;
+  SubtitleTrack? _findEmbeddedSubtitleTrack(String key, Player player) {
+    final tracks = player.state.tracks.subtitle;
     if (tracks.isEmpty) return null;
     final byId = tracks.firstWhereOrNull((t) => t.id == key);
     if (byId != null) return byId;
@@ -3399,43 +3407,87 @@ class PlayerController extends Notifier<PlayerState> {
     });
   }
 
-  void _scheduleAutoSubtitleSelection() {
-    if (state.useExoPlayer) {
-      Future.delayed(const Duration(milliseconds: 800), () {
-        unawaited(_autoSelectFirstSubtitleIfNeeded());
-      });
-      return;
-    }
-    StreamSubscription<dynamic>? sub;
-    sub = _player.stream.track.listen((_) {
-      sub?.cancel();
-      unawaited(_autoSelectFirstSubtitleIfNeeded());
-    });
-    Future.delayed(const Duration(milliseconds: 2000), () {
-      sub?.cancel();
-      unawaited(_autoSelectFirstSubtitleIfNeeded());
-    });
+  void _cancelAutoSubtitleSelection() {
+    ++_autoSubtitleGeneration;
+    _autoSubtitleTimer?.cancel();
+    _autoSubtitleTimer = null;
+    unawaited(_autoSubtitleSub?.cancel());
+    _autoSubtitleSub = null;
   }
 
-  Future<void> _autoSelectFirstSubtitleIfNeeded() async {
-    final currentId = state.useExoPlayer
-        ? _videoViewController?.overrideSubtitle.value
-        : _player.state.track.subtitle.id;
-    final hasSelection =
-        currentId != null && currentId != 'no' && currentId != 'auto';
-    if (hasSelection) return;
+  void _scheduleAutoSubtitleSelection() {
+    _cancelAutoSubtitleSelection();
+    final sourceSessionId = state.sourceSessionId;
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
+    final generation = _autoSubtitleGeneration;
+    final player = _player;
+    bool isActive() =>
+        _isCurrentSourceSession(sourceSessionId) &&
+        identical(_player, player) &&
+        generation == _autoSubtitleGeneration;
 
-    final external = state.externalSubtitles;
-    if (external.isNotEmpty) {
-      await _selectSubtitleTrack('external:${external.first.url}');
-      return;
+    void select() {
+      if (!isActive()) return;
+      _autoSubtitleTimer?.cancel();
+      _autoSubtitleTimer = null;
+      unawaited(_autoSubtitleSub?.cancel());
+      _autoSubtitleSub = null;
+      unawaited(
+        _autoSelectFirstSubtitleIfNeeded(
+          player,
+          sourceSessionId: sourceSessionId,
+          isActive: isActive,
+        ),
+      );
     }
 
-    if (!state.useExoPlayer) {
-      final embedded = _player.state.tracks.subtitle;
-      if (embedded.isNotEmpty) {
-        await _selectSubtitleTrack(embedded.first.id);
+    if (state.useExoPlayer) {
+      _autoSubtitleTimer = Timer(const Duration(milliseconds: 800), select);
+      return;
+    }
+    _autoSubtitleSub = player.stream.track.listen((_) => select());
+    _autoSubtitleTimer = Timer(const Duration(seconds: 2), select);
+  }
+
+  Future<void> _autoSelectFirstSubtitleIfNeeded(
+    Player player, {
+    required int sourceSessionId,
+    required bool Function() isActive,
+  }) async {
+    if (!isActive()) return;
+    try {
+      final currentId = state.useExoPlayer
+          ? _videoViewController?.overrideSubtitle.value
+          : player.state.track.subtitle.id;
+      final hasSelection =
+          currentId != null && currentId != 'no' && currentId != 'auto';
+      if (hasSelection) return;
+
+      final external = state.externalSubtitles;
+      if (external.isNotEmpty) {
+        await _selectSubtitleTrack('external:${external.first.url}', player);
+        return;
       }
+
+      if (!state.useExoPlayer) {
+        final embedded = player.state.tracks.subtitle;
+        if (embedded.isNotEmpty) {
+          await _selectSubtitleTrack(embedded.first.id, player);
+        }
+      }
+    } catch (error, stack) {
+      // A native selection already in flight can finish after teardown.
+      if (!isActive()) return;
+      appDiagnostics.recordError(
+        'player.subtitle_selection.error',
+        error,
+        stack,
+        fields: {
+          'sourceSessionId': sourceSessionId,
+          'engine': state.useExoPlayer ? 'video_view' : 'media_kit',
+        },
+      );
+      if (kDebugMode) debugPrint('Auto subtitle selection failed: $error');
     }
   }
 
@@ -3505,6 +3557,7 @@ class PlayerController extends Notifier<PlayerState> {
     if (!_isCurrentSourceSession(sourceSessionId)) {
       return;
     }
+    _cancelAutoSubtitleSelection();
 
     final stream = state.streams[index];
     final subtitles = _effectiveExternalSubtitles(stream.subtitles);
@@ -3624,6 +3677,7 @@ class PlayerController extends Notifier<PlayerState> {
   }) async {
     final sourceSessionId = state.sourceSessionId;
     if (!_isCurrentSourceSession(sourceSessionId)) return;
+    _cancelAutoSubtitleSelection();
     final matchingIndex = state.streams.indexWhere(
       (candidate) =>
           candidate.url == stream.url && candidate.source == stream.source,
@@ -4205,6 +4259,7 @@ class PlayerController extends Notifier<PlayerState> {
     if (player != null && _isInitialized && !identical(_player, player)) return;
     if (_isDisposed) return;
     _isDisposed = true;
+    _cancelAutoSubtitleSelection();
     _disableAnime4kMetal();
     final closingSession = ++_sourceSessionSerial;
     _pendingResumeSeekPosition = null;
