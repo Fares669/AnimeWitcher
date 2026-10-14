@@ -38,6 +38,7 @@ class AppDiagnostics {
   final Stopwatch _elapsed = Stopwatch()..start();
   Future<void> _tail = Future<void>.value();
   Future<void>? _flushing;
+  Future<void>? _clearing;
   Timer? _timer;
   bool _enabled = false;
   Object? _lastError;
@@ -88,7 +89,12 @@ class AppDiagnostics {
   }
 
   void record(String event, {Map<String, Object?> fields = const {}}) {
-    if (!_enabled || event.length > 64 || !_events.contains(event)) return;
+    if (!_enabled ||
+        _clearing != null ||
+        event.length > 64 ||
+        !_events.contains(event)) {
+      return;
+    }
     try {
       _enqueue(event, _sanitize(fields));
     } catch (error) {
@@ -103,7 +109,12 @@ class AppDiagnostics {
     StackTrace? stack, {
     Map<String, Object?> fields = const {},
   }) {
-    if (!_enabled || event.length > 64 || !_events.contains(event)) return;
+    if (!_enabled ||
+        _clearing != null ||
+        event.length > 64 ||
+        !_events.contains(event)) {
+      return;
+    }
     try {
       _enqueue(event, {
         ..._sanitize(fields),
@@ -276,6 +287,42 @@ class AppDiagnostics {
       if (await _regularOrMissing(file)) files.add(file);
     }
     return files;
+  }
+
+  /// Deletes owned logs and the temporary export, preserving the opt-in state.
+  /// Capture pauses until deletion finishes so queued writes cannot revive logs.
+  Future<void> clear() {
+    if (_clearing != null) return _clearing!;
+    _timer?.cancel();
+    _timer = null;
+    _pending.clear();
+    _dropped = 0;
+    _recent.clear();
+    _burstSecond = null;
+    _burstCount = 0;
+    final completer = Completer<void>();
+    _clearing = completer.future;
+    _tail = _tail.then((_) async {
+      try {
+        final files = await listFiles();
+        final folder = await _exportDirectoryProvider();
+        await _prepareDirectory(folder);
+        final exported = File('${folder.path}/app-diagnostics.jsonl');
+        await _regularOrMissing(exported);
+        for (final file in files) {
+          await file.delete();
+        }
+        if (await _regularOrMissing(exported)) await exported.delete();
+        _lastError = null;
+        completer.complete();
+      } catch (error, stack) {
+        _lastError = _errorType(error);
+        completer.completeError(error, stack);
+      } finally {
+        _clearing = null;
+      }
+    });
+    return completer.future;
   }
 
   /// Makes a bounded local export; sharing is always a separate user action.

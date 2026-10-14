@@ -6,6 +6,7 @@ Use **Settings → App diagnostic log** (الإعدادات ← سجل التط�
 2. Reproduce it, including leaving/reopening the affected screen if relevant.
 3. Return to the dialog and export the log. The system save dialog lets you choose where to save it.
 4. Disable logging when finished. Existing log files remain available.
+5. To delete them, choose **Clear log** (مسح السجل) and confirm. This removes the app's rotating logs and temporary export, without changing the logging setting. If logging remains enabled, new events go into a fresh file. Copies you saved elsewhere remain untouched.
 
 Logging is off by default and stays on across restarts only when its setting was saved successfully. Nothing is uploaded automatically. Review the exported file before sharing it.
 

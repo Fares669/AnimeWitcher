@@ -74,6 +74,51 @@ class _AppLogDialogState extends ConsumerState<AppLogDialog> {
 
   Future<void> _refresh() => _run(_readFiles, refresh: false);
 
+  Future<void> _clear() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(_text('مسح سجل التطبيق؟', 'Clear app log?')),
+        content: Text(
+          _text(
+            'سيتم حذف سجلات التطبيق المحفوظة ونسخة التصدير المؤقتة. لا يمكن التراجع عن ذلك. إذا كان التسجيل مفعّلًا، فسيستمر في ملف جديد.',
+            'Saved app logs and the temporary export will be deleted. This cannot be undone. If logging is enabled, it will continue in a new file.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(_text('إلغاء', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(_text('مسح السجل', 'Clear log')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _run(
+      () async {
+        final log = ref.read(appDiagnosticsProvider);
+        await log.clear();
+        if (!mounted) return;
+        _files = const [];
+        _status = log.enabled
+            ? _text(
+                'تم مسح السجل. سيستمر التسجيل في ملف جديد.',
+                'Log cleared. Recording will continue in a new file.',
+              )
+            : _text('تم مسح السجل.', 'Log cleared.');
+      },
+      refresh: false,
+      failureMessage: _text(
+        'تعذّر مسح سجلات التطبيق. حاول مجددًا.',
+        'Could not clear app logs. Try again.',
+      ),
+    );
+  }
+
   Future<void> _export() => _run(() async {
     final log = ref.read(appDiagnosticsProvider);
     final export = await (() async {
@@ -176,6 +221,10 @@ class _AppLogDialogState extends ConsumerState<AppLogDialog> {
         ),
       ),
       actions: [
+        TextButton(
+          onPressed: _busy ? null : _clear,
+          child: Text(_text('مسح السجل', 'Clear log')),
+        ),
         TextButton(
           onPressed: _busy || _files.isEmpty ? null : _export,
           child: Text(_text('تصدير السجل', 'Export log')),
