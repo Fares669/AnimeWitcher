@@ -294,6 +294,184 @@ void main() {
     expect((await rows()).last['phase'], 'app_ready');
   });
 
+  test('clear removes owned rotated logs and cached export only', () async {
+    final folder = await log.directory();
+    for (final suffix in ['', '.1', '.2']) {
+      await File('${folder.path}/app-diagnostics$suffix.jsonl')
+          .writeAsString('old log\n');
+    }
+    final unrelated = File('${folder.path}/download.log');
+    await unrelated.writeAsString('keep');
+    final exported = await log.export();
+    final savedCopy = await exported.copy('${root.path}/saved-log.jsonl');
+
+    await log.clear();
+
+    expect(log.enabled, isFalse);
+    expect(await log.listFiles(), isEmpty);
+    expect(await exported.exists(), isFalse);
+    expect(await unrelated.readAsString(), 'keep');
+    expect(await savedCopy.readAsString(), 'old log\n' * 3);
+    expect(await rows(), isEmpty);
+    await log.clear();
+    expect(log.lastError, isNull);
+  });
+
+  test('clear keeps capture enabled and accepts the same event anew', () async {
+    await log.setEnabled(true);
+    log.record('navigation', fields: {'route': 'home'});
+    await log.flush();
+    log.record('navigation', fields: {'route': 'home'});
+
+    await log.clear();
+
+    expect(log.enabled, isTrue);
+    expect(await log.listFiles(), isEmpty);
+    log.record('navigation', fields: {'route': 'home'});
+    final data = await rows();
+    expect(data, hasLength(1));
+    expect(data.single['event'], 'navigation');
+    expect(data.single['route'], 'home');
+  });
+
+  test(
+    'clear waits for in-flight writes and discards queued old events',
+    () async {
+      final gate = Completer<void>();
+      final writing = Completer<void>();
+      var stalled = false;
+      log = AppDiagnostics(
+        directoryProvider: () async {
+          if (stalled) {
+            if (!writing.isCompleted) writing.complete();
+            await gate.future;
+          }
+          return Directory('${root.path}/logs');
+        },
+        exportDirectoryProvider: () async => Directory('${root.path}/exports'),
+        now: () => now,
+      );
+      await log.setEnabled(true);
+      await log.flush();
+      stalled = true;
+      log.record('navigation', fields: {'route': 'home'});
+      final flushing = log.flush();
+      await writing.future;
+      log.record('navigation', fields: {'route': 'settings'});
+      var cleared = false;
+      final clearing = log.clear();
+      unawaited(clearing.then((_) => cleared = true));
+      expect(identical(log.clear(), clearing), isTrue);
+      log.record('navigation', fields: {'route': 'search'});
+      await Future<void>.delayed(Duration.zero);
+      expect(cleared, isFalse);
+
+      gate.complete();
+      await flushing;
+      await clearing;
+      await log.flush();
+
+      expect(log.enabled, isTrue);
+      expect(await log.listFiles(), isEmpty);
+      log.record('navigation', fields: {'route': 'downloads'});
+      expect((await rows()).map((row) => row['route']), ['downloads']);
+    },
+  );
+
+  test(
+    'clear removes an export already in progress without stale data',
+    () async {
+      final gate = Completer<void>();
+      final exporting = Completer<void>();
+      var stalled = true;
+      log = AppDiagnostics(
+        directoryProvider: () async => Directory('${root.path}/logs'),
+        exportDirectoryProvider: () async {
+          if (stalled) {
+            if (!exporting.isCompleted) exporting.complete();
+            await gate.future;
+          }
+          return Directory('${root.path}/exports');
+        },
+      );
+      await log.setEnabled(true);
+      log.record('navigation', fields: {'route': 'home'});
+      final export = log.export();
+      await exporting.future;
+      final clearing = log.clear();
+      gate.complete();
+      final exported = await export;
+      await clearing;
+      stalled = false;
+
+      expect(await exported.exists(), isFalse);
+      expect(await rows(), isEmpty);
+    },
+  );
+
+  test('clear failures are reported safely and a retry can succeed', () async {
+    await log.setEnabled(true);
+    await log.flush();
+    final folder = await log.directory();
+    final active = File('${folder.path}/app-diagnostics.jsonl');
+    await active.delete();
+    await Directory(active.path).create();
+
+    await expectLater(log.clear(), throwsA(isA<FileSystemException>()));
+    expect(log.enabled, isTrue);
+    expect(log.lastError, 'FileSystemException');
+
+    await Directory(active.path).delete();
+    log.record('navigation', fields: {'route': 'home'});
+    await log.flush();
+    expect(await log.listFiles(), isNotEmpty);
+    await log.clear();
+    expect(log.lastError, isNull);
+    expect(await log.listFiles(), isEmpty);
+  });
+
+  test('clear refuses linked logs and never deletes their targets', () async {
+    final folder = await log.directory();
+    final target = File('${root.path}/private-file');
+    await target.writeAsString('keep');
+    await Link('${folder.path}/app-diagnostics.jsonl').create(target.path);
+
+    await expectLater(log.clear(), throwsA(isA<FileSystemException>()));
+
+    expect(await target.readAsString(), 'keep');
+  });
+
+  test('partial deletion reports failure and can be retried', () async {
+    final folder = Directory('${root.path}/logs');
+    final active = File('${folder.path}/app-diagnostics.jsonl');
+    final rotated = File('${folder.path}/app-diagnostics.1.jsonl');
+    var interfere = true;
+    log = AppDiagnostics(
+      directoryProvider: () async => folder,
+      exportDirectoryProvider: () async {
+        if (interfere) {
+          await rotated.delete();
+          await Directory(rotated.path).create();
+          await File('${rotated.path}/blocker').writeAsString('keep');
+        }
+        return Directory('${root.path}/exports');
+      },
+    );
+    await log.directory();
+    await active.writeAsString('old log');
+    await rotated.writeAsString('old log');
+
+    await expectLater(log.clear(), throwsA(isA<FileSystemException>()));
+
+    expect(await active.exists(), isFalse);
+    expect(log.lastError, 'FileSystemException');
+    interfere = false;
+    await Directory(rotated.path).delete(recursive: true);
+    await log.clear();
+    expect(log.lastError, isNull);
+    expect(await log.listFiles(), isEmpty);
+  });
+
   test('enable failure remains disabled and can be retried', () async {
     await File('${root.path}/logs').writeAsString('blocked');
     await expectLater(

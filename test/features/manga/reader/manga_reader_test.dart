@@ -38,17 +38,6 @@ final class _ReaderProvider extends AnimeWitcherProvider {
 
   final bool emptyPages;
   final List<String> requestedChapterIds = <String>[];
-  final Map<String, Completer<void>> _requestWaiters =
-      <String, Completer<void>>{};
-
-  Future<void> waitUntilRequested(String chapterId) {
-    if (requestedChapterIds.contains(chapterId)) return Future<void>.value();
-    return _requestWaiters
-        .putIfAbsent(chapterId, Completer<void>.new)
-        .future
-        .timeout(const Duration(seconds: 1));
-  }
-
   @override
   String get packageName => 'test.reader.manga';
 
@@ -93,9 +82,30 @@ final class _ReaderProvider extends AnimeWitcherProvider {
     MangaChapter chapter,
   ) async {
     requestedChapterIds.add(chapter.id);
-    final waiter = _requestWaiters[chapter.id];
-    if (waiter != null && !waiter.isCompleted) waiter.complete();
     return emptyPages ? const <MangaPage>[] : pages;
+  }
+}
+
+final class _RecordingReaderPageCache extends MangaReaderPageCache {
+  _RecordingReaderPageCache({required super.cacheDirectory});
+
+  final Map<String, Completer<void>> _writeWaiters =
+      <String, Completer<void>>{};
+
+  Future<void> waitUntilWritten(String chapterId) => _writeWaiters
+      .putIfAbsent(chapterId, Completer<void>.new)
+      .future
+      .timeout(const Duration(seconds: 2));
+
+  @override
+  Future<void> put(
+    String mangaId,
+    MangaChapter chapter,
+    List<MangaPage> pages,
+  ) async {
+    await super.put(mangaId, chapter, pages);
+    final waiter = _writeWaiters.putIfAbsent(chapter.id, Completer<void>.new);
+    if (!waiter.isCompleted) waiter.complete();
   }
 }
 
@@ -312,6 +322,7 @@ void main() {
       final temp = await Directory.systemTemp.createTemp('aw_reader_preload_');
       addTearDown(() => temp.delete(recursive: true));
       final provider = _ReaderProvider();
+      final cache = _RecordingReaderPageCache(cacheDirectory: temp);
       const first = MangaChapter(
         id: 'c1',
         mangaId: 'm1',
@@ -339,14 +350,19 @@ void main() {
         manga: manga,
         chapter: first,
         chapters: const <MangaChapter>[first, second],
-        pageCache: MangaReaderPageCache(cacheDirectory: temp),
+        pageCache: cache,
       );
       addTearDown(controller.dispose);
 
       await controller.load();
-      await provider.waitUntilRequested('c2');
+      // Provider entry precedes the background write; teardown needs the latter.
+      await cache.waitUntilWritten('c2');
 
       expect(provider.requestedChapterIds, containsAll(<String>['c1', 'c2']));
+      expect(
+        (await cache.get('m1', second))?.map((page) => page.imageUrl),
+        pages.map((page) => page.imageUrl),
+      );
     },
   );
 

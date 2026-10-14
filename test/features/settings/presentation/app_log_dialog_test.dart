@@ -34,6 +34,28 @@ class _FailingDisableStorage extends MemoryStorageService {
   }
 }
 
+class _UnreadableAfterClearDiagnostics extends AppDiagnostics {
+  _UnreadableAfterClearDiagnostics(Directory folder)
+    : super(
+        directoryProvider: () async => folder,
+        exportDirectoryProvider: () async => Directory('${folder.path}/export'),
+      );
+
+  bool cleared = false;
+
+  @override
+  Future<void> clear() async {
+    await super.clear();
+    cleared = true;
+  }
+
+  @override
+  Future<Directory> directory() async {
+    if (cleared) throw const FileSystemException('private path unavailable');
+    return super.directory();
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory directory;
@@ -95,6 +117,32 @@ void main() {
     if (settle) await tester.pumpAndSettle();
   }
 
+  Future<void> flushLog(WidgetTester tester, AppDiagnostics log) async {
+    var flushed = false;
+    final draining = log.flush().whenComplete(() => flushed = true);
+    for (var i = 0; i < 100 && !flushed; i++) {
+      await tester.pump();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(flushed, isTrue);
+    await draining;
+  }
+
+  Future<void> confirmClear(WidgetTester tester) async {
+    await tester.runAsync(() async {
+      await tester.tap(find.widgetWithText(FilledButton, 'Clear log'));
+      for (var i = 0; i < 200; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        if (find.widgetWithText(FilledButton, 'Clear log').evaluate().isEmpty &&
+            find.byType(LinearProgressIndicator).evaluate().isEmpty) {
+          break;
+        }
+      }
+    });
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('general settings open the app diagnostic log separately', (
     tester,
   ) async {
@@ -143,7 +191,7 @@ void main() {
         isFalse,
       );
       expect(find.text('تصدير السجل'), findsOneWidget);
-      expect(find.byIcon(Icons.delete), findsNothing);
+      expect(find.text('مسح السجل'), findsOneWidget);
 
       await tester.runAsync(() async {
         await tester.tap(find.byType(SwitchListTile));
@@ -222,7 +270,7 @@ void main() {
         tester.widget<SwitchListTile>(find.byType(SwitchListTile)).onChanged,
         isNull,
       );
-      for (final label in ['Export log', 'Refresh']) {
+      for (final label in ['Export log', 'Clear log', 'Refresh']) {
         expect(
           tester
               .widget<TextButton>(find.widgetWithText(TextButton, label))
@@ -255,6 +303,151 @@ void main() {
       });
     },
   );
+
+  testWidgets('canceling clear leaves logs, export and preference unchanged', (
+    tester,
+  ) async {
+    final storage = MemoryStorageService();
+    final log = AppDiagnostics(
+      directoryProvider: () async => Directory('${directory.path}/logs'),
+      exportDirectoryProvider: () async =>
+          Directory('${directory.path}/export'),
+    );
+    late File active;
+    late File exported;
+    late String before;
+    await tester.runAsync(() async {
+      await log.setEnabled(true);
+      await log.setEnabled(false);
+      exported = await log.export();
+      active = (await log.listFiles()).single;
+      before = await active.readAsString();
+    });
+    await showDialog(tester, log, storage);
+
+    await tester.tap(find.text('Clear log'));
+    await tester.pumpAndSettle();
+    expect(find.text('Clear app log?'), findsOneWidget);
+    expect(find.textContaining('cannot be undone'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    await tester.runAsync(() async {
+      expect(await active.readAsString(), before);
+      expect(await exported.readAsString(), before);
+    });
+    expect(log.enabled, isFalse);
+    expect(storage.getAppDiagnosticLog(), isFalse);
+    expect(find.text('Log cleared.'), findsNothing);
+  });
+
+  for (final enabled in [false, true]) {
+    testWidgets('confirmed clear preserves logging setting: $enabled', (
+      tester,
+    ) async {
+      final storage = MemoryStorageService();
+      await storage.setAppDiagnosticLog(enabled);
+      final log = AppDiagnostics(
+        directoryProvider: () async => Directory('${directory.path}/logs'),
+        exportDirectoryProvider: () async =>
+            Directory('${directory.path}/export'),
+      );
+      late File exported;
+      await tester.runAsync(() async {
+        await log.setEnabled(true);
+        if (!enabled) await log.setEnabled(false);
+        exported = await log.export();
+      });
+      await showDialog(tester, log, storage);
+      await tester.tap(find.text('Clear log'));
+      await tester.pumpAndSettle();
+      await confirmClear(tester);
+
+      expect(find.text('No app logs yet.'), findsOneWidget);
+      expect(find.textContaining('Log cleared.'), findsOneWidget);
+      expect(storage.getAppDiagnosticLog(), enabled);
+      expect(log.enabled, enabled);
+      expect(
+        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        enabled,
+      );
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Export log'))
+            .onPressed,
+        isNull,
+      );
+      await tester.runAsync(() async {
+        expect(await log.listFiles(), isEmpty);
+        expect(await exported.exists(), isFalse);
+        if (enabled) {
+          log.record('navigation', fields: {'route': 'home'});
+          await flushLog(tester, log);
+          final file = (await log.listFiles()).single;
+          expect(await file.readAsString(), contains('home'));
+          await log.setEnabled(false);
+          await flushLog(tester, log);
+        }
+      });
+    });
+  }
+
+  testWidgets('clear failure is safe and allows retry', (tester) async {
+    final log = AppDiagnostics(
+      directoryProvider: () async => Directory('${directory.path}/logs'),
+      exportDirectoryProvider: () async =>
+          Directory('${directory.path}/export'),
+    );
+    late File active;
+    await tester.runAsync(() async {
+      await log.setEnabled(true);
+      await log.setEnabled(false);
+      await log.flush();
+      active = (await log.listFiles()).single;
+    });
+    await showDialog(tester, log, MemoryStorageService());
+    await tester.runAsync(() async {
+      await active.delete();
+      await Directory(active.path).create();
+    });
+    await tester.tap(find.text('Clear log'));
+    await tester.pumpAndSettle();
+    await confirmClear(tester);
+
+    expect(find.text('Could not clear app logs. Try again.'), findsOneWidget);
+    expect(find.textContaining('Log cleared.'), findsNothing);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Clear log'))
+          .onPressed,
+      isNotNull,
+    );
+    await tester.runAsync(() => Directory(active.path).delete());
+    await tester.tap(find.text('Clear log'));
+    await tester.pumpAndSettle();
+    await confirmClear(tester);
+    expect(find.text('Log cleared.'), findsOneWidget);
+    expect(find.text('Could not clear app logs. Try again.'), findsNothing);
+  });
+
+  testWidgets('successful clear does not require another storage read', (
+    tester,
+  ) async {
+    final log = _UnreadableAfterClearDiagnostics(directory);
+    final active = File('${directory.path}/app-diagnostics.jsonl');
+    await tester.runAsync(() => active.writeAsString('old log'));
+    await showDialog(tester, log, MemoryStorageService());
+    await tester.tap(find.text('Clear log'));
+    await tester.pumpAndSettle();
+    await confirmClear(tester);
+
+    expect(log.cleared, isTrue);
+    expect(find.text('Log cleared.'), findsOneWidget);
+    expect(find.text('No app logs yet.'), findsOneWidget);
+    expect(find.textContaining('Could not'), findsNothing);
+    await tester.runAsync(() async => expect(await active.exists(), isFalse));
+  });
 
   testWidgets('refresh surfaces safe storage errors and allows retry', (
     tester,
