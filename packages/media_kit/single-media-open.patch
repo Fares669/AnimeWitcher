@@ -1,0 +1,14 @@
+--- a/lib/src/player/native/player/real.dart
++++ b/lib/src/player/native/player/real.dart
+@@ -178,7 +178,10 @@
+       // Enter paused state.
+       await _setPropertyFlag('pause', true);
+ 
+-      if (playlist.any((media) => media.uri.startsWith('fd://'))) {
++      // Single-media opens must not wait for temporary playlist file I/O while
++      // holding the shared player lock (DNS can occupy every Dart I/O worker).
++      if (playlist.length == 1 ||
++          playlist.any((media) => media.uri.startsWith('fd://'))) {
+         // The fd:// scheme is used to reference content:// URIs on Android.
+         // The loadlist command does not support this by default, yielding "Refusing to load potentially unsafe URL from a playlist."
+         // So, we fallback to loading each file individually.
