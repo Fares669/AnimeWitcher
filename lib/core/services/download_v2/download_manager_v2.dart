@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../logger/app_diagnostics.dart';
 import '../download_concurrency.dart';
 import '../download_parallel.dart';
 import '../../utils/download_cleanup.dart';
@@ -171,21 +172,30 @@ final class DownloadManagerV2 {
     final existing = _initialization;
     if (existing != null) return existing;
 
+    appDiagnostics.record('download.init', fields: {'phase': 'begin'});
     final attempt = _initialize();
     _initialization = attempt;
     unawaited(
-      attempt.catchError((Object _, StackTrace __) {
-        if (identical(_initialization, attempt)) {
-          _initialization = null;
-        }
-      }),
+      attempt.then<void>(
+        (_) => appDiagnostics.record('download.init', fields: {'phase': 'end'}),
+        onError: (Object error, StackTrace stack) {
+          appDiagnostics.recordError('download.init', error, stack);
+          if (identical(_initialization, attempt)) {
+            _initialization = null;
+          }
+        },
+      ),
     );
     return attempt;
   }
 
   Future<void> _initialize() async {
+    appDiagnostics.record('download.init', fields: {'phase': 'begin', 'operation': 'gatewayInitialize'});
     await _gateway.initialize();
+    appDiagnostics.record('download.init', fields: {'phase': 'end', 'operation': 'gatewayInitialize'});
+    appDiagnostics.record('download.init', fields: {'phase': 'begin', 'operation': 'gatewayRehydrate'});
     final rehydrated = await _gateway.rehydrate();
+    appDiagnostics.record('download.init', fields: {'phase': 'end', 'operation': 'gatewayRehydrate', 'count': rehydrated.length});
     final byTaskId = <String, DownloadTransportHandle>{
       for (final handle in rehydrated) handle.taskId: handle,
     };
@@ -2981,6 +2991,15 @@ final class DownloadManagerV2 {
       snapshot = _snapshotWithStatus(snapshot, DownloadTransportStatus.held);
       if (snapshot.completedPages == null) snapshot = _snapshotWithPages(snapshot, 0, null);
       _snapshots[logicalId] = snapshot;
+    }
+    if (appDiagnostics.enabled) {
+      appDiagnostics.record('download.state', fields: {
+        'requestId': snapshot.taskId.hashCode,
+        'generation': generation,
+        'status': snapshot.status.name,
+        if (snapshot.failureCategory != null) 'reason': snapshot.failureCategory!.name,
+        if (integrityResult != null) 'result': integrityResult.name,
+      });
     }
     _diagnostics.record(
       DownloadDiagnosticEventV2(

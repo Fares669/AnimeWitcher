@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import '../logger/app_diagnostics.dart';
 
 class ProxyOptions {
   final List<String> mirrorHosts;
@@ -44,6 +45,7 @@ class LocalProxyService {
 
   Future<void> startServer() async {
     if (_server != null) return;
+    appDiagnostics.record('proxy.lifecycle', fields: {'phase': 'begin', 'operation': 'start'});
     try {
       _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       _serverPort = _server!.port;
@@ -52,7 +54,9 @@ class LocalProxyService {
       }
 
       _server!.listen(_handleRequest);
-    } catch (e) {
+      appDiagnostics.record('proxy.lifecycle', fields: {'phase': 'end', 'operation': 'start'});
+    } catch (e, stack) {
+      appDiagnostics.recordError('proxy.error', e, stack);
       if (kDebugMode) {
         debugPrint("LocalProxyService: Failed to start server: $e");
       }
@@ -69,10 +73,13 @@ class LocalProxyService {
     _serverPort = 0;
     _playlists.clear();
     if (server != null) {
+      appDiagnostics.record('proxy.lifecycle', fields: {'phase': 'begin', 'operation': 'stop'});
       try {
         await server.close(force: true);
+        appDiagnostics.record('proxy.lifecycle', fields: {'phase': 'end', 'operation': 'stop'});
         if (kDebugMode) debugPrint("LocalProxyService: shut down cleanly");
-      } catch (e) {
+      } catch (e, stack) {
+        appDiagnostics.recordError('proxy.error', e, stack);
         if (kDebugMode) debugPrint("LocalProxyService: shutdown error: $e");
       }
     }
@@ -182,7 +189,8 @@ class LocalProxyService {
 
       request.response.statusCode = HttpStatus.notFound;
       unawaited(request.response.close());
-    } catch (e) {
+    } catch (e, stack) {
+      appDiagnostics.recordError('proxy.error', e, stack);
       if (kDebugMode) debugPrint("LocalProxyService: Server Error: $e");
       try {
         request.response.statusCode = HttpStatus.internalServerError;
@@ -503,7 +511,8 @@ class LocalProxyService {
         // Pipe binary data (segments, keys, etc.)
         await response.pipe(request.response);
       }
-    } catch (e) {
+    } catch (e, stack) {
+      appDiagnostics.recordError('proxy.error', e, stack);
       if (kDebugMode) debugPrint("LocalProxyService: Proxy Request Error: $e");
       request.response.statusCode = HttpStatus.badGateway;
       await request.response.close();

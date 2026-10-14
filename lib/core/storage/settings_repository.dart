@@ -55,6 +55,11 @@ class SettingsRepository {
   Future<void> setDownloadConcurrency(int value) =>
       _storageService.setDownloadConcurrency(value);
 
+  Future<void> setAppDiagnosticLog(bool enabled) =>
+      _storageService.setAppDiagnosticLog(enabled);
+
+  bool getAppDiagnosticLog() => _storageService.getAppDiagnosticLog();
+
   Future<void> setDownloadDiagnosticLog(bool enabled) =>
       _storageService.setDownloadDiagnosticLog(enabled);
 
