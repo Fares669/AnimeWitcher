@@ -136,23 +136,30 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
           );
         },
   );
-  final artwork = DownloadArtworkObserverV2(sourceFor: (record) async {
-    final storage = ref.read(storageServiceProvider);
-    var metadata = await storage.getDownloadMetadata(record.logicalId.value);
-    if (metadata == null || !downloadArtworkMetadataMatchesRecordV2(metadata, record)) {
-      metadata = await storage.getDownloadMetadata(record.taskId);
-      if (metadata == null || !downloadArtworkMetadataMatchesRecordV2(metadata, record)) return null;
-    }
-    final item = metadata['item'];
-    final episode = metadata['episode'];
-    final poster = item is Map ? item['posterUrl'] : null;
-    final thumbnail = episode is Map ? episode['posterUrl'] : null;
-    return DownloadArtworkSourceV2(
-      posterUrl: poster is String ? poster : null,
-      episodeUrl: thumbnail is String ? thumbnail : null,
-      legacyTaskId: record.taskId,
-    );
-  });
+  final artwork = DownloadArtworkObserverV2(
+    sourceFor: (record) async {
+      final storage = ref.read(storageServiceProvider);
+      var metadata = await storage.getDownloadMetadata(record.logicalId.value);
+      if (metadata == null ||
+          !downloadArtworkMetadataMatchesRecordV2(metadata, record)) {
+        metadata = await storage.getDownloadMetadata(record.taskId);
+        if (metadata == null ||
+            !downloadArtworkMetadataMatchesRecordV2(metadata, record))
+          return null;
+      }
+      final item = metadata['item'];
+      final episode = metadata['episode'];
+      final poster = item is Map ? item['posterUrl'] : null;
+      final thumbnail = episode is Map ? episode['posterUrl'] : null;
+      final banner = item is Map ? item['bannerUrl'] : null;
+      return DownloadArtworkSourceV2(
+        posterUrl: poster is String ? poster : null,
+        bannerUrl: banner is String ? banner : null,
+        episodeUrl: thumbnail is String ? thumbnail : null,
+        legacyTaskId: record.taskId,
+      );
+    },
+  );
   manager = DownloadManagerV2(
     store: ref.read(logicalDownloadStoreV2Provider),
     gateway: ref.read(backgroundDownloaderGatewayV2Provider),
