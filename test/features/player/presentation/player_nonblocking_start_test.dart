@@ -30,6 +30,7 @@ class _Player extends Fake implements media.Player {
   Completer<void>? pendingOpen;
   _ReadinessNative? native;
   final seeks = <Duration>[];
+  final openEnteredSignal = Completer<void>();
   final openedSignal = Completer<void>();
   final seekSignal = Completer<void>();
   bool settleSeek = true;
@@ -46,6 +47,7 @@ class _Player extends Fake implements media.Player {
   Future<void> open(media.Playable playable, {bool play = true}) async {
     opened.add((playable as media.Media).uri);
     await native?.open(playable, play: play);
+    if (!openEnteredSignal.isCompleted) openEnteredSignal.complete();
     await pendingOpen?.future;
     value = value.copyWith(position: Duration.zero, playing: play);
     if (!openedSignal.isCompleted) openedSignal.complete();
@@ -90,6 +92,7 @@ class _ReadinessNative extends Fake implements media.NativePlayer {
   bool pauseEntered = false;
   bool playEntered = false;
   int propertyWrites = 0;
+  final properties = <String, String>{};
   Completer<void>? pendingProperties;
 
   @override
@@ -111,6 +114,7 @@ class _ReadinessNative extends Fake implements media.NativePlayer {
     bool waitForInitialization = true,
   }) async {
     propertyWrites++;
+    properties[property] = value;
     await pendingProperties?.future;
   }
 
@@ -630,6 +634,62 @@ void main() {
     await flush();
   });
 
+  test('local startup skips network cookie and cache directory preparation', () async {
+    final pendingDirectory = Completer<String>();
+    var temporaryLookups = 0;
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (call) async {
+        if (call.method == 'getTemporaryDirectory') {
+          temporaryLookups++;
+          return pendingDirectory.future;
+        }
+        return diagnosticsDirectory.path;
+      },
+    );
+    final native = _ReadinessNative()..renderer.complete();
+    player.native = native;
+    final startup = startSource(local: true);
+    try {
+      await player.openedSignal.future.timeout(const Duration(seconds: 2));
+      expect(temporaryLookups, 0);
+      expect(native.properties, isNot(contains('cookies-file')));
+      expect(native.properties, isNot(contains('cache-dir')));
+    } finally {
+      pendingDirectory.complete(diagnosticsDirectory.path);
+      await startup;
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (call) async => call.method == 'getApplicationSupportDirectory'
+            ? diagnosticsDirectory.path
+            : '/nonexistent/player-tests',
+      );
+    }
+  });
+
+  test('remote startup preserves network cookie and cache properties', () async {
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (_) async => diagnosticsDirectory.path,
+    );
+    final native = _ReadinessNative()..renderer.complete();
+    player.native = native;
+    try {
+      await startSource();
+      expect(native.properties['cookies-file'], endsWith('mpv_cookies.txt'));
+      expect(native.properties['cache-dir'], diagnosticsDirectory.path);
+    } finally {
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (call) async => call.method == 'getApplicationSupportDirectory'
+            ? diagnosticsDirectory.path
+            : '/nonexistent/player-tests',
+      );
+    }
+  });
+
   test('startup exposes a native property stall before renderer readiness', () async {
     await appDiagnostics.setEnabled(true);
     final pending = Completer<void>();
@@ -809,7 +869,7 @@ void main() {
       videoUrl: '/saved/private-file-secret.mp4',
       episode: episode,
     );
-    await flush();
+    await player.openEnteredSignal.future.timeout(const Duration(seconds: 2));
     final session = controller.currentState.sourceSessionId;
     pending.completeError(
       StateError(

@@ -4819,25 +4819,28 @@ class PlayerController extends Notifier<PlayerState> {
         await native.setProperty('demuxer-lavf-o', demuxerLavfOpts.join(','));
       }
 
-      try {
-        final tempDir = await getTemporaryDirectory();
-        // Use p.join to produce a platform-correct path; on Windows the mixed
-        // forward/back-slash path produced by string concatenation can confuse
-        // libmpv's internal path parser.
-        final cookieFile = File(p.join(tempDir.path, 'mpv_cookies.txt'));
-        if (!await cookieFile.exists()) {
-          await cookieFile.create();
-        }
-        await native.setProperty('cookies-file', cookieFile.path);
+      // Local playback must not wait on network-cookie filesystem work.
+      if (!AppUtils.isLocalFile(stream.url)) {
+        try {
+          final tempDir = await getTemporaryDirectory();
+          // Use p.join to produce a platform-correct path; on Windows the mixed
+          // forward/back-slash path produced by string concatenation can confuse
+          // libmpv's internal path parser.
+          final cookieFile = File(p.join(tempDir.path, 'mpv_cookies.txt'));
+          if (!await cookieFile.exists()) {
+            await cookieFile.create();
+          }
+          await native.setProperty('cookies-file', cookieFile.path);
 
-        // Set a writable cache dir so mpv can persist its seek-backward and
-        // init-segment cache to disk. Without this, mpv logs "Failed to create
-        // file cache" and must re-fetch EXT-X-MAP init segments every time they
-        // are needed; if the CDN expires the init segment URL (404) before the
-        // next re-fetch, audio/video stops (typically ~20 s into playback).
-        await native.setProperty('cache-dir', tempDir.path);
-      } catch (e) {
-        if (kDebugMode) debugPrint('Failed to set cache-dir/cookies-file: $e');
+          // Set a writable cache dir so mpv can persist its seek-backward and
+          // init-segment cache to disk. Without this, mpv logs "Failed to create
+          // file cache" and must re-fetch EXT-X-MAP init segments every time they
+          // are needed; if the CDN expires the init segment URL (404) before the
+          // next re-fetch, audio/video stops (typically ~20 s into playback).
+          await native.setProperty('cache-dir', tempDir.path);
+        } catch (e) {
+          if (kDebugMode) debugPrint('Failed to set cache-dir/cookies-file: $e');
+        }
       }
 
       // Re-assert: disable native MPV subtitle rendering on the video

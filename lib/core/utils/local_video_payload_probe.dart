@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 /// Text artifacts that cannot be played as a standalone downloaded video.
 enum LocalVideoPayloadProblem {
@@ -31,11 +32,18 @@ enum LocalVideoPayloadProblem {
 /// A null result leaves unknown formats alone; it does not establish that the
 /// file is playable or self-contained. Missing or unreadable files also return
 /// null, leaving ordinary filesystem failures to the verifier or player.
-Future<LocalVideoPayloadProblem?> probeLocalVideoPayload(File file) async {
+Future<LocalVideoPayloadProblem?> probeLocalVideoPayload(File file) {
+  final path = file.path;
+  // Keep both the UI isolate and Dart's shared DNS/file-I/O queue out of this read.
+  return Isolate.run(() => probeLocalVideoPayloadSync(File(path)));
+}
+
+/// Bounded worker-isolate implementation, also used during integrity checks.
+LocalVideoPayloadProblem? probeLocalVideoPayloadSync(File file) {
   try {
-    final handle = await file.open(mode: FileMode.read);
+    final handle = file.openSync(mode: FileMode.read);
     try {
-      final prefix = utf8.decode(await handle.read(4096), allowMalformed: true);
+      final prefix = utf8.decode(handle.readSync(4096), allowMalformed: true);
       final text = _trimDocumentStart(prefix);
       if (RegExp(r'^#EXTM3U(?:[ \t]*(?:[\r\n]|$))').hasMatch(text)) {
         return LocalVideoPayloadProblem.hlsPlaylist;
@@ -53,7 +61,7 @@ Future<LocalVideoPayloadProblem?> probeLocalVideoPayload(File file) async {
       }
       return null;
     } finally {
-      await handle.close();
+      handle.closeSync();
     }
   } on FileSystemException {
     return null;

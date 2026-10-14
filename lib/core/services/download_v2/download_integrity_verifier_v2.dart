@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 
 import '../../utils/local_video_payload_probe.dart';
 
@@ -37,12 +38,25 @@ final class DownloadIntegrityVerifierV2 {
     // retain their original integrity semantics and must not be deleted by a
     // startup migration; playback separately checks recognizable text payloads.
     bool rejectNonVideoPayload = false,
-  }) async {
-    if (!await file.exists()) {
+  }) {
+    final path = file.path;
+    // Async file calls share Dart's I/O queue with stalled DNS lookups.
+    return Isolate.run(
+      () => _verifyPath(path, expectedBytes, rejectNonVideoPayload),
+    );
+  }
+
+  static DownloadIntegrityResult _verifyPath(
+    String path,
+    int? expectedBytes,
+    bool rejectNonVideoPayload,
+  ) {
+    final file = File(path);
+    if (!file.existsSync()) {
       return const DownloadIntegrityResult.invalid('missing');
     }
 
-    final bytes = await file.length();
+    final bytes = file.lengthSync();
     if (bytes <= 0) {
       return const DownloadIntegrityResult.invalid('empty');
     }
@@ -52,7 +66,7 @@ final class DownloadIntegrityVerifierV2 {
     }
 
     if (rejectNonVideoPayload) {
-      final problem = await probeLocalVideoPayload(file);
+      final problem = probeLocalVideoPayloadSync(file);
       if (problem != null) {
         return DownloadIntegrityResult.invalid(problem.reason);
       }
