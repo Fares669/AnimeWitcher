@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:animewitcher/core/account/account_providers.dart';
@@ -6,6 +7,7 @@ import 'package:animewitcher/core/account/animewitcher_account_service.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/logger/app_diagnostics.dart';
 import 'package:animewitcher/core/providers/anime_data_source_settings_provider.dart';
 import 'package:animewitcher/core/storage/history_repository.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
@@ -88,6 +90,7 @@ class _ReadinessNative extends Fake implements media.NativePlayer {
   bool pauseEntered = false;
   bool playEntered = false;
   int propertyWrites = 0;
+  Completer<void>? pendingProperties;
 
   @override
   Future<void> get waitForPlayerInitialization {
@@ -108,6 +111,7 @@ class _ReadinessNative extends Fake implements media.NativePlayer {
     bool waitForInitialization = true,
   }) async {
     propertyWrites++;
+    await pendingProperties?.future;
   }
 
   @override
@@ -347,17 +351,28 @@ MultimediaItem _item(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() {
+  late Directory diagnosticsDirectory;
+  setUpAll(() async {
+    diagnosticsDirectory = await Directory.systemTemp.createTemp(
+      'player-diagnostics-',
+    );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
           const MethodChannel('plugins.flutter.io/path_provider'),
-          (_) async => '/nonexistent/player-tests',
+          (call) async => call.method == 'getApplicationSupportDirectory'
+              ? diagnosticsDirectory.path
+              : '/nonexistent/player-tests',
         );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
           const MethodChannel('dev.fluttercommunity.plus/connectivity_status'),
           (_) async => null,
         );
+  });
+  tearDownAll(() async {
+    await appDiagnostics.setEnabled(false);
+    await appDiagnostics.flush();
+    await diagnosticsDirectory.delete(recursive: true);
   });
 
   late ProviderContainer container;
@@ -370,7 +385,26 @@ void main() {
   int connectivityChecks = 0;
   Completer<List<String>>? pendingConnectivity;
 
+  var diagnosticBaseline = 0;
+
+  Future<List<Map<String, dynamic>>> diagnosticEvents() async {
+    await appDiagnostics.flush();
+    final events = <Map<String, dynamic>>[];
+    for (final file in await appDiagnostics.listFiles()) {
+      for (final line in await file.readAsLines()) {
+        if (line.isNotEmpty) {
+          events.add(jsonDecode(line) as Map<String, dynamic>);
+        }
+      }
+    }
+    return events.skip(diagnosticBaseline).toList();
+  }
+
   setUp(() async {
+    await appDiagnostics.setEnabled(false);
+    await appDiagnostics.flush();
+    diagnosticBaseline = 0;
+    diagnosticBaseline = (await diagnosticEvents()).length;
     connectivityChecks = 0;
     pendingConnectivity = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -596,8 +630,10 @@ void main() {
     await flush();
   });
 
-  test('startup waits for native renderer before taking the shared open lock', () async {
-    final native = _ReadinessNative();
+  test('startup exposes a native property stall before renderer readiness', () async {
+    await appDiagnostics.setEnabled(true);
+    final pending = Completer<void>();
+    final native = _ReadinessNative()..pendingProperties = pending;
     player.native = native;
     final episode = _episode(1);
     final startup = controller.init(
@@ -605,45 +641,194 @@ void main() {
       item: _item([episode]),
       videoUrl: '/saved/episode.mp4',
       episode: episode,
-    );
-    await native.readinessReached.future.timeout(const Duration(seconds: 1));
-    await flush();
-    var nextEngineCanStart = false;
-    final nextEngine = media.NativePlayer.lock.synchronized(
-      () => nextEngineCanStart = true,
     );
     try {
       await flush();
-      expect(nextEngineCanStart, isTrue);
+      expect(native.propertyWrites, 1);
+      final events = (await diagnosticEvents()).where(
+        (event) => event['sourceSessionId'] == controller.currentState.sourceSessionId,
+      );
+      final names = events.map((event) => event['event']);
+      expect(names, contains('player.properties.begin'));
+      expect(names, isNot(contains('player.properties.end')));
+      expect(names, isNot(contains('player.native_ready.begin')));
+      expect(names, isNot(contains('player.engine_open.begin')));
       expect(native.openEntered, isFalse);
     } finally {
+      pending.complete();
       native.renderer.complete();
       await startup;
-      await nextEngine;
     }
-    expect(native.openEntered, isTrue);
-    expect(player.opened, ['/saved/episode.mp4']);
   });
 
-  test('late renderer readiness cannot enter an abandoned native open', () async {
-    final native = _ReadinessNative();
-    player.native = native;
+  test(
+    'startup waits for native renderer before taking the shared open lock',
+    () async {
+      await appDiagnostics.setEnabled(true);
+      final native = _ReadinessNative();
+      player.native = native;
+      final episode = _episode(1);
+      final startup = controller.init(
+        player: player,
+        item: _item([episode]),
+        videoUrl: '/saved/episode.mp4',
+        episode: episode,
+      );
+      await native.readinessReached.future.timeout(const Duration(seconds: 1));
+      await flush();
+      final session = controller.currentState.sourceSessionId;
+      var nextEngineCanStart = false;
+      final nextEngine = media.NativePlayer.lock.synchronized(
+        () => nextEngineCanStart = true,
+      );
+      try {
+        await flush();
+        expect(nextEngineCanStart, isTrue);
+        expect(native.openEntered, isFalse);
+        final events = (await diagnosticEvents()).where(
+          (event) => event['sourceSessionId'] == session,
+        );
+        expect(
+          events.map((event) => event['event']),
+          contains('player.native_ready.end'),
+        );
+        expect(
+          events.map((event) => event['event']),
+          contains('player.renderer_ready.begin'),
+        );
+        expect(
+          events.map((event) => event['event']),
+          isNot(contains('player.renderer_ready.end')),
+        );
+        expect(
+          events.map((event) => event['event']),
+          isNot(contains('player.engine_open.begin')),
+        );
+      } finally {
+        native.renderer.complete();
+        await startup;
+        await nextEngine;
+      }
+      expect(native.openEntered, isTrue);
+      expect(player.opened, ['/saved/episode.mp4']);
+      final completed = (await diagnosticEvents()).where(
+        (event) => event['sourceSessionId'] == session,
+      );
+      expect(
+        completed.map((event) => event['event']),
+        contains('player.renderer_ready.end'),
+      );
+      expect(
+        completed.map((event) => event['event']),
+        contains('player.engine_open.end'),
+      );
+    },
+  );
+
+  test(
+    'late renderer readiness cannot enter an abandoned native open',
+    () async {
+      await appDiagnostics.setEnabled(true);
+      final native = _ReadinessNative();
+      player.native = native;
+      final episode = _episode(1);
+      final startup = controller.init(
+        player: player,
+        item: _item([episode]),
+        videoUrl: '/saved/episode.mp4',
+        episode: episode,
+      );
+      await native.readinessReached.future.timeout(const Duration(seconds: 1));
+      await flush();
+      final oldSession = controller.currentState.sourceSessionId;
+      final replacement = await replaceRoute();
+      native.renderer.complete();
+      await startup;
+      await flush();
+      expect(native.openEntered, isFalse);
+      expect(player.opened, isEmpty);
+      expect(replacement.opened, ['/saved/replacement.mp4']);
+      final events = (await diagnosticEvents()).where(
+        (event) => event['sourceSessionId'] == oldSession,
+      );
+      expect(
+        events.map((event) => event['event']),
+        contains('player.session_stale'),
+      );
+      expect(
+        events.map((event) => event['event']),
+        isNot(contains('player.engine_open.begin')),
+      );
+    },
+  );
+
+  test(
+    'startup diagnostics omit media secrets and only confirm position once',
+    () async {
+      await appDiagnostics.setEnabled(true);
+      final episode = _episode(1, url: 'private-episode-secret');
+      const secret = 'private-media-secret';
+      await controller.init(
+        player: player,
+        item: _item([episode]).copyWith(title: secret),
+        videoUrl: '/saved/$secret.mp4',
+        episode: episode,
+        selectedSource: const StreamResult(
+          url: '/saved/$secret.mp4',
+          source: secret,
+          headers: {'Authorization': 'Bearer private-token-secret'},
+        ),
+      );
+      final session = controller.currentState.sourceSessionId;
+      for (var seconds = 1; seconds <= 100; seconds++) {
+        player.advance(Duration(seconds: seconds));
+      }
+      final events = (await diagnosticEvents())
+          .where((event) => event['sourceSessionId'] == session)
+          .toList();
+      expect(
+        events.where((event) => event['event'] == 'player.first_position'),
+        hasLength(1),
+      );
+      final text = jsonEncode(events);
+      expect(text, isNot(contains(secret)));
+      expect(text, isNot(contains('private-token-secret')));
+      expect(text, isNot(contains('private-episode-secret')));
+      expect(text, isNot(contains('/saved/')));
+    },
+  );
+
+  test('engine failure diagnostics omit exception messages', () async {
+    await appDiagnostics.setEnabled(true);
+    final pending = Completer<void>();
+    player.pendingOpen = pending;
     final episode = _episode(1);
     final startup = controller.init(
       player: player,
       item: _item([episode]),
-      videoUrl: '/saved/episode.mp4',
+      videoUrl: '/saved/private-file-secret.mp4',
       episode: episode,
     );
-    await native.readinessReached.future.timeout(const Duration(seconds: 1));
     await flush();
-    final replacement = await replaceRoute();
-    native.renderer.complete();
+    final session = controller.currentState.sourceSessionId;
+    pending.completeError(
+      StateError(
+        'https://private.test/secret?token=private-token-secret /saved/private-file-secret.mp4',
+      ),
+    );
     await startup;
     await flush();
-    expect(native.openEntered, isFalse);
-    expect(player.opened, isEmpty);
-    expect(replacement.opened, ['/saved/replacement.mp4']);
+    final events = (await diagnosticEvents())
+        .where((event) => event['sourceSessionId'] == session)
+        .toList();
+    expect(
+      events.map((event) => event['event']),
+      contains('player.engine_open.error'),
+    );
+    final text = jsonEncode(events);
+    expect(text, isNot(contains('private.test')));
+    expect(text, isNot(contains('private-token-secret')));
+    expect(text, isNot(contains('private-file-secret')));
   });
 
   for (final pausing in [true, false]) {

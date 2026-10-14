@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
+import 'package:animewitcher/core/logger/app_diagnostics.dart';
 import 'package:animewitcher/features/player/presentation/player_teardown.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 
@@ -95,9 +99,44 @@ class _Native extends Fake implements NativePlayer {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  late Directory diagnosticsDirectory;
+  setUpAll(() async {
+    diagnosticsDirectory = await Directory.systemTemp.createTemp(
+      'teardown-diagnostics-',
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('plugins.flutter.io/path_provider'),
+          (_) async => diagnosticsDirectory.path,
+        );
+  });
+  tearDownAll(() async {
+    await appDiagnostics.setEnabled(false);
+    await appDiagnostics.flush();
+    await diagnosticsDirectory.delete(recursive: true);
+  });
+
+  Future<List<String>> diagnosticEventNames() async {
+    await appDiagnostics.flush();
+    final names = <String>[];
+    for (final file in await appDiagnostics.listFiles()) {
+      names.addAll(
+        (await file.readAsLines())
+            .where((line) => line.isNotEmpty)
+            .map(
+              (line) =>
+                  (jsonDecode(line) as Map<String, dynamic>)['event'] as String,
+            ),
+      );
+    }
+    return names;
+  }
+
   testWidgets('exit finishes when native stop remains behind a hung open', (
     tester,
   ) async {
+    await tester.runAsync(() => appDiagnostics.setEnabled(true));
     final pendingStop = Completer<void>();
     final player = _Player(pendingStop.future);
     var exited = false;
@@ -105,8 +144,17 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     expect(exited, isTrue);
     expect(player.stops, 1);
+    final timedOut = await tester.runAsync(diagnosticEventNames);
+    expect(timedOut, contains('player.teardown_stop.begin'));
+    expect(timedOut, contains('player.teardown_stop.timeout'));
+    expect(timedOut, isNot(contains('player.teardown_stop.end')));
     pendingStop.complete();
     await tester.pump();
+    expect(
+      await tester.runAsync(diagnosticEventNames),
+      contains('player.teardown_stop.end'),
+    );
+    await tester.runAsync(() => appDiagnostics.setEnabled(false));
   });
 
   for (final disposing in [false, true]) {

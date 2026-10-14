@@ -8,6 +8,13 @@ class MemoryStorageService extends StorageService {
   final Map<String, dynamic> settings = <String, dynamic>{};
 
   @override
+  bool getAppDiagnosticLog() => settings['app_diagnostic_log'] == true;
+  @override
+  Future<void> setAppDiagnosticLog(bool value) async {
+    settings['app_diagnostic_log'] = value;
+  }
+
+  @override
   bool getDownloadDiagnosticLog() =>
       settings['download_diagnostic_log'] == true;
   @override
