@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import 'widgets/download_log_dialog.dart';
+import 'widgets/app_log_dialog.dart';
 
 import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
@@ -267,7 +268,6 @@ class SettingsScreen extends ConsumerWidget {
               generalSettings.taskbarOrder,
               generalSettings.hiddenTaskbarItems,
             ),
-            isLast: !appLayoutsAvailable(context),
           ),
           if (appLayoutsAvailable(context))
             SettingsTile(
@@ -277,8 +277,26 @@ class SettingsScreen extends ConsumerWidget {
                   (ref.watch(appLayoutStyleProvider) ?? AppLayoutStyle.dock)
                       .label(arabic: isArabic),
               onTap: () => showAppLayoutPicker(context, ref),
-              isLast: true,
             ),
+          SettingsTile(
+            key: const ValueKey<String>('settings-app-diagnostic-log'),
+            icon: Icons.bug_report_outlined,
+            title: appText(
+              context,
+              english: 'App diagnostic log',
+              arabic: 'سجل التطبيق',
+            ),
+            subtitle: appText(
+              context,
+              english: 'Local diagnostics for app problems. Enable and export.',
+              arabic: 'تشخيص مشاكل التطبيق محليًا. اضغط للتفعيل والتصدير.',
+            ),
+            isLast: true,
+            onTap: () => showDialog<void>(
+              context: context,
+              builder: (_) => const AppLogDialog(),
+            ),
+          ),
         ],
       ),
       const SizedBox(height: LayoutConstants.spacingLg),

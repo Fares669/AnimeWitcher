@@ -17,6 +17,8 @@ import 'core/theme/theme_provider.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/storage/storage_service.dart';
+import 'core/logger/app_diagnostics.dart';
+import 'core/logger/app_diagnostic_observers.dart';
 
 import 'package:dynamic_color/dynamic_color.dart';
 
@@ -43,6 +45,7 @@ import 'core/account/account_providers.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  installAppDiagnosticErrorHandlers();
   await AppProgressiveHeaderBackdrop.preload();
   MediaKit.ensureInitialized();
 
@@ -173,6 +176,7 @@ class _AppRootState extends State<AppRoot> {
   }
 
   Future<void> _init() async {
+    final startupTimer = Stopwatch()..start();
     _storageService = StorageService();
     try {
       await Future.wait([
@@ -182,6 +186,11 @@ class _AppRootState extends State<AppRoot> {
             if (kDebugMode) debugPrint("Error setting high refresh rate: $e");
           }),
       ]);
+
+      unawaited(restoreAppDiagnosticPreference(
+        _storageService.getAppDiagnosticLog(),
+        startupTimer: startupTimer,
+      ));
 
       // Image widgets read the artwork quality switch directly, so publish it
       // (and the matching image cache budget) before the first screen paints.
@@ -209,6 +218,10 @@ class _AppRootState extends State<AppRoot> {
         unawaited(_refreshArtworkHostReachability());
       }
 
+      appDiagnostics.record(
+        'startup_phase', fields: const {'phase': 'artwork_ready'},
+      );
+
       if (Platform.isMacOS || Platform.isWindows) {
         final alwaysOnTop = _storageService.isAlwaysOnTop();
         await windowManager.setAlwaysOnTop(alwaysOnTop);
@@ -218,8 +231,13 @@ class _AppRootState extends State<AppRoot> {
         setState(() {
           _initialized = true;
         });
+        appDiagnostics.record('startup_phase', fields: {
+          'phase': 'app_ready',
+          'duration_ms': startupTimer.elapsedMilliseconds,
+        });
       }
     } catch (e, stack) {
+      appDiagnostics.recordError('startup_error', e, stack);
       if (mounted) {
         setState(() {
           _error = e;
@@ -273,6 +291,7 @@ class _AppRootState extends State<AppRoot> {
     }
 
     return ProviderScope(
+      observers: [AppDiagnosticProviderObserver()],
       overrides: [storageServiceProvider.overrideWithValue(_storageService)],
       child: const MyApp(),
     );
@@ -329,6 +348,10 @@ class _MyAppState extends ConsumerState<MyApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    appDiagnostics.record('lifecycle', fields: {'state': state.name});
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      unawaited(appDiagnostics.flush());
+    }
     if (state != AppLifecycleState.resumed) return;
     final account = ref
         .read(animeWitcherAccountControllerProvider)
