@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import 'dart:io';
 
 import '../domain/entity/multimedia_item.dart';
+import '../logger/app_diagnostics.dart';
 import '../services/download_concurrency.dart';
 import '../services/download_parallel.dart';
 import '../utils/safe_uri.dart';
@@ -57,7 +58,9 @@ class StorageService {
   Future<Box<dynamic>> _safeOpenBox(String boxName) async {
     try {
       return await Hive.openBox<dynamic>(boxName);
-    } catch (e) {
+    } catch (e, stack) {
+      appDiagnostics.recordError('service_error', e, stack,
+          fields: {'area': 'storage', 'operation': 'open'});
       if (kDebugMode) {
         debugPrint(
           "Error opening Hive box '$boxName': $e. Attempting recovery before deleting...",
@@ -76,13 +79,18 @@ class StorageService {
           salvaged[key] = recoveryBox.get(key);
         }
         await recoveryBox.close();
-      } catch (_) {
+      } catch (error, recoveryStack) {
+        appDiagnostics.recordError('service_error', error, recoveryStack,
+            fields: {'area': 'storage', 'operation': 'recovery'});
         // Box is unreadable even with crash recovery — salvaged stays empty.
       }
 
       try {
         await Hive.deleteBoxFromDisk(boxName);
-      } catch (_) {}
+      } catch (error, resetStack) {
+        appDiagnostics.recordError('service_error', error, resetStack,
+            fields: {'area': 'storage', 'operation': 'dispose'});
+      }
 
       final fresh = await Hive.openBox<dynamic>(boxName);
 
@@ -635,6 +643,15 @@ class StorageService {
             as bool?) ??
         true;
   }
+
+  // --- App diagnostics ---
+
+  Future<void> setAppDiagnosticLog(bool value) async {
+    await _settingsBox.put('app_diagnostic_log', value);
+  }
+
+  bool getAppDiagnosticLog() =>
+      _settingsBox.get('app_diagnostic_log') == true;
 
   // --- Download queue ---
 
