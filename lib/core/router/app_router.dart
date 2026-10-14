@@ -19,7 +19,6 @@ import '../../shared/widgets/app_scaffold.dart';
 import '../storage/settings_repository.dart';
 import '../extensions/base_provider.dart';
 import '../navigation/taskbar_destination.dart';
-import '../logger/app_diagnostic_observers.dart';
 
 part 'app_router.g.dart';
 
@@ -328,14 +327,12 @@ GoRouter appRouter(Ref ref) {
     repository.getHiddenTaskbarItems(),
   );
 
-  final router = GoRouter(
+  return GoRouter(
     initialLocation: initial,
     navigatorKey: rootNavigatorKey,
     debugLogDiagnostics: kDebugMode,
     routes: $appRoutes,
   );
-  ref.onDispose(observeDiagnosticNavigation(router));
-  return router;
 }
 
 // End of Routes

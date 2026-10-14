@@ -4,8 +4,6 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
-import '../network/app_diagnostic_interceptor.dart';
-
 import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
 
@@ -25,9 +23,7 @@ class FirebaseStorageRestClient {
               sendTimeout: const Duration(seconds: 45),
               headers: const <String, String>{'Accept': 'application/json'},
             ),
-          ) {
-    attachAppDiagnosticInterceptor(_dio, operation: 'account_http');
-  }
+          );
 
   final Dio _dio;
   final String _storageBucket;
