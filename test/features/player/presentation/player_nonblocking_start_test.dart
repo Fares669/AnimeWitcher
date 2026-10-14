@@ -88,6 +88,7 @@ class _Player extends Fake implements media.Player {
 class _ReadinessNative extends Fake implements media.NativePlayer {
   final renderer = Completer<void>();
   final readinessReached = Completer<void>();
+  final firstPropertyWrite = Completer<void>();
   bool openEntered = false;
   bool pauseEntered = false;
   bool playEntered = false;
@@ -115,6 +116,7 @@ class _ReadinessNative extends Fake implements media.NativePlayer {
   }) async {
     propertyWrites++;
     properties[property] = value;
+    if (!firstPropertyWrite.isCompleted) firstPropertyWrite.complete();
     await pendingProperties?.future;
   }
 
@@ -703,7 +705,7 @@ void main() {
       episode: episode,
     );
     try {
-      await flush();
+      await native.firstPropertyWrite.future.timeout(const Duration(seconds: 2));
       expect(native.propertyWrites, 1);
       final events = (await diagnosticEvents()).where(
         (event) => event['sourceSessionId'] == controller.currentState.sourceSessionId,
