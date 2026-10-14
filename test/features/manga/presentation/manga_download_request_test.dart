@@ -11,9 +11,9 @@ import 'package:animewitcher/core/services/download_v2/background_downloader_gat
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_manifest_v2.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
+import 'package:animewitcher/core/storage/download_persistence_worker.dart';
 import 'package:animewitcher/features/manga/presentation/manga_details_state.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 
 import '../../../core/services/download_v2/download_v2_test_support.dart';
 import '../../../support/memory_storage_service.dart';
@@ -37,9 +37,8 @@ void main() {
   test('existing completed hashed chapter keeps its stored path in refreshed metadata', () async {
     final root = await Directory.systemTemp.createTemp('aw-manga-stored-path-');
     PathProviderPlatform.instance = _FakePathProviderPlatform(root.path);
-    Hive.init(root.path);
-    final box = await Hive.openBox<dynamic>(StorageService.kDownloadMetadataBox);
-    addTearDown(() async { await box.close(); await root.delete(recursive: true); });
+    final worker = DownloadPersistenceWorker.forDirectory(root.path);
+    addTearDown(() async { await worker.close(); await root.delete(recursive: true); });
     final manga = MultimediaItem(title: 'Renamed title', url: '/manga', posterUrl: '',
       contentType: MultimediaContentType.manga, provider: 'animewitcher.native', syncData: const {'mangaId': 'm1'});
     const chapter = MangaChapter(id: '357', mangaId: 'm1', url: '/chapter', name: 'Chapter 357', number: 357);
@@ -53,7 +52,7 @@ void main() {
       logicalId: id, mediaKind: DownloadMediaKind.mangaChapter, mediaId: 'm1', unitKey: '357', variantKey: 'pages',
       generation: 1, taskId: taskIdForGeneration(id, 1), intent: DownloadUserIntent.active,
       destinationPath: oldPath, sourceDescriptor: const {}, completedAtMillis: 1, updatedAtMillis: 1));
-    final storage = MemoryStorageService();
+    final storage = MemoryStorageService(downloadPersistenceWorker: worker);
     await storage.saveDownloadMetadata(id.value, manga, trackingUrl: chapter.url,
       filePath: oldPath, logicalId: id.value);
     final manager = DownloadManagerV2(store: store, gateway: _MissingChapterGateway(), sourceResolver: StaticSourceResolverV2());
@@ -78,12 +77,9 @@ void main() {
         final root = await Directory.systemTemp.createTemp(
           'aw-manga-metadata-',
         );
-        Hive.init(root.path);
-        final box = await Hive.openBox<dynamic>(
-          StorageService.kDownloadMetadataBox,
-        );
+        final worker = DownloadPersistenceWorker.forDirectory(root.path);
         addTearDown(() async {
-          await box.close();
+          await worker.close();
           await root.delete(recursive: true);
         });
         final manga = MultimediaItem(
@@ -137,7 +133,7 @@ void main() {
             updatedAtMillis: 1,
           ),
         );
-        final storage = MemoryStorageService();
+        final storage = MemoryStorageService(downloadPersistenceWorker: worker);
         if (hasMetadata) {
           await storage.saveDownloadMetadata(
             logicalId.value,

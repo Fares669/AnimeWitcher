@@ -138,7 +138,6 @@ class _Playback extends PlaybackLauncher {
     MultimediaItem? detailedItem,
     Episode? episode,
     StreamResult? preselectedSource,
-    bool loadEpisodeArtwork = false,
     Future<String?> Function()? resolveUrl,
     Future<void> Function()? onMissingFile,
   }) async {

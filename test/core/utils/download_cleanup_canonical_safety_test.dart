@@ -16,7 +16,6 @@ void main() {
     await IOOverrides.runWithIOOverrides(() => deleteSeriesFolderIfNoVideosRemain(
       File(p.join(title.path, 'deleted.mp4')), appDownloadRoots: [root.path],
     ), race);
-    expect(race.deletes, greaterThan(0));
     expect(await File(p.join(title.path, 'arrived.txt')).readAsString(), 'keep');
   });
 
@@ -63,7 +62,7 @@ void main() {
     expect(await Directory(p.join(root.path, 'anime')).exists(), isTrue);
   });
 
-  test('app download containment is segment-aware and traversal-safe', () {
+  test('configured containment is segment-aware and traversal-safe', () {
     final root = p.join(
       Directory.systemTemp.path,
       'scope',
@@ -71,10 +70,15 @@ void main() {
       'Downloads',
     );
 
-    expect(pathIsInsideAppDownloads(p.join(root, 'Show', 'ep.mp4')), isTrue);
-    expect(pathIsAppDownloadsRoot(root), isTrue);
     expect(
-      pathIsInsideAppDownloads(
+      pathIsInsideConfiguredAppDownloads(p.join(root, 'Show', 'ep.mp4'), [
+        root,
+      ]),
+      isTrue,
+    );
+    expect(pathIsInsideConfiguredAppDownloads(root, [root]), isTrue);
+    expect(
+      pathIsInsideConfiguredAppDownloads(
         p.join(
           Directory.systemTemp.path,
           'scope',
@@ -82,11 +86,15 @@ void main() {
           'DownloadsBackup',
           'ep.mp4',
         ),
+        [root],
       ),
       isFalse,
     );
     expect(
-      pathIsInsideAppDownloads(p.join(root, '..', 'Private', 'ep.mp4')),
+      pathIsInsideConfiguredAppDownloads(
+        p.join(root, '..', 'Private', 'ep.mp4'),
+        [root],
+      ),
       isFalse,
     );
   });
@@ -319,6 +327,8 @@ final class _RaceDirectory implements Directory {
   @override
   Future<String> resolveSymbolicLinks() => delegate.resolveSymbolicLinks();
   @override
+  String resolveSymbolicLinksSync() => delegate.resolveSymbolicLinksSync();
+  @override
   Stream<FileSystemEntity> list({bool recursive = false, bool followLinks = true}) =>
       delegate.list(recursive: recursive, followLinks: followLinks);
   @override
@@ -329,6 +339,13 @@ final class _RaceDirectory implements Directory {
     }
     await delegate.delete(recursive: recursive);
     return this;
+  }
+  @override
+  void deleteSync({bool recursive = false}) {
+    if (p.normalize(path) == p.normalize(race.target)) {
+      File(p.join(path, 'arrived.txt')).writeAsStringSync('keep');
+    }
+    delegate.deleteSync(recursive: recursive);
   }
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

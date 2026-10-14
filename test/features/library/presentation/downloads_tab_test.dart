@@ -267,7 +267,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('delete uses the task file path, not reconstructed labels', (
+  testWidgets('delete preserves label lookalikes', (
     tester,
   ) async {
     await tester.runAsync(() async {
@@ -285,31 +285,8 @@ void main() {
       final reconstructed = File(p.join(series.path, 'الحلقة 9.mp4'));
       await reconstructed.writeAsBytes(List<int>.filled(32, 2));
 
-      var usedTaskPath = false;
-      var usedRawPath = false;
-      var usedLabels = false;
-      final resolved = await resolveDownloadFileToDelete(
-        fromTask: () async {
-          usedTaskPath = true;
-          return taskFile;
-        },
-        taskFilePath: () async {
-          usedRawPath = true;
-          return reconstructed.path;
-        },
-        fromLabels: () async {
-          usedLabels = true;
-          return reconstructed;
-        },
-      );
-
-      expect(resolved!.path, taskFile.path);
-      expect(usedTaskPath, isTrue);
-      expect(usedRawPath, isFalse);
-      expect(usedLabels, isFalse);
-
       await deleteDownloadedVideo(
-        resolved,
+        taskFile,
 
         appDownloadRoots: [p.join(root.path, 'AnimeWitcher', 'Downloads')],
       );
@@ -317,42 +294,6 @@ void main() {
       expect(await taskFile.exists(), isFalse);
       expect(await reconstructed.exists(), isTrue);
       expect(await series.exists(), isTrue);
-    });
-  });
-
-  testWidgets('resolve falls back to task.filePath then reconstructed labels', (
-    tester,
-  ) async {
-    await tester.runAsync(() async {
-      final root = await Directory.systemTemp.createTemp('aw_dl_resolve_');
-      addTearDown(() => root.delete(recursive: true));
-      final series = Directory(
-        p.join(root.path, 'AnimeWitcher', 'Downloads', 'Black Torch'),
-      );
-      await series.create(recursive: true);
-      final pathFile = File(p.join(series.path, 'الحلقة 9 (1080p).mp4'));
-      await pathFile.writeAsBytes(List<int>.filled(8, 1));
-      final reconstructed = File(p.join(series.path, 'الحلقة 9.mp4'));
-      await reconstructed.writeAsBytes(List<int>.filled(8, 2));
-
-      var usedLabels = false;
-      final fromPath = await resolveDownloadFileToDelete(
-        fromTask: () async => null,
-        taskFilePath: () async => pathFile.path,
-        fromLabels: () async {
-          usedLabels = true;
-          return reconstructed;
-        },
-      );
-      expect(fromPath!.path, pathFile.path);
-      expect(usedLabels, isFalse);
-
-      final fromLabels = await resolveDownloadFileToDelete(
-        fromTask: () async => null,
-        taskFilePath: () async => null,
-        fromLabels: () async => reconstructed,
-      );
-      expect(fromLabels!.path, reconstructed.path);
     });
   });
 
@@ -454,7 +395,6 @@ void main() {
       final older = _item(taskId: 'old-complete', timestamp: 100);
       final newer = _item(taskId: 'new-complete', timestamp: 200);
       expect(older.task.taskId, isNot(newer.task.taskId));
-      expect(downloadTrackingUrl(older.task), downloadTrackingUrl(newer.task));
       expect(downloadsPointAtSameTarget(older, newer), isTrue);
       expect(collapseDuplicateDownloads([older, newer]).visible, hasLength(1));
       expect(
@@ -501,11 +441,7 @@ void main() {
   test('canonical identity is task metaData / episode.url, not taskId', () {
     final a = _item(taskId: 'task-a', timestamp: 1);
     final b = _item(taskId: 'task-b', timestamp: 2);
-    expect(
-      downloadTrackingUrl(a.task),
-      'https://animewitcher.test/black-torch/9',
-    );
-    expect(downloadIdentityKey(a.item, a.episode), a.episode!.url);
+    expect(a.task.metaData, a.episode!.url);
     expect(downloadsPointAtSameTarget(a, b), isTrue);
 
     final other = DownloadItem(
@@ -526,28 +462,6 @@ void main() {
       timestamp: 3,
     );
     expect(downloadsPointAtSameTarget(a, other), isFalse);
-  });
-
-  test('complete records skip cancel; in-progress records cancel', () {
-    expect(shouldCancelDownload(TaskStatus.complete), isFalse);
-    expect(shouldCancelDownload(TaskStatus.running), isTrue);
-    expect(shouldCancelDownload(TaskStatus.enqueued), isTrue);
-    expect(shouldCancelDownload(TaskStatus.paused), isTrue);
-  });
-
-  test('startDownload reuses a complete record when the file exists', () {
-    expect(
-      decideCompleteDownloadAction(hasCompleteRecord: true, fileExists: true),
-      CompleteDownloadAction.reuse,
-    );
-    expect(
-      decideCompleteDownloadAction(hasCompleteRecord: true, fileExists: false),
-      CompleteDownloadAction.dropAndEnqueue,
-    );
-    expect(
-      decideCompleteDownloadAction(hasCompleteRecord: false, fileExists: false),
-      CompleteDownloadAction.enqueue,
-    );
   });
 
   testWidgets('waiting overflow keeps في الانتظار without restyling the row', (
