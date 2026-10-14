@@ -14,8 +14,9 @@ import 'package:path/path.dart' as p;
 
 import 'dart:io';
 
+import 'download_persistence_worker.dart';
+
 import '../domain/entity/multimedia_item.dart';
-import '../logger/app_diagnostics.dart';
 import '../services/download_concurrency.dart';
 import '../services/download_parallel.dart';
 import '../utils/safe_uri.dart';
@@ -28,6 +29,22 @@ StorageService storageService(Ref ref) {
 }
 
 class StorageService {
+  StorageService({DownloadPersistenceWorker? downloadPersistenceWorker})
+    : _downloadPersistenceWorker = downloadPersistenceWorker == null
+          ? null
+          : Future.value(downloadPersistenceWorker);
+
+  Future<DownloadPersistenceWorker>? _downloadPersistenceWorker;
+
+  Future<dynamic> _downloadMetadata(
+    String operation,
+    List<Object?> arguments,
+  ) async {
+    final worker = await (_downloadPersistenceWorker ??=
+        DownloadPersistenceWorker.application());
+    return worker.run(operation, <Object?>[kDownloadMetadataBox, ...arguments]);
+  }
+
   late Box<dynamic> _libraryBox;
   late Box<dynamic> _settingsBox;
   late Box<dynamic> _extensionsBox;
@@ -47,9 +64,7 @@ class StorageService {
     _libraryBox = await _safeOpenBox(kLibraryBox);
     _settingsBox = await _safeOpenBox(kSettingsBox);
     _extensionsBox = await _safeOpenBox(kExtensionsBox);
-    await _safeOpenBox(
-      kDownloadMetadataBox,
-    ); // Open but no need to keep late reference if we use Hive.box()
+    await _downloadMetadata('hive.safeOpen', []);
     await initHistory();
     _continueWatchingBox = await _safeOpenBox(kContinueWatchingBox);
     await _migrateContinueWatchingStorage();
@@ -58,9 +73,7 @@ class StorageService {
   Future<Box<dynamic>> _safeOpenBox(String boxName) async {
     try {
       return await Hive.openBox<dynamic>(boxName);
-    } catch (e, stack) {
-      appDiagnostics.recordError('service_error', e, stack,
-          fields: {'area': 'storage', 'operation': 'open'});
+    } catch (e) {
       if (kDebugMode) {
         debugPrint(
           "Error opening Hive box '$boxName': $e. Attempting recovery before deleting...",
@@ -79,18 +92,13 @@ class StorageService {
           salvaged[key] = recoveryBox.get(key);
         }
         await recoveryBox.close();
-      } catch (error, recoveryStack) {
-        appDiagnostics.recordError('service_error', error, recoveryStack,
-            fields: {'area': 'storage', 'operation': 'recovery'});
+      } catch (_) {
         // Box is unreadable even with crash recovery — salvaged stays empty.
       }
 
       try {
         await Hive.deleteBoxFromDisk(boxName);
-      } catch (error, resetStack) {
-        appDiagnostics.recordError('service_error', error, resetStack,
-            fields: {'area': 'storage', 'operation': 'dispose'});
-      }
+      } catch (_) {}
 
       final fresh = await Hive.openBox<dynamic>(boxName);
 
@@ -643,15 +651,6 @@ class StorageService {
             as bool?) ??
         true;
   }
-
-  // --- App diagnostics ---
-
-  Future<void> setAppDiagnosticLog(bool value) async {
-    await _settingsBox.put('app_diagnostic_log', value);
-  }
-
-  bool getAppDiagnosticLog() =>
-      _settingsBox.get('app_diagnostic_log') == true;
 
   // --- Download queue ---
 
@@ -1450,24 +1449,28 @@ class StorageService {
     double? lastProgress,
     int? lastExpectedBytes,
   }) async {
-    final box = await Hive.openBox<dynamic>(kDownloadMetadataBox);
-    await box.put(taskId, {
-      'item': item.toJson(),
-      'episode': episode?.toJson(),
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-      if (trackingUrl != null && trackingUrl.isNotEmpty)
-        'trackingUrl': trackingUrl,
-      if (filePath != null && filePath.isNotEmpty) 'filePath': filePath,
-      if (logicalId != null && logicalId.trim().isNotEmpty)
-        'logicalId': logicalId.trim(),
-      if (taskSnapshot != null)
-        'taskSnapshot': Map<String, dynamic>.from(taskSnapshot),
-      if (queueWaiting != null) kDownloadQueueWaitingMetadataKey: queueWaiting,
-      if (userPaused != null) kDownloadUserPausedMetadataKey: userPaused,
-      if (lastProgress != null) kDownloadLastProgressMetadataKey: lastProgress,
-      if (lastExpectedBytes != null)
-        kDownloadLastExpectedBytesMetadataKey: lastExpectedBytes,
-    });
+    await _downloadMetadata('hive.put', [
+      taskId,
+      {
+        'item': item.toJson(),
+        'episode': episode?.toJson(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        if (trackingUrl != null && trackingUrl.isNotEmpty)
+          'trackingUrl': trackingUrl,
+        if (filePath != null && filePath.isNotEmpty) 'filePath': filePath,
+        if (logicalId != null && logicalId.trim().isNotEmpty)
+          'logicalId': logicalId.trim(),
+        if (taskSnapshot != null)
+          'taskSnapshot': Map<String, dynamic>.from(taskSnapshot),
+        if (queueWaiting != null)
+          kDownloadQueueWaitingMetadataKey: queueWaiting,
+        if (userPaused != null) kDownloadUserPausedMetadataKey: userPaused,
+        if (lastProgress != null)
+          kDownloadLastProgressMetadataKey: lastProgress,
+        if (lastExpectedBytes != null)
+          kDownloadLastExpectedBytesMetadataKey: lastExpectedBytes,
+      },
+    ]);
   }
 
   Future<void> patchDownloadMetadata(
@@ -1481,10 +1484,7 @@ class StorageService {
     double? lastProgress,
     int? lastExpectedBytes,
   }) async {
-    final box = await Hive.openBox<dynamic>(kDownloadMetadataBox);
-    final data = box.get(taskId);
-    if (data == null) return;
-    final map = Map<String, dynamic>.from(data as Map);
+    final map = <String, dynamic>{};
     if (trackingUrl != null && trackingUrl.isNotEmpty) {
       map['trackingUrl'] = trackingUrl;
     }
@@ -1509,22 +1509,21 @@ class StorageService {
     if (lastExpectedBytes != null) {
       map[kDownloadLastExpectedBytesMetadataKey] = lastExpectedBytes;
     }
-    await box.put(taskId, map);
+    await _downloadMetadata('hive.patch', [taskId, map]);
   }
 
   Future<Map<String, dynamic>?> getDownloadMetadata(String taskId) async {
-    final box = await Hive.openBox<dynamic>(kDownloadMetadataBox);
-    final data = box.get(taskId);
+    final data = await _downloadMetadata('hive.get', [taskId]);
     if (data == null) return null;
     return Map<String, dynamic>.from(data as Map);
   }
 
   Future<Map<String, Map<String, dynamic>>> getAllDownloadMetadata() async {
-    final box = await Hive.openBox<dynamic>(kDownloadMetadataBox);
+    final rows = await _downloadMetadata('hive.all', []) as Map;
     final result = <String, Map<String, dynamic>>{};
-    for (final key in box.keys) {
+    for (final key in rows.keys) {
       if (key is! String) continue;
-      final raw = box.get(key);
+      final raw = rows[key];
       if (raw is! Map) continue;
       result[key] = Map<String, dynamic>.from(raw);
     }
@@ -1532,8 +1531,7 @@ class StorageService {
   }
 
   Future<void> removeDownloadMetadata(String taskId) async {
-    final box = await Hive.openBox<dynamic>(kDownloadMetadataBox);
-    await box.delete(taskId);
+    await _downloadMetadata('hive.delete', [taskId]);
   }
 
   Future<void> deleteAllData() async {
@@ -1549,7 +1547,7 @@ class StorageService {
       await clearPreferences();
 
       try {
-        await Hive.deleteBoxFromDisk(kDownloadMetadataBox);
+        await _downloadMetadata('hive.deleteBox', []);
       } catch (_) {}
 
       // Clear Cache Manager (Images)
