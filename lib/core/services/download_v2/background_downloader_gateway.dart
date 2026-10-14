@@ -11,6 +11,8 @@ import 'package:path_provider/path_provider.dart';
 import '../download_concurrency.dart';
 import '../download_parallel.dart';
 import '../persistent_parallel_download.dart';
+import '../../utils/local_file_io.dart';
+import 'download_persistent_storage_v2.dart';
 import 'download_v2_diagnostics.dart';
 import 'download_v2_models.dart';
 import 'download_v2_identity.dart';
@@ -204,7 +206,7 @@ final class PackageBackgroundDownloaderGateway
     Future<DownloadRangeCapabilityV2> Function(DownloadTaskSpecV2 spec)?
     rangeCapabilityProbe,
     DownloadDiagnosticsV2? diagnostics,
-  }) : _downloader = downloader ?? FileDownloader(),
+  }) : _downloader = downloader ?? configuredFileDownloaderV2(),
        _notificationPreferences =
            notificationPreferences ?? (() => const DownloadNotificationPrefs()),
        _initializePackage = initializePackage,
@@ -497,10 +499,7 @@ final class PackageBackgroundDownloaderGateway
     final roots = <Directory>[await _privateParallelCheckpointRootV2()];
     final documents = await getApplicationDocumentsDirectory();
     final legacyRoot = Directory(p.join(documents.path, 'Downloads'));
-    final legacyType = await FileSystemEntity.type(
-      legacyRoot.path,
-      followLinks: false,
-    );
+    final legacyType = await localPathType(legacyRoot.path);
     if (legacyType != FileSystemEntityType.notFound &&
         legacyType != FileSystemEntityType.directory) {
       throw FileSystemException(
@@ -922,7 +921,7 @@ Future<Directory> _privateParallelCheckpointRootV2() async {
     p.join(support.path, 'download_v2'),
     root.path,
   ]) {
-    final type = await FileSystemEntity.type(path, followLinks: false);
+    final type = await localPathType(path);
     if (type != FileSystemEntityType.notFound &&
         type != FileSystemEntityType.directory) {
       throw FileSystemException(
@@ -940,7 +939,7 @@ Future<File> privateParallelManifestFileV2(DownloadTask task) async {
   final directory = Directory(
     p.join(root.path, sha256.convert(utf8.encode(task.taskId)).toString()),
   );
-  final type = await FileSystemEntity.type(directory.path, followLinks: false);
+  final type = await localPathType(directory.path);
   if (type != FileSystemEntityType.notFound &&
       type != FileSystemEntityType.directory) {
     throw FileSystemException(
@@ -950,7 +949,7 @@ Future<File> privateParallelManifestFileV2(DownloadTask task) async {
   }
   final manifest = File(p.join(directory.path, 'manifest.json'));
   for (final path in [manifest.path, '${manifest.path}.tmp']) {
-    final type = await FileSystemEntity.type(path, followLinks: false);
+    final type = await localPathType(path);
     if (type != FileSystemEntityType.notFound &&
         type != FileSystemEntityType.file) {
       throw FileSystemException(

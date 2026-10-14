@@ -11,8 +11,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../network/poster_cache.dart';
-import '../../logger/app_diagnostics.dart';
 import '../../utils/image_fallbacks.dart';
+import '../../utils/local_file_io.dart';
 import 'download_continued_processing_v2.dart';
 import 'download_v2_models.dart';
 import 'download_v2_identity.dart';
@@ -34,7 +34,7 @@ final class DownloadArtworkStoreV2 {
        _publishFile =
            publishFile ??
            ((file, path) async {
-             await file.rename(path);
+             await runLocalFileIo(() => file.renameSync(path));
            });
 
   static const int _maxBytes = 10 * 1024 * 1024;
@@ -54,8 +54,10 @@ final class DownloadArtworkStoreV2 {
 
   Future<Directory> _support() async {
     final directory = await _supportDirectory().timeout(_fetchTimeout);
-    await directory.create(recursive: true);
-    return Directory(await directory.resolveSymbolicLinks());
+    return runLocalFileIo(() {
+      directory.createSync(recursive: true);
+      return Directory(directory.resolveSymbolicLinksSync());
+    });
   }
 
   Future<Directory?> _childDirectory(
@@ -63,17 +65,19 @@ final class DownloadArtworkStoreV2 {
     String leaf, {
     bool create = false,
   }) async {
-    final directory = Directory(p.join(parent.path, leaf));
-    var type = await FileSystemEntity.type(directory.path, followLinks: false);
-    if (type == FileSystemEntityType.notFound && create) {
-      await directory.create();
-      type = await FileSystemEntity.type(directory.path, followLinks: false);
-    }
-    if (type != FileSystemEntityType.directory ||
-        !p.equals(await directory.resolveSymbolicLinks(), directory.path)) {
-      return null;
-    }
-    return directory;
+    return runLocalFileIo(() {
+      final directory = Directory(p.join(parent.path, leaf));
+      var type = FileSystemEntity.typeSync(directory.path, followLinks: false);
+      if (type == FileSystemEntityType.notFound && create) {
+        directory.createSync();
+        type = FileSystemEntity.typeSync(directory.path, followLinks: false);
+      }
+      if (type != FileSystemEntityType.directory ||
+          !p.equals(directory.resolveSymbolicLinksSync(), directory.path)) {
+        return null;
+      }
+      return directory;
+    });
   }
 
   Future<Directory?> _ownedDirectory(
@@ -102,18 +106,22 @@ final class DownloadArtworkStoreV2 {
       final directory = Directory(
         p.join(support.path, 'download_episode_artwork'),
       );
-      final type = await FileSystemEntity.type(
-        directory.path,
-        followLinks: false,
-      );
-      if (type != FileSystemEntityType.notFound &&
-          (type != FileSystemEntityType.directory ||
-              !p.equals(
-                await directory.resolveSymbolicLinks(),
-                directory.path,
-              ))) {
-        return null;
-      }
+      final safe = await runLocalFileIo(() {
+        final type = FileSystemEntity.typeSync(
+          directory.path,
+          followLinks: false,
+        );
+        if (type != FileSystemEntityType.notFound &&
+            (type != FileSystemEntityType.directory ||
+                !p.equals(
+                  directory.resolveSymbolicLinksSync(),
+                  directory.path,
+                ))) {
+          return false;
+        }
+        return true;
+      });
+      if (!safe) return null;
       final key = sha1.convert(taskId.codeUnits).toString();
       return File(p.join(directory.path, '$key.img'));
     } catch (_) {
@@ -183,10 +191,6 @@ final class DownloadArtworkStoreV2 {
     if (!allowed()) return null;
     final saved = await existing(logicalId, kind);
     if (!allowed()) return null;
-    appDiagnostics.record('artwork.lookup', fields: {
-      'phase': kind.name,
-      'result': saved == null ? 'missing' : 'hit',
-    });
     if (saved != null) return saved;
     final key = '$logicalId:${kind.name}';
     final candidates = <String>{
@@ -316,9 +320,10 @@ final class DownloadArtworkStoreV2 {
     final parent = await _ownedDirectory(logicalId);
     return parent != null &&
         p.equals(parent.path, staging.parent.path) &&
-        await FileSystemEntity.type(staging.path, followLinks: false) ==
-            FileSystemEntityType.directory &&
-        p.equals(await staging.resolveSymbolicLinks(), staging.path);
+        await runLocalFileIo(() =>
+            FileSystemEntity.typeSync(staging.path, followLinks: false) ==
+                FileSystemEntityType.directory &&
+            p.equals(staging.resolveSymbolicLinksSync(), staging.path));
   }
 
   Future<void> _waitForPublication(String logicalId) =>
@@ -338,7 +343,7 @@ final class DownloadArtworkStoreV2 {
           !p.equals(directory.path, target.parent.path) ||
           !await _ownedStaging(logicalId, temporary.parent))
         return null;
-      final type = await FileSystemEntity.type(target.path, followLinks: false);
+      final type = await localPathType(target.path);
       // Check after the last awaited stat, immediately before issuing rename.
       if (!allowed() ||
           (type != FileSystemEntityType.notFound &&
@@ -351,9 +356,9 @@ final class DownloadArtworkStoreV2 {
       final checked = await _ownedDirectory(logicalId);
       if (checked != null &&
           p.equals(checked.path, target.parent.path) &&
-          await FileSystemEntity.type(target.path, followLinks: false) ==
+          await localPathType(target.path) ==
               FileSystemEntityType.file) {
-        await target.delete();
+        await localDelete(target);
       }
       return null;
     });
@@ -377,13 +382,16 @@ final class DownloadArtworkStoreV2 {
         // Fetches never hold this barrier; only an already-issued publication.
         await _waitForPublication(logicalId);
         final directory = await _ownedDirectory(logicalId);
-        if (directory != null) await directory.delete(recursive: true);
+        if (directory != null) {
+          await localDelete(directory, recursive: true);
+        }
         if (legacyTaskId != null) {
           final legacy = await legacyFileFor(legacyTaskId);
           if (legacy != null &&
-              await FileSystemEntity.type(legacy.path, followLinks: false) ==
-                  FileSystemEntityType.file)
-            await legacy.delete();
+              await localPathType(legacy.path) ==
+                  FileSystemEntityType.file) {
+            await localDelete(legacy);
+          }
         }
       } catch (_) {}
     });
@@ -619,10 +627,6 @@ final class DownloadArtworkObserverV2
               : const [],
           legacyTaskId: source.legacyTaskId,
         );
-        appDiagnostics.record('artwork.capture', fields: {
-          'phase': kind.name,
-          'result': saved == null ? 'missing' : 'hit',
-        });
         final candidates = kind == DownloadArtworkKindV2.episode
             ? [source.episodeUrl, source.bannerUrl, source.posterUrl]
             : [source.posterUrl];
