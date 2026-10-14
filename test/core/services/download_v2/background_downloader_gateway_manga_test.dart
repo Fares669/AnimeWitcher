@@ -2,9 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
+import 'package:animewitcher/core/services/download_v2/download_persistent_storage_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/manga_chapter_transport_v2.dart';
+import 'package:animewitcher/core/storage/download_persistence_worker.dart';
 import 'package:background_downloader/background_downloader.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
@@ -13,19 +16,41 @@ import '../../../support/manga_image_fixtures.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final originalPathProvider = PathProviderPlatform.instance;
+  late Directory root;
+  const connectivity = MethodChannel('dev.fluttercommunity.plus/connectivity');
+  const connectivityStatus =
+      MethodChannel('dev.fluttercommunity.plus/connectivity_status');
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+  setUpAll(() async {
+    root = await Directory.systemTemp.createTemp('aw_manga_gateway_');
+    messenger.setMockMethodCallHandler(connectivity, (_) async => ['none']);
+    messenger.setMockMethodCallHandler(connectivityStatus, (_) async => null);
+  });
+
+  tearDownAll(() async {
+    configuredFileDownloaderV2().destroy();
+    await DownloadPersistenceWorker.forDirectory('${root.path}/support').close();
+    PathProviderPlatform.instance = originalPathProvider;
+    messenger.setMockMethodCallHandler(connectivity, null);
+    messenger.setMockMethodCallHandler(connectivityStatus, null);
+    await root.delete(recursive: true);
+  });
 
   setUp(() {
-    PathProviderPlatform.instance = _MangaTestPathProvider();
+    PathProviderPlatform.instance = _MangaTestPathProvider(root.path);
   });
 
-  tearDown(() {
-    PathProviderPlatform.instance = originalPathProvider;
-  });
-  test('production background gateway exposes manga chapter transport', () {
+  test('production background gateway exposes manga chapter transport', () async {
     final gateway = PackageBackgroundDownloaderGateway(
       initializePackage: () async {},
     );
 
+    final downloader = configuredFileDownloaderV2();
+    expect(await downloader.ready, isTrue);
+    expect(downloader.database.storage, isA<DownloadPersistentStorageV2>());
+    expect(configuredFileDownloaderV2(), same(downloader));
     expect(gateway, isA<MangaChapterGatewayV2>());
   });
 
@@ -208,6 +233,16 @@ final class _PausedHandle implements DownloadTransportHandle {
 }
 
 final class _MangaTestPathProvider extends PathProviderPlatform {
+  _MangaTestPathProvider(this.root);
+
+  final String root;
+
   @override
-  Future<String?> getTemporaryPath() async => Directory.systemTemp.path;
+  Future<String?> getApplicationSupportPath() async => '$root/support';
+
+  @override
+  Future<String?> getApplicationDocumentsPath() async => '$root/documents';
+
+  @override
+  Future<String?> getTemporaryPath() async => root;
 }

@@ -16,6 +16,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
@@ -25,6 +26,16 @@ import 'download_v2_test_support.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(
+        const MethodChannel('dev.fluttercommunity.plus/connectivity'),
+        (call) async => ['none'],
+      );
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(
+        const MethodChannel('dev.fluttercommunity.plus/connectivity_status'),
+        (call) async => null,
+      );
   late Directory root;
   final originalPaths = PathProviderPlatform.instance;
   setUp(() async {
@@ -214,7 +225,12 @@ void main() {
             throwsA(isA<FileSystemException>()),
           );
         }, _DeleteFailure(f.record.destinationPath));
-        expect(await f.store.get(f.record.logicalId), isNotNull);
+        final kept = await f.store.get(f.record.logicalId);
+        expect(kept, isNotNull);
+        expect(kept!.intent, f.record.intent);
+        expect(kept.completedAtMillis, f.record.completedAtMillis);
+        expect(manager.snapshotFor(f.record.logicalId)?.status,
+            DownloadTransportStatus.complete);
         expect(await File(f.record.destinationPath).readAsBytes(), [1, 2, 3]);
         for (final file in owned) {
           expect(await file.readAsBytes(), tinyMangaPng);
@@ -507,9 +523,14 @@ final class _UndeletableFile implements File {
   @override
   Future<bool> exists() => file.exists();
   @override
+  bool existsSync() => file.existsSync();
+  @override
   Future<String> resolveSymbolicLinks() => file.resolveSymbolicLinks();
   @override
   Future<File> delete({bool recursive = false}) async =>
+      throw FileSystemException('test-only denied media delete', path);
+  @override
+  void deleteSync({bool recursive = false}) =>
       throw FileSystemException('test-only denied media delete', path);
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

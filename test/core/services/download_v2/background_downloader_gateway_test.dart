@@ -406,6 +406,7 @@ void main() {
   test('gateway initialization retries after one package start failure', () async {
     var startCalls = 0;
     final gateway = PackageBackgroundDownloaderGateway(
+      downloader: FileDownloader(),
       initializePackage: () async {
         startCalls++;
         if (startCalls == 1) {
