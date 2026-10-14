@@ -4,10 +4,10 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import '../../logger/app_diagnostics.dart';
 import '../download_concurrency.dart';
 import '../download_parallel.dart';
 import '../../utils/download_cleanup.dart';
+import '../../utils/local_file_io.dart';
 import 'background_downloader_gateway.dart';
 import 'download_continued_processing_v2.dart';
 import 'download_artwork_store_v2.dart';
@@ -136,6 +136,7 @@ final class DownloadManagerV2 {
       StreamController<List<LogicalDownloadRecordV2>>.broadcast();
 
   Future<void>? _initialization;
+  Completer<void>? _localReadiness;
   Future<void>? _admissionPromotion;
   bool _admissionPromotionRequested = false;
   Timer? _admissionPromotionRetryTimer;
@@ -145,7 +146,13 @@ final class DownloadManagerV2 {
   /// Application-owned logical records for presentation. This never exposes
   /// package child transfers, URLs, headers or FileDownloader database rows.
   Stream<List<LogicalDownloadRecordV2>> get records async* {
-    await initialize();
+    try {
+      await _initializeForLocalAccess();
+    } on _DownloadManagerDisposedDuringStartup {
+      // Canceling a stream awaits its async* body. Normal manager disposal
+      // must finish that cancellation without hiding real startup failures.
+      return;
+    }
 
     // Subscribe before reading the initial snapshot. A start can persist and
     // publish while Hive is being read; a broadcast event emitted in that gap
@@ -172,30 +179,30 @@ final class DownloadManagerV2 {
     final existing = _initialization;
     if (existing != null) return existing;
 
-    appDiagnostics.record('download.init', fields: {'phase': 'begin'});
+    final ready = Completer<void>();
+    _localReadiness = ready;
+    ready.future.ignore();
     final attempt = _initialize();
     _initialization = attempt;
     unawaited(
-      attempt.then<void>(
-        (_) => appDiagnostics.record('download.init', fields: {'phase': 'end'}),
-        onError: (Object error, StackTrace stack) {
-          appDiagnostics.recordError('download.init', error, stack);
-          if (identical(_initialization, attempt)) {
-            _initialization = null;
-          }
-        },
-      ),
+      attempt.catchError((Object error, StackTrace stack) {
+        if (!ready.isCompleted) ready.completeError(error, stack);
+        if (identical(_initialization, attempt)) {
+          _initialization = null;
+        }
+      }),
     );
     return attempt;
   }
 
+  Future<void> _initializeForLocalAccess() {
+    initialize().ignore();
+    return _localReadiness!.future;
+  }
+
   Future<void> _initialize() async {
-    appDiagnostics.record('download.init', fields: {'phase': 'begin', 'operation': 'gatewayInitialize'});
     await _gateway.initialize();
-    appDiagnostics.record('download.init', fields: {'phase': 'end', 'operation': 'gatewayInitialize'});
-    appDiagnostics.record('download.init', fields: {'phase': 'begin', 'operation': 'gatewayRehydrate'});
     final rehydrated = await _gateway.rehydrate();
-    appDiagnostics.record('download.init', fields: {'phase': 'end', 'operation': 'gatewayRehydrate', 'count': rehydrated.length});
     final byTaskId = <String, DownloadTransportHandle>{
       for (final handle in rehydrated) handle.taskId: handle,
     };
@@ -204,9 +211,40 @@ final class DownloadManagerV2 {
     final records = await _store.all()
       ..sort((a, b) => a.updatedAtMillis.compareTo(b.updatedAtMillis));
     final startupDestinationOwners = <String, DownloadLogicalId>{};
+    final startupDestinationKeys = <DownloadLogicalId, String>{};
+    final indexingErrors = <DownloadLogicalId, Object>{};
+    // Preserve oldest-owner precedence before reconciling video rows first.
     for (final record in records) {
       _rememberRecord(record);
+      if (record.intent == DownloadUserIntent.canceled) continue;
+      try {
+        final key = await _canonicalDestinationPath(record.destinationPath);
+        startupDestinationKeys[record.logicalId] = key;
+        startupDestinationOwners.putIfAbsent(key, () => record.logicalId);
+      } catch (error) {
+        indexingErrors[record.logicalId] = error;
+      }
+    }
+    final recoveries = <Future<void> Function()>[];
+    for (final record in [
+      ...records.where((record) => record.mediaKind == DownloadMediaKind.videoEpisode),
+      ...records.where((record) => record.mediaKind == DownloadMediaKind.mangaChapter),
+    ]) {
+      if (record.mediaKind == DownloadMediaKind.mangaChapter) {
+        // An unrelated chapter's deep verification must not gate local video controls.
+        await _publishLocalReadiness();
+      }
       DownloadTransportHandle? startupOwnership;
+      void recoverAfterLocalIndex(Future<void> Function() recover) {
+        recoveries.add(() async {
+          if (_recordChanges.isClosed) return;
+          try {
+            await recover();
+          } catch (error) {
+            await _recordStartupFailure(record, startupOwnership, error);
+          }
+        });
+      }
 
       try {
         final olderParents = <int, String>{};
@@ -230,18 +268,11 @@ final class DownloadManagerV2 {
         startupOwnership = record.mediaKind == DownloadMediaKind.mangaChapter
             ? await _exactHandle(record.taskId)
             : _handlesByTaskId[record.taskId];
-        var duplicateStartupDestination = false;
-        if (record.intent != DownloadUserIntent.canceled) {
-          final destinationKey = await _canonicalDestinationPath(
-            record.destinationPath,
-          );
-          final owner = startupDestinationOwners[destinationKey];
-          if (owner == null) {
-            startupDestinationOwners[destinationKey] = record.logicalId;
-          } else if (owner != record.logicalId) {
-            duplicateStartupDestination = true;
-          }
-        }
+        final indexingError = indexingErrors[record.logicalId];
+        if (indexingError != null) throw indexingError;
+        final destinationKey = startupDestinationKeys[record.logicalId];
+        final duplicateStartupDestination = destinationKey != null &&
+            startupDestinationOwners[destinationKey] != record.logicalId;
         if (record.completedAtMillis != null) {
           final result = await _verifyRecordDestination(
             record,
@@ -478,7 +509,9 @@ final class DownloadManagerV2 {
                 await _store.put(admitted);
                 _rememberRecord(admitted);
                 if (exactHandle is MangaChapterTransportHandleV2 && exactHandle.recoveryOnly) {
-                  await _startExistingMangaGenerationUnsafe(request, admitted);
+                  recoverAfterLocalIndex(() async {
+                    await _startExistingMangaGenerationUnsafe(request, admitted);
+                  });
                 } else {
                   _activateHandle(admitted.logicalId, exactHandle);
                 }
@@ -504,7 +537,9 @@ final class DownloadManagerV2 {
             } else if (exactHandle != null &&
                 _isRecoverable(exactHandle.current)) {
               if (exactHandle is MangaChapterTransportHandleV2 && exactHandle.recoveryOnly) {
-                await _resumeRecordUnsafe(record, request);
+                recoverAfterLocalIndex(() async {
+                  await _resumeRecordUnsafe(record, request);
+                });
                 continue;
               }
               if (exactHandle.current.status ==
@@ -531,51 +566,75 @@ final class DownloadManagerV2 {
               }
               _activateHandle(record.logicalId, exactHandle);
             } else if (record.mediaKind == DownloadMediaKind.mangaChapter) {
-              await _resumeRecordUnsafe(record, request);
+              recoverAfterLocalIndex(() async {
+                await _resumeRecordUnsafe(record, request);
+              });
             } else {
-              await _startFreshGeneration(
-                request,
-                record,
-                previousHandle: exactHandle,
-                lookUpPreviousHandle: false,
-              );
+              recoverAfterLocalIndex(() async {
+                await _startFreshGeneration(
+                  request,
+                  record,
+                  previousHandle: exactHandle,
+                  lookUpPreviousHandle: false,
+                );
+              });
             }
         }
-      } catch (e) {
-        final current = await _store.get(record.logicalId) ?? record;
-        // Recovery can fail for a passing reason, such as launching offline.
-        // Keep the user's intent so the next launch tries again; this session
-        // shows the failure below, and Retry still starts it at once.
-        final failedRecord = current.copyWith(
-          intent: record.intent,
-          awaitingAdmission: false,
-          failureCategory: DownloadFailureCategory.unknown,
-          failureMessage: 'startup recovery failed: $e',
-          updatedAtMillis: _nowMillis(),
-        );
-        await _store.put(failedRecord);
-        _rememberRecord(failedRecord);
-        if (startupOwnership != null && _hasLiveOwnership(startupOwnership.current)) {
-          _activateHandle(record.logicalId, startupOwnership);
-          continue;
-        }
-        final failed = DownloadTransportSnapshot(
-          taskId: current.taskId,
-          status: DownloadTransportStatus.failed,
-          progress: _snapshots[current.logicalId]?.progress ?? 0,
-          completedPages: _snapshots[current.logicalId]?.completedPages,
-          totalPages: _snapshots[current.logicalId]?.totalPages,
-          totalBytes: current.expectedBytes,
-          failureCategory: DownloadFailureCategory.unknown,
-          failureMessage: 'startup recovery failed',
-        );
-        _snapshots[current.logicalId] = failed;
-        _recordDiagnostic(current.logicalId, failed);
+      } catch (error) {
+        await _recordStartupFailure(record, startupOwnership, error);
       }
     }
     await _cleanupEmptyDownloadFolders(sweepOrphans: true);
+    await _publishLocalReadiness();
+    for (final recover in recoveries) {
+      await recover();
+    }
     await _publishRecords();
     _scheduleAdmissionPromotion();
+  }
+
+  Future<void> _publishLocalReadiness() async {
+    final ready = _localReadiness;
+    if (ready == null || ready.isCompleted) return;
+    await _publishRecords();
+    if (!ready.isCompleted) ready.complete();
+  }
+
+  Future<void> _recordStartupFailure(
+    LogicalDownloadRecordV2 record,
+    DownloadTransportHandle? startupOwnership,
+    Object error,
+  ) async {
+    if (_recordChanges.isClosed) return;
+    final current = await _store.get(record.logicalId) ?? record;
+    // Recovery can fail for a passing reason, such as launching offline.
+    // Keep the user's intent so the next launch tries again; this session
+    // shows the failure below, and Retry still starts it at once.
+    final failedRecord = current.copyWith(
+      intent: record.intent,
+      awaitingAdmission: false,
+      failureCategory: DownloadFailureCategory.unknown,
+      failureMessage: 'startup recovery failed: $error',
+      updatedAtMillis: _nowMillis(),
+    );
+    await _store.put(failedRecord);
+    _rememberRecord(failedRecord);
+    if (startupOwnership != null && _hasLiveOwnership(startupOwnership.current)) {
+      _activateHandle(record.logicalId, startupOwnership);
+      return;
+    }
+    final failed = DownloadTransportSnapshot(
+      taskId: current.taskId,
+      status: DownloadTransportStatus.failed,
+      progress: _snapshots[current.logicalId]?.progress ?? 0,
+      completedPages: _snapshots[current.logicalId]?.completedPages,
+      totalPages: _snapshots[current.logicalId]?.totalPages,
+      totalBytes: current.expectedBytes,
+      failureCategory: DownloadFailureCategory.unknown,
+      failureMessage: 'startup recovery failed',
+    );
+    _snapshots[current.logicalId] = failed;
+    _recordDiagnostic(current.logicalId, failed);
   }
 
   /// Starts a logical download, coalescing concurrent duplicate starts into
@@ -1077,24 +1136,43 @@ final class DownloadManagerV2 {
   /// as already deleted.
   Future<void> delete(DownloadLogicalId logicalId) {
     return _commands.run(logicalId, () async {
-      await initialize();
-      final record = await _store.get(logicalId);
+      await _initializeForLocalAccess();
+      var record = await _store.get(logicalId);
       if (record == null) return;
+      if (record.completedAtMillis == null ||
+          record.mediaKind != DownloadMediaKind.videoEpisode) {
+        await initialize();
+        record = await _store.get(logicalId);
+        if (record == null) return;
+      }
+      final deleting = record;
       final destinationKey = await _canonicalDestinationPath(
-        record.destinationPath,
+        deleting.destinationPath,
       );
       await _destinationCommands.run(destinationKey, () async {
         _admissionReservations.add(logicalId);
         try {
-          await _cancelRecord(record);
+          if (deleting.completedAtMillis != null) {
+            // Keep the completed item retryable until its bytes are deleted.
+            final handle = deleting.mediaKind == DownloadMediaKind.videoEpisode
+                ? _handlesByTaskId[deleting.taskId]
+                : await _recordHandle(deleting);
+            if (handle != null) {
+              await _settleObsoleteHandle(handle, cancelEvenIfFinal: false);
+            }
+            await _gateway.removeTracking(deleting.taskId);
+            _forgetHandle(deleting.taskId);
+          } else {
+            await _cancelRecord(deleting);
+          }
           await _deleteDestination(
-            record.destinationPath,
-            ownerLogicalId: record.logicalId,
-            mediaKind: record.mediaKind,
-            mangaRecord: record,
+            deleting.destinationPath,
+            ownerLogicalId: deleting.logicalId,
+            mediaKind: deleting.mediaKind,
+            mangaRecord: deleting,
           );
-          if (record.mediaKind == DownloadMediaKind.videoEpisode) {
-            await deleteDownloadArtworkV2(record.logicalId.value, legacyTaskId: record.taskId);
+          if (deleting.mediaKind == DownloadMediaKind.videoEpisode) {
+            await deleteDownloadArtworkV2(deleting.logicalId.value, legacyTaskId: deleting.taskId);
           }
           await _store.remove(logicalId);
           _currentTaskIds.remove(logicalId);
@@ -1103,7 +1181,7 @@ final class DownloadManagerV2 {
           _recordsByLogicalId.remove(logicalId);
           _snapshots.remove(logicalId);
           _lastPositiveSpeedAtMillis.remove(logicalId);
-          await _cleanupEmptyDownloadFolders(removed: record);
+          await _cleanupEmptyDownloadFolders(removed: deleting);
           await _publishRecords();
         } finally {
           _admissionReservations.remove(logicalId);
@@ -1115,7 +1193,7 @@ final class DownloadManagerV2 {
 
   /// Legacy files still share title folders with current V2 downloads.
   Future<bool> deleteLegacyDownloadedVideo(File file) async {
-    await initialize();
+    await _initializeForLocalAccess();
     final destinationKey = await _canonicalDestinationPath(file.path);
     return _destinationCommands.run(destinationKey, () async {
       if (_hasUnmappedDownloadWriter() ||
@@ -1882,7 +1960,8 @@ final class DownloadManagerV2 {
           ? null
           : await _sourceResolver.resolve(request.sourceDescriptor);
     } catch (error) {
-      if (previous != null && previous.intent != DownloadUserIntent.canceled) {
+      if (!_recordChanges.isClosed && previous != null &&
+          previous.intent != DownloadUserIntent.canceled) {
         await _persistFailure(
           previous,
           DownloadTransportSnapshot(
@@ -1898,6 +1977,9 @@ final class DownloadManagerV2 {
         );
       }
       rethrow;
+    }
+    if (_recordChanges.isClosed) {
+      throw StateError('Download manager disposed during source recovery');
     }
     if (previous != null && previous.mediaKind == DownloadMediaKind.mangaChapter) {
       final oldId = obsoleteHandle?.taskId ?? previous.taskId;
@@ -2124,27 +2206,29 @@ final class DownloadManagerV2 {
     final file = !p.isAbsolute(destinationPath) && !Platform.isIOS
         ? File(p.absolute(destinationPath))
         : await _destinationFile(destinationPath);
-    var ancestor = p.normalize(file.absolute.path);
-    final missing = <String>[];
-    while (await FileSystemEntity.type(ancestor, followLinks: false) ==
-        FileSystemEntityType.notFound) {
-      try {
-        await File(ancestor).resolveSymbolicLinks();
-        break;
-      } on FileSystemException catch (error) {
-        // Only proven missing components may be appended to a resolved key.
-        if (![2, 3].contains(error.osError?.errorCode)) rethrow;
+    return runLocalFileIo(() {
+      var ancestor = p.normalize(file.absolute.path);
+      final missing = <String>[];
+      while (FileSystemEntity.typeSync(ancestor, followLinks: false) ==
+          FileSystemEntityType.notFound) {
+        try {
+          File(ancestor).resolveSymbolicLinksSync();
+          break;
+        } on FileSystemException catch (error) {
+          // Only proven missing components may be appended to a resolved key.
+          if (![2, 3].contains(error.osError?.errorCode)) rethrow;
+        }
+        final parent = p.dirname(ancestor);
+        if (parent == ancestor) {
+          throw FileSystemException('No existing destination ancestor', destinationPath);
+        }
+        missing.insert(0, p.basename(ancestor));
+        ancestor = parent;
       }
-      final parent = p.dirname(ancestor);
-      if (parent == ancestor) {
-        throw FileSystemException('No existing destination ancestor', destinationPath);
-      }
-      missing.insert(0, p.basename(ancestor));
-      ancestor = parent;
-    }
-    final resolved = await File(ancestor).resolveSymbolicLinks();
-    final canonical = p.normalize(p.joinAll([resolved, ...missing]));
-    return Platform.isWindows ? canonical.toLowerCase() : canonical;
+      final resolved = File(ancestor).resolveSymbolicLinksSync();
+      final canonical = p.normalize(p.joinAll([resolved, ...missing]));
+      return Platform.isWindows ? canonical.toLowerCase() : canonical;
+    });
   }
 
   Future<LogicalDownloadRecordV2?> _findDestinationConflict(
@@ -2220,11 +2304,9 @@ final class DownloadManagerV2 {
       }
       final canonicalRoots = <String, String>{};
       for (final root in roots) {
-        if (await FileSystemEntity.type(root, followLinks: false) ==
-            FileSystemEntityType.directory) {
-          canonicalRoots[key(root)] = key(
-            await Directory(root).resolveSymbolicLinks(),
-          );
+        final canonicalRoot = await localCanonicalDirectory(root);
+        if (canonicalRoot != null) {
+          canonicalRoots[key(root)] = key(canonicalRoot);
         }
       }
       bool isProtected(String directory) {
@@ -2280,7 +2362,8 @@ final class DownloadManagerV2 {
           if (!canonicalRoots.containsKey(key(root))) {
             continue;
           }
-          await for (final child in Directory(root).list(followLinks: false)) {
+          final children = await localDirectoryEntries(root);
+          for (final child in children) {
             if (child is Directory) {
               candidates.add(p.join(child.path, '.empty-folder-check'));
             }
@@ -2317,11 +2400,8 @@ final class DownloadManagerV2 {
       return;
     }
     final file = await _destinationFile(trimmed);
-    if (await file.exists()) {
-      await file.delete();
-      return;
-    }
-    if (mediaKind != DownloadMediaKind.mangaChapter) return;
+    final deleted = await localDeleteFileIfPresent(file);
+    if (deleted || mediaKind != DownloadMediaKind.mangaChapter) return;
     final directory = Directory(file.path);
     if (!await directory.exists()) return;
     final destination = p.normalize(directory.absolute.path);
@@ -2992,15 +3072,6 @@ final class DownloadManagerV2 {
       if (snapshot.completedPages == null) snapshot = _snapshotWithPages(snapshot, 0, null);
       _snapshots[logicalId] = snapshot;
     }
-    if (appDiagnostics.enabled) {
-      appDiagnostics.record('download.state', fields: {
-        'requestId': snapshot.taskId.hashCode,
-        'generation': generation,
-        'status': snapshot.status.name,
-        if (snapshot.failureCategory != null) 'reason': snapshot.failureCategory!.name,
-        if (integrityResult != null) 'result': integrityResult.name,
-      });
-    }
     _diagnostics.record(
       DownloadDiagnosticEventV2(
         logicalId: logicalId,
@@ -3064,6 +3135,10 @@ final class DownloadManagerV2 {
   }
 
   Future<void> dispose() async {
+    final ready = _localReadiness;
+    if (ready != null && !ready.isCompleted) {
+      ready.completeError(_DownloadManagerDisposedDuringStartup());
+    }
     final presentationDisposal = Future.wait<void>(
       _presentationObservers.map((observer) async {
         try {
@@ -3093,6 +3168,11 @@ final class DownloadManagerV2 {
     _mangaSourceRefreshVerifiedPages.clear();
     await _recordChanges.close();
   }
+}
+
+final class _DownloadManagerDisposedDuringStartup extends StateError {
+  _DownloadManagerDisposedDuringStartup()
+    : super('Download manager disposed during startup');
 }
 
 int? _presentationTransferredBytes({
