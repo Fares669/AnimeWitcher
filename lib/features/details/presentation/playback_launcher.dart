@@ -7,6 +7,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
 import '../../../core/router/app_router.dart';
+import '../../../core/logger/app_diagnostics.dart';
 import '../../../core/services/external_player_service.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/base_provider.dart';
@@ -35,10 +36,99 @@ PlaybackLauncher playbackLauncher(Ref ref) {
   return PlaybackLauncher(ref);
 }
 
+class _PlaybackLaunch {
+  _PlaybackLaunch(this.context, this.origin, this.id);
+
+  final BuildContext context;
+  final Object origin;
+  final int id;
+
+  bool get isCurrent =>
+      context.mounted &&
+      (origin is! ModalRoute || (origin as ModalRoute).isCurrent);
+
+  void trace(String operation, String phase, {String? result}) {
+    appDiagnostics.record(
+      'playback.phase',
+      fields: {
+        'requestId': id,
+        'operation': operation,
+        'phase': phase,
+        'result': ?result,
+      },
+    );
+  }
+
+  Future<T> wait<T>(Future<T> Function() action, String operation) async {
+    trace(operation, 'begin');
+    try {
+      final result = await action().timeout(const Duration(seconds: 10));
+      trace(operation, 'end', result: 'success');
+      return result;
+    } catch (error, stack) {
+      appDiagnostics.recordError(
+        'playback.error',
+        error,
+        stack,
+        fields: {'requestId': id, 'operation': operation},
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> push(PlayerRoute route) async {
+    if (!isCurrent) {
+      trace('routePush', 'end', result: 'stale');
+      return;
+    }
+    trace('routePush', 'begin');
+    await route.push<void>(context);
+    trace('routePush', 'end', result: 'success');
+  }
+}
+
 class PlaybackLauncher {
   final Ref _ref;
+  static final _pendingOrigins = Expando<bool>();
+  static int _nextLaunchId = 0;
 
   PlaybackLauncher(this._ref);
+
+  Future<void> _guardLaunch(
+    BuildContext context,
+    Future<void> Function(_PlaybackLaunch launch) action,
+  ) async {
+    if (!context.mounted) return;
+    final origin =
+        ModalRoute.of(context) ?? Navigator.of(context, rootNavigator: true);
+    if (_pendingOrigins[origin] == true ||
+        (origin is ModalRoute && !origin.isCurrent)) {
+      appDiagnostics.record('playback.launch', fields: {'result': 'skipped'});
+      return;
+    }
+    // All episode cards on a page share the lock, acquired before any IO.
+    _pendingOrigins[origin] = true;
+    final launch = _PlaybackLaunch(context, origin, ++_nextLaunchId);
+    appDiagnostics.record(
+      'playback.launch',
+      fields: {'requestId': launch.id, 'phase': 'begin'},
+    );
+    try {
+      await action(launch);
+    } on TimeoutException {
+      if (launch.isCurrent) {
+        _ref
+            .read(notificationServiceProvider)
+            .showError('تعذر بدء التشغيل الآن. حاول مرة أخرى.');
+      }
+    } finally {
+      _pendingOrigins[origin] = null;
+      appDiagnostics.record(
+        'playback.launch',
+        fields: {'requestId': launch.id, 'phase': 'end'},
+      );
+    }
+  }
 
   AnimeWitcherProvider? _resolveProvider(MultimediaItem item) {
     final manager = _ref.read(extensionManagerProvider.notifier);
@@ -169,26 +259,39 @@ class PlaybackLauncher {
   Future<void> playFromContinueWatching(
     BuildContext context,
     HistoryItem history,
+  ) => _guardLaunch(
+    context,
+    (launch) => _playFromContinueWatching(context, history, launch),
+  );
+
+  Future<void> _playFromContinueWatching(
+    BuildContext context,
+    HistoryItem history,
+    _PlaybackLaunch launch,
   ) async {
     final item = history.item;
     final savedUrl = history.lastEpisodeUrl?.trim() ?? '';
     final hintEpisode = episodeFromContinueWatching(history);
 
     if (savedUrl.isNotEmpty) {
-      final localFile = await _ref
-          .read(downloadedFilesProvider.notifier)
-          .resolveFileForTrackingUrl(
-            savedUrl,
-            item: item,
-            episode: hintEpisode,
-          );
-      if (!context.mounted) return;
+      final localFile = await launch.wait(
+        () => _ref
+            .read(downloadedFilesProvider.notifier)
+            .resolveFileForTrackingUrl(
+              savedUrl,
+              item: item,
+              episode: hintEpisode,
+            ),
+        'fileResolve',
+      );
+      if (!context.mounted || !launch.isCurrent) return;
 
-      await play(
+      await _play(
         context,
         localFile?.path ?? savedUrl,
         baseItem: item,
         episode: hintEpisode,
+        launch: launch,
       );
       return;
     }
@@ -240,13 +343,14 @@ class PlaybackLauncher {
             provider: item.provider ?? provider.packageName,
           );
 
-    await play(
+    await _play(
       context,
       resolvedUrl,
       baseItem: item,
       detailedItem: detailedItem,
       episode: resolvedEpisode,
       preselectedSource: selected,
+      launch: launch,
     );
   }
 
@@ -330,11 +434,31 @@ class PlaybackLauncher {
     }
   }
 
-  Future<void> _recordEpisodeOpened(
+  void _recordEpisodeOpened(
     MultimediaItem item,
     Episode? episode,
-  ) async {
+    _PlaybackLaunch launch,
+  ) {
     if (episode == null) return;
+    launch.trace('historyOpen', 'begin');
+    unawaited(
+      _saveEpisodeOpened(item, episode).then(
+        (_) {
+          launch.trace('historyOpen', 'end', result: 'success');
+        },
+        onError: (Object error, StackTrace stack) {
+          appDiagnostics.recordError(
+            'playback.error',
+            error,
+            stack,
+            fields: {'requestId': launch.id, 'operation': 'historyOpen'},
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _saveEpisodeOpened(MultimediaItem item, Episode episode) async {
     await _ref
         .read(watchHistoryProvider.notifier)
         .recordOpened(
@@ -362,9 +486,42 @@ class PlaybackLauncher {
     Episode? episode,
     StreamResult? preselectedSource,
     bool loadEpisodeArtwork = false,
+    Future<String?> Function()? resolveUrl,
+    Future<void> Function()? onMissingFile,
+  }) => _guardLaunch(context, (launch) async {
+    final resolvedUrl = resolveUrl == null
+        ? url
+        : await launch.wait(resolveUrl, 'fileResolve');
+    if (!context.mounted || !launch.isCurrent) return;
+    if (resolvedUrl == null) {
+      await onMissingFile?.call();
+      return;
+    }
+    await _play(
+      context,
+      resolvedUrl,
+      baseItem: baseItem,
+      detailedItem: detailedItem,
+      episode: episode,
+      preselectedSource: preselectedSource,
+      launch: launch,
+    );
+  });
+
+  Future<void> _play(
+    BuildContext context,
+    String url, {
+    required MultimediaItem baseItem,
+    MultimediaItem? detailedItem,
+    Episode? episode,
+    StreamResult? preselectedSource,
+    required _PlaybackLaunch launch,
   }) async {
-    final settings = await _ref.read(playerSettingsProvider.future);
-    if (!context.mounted) return;
+    final settings = await launch.wait(
+      () => _ref.read(playerSettingsProvider.future),
+      'playerSettings',
+    );
+    if (!context.mounted || !launch.isCurrent) return;
 
     final item = detailedItem ?? baseItem;
     final resolvedEpisode =
@@ -375,12 +532,13 @@ class PlaybackLauncher {
         : url;
     String? downloadedPath;
     if (!AppUtils.isLocalFile(url)) {
-      downloadedPath =
-          (await _ref
-                  .read(downloadedFilesProvider.notifier)
-                  .resolveFile(item, episode: resolvedEpisode))
-              ?.path;
-      if (!context.mounted) return;
+      downloadedPath = (await launch.wait(
+        () => _ref
+            .read(downloadedFilesProvider.notifier)
+            .resolveFile(item, episode: resolvedEpisode),
+        'fileResolve',
+      ))?.path;
+      if (!context.mounted || !launch.isCurrent) return;
     }
 
     final localOrEpisodeUrl = AppUtils.resolvePlayableUrl(
@@ -405,8 +563,8 @@ class PlaybackLauncher {
 
     // Downloaded files are already playable and do not need a source list.
     if (AppUtils.isLocalFile(localOrEpisodeUrl)) {
-      await _recordEpisodeOpened(playerItem, playerEpisode);
-      if (!context.mounted) return;
+      _recordEpisodeOpened(playerItem, playerEpisode, launch);
+      if (!context.mounted || !launch.isCurrent) return;
       if (settings.preferredPlayer != null) {
         final stream = StreamResult(url: localOrEpisodeUrl, source: 'محلي');
         await _launchStream(
@@ -417,16 +575,19 @@ class PlaybackLauncher {
           settings.preferredPlayer!,
           episode: playerEpisode,
           progressUrl: canonicalProgressUrl,
+          launch: launch,
         );
       } else {
-        await PlayerRoute(
-          $extra: PlayerRouteExtra(
-            item: playerItem,
-            videoUrl: localOrEpisodeUrl,
-            progressUrl: canonicalProgressUrl,
-            episode: playerEpisode,
+        await launch.push(
+          PlayerRoute(
+            $extra: PlayerRouteExtra(
+              item: playerItem,
+              videoUrl: localOrEpisodeUrl,
+              progressUrl: canonicalProgressUrl,
+              episode: playerEpisode,
+            ),
           ),
-        ).push<void>(context);
+        );
       }
       return;
     }
@@ -451,20 +612,22 @@ class PlaybackLauncher {
           localOrEpisodeUrl,
           episode: resolvedEpisode,
         );
-    if (selected == null || !context.mounted) return;
+    if (selected == null || !context.mounted || !launch.isCurrent) return;
 
     if (settings.preferredPlayer == null) {
-      await _recordEpisodeOpened(playerItem, playerEpisode);
-      if (!context.mounted) return;
-      await PlayerRoute(
-        $extra: PlayerRouteExtra(
-          item: playerItem,
-          videoUrl: localOrEpisodeUrl,
-          progressUrl: canonicalProgressUrl,
-          episode: playerEpisode,
-          selectedSource: selected,
+      _recordEpisodeOpened(playerItem, playerEpisode, launch);
+      if (!context.mounted || !launch.isCurrent) return;
+      await launch.push(
+        PlayerRoute(
+          $extra: PlayerRouteExtra(
+            item: playerItem,
+            videoUrl: localOrEpisodeUrl,
+            progressUrl: canonicalProgressUrl,
+            episode: playerEpisode,
+            selectedSource: selected,
+          ),
         ),
-      ).push<void>(context);
+      );
       return;
     }
 
@@ -481,9 +644,9 @@ class PlaybackLauncher {
           provider,
           selected,
         );
-        if (resolved == null || !context.mounted) return;
-        await _recordEpisodeOpened(playerItem, playerEpisode);
-        if (!context.mounted) return;
+        if (resolved == null || !context.mounted || !launch.isCurrent) return;
+        _recordEpisodeOpened(playerItem, playerEpisode, launch);
+        if (!context.mounted || !launch.isCurrent) return;
         await _launchStream(
           context,
           resolved,
@@ -492,6 +655,7 @@ class PlaybackLauncher {
           settings.preferredPlayer!,
           episode: playerEpisode,
           progressUrl: canonicalProgressUrl,
+          launch: launch,
         );
       } finally {
         if (baseItem.url.isNotEmpty) {
@@ -512,6 +676,7 @@ class PlaybackLauncher {
     String playerId, {
     Episode? episode,
     String? progressUrl,
+    required _PlaybackLaunch launch,
   }) async {
     final success = await ExternalPlayerService.instance.launch(
       stream.url,
@@ -520,7 +685,7 @@ class PlaybackLauncher {
       title: item.title,
     );
 
-    if (!success && context.mounted) {
+    if (!success && context.mounted && launch.isCurrent) {
       final playerName =
           ExternalPlayerService.instance.getPlayerById(playerId)?.displayName ??
           playerId;
@@ -529,7 +694,7 @@ class PlaybackLauncher {
           .showError(
             AppLocalizations.of(context)!.playerNotDetected(playerName),
           );
-      unawaited(
+      await launch.push(
         PlayerRoute(
           $extra: PlayerRouteExtra(
             item: item,
@@ -537,7 +702,7 @@ class PlaybackLauncher {
             progressUrl: progressUrl,
             episode: episode,
           ),
-        ).push<void>(context),
+        ),
       );
     }
   }

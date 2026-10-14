@@ -1226,6 +1226,16 @@ class DetailsController extends _$DetailsController {
     Episode? specificEpisode,
     String? overrideUrl,
   }) async {
+    if (specificEpisode != null && overrideUrl == null) {
+      // A known episode can resolve its saved file before optional catalog IO.
+      await ref.read(playbackLauncherProvider).play(
+        context,
+        specificEpisode.url,
+        baseItem: state.details.asData?.value ?? details,
+        episode: specificEpisode,
+      );
+      return;
+    }
     final playLocalWithoutCatalog = await _canPlayDownloadedWithoutCatalog(
       details: details,
       specificEpisode: specificEpisode,
@@ -1251,13 +1261,6 @@ class DetailsController extends _$DetailsController {
       await ref
           .read(playbackLauncherProvider)
           .play(context, overrideUrl, baseItem: details);
-      return;
-    }
-
-    if (specificEpisode != null) {
-      await ref
-          .read(playbackLauncherProvider)
-          .play(context, specificEpisode.url, baseItem: details);
       return;
     }
 

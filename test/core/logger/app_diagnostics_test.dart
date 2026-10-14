@@ -95,6 +95,53 @@ void main() {
   );
 
   test(
+    'records fixed playback preflight phases without identity or path data',
+    () async {
+      await log.setEnabled(true);
+      log.record(
+        'playback.launch',
+        fields: {'requestId': 1, 'phase': 'begin', 'local': true},
+      );
+      for (final operation in [
+        'fileResolve',
+        'playerSettings',
+        'historyOpen',
+        'routePush',
+      ]) {
+        log.record(
+          'playback.phase',
+          fields: {
+            'requestId': 1,
+            'operation': operation,
+            'phase': 'begin',
+            'url': 'private_secret',
+            'path': 'private_secret',
+            'title': 'private_secret',
+          },
+        );
+      }
+      log.recordError(
+        'player.subtitle_selection.error',
+        StateError('private_secret'),
+        null,
+        fields: {'sourceSessionId': 2, 'engine': 'media_kit'},
+      );
+      final data = await rows();
+      expect(
+        data
+            .where((row) => row['event'] == 'playback.phase')
+            .map((row) => row['operation']),
+        ['fileResolve', 'playerSettings', 'historyOpen', 'routePush'],
+      );
+      expect(data.last['event'], 'player.subtitle_selection.error');
+      expect(
+        await (await log.export()).readAsString(),
+        isNot(contains('private_secret')),
+      );
+    },
+  );
+
+  test(
     'never reads error messages and keeps only safe source stack frames',
     () async {
       await log.setEnabled(true);

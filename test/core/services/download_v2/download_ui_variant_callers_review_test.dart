@@ -103,9 +103,15 @@ class _Playback extends PlaybackLauncher {
   @override
   Future<void> play(BuildContext context, String url, {
     required MultimediaItem baseItem, MultimediaItem? detailedItem, Episode? episode,
-    StreamResult? preselectedSource, bool loadEpisodeArtwork = false,
+    StreamResult? preselectedSource, bool loadEpisodeArtwork = false, Future<String?> Function()? resolveUrl,
+    Future<void> Function()? onMissingFile,
   }) async {
-    played.add(url);
+    final playableUrl = resolveUrl == null ? url : await resolveUrl();
+    if (playableUrl == null) {
+      await onMissingFile?.call();
+      return;
+    }
+    played.add(playableUrl);
     playedItems.add(detailedItem ?? baseItem);
   }
 }

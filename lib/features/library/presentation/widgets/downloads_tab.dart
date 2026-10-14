@@ -59,6 +59,19 @@ MultimediaItem _savedPlaybackItem(DownloadItem selected, Iterable<DownloadItem> 
   );
 }
 
+Future<String?> _resolveLocalPlaybackUrl(WidgetRef ref, DownloadItem item) async {
+  final file = await ref.read(downloadedFilesProvider.notifier)
+      .resolveFile(item.item, episode: item.episode, logicalId: item.logicalId);
+  return file?.path;
+}
+
+Future<void> _removeMissingDownload(BuildContext context, WidgetRef ref,
+    DownloadItem item, AppLocalizations l10n) async {
+  if (!context.mounted) return;
+  ref.read(notificationServiceProvider).showError(l10n.fileNotFoundRemoving);
+  await ref.read(downloadsProvider.notifier).removeDownload(item);
+}
+
 class DownloadsTab extends ConsumerStatefulWidget {
   const DownloadsTab({super.key});
 
@@ -541,34 +554,16 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     WidgetRef ref,
     DownloadItem item,
     AppLocalizations l10n,
-  ) async {
-    final file = await ref
-        .read(downloadedFilesProvider.notifier)
-        .resolveFile(item.item, episode: item.episode, logicalId: item.logicalId);
-
-    if (file == null || !await file.exists()) {
-      if (context.mounted) {
-        ref
-            .read(notificationServiceProvider)
-            .showError(l10n.fileNotFoundRemoving);
-      }
-      await ref.read(downloadsProvider.notifier).removeDownload(item);
-      return;
-    }
-
-    if (context.mounted) {
-      unawaited(
-        ref
-            .read(playbackLauncherProvider)
-            .play(
-              context,
-              file.path,
-              baseItem: _savedPlaybackItem(item, items),
-              episode: item.episode,
-            ),
+  ) => ref
+      .read(playbackLauncherProvider)
+      .play(
+        context,
+        item.trackingUrl,
+        baseItem: _savedPlaybackItem(item, items),
+        episode: item.episode,
+        resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
+        onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
       );
-    }
-  }
 
   void _confirmDeleteAll(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context)!;
@@ -936,34 +931,19 @@ class _DownloadItemTile extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     AppLocalizations l10n,
-  ) async {
-    final file = await ref
-        .read(downloadedFilesProvider.notifier)
-        .resolveFile(item.item, episode: item.episode, logicalId: item.logicalId);
-
-    if (file == null || !await file.exists()) {
-      if (context.mounted) {
-        ref
-            .read(notificationServiceProvider)
-            .showError(l10n.fileNotFoundRemoving);
-      }
-      await ref.read(downloadsProvider.notifier).removeDownload(item);
-      return;
-    }
-
-    if (context.mounted) {
-      unawaited(
-        ref
-            .read(playbackLauncherProvider)
-            .play(
-              context,
-              file.path,
-              baseItem: _savedPlaybackItem(item, ref.read(downloadsProvider).value ?? [item]),
-              episode: item.episode,
-            ),
+  ) => ref
+      .read(playbackLauncherProvider)
+      .play(
+        context,
+        item.trackingUrl,
+        baseItem: _savedPlaybackItem(
+          item,
+          ref.read(downloadsProvider).value ?? [item],
+        ),
+        episode: item.episode,
+        resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
+        onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
       );
-    }
-  }
 
   void _confirmDelete(
     BuildContext context,
