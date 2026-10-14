@@ -28,6 +28,7 @@ import 'widgets/hotstar_player_style.dart';
 import 'widgets/player_ltr.dart';
 import 'player_controller.dart';
 import 'player_shortcuts.dart';
+import 'player_teardown.dart';
 import 'player_gesture_handler.dart';
 
 TextStyle _getSubtitleTextStyle(String? fontFamily, TextStyle baseStyle) {
@@ -302,7 +303,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         // it; pausing here would cancel PiP.
         return;
       } else {
-        _playerController.pause();
+        _playerController.pause(onlyWhileBackgrounded: true);
       }
     } else if (state == AppLifecycleState.resumed) {
       _playerController.setAppBackgrounded(false);
@@ -368,7 +369,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _playerStateSub?.close();
     _playerController.disposeController(player: _player);
 
-    _player.dispose();
+    unawaited(disposePlayerAfterExit(_player));
     _videoViewController.dispose();
     _controlsVisible.removeListener(_syncWindowControls);
     windowControlsHidden.value = false;
@@ -691,11 +692,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     // and video-controller initialisation, all inside a lock — so a
     // synchronous dispose() can start that and return, leaving the episode
     // audible over whatever screen comes next.
-    try {
-      await _player.stop();
-    } catch (e) {
-      if (kDebugMode) debugPrint('PlayerScreen._handleBack stop: $e');
-    }
+    await stopPlayerBeforeExit(_player);
     try {
       // The native engine only carries live streams, but it is closed the
       // same way rather than left to whatever teardown happens later.
