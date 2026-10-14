@@ -5,8 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
-import '../../../../core/network/app_diagnostic_interceptor.dart';
-import '../../../../core/logger/app_diagnostics.dart';
 import '../player_controller.dart';
 import 'hotstar_player_style.dart';
 import 'player_ltr.dart';
@@ -396,9 +394,7 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
       String content = '';
       if (subtitleUrl.startsWith('http://') ||
           subtitleUrl.startsWith('https://')) {
-        final client = Dio();
-        attachAppDiagnosticInterceptor(client, operation: 'subtitle_http');
-        final response = await client.get<List<int>>(
+        final response = await Dio().get<List<int>>(
           subtitleUrl,
           options: Options(responseType: ResponseType.bytes),
         );
@@ -439,8 +435,7 @@ class _SubtitleSyncDialogState extends ConsumerState<SubtitleSyncDialog> {
         Duration(milliseconds: initialSubtitlePosition),
       );
       _scrollToPosition(firstSubtitleIndex);
-    } catch (e, stack) {
-      appDiagnostics.recordError('service_error', e, stack);
+    } catch (e) {
       setState(() {
         _loadingCues = false;
         _errorMessage = 'تعذر تحميل نصوص الترجمة: $e';

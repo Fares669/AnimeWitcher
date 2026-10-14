@@ -1,27 +1,18 @@
-import 'dart:async';
-
-import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/stream_source_preferences.dart';
-import '../../../core/logger/app_diagnostics.dart';
-import '../../../core/logger/app_diagnostic_observers.dart';
 import '../../../core/navigation/taskbar_destination.dart';
 import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_continued_processing_service.dart';
 import '../../../core/services/download_parallel.dart';
 import '../../../core/services/download_v2/background_downloader_gateway.dart';
+import '../../../core/services/download_v2/download_persistent_storage_v2.dart';
 import '../../../core/storage/settings_repository.dart';
 
 part 'general_settings_provider.g.dart';
 
-final appDiagnosticsProvider = Provider<AppDiagnostics>(
-  (ref) => appDiagnostics,
-);
-
 class GeneralSettings {
-  final bool appDiagnosticLog;
   final bool downloadDiagnosticLog;
   final String defaultHomeScreen;
   final bool alwaysOnTop;
@@ -35,7 +26,6 @@ class GeneralSettings {
   final List<String> streamQualityPriority;
 
   const GeneralSettings({
-    this.appDiagnosticLog = false,
     this.downloadDiagnosticLog = false,
     this.defaultHomeScreen = '/home',
     this.alwaysOnTop = false,
@@ -50,7 +40,6 @@ class GeneralSettings {
   });
 
   GeneralSettings copyWith({
-    bool? appDiagnosticLog,
     bool? downloadDiagnosticLog,
     String? defaultHomeScreen,
     bool? alwaysOnTop,
@@ -64,7 +53,6 @@ class GeneralSettings {
     List<String>? streamQualityPriority,
   }) {
     return GeneralSettings(
-      appDiagnosticLog: appDiagnosticLog ?? this.appDiagnosticLog,
       downloadDiagnosticLog:
           downloadDiagnosticLog ?? this.downloadDiagnosticLog,
       defaultHomeScreen: defaultHomeScreen ?? this.defaultHomeScreen,
@@ -78,8 +66,7 @@ class GeneralSettings {
           downloadNotifications ?? this.downloadNotifications,
       autoSelectStreamSource:
           autoSelectStreamSource ?? this.autoSelectStreamSource,
-      streamServerPriority:
-          streamServerPriority ?? this.streamServerPriority,
+      streamServerPriority: streamServerPriority ?? this.streamServerPriority,
       streamQualityPriority:
           streamQualityPriority ?? this.streamQualityPriority,
     );
@@ -106,7 +93,6 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
     );
 
     return GeneralSettings(
-      appDiagnosticLog: repository.getAppDiagnosticLog(),
       downloadDiagnosticLog: repository.getDownloadDiagnosticLog(),
       defaultHomeScreen: resolveInitialTaskbarRoute(
         repository.getDefaultHomeScreen(),
@@ -136,32 +122,10 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
     );
   }
 
-  Future<void> setAppDiagnosticLog(bool enabled) async {
-    final repository = ref.read(settingsRepositoryProvider);
-    if (!enabled) {
-      await ref.read(appDiagnosticsProvider).setEnabled(false);
-      state = state.copyWith(appDiagnosticLog: false);
-      await repository.setAppDiagnosticLog(false);
-      return;
-    }
-    final previous = state.appDiagnosticLog;
-    await repository.setAppDiagnosticLog(enabled);
-    try {
-      await ref.read(appDiagnosticsProvider).setEnabled(enabled);
-    } catch (_) {
-      await repository.setAppDiagnosticLog(previous);
-      rethrow;
-    }
-    state = state.copyWith(appDiagnosticLog: enabled);
-    unawaited(
-      recordAppDiagnosticMetadata(
-        diagnostics: ref.read(appDiagnosticsProvider),
-      ),
-    );
-  }
-
   Future<void> setDownloadDiagnosticLog(bool enabled) async {
-    await ref.read(settingsRepositoryProvider).setDownloadDiagnosticLog(enabled);
+    await ref
+        .read(settingsRepositoryProvider)
+        .setDownloadDiagnosticLog(enabled);
     await configureNativeDownloadDiagnosticLog(enabled);
     state = state.copyWith(downloadDiagnosticLog: enabled);
   }
@@ -297,7 +261,7 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
     await ref
         .read(settingsRepositoryProvider)
         .setDownloadNotificationPrefs(prefs);
-    await configurePackageNotificationsV2(FileDownloader(), prefs);
+    await configurePackageNotificationsV2(configuredFileDownloaderV2(), prefs);
     state = state.copyWith(downloadNotifications: prefs);
   }
 }

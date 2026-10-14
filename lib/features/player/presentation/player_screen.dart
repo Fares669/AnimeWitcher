@@ -17,7 +17,6 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
-import '../../../../core/logger/app_diagnostics.dart';
 import '../../../../core/utils/immersive_mode.dart';
 import '../../../../core/utils/window_controls_visibility.dart';
 import '../../../../core/providers/device_info_provider.dart';
@@ -101,7 +100,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   DateTime? _lastBackAt;
 
   bool _isExiting = false;
-  int _diagnosticSourceSessionId = 0;
   bool _isTv = false;
   bool _isTablet = false;
   bool _wasPlayingBeforeBackground = false;
@@ -226,11 +224,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       _,
       next,
     ) {
-      if (!_isExiting &&
-          _playerController.multimediaItem != null &&
-          identical(_playerController.player, _player)) {
-        _diagnosticSourceSessionId = next.sourceSessionId;
-      }
       // The startup timeout is only for the period before the first real
       // playback frame. Once position advances, runtime buffering/source
       // switching must never be allowed to eject the user from the player.
@@ -261,14 +254,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       if (!mounted) return;
       _startupTimeoutTimer = null;
       if (!_playerController.hasConfirmedPlaybackFrame) {
-        appDiagnostics.record(
-          'player.startup_timeout',
-          fields: {
-            'sourceSessionId': _diagnosticSourceSessionId,
-            'phase': _playerController.currentState.uiPhase.kind.name,
-            'elapsedMs': 30000,
-          },
-        );
         unawaited(_handleBack());
       }
     });
@@ -276,19 +261,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.resumed) {
-      appDiagnostics.record(
-        'player.lifecycle',
-        fields: {
-          'sourceSessionId': _diagnosticSourceSessionId,
-          'reason': state == AppLifecycleState.resumed
-              ? 'foreground'
-              : 'background',
-        },
-      );
-    }
     // Desktop platforms (Windows, macOS, Linux) do not have mobile OS background
     // restrictions or socket freezes when minimized/unfocused; users expect playback
     // to continue in the background on desktop.
@@ -372,12 +344,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   @override
   void dispose() {
-    if (!_isExiting) {
-      appDiagnostics.record(
-        'player.route_exit.begin',
-        fields: {'sourceSessionId': _diagnosticSourceSessionId},
-      );
-    }
     applePersistentGlassHeaderController.hide(this);
     WidgetsBinding.instance.removeObserver(this);
 
@@ -408,12 +374,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _playerStateSub?.close();
     _playerController.disposeController(player: _player);
 
-    unawaited(
-      disposePlayerAfterExit(
-        _player,
-        sourceSessionId: _diagnosticSourceSessionId,
-      ),
-    );
+    unawaited(disposePlayerAfterExit(_player));
     _videoViewController.dispose();
     _controlsVisible.removeListener(_syncWindowControls);
     windowControlsHidden.value = false;
@@ -444,10 +405,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       }
     }
     _startupTimeoutTimer?.cancel();
-    appDiagnostics.record(
-      'player.route_exit.end',
-      fields: {'sourceSessionId': _diagnosticSourceSessionId},
-    );
     super.dispose();
   }
 
@@ -730,10 +687,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   Future<void> _handleBack() async {
     if (!context.mounted || _isExiting) return;
     _isExiting = true;
-    appDiagnostics.record(
-      'player.route_exit.begin',
-      fields: {'sourceSessionId': _diagnosticSourceSessionId},
-    );
     _startupTimeoutTimer?.cancel();
     // Invalidate startup/resume work BEFORE stop yields. A late cloud bookmark
     // must not reopen the engine after stop, or target a subsequently opened route.
@@ -744,10 +697,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     // and video-controller initialisation, all inside a lock — so a
     // synchronous dispose() can start that and return, leaving the episode
     // audible over whatever screen comes next.
-    await stopPlayerBeforeExit(
-      _player,
-      sourceSessionId: _diagnosticSourceSessionId,
-    );
+    await stopPlayerBeforeExit(_player);
     try {
       // The native engine only carries live streams, but it is closed the
       // same way rather than left to whatever teardown happens later.
