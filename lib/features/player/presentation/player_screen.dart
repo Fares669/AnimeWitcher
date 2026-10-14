@@ -117,6 +117,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   @override
   void initState() {
     super.initState();
+    // Count from page entry so renderer/source preparation overlaps the delay.
+    final localPlaybackReady = Future<void>.delayed(
+      const Duration(milliseconds: 500),
+    );
     MediaKit.ensureInitialized();
     WidgetsBinding.instance.addObserver(this);
 
@@ -246,6 +250,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         episode: widget.episode,
         selectedSource: widget.selectedSource,
         videoViewController: _videoViewController,
+        localPlaybackReady: localPlaybackReady,
       );
     });
 

@@ -507,6 +507,211 @@ void main() {
     return replacement;
   }
 
+  Future<Completer<void>> pageEntryGate(WidgetTester tester) async {
+    // Real IO continuations must not wait on fake-zone microtasks after expiry.
+    final gate = (await tester.runAsync(() async => Completer<void>()))!;
+    Timer(const Duration(milliseconds: 500), gate.complete);
+    return gate;
+  }
+
+  Future<({Future<void> done})> prepareEntry(
+    WidgetTester tester, {
+    required Future<void> localPlaybackReady,
+    String url = '/saved/entry.mp4',
+    _Player? target,
+    _ReadinessNative? native,
+  }) async {
+    final activePlayer = target ?? player;
+    late Future<void> startup;
+    await tester.runAsync(() async {
+      final activeNative = native ?? (_ReadinessNative()..renderer.complete());
+      activePlayer.native = activeNative;
+      final episode = _episode(1);
+      startup = controller.init(
+        player: activePlayer,
+        item: _item([episode, _episode(2)]),
+        videoUrl: url,
+        episode: episode,
+        selectedSource: StreamResult(url: url, source: 'Selected'),
+        localPlaybackReady: localPlaybackReady,
+      );
+      await activeNative.readinessReached.future;
+    });
+    return (done: startup);
+  }
+
+  testWidgets('local engine waits until 500 ms from page entry', (
+    tester,
+  ) async {
+    final ready = (await pageEntryGate(tester)).future;
+    await tester.pump(const Duration(milliseconds: 200));
+    final entry = await prepareEntry(tester, localPlaybackReady: ready);
+    expect(player.opened, isEmpty);
+    expect(player.state.playing, isFalse);
+    await tester.pump(const Duration(milliseconds: 299));
+    expect(player.opened, isEmpty);
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.runAsync(() => entry.done);
+    expect(player.opened, ['/saved/entry.mp4']);
+  });
+
+  testWidgets('remote engine does not wait for the local entry deadline', (
+    tester,
+  ) async {
+    final ready = (await pageEntryGate(tester)).future;
+    final entry = await prepareEntry(
+      tester,
+      localPlaybackReady: ready,
+      url: 'https://video.test/entry.mp4',
+    );
+    await tester.runAsync(() => entry.done);
+    expect(player.opened, ['https://video.test/entry.mp4']);
+    await tester.pump(const Duration(milliseconds: 500));
+  });
+
+  testWidgets('slow local preparation does not add another 500 ms', (
+    tester,
+  ) async {
+    final ready = (await pageEntryGate(tester)).future;
+    final native = (await tester.runAsync(() async => _ReadinessNative()))!;
+    final entry = await prepareEntry(
+      tester,
+      localPlaybackReady: ready,
+      native: native,
+    );
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(player.opened, isEmpty);
+    await tester.runAsync(() async {
+      native.renderer.complete();
+      await entry.done;
+    });
+    expect(player.opened, ['/saved/entry.mp4']);
+  });
+
+  testWidgets('leaving before the local deadline prevents engine open', (
+    tester,
+  ) async {
+    final ready = (await pageEntryGate(tester)).future;
+    final entry = await prepareEntry(tester, localPlaybackReady: ready);
+    await tester.runAsync(
+      () async => controller.disposeController(player: player),
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.runAsync(() => entry.done);
+    expect(player.opened, isEmpty);
+  });
+
+  testWidgets(
+    'replacement route gets its own deadline and abandons the old open',
+    (tester) async {
+      final oldReady = (await pageEntryGate(tester)).future;
+      final oldEntry = await prepareEntry(tester, localPlaybackReady: oldReady);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.runAsync(
+        () async => controller.disposeController(player: player),
+      );
+      final replacement = (await tester.runAsync(() async => _Player()))!;
+      additionalPlayers.add(replacement);
+      final ready = (await pageEntryGate(tester)).future;
+      final entry = await prepareEntry(
+        tester,
+        localPlaybackReady: ready,
+        target: replacement,
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.runAsync(() => oldEntry.done);
+      expect(player.opened, isEmpty);
+      expect(replacement.opened, isEmpty);
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.runAsync(() => entry.done);
+      expect(player.opened, isEmpty);
+      expect(replacement.opened, ['/saved/entry.mp4']);
+    },
+  );
+
+  testWidgets(
+    'changing source before the deadline abandons the pending local open',
+    (tester) async {
+      final ready = (await pageEntryGate(tester)).future;
+      final entry = await prepareEntry(tester, localPlaybackReady: ready);
+      await tester.runAsync(() async {
+        await controller.switchToSource(
+          const StreamResult(
+            url: 'https://video.test/replacement.mp4',
+            source: 'Replacement',
+          ),
+        );
+      });
+      expect(player.opened, ['https://video.test/replacement.mp4']);
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.runAsync(() => entry.done);
+      expect(player.opened, ['https://video.test/replacement.mp4']);
+    },
+  );
+
+  for (final resumeMs in [0, 90000]) {
+    testWidgets(
+      'background pause remains effective at the local deadline with bookmark $resumeMs',
+      (tester) async {
+        history.position = resumeMs;
+        player.value = player.value.copyWith(
+          duration: const Duration(minutes: 20),
+        );
+        final ready = (await pageEntryGate(tester)).future;
+        final entry = await prepareEntry(tester, localPlaybackReady: ready);
+        await tester.runAsync(() async {
+          controller.setAppBackgrounded(true);
+          await controller.pause(onlyWhileBackgrounded: true);
+        });
+        expect(player.state.playing, isFalse);
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.runAsync(() => entry.done);
+        expect(player.opened, ['/saved/entry.mp4']);
+        if (resumeMs > 0) {
+          expect(player.seeks, [Duration(milliseconds: resumeMs)]);
+        }
+        expect(player.state.playing, isFalse);
+      },
+    );
+  }
+
+  for (final inPip in [false, true]) {
+    testWidgets(
+      '${inPip ? 'PiP' : 'returning foreground before the deadline'} allows local autoplay',
+      (tester) async {
+        final ready = (await pageEntryGate(tester)).future;
+        final entry = await prepareEntry(tester, localPlaybackReady: ready);
+        await tester.runAsync(() async {
+          controller.setAppBackgrounded(true);
+          if (inPip) {
+            controller.setInPip(true);
+          } else {
+            await controller.pause(onlyWhileBackgrounded: true);
+            controller.setAppBackgrounded(false);
+          }
+        });
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.runAsync(() => entry.done);
+        expect(player.state.playing, isTrue);
+      },
+    );
+  }
+
+  testWidgets(
+    'next downloaded episode reuses the elapsed page-entry deadline',
+    (tester) async {
+      final ready = (await pageEntryGate(tester)).future;
+      final entry = await prepareEntry(tester, localPlaybackReady: ready);
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.runAsync(() async {
+        await entry.done;
+        player.advance(const Duration(seconds: 5));
+        await controller.playNextEpisode();
+      });
+      expect(player.opened, ['/saved/entry.mp4', '/saved/episode-2.mp4']);
+    },
+  );
+
   test('local playback recovery never checks a router connection', () async {
     await startSource(local: true);
     player.errors.add('Connection reset by peer');

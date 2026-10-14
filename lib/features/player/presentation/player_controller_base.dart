@@ -274,6 +274,7 @@ class PlayerController extends Notifier<PlayerState> {
   bool _isInitialized = false;
   bool _isDisposed = false;
   int _sourceSessionSerial = 0;
+  Future<void>? _localPlaybackReady;
 
   bool _hasMarkedWatched = false;
   int _catalogGeneration = 0;
@@ -753,7 +754,9 @@ class PlayerController extends Notifier<PlayerState> {
     Episode? episode,
     StreamResult? selectedSource,
     VideoController? videoViewController,
+    Future<void>? localPlaybackReady,
   }) async {
+    _localPlaybackReady = localPlaybackReady;
     _cancelAutoSubtitleSelection();
     _isDisposed = false;
     // The provider survives routes. Never reuse a previous route's source ID.
@@ -2539,7 +2542,7 @@ class PlayerController extends Notifier<PlayerState> {
   /// position. A source that is only a server link is resolved to a playable
   /// stream first, the same way the picker does when one is chosen.
   Future<bool> switchToSource(StreamResult source) async {
-    final sourceSessionId = state.sourceSessionId;
+    var sourceSessionId = state.sourceSessionId;
     if (!_isCurrentSourceSession(sourceSessionId)) return false;
     var playable = source;
     if (source.requiresResolution) {
@@ -2550,6 +2553,10 @@ class PlayerController extends Notifier<PlayerState> {
         return false;
       }
       playable = streams.first;
+    }
+    // A manual choice must invalidate an initial open still waiting at entry.
+    if (!_hasConfirmedPlaybackFrame) {
+      sourceSessionId = _beginSourceSession();
     }
     await _changeStream(playable, manualSelection: true);
     return _isCurrentSourceSession(sourceSessionId);
@@ -2814,6 +2821,12 @@ class PlayerController extends Notifier<PlayerState> {
     return isActive();
   }
 
+  bool _shouldPauseLocalStartup(String url) =>
+      !_hasConfirmedPlaybackFrame &&
+      AppUtils.isLocalFile(url) &&
+      _isAppBackgrounded &&
+      !_isInPip;
+
   Future<void> _openResolvedStream(
     String playUrl,
     StreamResult stream,
@@ -2833,8 +2846,6 @@ class PlayerController extends Notifier<PlayerState> {
         await player.pause();
         if (!_isCurrentSourceSession(sourceSessionId)) return;
       }
-      _videoViewController?.setAutoPlay(play);
-
       String finalUrl = playUrl;
       if (finalUrl.contains('play.php') || finalUrl.contains('index.php')) {
         finalUrl = LocalProxyService.instance.getProxyUrl(
@@ -2864,6 +2875,13 @@ class PlayerController extends Notifier<PlayerState> {
         }
       }
 
+      if (AppUtils.isLocalFile(playUrl)) {
+        await _localPlaybackReady;
+        if (!_isCurrentSourceSession(sourceSessionId)) return;
+      }
+      _videoViewController?.setAutoPlay(
+        play && !_shouldPauseLocalStartup(playUrl),
+      );
       final subs = state.externalSubtitles;
       final clock = _diagnosticClock();
       _recordPlaybackDiagnostic(
@@ -2978,6 +2996,10 @@ class PlayerController extends Notifier<PlayerState> {
 
     if (!_isCurrentSourceSession(sourceSessionId)) return;
     if (!await _waitForNativePlayerReady(player, sourceSessionId)) return;
+    if (AppUtils.isLocalFile(playUrl)) {
+      await _localPlaybackReady;
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
+    }
     final clock = _diagnosticClock();
     _recordPlaybackDiagnostic(
       'player.engine_open.begin',
@@ -2985,7 +3007,10 @@ class PlayerController extends Notifier<PlayerState> {
       fields: {'engine': 'media_kit', 'local': AppUtils.isLocalFile(playUrl)},
     );
     try {
-      await player.open(Media(mediaKitUrl, httpHeaders: headers), play: play);
+      await player.open(
+        Media(mediaKitUrl, httpHeaders: headers),
+        play: play && !_shouldPauseLocalStartup(playUrl),
+      );
       _recordPlaybackDiagnostic(
         'player.engine_open.end',
         sourceSessionId: sourceSessionId,
@@ -5176,7 +5201,9 @@ class PlayerController extends Notifier<PlayerState> {
     if (!_isCurrentSourceSession(sourceSessionId)) return;
     await _waitUntilNearResumePosition(targetMs);
     if (!_isCurrentSourceSession(sourceSessionId)) return;
-    await play();
+    if (!_shouldPauseLocalStartup(state.currentStream?.url ?? _videoUrl)) {
+      await play();
+    }
     if (!_isCurrentSourceSession(sourceSessionId)) return;
     await _waitUntilNearResumePosition(targetMs);
   }
