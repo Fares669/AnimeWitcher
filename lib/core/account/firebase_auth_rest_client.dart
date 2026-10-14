@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../network/app_diagnostic_interceptor.dart';
+
 import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
 
@@ -15,7 +17,9 @@ class FirebaseAuthRestClient {
               sendTimeout: const Duration(seconds: 20),
               headers: const <String, String>{'Accept': 'application/json'},
             ),
-          );
+          ) {
+    attachAppDiagnosticInterceptor(_dio, operation: 'account_http');
+  }
 
   final Dio _dio;
   final String _apiKey;

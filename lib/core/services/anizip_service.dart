@@ -2,6 +2,7 @@
 import 'package:dio/dio.dart';
 
 import '../domain/entity/multimedia_item.dart';
+import '../network/app_diagnostic_interceptor.dart';
 
 /// Best-effort AniZip enrichment for episode artwork and franchise season
 /// labels. Playback episodes keep AnimeWitcher's local season identity; the
@@ -39,7 +40,9 @@ class AniZipService {
                 connectTimeout: const Duration(seconds: 8),
                 receiveTimeout: const Duration(seconds: 8),
               ),
-            );
+            ) {
+    attachAppDiagnosticInterceptor(_dio, operation: 'anizip_http');
+  }
 
   Future<AniZipMapping?> fetchSeasonMapping(int aniListId) {
     if (aniListId <= 0) return Future<AniZipMapping?>.value();

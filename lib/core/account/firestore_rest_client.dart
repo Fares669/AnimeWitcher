@@ -2,6 +2,8 @@ import 'dart:math';
 
 import 'package:dio/dio.dart';
 
+import '../network/app_diagnostic_interceptor.dart';
+
 import 'animewitcher_account_config.dart';
 import 'animewitcher_account_models.dart';
 
@@ -128,7 +130,9 @@ class FirestoreRestClient {
               sendTimeout: const Duration(seconds: 25),
               headers: const <String, String>{'Accept': 'application/json'},
             ),
-          );
+          ) {
+    attachAppDiagnosticInterceptor(_dio, operation: 'account_http');
+  }
 
   final Dio _dio;
   final Map<String, int> _catalogDurationCache = <String, int>{};

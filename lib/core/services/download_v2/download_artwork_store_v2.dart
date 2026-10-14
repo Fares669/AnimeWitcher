@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../network/poster_cache.dart';
+import '../../logger/app_diagnostics.dart';
 import '../../utils/image_fallbacks.dart';
 import 'download_continued_processing_v2.dart';
 import 'download_v2_models.dart';
@@ -182,6 +183,10 @@ final class DownloadArtworkStoreV2 {
     if (!allowed()) return null;
     final saved = await existing(logicalId, kind);
     if (!allowed()) return null;
+    appDiagnostics.record('artwork.lookup', fields: {
+      'phase': kind.name,
+      'result': saved == null ? 'missing' : 'hit',
+    });
     if (saved != null) return saved;
     final key = '$logicalId:${kind.name}';
     final candidates = <String>{
@@ -614,6 +619,10 @@ final class DownloadArtworkObserverV2
               : const [],
           legacyTaskId: source.legacyTaskId,
         );
+        appDiagnostics.record('artwork.capture', fields: {
+          'phase': kind.name,
+          'result': saved == null ? 'missing' : 'hit',
+        });
         final candidates = kind == DownloadArtworkKindV2.episode
             ? [source.episodeUrl, source.bannerUrl, source.posterUrl]
             : [source.posterUrl];

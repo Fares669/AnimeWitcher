@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 
 import 'http_defaults.dart';
+import 'app_diagnostic_interceptor.dart';
 
 const String kStaleConnectionRetriedExtra = 'staleConnectionRetried';
 
@@ -112,6 +113,7 @@ Dio createAnimeWitcherDio({
     ),
   );
   dio.httpClientAdapter = httpClientAdapter ?? ResettableIoHttpClientAdapter();
+  attachAppDiagnosticInterceptor(dio, operation: 'shared_http');
   dio.interceptors.add(StaleConnectionRetryInterceptor(dio));
   return dio;
 }
