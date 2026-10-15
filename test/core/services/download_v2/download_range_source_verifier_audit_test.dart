@@ -141,6 +141,69 @@ void main() {
       }
     });
   }
+  test('cancelling verification closes a held HTTP response', () async {
+    final root = await Directory.systemTemp.createTemp('aw-range-cancel-');
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final local = File(p.join(root.path, 'range.chunk'));
+    final original = [2, 3, 4, 5];
+    await local.writeAsBytes(original);
+    final requestReceived = Completer<HttpRequest>();
+    final cancellation = Completer<void>();
+    final disconnected = Completer<void>();
+    void markDisconnected() {
+      if (!disconnected.isCompleted) disconnected.complete();
+    }
+
+    final subscription = server.listen(requestReceived.complete);
+    Socket? socket;
+    StreamSubscription<List<int>>? socketSubscription;
+    try {
+      final task = DownloadTask(
+        taskId: 'cancelled-resource-part',
+        url: 'http://${server.address.address}:${server.port}/resource',
+        filename: 'range.chunk',
+        headers: {'Range': 'bytes=2-5', 'If-Range': '"resource"'},
+      );
+      final verification = verifySavedRangeSourceV2(
+        task,
+        local,
+        4,
+        8,
+        cancelled: cancellation.future,
+      );
+      final request = await requestReceived.future.timeout(
+        const Duration(seconds: 2),
+      );
+      request.response.statusCode = HttpStatus.partialContent;
+      request.response.contentLength = original.length;
+      request.response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes 2-5/8',
+      );
+      request.response.headers.set(HttpHeaders.etagHeader, '"resource"');
+      // Keep the body incomplete and observe the real peer disconnect.
+      socket = await request.response.detachSocket();
+      socketSubscription = socket.listen(
+        (_) {},
+        onDone: markDisconnected,
+        onError: (Object _) => markDisconnected(),
+      );
+      socket.add(original.take(1).toList());
+      await socket.flush();
+
+      cancellation.complete();
+      final result = await verification.timeout(const Duration(seconds: 2));
+      await disconnected.future.timeout(const Duration(seconds: 2));
+      expect(result, (matches: false, validator: null));
+      expect(await local.readAsBytes(), original);
+    } finally {
+      socket?.destroy();
+      await socketSubscription?.cancel();
+      await subscription.cancel();
+      await server.close(force: true);
+      await root.delete(recursive: true);
+    }
+  });
   test(
     'unavailable source parks saved bytes without authorizing reuse',
     () async {

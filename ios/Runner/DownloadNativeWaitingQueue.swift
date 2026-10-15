@@ -178,6 +178,8 @@ enum DownloadNativeWaitingQueue {
   private static let encryptedStateKey = stateKey + ".encrypted"
   // A locked/corrupt store must never be overwritten by an empty native load.
   private static var stateReadFailed = false
+  // A failed encrypted write must not let a later snapshot reoffer these bytes.
+  private static var pendingRangeCompletions: [String: Int] = [:]
 
   struct Waiter: Codable, Equatable, Sendable {
     var taskId: String
@@ -309,6 +311,7 @@ enum DownloadNativeWaitingQueue {
     var multipartPlans: [MultipartPlan]
     var multipartClaims: [MultipartClaim]
     var dartRangeGenerations: [String: Int]
+    var completedRangeGenerations: [String: Int]
     var rangeParentWithdrawnAtMicros: [String: Int64]
 
     init(
@@ -334,6 +337,7 @@ enum DownloadNativeWaitingQueue {
       multipartPlans: [MultipartPlan] = [],
       multipartClaims: [MultipartClaim] = [],
       dartRangeGenerations: [String: Int] = [:],
+      completedRangeGenerations: [String: Int] = [:],
       rangeParentWithdrawnAtMicros: [String: Int64] = [:]
     ) {
       self.snapshotVersion = snapshotVersion
@@ -358,6 +362,7 @@ enum DownloadNativeWaitingQueue {
       self.multipartPlans = multipartPlans
       self.multipartClaims = multipartClaims
       self.dartRangeGenerations = dartRangeGenerations
+      self.completedRangeGenerations = completedRangeGenerations
       self.rangeParentWithdrawnAtMicros = rangeParentWithdrawnAtMicros
     }
 
@@ -385,6 +390,7 @@ enum DownloadNativeWaitingQueue {
       multipartPlans = try container.decodeIfPresent([MultipartPlan].self, forKey: .multipartPlans) ?? []
       multipartClaims = try container.decodeIfPresent([MultipartClaim].self, forKey: .multipartClaims) ?? []
       dartRangeGenerations = try container.decodeIfPresent([String: Int].self, forKey: .dartRangeGenerations) ?? [:]
+      completedRangeGenerations = try container.decodeIfPresent([String: Int].self, forKey: .completedRangeGenerations) ?? [:]
       rangeParentWithdrawnAtMicros = try container.decodeIfPresent([String: Int64].self, forKey: .rangeParentWithdrawnAtMicros) ?? [:]
     }
 
@@ -554,6 +560,7 @@ enum DownloadNativeWaitingQueue {
       dartMultipartPlans[index].waiters.removeAll {
         rangeIdentity(for: $0)?.parentTaskId != parent || !isImmutableRangeWaiter($0)
           || ($0.generation ?? 0) <= (dartGenerations[$0.taskId] ?? 0)
+          || ($0.generation ?? 0) <= (current.completedRangeGenerations[$0.taskId] ?? 0)
       }
     }
     let plannedParents = Set(dartMultipartPlans.map(\.parentTaskId))
@@ -582,6 +589,10 @@ enum DownloadNativeWaitingQueue {
     // A snapshot predating withdrawal cannot prune that parent's cutoff.
     let knownParents = Set(dartTransferring + dartPaused + dartSessionIds)
     dartGenerations = dartGenerations.filter { childId, _ in
+      guard let parent = rangeParentId(fromChildId: childId) else { return false }
+      return knownParents.contains(parent) || snapshotCreatedAt <= (withdrawnParents[parent] ?? -1)
+    }
+    let completedRangeGenerations = current.completedRangeGenerations.filter { childId, _ in
       guard let parent = rangeParentId(fromChildId: childId) else { return false }
       return knownParents.contains(parent) || snapshotCreatedAt <= (withdrawnParents[parent] ?? -1)
     }
@@ -718,6 +729,7 @@ enum DownloadNativeWaitingQueue {
         multipartPlans: dartMultipartPlans,
         multipartClaims: current.multipartClaims,
         dartRangeGenerations: dartGenerations,
+        completedRangeGenerations: completedRangeGenerations,
         rangeParentWithdrawnAtMicros: withdrawnParents
       )
     )
@@ -733,6 +745,7 @@ enum DownloadNativeWaitingQueue {
   static func resetForTests() {
     lock.lock()
     defer { lock.unlock() }
+    pendingRangeCompletions.removeAll()
     UserDefaults.standard.removeObject(forKey: stateKey)
     UserDefaults.standard.removeObject(forKey: encryptedStateKey)
     stateReadFailed = false
@@ -857,6 +870,7 @@ enum DownloadNativeWaitingQueue {
     guard !stateReadFailed, !isAppInForeground(),
           parentMayRefillLocked(identity.parentTaskId, in: state),
           identity.generation > (state.dartRangeGenerations[identity.taskId] ?? 0),
+          identity.generation > (state.completedRangeGenerations[identity.taskId] ?? 0),
           let index = state.multipartClaims.firstIndex(where: {
             $0.claimId == claimId && $0.waiter.taskId == identity.taskId
               && $0.parentTaskId == identity.parentTaskId && $0.generation == identity.generation
@@ -895,7 +909,8 @@ enum DownloadNativeWaitingQueue {
       return owner.taskId == taskId && owner.parentTaskId == parentId
         && $0.state != .completed && !DownloadUrlSessionHook.callbacks(for: $0).hasSettledCompletion
     }) { return false }
-    guard generation >= (state.dartRangeGenerations[taskId] ?? 0) else { return false }
+    guard generation >= (state.dartRangeGenerations[taskId] ?? 0),
+          generation > (state.completedRangeGenerations[taskId] ?? 0) else { return false }
     let claims = state.multipartClaims.filter { $0.waiter.taskId == taskId }
     for claim in claims {
       guard let owner = rangeIdentity(for: claim.waiter), requested.canRevoke(owner) else { return false }
@@ -934,6 +949,37 @@ enum DownloadNativeWaitingQueue {
     state.multipartClaims.removeAll { $0.parentTaskId == parentId && !$0.launchCommitted }
     if !state.pausedTaskIds.contains(parentId) { state.pausedTaskIds.append(parentId) }
     return saveLocked(state)
+  }
+
+  /// Only the plugin's synchronous successful file-receipt status proves this
+  /// execution wrote its destination. A nil transport error is not that proof.
+  static func recordCompletedRange(task: URLSessionTask, succeeded: Bool?) {
+    guard succeeded == true, let identity = rangeIdentity(for: task) else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    pendingRangeCompletions[identity.taskId] = max(
+      pendingRangeCompletions[identity.taskId] ?? 0, identity.generation
+    )
+    let state = loadLocked()
+    guard !stateReadFailed else { return }
+    saveLocked(state)
+  }
+
+  private static func retainingPendingRangeCompletions(_ saved: State) -> State {
+    var state = saved
+    for (childId, generation) in pendingRangeCompletions {
+      state.completedRangeGenerations[childId] = max(state.completedRangeGenerations[childId] ?? 0, generation)
+    }
+    let completed = state.completedRangeGenerations
+    for index in state.multipartPlans.indices {
+      state.multipartPlans[index].waiters.removeAll {
+        ($0.generation ?? 0) <= (completed[$0.taskId] ?? 0)
+      }
+    }
+    state.multipartClaims.removeAll {
+      !$0.launchCommitted && $0.generation <= (completed[$0.waiter.taskId] ?? 0)
+    }
+    return state
   }
 
   private static func settleMultipartClaim(task: URLSessionTask) {
@@ -2168,6 +2214,7 @@ enum DownloadNativeWaitingQueue {
       let available = max(min(plan.maxConcurrent, 16) - occupiedIds.count, 0)
       let claimable = plan.waiters.filter {
         isImmutableRangeWaiter($0) && ($0.generation ?? 0) > (state.dartRangeGenerations[$0.taskId] ?? 0)
+          && ($0.generation ?? 0) > (state.completedRangeGenerations[$0.taskId] ?? 0)
           && !($0.claimId ?? "").isEmpty && ($0.claimLeaseMillis ?? 0) > 0
       }
       selected = Array(claimable.prefix(available))
@@ -2946,16 +2993,17 @@ enum DownloadNativeWaitingQueue {
     } else {
       data = UserDefaults.standard.data(forKey: stateKey)
     }
-    guard let data, let state = try? JSONDecoder().decode(State.self, from: data) else {
+    guard let data, var state = try? JSONDecoder().decode(State.self, from: data) else {
       if data != nil { stateReadFailed = true }
-      return State(
+      return retainingPendingRangeCompletions(State(
         maxConcurrent: 1,
         transferringTaskIds: [],
         pausedTaskIds: [],
         waiters: [],
         completedTaskIds: []
-      )
+      ))
     }
+    state = retainingPendingRangeCompletions(state)
     // Migrate old plaintext only after preserving every waiter, task JSON,
     // auth header and resume blob in authenticated encrypted storage.
     if UserDefaults.standard.object(forKey: stateKey) != nil {
@@ -2966,11 +3014,13 @@ enum DownloadNativeWaitingQueue {
 
   @discardableResult
   private static func saveLocked(_ state: State) -> Bool {
+    let state = retainingPendingRangeCompletions(state)
     guard !stateReadFailed,
           let data = try? JSONEncoder().encode(state),
           let encrypted = DownloadNativeQueueEncryption.encrypt(data) else { return false }
     UserDefaults.standard.set(encrypted, forKey: encryptedStateKey)
     UserDefaults.standard.removeObject(forKey: stateKey)
+    pendingRangeCompletions.removeAll()
     return true
   }
 
@@ -3287,16 +3337,19 @@ private enum DownloadUrlSessionHook {
     guard let method = class_getInstanceMethod(cls, finishDownloadSelector) else { return }
     originalFinishDownload = method_getImplementation(method)
     let block: @convention(block) (AnyObject, URLSession, URLSessionDownloadTask, URL) -> Void = { slf, session, downloadTask, location in
-      _ = callbacks(for: downloadTask).beginFinish()
+      let firstFinish = callbacks(for: downloadTask).beginFinish()
       DownloadNativeDiagnosticLog.record("file.received.beforePlugin", task: downloadTask)
       // 9.6.1/9.6.2 validate HTTP and move the temporary file synchronously.
       // Only plugin-supported status/progress observers publish that outcome.
-      _ = DownloadNativeWaitingQueue.terminalObservation.capture(
+      let succeeded = DownloadNativeWaitingQueue.terminalObservation.capture(
         execution: downloadTask, taskId: DownloadNativeWaitingQueue.taskId(from: downloadTask) ?? ""
       ) {
         guard let original = DownloadUrlSessionHook.originalFinishDownload else { return }
         let fn = unsafeBitCast(original, to: (@convention(c) (AnyObject, Selector, URLSession, URLSessionDownloadTask, URL) -> Void).self)
         fn(slf, finishDownloadSelector, session, downloadTask, location)
+      }
+      if firstFinish {
+        DownloadNativeWaitingQueue.recordCompletedRange(task: downloadTask, succeeded: succeeded)
       }
       DownloadNativeDiagnosticLog.record("file.received.afterPlugin", task: downloadTask)
     }

@@ -37,7 +37,8 @@ FUNCTIONS = "\n".join(function(name) for name in (
     "persist", "nowMillis", "nowMicros", "rangeParentId", "rangeIdentity", "isImmutableRangeWaiter",
     "parentMayRefillLocked", "requeueExpiredMultipartClaimsLocked",
     "releaseMultipartClaim", "commitMultipartClaimBeforeResume",
-    "claimRangeForDart", "withdrawRangeParent", "settleMultipartClaim", "rememberDownloadSession",
+    "claimRangeForDart", "withdrawRangeParent", "settleMultipartClaim", "recordCompletedRange",
+    "retainingPendingRangeCompletions", "rememberDownloadSession",
     "promoteMultipartIfPossible", "promoteMultipartPlan",
     "finishMultipartPromotionPass", "scanMultipartPlan", "startMultipartChild",
     "unique", "clamp", "string", "stringArray", "dictionaryArray", "stringMap",
@@ -89,6 +90,8 @@ enum DownloadNativeQueueEncryption { static let keyMissing = false }
 STATE = r'''
   private static let lock = NSLock()
   private static var stateReadFailed = false
+  private static var pendingRangeCompletions: [String: Int] = [:]
+  static var saveSucceeds = true
   static var stored = State(maxConcurrent: 2, transferringTaskIds: [], pausedTaskIds: [], waiters: [])
   static var foreground = false
   static let nativePromotionAvailable = true
@@ -101,8 +104,13 @@ STATE = r'''
   private static var multipartPromotionCompletions: [String: [() -> Void]] = [:]
   private static var nativeMultipartTasksByClaimId: [String: URLSessionTask] = [:]
   private static func isAppInForeground() -> Bool { foreground }
-  private static func loadLocked() -> State { stored }
-  @discardableResult private static func saveLocked(_ state: State) -> Bool { stored = state; return true }
+  private static func loadLocked() -> State { retainingPendingRangeCompletions(stored) }
+  @discardableResult private static func saveLocked(_ state: State) -> Bool {
+    guard saveSucceeds else { return false }
+    stored = retainingPendingRangeCompletions(state)
+    pendingRangeCompletions = [:]
+    return true
+  }
 '''
 
 CHECKS = r'''
@@ -132,6 +140,7 @@ CHECKS = r'''
   }
   static func reset(_ waiters: [Waiter], claims: [MultipartClaim] = [], width: Int = 2) {
     foreground = false
+    pendingRangeCompletions = [:]; saveSucceeds = true
     nativeMultipartTasksByClaimId = [:]
     multipartPromotionParents = []; multipartPromotionPendingParents = []; multipartPromotionCompletions = [:]
     DownloadUrlSessionHook.observations = [:]
@@ -222,6 +231,105 @@ CHECKS = r'''
     _ = persist(from: resumed)
     precondition(stored.multipartPlans[0].waiters == [first], "fresh resumed parent can export native candidates")
 
+    // Success belongs to the exact synchronous plugin file-receipt callback,
+    // not URLSession's nil transport error, a byte count, or a reusable task ID.
+    reset([first, second])
+    let receipts = DownloadTerminalObservation()
+    let finished = URLSessionTask(); finished.taskDescription = first.taskDescription
+    let success = receipts.capture(execution: finished, taskId: first.taskId) {
+      receipts.record(taskId: first.taskId, succeeded: true)
+    }
+    recordCompletedRange(task: finished, succeeded: success)
+    settleMultipartClaim(task: finished)
+    precondition(stored.completedRangeGenerations[first.taskId] == 1)
+    _ = persist(from: snapshot(plans: plans([first, second])))
+    precondition(stored.multipartPlans[0].waiters == [second], "stale snapshot cannot reoffer successful range")
+    let afterSuccess = URLSession()
+    promoteMultipartIfPossible(on: afterSuccess); afterSuccess.answer()
+    precondition(afterSuccess.tasks.count == 1 && rangeIdentity(for: afterSuccess.tasks[0])?.taskId == second.taskId,
+                 "completion frees a slot for the next range, never its completed bytes")
+    stored = try! JSONDecoder().decode(State.self, from: JSONEncoder().encode(stored))
+    _ = persist(from: snapshot(plans: plans([first])))
+    precondition(stored.multipartPlans[0].waiters.isEmpty, "completion fence survives process storage round trip")
+    _ = persist(from: snapshot(plans: plans([newer])))
+    precondition(stored.multipartPlans[0].waiters == [newer], "explicit newer Dart attempt may retry invalidated bytes")
+    precondition(stored.completedRangeGenerations[first.taskId] == 1, "new offer cannot erase the old completion fence")
+    _ = persist(from: snapshot(plans: plans([first])))
+    precondition(stored.multipartPlans[0].waiters.isEmpty, "older offer remains fenced after a newer offer")
+
+    reset([], claims: [claim(first)])
+    let completedNative = URLSession()
+    startMultipartChild(first, on: completedNative)
+    let nativeFinished = completedNative.tasks[0]
+    recordCompletedRange(task: nativeFinished, succeeded: true)
+    precondition(stored.multipartClaims.count == 1, "file receipt must retain committed ownership until didComplete settles")
+    nativeFinished.state = .completed
+    settleMultipartClaim(task: nativeFinished)
+    _ = persist(from: snapshot(plans: plans([first])))
+    precondition(stored.multipartClaims.isEmpty && stored.multipartPlans[0].waiters.isEmpty,
+                 "completed native claim cannot be reoffered after settlement")
+    precondition(!dart(first), "same-generation Dart launch is also fenced")
+    precondition(dart(newer), "newer Dart recovery can explicitly claim the immutable range")
+
+    reset([first])
+    let newerFinished = URLSessionTask(); newerFinished.taskDescription = newer.taskDescription
+    recordCompletedRange(task: newerFinished, succeeded: true)
+    recordCompletedRange(task: finished, succeeded: true)
+    precondition(stored.completedRangeGenerations[first.taskId] == 2, "late older receipt never lowers a completed generation")
+    _ = persist(from: snapshot(plans: plans([first, newer])))
+    precondition(stored.multipartPlans[0].waiters.isEmpty, "same and older generations stay fenced")
+
+    reset([first])
+    for result: Bool? in [nil, false] {
+      recordCompletedRange(task: finished, succeeded: result)
+      precondition(stored.completedRangeGenerations.isEmpty && stored.multipartPlans[0].waiters == [first],
+                   "unknown/failed plugin receipt cannot fence a retryable range")
+    }
+    let failedReceipt = URLSession()
+    promoteMultipartIfPossible(on: failedReceipt); failedReceipt.answer()
+    precondition(failedReceipt.tasks.count == 1, "failed receipts remain retryable")
+
+    // Even an already selected waiter must recheck a success that won the lock.
+    reset([], claims: [claim(first)])
+    recordCompletedRange(task: finished, succeeded: true)
+    let selectedBeforeCompletion = URLSession()
+    startMultipartChild(first, on: selectedBeforeCompletion)
+    precondition(selectedBeforeCompletion.tasks.isEmpty && stored.multipartClaims.isEmpty)
+
+    // Keep an unsaved success authoritative until encryption/storage recovers.
+    reset([first], claims: [claim(first)])
+    saveSucceeds = false
+    recordCompletedRange(task: finished, succeeded: true)
+    precondition(pendingRangeCompletions[first.taskId] == 1 && stored.completedRangeGenerations.isEmpty)
+    let duringWriteFailure = URLSession()
+    startMultipartChild(first, on: duringWriteFailure)
+    precondition(duringWriteFailure.tasks.isEmpty, "failed fence persistence must not create a duplicate")
+    saveSucceeds = true
+    _ = persist(from: snapshot(plans: plans([first])))
+    precondition(pendingRangeCompletions.isEmpty && stored.completedRangeGenerations[first.taskId] == 1)
+    precondition(stored.multipartPlans[0].waiters.isEmpty, "next snapshot durably retains the unsaved fence")
+
+    reset([first])
+    recordCompletedRange(task: finished, succeeded: true)
+    precondition(withdrawRangeParent(from: ["parentTaskId": parent]))
+    let completionCutoff = stored.rangeParentWithdrawnAtMicros[parent]!
+    var preWithdrawal = snapshot(plans: [])
+    preWithdrawal["transferringTaskIds"] = []; preWithdrawal["pausedTaskIds"] = []
+    preWithdrawal["snapshotCreatedAtMicros"] = completionCutoff
+    _ = persist(from: preWithdrawal)
+    precondition(stored.completedRangeGenerations[first.taskId] == 1, "old empty snapshot cannot prune completion evidence")
+    var pausedCompletion = snapshot(plans: [], paused: true)
+    pausedCompletion["snapshotCreatedAtMicros"] = completionCutoff + 1
+    _ = persist(from: pausedCompletion)
+    precondition(stored.completedRangeGenerations[first.taskId] == 1, "paused parent retains completed bytes across resume")
+    let beforeTerminalVersion = stored.snapshotVersion
+    _ = persist(from: ["snapshotVersion": beforeTerminalVersion + 1, "snapshotCreatedAtMicros": completionCutoff + 2,
+      "transferringTaskIds": [], "pausedTaskIds": [], "sessionTaskIds": [], "multipartPlans": []])
+    precondition(stored.completedRangeGenerations.isEmpty, "authoritative terminal snapshot bounds completion metadata")
+    _ = persist(from: ["snapshotVersion": beforeTerminalVersion, "snapshotCreatedAtMicros": completionCutoff,
+      "transferringTaskIds": [parent], "multipartPlans": plans([first])])
+    precondition(stored.multipartPlans.isEmpty, "old snapshot cannot replay after terminal pruning")
+
     // Exercise the real production lock from competing Dart/native workers.
     for _ in 0..<100 {
       reset([first], claims: [claim(first)])
@@ -240,10 +348,19 @@ CHECKS = r'''
 
     let savedState = try! JSONEncoder().encode(stored)
     var oldState = try! JSONSerialization.jsonObject(with: savedState) as! [String: Any]
+    oldState.removeValue(forKey: "completedRangeGenerations")
+    let previousSchema = try! JSONDecoder().decode(State.self, from: JSONSerialization.data(withJSONObject: oldState))
+    precondition(previousSchema.completedRangeGenerations.isEmpty,
+                 "previous encrypted payload schema defaults new completion fences to empty")
+    precondition(previousSchema.multipartPlans == stored.multipartPlans
+      && previousSchema.multipartClaims == stored.multipartClaims
+      && previousSchema.dartRangeGenerations == stored.dartRangeGenerations
+      && previousSchema.rangeParentWithdrawnAtMicros == stored.rangeParentWithdrawnAtMicros,
+      "adding completion fences preserves the prior queue and ownership metadata")
     oldState.removeValue(forKey: "dartRangeGenerations")
     oldState.removeValue(forKey: "rangeParentWithdrawnAtMicros")
     let decoded = try! JSONDecoder().decode(State.self, from: JSONSerialization.data(withJSONObject: oldState))
-    precondition(decoded.dartRangeGenerations.isEmpty && decoded.rangeParentWithdrawnAtMicros.isEmpty,
+    precondition(decoded.completedRangeGenerations.isEmpty && decoded.dartRangeGenerations.isEmpty && decoded.rangeParentWithdrawnAtMicros.isEmpty,
                  "existing encrypted queue state decodes safely across upgrade")
 
     reset([first, second])
@@ -255,15 +372,16 @@ CHECKS = r'''
     precondition(overlap.queries.count == 1)
     let observation = DownloadUrlSessionHook.callbacks(for: finishing)
     _ = observation.beginComplete()
+    recordCompletedRange(task: finishing, succeeded: true)
     observation.markCompletionSettled()
     promoteMultipartIfPossible(on: overlap) { settled.signal() }
     precondition(overlap.queries.count == 1, "overlapping completion coalesces enumeration")
     overlap.answer([finishing])
-    precondition(overlap.tasks.count == 3, "settled execution does not consume a live slot even while state still running")
+    precondition(overlap.tasks.count == 2, "settled successful execution refills the next range even while its state still says running")
     precondition(overlap.queries.count == 1, "a completion during enumeration schedules a rescan")
     precondition(settled.wait(timeout: .now()) == .timedOut, "finish-events completion barrier stays pending through the rescan")
     overlap.answer()
-    precondition(overlap.queries.isEmpty && overlap.tasks.count == 3, "rescan respects committed slots and cannot duplicate")
+    precondition(overlap.queries.isEmpty && overlap.tasks.count == 2, "rescan respects committed slots and cannot duplicate")
     precondition(settled.wait(timeout: .now() + 1) == .success)
     precondition(settled.wait(timeout: .now() + 1) == .success, "all coalesced callers settle after resume commits")
 
@@ -288,17 +406,34 @@ CHECKS = r'''
       let doneParent = "aw_v2_completed_\(index)"
       let child = doneParent + ".part.0"
       precondition(claimRangeForDart(from: ["taskId": child, "parentTaskId": doneParent, "attemptGeneration": 1]))
+      var completedWaiter = waiter(0)
+      completedWaiter.taskId = child
+      completedWaiter.taskJson = completedWaiter.taskJson.replacingOccurrences(of: parent, with: doneParent)
+      completedWaiter.claimId = "\(child):g1"
+      let completedExecution = URLSessionTask()
+      completedExecution.taskDescription = completedWaiter.taskDescription
+      recordCompletedRange(task: completedExecution, succeeded: true)
+      precondition(stored.completedRangeGenerations == [child: 1],
+                   "each parent records its completion without retaining earlier terminal parents")
       precondition(withdrawRangeParent(from: ["parentTaskId": doneParent]))
       let cutoff = stored.rangeParentWithdrawnAtMicros[doneParent]!
       let oldVersion = stored.snapshotVersion
       _ = persist(from: ["snapshotVersion": oldVersion + 1, "snapshotCreatedAtMicros": cutoff + 1,
         "transferringTaskIds": [], "pausedTaskIds": [], "sessionTaskIds": [], "multipartPlans": []])
-      precondition(stored.dartRangeGenerations.isEmpty && stored.rangeParentWithdrawnAtMicros.isEmpty,
-                   "terminal snapshots bound metadata instead of accumulating completed parent IDs")
-      _ = persist(from: ["snapshotVersion": oldVersion, "snapshotCreatedAtMicros": cutoff - 1,
-        "transferringTaskIds": [doneParent], "pausedTaskIds": [], "sessionTaskIds": [doneParent],
-        "multipartPlans": [["parentTaskId": doneParent, "maxConcurrent": 2, "waiters": []]]])
-      precondition(stored.multipartPlans.isEmpty, "terminal snapshot version rejects replay after tombstone pruning")
+      precondition(stored.dartRangeGenerations.isEmpty && stored.rangeParentWithdrawnAtMicros.isEmpty
+        && stored.completedRangeGenerations.isEmpty && pendingRangeCompletions.isEmpty,
+        "terminal snapshots bound claims, withdrawals and completion fences across 1000 parents")
+      for replayVersion in [oldVersion, oldVersion + 1] {
+        let accepted = persist(from: ["snapshotVersion": replayVersion, "snapshotCreatedAtMicros": cutoff - 1,
+          "transferringTaskIds": [doneParent], "pausedTaskIds": [], "sessionTaskIds": [doneParent],
+          "multipartPlans": [["parentTaskId": doneParent, "maxConcurrent": 2, "waiters": [payload(completedWaiter)]]]])
+        precondition(accepted == oldVersion + 1 && stored.multipartPlans.isEmpty && stored.completedRangeGenerations.isEmpty,
+                     "older/equal snapshot with a real completed offer cannot replay after terminal pruning")
+      }
+      let replaySession = URLSession()
+      promoteMultipartIfPossible(on: replaySession)
+      precondition(replaySession.tasks.isEmpty && replaySession.queries.isEmpty,
+                   "pruned terminal parent never reaches native promotion after stale replay")
     }
 
     reset([first])
@@ -308,7 +443,7 @@ CHECKS = r'''
     precondition(!isImmutableRangeWaiter(invalid), "open-ended range fails closed")
     invalid = first; invalid.progress = 0.1
     precondition(!isImmutableRangeWaiter(invalid), "native never restarts partial progress from byte zero")
-    print("PASS: production range revocation, native ownership, generation fencing, orphan recovery, pause, expiry, cap and coalescing")
+    print("PASS: production range revocation, native ownership, generation/completion fencing, failed-write recovery, orphan recovery, pause, expiry, cap and coalescing")
   }
 '''
 
@@ -321,6 +456,9 @@ hook = QUEUE[QUEUE.index("  private static func hookComplete(on cls:"):QUEUE.ind
 assert hook.index("fn(slf, completeSelector") < hook.index("observeRangeCompletion")
 assert "retryBackgroundTransferIfNeeded" not in hook
 assert "handlePluginTaskCompleted" not in hook
+receipt_hook = QUEUE[QUEUE.index("  private static func hookFinishDownload(on cls:"):QUEUE.index("  private static func hookFinishEvents(on cls:")]
+assert receipt_hook.index("let succeeded = DownloadNativeWaitingQueue.terminalObservation.capture(") < receipt_hook.index("fn(slf, finishDownloadSelector") < receipt_hook.index("recordCompletedRange(task: downloadTask, succeeded: succeeded)")
+assert "if firstFinish {" in receipt_hook
 
 swiftc = shutil.which("swiftc")
 if not swiftc:

@@ -10,6 +10,14 @@ import '../../support/parallel_download_fixtures.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  Future<void> waitUntil(bool Function() predicate) async {
+    for (var i = 0; i < 600; i++) {
+      if (predicate()) return;
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    fail('Timed out waiting for native range verification');
+  }
+
   for (final preserve in [true, false]) {
     test(
       'pause accounts for native-only owners with drain $preserve',
@@ -162,7 +170,7 @@ void main() {
           // no child callbacks. Some ranges are still unlaunched in Dart state.
           await coordinator.reconcile(() async => <String>{});
           if (acceptSource) {
-            expect(statuses, contains(TaskStatus.complete));
+            await waitUntil(() => statuses.contains(TaskStatus.complete));
             expect(
               await File(await parent.filePath()).readAsBytes(),
               List<int>.generate(20, (i) => i),
@@ -173,6 +181,7 @@ void main() {
               reason: 'completed native-only ranges must not download again',
             );
           } else {
+            await waitUntil(() => statuses.contains(TaskStatus.paused));
             expect(statuses, isNot(contains(TaskStatus.complete)));
             expect(
               await File(await parent.filePath()).exists(),

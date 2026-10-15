@@ -385,7 +385,7 @@ void main() {
       '${parent.taskId}.part.11',
       '${parent.taskId}.part.12',
     });
-    expect(await partsDirectory.exists(), isFalse);
+    await waitUntil(() => !partsDirectory.existsSync());
     expect(records[parent.taskId]?.status, TaskStatus.complete);
   });
 

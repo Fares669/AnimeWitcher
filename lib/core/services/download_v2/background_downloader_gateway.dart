@@ -293,6 +293,7 @@ final class PackageBackgroundDownloaderGateway
   final _mangaHandles = <String, MangaChapterTransportHandleV2>{};
   PersistentParallelDownload? _durableParallel;
   final Map<String, Future<bool>> _pendingDurableStarts = {};
+  final Map<String, Completer<void>> _durableSourceVerifications = {};
   StreamSubscription<TaskUpdate>? _durableUpdatesSubscription;
 
   Future<void>? _initialization;
@@ -903,7 +904,32 @@ final class PackageBackgroundDownloaderGateway
       recordForId: _downloader.database.recordForId,
       livePartIds: _durablePartOwnershipIds,
       availableStorageBytes: availableDownloadStorageBytesV2,
-      verifyPartSource: verifySavedRangeSourceV2,
+      verifyPartSource: (task, file, bytes, resourceSize) async {
+        final cancellation = Completer<void>();
+        _durableSourceVerifications[task.taskId] = cancellation;
+        try {
+          return await verifySavedRangeSourceV2(
+            task,
+            file,
+            bytes,
+            resourceSize,
+            cancelled: cancellation.future,
+          );
+        } finally {
+          if (identical(
+            _durableSourceVerifications[task.taskId],
+            cancellation,
+          )) {
+            _durableSourceVerifications.remove(task.taskId);
+          }
+        }
+      },
+      cancelPartSourceVerification: (taskId) {
+        final cancellation = _durableSourceVerifications.remove(taskId);
+        if (cancellation != null && !cancellation.isCompleted) {
+          cancellation.complete();
+        }
+      },
       manifestFileResolver: privateParallelManifestFileV2,
       promoteFile: promoteCompletedDownloadFileV2,
       shouldDrainPartOnPause: (_) => _isIOS(),
@@ -1223,8 +1249,9 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
   DownloadTask task,
   File file,
   int bytes,
-  int resourceSize,
-) async {
+  int resourceSize, {
+  Future<void>? cancelled,
+}) async {
   const rejected = (matches: false, validator: null);
   final range = _diagnosticRangeBoundsV2(task);
   if (range == null ||
@@ -1235,6 +1262,12 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
     return rejected;
   }
   final client = HttpClient()..autoUncompress = false;
+  var closed = false;
+  unawaited(
+    cancelled?.then((_) {
+      if (!closed) client.close(force: true);
+    }),
+  );
   RandomAccessFile? saved;
   try {
     return await (() async {
@@ -1324,6 +1357,7 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
   } catch (_) {
     return rejected;
   } finally {
+    closed = true;
     client.close(force: true);
     await saved?.close();
   }

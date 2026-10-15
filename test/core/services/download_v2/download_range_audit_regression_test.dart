@@ -109,6 +109,14 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late _RangeHarness harness;
 
+  Future<void> waitUntil(bool Function() predicate) async {
+    for (var i = 0; i < 600; i++) {
+      if (predicate()) return;
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    fail('Timed out waiting for saved range verification');
+  }
+
   setUp(() async {
     harness = _RangeHarness(
       await Directory.systemTemp.createTemp('range-audit-'),
@@ -260,13 +268,18 @@ void main() {
   test('saved_range_verifier_receives_exact_resource_size_and_can_adopt', () async {
     await harness.close();
     final probes = <int>[];
+    final verificationStarted = Completer<void>();
+    final releaseVerification = Completer<void>();
     harness = _RangeHarness(
       await Directory.systemTemp.createTemp('range-audit-verifier-'),
+      maxConnections: 4,
       verifier: (task, file, bytes, resourceSize) async {
         probes.add(resourceSize);
         expect(task.headers['Range'], 'bytes=0-4');
         expect(bytes, 5);
         expect(await file.readAsBytes(), <int>[1, 2, 3, 4, 5]);
+        verificationStarted.complete();
+        await releaseVerification.future;
         return (matches: true, validator: '"resource-v1"');
       },
     );
@@ -276,6 +289,18 @@ void main() {
     harness.coordinator.handleUpdate(TaskProgressUpdate(child, 0.999, 5));
     await harness.barrier();
 
+    await verificationStarted.future.timeout(const Duration(seconds: 3));
+    expect(probes, <int>[20]);
+    expect(harness.records[child.taskId]?.status, isNot(TaskStatus.complete));
+    expect(
+      harness.starts.where((task) => task.taskId == child.taskId),
+      hasLength(1),
+    );
+    releaseVerification.complete();
+    await waitUntil(
+      () => harness.records[child.taskId]?.status == TaskStatus.complete,
+    );
+    await harness.barrier();
     expect(probes, <int>[20]);
     expect(harness.records[child.taskId]?.status, TaskStatus.complete);
     final checkpoint = jsonDecode(await (await harness.manifest).readAsString()) as Map;
@@ -294,12 +319,21 @@ void main() {
     await manifest.writeAsString(jsonEncode(checkpoint), flush: true);
     final restarted = _RangeHarness(
       harness.directory,
+      maxConnections: 4,
       verifier: (task, file, bytes, resourceSize) async =>
           (matches: true, validator: '"resource-v2"'),
     );
     try {
-      expect(await restarted.coordinator.start(restarted.parent, 20), isFalse);
-      expect(restarted.starts, isEmpty);
+      expect(await restarted.coordinator.start(restarted.parent, 20), isTrue);
+      expect(
+        restarted.starts.map((task) => task.taskId),
+        isNot(contains(child.taskId)),
+      );
+      await waitUntil(() => restarted.statuses.contains(TaskStatus.paused));
+      expect(
+        restarted.starts.map((task) => task.taskId),
+        isNot(contains(child.taskId)),
+      );
       expect(restarted.records[child.taskId]?.status, isNot(TaskStatus.complete));
       expect(await file.readAsBytes(), <int>[1, 2, 3, 4, 5]);
     } finally {

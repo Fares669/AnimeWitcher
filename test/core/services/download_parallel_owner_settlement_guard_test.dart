@@ -7,7 +7,7 @@ void main() {
       .readAsStringSync();
 
   test('exact-size multipart adoption still requires writer settlement', () {
-    final start = source.indexOf('Future<bool> _adoptExactSizePart(');
+    final start = source.indexOf('Future<bool> _adoptOrVerifyExactSizePart(');
     final end = source.indexOf('void _capSessionAt(', start);
     expect(start, greaterThanOrEqualTo(0), reason: 'missing adoption seam');
     expect(end, greaterThan(start), reason: 'missing adoption boundary');
@@ -58,13 +58,13 @@ void main() {
 
   test('tail recycle preserves ownership evidence until cancel settles', () {
     final start = source.indexOf('Future<void> _recycleStalledTailRange(');
-    final end = source.indexOf('Future<bool> _adoptExactSizePart(', start);
+    final end = source.indexOf('Future<bool> _adoptOrVerifyExactSizePart(', start);
     expect(start, greaterThanOrEqualTo(0), reason: 'missing recycle seam');
     expect(end, greaterThan(start), reason: 'missing adoption boundary');
     final body = source.substring(start, end);
 
     final cancelCall = body.indexOf('await cancelParts(<String>[part.task.taskId]);');
-    final releaseEvidence = body.indexOf('_activeConnectionIds.remove(part.task.taskId);');
+    final releaseEvidence = body.indexOf('_releaseActiveConnection(part.task.taskId);');
     expect(cancelCall, greaterThanOrEqualTo(0));
     expect(
       releaseEvidence,
@@ -73,7 +73,7 @@ void main() {
     );
 
     final catchStart = body.indexOf('catch (_)', cancelCall);
-    final releaseAfterCatch = body.indexOf('_activeConnectionIds.remove', catchStart);
+    final releaseAfterCatch = body.indexOf('_releaseActiveConnection', catchStart);
     expect(catchStart, greaterThan(cancelCall));
     expect(releaseAfterCatch, greaterThan(catchStart));
     final failedSettlement = body.substring(catchStart, releaseAfterCatch);

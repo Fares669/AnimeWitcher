@@ -424,6 +424,7 @@ class PersistentParallelDownload {
     this.shouldRecoverFailedStart,
     this.onSourceRefreshNeeded,
     this.verifyPartSource,
+    this.cancelPartSourceVerification,
     this.shouldDrainPartOnPause,
     this.onPausedDrainSettled,
     this.recoveryDelay = const Duration(seconds: 1),
@@ -463,6 +464,7 @@ class PersistentParallelDownload {
     int resourceSize,
   )?
   verifyPartSource;
+  final void Function(String childTaskId)? cancelPartSourceVerification;
 
   /// Whether this launched child must avoid transport pause and finish its
   /// current immutable Range into a durable file instead. Used on iOS where
@@ -492,6 +494,9 @@ class PersistentParallelDownload {
   final Map<String, _ParallelSession> _sessions = {};
   final Map<String, _ParallelSession> _children = {};
   final Set<String> _activeConnectionIds = {};
+  final Map<_PartSourceVerification, _ParallelSession>
+  _verificationConnections = {};
+  Completer<void> _connectionsChanged = Completer<void>();
   final Map<String, ({int generation, DateTime expiresAt, String claimId})>
   _nativeClaimOffers = {};
   bool _nativeOffersBlockedPump = false;
@@ -582,6 +587,7 @@ class PersistentParallelDownload {
             part.recoveryTimer != null ||
             part.attemptGeneration <= 0 ||
             part.sourceValidationRequired ||
+            part.sourceVerification != null ||
             part.progress > 0 ||
             part.credibleProgress > 0) {
           continue;
@@ -822,6 +828,31 @@ class PersistentParallelDownload {
   int get _connectionBudget =>
       maxActiveConnections.clamp(1, kDownloadGlobalConnectionBudget).toInt();
 
+  int get _occupiedConnectionCount =>
+      _activeConnectionIds.length + _verificationConnections.length;
+
+  int _occupiedConnectionsForSession(_ParallelSession session) =>
+      _activeConnectionsForSession(session) +
+      _verificationConnections.values
+          .where((owner) => identical(owner, session))
+          .length;
+
+  void _releaseVerificationConnection(_PartSourceVerification pending) {
+    if (_verificationConnections.remove(pending) == null) return;
+    _notifyConnectionChange();
+    _schedulePumpAll();
+  }
+
+  void _releaseActiveConnection(String taskId) {
+    if (_activeConnectionIds.remove(taskId)) _notifyConnectionChange();
+  }
+
+  void _notifyConnectionChange() {
+    final previous = _connectionsChanged;
+    _connectionsChanged = Completer<void>();
+    previous.complete();
+  }
+
   Future<Directory> _partsDirectory(DownloadTask task) async =>
       Directory('${await task.filePath()}.parts');
 
@@ -1010,6 +1041,7 @@ class PersistentParallelDownload {
   }
 
   void _invalidatePartAttempt(_ParallelSession session, _DownloadPart part) {
+    _cancelSourceVerification(part);
     part.lastProgressAdvanceAt = null;
     part.attemptGeneration = part.attemptGeneration <= 0
         ? 1
@@ -1032,6 +1064,9 @@ class PersistentParallelDownload {
       session.cancelDiskProgressPoll();
       session.cancelCoordinatorRecovery();
       session.cancelPartRetries();
+      for (final part in session.parts) {
+        _cancelSourceVerification(part);
+      }
     }
     final pump = _pumpFuture;
     if (pump != null) await pump;
@@ -1192,7 +1227,7 @@ class PersistentParallelDownload {
               );
               final bytes = partial == null ? 0 : await partial.length();
               if (bytes == part.size && part.size > 0) {
-                await _adoptExactSizePart(
+                await _adoptOrVerifyExactSizePart(
                   session,
                   part,
                   settleNativeOwner: false,
@@ -1264,7 +1299,7 @@ class PersistentParallelDownload {
       if (part.launched) {
         _activeConnectionIds.add(part.task.taskId);
       } else {
-        _activeConnectionIds.remove(part.task.taskId);
+        _releaseActiveConnection(part.task.taskId);
       }
     }
   }
@@ -1439,7 +1474,7 @@ class PersistentParallelDownload {
           // evidence than that stale status. Settle the worker first, verify the
           // bytes again, then adopt the range without downloading it twice.
           if (part.launched) {
-            if (await _adoptExactSizePart(
+            if (await _adoptOrVerifyExactSizePart(
               session,
               part,
               settleNativeOwner: true,
@@ -1456,7 +1491,7 @@ class PersistentParallelDownload {
           );
           final file = saved?.file ?? File(await part.task.filePath());
           if (await file.exists() && await file.length() == part.size) {
-            if (await _adoptExactSizePart(
+            if (await _adoptOrVerifyExactSizePart(
               session,
               part,
               settleNativeOwner: false,
@@ -1548,6 +1583,7 @@ class PersistentParallelDownload {
         (part) =>
             !part.complete &&
             !part.launched &&
+            part.sourceVerification == null &&
             part.recoveryTimer == null &&
             !_hasActiveNativeClaimOffer(part),
       );
@@ -1568,7 +1604,7 @@ class PersistentParallelDownload {
     if (session.currentBatchPendingIds.remove(part.task.taskId)) {
       session.currentBatchRemaining++;
     }
-    _activeConnectionIds.remove(part.task.taskId);
+    _releaseActiveConnection(part.task.taskId);
     part.launched = false;
     part.speed = 0;
   }
@@ -1707,7 +1743,7 @@ class PersistentParallelDownload {
           final durableBytes = await _durablePartBytes(part);
           if (durableBytes == part.size &&
               part.size > 0 &&
-              await _adoptExactSizePart(
+              await _adoptOrVerifyExactSizePart(
                 session,
                 part,
                 settleNativeOwner: false,
@@ -1769,7 +1805,8 @@ class PersistentParallelDownload {
           // exceeding that cap.
           session.slowStartComplete = true;
           final sessionAvailable =
-              session.connectionCeiling - _activeConnectionsForSession(session);
+              session.connectionCeiling -
+              _occupiedConnectionsForSession(session);
           if (sessionAvailable <= 0) return true;
           final remaining = _launchablePartCount(session);
           if (remaining <= 0) return true;
@@ -1779,9 +1816,9 @@ class PersistentParallelDownload {
         }
       }
 
-      final globalAvailable = _connectionBudget - _activeConnectionIds.length;
+      final globalAvailable = _connectionBudget - _occupiedConnectionCount;
       final sessionAvailable =
-          session.connectionCeiling - _activeConnectionsForSession(session);
+          session.connectionCeiling - _occupiedConnectionsForSession(session);
       final available = globalAvailable < sessionAvailable
           ? globalAvailable
           : sessionAvailable;
@@ -1801,6 +1838,19 @@ class PersistentParallelDownload {
 
       for (final part in parts) {
         if (_disposed || session.pauseRequested || !session.active) return true;
+        // Rollback/recovery can clear an in-flight verification marker. Its
+        // saved bytes still forbid a new writer until their identity is proven.
+        if (await _durablePartBytes(part) == part.size) {
+          if (await _adoptOrVerifyExactSizePart(
+            session,
+            part,
+            settleNativeOwner: false,
+          )) {
+            continue;
+          }
+          await _pause(session);
+          return false;
+        }
         final record = await recordForId(part.task.taskId);
         final progress = record?.progress ?? 0;
         if (progress > part.progress && progress <= 1) {
@@ -1828,8 +1878,8 @@ class PersistentParallelDownload {
         if (_disposed || !session.active || session.pauseRequested || session.deleted) {
           return true;
         }
-        if (_activeConnectionIds.length >= _connectionBudget ||
-            _activeConnectionsForSession(session) >=
+        if (_occupiedConnectionCount >= _connectionBudget ||
+            _occupiedConnectionsForSession(session) >=
                 session.connectionCeiling) {
           return true;
         }
@@ -1932,7 +1982,7 @@ class PersistentParallelDownload {
     part.recoveryTimer = null;
     _cancelPendingStartLease(part);
     _cancelTailStallWatch(part);
-    _activeConnectionIds.remove(part.task.taskId);
+    _releaseActiveConnection(part.task.taskId);
     part.launched = false;
     part.speed = 0;
     _schedulePumpAll();
@@ -2075,7 +2125,7 @@ class PersistentParallelDownload {
     if (_disposed || !session.active || session.deleted || part.complete)
       return;
 
-    if (await _adoptExactSizePart(
+    if (await _adoptOrVerifyExactSizePart(
       session,
       part,
       settleNativeOwner: part.launched,
@@ -2100,7 +2150,11 @@ class PersistentParallelDownload {
         _armTailStallWatch(session, part);
         return;
       }
-      if (await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
+      if (await _adoptOrVerifyExactSizePart(
+        session,
+        part,
+        settleNativeOwner: false,
+      )) {
         await _afterAdoptedPart(session);
         return;
       }
@@ -2166,7 +2220,7 @@ class PersistentParallelDownload {
     }
 
     _cancelTailStallWatch(part);
-    _activeConnectionIds.remove(part.task.taskId);
+    _releaseActiveConnection(part.task.taskId);
     part.launched = false;
     part.speed = 0;
     session.currentBatchPendingIds.remove(part.task.taskId);
@@ -2187,7 +2241,11 @@ class PersistentParallelDownload {
     );
     savedBytes = restored?.bytes ?? 0;
     if (savedBytes == part.size && part.size > 0) {
-      if (await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
+      if (await _adoptOrVerifyExactSizePart(
+        session,
+        part,
+        settleNativeOwner: false,
+      )) {
         await _afterAdoptedPart(session);
       } else {
         await _pause(session);
@@ -2231,35 +2289,172 @@ class PersistentParallelDownload {
     }
   }
 
-  Future<bool> _savedRangeEvidenceMatches(
-    _ParallelSession session,
-    _DownloadPart part,
-    File file,
-  ) async {
-    final verifier = verifyPartSource;
-    if (verifier == null) return false;
+  void _cancelSourceVerification(_DownloadPart part) {
+    final pending = part.sourceVerification;
+    if (pending == null) return;
+    part.sourceVerification = null;
+    pending.cancelled.complete();
     try {
-      final evidence = await verifier(part.task, file, part.size, session.size);
-      if (!evidence.matches) return false;
-      final pinned = session.resourceValidator;
-      if (pinned != null && evidence.validator != pinned) return false;
-      if (pinned == null && evidence.validator != null) {
-        session.resourceValidator = evidence.validator;
-        _applyPinnedValidatorToPendingParts(session);
-      }
-      return true;
+      cancelPartSourceVerification?.call(part.task.taskId);
     } catch (_) {
-      // Offline/unknown verification never consumes saved bytes.
-      return false;
+      // Cancellation cannot prevent the logical fence/control from settling.
     }
   }
 
-  Future<bool> _adoptExactSizePart(
+  void _queueSourceVerification(
+    _ParallelSession session,
+    _DownloadPart part,
+    File file, {
+    Duration grace = kParallelProgressCoalesceDelay,
+  }) {
+    final verifier = verifyPartSource;
+    if (verifier == null ||
+        part.sourceVerification != null ||
+        !session.active ||
+        session.pauseRequested ||
+        session.deleted)
+      return;
+    final pending = _PartSourceVerification();
+    final generation = session.generation;
+    final attempt = part.attemptGeneration;
+    final task = part.task;
+    final readyAt = DateTime.now().add(grace);
+    part.sourceVerification = pending;
+    _nativeClaimOffers.remove(task.taskId);
+    _markConnectionReady(session, part);
+    _releaseConnection(part);
+    _recordDiagnostic('parallel.sourceVerificationQueued', {
+      'taskId': session.task.taskId,
+      'childTaskId': task.taskId,
+      'attemptGeneration': attempt,
+    });
+
+    bool current() =>
+        !_disposed &&
+        !session.deleted &&
+        session.active &&
+        !session.pauseRequested &&
+        !part.complete &&
+        session.generation == generation &&
+        part.attemptGeneration == attempt &&
+        part.task.url == task.url &&
+        identical(part.sourceVerification, pending);
+
+    // One recovery probe per parent, outside its control/callback queue. Give
+    // the real HTTP-complete callback time to arrive before fetching bytes again.
+    session.sourceVerificationTail = session.sourceVerificationTail
+        .then((_) async {
+          await Future.any<void>([
+            Future<void>.delayed(readyAt.difference(DateTime.now())),
+            pending.cancelled.future,
+          ]);
+          if (!current()) return;
+          while (_occupiedConnectionCount >= _connectionBudget ||
+              _occupiedConnectionsForSession(session) >=
+                  session.connectionCeiling) {
+            await Future.any<void>([
+              _connectionsChanged.future,
+              pending.cancelled.future,
+            ]);
+            if (!current()) return;
+          }
+          _verificationConnections[pending] = session;
+          final before = await file.stat();
+          if (!current()) {
+            _releaseVerificationConnection(pending);
+            return;
+          }
+          final watch = Stopwatch()..start();
+          _recordDiagnostic('parallel.sourceVerificationStarted', {
+            'taskId': session.task.taskId,
+            'childTaskId': task.taskId,
+            'attemptGeneration': attempt,
+          });
+          const rejected = (matches: false, validator: null);
+          final verification =
+              Future.sync(() => verifier(task, file, part.size, session.size))
+                  .catchError((Object _) => rejected)
+                  .whenComplete(() {
+                    _releaseVerificationConnection(pending);
+                  });
+          final evidence =
+              await Future.any<({bool matches, String? validator})>([
+                verification,
+                pending.cancelled.future.then((_) => rejected),
+              ]);
+          await session.serialize(() async {
+            if (!current()) return;
+            final after = await file.stat();
+            if (!current()) return;
+            final pinned = session.resourceValidator;
+            final valid =
+                evidence.matches &&
+                before.type == FileSystemEntityType.file &&
+                before.size == part.size &&
+                after.type == before.type &&
+                after.size == before.size &&
+                after.modified == before.modified &&
+                after.changed == before.changed &&
+                (pinned == null || evidence.validator == pinned);
+            _recordDiagnostic('parallel.sourceVerificationSettled', {
+              'taskId': session.task.taskId,
+              'childTaskId': task.taskId,
+              'attemptGeneration': attempt,
+              'durationMs': watch.elapsedMilliseconds,
+              'result': valid,
+            });
+            if (!valid) {
+              // Unknown/changed source evidence must preserve the saved range.
+              pending.needsPause = true;
+              if (!await _pause(session)) _scheduleCoordinatorRecovery(session);
+              return;
+            }
+            if (pinned == null && evidence.validator != null) {
+              session.resourceValidator = evidence.validator;
+              _applyPinnedValidatorToPendingParts(session);
+            }
+            final owners = livePartIds == null
+                ? <String>{}
+                : await livePartIds!();
+            if (!current()) return;
+            if (await _adoptOrVerifyExactSizePart(
+              session,
+              part,
+              settleNativeOwner: owners.contains(task.taskId),
+              verifiedSource: true,
+              verifiedFileState: before,
+              canCommit: current,
+            )) {
+              await _afterAdoptedPart(session);
+            } else {
+              if (!current()) return;
+              pending.needsPause = true;
+              if (!await _pause(session)) _scheduleCoordinatorRecovery(session);
+            }
+          });
+        })
+        .catchError((Object _, StackTrace __) async {
+          _releaseVerificationConnection(pending);
+          await session.serialize(() async {
+            if (!current()) return;
+            pending.needsPause = true;
+            if (!await _pause(session)) _scheduleCoordinatorRecovery(session);
+          });
+        });
+  }
+
+  /// True also means an exact-size file is fenced for asynchronous source
+  /// verification. Callers must not retry, discard or adopt that range early.
+  Future<bool> _adoptOrVerifyExactSizePart(
     _ParallelSession session,
     _DownloadPart part, {
     required bool settleNativeOwner,
+    bool verifiedSource = false,
+    FileStat? verifiedFileState,
+    bool Function()? canCommit,
   }) async {
     if (session.deleted) return false;
+    if (part.sourceVerification != null && !verifiedSource) return true;
     final path = await part.task.filePath();
     final saved = part.launched
         ? null
@@ -2283,13 +2478,26 @@ class PersistentParallelDownload {
     }
 
     if (!await file.exists() || await file.length() != part.size) return false;
-    if (!part.complete && !await _savedRangeEvidenceMatches(session, part, file)) {
-      return false;
+    if (!part.complete && !verifiedSource) {
+      if (!session.active || session.pauseRequested) return false;
+      _queueSourceVerification(session, part, file);
+      return part.sourceVerification != null;
     }
     if (!await file.exists() || await file.length() != part.size) return false;
 
+    if (verifiedFileState != null) {
+      final committed = await file.stat();
+      if (committed.type != FileSystemEntityType.file ||
+          committed.size != verifiedFileState.size ||
+          committed.modified != verifiedFileState.modified ||
+          committed.changed != verifiedFileState.changed)
+        return false;
+    }
+
+    if (canCommit != null && !canCommit()) return false;
     _markConnectionReady(session, part);
     _releaseConnection(part);
+    _cancelSourceVerification(part);
     part.complete = true;
     part.progress = 1;
     part.credibleProgress = 1;
@@ -2422,7 +2630,7 @@ class PersistentParallelDownload {
         if (bytes <= 0 || bytes > part.size) continue;
 
         if (bytes == part.size &&
-            await _adoptExactSizePart(
+            await _adoptOrVerifyExactSizePart(
               session,
               part,
               settleNativeOwner: part.launched,
@@ -2773,6 +2981,12 @@ class PersistentParallelDownload {
             _scheduleCoordinatorRecovery(session);
             return;
           }
+          if (session.parts.any(
+            (part) => part.sourceVerification?.needsPause ?? false,
+          )) {
+            if (!await _pause(session)) _scheduleCoordinatorRecovery(session);
+            return;
+          }
           if (session.readyToPublish != null) {
             await _recoverReadyPublication(session);
             if (session.active) _scheduleCoordinatorRecovery(session);
@@ -2842,7 +3056,7 @@ class PersistentParallelDownload {
             .whenComplete(() {
               if (identical(_pumpFuture, pump)) _pumpFuture = null;
               if (!_disposed &&
-                  _activeConnectionIds.length < _connectionBudget &&
+                  _occupiedConnectionCount < _connectionBudget &&
                   _sessions.values.any(_hasImmediatelyPumpableWork)) {
                 _schedulePumpAll();
               }
@@ -2851,8 +3065,12 @@ class PersistentParallelDownload {
   }
 
   bool _hasImmediatelyPumpableWork(_ParallelSession session) {
-    if (_disposed || !session.active || session.pauseRequested || session.deleted) return false;
-    if (_activeConnectionsForSession(session) >= session.connectionCeiling) {
+    if (_disposed ||
+        !session.active ||
+        session.pauseRequested ||
+        session.deleted)
+      return false;
+    if (_occupiedConnectionsForSession(session) >= session.connectionCeiling) {
       return false;
     }
     final launchable = _launchablePartCount(session);
@@ -2891,7 +3109,8 @@ class PersistentParallelDownload {
       }
 
       final part = session.partsByTaskId[chunkTaskId];
-      if (part == null || part.complete) return;
+      if (part == null || part.complete || part.sourceVerification != null)
+        return;
       // Native background refill tasks are created from a pre-fenced child
       // definition while Dart can be asleep. Adopt that ownership only when
       // Swift echoed the exact current attempt token. A late callback from an
@@ -2932,7 +3151,7 @@ class PersistentParallelDownload {
         final file = File(await part.task.filePath());
         if (await file.exists() &&
             await file.length() == part.size &&
-            await _adoptExactSizePart(
+            await _adoptOrVerifyExactSizePart(
               session,
               part,
               settleNativeOwner: false,
@@ -3057,6 +3276,12 @@ class PersistentParallelDownload {
           // Completion is durable; a late running/progress/retry callback must
           // never reserve its connection again or park the remaining parts.
           if (part.complete) return;
+          // The saved file has already fenced this native writer. Late status
+          // or progress must not resurrect its slot while recovery verifies it.
+          if (part.sourceVerification != null &&
+              !(update is TaskStatusUpdate &&
+                  update.status == TaskStatus.complete))
+            return;
           if (!part.launched &&
               !(update is TaskStatusUpdate &&
                   update.status == TaskStatus.complete)) {
@@ -3132,7 +3357,7 @@ class PersistentParallelDownload {
             // the .part files.
             if (session.active &&
                 incoming >= kParallelNativeCompletionSentinel &&
-                await _adoptExactSizePart(
+                await _adoptOrVerifyExactSizePart(
                   session,
                   part,
                   settleNativeOwner: part.launched,
@@ -3202,6 +3427,7 @@ class PersistentParallelDownload {
             }
             _markConnectionReady(session, part);
             _releaseConnection(part);
+            _cancelSourceVerification(part);
             part.complete = true;
             part.progress = 1;
             part.credibleProgress = 1;
@@ -3355,6 +3581,9 @@ class PersistentParallelDownload {
     // the user's pause intent synchronously and stop before another enqueue.
     final previousPauseRequested = session.pauseRequested;
     session.pauseRequested = true;
+    for (final part in session.parts) {
+      _cancelSourceVerification(part);
+    }
     try {
       await beforePause?.call();
     } catch (_) {
@@ -3402,7 +3631,8 @@ class PersistentParallelDownload {
   }
 
   bool _schedulePartRecovery(_ParallelSession session, _DownloadPart part) {
-    if (part.recoveryTimer != null) return true;
+    if (part.recoveryTimer != null || part.sourceVerification != null)
+      return true;
     if (!session.active || session.deleted || _disposed || part.complete) {
       return false;
     }
@@ -3417,7 +3647,7 @@ class PersistentParallelDownload {
     // only after its timer expires and then re-enters _pumpSession, where both
     // the per-session ceiling and the global governor are checked again.
     part.launched = false;
-    _activeConnectionIds.remove(part.task.taskId);
+    _releaseActiveConnection(part.task.taskId);
     session.currentBatchPendingIds.remove(part.task.taskId);
     final generation = session.generation;
     part.recoveryTimer = Timer(_partRecoveryDelay(part.recoveryAttempts), () {
@@ -3459,7 +3689,7 @@ class PersistentParallelDownload {
             part.launched = true;
             _activeConnectionIds.add(part.task.taskId);
           }
-          if (await _adoptExactSizePart(
+          if (await _adoptOrVerifyExactSizePart(
             session,
             part,
             settleNativeOwner: nativeOwnsPart,
@@ -3536,6 +3766,9 @@ class PersistentParallelDownload {
       }
     }
     session.active = false;
+    for (final part in session.parts) {
+      _cancelSourceVerification(part);
+    }
     session.generation++;
     _speedTelemetry.resetSpeed(session.task.taskId);
     session.cancelAggregateProgress();
@@ -3638,7 +3871,7 @@ class PersistentParallelDownload {
           _activeConnectionIds.add(part.task.taskId);
         } else {
           _invalidatePartAttempt(session, part);
-          _activeConnectionIds.remove(part.task.taskId);
+          _releaseActiveConnection(part.task.taskId);
         }
       }
       _scheduleDiskProgressPoll(session);
@@ -3674,14 +3907,18 @@ class PersistentParallelDownload {
       // snapshot may already have moved its complete file. Adopt exact bytes
       // before fencing the old attempt.
       if (requestedDrain &&
-          await _adoptExactSizePart(session, part, settleNativeOwner: false)) {
+          await _adoptOrVerifyExactSizePart(
+            session,
+            part,
+            settleNativeOwner: false,
+          )) {
         continue;
       }
 
       _invalidatePartAttempt(session, part);
       part.launched = false;
       part.speed = 0;
-      _activeConnectionIds.remove(part.task.taskId);
+      _releaseActiveConnection(part.task.taskId);
     }
 
     await _persist(session);
@@ -3707,6 +3944,9 @@ class PersistentParallelDownload {
     // Fence admission immediately, but retain callbacks, bytes and writer leases
     // until the gateway proves accepted cancellation and native settlement.
     session.pauseRequested = true;
+    for (final part in session.parts) {
+      _cancelSourceVerification(part);
+    }
     session.cancelAggregateProgress();
     session.cancelProgressPersist();
     session.cancelDiskProgressPoll();
@@ -3734,7 +3974,7 @@ class PersistentParallelDownload {
       _speedTelemetry.remove(task.taskId);
       session.resetRamp();
       for (final part in session.parts) {
-        _activeConnectionIds.remove(part.task.taskId);
+        _releaseActiveConnection(part.task.taskId);
         part.launched = false;
       }
       await _clearOwnedPromotion(session, removeReservation: true);
@@ -4046,7 +4286,7 @@ class PersistentParallelDownload {
     part.recoveryTimer?.cancel();
     part.recoveryTimer = null;
     session.currentBatchPendingIds.remove(part.task.taskId);
-    _activeConnectionIds.remove(part.task.taskId);
+    _releaseActiveConnection(part.task.taskId);
     part.launched = false;
     part.complete = false;
     part.progress = 0;
@@ -4074,14 +4314,22 @@ class PersistentParallelDownload {
     TaskStatusUpdate update,
   ) async {
     if (update.responseStatusCode == null && update.responseHeaders == null) {
-      if (await _savedRangeEvidenceMatches(
-        session, part, File(await part.task.filePath()),
-      )) {
-        return true;
+      _queueSourceVerification(
+        session,
+        part,
+        File(await part.task.filePath()),
+        grace: Duration.zero,
+      );
+      if (part.sourceVerification == null) {
+        _markConnectionReady(session, part);
+        _releaseConnection(part);
+        if (session.active) {
+          await _pause(session);
+        } else {
+          await _persist(session);
+          _notifyPausedDrainSettled(session);
+        }
       }
-      _markConnectionReady(session, part);
-      _releaseConnection(part);
-      await _pause(session);
       return false;
     }
     if (!downloadPartResponseMatchesRequestedRange(
@@ -4167,10 +4415,13 @@ class PersistentParallelDownload {
 
     session.fullBodyCancellationPending = false;
     session.active = false;
+    for (final part in session.parts) {
+      _cancelSourceVerification(part);
+    }
     session.cancelAggregateProgress();
     session.resetRamp();
     for (final part in session.parts) {
-      _activeConnectionIds.remove(part.task.taskId);
+      _releaseActiveConnection(part.task.taskId);
       part.launched = false;
       part.speed = 0;
     }
@@ -4185,6 +4436,9 @@ class PersistentParallelDownload {
 
   Future<void> _finishCompleteSession(_ParallelSession session) async {
     session.active = false;
+    for (final part in session.parts) {
+      _cancelSourceVerification(part);
+    }
     session.cancelAggregateProgress();
     session.cancelProgressPersist();
     session.cancelDiskProgressPoll();
@@ -4192,7 +4446,7 @@ class PersistentParallelDownload {
     _speedTelemetry.remove(session.task.taskId);
     session.resetRamp();
     for (final part in session.parts) {
-      _activeConnectionIds.remove(part.task.taskId);
+      _releaseActiveConnection(part.task.taskId);
     }
     onUpdate(
       TaskProgressUpdate(session.task, 1, session.size, 0, Duration.zero),
@@ -4252,6 +4506,9 @@ class PersistentParallelDownload {
 
   Future<void> _parkForStorageFailure(_ParallelSession session) async {
     session.active = false;
+    for (final part in session.parts) {
+      _cancelSourceVerification(part);
+    }
     session.generation++;
     session.pauseRequested = false;
     _speedTelemetry.resetSpeed(session.task.taskId);
@@ -4267,7 +4524,7 @@ class PersistentParallelDownload {
       part.recoveryTimer = null;
       part.launched = false;
       part.speed = 0;
-      _activeConnectionIds.remove(part.task.taskId);
+      _releaseActiveConnection(part.task.taskId);
     }
     try {
       await _status(session, TaskStatus.paused);
@@ -4454,7 +4711,7 @@ class PersistentParallelDownload {
       return false;
     }
     for (final part in session.parts) {
-      _activeConnectionIds.remove(part.task.taskId);
+      _releaseActiveConnection(part.task.taskId);
       part.launched = false;
     }
     session.fullBodyCancellationPending = false;
@@ -4614,6 +4871,11 @@ class PersistentParallelDownload {
   }
 }
 
+class _PartSourceVerification {
+  final Completer<void> cancelled = Completer<void>();
+  bool needsPause = false;
+}
+
 class _ParallelSession {
   _ParallelSession(
     this.task,
@@ -4671,6 +4933,7 @@ class _ParallelSession {
   DateTime? lastHostProfileSampleAt;
   Future<void> _pending = Future<void>.value();
   Future<void> parentRecordWrite = Future<void>.value();
+  Future<void> sourceVerificationTail = Future<void>.value();
 
   int get size => parts.fold(0, (sum, part) => sum + part.size);
   int get creditedBytes =>
@@ -4803,6 +5066,7 @@ class _DownloadPart {
   double speed = 0;
   int recoveryAttempts = 0;
   Timer? recoveryTimer;
+  _PartSourceVerification? sourceVerification;
   Timer? pendingStartLeaseTimer;
   Timer? tailStallTimer;
   double tailWatchProgress = -1;
