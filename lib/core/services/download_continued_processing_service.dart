@@ -85,6 +85,16 @@ Future<void> configureNativeDownloadDiagnosticLog(
 /// no-ops unless [endSession] is true — finishing ep1's overlay is what
 /// suspended the process and broke ep2 promotion.
 class DownloadContinuedProcessingService {
+  static int _nativeQueueControlGeneration = 0;
+
+  static int get nativeQueueControlGeneration => _nativeQueueControlGeneration;
+
+  /// A withdrawal can succeed even when its ACK is lost. Invalidate any cached
+  /// observer signature before dispatch so the next truth sample republishes.
+  static void invalidateNativeQueueCheckpoint() {
+    _nativeQueueControlGeneration++;
+  }
+
   static const MethodChannel _channel = MethodChannel(
     'com.animewitcher.app/download_continued_processing',
   );
@@ -306,6 +316,9 @@ class DownloadContinuedProcessingService {
     int sessionCurrentIndex = 0,
     List<Map<String, Object>> multipartPlans = const [],
   }) async {
+    // Preserve creation time across ACK/version retries so a pre-pause plan
+    // can never become fresh permission merely because its ACK was delayed.
+    final snapshotCreatedAtMicros = DateTime.now().microsecondsSinceEpoch;
     int nextVersion() {
       final wallClock = DateTime.now().microsecondsSinceEpoch;
       final next = _nativeQueueSnapshotVersion + 1;
@@ -318,6 +331,7 @@ class DownloadContinuedProcessingService {
         'persistNativeQueue',
         <String, Object>{
           'snapshotVersion': snapshotVersion,
+          'snapshotCreatedAtMicros': snapshotCreatedAtMicros,
           'maxConcurrent': maxConcurrent,
           'waiters': waiters,
           'transferringTaskIds': transferringTaskIds,

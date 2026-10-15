@@ -125,6 +125,10 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
   final packageGateway = ref.read(packageBackgroundDownloaderGatewayV2Provider);
   final continuedProcessing = IosDownloadContinuedProcessingObserverV2(
     pauseReadiness: pauseReadiness,
+    onNativeChunkUpdate: packageGateway.observeNativeChunkUpdateV2,
+    diagnostics: diagnostics,
+    reconcileNativeBackgroundTransfers:
+        packageGateway.reconcileNativeBackgroundTransfersV2,
     nativeBackgroundPlans: packageGateway.nativeBackgroundPlansV2,
     releaseNativeBackgroundOffers:
         packageGateway.releaseNativeBackgroundOffersV2,

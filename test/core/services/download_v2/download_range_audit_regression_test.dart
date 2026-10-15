@@ -167,6 +167,30 @@ void main() {
     expect(harness.statuses.last, TaskStatus.running);
   });
 
+  test('inventory failure after native withdrawal can retry pause and resume', () async {
+    expect(await harness.coordinator.start(harness.parent, 20), isTrue);
+    harness.failedLookups.add(harness.lookupCalls + 1);
+    var withdrawals = 0;
+    Future<void> withdraw() async {
+      withdrawals++;
+      expect(harness.coordinator.nativeBackgroundPlans(), isEmpty,
+          reason: 'control intent fences plans before native withdrawal');
+    }
+
+    expect(await harness.coordinator.pause(harness.parent, beforePause: withdraw), isFalse);
+    expect(harness.coordinator.isActive(harness.parent.taskId), isTrue);
+    expect(harness.statuses.last, TaskStatus.running);
+    expect(harness.coordinator.nativeBackgroundPlans(), isNotEmpty,
+        reason: 'a rejected pause must not leave an active session permanently fenced');
+
+    expect(await harness.coordinator.pause(harness.parent, beforePause: withdraw), isTrue);
+    expect(harness.coordinator.isActive(harness.parent.taskId), isFalse);
+    expect(withdrawals, 2);
+    expect(await harness.coordinator.start(harness.parent, 20), isTrue);
+    expect(harness.coordinator.nativeBackgroundPlans(), isNotEmpty,
+        reason: 'a fresh resumed generation exports authoritative continuation work');
+  });
+
   test('pause rejection with second liveness failure retains launched owner', () async {
     expect(await harness.coordinator.start(harness.parent, 20), isTrue);
     harness.rejectPause = true;

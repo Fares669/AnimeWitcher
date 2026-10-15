@@ -3336,6 +3336,7 @@ class PersistentParallelDownload {
   Future<bool> pause(
     ParallelDownloadTask task, {
     bool preserveLiveParts = false,
+    Future<void> Function()? beforePause,
   }) async {
     if (_disposed) return false;
     if (!await restore(task)) return false;
@@ -3343,7 +3344,15 @@ class PersistentParallelDownload {
     // This flag is deliberately set before waiting for session.serialize(). A
     // slow-start pump may already be queued ahead of _pause; it must observe
     // the user's pause intent synchronously and stop before another enqueue.
+    final previousPauseRequested = session.pauseRequested;
     session.pauseRequested = true;
+    try {
+      await beforePause?.call();
+    } catch (_) {
+      session.pauseRequested = previousPauseRequested;
+      _schedulePumpAll();
+      rethrow;
+    }
     return session.serialize(
       () => _pause(session, preserveLiveParts: preserveLiveParts),
     );
@@ -3429,11 +3438,18 @@ class PersistentParallelDownload {
         final live = await liveTaskIds();
         var recovering = false;
         for (final part in session.parts) {
-          if (part.complete || !part.launched || part.recoveryTimer != null) {
+          if (part.complete || part.recoveryTimer != null) {
             continue;
           }
 
           final nativeOwnsPart = live.contains(part.task.taskId);
+          final wasLaunched = part.launched;
+          // Native may have started an exported immutable range while Flutter
+          // was suspended, before any callback could adopt it in Dart.
+          if (!part.launched && nativeOwnsPart) {
+            part.launched = true;
+            _activeConnectionIds.add(part.task.taskId);
+          }
           if (await _adoptExactSizePart(
             session,
             part,
@@ -3450,6 +3466,10 @@ class PersistentParallelDownload {
             _armTailStallWatch(session, part);
             continue;
           }
+
+          // An unlaunched range with no native/file evidence is ordinary queued
+          // work. It must not be classified as a lost native worker or retried.
+          if (!wasLaunched) continue;
 
           if (session.currentBatchPendingIds.contains(part.task.taskId)) {
             _rollbackPendingStartReservation(session, part);
@@ -3482,6 +3502,30 @@ class PersistentParallelDownload {
     _ParallelSession session, {
     bool preserveLiveParts = false,
   }) async {
+    // Exported native ranges may have started while Dart was suspended. Adopt
+    // their actual ownership before selecting pause/drain candidates.
+    final lookupNativeOwners = livePartIds;
+    if (lookupNativeOwners != null) {
+      try {
+        final owners = await lookupNativeOwners();
+        for (final part in session.parts) {
+          if (!part.complete && owners.contains(part.task.taskId)) {
+            part.launched = true;
+            _activeConnectionIds.add(part.task.taskId);
+          }
+        }
+      } catch (_) {
+        _recordDiagnostic('parallel.pauseOwnershipUnknown', {
+          'taskId': session.task.taskId,
+        });
+        // Failed inventory is not a committed pause. Keep transport truth and
+        // make the rejected action retryable, rather than leaving an active
+        // row permanently fenced behind pauseRequested after withdrawal.
+        session.pauseRequested = false;
+        await _status(session, TaskStatus.running);
+        return false;
+      }
+    }
     session.active = false;
     session.generation++;
     _speedTelemetry.resetSpeed(session.task.taskId);
@@ -3642,7 +3686,10 @@ class PersistentParallelDownload {
     return true;
   }
 
-  Future<void> cancel(ParallelDownloadTask task) async {
+  Future<void> cancel(
+    ParallelDownloadTask task, {
+    Future<void> Function()? beforeCancel,
+  }) async {
     if (_disposed) return;
     if (!await restore(task)) return;
     final session = _sessions[task.taskId]!;
@@ -3657,6 +3704,7 @@ class PersistentParallelDownload {
     session.cancelCoordinatorRecovery();
     await session.serialize(() async {
       try {
+        await beforeCancel?.call();
         await cancelParts(
           session.parts.map((part) => part.task.taskId).toList(),
         );

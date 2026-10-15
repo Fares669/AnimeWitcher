@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../download_concurrency.dart';
+import '../download_continued_processing_service.dart';
 import '../download_parallel.dart';
 import '../persistent_parallel_download.dart';
 import '../../utils/local_file_io.dart';
@@ -95,6 +96,68 @@ abstract interface class SelfSettlingParallelDownloadTransportHandleV2 {}
 const String kDownloadV2PackageGroup = 'downloads_v2';
 const String kDownloadV2SilentPackageGroup = 'downloads_v2_silent';
 const String kDownloadV2DurableParallelGroup = 'downloads_v2_ranges';
+
+/// Withdraws a previously exported native offer before Dart starts this range.
+/// The native queue serializes this with its own claim/commit transaction. A
+/// lost or malformed response must never authorize a second URLSession writer.
+Future<bool> claimNativeRangeForDartV2(
+  DownloadTask task, {
+  required int observedAtMillis,
+  bool forceAvailableForTesting = false,
+}) async {
+  if (!forceAvailableForTesting && !Platform.isIOS) return true;
+  final parentId = downloadInternalParentTaskId(task);
+  final metadata = jsonDecode(task.metaData);
+  final generation = metadata is Map ? metadata['attemptGeneration'] : null;
+  if (task.group != kPersistentDownloadChunkGroup ||
+      parentId == null ||
+      !parentId.startsWith('aw_v2_') ||
+      generation is! int ||
+      generation <= 0 ||
+      !task.taskId.startsWith('$parentId.part.')) {
+    throw StateError('Invalid native range claim identity');
+  }
+  try {
+    final granted =
+        await const MethodChannel(
+          'com.animewitcher.app/download_continued_processing',
+        ).invokeMethod<bool>('claimRangeForDart', <String, Object>{
+          'taskId': task.taskId,
+          'parentTaskId': parentId,
+          'attemptGeneration': generation,
+          'nativeOwnerAbsent': true,
+          'observedAtMillis': observedAtMillis,
+        }).timeout(const Duration(seconds: 10));
+    if (granted == null) {
+      throw StateError('Native range claim not acknowledged');
+    }
+    return granted;
+  } on MissingPluginException {
+    // Older builds cannot refill ranges natively, so they cannot own an offer.
+    return true;
+  }
+}
+
+Future<void> withdrawNativeRangeParentV2(
+  String parentTaskId, {
+  bool forceAvailableForTesting = false,
+}) async {
+  if (!forceAvailableForTesting && !Platform.isIOS) return;
+  DownloadContinuedProcessingService.invalidateNativeQueueCheckpoint();
+  try {
+    final withdrawn = await const MethodChannel(
+      'com.animewitcher.app/download_continued_processing',
+    ).invokeMethod<bool>('withdrawRangeParent', {
+      'parentTaskId': parentTaskId,
+    }).timeout(const Duration(seconds: 10));
+    if (withdrawn != true) {
+      throw StateError('Native range withdrawal not acknowledged');
+    }
+  } on MissingPluginException {
+    // A pre-refill binary cannot start an exported range autonomously.
+  }
+}
+
 
 /// Selects package child records owned by one durable V2 range parent.
 ///
@@ -299,6 +362,55 @@ final class PackageBackgroundDownloaderGateway
   /// native queue independently filters children that already exist in URLSession.
   void releaseNativeBackgroundOffersV2() {
     _durableParallel?.releaseNativeBackgroundOffers();
+  }
+
+  Future<void> reconcileNativeBackgroundTransfersV2() async {
+    final coordinator = _durableParallel;
+    if (coordinator == null) return;
+    await coordinator.reconcile(
+      () => _activeDurablePartTaskIds().timeout(const Duration(seconds: 10)),
+    );
+    coordinator.releaseNativeBackgroundOffers();
+  }
+
+  /// Exact-generation observations may adopt a range started by native refill.
+  /// Package/native callbacks still have to prove the final file on disk.
+  void observeNativeChunkUpdateV2({
+    required String parentTaskId,
+    required String chunkTaskId,
+    double? progress,
+    int? statusOrdinal,
+    int? writtenBytes,
+    int? expectedBytes,
+    int? attemptGeneration,
+    double? speedBytesPerSecond,
+    required bool completed,
+  }) {
+    final coordinator = _durableParallel;
+    if (coordinator == null || attemptGeneration == null) return;
+    unawaited(
+      coordinator
+          .handleNativeChunkUpdate(
+            parentTaskId: parentTaskId,
+            chunkTaskId: chunkTaskId,
+            progress: progress,
+            writtenBytes: writtenBytes,
+            expectedBytes: expectedBytes,
+            attemptGeneration: attemptGeneration,
+            speedBytesPerSecond: speedBytesPerSecond,
+            // The UI bridge uses `completed` for all inactive speed samples,
+            // including failures and pauses. Only package success closes a range.
+            completed: completed && statusOrdinal == TaskStatus.complete.index,
+          )
+          .catchError((Object error, StackTrace _) {
+            _diagnostics.recordTransport('background.observationRejected', {
+              'taskId': parentTaskId,
+              'childTaskId': chunkTaskId,
+              'attemptGeneration': attemptGeneration,
+              'errorType': error.runtimeType.toString(),
+            });
+          }),
+    );
   }
 
   @override
@@ -711,7 +823,8 @@ final class PackageBackgroundDownloaderGateway
       },
       saveRecord: _saveDurableRecord,
       recordForId: _downloader.database.recordForId,
-      livePartIds: _activeDurablePartTaskIds,
+      livePartIds: () =>
+          _activeDurablePartTaskIds().timeout(const Duration(seconds: 10)),
       availableStorageBytes: availableDownloadStorageBytesV2,
       verifyPartSource: verifySavedRangeSourceV2,
       manifestFileResolver: privateParallelManifestFileV2,
@@ -746,12 +859,28 @@ final class PackageBackgroundDownloaderGateway
     int size,
   ) async {
     final range = _diagnosticRangeBoundsV2(task);
+    final nativeInventoryStartedAtMillis = DateTime.now().millisecondsSinceEpoch;
     final liveTaskIds = await _activeDurablePartTaskIds();
     if (liveTaskIds.contains(task.taskId)) {
       _diagnostics.recordTransport('recovery.decision', <String, Object?>{
         'taskId': downloadInternalParentTaskId(task),
         'childTaskId': task.taskId,
         'reason': 'nativeOwnerPresent',
+        'nativeLive': true,
+        'rangeStart': range?.$1,
+        'rangeEnd': range?.$2,
+      });
+      return true;
+    }
+
+    if (!await claimNativeRangeForDartV2(
+      task,
+      observedAtMillis: nativeInventoryStartedAtMillis,
+    )) {
+      _diagnostics.recordTransport('recovery.decision', <String, Object?>{
+        'taskId': downloadInternalParentTaskId(task),
+        'childTaskId': task.taskId,
+        'reason': 'nativeClaimCommitted',
         'nativeLive': true,
         'rangeStart': range?.$1,
         'rangeEnd': range?.$2,
@@ -1550,14 +1679,21 @@ final class _DurableParallelDownloadTransportHandle
 
   @override
   Future<bool> pause() =>
-      coordinator.pause(parent, preserveLiveParts: Platform.isIOS);
+      coordinator.pause(
+        parent,
+        preserveLiveParts: Platform.isIOS,
+        beforePause: () => withdrawNativeRangeParentV2(taskId),
+      );
 
   @override
   Future<bool> resume() => coordinator.start(parent, totalBytes);
 
   @override
   Future<bool> cancel() async {
-    await coordinator.cancel(parent);
+    await coordinator.cancel(
+      parent,
+      beforeCancel: () => withdrawNativeRangeParentV2(taskId),
+    );
     if (_current.status != DownloadTransportStatus.canceled) {
       _emit(
         DownloadTransportSnapshot(
