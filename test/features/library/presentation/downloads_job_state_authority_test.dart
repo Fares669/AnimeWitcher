@@ -21,10 +21,11 @@ void main() {
       expect(source, isNot(contains('FileDownloader().database')));
     });
 
-    test('one-second progress refresh stays memory-only', () {
+    test('live progress refresh stays memory-only', () {
       final source = File(
         'lib/features/library/presentation/downloads_provider.dart',
       ).readAsStringSync();
+      expect(source, contains('manager.presentationChanges.listen'));
       final start = source.indexOf('void _refreshPresentationState()');
       final end = source.indexOf('Future<void> _reloadMetadataAndRefresh()', start);
       expect(start, greaterThanOrEqualTo(0));

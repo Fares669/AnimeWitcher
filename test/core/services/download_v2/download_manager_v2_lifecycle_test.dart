@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_diagnostics.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
@@ -12,8 +13,522 @@ import 'package:background_downloader/background_downloader.dart'
 import 'package:flutter_test/flutter_test.dart';
 
 import 'download_v2_test_support.dart';
+import '../../../support/widget_completion.dart';
 
 void main() {
+  test('artifact deletion failure stays retryable after successful cancellation', () async {
+    final root = await Directory.systemTemp.createTemp('aw-artifact-delete-retry-');
+    final f = _fixture(destinationPath: '${root.path}/episode.mp4');
+    addTearDown(f.manager.dispose);
+    addTearDown(() async {
+      await Process.run('chmod', ['700', root.path]);
+      await root.delete(recursive: true);
+    });
+    await f.manager.start(f.request);
+    final file = await File(f.request.destinationPath).writeAsBytes([1, 2, 3]);
+    expect((await Process.run('chmod', ['500', root.path])).exitCode, 0);
+    await expectLater(f.manager.delete(f.request.logicalId), throwsA(isA<FileSystemException>()));
+    expect((await f.store.get(f.request.logicalId))?.intent, DownloadUserIntent.canceled);
+    expect((await f.store.get(f.request.logicalId))?.failureCategory, DownloadFailureCategory.filesystem);
+    expect(f.manager.snapshotFor(f.request.logicalId)?.status, DownloadTransportStatus.failed);
+    expect(await file.readAsBytes(), [1, 2, 3]);
+    expect((await Process.run('chmod', ['700', root.path])).exitCode, 0);
+    await f.manager.delete(f.request.logicalId);
+    expect(await f.store.get(f.request.logicalId), isNull);
+    expect(await file.exists(), isFalse);
+    expect(f.gateway.startedSpecs, hasLength(1));
+  }, skip: Platform.isWindows);
+
+  test('cleanup failure retains canceled ownership as retryable failure without reviving transfer', () async {
+    final root = await Directory.systemTemp.createTemp('aw-cleanup-retry-');
+    final f = _fixture(destinationPath: '${root.path}/episode.mp4');
+    addTearDown(f.manager.dispose);
+    addTearDown(() => root.delete(recursive: true));
+    await f.manager.start(f.request);
+    final file = await File(f.request.destinationPath).writeAsBytes([1, 2, 3]);
+    f.gateway.onRemoveTracking = (_) async => throw StateError('native ownership inventory unavailable');
+    await expectLater(f.manager.delete(f.request.logicalId), throwsStateError);
+    final retained = (await f.store.get(f.request.logicalId))!;
+    expect(retained.intent, DownloadUserIntent.canceled);
+    expect(retained.failureCategory, DownloadFailureCategory.filesystem);
+    expect(f.manager.snapshotFor(f.request.logicalId)?.status, DownloadTransportStatus.failed);
+    expect(await file.readAsBytes(), [1, 2, 3]);
+    f.gateway.onRemoveTracking = null;
+    await f.manager.delete(f.request.logicalId);
+    expect(await f.store.get(f.request.logicalId), isNull);
+    expect(await file.exists(), isFalse);
+    expect(f.gateway.startedSpecs, hasLength(1));
+  });
+
+  testWidgets(
+    'unknown resume acknowledgement blocks destructive cleanup until settled',
+    (tester) async {
+      final temp = Directory.systemTemp.createTempSync('aw-v2-late-resume-');
+      final destination = File('${temp.path}/episode.mp4')
+        ..writeAsBytesSync([1, 2, 3]);
+      final f = _fixture(destinationPath: destination.path);
+      StreamSubscription<List<LogicalDownloadRecordV2>>? records;
+      final acknowledgement = Completer<bool>();
+      try {
+        await pumpUntilFuture(
+          tester,
+          f.manager.start(f.request),
+          'start before uncertain resume',
+        );
+        final taskId = f.gateway.startedSpecs.single.taskId;
+        final handle = f.gateway.handleFor(taskId)!;
+        await pumpUntilFuture(
+          tester,
+          f.manager.pause(f.request.logicalId),
+          'pause before uncertain resume',
+        );
+        var nativeWriter = false;
+        handle.onResume = () async {
+          final accepted = await acknowledgement.future;
+          nativeWriter = accepted;
+          return accepted;
+        };
+        handle.onCancel = () async {
+          nativeWriter = false;
+          handle.emit(DownloadTransportStatus.canceled);
+          return true;
+        };
+        Object? resumeError;
+        f.manager
+            .resume(f.request.logicalId)
+            .then<void>(
+              (_) {},
+              onError: (Object error) {
+                resumeError = error;
+              },
+            ).ignore();
+        await pumpUntil(
+          tester,
+          () => handle.resumeCalls == 1,
+          'native resume request',
+        );
+        await tester.pump(const Duration(seconds: 31));
+        expect(resumeError, isA<StateError>());
+        handle.emit(DownloadTransportStatus.canceled);
+        expect(
+          f.manager.snapshotFor(f.request.logicalId)?.status,
+          DownloadTransportStatus.held,
+        );
+        var canceledIntent = false;
+        records = f.manager.records.listen((values) {
+          canceledIntent = values.any(
+            (record) => record.intent == DownloadUserIntent.canceled,
+          );
+        });
+        Object? deleteError;
+        f.manager
+            .delete(f.request.logicalId)
+            .then<void>(
+              (_) {},
+              onError: (Object error) {
+                deleteError = error;
+              },
+            ).ignore();
+        await pumpUntil(
+          tester,
+          () => canceledIntent,
+          'durable cancel intent before cleanup',
+        );
+        await tester.pump(const Duration(seconds: 31));
+        expect(deleteError, isA<StateError>());
+        expect(destination.existsSync(), isTrue);
+        expect(f.gateway.removedTracking, isEmpty);
+        expect(
+          handle.cancelCalls,
+          0,
+          reason: 'resume may still create a native writer',
+        );
+        expect(
+          f.manager.snapshotFor(f.request.logicalId)?.status,
+          DownloadTransportStatus.held,
+        );
+
+        acknowledgement.complete(true);
+        await tester.pump();
+        expect(
+          nativeWriter,
+          isTrue,
+          reason: 'late native commit can precede its progress callback',
+        );
+        await pumpUntilFuture(
+          tester,
+          f.manager.delete(f.request.logicalId),
+          'retry deletion after resume acknowledgement',
+        );
+        expect(handle.cancelCalls, 1);
+        expect(nativeWriter, isFalse);
+        expect(destination.existsSync(), isFalse);
+        expect(
+          await pumpUntilFuture(
+            tester,
+            f.store.get(f.request.logicalId),
+            'deleted logical record',
+          ),
+          isNull,
+        );
+        handle.emit(DownloadTransportStatus.running);
+        await tester.pump();
+        expect(f.manager.snapshotFor(f.request.logicalId), isNull);
+      } finally {
+        if (!acknowledgement.isCompleted) acknowledgement.complete(false);
+        if (records != null) {
+          await pumpUntilFuture(
+            tester,
+            records.cancel(),
+            'uncertain resume records cancellation',
+          );
+        }
+        await pumpUntilFuture(
+          tester,
+          f.manager.dispose(),
+          'uncertain resume manager disposal',
+        );
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'final snapshot with active native connections still requires cancel',
+    () async {
+      final temp = Directory.systemTemp.createTempSync('aw-v2-final-live-');
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
+      final f = _fixture(destinationPath: '${temp.path}/episode.mp4');
+      addTearDown(f.manager.dispose);
+      await f.manager.start(f.request);
+      final taskId = f.gateway.startedSpecs.single.taskId;
+      final handle = f.gateway.handleFor(taskId)!;
+      handle.emitSnapshot(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.failed,
+          progress: .5,
+          activeConnections: 1,
+        ),
+      );
+
+      await f.manager.delete(f.request.logicalId);
+
+      expect(handle.cancelCalls, 1);
+      expect(await f.store.get(f.request.logicalId), isNull);
+    },
+  );
+
+  for (final action in ['pause', 'cancel']) {
+    testWidgets('$action settlement timeout retains requested intent', (
+      tester,
+    ) async {
+      final f = _fixture();
+      try {
+        await pumpUntilFuture(
+          tester,
+          f.manager.start(f.request),
+          'start before settlement timeout',
+        );
+        final handle = f.gateway.handleFor(
+          f.gateway.startedSpecs.single.taskId,
+        )!;
+        if (action == 'pause') {
+          handle.onPause = () async => true;
+        } else {
+          handle.onCancel = () async => true;
+        }
+        Object? controlError;
+        final Future<Object?> command = action == 'pause'
+            ? f.manager.pause(f.request.logicalId)
+            : f.manager.cancel(f.request.logicalId);
+        command
+            .then<void>(
+              (_) {},
+              onError: (Object error) {
+                controlError = error;
+              },
+            )
+            .ignore();
+        await pumpUntil(
+          tester,
+          () => handle.pauseCalls + handle.cancelCalls == 1,
+          'accepted native control',
+        );
+        await tester.pump(const Duration(seconds: 11));
+        await pumpUntil(
+          tester,
+          () => controlError != null,
+          'control timeout projection',
+        );
+        expect(controlError, isA<StateError>());
+        final record = await pumpUntilFuture(
+          tester,
+          f.store.get(f.request.logicalId),
+          'retained intent after timeout',
+        );
+        expect(
+          record?.intent,
+          action == 'pause'
+              ? DownloadUserIntent.paused
+              : DownloadUserIntent.canceled,
+        );
+        expect(
+          f.manager.snapshotFor(f.request.logicalId)?.status,
+          DownloadTransportStatus.running,
+        );
+        handle.emit(
+          action == 'pause'
+              ? DownloadTransportStatus.paused
+              : DownloadTransportStatus.canceled,
+        );
+        await tester.pump();
+        final settled = await pumpUntilFuture(
+          tester,
+          f.store.get(f.request.logicalId),
+          'late control settlement',
+        );
+        expect(settled?.intent, record?.intent);
+      } finally {
+        await pumpUntilFuture(
+          tester,
+          f.manager.dispose(),
+          'settlement timeout manager disposal',
+        );
+      }
+    });
+  }
+
+  testWidgets('lost pause acknowledgement releases the queue for deletion', (
+    tester,
+  ) async {
+    final temp = Directory.systemTemp.createTempSync('aw-v2-lost-pause-');
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    final f = _fixture(
+      diagnostics: diagnostics,
+      destinationPath: '${temp.path}/episode.mp4',
+    );
+    final acknowledgement = Completer<bool>();
+    try {
+      await pumpUntilFuture(
+        tester,
+        f.manager.start(f.request),
+        'start before lost pause reply',
+      );
+      final taskId = f.gateway.startedSpecs.single.taskId;
+      final handle = f.gateway.handleFor(taskId)!;
+      handle.onPause = () async {
+        final accepted = await acknowledgement.future;
+        if (accepted) handle.emit(DownloadTransportStatus.paused);
+        return accepted;
+      };
+      Object? pauseError;
+      f.manager
+          .pause(f.request.logicalId)
+          .then<void>(
+            (_) {},
+            onError: (Object error) {
+              pauseError = error;
+            },
+          )
+          .ignore();
+      await pumpUntil(
+        tester,
+        () => handle.pauseCalls == 1,
+        'native pause request',
+      );
+      await tester.pump(const Duration(seconds: 31));
+      await pumpUntil(
+        tester,
+        () => pauseError != null,
+        'pause timeout projection',
+      );
+      expect(pauseError, isA<StateError>());
+      final commands = diagnostics.transportEvents
+          .where((event) => event['action'] == 'pause')
+          .toList();
+      expect(commands.map((event) => event['event']), [
+        'command.requested',
+        'command.started',
+        'command.timedOut',
+      ]);
+      expect(commands.last['logicalId'], f.request.logicalId.value);
+      expect(commands.last['taskId'], taskId);
+      expect(commands.last['durationMs'], greaterThanOrEqualTo(0));
+      expect(
+        f.manager.snapshotFor(f.request.logicalId)?.status,
+        DownloadTransportStatus.running,
+      );
+      final record = await pumpUntilFuture(
+        tester,
+        f.store.get(f.request.logicalId),
+        'intent after lost pause reply',
+      );
+      expect(record?.intent, DownloadUserIntent.paused);
+      await pumpUntilFuture(
+        tester,
+        f.manager.delete(f.request.logicalId),
+        'deletion after lost pause reply',
+      );
+      expect(handle.cancelCalls, 1);
+      expect(
+        await pumpUntilFuture(
+          tester,
+          f.store.get(f.request.logicalId),
+          'deleted logical record',
+        ),
+        isNull,
+      );
+      expect(diagnostics.transportEvents.last['taskId'], taskId);
+      acknowledgement.complete(true);
+      await tester.pump();
+      expect(f.manager.snapshotFor(f.request.logicalId), isNull);
+    } finally {
+      if (!acknowledgement.isCompleted) acknowledgement.complete(false);
+      await pumpUntilFuture(
+        tester,
+        f.manager.dispose(),
+        'lost pause manager disposal',
+      );
+      if (temp.existsSync()) temp.deleteSync(recursive: true);
+    }
+  });
+
+  test('control rejection diagnostics never include exception text', () async {
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    final f = _fixture(diagnostics: diagnostics);
+    addTearDown(f.manager.dispose);
+    await f.manager.start(f.request);
+    final handle = f.gateway.handleFor(f.gateway.startedSpecs.single.taskId)!;
+    handle.onPause = () async =>
+        throw StateError('https://secret.invalid?token=private');
+
+    await expectLater(f.manager.pause(f.request.logicalId), throwsStateError);
+
+    final commands = diagnostics.transportEvents
+        .where((event) => event['action'] == 'pause')
+        .toList();
+    expect(commands.map((event) => event['event']), [
+      'command.requested',
+      'command.started',
+      'command.rejected',
+    ]);
+    expect(commands.last['errorType'], isNotNull);
+    expect(commands.toString(), isNot(contains('private')));
+    expect(commands.toString(), isNot(contains('secret.invalid')));
+  });
+
+  test(
+    'cancel timeout retains intent through late native settlement',
+    () async {
+      final f = _fixture();
+      addTearDown(f.manager.dispose);
+      await f.manager.start(f.request);
+      final taskId = f.gateway.startedSpecs.single.taskId;
+      final handle = f.gateway.handleFor(taskId)!;
+      handle.onCancel = () async =>
+          throw TimeoutException('native acknowledgement');
+
+      await expectLater(
+        f.manager.cancel(f.request.logicalId),
+        throwsA(isA<TimeoutException>()),
+      );
+
+      expect(
+        (await f.store.get(f.request.logicalId))?.intent,
+        DownloadUserIntent.canceled,
+      );
+      expect(
+        f.manager.snapshotFor(f.request.logicalId)?.status,
+        DownloadTransportStatus.running,
+      );
+      expect(f.gateway.removedTracking, isEmpty);
+      handle.emit(DownloadTransportStatus.canceled);
+      expect(
+        (await f.store.get(f.request.logicalId))?.intent,
+        DownloadUserIntent.canceled,
+      );
+      final recovered = DownloadManagerV2(
+        store: f.store,
+        gateway: f.gateway,
+        sourceResolver: StaticSourceResolverV2(),
+      );
+      addTearDown(recovered.dispose);
+      await recovered.initialize();
+      expect(
+        f.gateway.startedSpecs,
+        hasLength(1),
+        reason: 'a late successful cancel must never restart on recovery',
+      );
+    },
+  );
+
+  test('pause timeout retains intent without hiding a live writer', () async {
+    final f = _fixture();
+    addTearDown(f.manager.dispose);
+    await f.manager.start(f.request);
+    final handle = f.gateway.handleFor(f.gateway.startedSpecs.single.taskId)!;
+    handle.onPause = () async =>
+        throw TimeoutException('native acknowledgement');
+
+    await expectLater(
+      f.manager.pause(f.request.logicalId),
+      throwsA(isA<TimeoutException>()),
+    );
+
+    expect(
+      (await f.store.get(f.request.logicalId))?.intent,
+      DownloadUserIntent.paused,
+    );
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.status,
+      DownloadTransportStatus.running,
+    );
+    handle.emit(DownloadTransportStatus.paused);
+    expect(
+      (await f.store.get(f.request.logicalId))?.intent,
+      DownloadUserIntent.paused,
+    );
+    expect(
+      f.manager.snapshotFor(f.request.logicalId)?.status,
+      DownloadTransportStatus.paused,
+    );
+  });
+
+  test('cancel keeps live presentation until transport settlement', () async {
+    final observer = _RecordingPresentationObserver();
+    final f = _fixture(presentationObservers: [observer]);
+    addTearDown(f.manager.dispose);
+    await f.manager.start(f.request);
+    final taskId = f.gateway.startedSpecs.single.taskId;
+    final handle = f.gateway.handleFor(taskId)!;
+    final entered = Completer<void>();
+    handle.onCancel = () async {
+      entered.complete();
+      return true;
+    };
+    final cancellation = f.manager.cancel(f.request.logicalId);
+    await entered.future;
+    try {
+      expect(
+        (await f.store.get(f.request.logicalId))?.intent,
+        DownloadUserIntent.canceled,
+        reason: 'user intent is durable before the transport stops',
+      );
+      expect(
+        f.manager.snapshotFor(f.request.logicalId)?.status,
+        DownloadTransportStatus.running,
+      );
+      expect(observer.events.last.$2.status, DownloadTransportStatus.running);
+    } finally {
+      handle.emit(DownloadTransportStatus.canceled);
+      await cancellation;
+    }
+    expect(observer.events.last.$2.status, DownloadTransportStatus.canceled);
+  });
+
   test(
     'accepted V2 snapshots are forwarded to presentation observers',
     () async {
@@ -707,6 +1222,8 @@ _Fixture _fixture({
   String destinationPath = 'downloads/anime/episode-12.mp4',
   int parallelChunks = 1,
   NativeParallelPauseReadinessV2? pauseReadiness,
+  List<DownloadPresentationObserverV2> presentationObservers = const [],
+  DownloadDiagnosticsV2? diagnostics,
 }) {
   final store = InMemoryLogicalDownloadStoreV2();
   final gateway = _FakeGateway();
@@ -737,6 +1254,8 @@ _Fixture _fixture({
       gateway: gateway,
       sourceResolver: resolver,
       parallelPauseReadiness: pauseReadiness,
+      presentationObservers: presentationObservers,
+      diagnostics: diagnostics,
     ),
   );
 }
@@ -761,6 +1280,7 @@ final class _FakeGateway implements BackgroundDownloaderGateway {
   final List<DownloadTaskSpecV2> startedSpecs = <DownloadTaskSpecV2>[];
   final List<String> removedTracking = <String>[];
   final Map<String, _FakeHandle> _handles = <String, _FakeHandle>{};
+  Future<void> Function(String taskId)? onRemoveTracking;
 
   @override
   Future<void> initialize() async {}
@@ -789,6 +1309,7 @@ final class _FakeGateway implements BackgroundDownloaderGateway {
 
   @override
   Future<void> removeTracking(String taskId) async {
+    await onRemoveTracking?.call(taskId);
     removedTracking.add(taskId);
   }
 

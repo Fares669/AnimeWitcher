@@ -7,6 +7,25 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('control diagnostics preserve safe timing and identity fields', () {
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    diagnostics.recordTransport('command.timedOut', {
+      'logicalId': 'dl_123',
+      'taskId': 'aw_v2_dl_123_g1',
+      'action': 'pause',
+      'durationMs': 30000,
+      'url': 'https://secret.invalid',
+      'error': 'token=private',
+    });
+    expect(diagnostics.transportEvents.single, {
+      'event': 'command.timedOut',
+      'logicalId': 'dl_123',
+      'taskId': 'aw_v2_dl_123_g1',
+      'action': 'pause',
+      'durationMs': 30000,
+    });
+  });
+
   test('diagnostic event serializes only allowlisted non-secret fields', () {
     final event = DownloadDiagnosticEventV2(
       logicalId: const DownloadLogicalId('logical-episode'),

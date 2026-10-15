@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -109,14 +110,43 @@ DownloadItem _item({
 }
 
 class _StubDownloadsNotifier extends DownloadsNotifier {
-  _StubDownloadsNotifier(this._items, {this.resumeError, this.retryError});
+  _StubDownloadsNotifier(
+    this._items, {
+    this.resumeError,
+    this.retryError,
+    this.pauseAction,
+    this.removeAction,
+  });
 
   final List<DownloadItem> _items;
   final Object? resumeError;
   final Object? retryError;
+  final Future<void> Function()? pauseAction;
+  final Future<void> Function()? removeAction;
+  int pauseCalls = 0;
+  int removeCalls = 0;
 
   @override
   Future<List<DownloadItem>> build() async => _items;
+
+  @override
+  Future<void> pauseDownload(String taskId) async {
+    pauseCalls++;
+    await pauseAction?.call();
+  }
+
+  @override
+  Future<void> removeDownload(DownloadItem item) async {
+    removeCalls++;
+    await removeAction?.call();
+  }
+
+  @override
+  Future<bool> removeDownloads(List<DownloadItem> items) async {
+    removeCalls++;
+    await removeAction?.call();
+    return true;
+  }
 
   @override
   Future<void> retryDownload(String taskId) async {
@@ -147,6 +177,7 @@ Widget _downloadsApp(
   Object? resumeError,
   Object? retryError,
   NotificationService? notificationService,
+  _StubDownloadsNotifier? notifier,
 }) {
   Widget home = const Scaffold(
     body: RepaintBoundary(
@@ -160,11 +191,13 @@ Widget _downloadsApp(
   return ProviderScope(
     overrides: [
       downloadsProvider.overrideWith(
-        () => _StubDownloadsNotifier(
-          items,
-          resumeError: resumeError,
-          retryError: retryError,
-        ),
+        () =>
+            notifier ??
+            _StubDownloadsNotifier(
+              items,
+              resumeError: resumeError,
+              retryError: retryError,
+            ),
       ),
       if (notificationService != null)
         notificationServiceProvider.overrideWithValue(notificationService),
@@ -196,6 +229,147 @@ void main() {
     }
   });
   tearDownAll(() => _artworkFixtureRoot.delete(recursive: true));
+
+  testWidgets('pause failure is shown and the button is usable again', (
+    tester,
+  ) async {
+    final notifications = NotificationService();
+    addTearDown(notifications.dispose);
+    final notifier = _StubDownloadsNotifier(
+      [_item(taskId: 'running-v2', timestamp: 1, status: TaskStatus.running)],
+      pauseAction: () async =>
+          throw StateError('pause acknowledgement timed out'),
+    );
+    await tester.pumpWidget(
+      _downloadsApp([], notifier: notifier, notificationService: notifications),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      notifications.toasts.single.message,
+      'pause acknowledgement timed out',
+    );
+    expect(
+      tester
+          .widget<IconButton>(
+            find.widgetWithIcon(IconButton, Icons.pause_rounded),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.pump();
+    expect(notifier.pauseCalls, 2);
+    notifications.clearToasts();
+  });
+
+  testWidgets('pending pause blocks duplicate taps but still allows deletion', (
+    tester,
+  ) async {
+    final pause = Completer<void>();
+    final deletion = Completer<void>();
+    final notifier = _StubDownloadsNotifier(
+      [_item(taskId: 'running-v2', timestamp: 1, status: TaskStatus.running)],
+      pauseAction: () => pause.future,
+      removeAction: () => deletion.future,
+    );
+    await tester.pumpWidget(_downloadsApp([], notifier: notifier));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.pump();
+    expect(notifier.pauseCalls, 1);
+    expect(
+      tester
+          .widget<IconButton>(
+            find.widgetWithIcon(IconButton, Icons.pause_rounded),
+          )
+          .onPressed,
+      isNull,
+    );
+    final deleteButton = find.widgetWithIcon(
+      IconButton,
+      Icons.delete_outline_rounded,
+    );
+    expect(tester.widget<IconButton>(deleteButton).onPressed, isNotNull);
+
+    await tester.tap(deleteButton);
+    await tester.pumpAndSettle();
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(DownloadsTab)),
+    )!;
+    await tester.tap(find.widgetWithText(TextButton, l10n.delete));
+    await tester.pumpAndSettle();
+    expect(notifier.removeCalls, 1);
+    expect(tester.widget<IconButton>(deleteButton).onPressed, isNull);
+
+    pause.complete();
+    deletion.complete();
+    await tester.pumpAndSettle();
+    expect(tester.widget<IconButton>(deleteButton).onPressed, isNotNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final completed in [false, true]) {
+    testWidgets(
+      '${completed ? 'completed group' : 'active row'} deletion failure is shown and can be retried',
+      (tester) async {
+        final notifications = NotificationService();
+        addTearDown(notifications.dispose);
+      if (completed) await _prepareArtworkStorage(tester);
+        final notifier = _StubDownloadsNotifier(
+          [
+            _item(
+              taskId: 'delete-v2',
+              timestamp: 1,
+              status: completed ? TaskStatus.complete : TaskStatus.running,
+            ),
+          ],
+          removeAction: () async =>
+              throw StateError('download still has a native writer'),
+        );
+        await tester.pumpWidget(
+          _downloadsApp(
+            [],
+            notifier: notifier,
+            notificationService: notifications,
+          ),
+        );
+        await tester.pumpAndSettle();
+        final l10n = AppLocalizations.of(
+          tester.element(find.byType(DownloadsTab)),
+        )!;
+        if (completed) {
+          await tester.tap(find.text(l10n.downloadsTabCompleted));
+          await tester.pumpAndSettle();
+        await _awaitArtworkLookups(tester);
+        }
+        for (var attempt = 0; attempt < 2; attempt++) {
+          await tester.tap(find.byIcon(Icons.delete_outline_rounded));
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.widgetWithText(
+              TextButton,
+              completed ? l10n.deleteAll : l10n.delete,
+            ),
+          );
+          // Keep the one-second error toast visible while the dialog closes.
+          await tester.pump();
+          expect(tester.takeException(), isNull);
+          expect(
+            notifications.toasts.single.message,
+            'download still has a native writer',
+          );
+          notifications.clearToasts();
+          await tester.pumpAndSettle();
+        }
+        expect(notifier.removeCalls, 2);
+      },
+    );
+  }
 
   testWidgets('resume failure is caught and surfaced as an error toast', (
     tester,
@@ -267,9 +441,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('delete preserves label lookalikes', (
-    tester,
-  ) async {
+  testWidgets('delete preserves label lookalikes', (tester) async {
     await tester.runAsync(() async {
       final root = await Directory.systemTemp.createTemp('aw_dl_path_');
       addTearDown(() => root.delete(recursive: true));

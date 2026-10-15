@@ -498,6 +498,24 @@ final class DownloadContinuedProcessingManager {
   }
 
   private func attach(_ task: BGContinuedProcessingTask) {
+    // Canceling a request cannot retract an already-delivered launch callback.
+    guard identifier == task.identifier, snapshot != nil else {
+      recordLifecycle("continued.attach.rejected", fields: [
+        "leaseIdentifier": task.identifier, "failure": "inactiveSession",
+      ])
+      task.setTaskCompleted(success: false)
+      return
+    }
+    if let activeTask {
+      if activeTask !== task {
+        recordLifecycle("continued.attach.rejected", fields: [
+          "leaseIdentifier": task.identifier, "failure": "duplicateLease",
+        ])
+        task.setTaskCompleted(success: false)
+      }
+      return
+    }
+
     activeTask = task
     let completion = DownloadContinuedProcessingCompletion()
     activeTaskCompletion = completion

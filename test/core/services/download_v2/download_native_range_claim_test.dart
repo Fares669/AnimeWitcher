@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
@@ -27,6 +28,24 @@ void main() {
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+  });
+
+  testWidgets('missing disk-space ACK stays unknown and cannot lock the assembler', (tester) async {
+    final ack = Completer<int>();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) => ack.future);
+    var finished = false;
+    int? available;
+    final probe = availableDownloadStorageBytesV2('/downloads').then((value) {
+      finished = true;
+      available = value;
+    });
+    await tester.pump(const Duration(seconds: 6));
+    final bounded = finished;
+    ack.complete(123);
+    await probe;
+    expect(bounded, isTrue);
+    expect(available, isNull, reason: 'a lost native ACK cannot claim known headroom');
   });
 
   test(

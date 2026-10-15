@@ -1534,6 +1534,14 @@ class StorageService {
     await _downloadMetadata('hive.delete', [taskId]);
   }
 
+  Future<bool> removeDownloadMetadataIfUnchanged(
+    String taskId,
+    Map<String, dynamic> expected,
+  ) async {
+    return await _downloadMetadata('hive.deleteIfUnchanged', [taskId, expected])
+        as bool;
+  }
+
   Future<void> deleteAllData() async {
     try {
       // Delete Extensions Folder (Application Support)

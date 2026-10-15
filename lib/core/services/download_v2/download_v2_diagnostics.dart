@@ -287,6 +287,9 @@ bool _shouldFlushDiagnosticRecord(Map<String, Object?> body) {
 }
 
 const Set<String> _transportFieldAllowlist = <String>{
+  'logicalId',
+  'action',
+  'durationMs',
   'taskId',
   'parentTaskId',
   'childTaskId',

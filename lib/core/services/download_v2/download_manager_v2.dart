@@ -122,6 +122,7 @@ final class DownloadManagerV2 {
   _subscriptionsByTaskId =
       <String, StreamSubscription<DownloadTransportSnapshot>>{};
   final Set<DownloadLogicalId> _parallelPausePending = <DownloadLogicalId>{};
+  final Map<String, Future<bool>> _unsettledResumeAcks = <String, Future<bool>>{};
   final Map<DownloadLogicalId, int> _lastPositiveSpeedAtMillis =
       <DownloadLogicalId, int>{};
   final Map<String, int> _lastNativeSpeedProjectionAtMillis = <String, int>{};
@@ -134,6 +135,8 @@ final class DownloadManagerV2 {
       _firstRenewedPositiveSample = <DownloadLogicalId, DownloadTransportSnapshot>{};
   final StreamController<List<LogicalDownloadRecordV2>> _recordChanges =
       StreamController<List<LogicalDownloadRecordV2>>.broadcast();
+  final StreamController<void> _presentationChanges =
+      StreamController<void>.broadcast(sync: true);
 
   Future<void>? _initialization;
   Completer<void>? _localReadiness;
@@ -174,6 +177,9 @@ final class DownloadManagerV2 {
       unawaited(buffered.close());
     }
   }
+
+  /// Signals the same in-memory snapshot sent to the platform presentation.
+  Stream<void> get presentationChanges => _presentationChanges.stream;
 
   Future<void> initialize() {
     final existing = _initialization;
@@ -546,7 +552,7 @@ final class DownloadManagerV2 {
                   DownloadTransportStatus.paused) {
                 var resumed = false;
                 try {
-                  resumed = await exactHandle.resume();
+                  resumed = await _resumeHandleAndAwaitAcknowledgement(record.logicalId, exactHandle);
                 } catch (_) {
                   // Preserve the exact generation if native resume throws.
                 }
@@ -640,7 +646,7 @@ final class DownloadManagerV2 {
   /// Starts a logical download, coalescing concurrent duplicate starts into
   /// the same exact package writer.
   Future<DownloadTransportSnapshot> start(DownloadStartRequestV2 request) {
-    return _commands.run(request.logicalId, () async {
+    return _runControlCommand(request.logicalId, 'start', () async {
       await initialize();
       final currentRecord = await _store.get(request.logicalId);
 
@@ -711,7 +717,7 @@ final class DownloadManagerV2 {
 
   /// Replaces the current transport with a new generation for this logical ID.
   Future<DownloadTransportSnapshot> restart(DownloadLogicalId logicalId) {
-    return _commands.run(logicalId, () async {
+    return _runControlCommand(logicalId, 'restart', () async {
       await initialize();
       final currentRecord = await _store.get(logicalId);
       if (currentRecord == null) {
@@ -727,7 +733,7 @@ final class DownloadManagerV2 {
 
   /// Persists paused intent before asking the package to pause.
   Future<DownloadTransportSnapshot?> pause(DownloadLogicalId logicalId) {
-    return _commands.run(logicalId, () async {
+    return _runControlCommand(logicalId, 'pause', () async {
       await initialize();
       final record = await _store.get(logicalId);
       if (record == null) return null;
@@ -784,10 +790,12 @@ final class DownloadManagerV2 {
               );
             }
           }
-        } catch (_) {
-          // A rejected command must not free admission while its writer lives.
-          await _store.put(record);
-          _rememberRecord(record);
+        } catch (error) {
+          // A timeout is ambiguous: a late native pause must not be resumed on
+          // startup. Keep paused intent and expose live transport truth.
+          final restored = _isControlTimeout(error) ? pausedRecord : record;
+          await _store.put(restored);
+          _rememberRecord(restored);
           final current = handle?.current;
           if (current != null &&
               current.status != DownloadTransportStatus.paused) {
@@ -854,7 +862,7 @@ final class DownloadManagerV2 {
   /// package handle must preserve the user's existing progress. Active records
   /// may still use normal missing-transfer recovery.
   Future<DownloadTransportSnapshot> resume(DownloadLogicalId logicalId) {
-    return _commands.run(logicalId, () async {
+    return _runControlCommand(logicalId, 'resume', () async {
       await initialize();
       final record = await _store.get(logicalId);
       if (record == null) {
@@ -999,7 +1007,7 @@ final class DownloadManagerV2 {
             }
           }
 
-          final resumed = await handle.resume();
+          final resumed = await _resumeHandleAndAwaitAcknowledgement(logicalId, handle);
           if (resumed) {
             final activeRecord = record.copyWith(
               intent: DownloadUserIntent.active,
@@ -1112,7 +1120,7 @@ final class DownloadManagerV2 {
 
   /// Cancels the logical download.
   Future<void> cancel(DownloadLogicalId logicalId) {
-    return _commands.run(logicalId, () async {
+    return _runControlCommand(logicalId, 'cancel', () async {
       await initialize();
       final record = await _store.get(logicalId);
       if (record == null) return;
@@ -1135,7 +1143,7 @@ final class DownloadManagerV2 {
   /// Deletes the logical item and final artifact. Missing artifacts are treated
   /// as already deleted.
   Future<void> delete(DownloadLogicalId logicalId) {
-    return _commands.run(logicalId, () async {
+    return _runControlCommand(logicalId, 'delete', () async {
       await _initializeForLocalAccess();
       var record = await _store.get(logicalId);
       if (record == null) return;
@@ -1183,6 +1191,16 @@ final class DownloadManagerV2 {
           _lastPositiveSpeedAtMillis.remove(logicalId);
           await _cleanupEmptyDownloadFolders(removed: deleting);
           await _publishRecords();
+        } catch (_) {
+          final retained = await _store.get(logicalId);
+          final settled = _snapshots[logicalId];
+          if (retained?.intent == DownloadUserIntent.canceled &&
+              retained?.taskId == deleting.taskId &&
+              settled?.taskId == deleting.taskId &&
+              settled?.status == DownloadTransportStatus.canceled) {
+            await _markCanceledCleanupFailure(retained!);
+          }
+          rethrow;
         } finally {
           _admissionReservations.remove(logicalId);
           _scheduleAdmissionPromotion();
@@ -1398,8 +1416,7 @@ final class DownloadManagerV2 {
               (lookUpPreviousHandle
                   ? await _recordHandle(previous)
                   : null);
-    if (obsoleteHandle != null &&
-        (cancelPreviousEvenIfFinal || !obsoleteHandle.current.isFinal)) {
+    if (obsoleteHandle != null) {
       await _settleObsoleteHandle(
         obsoleteHandle,
         cancelEvenIfFinal: cancelPreviousEvenIfFinal,
@@ -1685,7 +1702,7 @@ final class DownloadManagerV2 {
               return;
             }
           }
-          resumed = await existing.resume();
+          resumed = await _resumeHandleAndAwaitAcknowledgement(record.logicalId, existing);
         } catch (_) {
           // A thrown resume is no proof the progress is gone. Keep it paused
           // rather than failed, whose Retry would start from byte zero.
@@ -1945,8 +1962,7 @@ final class DownloadManagerV2 {
                   ? await _recordHandle(previous)
                   : null);
 
-    if (obsoleteHandle != null &&
-        (cancelPreviousEvenIfFinal || !obsoleteHandle.current.isFinal)) {
+    if (obsoleteHandle != null) {
       await _settleObsoleteHandle(
         obsoleteHandle,
         cancelEvenIfFinal: cancelPreviousEvenIfFinal,
@@ -2068,6 +2084,77 @@ final class DownloadManagerV2 {
     }
   }
 
+  Future<T> _runControlCommand<T>(
+    DownloadLogicalId logicalId,
+    String action,
+    Future<T> Function() command,
+  ) {
+    final elapsed = Stopwatch()..start();
+    var taskId = _currentTaskIds[logicalId];
+    void record(String phase, [Object? error]) {
+      taskId = _currentTaskIds[logicalId] ?? taskId;
+      _diagnostics.recordTransport('command.$phase', {
+        'logicalId': logicalId.value,
+        'taskId': ?taskId,
+        'action': action,
+        'durationMs': elapsed.elapsedMilliseconds,
+        if (error case final cause?) 'errorType': cause.runtimeType.toString(),
+      });
+    }
+
+    record('requested');
+    return _commands
+        .run(logicalId, () {
+          record('started');
+          return command();
+        })
+        .then(
+          (value) {
+            record('accepted');
+            return value;
+          },
+          onError: (Object error, StackTrace stack) {
+            record(_isControlTimeout(error) ? 'timedOut' : 'rejected', error);
+            Error.throwWithStackTrace(error, stack);
+          },
+        );
+  }
+
+  Future<bool> _resumeHandleAndAwaitAcknowledgement(
+    DownloadLogicalId logicalId,
+    DownloadTransportHandle handle,
+  ) async {
+    final acknowledgement = _unsettledResumeAcks.putIfAbsent(
+      handle.taskId,
+      handle.resume,
+    );
+    try {
+      final accepted = await _awaitControlAcknowledgement(
+        'resume',
+        acknowledgement,
+      );
+      _unsettledResumeAcks.remove(handle.taskId)?.ignore();
+      return accepted;
+    } catch (error) {
+      if (!_isControlTimeout(error)) {
+        _unsettledResumeAcks.remove(handle.taskId)?.ignore();
+      } else {
+        // A lost resume reply may still create a native writer. Keep ownership
+        // visible and fence destructive cleanup until the original call settles.
+        _consumeSnapshot(logicalId, handle.current);
+      }
+      rethrow;
+    }
+  }
+
+  Future<bool> _awaitControlAcknowledgement(
+    String action,
+    Future<bool> acknowledgement,
+  ) => acknowledgement.timeout(
+    const Duration(seconds: 30),
+    onTimeout: () => throw _DownloadControlTimeout(action),
+  );
+
   Future<DownloadTransportSnapshot> _pauseHandleAndSettle(
     DownloadTransportHandle handle,
   ) async {
@@ -2087,7 +2174,9 @@ final class DownloadManagerV2 {
     });
 
     try {
-      final accepted = await handle.pause();
+      final accepted = await _awaitControlAcknowledgement(
+        'pause', handle.pause(),
+      );
       if (!accepted) {
         // On iOS a failed pause can mean URLSession could not produce resume
         // data. Canceling here destroys the exact writer and makes a later
@@ -2104,9 +2193,8 @@ final class DownloadManagerV2 {
       try {
         return await settled.future.timeout(const Duration(seconds: 10));
       } on TimeoutException {
-        // Command acceptance is not proof of a durable paused transfer.
-        // Never turn a pause timeout into a destructive cancel.
-        return handle.current;
+        // A late pause may still settle; keep durable paused user intent.
+        throw _DownloadControlTimeout('pause settlement');
       }
     } finally {
       await subscription.cancel();
@@ -2117,10 +2205,22 @@ final class DownloadManagerV2 {
     DownloadTransportHandle handle, {
     required bool cancelEvenIfFinal,
   }) async {
-    if (handle.current.isFinal ||
-        handle.current.status == DownloadTransportStatus.missing) {
-      if (cancelEvenIfFinal && handle.current.isFinal) {
-        await handle.cancel();
+    final unresolvedResume = _unsettledResumeAcks[handle.taskId];
+    if (unresolvedResume != null) {
+      // A timeout cannot revoke resume. Deleting before its original ACK could
+      // let that operation enqueue a writer after the logical item disappeared.
+      await _awaitControlAcknowledgement('resume', unresolvedResume);
+    }
+    final initial = handle.current;
+    final initiallySettled =
+        (initial.isFinal ||
+            initial.status == DownloadTransportStatus.missing) &&
+        (initial.activeConnections ?? 0) == 0;
+    if (initiallySettled && unresolvedResume == null) {
+      if (cancelEvenIfFinal) {
+        // Already-settled manga parents reject cancel; their terminal snapshot
+        // still proves ownership ended. Preserve explicit renewal cleanup.
+        await _awaitControlAcknowledgement('cancel', handle.cancel());
       }
       return;
     }
@@ -2129,24 +2229,35 @@ final class DownloadManagerV2 {
     final subscription = handle.snapshots.listen((snapshot) {
       if ((snapshot.isFinal ||
               snapshot.status == DownloadTransportStatus.missing) &&
+          (snapshot.activeConnections ?? 0) == 0 &&
           !settled.isCompleted) {
         settled.complete();
       }
     });
 
     try {
-      final accepted = await handle.cancel();
+      final accepted = await _awaitControlAcknowledgement(
+        'cancel',
+        handle.cancel(),
+      );
       if (!accepted) {
         throw StateError('Could not stop obsolete transport ${handle.taskId}');
       }
-      if (handle.current.isFinal) return;
+      final current = handle.current;
+      if ((current.isFinal ||
+              current.status == DownloadTransportStatus.missing) &&
+          (current.activeConnections ?? 0) == 0 &&
+          (unresolvedResume == null || !initiallySettled ||
+              handle is SelfSettlingParallelDownloadTransportHandleV2)) {
+        _unsettledResumeAcks.remove(handle.taskId)?.ignore();
+        return;
+      }
 
       try {
         await settled.future.timeout(const Duration(seconds: 10));
+        _unsettledResumeAcks.remove(handle.taskId)?.ignore();
       } on TimeoutException {
-        throw StateError(
-          'Obsolete transport ${handle.taskId} did not settle after cancel',
-        );
+        throw _DownloadControlTimeout('cancel settlement');
       }
     } finally {
       await subscription.cancel();
@@ -2178,28 +2289,61 @@ final class DownloadManagerV2 {
       totalBytes: record.expectedBytes,
       transferredBytes: record.expectedBytes == null ? null : 0,
     );
-    _snapshots[logicalId] = snapshot;
-    _recordDiagnostic(logicalId, snapshot);
-
     if (handle != null) {
       try {
         await _settleObsoleteHandle(handle, cancelEvenIfFinal: false);
-      } catch (_) {
-        // A rejected cancel leaves the exact writer authoritative. Restore
-        // its durable record and projection instead of claiming it stopped.
-        await _store.put(record);
-        _rememberRecord(record);
+      } catch (error) {
+        // A timeout may still settle later. Retain canceled intent so startup
+        // cannot revive it, while the exact live writer keeps its ownership.
+        final restored = _isControlTimeout(error) ? canceledRecord : record;
+        await _store.put(restored);
+        _rememberRecord(restored);
         _activateHandle(logicalId, handle);
         await _publishRecords();
         rethrow;
       }
     }
-    await _gateway.removeTracking(obsoleteTaskId);
+    // Durable cancel intent fences recovery immediately; terminal presentation
+    // requires proof the exact writer has stopped.
+    _snapshots[logicalId] = snapshot;
+    _recordDiagnostic(logicalId, snapshot);
+    try {
+      await _gateway.removeTracking(obsoleteTaskId);
+    } catch (_) {
+      await _markCanceledCleanupFailure(canceledRecord);
+      rethrow;
+    }
     _forgetHandle(obsoleteTaskId);
     _sourceRefreshAttempts.remove(logicalId);
     _mangaSourceRefreshVerifiedPages.remove(logicalId);
     _firstRenewedPositiveSample.remove(logicalId);
     _scheduleAdmissionPromotion();
+  }
+
+  Future<void> _markCanceledCleanupFailure(LogicalDownloadRecordV2 record) async {
+    // Cleanup failure must remain retryable without reviving a stopped writer.
+    const message = 'Download cleanup could not finish; delete again to retry';
+    final failedRecord = record.copyWith(
+      failureCategory: DownloadFailureCategory.filesystem,
+      failureMessage: message,
+      updatedAtMillis: _nowMillis(),
+    );
+    await _store.put(failedRecord);
+    _rememberRecord(failedRecord);
+    final previous = _snapshots[record.logicalId];
+    final failed = DownloadTransportSnapshot(
+      taskId: record.taskId,
+      status: DownloadTransportStatus.failed,
+      progress: previous?.progress ?? 0,
+      totalBytes: previous?.totalBytes ?? record.expectedBytes,
+      transferredBytes: previous?.transferredBytes,
+      activeConnections: 0,
+      failureCategory: DownloadFailureCategory.filesystem,
+      failureMessage: message,
+    );
+    _snapshots[record.logicalId] = failed;
+    _recordDiagnostic(record.logicalId, failed);
+    await _publishRecords();
   }
 
   Future<String> _canonicalDestinationPath(String destinationPath) async {
@@ -2601,7 +2745,7 @@ final class DownloadManagerV2 {
     late final StreamSubscription<DownloadTransportSnapshot> subscription;
     subscription = handle.snapshots.listen((snapshot) {
       _consumeSnapshot(logicalId, snapshot);
-      if (snapshot.isFinal) {
+      if (snapshot.isFinal && !_unsettledResumeAcks.containsKey(snapshot.taskId)) {
         final registered = _subscriptionsByTaskId[snapshot.taskId];
         if (identical(registered, subscription)) {
           _subscriptionsByTaskId.remove(snapshot.taskId);
@@ -2617,6 +2761,11 @@ final class DownloadManagerV2 {
     DownloadTransportSnapshot snapshot,
   ) {
     if (_currentTaskIds[logicalId] != snapshot.taskId) return;
+    if (_unsettledResumeAcks.containsKey(snapshot.taskId) &&
+        snapshot.status != DownloadTransportStatus.running &&
+        snapshot.status != DownloadTransportStatus.queued) {
+      snapshot = _snapshotWithStatus(snapshot, DownloadTransportStatus.held);
+    }
     final intent = _currentIntents[logicalId];
     if (intent == DownloadUserIntent.failed || intent == DownloadUserIntent.canceled) {
       final truth = _hasLiveOwnership(snapshot)
@@ -3098,6 +3247,7 @@ final class DownloadManagerV2 {
       ),
     );
     if (record != null && record.taskId == snapshot.taskId) {
+      if (!_presentationChanges.isClosed) _presentationChanges.add(null);
       for (final observer in _presentationObservers) {
         unawaited(_observePresentation(observer, record, snapshot));
       }
@@ -3160,14 +3310,24 @@ final class DownloadManagerV2 {
     }
     _handlesByTaskId.clear();
     await presentationDisposal;
+    _unsettledResumeAcks.clear();
     _recordsByLogicalId.clear();
     _lastPositiveSpeedAtMillis.clear();
     _lastNativeSpeedProjectionAtMillis.clear();
     _lastParentSpeedAtMillis.clear();
     _firstRenewedPositiveSample.clear();
     _mangaSourceRefreshVerifiedPages.clear();
+    await _presentationChanges.close();
     await _recordChanges.close();
   }
+}
+
+bool _isControlTimeout(Object error) =>
+    error is _DownloadControlTimeout || error is TimeoutException;
+
+final class _DownloadControlTimeout extends StateError {
+  _DownloadControlTimeout(String action)
+    : super('Download $action timed out; existing progress was preserved');
 }
 
 final class _DownloadManagerDisposedDuringStartup extends StateError {

@@ -96,6 +96,7 @@ abstract interface class SelfSettlingParallelDownloadTransportHandleV2 {}
 const String kDownloadV2PackageGroup = 'downloads_v2';
 const String kDownloadV2SilentPackageGroup = 'downloads_v2_silent';
 const String kDownloadV2DurableParallelGroup = 'downloads_v2_ranges';
+const _nativeControlAckTimeoutV2 = Duration(seconds: 5);
 
 /// Withdraws a previously exported native offer before Dart starts this range.
 /// The native queue serializes this with its own claim/commit transaction. A
@@ -127,7 +128,7 @@ Future<bool> claimNativeRangeForDartV2(
           'attemptGeneration': generation,
           'nativeOwnerAbsent': true,
           'observedAtMillis': observedAtMillis,
-        }).timeout(const Duration(seconds: 10));
+        }).timeout(_nativeControlAckTimeoutV2);
     if (granted == null) {
       throw StateError('Native range claim not acknowledged');
     }
@@ -149,7 +150,7 @@ Future<void> withdrawNativeRangeParentV2(
       'com.animewitcher.app/download_continued_processing',
     ).invokeMethod<bool>('withdrawRangeParent', {
       'parentTaskId': parentTaskId,
-    }).timeout(const Duration(seconds: 10));
+    }).timeout(_nativeControlAckTimeoutV2);
     if (withdrawn != true) {
       throw StateError('Native range withdrawal not acknowledged');
     }
@@ -291,6 +292,7 @@ final class PackageBackgroundDownloaderGateway
       <String, _DurableParallelDownloadTransportHandle>{};
   final _mangaHandles = <String, MangaChapterTransportHandleV2>{};
   PersistentParallelDownload? _durableParallel;
+  final Map<String, Future<bool>> _pendingDurableStarts = {};
   StreamSubscription<TaskUpdate>? _durableUpdatesSubscription;
 
   Future<void>? _initialization;
@@ -368,7 +370,7 @@ final class PackageBackgroundDownloaderGateway
     final coordinator = _durableParallel;
     if (coordinator == null) return;
     await coordinator.reconcile(
-      () => _activeDurablePartTaskIds().timeout(const Duration(seconds: 10)),
+      _durablePartOwnershipIds,
     );
     coordinator.releaseNativeBackgroundOffers();
   }
@@ -676,6 +678,7 @@ final class PackageBackgroundDownloaderGateway
   @override
   Future<void> removeTracking(String taskId) async {
     await initialize();
+    await _ensureDurableTrackingSettled(taskId);
     await _cleanupMangaChildTracking(taskId);
     await _mangaHandles.remove(taskId)?.dispose();
     final durable = _durableHandles.remove(taskId);
@@ -686,6 +689,25 @@ final class PackageBackgroundDownloaderGateway
     _downloader.transfers.remove(taskId);
     _handles.remove(taskId)?.dispose();
     await _downloader.database.deleteRecordWithId(taskId);
+  }
+
+  Future<void> _ensureDurableTrackingSettled(String parentTaskId) async {
+    final parent = await _downloader.database.recordForId(parentTaskId);
+    var durable = _durableHandles.containsKey(parentTaskId) ||
+        parent?.task.group == kDownloadV2DurableParallelGroup ||
+        _pendingDurableStarts.keys.any((id) => id.startsWith('$parentTaskId.part.'));
+    if (!durable) {
+      final records = await _downloader.database.allRecords(group: kPersistentDownloadChunkGroup);
+      durable = durableChildTaskIdsForParentV2(records, parentTaskId).isNotEmpty;
+    }
+    // Already-cleaned ordinary tracking must stay locally idempotent; its
+    // logical completed artifact remains independently verified by the manager.
+    if (!durable) return;
+    final owners = await _durablePartOwnershipIds();
+    if ((_durableParallel?.isActive(parentTaskId) ?? false) ||
+        owners.any((id) => id.startsWith('$parentTaskId.part.'))) {
+      throw StateError('Native range ownership has not settled: $parentTaskId');
+    }
   }
 
   Future<void> _cleanupMangaChildTracking(String parentTaskId) async {
@@ -741,13 +763,15 @@ final class PackageBackgroundDownloaderGateway
   }
 
   Future<Set<String>> _activeDurablePartTaskIds() async {
-    final packageTasks = await _downloader.allTasks(allGroups: true);
+    final packageTasks = await _downloader
+        .allTasks(allGroups: true)
+        .timeout(_nativeControlAckTimeoutV2);
     // background_downloader includes stored paused tasks in allTasks().
     // Keep that package detail inside this adapter: paused children must not
     // reserve a native-writer slot after an app relaunch.
     // ignore: invalid_use_of_visible_for_testing_member
     final pausedTasks = await _downloader.database.storage
-        .retrieveAllPausedTasks();
+        .retrieveAllPausedTasks().timeout(_nativeControlAckTimeoutV2);
     final active = activeDurablePartTaskIdsV2(
       packageTasks: packageTasks,
       pausedTasks: pausedTasks,
@@ -776,6 +800,58 @@ final class PackageBackgroundDownloaderGateway
     return active;
   }
 
+  Future<Set<String>> _durablePartOwnershipIds() async => {
+    ...await _activeDurablePartTaskIds(),
+    ..._pendingDurableStarts.keys,
+  };
+
+  Future<bool> _awaitDurableStart(DownloadTask task, Future<bool> acknowledgement) async {
+    _pendingDurableStarts[task.taskId] = acknowledgement;
+    void release() {
+      if (identical(_pendingDurableStarts[task.taskId], acknowledgement)) {
+        unawaited(_pendingDurableStarts.remove(task.taskId));
+      }
+    }
+    unawaited(acknowledgement.then<void>((_) => release(),
+      onError: (Object _, StackTrace _) => release()));
+    try {
+      return await acknowledgement.timeout(_nativeControlAckTimeoutV2);
+    } on TimeoutException {
+      // Native may commit after a lost ACK. Retain the writer reservation;
+      // neither retry nor delete may treat this attempt as an absent worker.
+      _diagnostics.recordTransport('recovery.anomaly', {
+        'taskId': downloadInternalParentTaskId(task),
+        'childTaskId': task.taskId,
+        'anomaly': 'nativeStartAckUnknown',
+      });
+      return true;
+    }
+  }
+
+  Future<void> _settlePendingDurableStarts(List<String> ids) async {
+    final pending = {
+      for (final id in ids)
+        id: ?_pendingDurableStarts[id],
+    };
+    if (pending.isEmpty) return;
+    final live = await _activeDurablePartTaskIds();
+    final uncommitted = <Future<bool>>[];
+    for (final entry in pending.entries) {
+      // Every tracked start began after a raw absence check and native claim.
+      // A running occurrence, unlike a persisted paused row, proves commit.
+      if (live.contains(entry.key)) {
+        if (identical(_pendingDurableStarts[entry.key], entry.value)) {
+          unawaited(_pendingDurableStarts.remove(entry.key));
+        }
+        continue;
+      }
+      // A completed failed call has no pending commit; cancellation below
+      // still settles any existing worker. Wait all ACKs in one time budget.
+      uncommitted.add(entry.value.catchError((Object _) => false));
+    }
+    await Future.wait(uncommitted).timeout(_nativeControlAckTimeoutV2);
+  }
+
   bool _isDurableInternalTask(Task task) =>
       task.group == kDownloadV2DurableParallelGroup ||
       task.group == kPersistentDownloadChunkGroup;
@@ -797,25 +873,27 @@ final class PackageBackgroundDownloaderGateway
     final coordinator = PersistentParallelDownload(
       startPart: _startDurablePart,
       pausePart: (task) async {
-        if (!await _downloader.pause(task)) {
+        if (!await _downloader.pause(task).timeout(_nativeControlAckTimeoutV2)) {
           throw StateError('Native range did not pause safely');
         }
       },
       cancelParts: (ids) async {
-        if (!await _downloader.cancelTasksWithIds(ids)) {
+        await _settlePendingDurableStarts(ids);
+        if (!await _downloader.cancelTasksWithIds(ids)
+            .timeout(_nativeControlAckTimeoutV2)) {
           throw StateError('Native ranges rejected cancellation');
         }
         final deadline = DateTime.now().add(const Duration(seconds: 10));
         while (true) {
           final remaining = deadline.difference(DateTime.now());
           if (remaining <= Duration.zero) {
-            throw StateError('Native ranges did not settle after cancellation');
+            throw TimeoutException('Native ranges did not settle after cancellation');
           }
           Set<String> live;
           try {
             live = await _activeDurablePartTaskIds().timeout(remaining);
-          } on TimeoutException {
-            throw StateError('Native range ownership could not be established');
+          } catch (_) {
+            throw TimeoutException('Native range ownership could not be established');
           }
           if (!live.any(ids.contains)) return;
           await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -823,8 +901,7 @@ final class PackageBackgroundDownloaderGateway
       },
       saveRecord: _saveDurableRecord,
       recordForId: _downloader.database.recordForId,
-      livePartIds: () =>
-          _activeDurablePartTaskIds().timeout(const Duration(seconds: 10)),
+      livePartIds: _durablePartOwnershipIds,
       availableStorageBytes: availableDownloadStorageBytesV2,
       verifyPartSource: verifySavedRangeSourceV2,
       manifestFileResolver: privateParallelManifestFileV2,
@@ -861,7 +938,7 @@ final class PackageBackgroundDownloaderGateway
     final range = _diagnosticRangeBoundsV2(task);
     final nativeInventoryStartedAtMillis = DateTime.now().millisecondsSinceEpoch;
     final liveTaskIds = await _activeDurablePartTaskIds();
-    if (liveTaskIds.contains(task.taskId)) {
+    if (liveTaskIds.contains(task.taskId) || _pendingDurableStarts.containsKey(task.taskId)) {
       _diagnostics.recordTransport('recovery.decision', <String, Object?>{
         'taskId': downloadInternalParentTaskId(task),
         'childTaskId': task.taskId,
@@ -893,17 +970,19 @@ final class PackageBackgroundDownloaderGateway
     // ignore: invalid_use_of_visible_for_testing_member
     final resumeData = await _downloader.database.storage.retrieveResumeData(
       task.taskId,
-    );
+    ).timeout(_nativeControlAckTimeoutV2);
     // ignore: invalid_use_of_visible_for_testing_member
     final pausedTask = await _downloader.database.storage.retrievePausedTask(
       task.taskId,
-    );
+    ).timeout(_nativeControlAckTimeoutV2);
     final resumeDataPresent = resumeData != null;
     final packagePaused = pausedTask != null;
 
     try {
-      if (await _downloader.taskCanResume(task) &&
-          await _downloader.resume(task)) {
+      final canResume = await _downloader.taskCanResume(task).timeout(_nativeControlAckTimeoutV2);
+      if (!_ensureDurableParallelCoordinator().canStartPart(task.taskId)) return false;
+      if (canResume &&
+          await _awaitDurableStart(task, _downloader.resume(task))) {
         _diagnostics.recordTransport('recovery.decision', <String, Object?>{
           'taskId': downloadInternalParentTaskId(task),
           'childTaskId': task.taskId,
@@ -951,7 +1030,8 @@ final class PackageBackgroundDownloaderGateway
       );
     }
 
-    final enqueued = await _downloader.enqueue(task);
+    if (!_ensureDurableParallelCoordinator().canStartPart(task.taskId)) return false;
+    final enqueued = await _awaitDurableStart(task, _downloader.enqueue(task));
     _diagnostics.recordTransport('recovery.decision', <String, Object?>{
       'taskId': downloadInternalParentTaskId(task),
       'childTaskId': task.taskId,
@@ -1255,10 +1335,13 @@ Future<int?> availableDownloadStorageBytesV2(String path) async {
   try {
     return await const MethodChannel(
       'com.animewitcher.app/download_continued_processing',
-    ).invokeMethod<int>('availableDiskBytes', <String, Object>{'path': path});
+    ).invokeMethod<int>('availableDiskBytes', <String, Object>{'path': path})
+        .timeout(_nativeControlAckTimeoutV2);
   } on MissingPluginException {
     return null;
   } on PlatformException {
+    return null;
+  } on TimeoutException {
     return null;
   }
 }

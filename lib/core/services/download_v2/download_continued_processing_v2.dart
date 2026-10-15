@@ -332,6 +332,8 @@ final class IosDownloadContinuedProcessingObserverV2
   final Set<String> _completedMembers = <String>{};
 
   Future<void> _tail = Future<void>.value();
+  final Map<String, _PendingContinuedEntryV2> _pendingObservations = {};
+  bool _drainingObservations = false;
   bool _sessionActive = false;
   bool _deferSystemRequestUntilForeground = false;
   bool _disposed = false;
@@ -343,14 +345,37 @@ final class IosDownloadContinuedProcessingObserverV2
     DownloadTransportSnapshot snapshot,
   ) {
     if (_disposed) return Future<void>.value();
-    final result = _tail
-        .catchError((Object _) {})
-        .then((_) => _observeNow(record, snapshot));
-    _tail = result.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace __) {},
+    final result = Completer<void>();
+    final key = record.logicalId.value;
+    final pending = _pendingObservations[key];
+    // One newest sample per logical item, so a slow native ACK cannot make
+    // deletion wait for a timeout for every obsolete progress observation.
+    _pendingObservations[key] = _PendingContinuedEntryV2(
+      _ContinuedEntryV2(record, snapshot),
+      [...?pending?.waiters, result],
     );
-    return result;
+    if (!_drainingObservations) {
+      _drainingObservations = true;
+      _tail = Future<void>.microtask(_drainObservations);
+    }
+    return result.future;
+  }
+
+  Future<void> _drainObservations() async {
+    try {
+      while (_pendingObservations.isNotEmpty) {
+        final key = _pendingObservations.keys.first;
+        final pending = _pendingObservations.remove(key)!;
+        try {
+          await _observeNow(pending.entry.record, pending.entry.snapshot);
+          for (final waiter in pending.waiters) { waiter.complete(); }
+        } catch (error, stack) {
+          for (final waiter in pending.waiters) { waiter.completeError(error, stack); }
+        }
+      }
+    } finally {
+      _drainingObservations = false;
+    }
   }
 
   Future<void> _observeNow(
@@ -396,10 +421,12 @@ final class IosDownloadContinuedProcessingObserverV2
         .where(_isPackageOwnedActive)
         .toList(growable: false);
 
-    if (snapshot.status == DownloadTransportStatus.complete && _sessionActive) {
+    if (snapshot.status == DownloadTransportStatus.complete &&
+        (_sessionActive || _sessionMembers.contains(logicalId))) {
       // Update the native snapshot to an unequivocal final value before asking
       // the completion guard to close the session.
       await _service.update(
+        immediate: true,
         taskId: snapshot.taskId,
         displayName: _displayName(record),
         progress: 1,
@@ -467,6 +494,7 @@ final class IosDownloadContinuedProcessingObserverV2
         );
       } else {
         await _service.update(
+          immediate: true,
           taskId: currentSnapshot.taskId,
           displayName: _displayName(currentRecord),
           progress: currentSnapshot.progress,
@@ -483,7 +511,9 @@ final class IosDownloadContinuedProcessingObserverV2
       return;
     }
 
-    if (!_sessionActive || _outstanding.isNotEmpty) return;
+    // A lost start ACK does not prove the OS never attached its task.
+    if (_outstanding.isNotEmpty ||
+        (!_sessionActive && _sessionMembers.isEmpty)) return;
 
     await _checkpointNativeQueue(
       activeEntries: const <_ContinuedEntryV2>[],
@@ -698,4 +728,11 @@ final class _ContinuedEntryV2 {
 
   final LogicalDownloadRecordV2 record;
   final DownloadTransportSnapshot snapshot;
+}
+
+final class _PendingContinuedEntryV2 {
+  const _PendingContinuedEntryV2(this.entry, this.waiters);
+
+  final _ContinuedEntryV2 entry;
+  final List<Completer<void>> waiters;
 }

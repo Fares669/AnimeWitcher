@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:collection/collection.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -205,6 +206,12 @@ Future<dynamic> _dispatch(
         return box.put(args[1], args[2]);
       case 'hive.delete':
         return box.delete(args[1]);
+      case 'hive.deleteIfUnchanged':
+        if (!const DeepCollectionEquality().equals(box.get(args[1]), args[2])) {
+          return false;
+        }
+        await box.delete(args[1]);
+        return true;
       case 'hive.patch':
         final current = box.get(args[1]);
         if (current == null) return null;

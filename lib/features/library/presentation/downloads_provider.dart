@@ -280,7 +280,6 @@ CollapsedDownloads collapseDuplicateDownloads(List<DownloadItem> items) {
 
 @Riverpod(keepAlive: true)
 class DownloadsNotifier extends _$DownloadsNotifier {
-  static const Duration _refreshInterval = Duration(seconds: 1);
   static const Duration _durableRefreshInterval = Duration(seconds: 30);
 
   final Set<String> _artworkScheduledIds = <String>{};
@@ -288,7 +287,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   Map<String, Map<String, dynamic>> _metadataByTaskId =
       const <String, Map<String, dynamic>>{};
   StreamSubscription<List<LogicalDownloadRecordV2>>? _recordsSubscription;
-  Timer? _refreshTimer;
+  StreamSubscription<void>? _presentationSubscription;
   Timer? _durableRefreshTimer;
   Future<void>? _durableReloadInFlight;
 
@@ -314,23 +313,10 @@ class DownloadsNotifier extends _$DownloadsNotifier {
       },
     );
 
-    // Progress is ephemeral manager state. Project it from memory every second;
-    // do not scan both Hive boxes on the UI isolate for every progress tick.
-    _refreshTimer = Timer.periodic(_refreshInterval, (_) {
-      if (_records.any((record) {
-        if (record.completedAtMillis != null ||
-            record.intent == DownloadUserIntent.failed ||
-            record.intent == DownloadUserIntent.canceled) {
-          return false;
-        }
-        final snapshot = manager.snapshotFor(record.logicalId);
-        return snapshot?.taskId == record.taskId &&
-            (snapshot?.status == DownloadTransportStatus.queued ||
-                snapshot?.status == DownloadTransportStatus.running ||
-                snapshot?.status == DownloadTransportStatus.held);
-      })) {
-        _refreshPresentationState();
-      }
+    // Use the same accepted measurement as the native progress observer,
+    // without adding a polling delay or reading durable storage per sample.
+    _presentationSubscription = manager.presentationChanges.listen((_) {
+      if (ref.mounted) _refreshPresentationState();
     });
     // Keep a much slower durable reconciliation as a lifecycle/race safety net.
     _durableRefreshTimer = Timer.periodic(_durableRefreshInterval, (_) {
@@ -346,7 +332,7 @@ class DownloadsNotifier extends _$DownloadsNotifier {
 
     ref.onDispose(() {
       unawaited(_recordsSubscription?.cancel());
-      _refreshTimer?.cancel();
+      unawaited(_presentationSubscription?.cancel());
       _durableRefreshTimer?.cancel();
     });
 
@@ -405,7 +391,15 @@ class DownloadsNotifier extends _$DownloadsNotifier {
 
     final items = <DownloadItem>[];
     for (final record in _records) {
-      if (record.intent == DownloadUserIntent.canceled) continue;
+      final observed = manager.snapshotFor(record.logicalId);
+      final snapshot = observed?.taskId == record.taskId ? observed : null;
+      // A timed-out cancellation still owns its exact native writer. Keep its
+      // controls reachable until terminal native state proves it has stopped.
+      if (record.intent == DownloadUserIntent.canceled &&
+          !_hasVisibleDownloadWriter(snapshot) &&
+          !_isDownloadCleanupPending(record)) {
+        continue;
+      }
       final metadata =
           metadataByTaskId[record.logicalId.value] ??
           metadataByLogicalId[record.logicalId.value] ??
@@ -425,8 +419,6 @@ class DownloadsNotifier extends _$DownloadsNotifier {
           : const <String, dynamic>{};
       final chapter = MangaChapter.fromJson(taskSnapshot['chapter']);
       final trackingUrl = _trackingUrlFor(metadata, item, episode, chapter);
-      final observed = manager.snapshotFor(record.logicalId);
-      final snapshot = observed?.taskId == record.taskId ? observed : null;
       final task = _presentationTaskFor(record, trackingUrl: trackingUrl);
       final projected = DownloadItem(
         task: task,
@@ -485,7 +477,9 @@ class DownloadsNotifier extends _$DownloadsNotifier {
   }
 
   Future<void> removeDownload(DownloadItem item) async {
-    await removeDownloads(<DownloadItem>[item]);
+    if (!await removeDownloads(<DownloadItem>[item])) {
+      throw StateError('Unable to delete download while it is in use');
+    }
   }
 
   Future<bool> removeDownloads(List<DownloadItem> items) async {
@@ -513,11 +507,17 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     for (final item in orderedItems) {
       final logical = item.logicalId?.trim();
       if (logical != null && logical.isNotEmpty) {
-        await manager.delete(DownloadLogicalId(logical));
+        // Capture the deleted incarnation before releasing the manager queue.
+        // A re-download can already have replaced this logical-key metadata
+        // when delete returns, including a newly reused generation-one task.
         final metadata = await storage.getAllDownloadMetadata();
+        await manager.delete(DownloadLogicalId(logical));
         for (final entry in metadata.entries) {
           if ((entry.value['logicalId'] as String?)?.trim() == logical) {
-            await storage.removeDownloadMetadata(entry.key);
+            await storage.removeDownloadMetadataIfUnchanged(
+              entry.key,
+              entry.value,
+            );
           }
         }
       } else {
@@ -560,6 +560,15 @@ class DownloadsNotifier extends _$DownloadsNotifier {
     final item = state.value?.where((item) => item.id == taskId).firstOrNull;
     final logical = item?.logicalId?.trim();
     if (logical == null || logical.isEmpty) return;
+    final record = await ref
+        .read(logicalDownloadStoreV2Provider)
+        .get(DownloadLogicalId(logical));
+    if (record != null && record.intent == DownloadUserIntent.canceled) {
+      if (record.taskId == taskId && _isDownloadCleanupPending(record)) {
+        await removeDownload(item!);
+      }
+      return;
+    }
     await ref
         .read(downloadManagerV2Provider)
         .restart(DownloadLogicalId(logical));
@@ -597,9 +606,20 @@ TaskStatus _taskStatusFor(
   DownloadTransportSnapshot? snapshot,
 ) {
   if (record.completedAtMillis != null) return TaskStatus.complete;
-  if (record.intent == DownloadUserIntent.canceled) return TaskStatus.canceled;
-  if (record.intent == DownloadUserIntent.failed) return TaskStatus.failed;
   final currentSnapshot = snapshot?.taskId == record.taskId ? snapshot : null;
+  if (record.intent == DownloadUserIntent.canceled) {
+    if (!_hasVisibleDownloadWriter(currentSnapshot)) {
+      return _isDownloadCleanupPending(record)
+          ? TaskStatus.failed
+          : TaskStatus.canceled;
+    }
+    return switch (currentSnapshot?.status) {
+      DownloadTransportStatus.queued => TaskStatus.enqueued,
+      DownloadTransportStatus.held => TaskStatus.waitingToRetry,
+      _ => TaskStatus.running,
+    };
+  }
+  if (record.intent == DownloadUserIntent.failed) return TaskStatus.failed;
   if (record.intent == DownloadUserIntent.paused &&
       (currentSnapshot == null ||
           currentSnapshot.status == DownloadTransportStatus.paused ||
@@ -621,6 +641,17 @@ TaskStatus _taskStatusFor(
     null => TaskStatus.enqueued,
   };
 }
+
+bool _isDownloadCleanupPending(LogicalDownloadRecordV2 record) =>
+    record.intent == DownloadUserIntent.canceled &&
+    record.failureCategory == DownloadFailureCategory.filesystem;
+
+bool _hasVisibleDownloadWriter(DownloadTransportSnapshot? snapshot) =>
+    snapshot != null &&
+    (snapshot.status == DownloadTransportStatus.queued ||
+        snapshot.status == DownloadTransportStatus.running ||
+        snapshot.status == DownloadTransportStatus.held ||
+        (snapshot.activeConnections ?? 0) > 0);
 
 double _progressFor(
   LogicalDownloadRecordV2 record,

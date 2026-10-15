@@ -68,6 +68,18 @@ void main() {
     expect(await worker.run('hive.get', ['fixture', 'same']), {'value': 2});
   });
 
+  test('conditional deletion preserves newer metadata at the same key', () async {
+    final original = {'timestamp': 1, 'item': {'title': 'Episode'}};
+    final replacement = {'timestamp': 2, 'item': {'title': 'Episode'}};
+    await worker.run('hive.put', ['fixture', 'logical', original]);
+    await worker.run('hive.put', ['fixture', 'logical', replacement]);
+
+    expect(await worker.run('hive.deleteIfUnchanged', ['fixture', 'logical', original]), isFalse);
+    expect(await worker.run('hive.get', ['fixture', 'logical']), replacement);
+    expect(await worker.run('hive.deleteIfUnchanged', ['fixture', 'logical', replacement]), isTrue);
+    expect(await worker.run('hive.get', ['fixture', 'logical']), isNull);
+  });
+
   test(
     'rejects unsupported operations without poisoning later requests',
     () async {

@@ -504,6 +504,12 @@ class PersistentParallelDownload {
 
   bool isActive(String id) => !_disposed && (_sessions[id]?.active ?? false);
 
+  bool canStartPart(String childTaskId) {
+    final session = _children[childTaskId];
+    return !_disposed && session != null && session.active &&
+        !session.pauseRequested && !session.deleted;
+  }
+
   bool hasLiveConnections(String id) {
     final session = _sessions[id];
     return session != null && _activeConnectionsForSession(session) > 0;
@@ -1819,6 +1825,9 @@ class PersistentParallelDownload {
         // record/manifest IO. Revalidate immediately before the synchronous
         // reservation so stale availability can never overbook the global or
         // per-session connection budget.
+        if (_disposed || !session.active || session.pauseRequested || session.deleted) {
+          return true;
+        }
         if (_activeConnectionIds.length >= _connectionBudget ||
             _activeConnectionsForSession(session) >=
                 session.connectionCeiling) {
@@ -3708,9 +3717,9 @@ class PersistentParallelDownload {
         await cancelParts(
           session.parts.map((part) => part.task.taskId).toList(),
         );
-      } catch (_) {
+      } catch (error) {
         session.active = wasActive;
-        session.pauseRequested = wasPauseRequested;
+        session.pauseRequested = error is TimeoutException || wasPauseRequested;
         if (session.active) {
           _scheduleDiskProgressPoll(session);
           _scheduleCoordinatorRecovery(session);

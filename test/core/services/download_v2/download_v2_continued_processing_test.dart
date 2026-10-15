@@ -22,6 +22,76 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
+  test('terminal observation clears an uncertain native start even without its ACK', () async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'start') return null;
+          return true;
+        });
+    final observer = IosDownloadContinuedProcessingObserverV2(
+      forceAvailableForTesting: true,
+    );
+    final record = _terminalProgressRecord();
+    try {
+      await observer.observe(record, DownloadTransportSnapshot(
+        taskId: record.taskId,
+        status: DownloadTransportStatus.running,
+        progress: .25,
+      ));
+      await observer.observe(record, DownloadTransportSnapshot(
+        taskId: record.taskId,
+        status: DownloadTransportStatus.canceled,
+        progress: .25,
+      ));
+      expect(calls.where((call) => call.method == 'stop'), hasLength(1),
+        reason: 'a missing start ACK is not proof that iOS did not attach a lease');
+    } finally {
+      await observer.dispose();
+    }
+  });
+
+  testWidgets('terminal cleanup coalesces queued progress behind a missing update ACK', (tester) async {
+    final calls = <MethodCall>[];
+    final lostUpdate = Completer<bool>();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'start') return true;
+          if (call.method == 'update') return lostUpdate.future;
+          return true;
+        });
+    final observer = IosDownloadContinuedProcessingObserverV2(
+      forceAvailableForTesting: true,
+    );
+    final record = _terminalProgressRecord();
+    DownloadTransportSnapshot sample(double progress,
+        [DownloadTransportStatus status = DownloadTransportStatus.running]) =>
+        DownloadTransportSnapshot(taskId: record.taskId, status: status, progress: progress);
+    final pending = <Future<void>>[];
+    var boundedStop = false;
+    try {
+      await observer.observe(record, sample(.1));
+      pending.add(observer.observe(record, sample(.2)));
+      await tester.pump();
+      for (var index = 0; index < 20; index++) {
+        pending.add(observer.observe(record, sample(.3 + index / 100)));
+      }
+      pending.add(observer.observe(record, sample(.5, DownloadTransportStatus.canceled)));
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pump();
+      boundedStop = calls.any((call) => call.method == 'stop');
+    } finally {
+      if (!lostUpdate.isCompleted) lostUpdate.complete(true);
+      await Future.wait(pending);
+      await observer.dispose();
+    }
+    expect(boundedStop, isTrue,
+      reason: 'terminal cleanup cannot wait one native timeout per stale progress sample');
+    expect(calls.where((call) => call.method == 'update').length, lessThan(4));
+  });
+
   testWidgets(
     'lost background lease waits for foreground before requesting another',
     (tester) async {
