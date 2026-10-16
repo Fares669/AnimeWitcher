@@ -30,7 +30,7 @@ enum DM26CompatibilityTests {
     precondition(!current.beginComplete(), "duplicate complete must not settle twice")
 
     // Every unavailable/partial combination must leave ALL implementations alone.
-    for version in ["9.6.1", "9.6.2"] {
+    for version in ["9.6.1", "9.6.2", "9.6.4"] {
       for mask in 0..<7 {
         let installer = DownloadHookInstallation()
         var writes = 0
@@ -46,7 +46,7 @@ enum DM26CompatibilityTests {
         precondition(writes == 1 && installer.isInstalled, "reinstall must not wrap its own IMP or claim ownership")
       }
     }
-    for version in [nil, "0.0.1", "9.6.0", "9.6.3", "9.7.0"] as [String?] {
+    for version in [nil, "0.0.1", "9.6.0", "9.6.3", "9.6.5", "9.7.0"] as [String?] {
       let installer = DownloadHookInstallation()
       precondition(!installer.install(version: version, available: [true, true, true]) {
         preconditionFailure("unsupported package must not install")

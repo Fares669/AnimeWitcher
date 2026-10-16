@@ -2105,7 +2105,7 @@ enum DownloadNativeWaitingQueue {
   }
 
   /// A successful URLSession completion has no second supported status in
-  /// 9.6.2. Refill only immutable children after the original delegate settles;
+  /// the validated versions. Refill immutable children after the delegate settles;
   /// this never classifies or assembles a logical parent as complete.
   static func observeRangeCompletion(on session: URLSession, task: URLSessionTask) {
     guard nativePromotionAvailable, let identity = rangeIdentity(for: task) else { return }
@@ -2535,7 +2535,7 @@ enum DownloadNativeWaitingQueue {
     }
   }
 
-  /// background_downloader 9.6.1/9.6.2 expose throttled native progress directly.
+  /// Validated background_downloader versions expose throttled native progress.
   /// Prefer that supported contract over replacing its didWriteData IMP. When
   /// native/Dart state already knows the expected byte count, keep the exact
   /// byte/speed bridge; otherwise preserve normalized progress without
@@ -3227,7 +3227,7 @@ private final class DownloadRangeBackgroundAssertion {
 }
 
 /// Keeps only the plugin `UrlSessionDelegate` completion-ordering hooks that
-/// still require the live URLSession. Progress uses supported 9.6.1/9.6.2 native
+/// still require the live URLSession. Progress uses supported package-native
 /// callback above, so Flutter method channels are never required to observe it.
 ///
 /// Uses IMP replacement (not Swift `self.hooked()` after `method_exchange`),
@@ -3266,7 +3266,7 @@ private enum DownloadUrlSessionHook {
     #if canImport(background_downloader)
     // Generated from the installed pubspec by Podfile. The upstream podspec
     // advertises 0.0.1, so Bundle's framework version is not the pub version.
-    // V9.6.2 source validated at b0a14bf540cfe54087917393fa71db11eadcdaf9:
+    // V9.6.4 source validated at 3098b05e65445a12b57a8182755982ae3a77e6dd:
     // finish-download validates/moves before return; successful didComplete has
     // no new terminal status; finish-events queues its completion onto main.
     let pluginVersion: String? = animeWitcherBackgroundDownloaderVersion
@@ -3326,7 +3326,7 @@ private enum DownloadUrlSessionHook {
       DownloadNativeDiagnosticLog.record("complete.afterPlugin", task: task, error: error)
       guard firstCompletion else { return }
       observation.markCompletionSettled()
-      // Success didComplete emits no fresh supported status in pinned 9.6.2.
+      // Success didComplete emits no fresh supported status in pinned 9.6.4.
       // It still frees a native range slot after the original returns.
       DownloadNativeWaitingQueue.observeRangeCompletion(on: session, task: task)
     }
@@ -3339,7 +3339,7 @@ private enum DownloadUrlSessionHook {
     let block: @convention(block) (AnyObject, URLSession, URLSessionDownloadTask, URL) -> Void = { slf, session, downloadTask, location in
       let firstFinish = callbacks(for: downloadTask).beginFinish()
       DownloadNativeDiagnosticLog.record("file.received.beforePlugin", task: downloadTask)
-      // 9.6.1/9.6.2 validate HTTP and move the temporary file synchronously.
+      // Validated versions check HTTP and move the temporary file synchronously.
       // Only plugin-supported status/progress observers publish that outcome.
       let succeeded = DownloadNativeWaitingQueue.terminalObservation.capture(
         execution: downloadTask, taskId: DownloadNativeWaitingQueue.taskId(from: downloadTask) ?? ""
