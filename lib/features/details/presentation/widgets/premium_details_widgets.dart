@@ -10,11 +10,10 @@ import 'package:animewitcher/shared/widgets/shimmer_placeholder.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:animewitcher/shared/widgets/multimedia_card.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+
 import 'countdown_unit_visibility.dart';
 import 'details_ratings_row.dart';
 import '../../../../core/utils/avatar_image.dart';
-
-bool _isArabicDetailsLocale(BuildContext context) => true;
 
 String _detailsText(
   BuildContext context, {
@@ -49,7 +48,6 @@ class MetadataBar extends ConsumerWidget {
   }
 
   String _statusLabel(BuildContext context, Map<String, String> data) {
-    final isArabic = _isArabicDetailsLocale(context);
     final raw = _clean(data['awState']);
     late final String label;
     if (raw != null) {
@@ -57,13 +55,13 @@ class MetadataBar extends ConsumerWidget {
     } else {
       switch (item.status) {
         case ShowStatus.completed:
-          label = isArabic ? 'مكتمل' : 'Completed';
+          label = 'مكتمل';
           break;
         case ShowStatus.upcoming:
-          label = isArabic ? kNotYetAiredArabicState : 'Not yet aired';
+          label = kNotYetAiredArabicState;
           break;
         case ShowStatus.ongoing:
-          label = isArabic ? 'مستمر' : 'Ongoing';
+          label = 'مستمر';
           break;
       }
     }
@@ -84,8 +82,6 @@ class MetadataBar extends ConsumerWidget {
   }
 
   String? _seasonLabel(BuildContext context, Map<String, String> data) {
-    final isArabic = _isArabicDetailsLocale(context);
-
     String? season;
     for (final candidate in <String?>[
       _clean(data['awSeason']),
@@ -119,18 +115,17 @@ class MetadataBar extends ConsumerWidget {
     if (season == null) return year ?? startDate;
 
     season = season.replaceAll('عام ', '').trim();
-    final embeddedYear = RegExp(
-      r'(?:19|20)[0-9]{2}',
-    ).firstMatch(_normalizeDigits(season))?.group(0);
+    final embeddedYear = RegExp(r'(?:19|20)[0-9]{2}')
+        .firstMatch(_normalizeDigits(season))
+        ?.group(0);
     final displayYear = year ?? embeddedYear;
 
     final lower = season.toLowerCase();
-    if (isArabic) {
-      if (lower.contains('winter')) season = 'شتاء';
-      if (lower.contains('spring')) season = 'ربيع';
-      if (lower.contains('summer')) season = 'صيف';
-      if (lower.contains('fall') || lower.contains('autumn')) season = 'خريف';
-    }
+
+    if (lower.contains('winter')) season = 'شتاء';
+    if (lower.contains('spring')) season = 'ربيع';
+    if (lower.contains('summer')) season = 'صيف';
+    if (lower.contains('fall') || lower.contains('autumn')) season = 'خريف';
 
     if (displayYear != null && !season.contains(displayYear)) {
       return '$season $displayYear';
@@ -142,11 +137,10 @@ class MetadataBar extends ConsumerWidget {
     final raw = _clean(data['awType']);
     if (raw != null) return raw;
 
-    final isArabic = _isArabicDetailsLocale(context);
     if (item.contentType == MultimediaContentType.movie) {
-      return isArabic ? 'فيلم' : 'Movie';
+      return 'فيلم';
     }
-    return isArabic ? 'مسلسل' : 'Series';
+    return 'مسلسل';
   }
 
   int? _episodeCount(Map<String, String> data) {
@@ -193,9 +187,8 @@ class MetadataBar extends ConsumerWidget {
       height: 1.2,
     );
     final separatorStyle = style?.copyWith(
-      color: Theme.of(
-        context,
-      ).colorScheme.onSurfaceVariant.withValues(alpha: 0.55),
+      color: Theme.of(context).colorScheme.onSurfaceVariant
+          .withValues(alpha: 0.55),
       fontWeight: FontWeight.w600,
     );
 
@@ -205,8 +198,7 @@ class MetadataBar extends ConsumerWidget {
     final ageEntry = ageRating == null ? null : Text(ageRating, style: style);
     final episodeEntry = episodeCount == null
         ? null
-        : _isArabicDetailsLocale(context)
-        ? Row(
+        : Row(
             mainAxisSize: MainAxisSize.min,
             textDirection: TextDirection.rtl,
             children: [
@@ -214,28 +206,16 @@ class MetadataBar extends ConsumerWidget {
               const SizedBox(width: 4),
               Text('حلقة', style: style),
             ],
-          )
-        : Text('$episodeCount episodes', style: style);
+          );
 
-    final isArabic = _isArabicDetailsLocale(context);
     final firstRow = <Widget>[
-      if (isArabic) ...[
-        if (seasonEntry != null) seasonEntry,
-        statusEntry,
-      ] else ...[
-        statusEntry,
-        if (seasonEntry != null) seasonEntry,
-      ],
+      ...[if (seasonEntry != null) seasonEntry, statusEntry],
     ];
     final secondRow = <Widget>[
-      if (isArabic) ...[
+      ...[
         if (ageEntry != null) ageEntry,
         if (episodeEntry != null) episodeEntry,
         typeEntry,
-      ] else ...[
-        typeEntry,
-        if (episodeEntry != null) episodeEntry,
-        if (ageEntry != null) ageEntry,
       ],
     ];
 
@@ -354,10 +334,8 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
             textDirection: TextDirection.ltr,
             textAlign: TextAlign.center,
             maxLines: 1,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w800,
-              height: 1,
-            ),
+            style: Theme.of(context).textTheme.headlineSmall
+                ?.copyWith(fontWeight: FontWeight.w800, height: 1),
           ),
           const SizedBox(height: 6),
           Text(
@@ -376,7 +354,6 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
   }
 
   Widget _buildCountdownRow(BuildContext context) {
-    final isArabic = _isArabicDetailsLocale(context);
     final visibility = CountdownUnitVisibility.fromRemaining(_remaining);
     final days = _remaining.inDays.toString();
     final hours = _remaining.inHours.remainder(24).toString();
@@ -389,28 +366,28 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
           context,
           key: const ValueKey('countdown-days'),
           value: days,
-          label: isArabic ? 'يوم' : 'Days',
+          label: 'يوم',
         ),
       if (visibility.showHours)
         _buildCountdownCard(
           context,
           key: const ValueKey('countdown-hours'),
           value: hours,
-          label: isArabic ? 'ساعة' : 'Hours',
+          label: 'ساعة',
         ),
       if (visibility.showMinutes)
         _buildCountdownCard(
           context,
           key: const ValueKey('countdown-minutes'),
           value: minutes,
-          label: isArabic ? 'دقيقة' : 'Minutes',
+          label: 'دقيقة',
         ),
       if (visibility.showSeconds)
         _buildCountdownCard(
           context,
           key: const ValueKey('countdown-seconds'),
           value: seconds,
-          label: isArabic ? 'ثانية' : 'Seconds',
+          label: 'ثانية',
         ),
     ];
 
@@ -443,8 +420,7 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
       return const SizedBox.shrink();
     }
 
-    final isArabic = _isArabicDetailsLocale(context);
-    final heading = isArabic ? 'الحلقة القادمة بعد' : 'Next episode in';
+    final heading = 'الحلقة القادمة بعد';
 
     return Container(
       width: double.infinity,
@@ -457,9 +433,8 @@ class _NextAiringWidgetState extends State<NextAiringWidget> {
             child: Text(
               heading,
               textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold),
             ),
           ),
           const SizedBox(height: 10),
@@ -506,9 +481,8 @@ class CastCarousel extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 8.0),
           child: Text(
             _detailsText(context, english: 'Cast', arabic: 'طاقم الشخصيات'),
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(context).textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.bold),
           ),
         ),
         SizedBox(
@@ -529,9 +503,7 @@ class CastCarousel extends StatelessWidget {
                       children: [
                         CircleAvatar(
                           radius: 35,
-                          backgroundColor: Theme.of(context)
-                              .colorScheme
-                              .primary
+                          backgroundColor: Theme.of(context).colorScheme.primary
                               .withValues(alpha: 0.16),
                           child: Icon(
                             Icons.more_horiz_rounded,
@@ -577,9 +549,8 @@ class CastCarousel extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                   if (actor.role != null)
                     Text(
@@ -587,9 +558,8 @@ class CastCarousel extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Theme.of(context).hintColor,
-                      ),
+                      style: Theme.of(context).textTheme.labelSmall
+                          ?.copyWith(color: Theme.of(context).hintColor),
                     ),
                 ],
               );
@@ -628,9 +598,8 @@ class TrailersSection extends StatelessWidget {
               english: 'Trailers & Extras',
               arabic: 'العرض الدعائي',
             ),
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(context).textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.bold),
           ),
         ),
         SizedBox(
@@ -770,10 +739,7 @@ class RecommendationsCarousel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cardWidth = MultimediaCardLayout.cardWidth(
-      context,
-      isPortrait: true,
-    );
+    final cardWidth = MultimediaCardLayout.cardWidth(context, isPortrait: true);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -787,16 +753,12 @@ class RecommendationsCarousel extends StatelessWidget {
                   english: 'More Like This',
                   arabic: 'المزيد مثل هذا',
                 ),
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(context).textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.bold),
           ),
         ),
         SizedBox(
-          height: MultimediaCardLayout.listHeight(
-            cardWidth,
-            isPortrait: true,
-          ),
+          height: MultimediaCardLayout.listHeight(cardWidth, isPortrait: true),
           child: Directionality(
             textDirection: TextDirection.rtl,
             child: PagedRail(

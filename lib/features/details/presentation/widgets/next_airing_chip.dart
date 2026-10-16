@@ -22,18 +22,14 @@ const Key kNextAiringChipKey = Key('next-airing-chip');
 ///
 /// Arabic counts in more than two forms — one thing, two things, a few, many
 /// — so the unit is chosen by the count rather than by adding an 's'.
-String formatNextAiringWait(
-  BuildContext context,
-  Duration remaining, {
-  required bool isArabic,
-}) {
+String formatNextAiringWait(BuildContext context, Duration remaining) {
   if (remaining <= Duration.zero) {
-    return isArabic ? 'الآن' : 'now';
+    return 'الآن';
   }
 
   if (remaining.inDays >= 1) {
     final days = remaining.inDays;
-    if (!isArabic) return days == 1 ? '1 day' : '$days days';
+
     return switch (days) {
       1 => 'يوم',
       2 => 'يومين',
@@ -44,7 +40,7 @@ String formatNextAiringWait(
 
   if (remaining.inHours >= 1) {
     final hours = remaining.inHours;
-    if (!isArabic) return hours == 1 ? '1 hour' : '$hours hours';
+
     return switch (hours) {
       1 => 'ساعة',
       2 => 'ساعتين',
@@ -55,9 +51,9 @@ String formatNextAiringWait(
 
   final minutes = remaining.inMinutes;
   if (minutes < 1) {
-    return isArabic ? 'أقل من دقيقة' : 'less than a minute';
+    return 'أقل من دقيقة';
   }
-  if (!isArabic) return minutes == 1 ? '1 minute' : '$minutes minutes';
+
   return switch (minutes) {
     1 => 'دقيقة',
     2 => 'دقيقتين',
@@ -135,9 +131,8 @@ class _NextAiringChipState extends State<NextAiringChip> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final wait = formatNextAiringWait(context, _remaining, isArabic: isArabic);
+
+    final wait = formatNextAiringWait(context, _remaining);
 
     // The episode number is left out: the catalog does not always carry one
     // for the episode still to come, and "الحلقة 0" is worse than saying

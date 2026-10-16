@@ -15,8 +15,6 @@ Future<void> showSeasonsBarStylePicker(
   WidgetRef ref, {
   bool firstRun = false,
 }) {
-  final arabic =
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
   var selected = ref.read(seasonsBarStyleProvider);
 
   return showGlassDialog<void>(
@@ -31,7 +29,7 @@ Future<void> showSeasonsBarStylePicker(
               .toDouble();
           return AlertDialog(
             surfaceTintColor: Colors.transparent,
-            title: Text(arabic ? 'شكل شريط المواسم' : 'Seasons bar style'),
+            title: Text('شكل شريط المواسم'),
             content: SizedBox(
               width: width,
               child: Column(
@@ -39,9 +37,7 @@ Future<void> showSeasonsBarStylePicker(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    arabic
-                        ? 'يظهر فوق الحلقات للتنقل بين المواسم والأفلام. يمكنك تغييره لاحقًا من الإعدادات.'
-                        : 'Shown above the episodes to move between seasons and movies. You can change it later in settings.',
+                    'يظهر فوق الحلقات للتنقل بين المواسم والأفلام. يمكنك تغييره لاحقًا من الإعدادات.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 16),
@@ -54,7 +50,6 @@ Future<void> showSeasonsBarStylePicker(
                           width: width >= 440 ? (width - 12) / 2 : width,
                           child: _StyleCard(
                             style: style,
-                            arabic: arabic,
                             selected: style == selected,
                             onTap: () => setState(() => selected = style),
                           ),
@@ -68,14 +63,14 @@ Future<void> showSeasonsBarStylePicker(
               if (!firstRun)
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: Text(arabic ? 'إلغاء' : 'Cancel'),
+                  child: Text('إلغاء'),
                 ),
               FilledButton(
                 onPressed: () {
                   ref.read(seasonsBarStyleProvider.notifier).select(selected);
                   Navigator.of(dialogContext).pop();
                 },
-                child: Text(arabic ? 'تطبيق' : 'Apply'),
+                child: Text('تطبيق'),
               ),
             ],
           );
@@ -88,13 +83,12 @@ Future<void> showSeasonsBarStylePicker(
 class _StyleCard extends StatelessWidget {
   const _StyleCard({
     required this.style,
-    required this.arabic,
     required this.selected,
     required this.onTap,
   });
 
   final SeasonsBarStyle style;
-  final bool arabic;
+
   final bool selected;
   final VoidCallback onTap;
 
@@ -141,10 +135,9 @@ class _StyleCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      style.label(arabic: arabic),
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                      style.label(),
+                      style: Theme.of(context).textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                   ),
                   if (selected)

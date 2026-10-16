@@ -17,12 +17,9 @@ class DownloadsScreen extends ConsumerWidget {
     final isTv = profile?.isTv == true || context.isTv;
     final isWidescreen = isTv || context.isTabletOrLarger;
     final title = AppLocalizations.of(context)!.downloads;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final titleDirection = isArabic ? TextDirection.rtl : TextDirection.ltr;
-    final titleAlignment = isArabic
-        ? Alignment.centerRight
-        : Alignment.centerLeft;
+
+    final titleDirection = TextDirection.rtl;
+    final titleAlignment = Alignment.centerRight;
 
     if (isWidescreen) {
       return Scaffold(
@@ -46,9 +43,8 @@ class DownloadsScreen extends ConsumerWidget {
                   textDirection: titleDirection,
                   child: Text(
                     title,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: Theme.of(context).textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
@@ -62,11 +58,6 @@ class DownloadsScreen extends ConsumerWidget {
     // On handsets the tab strip is the page header. Avoid repeating
     // "Downloads" in a separate AppBar and keep the two tabs immediately
     // below the system safe area.
-    return Scaffold(
-      body: SafeArea(
-        bottom: false,
-        child: const DownloadsTab(),
-      ),
-    );
+    return Scaffold(body: SafeArea(bottom: false, child: const DownloadsTab()));
   }
 }

@@ -205,7 +205,7 @@ class LibraryEmptyState extends ConsumerWidget {
                           ? 'لا توجد مانجا في هذه القائمة بعد'
                           : 'لا توجد أعمال في هذه القائمة بعد',
                     )
-                  : librarySignInRequiredMessage(isArabic: true),
+                  : librarySignInRequiredMessage(),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyLarge,
             ),
