@@ -366,6 +366,9 @@ const Set<String> _transportFieldAllowlist = <String>{
   'callbackAttempt',
   'currentAttempt',
   'draining',
+  'verifiedBytes',
+  'verificationPhase',
+  'timeoutKind',
 };
 
 Map<String, Object?> _sanitizeTransportFields(Map<String, Object?> fields) {
@@ -376,7 +379,7 @@ Map<String, Object?> _sanitizeTransportFields(Map<String, Object?> fields) {
     if (entry.key == 'retryable' && value is! bool) {
       continue;
     }
-    if (const {'retryAttempt', 'delayMs', 'callbackAttempt', 'currentAttempt', 'draining'}
+    if (const {'retryAttempt', 'delayMs', 'callbackAttempt', 'currentAttempt', 'draining', 'verifiedBytes'}
         .contains(entry.key) && (value is! int || value < 0)) {
       continue;
     }

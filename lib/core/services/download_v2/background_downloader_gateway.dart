@@ -377,6 +377,13 @@ final class PackageBackgroundDownloaderGateway
   final Map<String, Future<bool>> _pendingDurableStarts = {};
   final Map<String, Completer<void>> _durableSourceVerifications = {};
   StreamSubscription<TaskUpdate>? _durableUpdatesSubscription;
+  // Native callbacks can arrive during configure/start, before manifests have
+  // registered their children. Keep their original HTTP and attempt evidence;
+  // the package database stores neither response headers nor response status.
+  final List<TaskStatusUpdate> _durableStartupStatuses = [];
+  static const _maxDurableStartupStatuses = 4096;
+  bool _bufferDurableStartupStatuses = false;
+  bool _startupStatusOverflowReported = false;
 
   Future<void>? _initialization;
 
@@ -398,6 +405,8 @@ final class PackageBackgroundDownloaderGateway
   }
 
   Future<void> _initializeOnce() async {
+    _bufferDurableStartupStatuses = true;
+    final coordinator = _ensureDurableParallelCoordinator();
     await _downloader.configure(
       globalConfig: const <(String, dynamic)>[(Config.holdingQueue, false)],
       iOSConfig: const <(String, dynamic)>[
@@ -408,11 +417,53 @@ final class PackageBackgroundDownloaderGateway
       _downloader,
       _notificationPreferences(),
     );
-    // start() replays native updates. Subscribe first and retain records until
-    // the V2 store has reconciled old background completions.
-    _ensureDurableParallelCoordinator();
+    // Subscribe before even configure(): live URLSession callbacks need not
+    // wait for start(). A listener alone cannot consume them until restoration.
     await _downloader.start(autoCleanDatabase: false);
+    if (_isIOS()) await _discoverDurableCheckpointRecordsV2();
+    for (final record in await _downloader.database.allRecords()) {
+      if (record.task is ParallelDownloadTask &&
+          record.task.group == kDownloadV2DurableParallelGroup) {
+        await coordinator.restore(record.task as ParallelDownloadTask);
+      }
+    }
+    // Enqueue retained statuses in arrival order before enabling live delivery.
+    // Unknown parents/old attempts still go through the coordinator's fences.
+    // On an initialization failure the bounded buffer survives the retry.
+    for (final update in _durableStartupStatuses) {
+      coordinator.handleUpdate(update);
+    }
+    _durableStartupStatuses.clear();
+    _bufferDurableStartupStatuses = false;
+    // Inactive sessions do not start source probes or range assembly. Allow
+    // normal local adoption to reach the initial snapshot, but a full-body
+    // fallback/native settlement must not block access to local downloads.
+    await coordinator.flushPendingUpdates().timeout(
+      const Duration(milliseconds: 250),
+      onTimeout: () {},
+    );
     await _recordStartupInventory();
+  }
+
+  void _acceptDurableUpdate(TaskUpdate update) {
+    if (update.task.group != kPersistentDownloadChunkGroup) return;
+    if (!_bufferDurableStartupStatuses) {
+      _durableParallel?.handleUpdate(update);
+      return;
+    }
+    // Startup progress is transient; restore obtains current writer ownership.
+    // Retain only ordered status evidence and bound it even if startup fails.
+    if (update is! TaskStatusUpdate) return;
+    if (_durableStartupStatuses.length < _maxDurableStartupStatuses) {
+      _durableStartupStatuses.add(update);
+    } else if (!_startupStatusOverflowReported) {
+      _startupStatusOverflowReported = true;
+      _diagnostics.recordTransport('startup.statusBufferFull', {
+        'count': _maxDurableStartupStatuses,
+      });
+      // Overflow loses an optimization, never verification authority: orphaned
+      // exact-size files continue through the existing source verifier.
+    }
   }
 
   /// Generation-fenced zero-byte Range candidates that iOS may start on the
@@ -1046,9 +1097,7 @@ final class PackageBackgroundDownloaderGateway
       diagnosticEvent: _diagnostics.recordTransport,
     );
     _durableParallel = coordinator;
-    _durableUpdatesSubscription ??= _downloader.updates.listen((update) {
-      coordinator.handleUpdate(update);
-    });
+    _durableUpdatesSubscription ??= _downloader.updates.listen(_acceptDurableUpdate);
     return coordinator;
   }
 
@@ -1392,6 +1441,10 @@ Future<bool> promoteCompletedDownloadFileV2(
 
 /// Verifies saved range bytes against the current authorized identity response.
 /// False requires contradictory source evidence; an unavailable probe throws.
+/// [verificationTimeout] bounds inactivity, including connection/headers. Only
+/// bytes compared successfully with the saved file renew it. The independent
+/// ten-minute cap permits a 6 MiB range at roughly 10 KiB/s while bounding a
+/// trickling response even when it continually makes small valid progress.
 Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
   DownloadTask task,
   File file,
@@ -1399,6 +1452,7 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
   int resourceSize, {
   Future<void>? cancelled,
   Duration verificationTimeout = const Duration(seconds: 20),
+  Duration verificationDeadline = const Duration(minutes: 10),
 }) async {
   const rejected = (matches: false, validator: null);
   const invalidResponse = DownloadSourceVerificationException(
@@ -1417,10 +1471,20 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
   }
   final client = HttpClient()..autoUncompress = false;
   var closed = false;
+  var verifiedBytes = 0;
+  var phase = DownloadSourceVerificationPhase.connecting;
   DownloadSourceVerificationException? interruption;
-  void interrupt(DownloadSourceVerificationFailure reason) {
+  void interrupt(
+    DownloadSourceVerificationFailure reason, {
+    DownloadSourceVerificationTimeout? timeoutKind,
+  }) {
     if (closed || interruption != null) return;
-    interruption = DownloadSourceVerificationException(reason: reason);
+    interruption = DownloadSourceVerificationException(
+      reason: reason,
+      verifiedBytes: verifiedBytes,
+      phase: phase,
+      timeoutKind: timeoutKind,
+    );
     // Force-close wakes pending connection, header, and body reads with errors.
     client.close(force: true);
   }
@@ -1430,9 +1494,24 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
     if (failure != null) throw failure;
   }
 
+  Timer? inactivity;
+  void renewInactivity() {
+    inactivity?.cancel();
+    inactivity = Timer(
+      verificationTimeout,
+      () => interrupt(
+        DownloadSourceVerificationFailure.timeout,
+        timeoutKind: DownloadSourceVerificationTimeout.inactivity,
+      ),
+    );
+  }
+  renewInactivity();
   final deadline = Timer(
-    verificationTimeout,
-    () => interrupt(DownloadSourceVerificationFailure.timeout),
+    verificationDeadline,
+    () => interrupt(
+      DownloadSourceVerificationFailure.timeout,
+      timeoutKind: DownloadSourceVerificationTimeout.deadline,
+    ),
   );
   unawaited(
     cancelled?.then<void>(
@@ -1463,6 +1542,7 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
     final to = from + bytes - 1;
     request.headers.set(HttpHeaders.rangeHeader, 'bytes=$from-$to');
     request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+    phase = DownloadSourceVerificationPhase.responseHeaders;
     final response = await request.close();
     checkInterrupted();
     if (response.statusCode != HttpStatus.partialContent &&
@@ -1512,6 +1592,7 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
       if (validator == null) throw invalidResponse;
       if (header.value != validator) return rejected;
     }
+    phase = DownloadSourceVerificationPhase.body;
     var received = 0;
     await for (final chunk in response) {
       checkInterrupted();
@@ -1526,6 +1607,8 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
         for (var index = 0; index < local.length; index++) {
           if (local[index] != chunk[offset + index]) return rejected;
         }
+        verifiedBytes += local.length;
+        renewInactivity();
         offset = end;
       }
       received += chunk.length;
@@ -1545,13 +1628,16 @@ Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
     if (error is SocketException ||
         error is HttpException ||
         error is TlsException) {
-      throw const DownloadSourceVerificationException(
+      throw DownloadSourceVerificationException(
         reason: DownloadSourceVerificationFailure.network,
+        verifiedBytes: verifiedBytes,
+        phase: phase,
       );
     }
     rethrow;
   } finally {
     closed = true;
+    inactivity?.cancel();
     deadline.cancel();
     client.close(force: true);
     try {

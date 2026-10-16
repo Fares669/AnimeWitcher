@@ -106,6 +106,9 @@ class DownloadDiagnosticLog {
       'draining',
       'osError',
       'freeBytes',
+      'verifiedBytes',
+      'verificationPhase',
+      'timeoutKind',
     };
     final data = <String, Object?>{};
     for (final entry in fields.entries) {

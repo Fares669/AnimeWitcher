@@ -8,14 +8,24 @@ enum DownloadSourceVerificationFailure {
   invalidResponse,
 }
 
+enum DownloadSourceVerificationPhase { connecting, responseHeaders, body }
+
+enum DownloadSourceVerificationTimeout { inactivity, deadline }
+
 final class DownloadSourceVerificationException implements Exception {
   const DownloadSourceVerificationException({
     required this.reason,
     this.httpStatus,
+    this.verifiedBytes,
+    this.phase,
+    this.timeoutKind,
   });
 
   final DownloadSourceVerificationFailure reason;
   final int? httpStatus;
+  final int? verifiedBytes;
+  final DownloadSourceVerificationPhase? phase;
+  final DownloadSourceVerificationTimeout? timeoutKind;
 
   bool get retryable => switch (reason) {
     DownloadSourceVerificationFailure.timeout ||
