@@ -1258,6 +1258,9 @@ final class DownloadManagerV2 {
 
     final current = _snapshots[logicalId];
     if (current == null || current.taskId != taskId || current.isFinal) return;
+    // All bytes have arrived; late child samples cannot revive network speed
+    // while the parent is assembling or verifying the local file.
+    if (current.progress >= 1) return;
 
     // Native emits one speed sample per live child. With 16 connections those
     // samples arrive in a burst and used to create up to 16 parent snapshots,
@@ -2871,6 +2874,7 @@ final class DownloadManagerV2 {
     if (record != null &&
         record.mediaKind != DownloadMediaKind.mangaChapter &&
         record.parallelChunks > 1 &&
+        snapshot.progress < 1 &&
         (snapshot.networkSpeedMBps < 0 || freshZeroHandoff) &&
         current != null &&
         current.taskId == snapshot.taskId &&
