@@ -394,7 +394,6 @@ class PlayerMetadataScrimState extends State<PlayerMetadataScrim>
       } else {
         final label = formatEpisodeLabel(
           episode: ep.episode,
-          isArabic: true,
           title: ep.name,
           isFinal: ep.isFinal,
           serverName: ep.serverName,

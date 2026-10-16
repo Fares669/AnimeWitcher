@@ -1286,8 +1286,6 @@ class AnimeWitcherPlayerControlsState
     if (episode == null) return null;
     final label = formatEpisodeLabel(
       episode: episode.episode,
-      isArabic:
-          Localizations.localeOf(context).languageCode.toLowerCase() == 'ar',
       title: episode.name,
       isFinal: episode.isFinal,
       serverName: episode.serverName,
