@@ -3,10 +3,18 @@ import 'package:background_downloader/background_downloader.dart';
 import '../../storage/download_persistence_worker.dart';
 
 FileDownloader? _configuredFileDownloader;
+final _configuredPersistentStorage = DownloadPersistentStorageV2();
 
 /// Installs the worker-backed store on the first use of the package singleton.
 FileDownloader configuredFileDownloaderV2() => _configuredFileDownloader ??=
-    FileDownloader(persistentStorage: DownloadPersistentStorageV2());
+    FileDownloader(persistentStorage: _configuredPersistentStorage);
+
+/// Retires only the obsolete source checkpoint in the store supplied to the
+/// production package instance. It never interprets opaque native resume data.
+Future<void> retireConfiguredResumeCheckpointV2(String taskId) async {
+  await _configuredPersistentStorage.removeResumeData(taskId);
+  await _configuredPersistentStorage.removePausedTask(taskId);
+}
 
 /// Keeps the package's Localstore v1 layout while sharing the download worker.
 ///

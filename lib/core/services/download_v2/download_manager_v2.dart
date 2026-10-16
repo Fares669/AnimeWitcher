@@ -2211,11 +2211,7 @@ final class DownloadManagerV2 {
       // let that operation enqueue a writer after the logical item disappeared.
       await _awaitControlAcknowledgement('resume', unresolvedResume);
     }
-    final initial = handle.current;
-    final initiallySettled =
-        (initial.isFinal ||
-            initial.status == DownloadTransportStatus.missing) &&
-        (initial.activeConnections ?? 0) == 0;
+    final initiallySettled = handle.isSettled;
     if (initiallySettled && unresolvedResume == null) {
       if (cancelEvenIfFinal) {
         // Already-settled manga parents reject cancel; their terminal snapshot
@@ -2225,15 +2221,12 @@ final class DownloadManagerV2 {
       return;
     }
 
-    final settled = Completer<void>();
-    final subscription = handle.snapshots.listen((snapshot) {
-      if ((snapshot.isFinal ||
-              snapshot.status == DownloadTransportStatus.missing) &&
-          (snapshot.activeConnections ?? 0) == 0 &&
-          !settled.isCompleted) {
-        settled.complete();
-      }
-    });
+    final settlement = StreamIterator(handle.settlement(
+      // A completed result from before an unresolved resume cannot prove that
+      // the resumed writer has stopped. Retain the fresh-observation barrier.
+      requireNewSnapshot: initiallySettled && unresolvedResume != null,
+    ));
+    final settled = settlement.moveNext()..ignore();
 
     try {
       final accepted = await _awaitControlAcknowledgement(
@@ -2243,10 +2236,7 @@ final class DownloadManagerV2 {
       if (!accepted) {
         throw StateError('Could not stop obsolete transport ${handle.taskId}');
       }
-      final current = handle.current;
-      if ((current.isFinal ||
-              current.status == DownloadTransportStatus.missing) &&
-          (current.activeConnections ?? 0) == 0 &&
+      if (handle.isSettled &&
           (unresolvedResume == null || !initiallySettled ||
               handle is SelfSettlingParallelDownloadTransportHandleV2)) {
         _unsettledResumeAcks.remove(handle.taskId)?.ignore();
@@ -2254,13 +2244,15 @@ final class DownloadManagerV2 {
       }
 
       try {
-        await settled.future.timeout(const Duration(seconds: 10));
+        if (!await settled.timeout(const Duration(seconds: 10))) {
+          throw StateError('Obsolete transport ${handle.taskId} closed before settling');
+        }
         _unsettledResumeAcks.remove(handle.taskId)?.ignore();
       } on TimeoutException {
         throw _DownloadControlTimeout('cancel settlement');
       }
     } finally {
-      await subscription.cancel();
+      await settlement.cancel();
     }
   }
 
