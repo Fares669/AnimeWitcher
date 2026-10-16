@@ -22,6 +22,73 @@ Future<bool> settlesSoonAfterGrace(Future<void> work) => Future.any([
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('adopting saved ranges does not report native throughput or ETA', () async {
+    final fixture = await SavedRangesFixture.create(chunks: 3);
+    final probes = <String, Completer<({bool matches, String? validator})>>{};
+    final started = Completer<void>();
+    final updates = StreamController<TaskProgressUpdate>.broadcast();
+    final coordinator = fixture.coordinator(
+      verifyPartSource: (task, _, _, _) {
+        final probe = probes.putIfAbsent(task.taskId,
+          () => Completer<({bool matches, String? validator})>());
+        if (probes.length >= 2 && !started.isCompleted) started.complete();
+        return probe.future;
+      },
+      onUpdate: (update) {
+        if (update is TaskProgressUpdate) updates.add(update);
+      },
+    );
+    try {
+      await coordinator.start(fixture.parent, 30);
+      await started.future.timeout(const Duration(seconds: 3));
+      final first = updates.stream.firstWhere((update) => update.progress >= 0.3);
+      probes[fixture.parts[0].taskId]!.complete((matches: true, validator: null));
+      await first.timeout(const Duration(seconds: 3));
+      final next = updates.stream.firstWhere((update) => update.progress >= 0.6);
+      probes[fixture.parts[1].taskId]!.complete((matches: true, validator: null));
+      final report = await next.timeout(const Duration(seconds: 3));
+      expect(coordinator.activeConnectionCount, 0);
+      expect(report.networkSpeed, 0);
+      expect(report.timeRemaining, Duration.zero);
+      expect(coordinator.isActive(fixture.parent.taskId), isTrue);
+    } finally {
+      await coordinator.pause(fixture.parent);
+      for (final probe in probes.values) {
+        if (!probe.isCompleted) probe.complete((matches: false, validator: null));
+      }
+      await coordinator.dispose();
+      await updates.close();
+      await fixture.dispose();
+    }
+  });
+
+  test('saved-range-only resume reports running while verification is active', () async {
+    final fixture = await SavedRangesFixture.create();
+    final started = Completer<void>();
+    final probe = Completer<({bool matches, String? validator})>();
+    final statuses = <TaskStatus>[];
+    final coordinator = fixture.coordinator(
+      verifyPartSource: (_, _, _, _) {
+        if (!started.isCompleted) started.complete();
+        return probe.future;
+      },
+      onUpdate: (update) {
+        if (update is TaskStatusUpdate) statuses.add(update.status);
+      },
+    );
+    try {
+      expect(await coordinator.start(fixture.parent, 20), isTrue);
+      await started.future.timeout(const Duration(seconds: 2));
+      expect(statuses.last, TaskStatus.running);
+      expect(coordinator.activeConnectionCount, 0);
+    } finally {
+      await coordinator.pause(fixture.parent);
+      probe.complete((matches: false, validator: null));
+      await coordinator.dispose();
+      await fixture.dispose();
+    }
+  });
+
   test(
     'native completion cannot re-download a range ahead of package success',
     () async {

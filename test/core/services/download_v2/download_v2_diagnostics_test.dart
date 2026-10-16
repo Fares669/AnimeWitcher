@@ -8,6 +8,30 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('verification timeout diagnostics retain bounded byte and phase evidence', () {
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    diagnostics.recordTransport('parallel.sourceVerificationSettled', {
+      'verifiedBytes': 4096,
+      'verificationPhase': 'body',
+      'timeoutKind': 'inactivity',
+      'headers': {'Authorization': 'Bearer secret'},
+    });
+    expect(diagnostics.transportEvents.single, {
+      'event': 'parallel.sourceVerificationSettled',
+      'verifiedBytes': 4096,
+      'verificationPhase': 'body',
+      'timeoutKind': 'inactivity',
+    });
+    diagnostics.recordTransport('parallel.sourceVerificationSettled', {
+      'verifiedBytes': -1,
+      'verificationPhase': 'https://private.invalid/token',
+      'timeoutKind': 'token=secret',
+    });
+    expect(diagnostics.transportEvents.last, {
+      'event': 'parallel.sourceVerificationSettled',
+    });
+  });
+
   test(
     'transport diagnostics retain probe retries and stale callback state',
     () {

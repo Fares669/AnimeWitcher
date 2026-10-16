@@ -81,3 +81,30 @@ prove its source identity, so only the affected unfinished immutable range may
 need a fresh request. A visible prefix is preserved in a recoverable sibling
 file before that request; rejected enqueue or failed native publication must
 not erase it. Ordinary same-source native Resume keeps its existing path.
+
+## Saved-range verification and final publication
+
+Fallback source comparison remains byte-for-byte and validates the requested
+range and qualified resource validator. A verified byte block renews a
+20-second inactivity timeout. Connecting, response headers, and an idle body
+cannot keep a probe alive without matching bytes. An independent ten-minute
+deadline bounds even a continuously trickling response: that permits a typical
+6 MiB range around 10 KiB/s but does not promise success at arbitrarily low
+rates or for arbitrarily large legacy ranges. The two-probe global limit,
+connection budgets, three-attempt backoff, and immediate cancellation remain.
+Timeout diagnostics identify the phase, timeout kind, and bytes already
+compared; these bytes are not credited as durable until the whole check passes.
+
+Verification-only work reports running. Adopting previously saved bytes resets
+the native throughput estimate.
+This prevents local verification credit from appearing as new network traffic.
+Once every input range is durable,
+assembly reports all received bytes with zero network speed and no ETA, while
+remaining nonterminal until publication succeeds. Assembly begin/completion
+events include total bytes and elapsed duration. A Pause queued behind successful
+publication cannot replace its completed record or recreate deleted checkpoints.
+
+The tests use real loopback HTTP and a fake clock for productive body progress,
+idle-body timeout, and the independent deadline. They also exercise publication
+held behind a gate with Pause queued concurrently. These tests do not establish
+physical-device throughput, native scheduling behavior, or full video playback.

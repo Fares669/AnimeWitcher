@@ -4,10 +4,101 @@ import 'dart:io';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_source_verification.dart';
 import 'package:background_downloader/background_downloader.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  for (final mode in ['progress', 'bodyIdle', 'hardDeadline']) {
+    test(
+      'verification clock bounds $mode without losing saved bytes',
+      () async {
+        final root = await Directory.systemTemp.createTemp('aw-range-clock-');
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final local = File(p.join(root.path, 'range.chunk'));
+        final original = [2, 3, 4, 5];
+        await local.writeAsBytes(original);
+        final requestReceived = Completer<HttpRequest>();
+        final subscription = server.listen(requestReceived.complete);
+        final clock = _VerificationClock(
+          deadline: Duration(seconds: mode == 'hardDeadline' ? 55 : 60),
+        );
+        Socket? socket;
+        try {
+          final verification = clock.run(
+            () => verifySavedRangeSourceV2(
+              _task(server),
+              local,
+              4,
+              8,
+              verificationDeadline: clock.deadline,
+            ),
+          );
+          final expectation = mode == 'progress'
+              ? expectLater(
+                  verification,
+                  completion((matches: true, validator: '"resource"')),
+                )
+              : expectLater(
+                  verification,
+                  throwsA(
+                    _failure('timeout', retryable: true)
+                        .having(
+                          (e) => e.verifiedBytes,
+                          'verified bytes',
+                          mode == 'bodyIdle' ? 1 : 3,
+                        )
+                        .having(
+                          (e) => e.phase,
+                          'phase',
+                          DownloadSourceVerificationPhase.body,
+                        )
+                        .having(
+                          (e) => e.timeoutKind,
+                          'timeout kind',
+                          mode == 'bodyIdle'
+                              ? DownloadSourceVerificationTimeout.inactivity
+                              : DownloadSourceVerificationTimeout.deadline,
+                        ),
+                  ),
+                );
+          final request = await requestReceived.future;
+          request.response.statusCode = HttpStatus.partialContent;
+          request.response.contentLength = original.length;
+          request.response.headers.set(
+            HttpHeaders.contentRangeHeader,
+            'bytes 2-5/8',
+          );
+          request.response.headers.set(HttpHeaders.etagHeader, '"resource"');
+          socket = await request.response.detachSocket();
+          final count = mode == 'bodyIdle'
+              ? 1
+              : mode == 'hardDeadline'
+              ? 3
+              : 4;
+          for (var index = 0; index < count; index++) {
+            socket.add([original[index]]);
+            await socket.flush();
+            await clock.waitForIdleSchedules(index + 2);
+            if (mode != 'progress' || index != count - 1) {
+              clock.elapse(const Duration(seconds: 19));
+            }
+          }
+          if (mode == 'bodyIdle') clock.elapse(const Duration(seconds: 1));
+          if (mode == 'hardDeadline') clock.elapse(const Duration(seconds: 3));
+          await expectation;
+          expect(await local.readAsBytes(), original);
+          expect(clock.pendingTimers, 0);
+        } finally {
+          socket?.destroy();
+          await subscription.cancel();
+          await server.close(force: true);
+          await root.delete(recursive: true);
+        }
+      },
+    );
+  }
+
   final cases = <String, bool?>{
     'exact206': true,
     'formatted206': true,
@@ -531,6 +622,55 @@ void main() {
     },
   );
 
+  test('verified body progress keeps a slow response alive beyond inactivity limit', () async {
+    final root = await Directory.systemTemp.createTemp('aw-range-progress-');
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final local = File(p.join(root.path, 'range.chunk'));
+    final original = [2, 3, 4, 5];
+    await local.writeAsBytes(original);
+    Socket? socket;
+    final subscription = server.listen((request) async {
+      request.response.statusCode = HttpStatus.partialContent;
+      request.response.contentLength = original.length;
+      request.response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes 2-5/8',
+      );
+      request.response.headers.set(HttpHeaders.etagHeader, '"resource"');
+      try {
+        socket = await request.response.detachSocket();
+        for (final byte in original) {
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+          socket!.add([byte]);
+          await socket!.flush();
+        }
+        await socket!.close();
+      } on SocketException {
+        // The old whole-response deadline closes this productive transfer.
+      } on HttpException {
+        // The old whole-response deadline closes this productive transfer.
+      }
+    });
+    try {
+      expect(
+        await verifySavedRangeSourceV2(
+          _task(server),
+          local,
+          4,
+          8,
+          verificationTimeout: const Duration(milliseconds: 500),
+        ),
+        (matches: true, validator: '"resource"'),
+      );
+      expect(await local.readAsBytes(), original);
+    } finally {
+      socket?.destroy();
+      await subscription.cancel();
+      await server.close(force: true);
+      await root.delete(recursive: true);
+    }
+  });
+
   test(
     'verification deadline is a typed timeout and closes the peer',
     () async {
@@ -554,7 +694,20 @@ void main() {
         );
         final result = expectLater(
           verification,
-          throwsA(_failure('timeout', retryable: true)),
+          throwsA(
+            _failure('timeout', retryable: true)
+                .having((e) => e.verifiedBytes, 'verified bytes', 0)
+                .having(
+                  (e) => e.phase,
+                  'phase',
+                  DownloadSourceVerificationPhase.responseHeaders,
+                )
+                .having(
+                  (e) => e.timeoutKind,
+                  'timeout kind',
+                  DownloadSourceVerificationTimeout.inactivity,
+                ),
+          ),
         );
         final request = await requestReceived.future.timeout(
           const Duration(seconds: 2),
@@ -600,3 +753,41 @@ DownloadTask _task(HttpServer server) => DownloadTask(
   filename: 'range.chunk',
   headers: {'Range': 'bytes=2-5'},
 );
+
+// Keep actual socket/file IO while advancing only the verifier's two timers.
+// This tests a minute-long trickle without wall-clock waits or production hooks.
+class _VerificationClock {
+  _VerificationClock({required this.deadline});
+
+  final _clock = FakeAsync();
+  final Duration deadline;
+  var _idleSchedules = 0;
+  var _changed = Completer<void>();
+
+  int get pendingTimers => _clock.nonPeriodicTimerCount;
+  void elapse(Duration duration) => _clock.elapse(duration);
+
+  T run<T>(T Function() body) => runZoned(
+    body,
+    zoneSpecification: ZoneSpecification(
+      createTimer: (self, parent, zone, duration, callback) {
+        if (duration != const Duration(seconds: 20) && duration != deadline) {
+          return parent.createTimer(zone, duration, callback);
+        }
+        final timer = _clock.run((_) => Timer(duration, callback));
+        if (duration == const Duration(seconds: 20)) {
+          _idleSchedules++;
+          _changed.complete();
+          _changed = Completer<void>();
+        }
+        return timer;
+      },
+    ),
+  );
+
+  Future<void> waitForIdleSchedules(int count) async {
+    while (_idleSchedules < count) {
+      await _changed.future.timeout(const Duration(seconds: 3));
+    }
+  }
+}
