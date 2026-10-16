@@ -26,17 +26,12 @@ class MangaReaderChapterTransitionPage extends StatelessWidget {
   final MangaReaderMode readerMode;
   final VoidCallback? onContinue;
 
-  String _t(BuildContext context, String en, String ar) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
-      ? ar
-      : en;
+  String _t(BuildContext context, String en, String ar) => ar;
 
   @override
   Widget build(BuildContext context) => ColoredBox(
     color: Theme.of(context).scaffoldBackgroundColor,
-    child: readerMode.isVertical
-        ? _vertical(context)
-        : _horizontal(context),
+    child: readerMode.isVertical ? _vertical(context) : _horizontal(context),
   );
 
   Widget _vertical(BuildContext context) => Center(
@@ -207,8 +202,9 @@ class MangaReaderChapterTransitionPage extends StatelessWidget {
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
-            style: theme.textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
