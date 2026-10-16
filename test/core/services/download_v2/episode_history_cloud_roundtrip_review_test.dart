@@ -208,7 +208,6 @@ void main() {
         expect(
           continueWatchingPrimaryLabel(
             episode: history.episode,
-            isArabic: true,
             episodeTitle: history.episodeTitle,
             episodeServerName: history.episodeServerName,
           ),
@@ -248,7 +247,6 @@ void main() {
       expect(
         continueWatchingPrimaryLabel(
           episode: history.episode,
-          isArabic: true,
           episodeServerName: history.episodeServerName,
         ),
         original,
@@ -371,7 +369,6 @@ void main() {
       expect(
         continueWatchingPrimaryLabel(
           episode: history.episode,
-          isArabic: true,
           episodeTitle: history.episodeTitle,
           episodeServerName: history.episodeServerName,
           episodeServerNumber: history.episodeServerNumber,

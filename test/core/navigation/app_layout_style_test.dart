@@ -65,7 +65,6 @@ void main() {
                   width: 180,
                   child: AppLayoutOptionCard(
                     style: style,
-                    arabic: true,
                     selected: style == AppLayoutStyle.dock,
                     onTap: () {},
                   ),
@@ -95,7 +94,6 @@ void main() {
                   width: 160,
                   child: AppLayoutOptionCard(
                     style: style,
-                    arabic: true,
                     selected: style == AppLayoutStyle.dock,
                     phone: true,
                     onTap: () {},
