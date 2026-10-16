@@ -12,6 +12,7 @@ import 'download_connection_governor.dart';
 import 'download_http_validator.dart';
 import 'download_parallel.dart';
 import 'download_retry_policy.dart';
+import 'download_source_verification.dart';
 import 'download_telemetry.dart';
 import '../utils/download_resume.dart';
 import '../utils/local_file_io.dart';
@@ -423,6 +424,7 @@ class PersistentParallelDownload {
     this.shouldDrainPartOnPause,
     this.onPausedDrainSettled,
     this.recoveryDelay = const Duration(seconds: 1),
+    this.sourceVerificationRetryDelay = const Duration(seconds: 2),
     this.tailStallDelay = kParallelTailStallDelay,
     this.diskProgressPollInterval = kParallelDiskProgressPollInterval,
     this.pendingStartLeaseDelay = kParallelPendingStartLeaseDelay,
@@ -471,6 +473,7 @@ class PersistentParallelDownload {
   final bool Function(DownloadTask task)? shouldDrainPartOnPause;
   final void Function(String parentTaskId)? onPausedDrainSettled;
   final Duration recoveryDelay;
+  final Duration sourceVerificationRetryDelay;
   final Duration tailStallDelay;
   final Duration diskProgressPollInterval;
   final Duration pendingStartLeaseDelay;
@@ -764,12 +767,12 @@ class PersistentParallelDownload {
         probeHeaders['Range'] = 'bytes=${part.from}-${part.to}';
         probeHeaders['Accept-Encoding'] = 'identity';
         final probeTask = part.task.copyWith(url: url, headers: probeHeaders);
-        final probe = await verifier(
-          probeTask,
-          localFile,
-          localBytes,
-          session.size,
-        );
+        final ({bool matches, String? validator}) probe;
+        try {
+          probe = await verifier(probeTask, localFile, localBytes, session.size);
+        } on DownloadSourceVerificationException {
+          return null;
+        }
         if (!probe.matches) return null;
         final observed = probe.validator;
         if (observed != null) {
@@ -1819,6 +1822,8 @@ class PersistentParallelDownload {
       return true;
     }
 
+    if (await _parkExhaustedSourceVerifications(session)) return true;
+
     for (final part in session.parts) {
       _armPartRecoveryDeadline(session, part);
     }
@@ -2361,13 +2366,13 @@ class PersistentParallelDownload {
         part.sourceVerification != null ||
         !session.active ||
         session.pauseRequested ||
-        session.deleted)
+        session.deleted) {
       return;
+    }
     final pending = _PartSourceVerification();
     final generation = session.generation;
     final attempt = part.attemptGeneration;
     final task = part.task;
-    final readyAt = DateTime.now().add(grace);
     part.sourceVerification = pending;
     _nativeClaimOffers.remove(task.taskId);
     _markConnectionReady(session, part);
@@ -2389,107 +2394,228 @@ class PersistentParallelDownload {
         part.task.url == task.url &&
         identical(part.sourceVerification, pending);
 
-    // One recovery probe per parent, outside its control/callback queue. Give
-    // the real HTTP-complete callback time to arrive before fetching bytes again.
-    session.sourceVerificationTail = session.sourceVerificationTail
-        .then((_) async {
+    Future<void> run() async {
+      var delay = grace;
+      // Probes and backoff never hold the control/callback queue. A failed
+      // attempt releases its connection before waiting, so other saved ranges
+      // and healthy native siblings can make progress instead of being paused.
+      for (var probeAttempt = 1; probeAttempt <= 3; probeAttempt++) {
+        await Future.any<void>([
+          Future<void>.delayed(delay),
+          pending.cancelled.future,
+        ]);
+        if (!current()) return;
+        while (_verificationConnections.length >= 2 ||
+            _occupiedConnectionCount >= _connectionBudget ||
+            _occupiedConnectionsForSession(session) >=
+                session.connectionCeiling) {
           await Future.any<void>([
-            Future<void>.delayed(readyAt.difference(DateTime.now())),
+            _connectionsChanged.future,
             pending.cancelled.future,
           ]);
           if (!current()) return;
-          while (_occupiedConnectionCount >= _connectionBudget ||
-              _occupiedConnectionsForSession(session) >=
-                  session.connectionCeiling) {
-            await Future.any<void>([
-              _connectionsChanged.future,
-              pending.cancelled.future,
-            ]);
-            if (!current()) return;
-          }
-          _verificationConnections[pending] = session;
-          final before = await file.stat();
-          if (!current()) {
+        }
+        _verificationConnections[pending] = session;
+        final watch = Stopwatch()..start();
+        FileStat? before;
+        Object? failure;
+        const rejected = (matches: false, validator: null);
+        final verification = Future.sync(() async {
+          try {
+            before = await file.stat();
+            if (!current()) return rejected;
+            _recordDiagnostic('parallel.sourceVerificationStarted', {
+              'taskId': session.task.taskId,
+              'childTaskId': task.taskId,
+              'attemptGeneration': attempt,
+              'retryAttempt': probeAttempt,
+            });
+            // A sibling may have pinned identity while this range backed off.
+            // Reuse the latest qualified If-Range header on the retry.
+            return await verifier(part.task, file, part.size, session.size);
+          } catch (error) {
+            failure = error;
+            return rejected;
+          } finally {
+            // Cancellation fences the result immediately, but the resource
+            // stays reserved until its actual IO has settled.
             _releaseVerificationConnection(pending);
-            return;
           }
-          final watch = Stopwatch()..start();
-          _recordDiagnostic('parallel.sourceVerificationStarted', {
-            'taskId': session.task.taskId,
-            'childTaskId': task.taskId,
-            'attemptGeneration': attempt,
-          });
-          const rejected = (matches: false, validator: null);
-          final verification =
-              Future.sync(() => verifier(task, file, part.size, session.size))
-                  .catchError((Object _) => rejected)
-                  .whenComplete(() {
-                    _releaseVerificationConnection(pending);
-                  });
-          final evidence =
-              await Future.any<({bool matches, String? validator})>([
-                verification,
-                pending.cancelled.future.then((_) => rejected),
-              ]);
-          await session.serialize(() async {
-            if (!current()) return;
-            final after = await file.stat();
-            if (!current()) return;
-            final pinned = session.resourceValidator;
-            final valid =
-                evidence.matches &&
-                before.type == FileSystemEntityType.file &&
-                before.size == part.size &&
-                after.type == before.type &&
-                after.size == before.size &&
-                after.modified == before.modified &&
-                after.changed == before.changed &&
-                (pinned == null || evidence.validator == pinned);
+        });
+        final evidence = await Future.any<({bool matches, String? validator})>([
+          verification,
+          pending.cancelled.future.then((_) => rejected),
+        ]);
+        if (!current()) return;
+        var retry = false;
+        await session.serialize(() async {
+          if (!current()) return;
+          // Concurrent probes can start before either pins a validator. A
+          // missing validator after a sibling pins one is unavailable evidence,
+          // not a contradictory identity that warrants canceling healthy IO.
+          final error = failure ??
+              (evidence.matches && session.resourceValidator != null &&
+                      evidence.validator == null
+                  ? const DownloadSourceVerificationException(
+                      reason: DownloadSourceVerificationFailure.invalidResponse,
+                    )
+                  : null);
+          if (error != null) {
+            final reason = switch (error) {
+              DownloadSourceVerificationException() => error.reason.name,
+              TimeoutException() => 'timeout',
+              SocketException() || HttpException() => 'network',
+              FileSystemException() => 'localFile',
+              _ => 'unknown',
+            };
+            final retryable = switch (error) {
+              DownloadSourceVerificationException() => error.retryable,
+              TimeoutException() ||
+              SocketException() ||
+              HttpException() => true,
+              _ => false,
+            };
             _recordDiagnostic('parallel.sourceVerificationSettled', {
               'taskId': session.task.taskId,
               'childTaskId': task.taskId,
               'attemptGeneration': attempt,
+              'retryAttempt': probeAttempt,
               'durationMs': watch.elapsedMilliseconds,
-              'result': valid,
+              'result': false,
+              'reason': reason,
+              'retryable': retryable,
+              if (error is DownloadSourceVerificationException &&
+                  error.httpStatus != null)
+                'httpStatus': error.httpStatus,
             });
-            if (!valid) {
-              // Unknown/changed source evidence must preserve the saved range.
-              pending.needsPause = true;
-              if (!await _pause(session)) _scheduleCoordinatorRecovery(session);
-              return;
-            }
-            if (pinned == null && evidence.validator != null) {
-              session.resourceValidator = evidence.validator;
-              _applyPinnedValidatorToPendingParts(session);
-            }
-            final owners = livePartIds == null
-                ? <String>{}
-                : await livePartIds!();
-            if (!current()) return;
-            if (await _adoptOrVerifyExactSizePart(
-              session,
-              part,
-              settleNativeOwner: owners.contains(task.taskId),
-              verifiedSource: true,
-              verifiedFileState: before,
-              canCommit: current,
-            )) {
-              await _afterAdoptedPart(session);
+            retry = retryable && probeAttempt < 3;
+            if (retry) {
+              delay = sourceVerificationRetryDelay * (1 << (probeAttempt - 1));
+              _recordDiagnostic('parallel.sourceVerificationRetryScheduled', {
+                'taskId': session.task.taskId,
+                'childTaskId': task.taskId,
+                'reason': reason,
+                'retryAttempt': probeAttempt + 1,
+                'delayMs': delay.inMilliseconds,
+              });
             } else {
-              if (!current()) return;
-              pending.needsPause = true;
-              if (!await _pause(session)) _scheduleCoordinatorRecovery(session);
+              // Unknown evidence never authorizes adoption or replacement.
+              // Keep its launch fence until other useful work finishes, then
+              // checkpoint a retryable pause without canceling healthy ranges.
+              pending.exhausted = true;
+              _recordDiagnostic('parallel.sourceVerificationExhausted', {
+                'taskId': session.task.taskId,
+                'childTaskId': task.taskId,
+                'reason': reason,
+                'retryAttempt': probeAttempt,
+              });
+              await _parkExhaustedSourceVerifications(session);
             }
+            return;
+          }
+
+          final after = await file.stat();
+          if (!current()) return;
+          final pinned = session.resourceValidator;
+          final fileUnchanged =
+              before?.type == FileSystemEntityType.file &&
+              before?.size == part.size &&
+              after.type == before?.type &&
+              after.size == before?.size &&
+              after.modified == before?.modified &&
+              after.changed == before?.changed;
+          final valid =
+              evidence.matches &&
+              fileUnchanged &&
+              (pinned == null || evidence.validator == pinned);
+          _recordDiagnostic('parallel.sourceVerificationSettled', {
+            'taskId': session.task.taskId,
+            'childTaskId': task.taskId,
+            'attemptGeneration': attempt,
+            'retryAttempt': probeAttempt,
+            'durationMs': watch.elapsedMilliseconds,
+            'result': valid,
+            'reason': valid
+                ? 'verified'
+                : !fileUnchanged
+                ? 'localFileChanged'
+                : 'sourceMismatch',
+            'retryable': false,
           });
-        })
-        .catchError((Object _, StackTrace __) async {
-          _releaseVerificationConnection(pending);
-          await session.serialize(() async {
+          if (!valid) {
+            // A changed file or positively mismatched source must fail closed.
+            pending.needsPause = true;
+            if (!await _pause(session)) _scheduleCoordinatorRecovery(session);
+            return;
+          }
+          if (pinned == null && evidence.validator != null) {
+            session.resourceValidator = evidence.validator;
+            _applyPinnedValidatorToPendingParts(session);
+          }
+          final owners = livePartIds == null
+              ? <String>{}
+              : await livePartIds!();
+          if (!current()) return;
+          if (await _adoptOrVerifyExactSizePart(
+            session,
+            part,
+            settleNativeOwner: owners.contains(task.taskId),
+            verifiedSource: true,
+            verifiedFileState: before,
+            canCommit: current,
+          )) {
+            await _afterAdoptedPart(session);
+          } else {
             if (!current()) return;
             pending.needsPause = true;
             if (!await _pause(session)) _scheduleCoordinatorRecovery(session);
-          });
+          }
         });
+        if (!retry) return;
+      }
+    }
+
+    unawaited(
+      run().catchError((Object error, StackTrace _) async {
+        _releaseVerificationConnection(pending);
+        await session.serialize(() async {
+          if (!current()) return;
+          _recordDiagnostic('parallel.sourceVerificationSettled', {
+            'taskId': session.task.taskId,
+            'childTaskId': task.taskId,
+            'attemptGeneration': attempt,
+            'result': false,
+            'reason': error is FileSystemException ? 'localFile' : 'unknown',
+            'retryable': false,
+          });
+          pending.needsPause = true;
+          if (!await _pause(session)) _scheduleCoordinatorRecovery(session);
+        });
+      }),
+    );
+  }
+
+  Future<bool> _parkExhaustedSourceVerifications(
+    _ParallelSession session,
+  ) async {
+    if (!session.active ||
+        session.pauseRequested ||
+        session.deleted ||
+        !session.parts.any(
+          (part) => part.sourceVerification?.exhausted ?? false,
+        ) ||
+        session.parts.any(
+          (part) =>
+              !part.complete && !(part.sourceVerification?.exhausted ?? false),
+        )) {
+      return false;
+    }
+    // No useful sibling transfer or probe remains. Preserve the exact files
+    // and expose a settled pause so Resume can attempt verification again.
+    if (!await _pause(session, preserveLiveParts: true)) {
+      _scheduleCoordinatorRecovery(session);
+    }
+    return true;
   }
 
   /// True also means an exact-size file is fenced for asynchronous source
@@ -5052,6 +5178,7 @@ class PersistentParallelDownload {
 class _PartSourceVerification {
   final Completer<void> cancelled = Completer<void>();
   bool needsPause = false;
+  bool exhausted = false;
 }
 
 class _ParallelSession {
@@ -5113,7 +5240,6 @@ class _ParallelSession {
   DateTime? lastHostProfileSampleAt;
   Future<void> _pending = Future<void>.value();
   Future<void> parentRecordWrite = Future<void>.value();
-  Future<void> sourceVerificationTail = Future<void>.value();
 
   int get size => parts.fold(0, (sum, part) => sum + part.size);
   int get creditedBytes =>
