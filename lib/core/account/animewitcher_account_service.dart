@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+
 import '../domain/entity/multimedia_item.dart';
 import '../extensions/providers/animewitcher_manga_mapping.dart';
 import '../storage/library_category.dart';
@@ -697,10 +698,7 @@ class AnimeWitcherAccountService {
     _session = session;
     _sessionGeneration++;
     try {
-      _profile = await _resolveProfile(
-        session,
-        createIfMissing: false,
-      );
+      _profile = await _resolveProfile(session, createIfMissing: false);
       await _persistSession();
       _syncNewAuthEmailBestEffort(session);
     } catch (_) {
@@ -3391,7 +3389,6 @@ class AnimeWitcherAccountService {
             ? ''
             : formatEpisodeNumberLabel(
                 episode: episodeNumber,
-                isArabic: true,
                 isFinal: hasFinalEpisodeSuffix(episodeTitle),
               ));
     final operations = <Future<void>>[];
@@ -3649,7 +3646,9 @@ class AnimeWitcherAccountService {
       episodeNumber: _nullableInt(raw['episode']),
       episodeTitle: _originalEpisodeText(raw['episodeTitle']),
       episodeServerName: _originalEpisodeText(raw['episodeServerName']),
-      episodeServerNumber: rawEpisodeNumberForDisplay(raw['episodeServerNumber']),
+      episodeServerNumber: rawEpisodeNumberForDisplay(
+        raw['episodeServerNumber'],
+      ),
       episodePosterUrl: _optionalString(raw['episodePosterUrl']),
     );
   }
@@ -3752,8 +3751,8 @@ class AnimeWitcherAccountService {
           : _originalEpisodeText(fields['episode_name']),
       episodeServerName: hasOriginalMetadata
           ? (fields['episode_server_name'] is String
-              ? fields['episode_server_name'] as String
-              : null)
+                ? fields['episode_server_name'] as String
+                : null)
           : _originalEpisodeText(fields['episode_name']),
       episodeServerNumber: hasOriginalMetadata
           ? rawEpisodeNumberForDisplay(fields['episode_number_raw'])

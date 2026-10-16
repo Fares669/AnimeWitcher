@@ -3,15 +3,15 @@ import '../utils/episode_label.dart';
 import '../utils/safe_uri.dart';
 import 'firestore_rest_client.dart';
 
-const String animeWitcherNativeProviderId =
-    'com.fares669.animewitcher.native';
+const String animeWitcherNativeProviderId = 'com.fares669.animewitcher.native';
 
 enum AnimeWitcherCommentSort {
   newest,
   oldest,
   mostLiked;
 
-  String get orderField => this == AnimeWitcherCommentSort.mostLiked ? 'likes' : 'date';
+  String get orderField =>
+      this == AnimeWitcherCommentSort.mostLiked ? 'likes' : 'date';
 
   bool get descending => this != AnimeWitcherCommentSort.oldest;
 
@@ -105,13 +105,13 @@ class AnimeWitcherCommentTarget {
   bool get isReviews => kind == AnimeWitcherSocialKind.reviews;
 
   Map<String, dynamic> get publishFields => <String, dynamic>{
-        if (animeId?.isNotEmpty == true) 'anime_id': animeId,
-        if (episodeId?.isNotEmpty == true) 'episode_id': episodeId,
-        if (episodeName?.isNotEmpty == true) 'episode_name': episodeName,
-        if (newsId?.isNotEmpty == true) 'new_id': newsId,
-        if (characterId?.isNotEmpty == true) 'character_id': characterId,
-        if (characterName?.isNotEmpty == true) 'character_name': characterName,
-      };
+    if (animeId?.isNotEmpty == true) 'anime_id': animeId,
+    if (episodeId?.isNotEmpty == true) 'episode_id': episodeId,
+    if (episodeName?.isNotEmpty == true) 'episode_name': episodeName,
+    if (newsId?.isNotEmpty == true) 'new_id': newsId,
+    if (characterId?.isNotEmpty == true) 'character_id': characterId,
+    if (characterName?.isNotEmpty == true) 'character_name': characterName,
+  };
 }
 
 class AnimeWitcherComment {
@@ -244,9 +244,7 @@ bool isAnimeWitcherCommentItem(MultimediaItem item) {
       item.url.toLowerCase().contains('animewitcher.com/watch/');
 }
 
-AnimeWitcherCommentTarget? animeWitcherAnimeCommentTarget(
-  MultimediaItem item,
-) {
+AnimeWitcherCommentTarget? animeWitcherAnimeCommentTarget(MultimediaItem item) {
   final animeId = animeWitcherAnimeIdFromItem(item);
   if (animeId.isEmpty) return null;
   final sourcePath = 'anime_list/$animeId';
@@ -258,9 +256,7 @@ AnimeWitcherCommentTarget? animeWitcherAnimeCommentTarget(
   );
 }
 
-AnimeWitcherCommentTarget? animeWitcherAnimeReviewTarget(
-  MultimediaItem item,
-) {
+AnimeWitcherCommentTarget? animeWitcherAnimeReviewTarget(MultimediaItem item) {
   final animeId = animeWitcherAnimeIdFromItem(item);
   if (animeId.isEmpty) return null;
   final sourcePath = 'anime_list/$animeId';
@@ -288,7 +284,6 @@ AnimeWitcherCommentTarget? animeWitcherEpisodeCommentTarget(
   final sourcePath = 'anime_list/$animeId/episodes/$episodeId';
   final episodeName = formatEpisodeLabel(
     episode: episode.episode,
-    isArabic: true,
     title: episode.name,
     isFinal: episode.isFinal,
     serverName: episode.serverName,
@@ -348,7 +343,9 @@ String? _normalizeDocumentPath(String? raw) {
   const marker = '/documents/';
   final markerIndex = value.indexOf(marker);
   if (markerIndex >= 0) value = value.substring(markerIndex + marker.length);
-  value = value.replaceFirst(RegExp(r'^/+'), '').replaceFirst(RegExp(r'/+$'), '');
+  value = value
+      .replaceFirst(RegExp(r'^/+'), '')
+      .replaceFirst(RegExp(r'/+$'), '');
   return value.isEmpty ? null : value;
 }
 
