@@ -81,11 +81,6 @@ final class DownloadContinuedProcessingManager {
     var currentIndex: Int
   }
 
-  /// Reserved for a real explicit cancel action. BGContinuedProcessingTask
-  /// expiration is only the end of the OS processing lease and must never be
-  /// translated into pausing the independent background URLSession transfer.
-  var cancellationHandler: ((String) -> Void)?
-
   private let scheduler = BGTaskScheduler.shared
   private var activeTask: BGContinuedProcessingTask?
   private var activeTaskCompletion: DownloadContinuedProcessingCompletion?
@@ -537,12 +532,13 @@ final class DownloadContinuedProcessingManager {
       Task { @MainActor in
         guard let self, self.activeTask === task else { return }
 
-        // Expiration only revokes the BGContinuedProcessingTask lease / system
-        // overlay. The actual episode is owned by background URLSession (or by
-        // PersistentParallelDownload's child URLSession tasks), which is
-        // intentionally independent and must keep transferring. Mapping this
-        // callback to `cancellationHandler` used to mark the logical parent
-        // paused and promote the next episode while its parts were still live.
+        // Apple uses this reasonless callback for both OS expiration and a
+        // person stopping the task in the system UI. Our continuity policy
+        // releases this lease without canceling independent URLSession work;
+        // treating every callback as app cancellation would also stop downloads
+        // on ordinary OS expiry. System UI stop therefore cannot be a reliable
+        // download cancel action here. Explicit in-app cancellation remains
+        // owned by the download coordinator. See download_background_lifecycle.md.
         self.activeTask = nil
         self.activeTaskCompletion = nil
         self.snapshot = nil

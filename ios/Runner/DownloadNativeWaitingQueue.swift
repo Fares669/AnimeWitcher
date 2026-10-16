@@ -112,6 +112,71 @@ import Security
 import background_downloader
 #endif
 
+/// Failed plugin channel messages omit headers. Save the small allowlisted
+/// response before that message can reach Dart, including across app relaunch.
+enum DownloadNativeRetryMetadata {
+  private static let lock = NSLock()
+  private static let key = "com.animewitcher.download.retryMetadata.v1"
+
+  static func record(identity: DownloadRangeIdentity, httpStatus: Int?, headers: [String: String]?) {
+    guard let httpStatus, (100...599).contains(httpStatus) else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    var rows = UserDefaults.standard.dictionary(forKey: key) ?? [:]
+    if let existing = rows[identity.taskId] as? [String: Any],
+       let generation = DownloadRangeIdentity.positiveInteger(existing["attemptGeneration"]),
+       generation > identity.generation { return }
+    var row: [String: Any] = ["taskId": identity.taskId,
+      "parentTaskId": identity.parentTaskId, "attemptGeneration": identity.generation,
+      "httpStatus": httpStatus]
+    if let retryAfter = headers?.first(where: { $0.key.lowercased() == "retry-after" })?.value {
+      row["retryAfter"] = retryAfter
+    }
+    if let date = headers?.first(where: { $0.key.lowercased() == "date" })?.value {
+      row["responseDate"] = date
+    }
+    rows[identity.taskId] = row
+    UserDefaults.standard.set(rows, forKey: key)
+  }
+
+  static func lookup(_ arguments: [String: Any]) -> [String: Any]? {
+    guard let taskId = arguments["taskId"] as? String,
+          let parent = arguments["parentTaskId"] as? String,
+          let generation = DownloadRangeIdentity.positiveInteger(arguments["attemptGeneration"]),
+          DownloadRangeIdentity(taskId: taskId, parentTaskId: parent, generation: generation) != nil
+    else { return nil }
+    lock.lock()
+    defer { lock.unlock() }
+    guard let row = UserDefaults.standard.dictionary(forKey: key)?[taskId] as? [String: Any],
+          row["taskId"] as? String == taskId,
+          row["parentTaskId"] as? String == parent,
+          DownloadRangeIdentity.positiveInteger(row["attemptGeneration"]) == generation
+    else { return nil }
+    return row
+  }
+
+  static func remove(identity: DownloadRangeIdentity) {
+    lock.lock()
+    defer { lock.unlock() }
+    var rows = UserDefaults.standard.dictionary(forKey: key) ?? [:]
+    guard let row = rows[identity.taskId] as? [String: Any],
+          row["parentTaskId"] as? String == identity.parentTaskId,
+          DownloadRangeIdentity.positiveInteger(row["attemptGeneration"]) == identity.generation
+    else { return }
+    rows.removeValue(forKey: identity.taskId)
+    UserDefaults.standard.set(rows, forKey: key)
+  }
+
+  static func removeParent(_ parentTaskId: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    let rows = UserDefaults.standard.dictionary(forKey: key) ?? [:]
+    UserDefaults.standard.set(rows.filter {
+      ($0.value as? [String: Any])?["parentTaskId"] as? String != parentTaskId
+    }, forKey: key)
+  }
+}
+
 /// Keep the large queue in the existing batched defaults store, encrypted as a
 /// whole: task JSON and resume blobs can also contain URLs and credentials.
 /// Only the small encryption key goes into Keychain, never on every byte sample.
@@ -793,7 +858,11 @@ enum DownloadNativeWaitingQueue {
   }
 
   private static func isImmutableRangeWaiter(_ waiter: Waiter) -> Bool {
-    guard rangeIdentity(for: waiter) != nil, waiter.savedProgress == 0,
+    guard let identity = rangeIdentity(for: waiter), waiter.savedProgress == 0,
+          DownloadNativeRetryMetadata.lookup([
+            "taskId": identity.taskId, "parentTaskId": identity.parentTaskId,
+            "attemptGeneration": identity.generation
+          ]) == nil,
           waiter.resumeDataBase64?.isEmpty ?? true,
           waiter.httpRequestMethod.uppercased() == "GET",
           let url = URL(string: waiter.url), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
@@ -2499,6 +2568,20 @@ enum DownloadNativeWaitingQueue {
     guard !task.taskId.isEmpty else { return }
 
     let status = statusUpdate.taskStatus
+    if task.group == "animewitcher_parts",
+       let parent = parentTaskId(fromPluginTask: task),
+       let generation = attemptGeneration(fromPluginTask: task),
+       let identity = DownloadRangeIdentity(taskId: task.taskId, parentTaskId: parent, generation: generation) {
+      if status == .failed {
+        DownloadNativeRetryMetadata.record(
+          identity: identity,
+          httpStatus: statusUpdate.responseStatusCode ?? statusUpdate.exception?.httpResponseCode,
+          headers: statusUpdate.responseHeaders
+        )
+      } else if status == .complete {
+        DownloadNativeRetryMetadata.remove(identity: identity)
+      }
+    }
     let inactiveForSpeed: Bool
     switch status {
     case .complete, .notFound, .failed, .canceled, .paused:
