@@ -18,7 +18,8 @@ void _transferApiContract(Transfers transfers, Task task, Transfer transfer) {
   final Future<bool> pause = transfer.pause();
   final Future<bool> resume = transfer.resume();
   final Future<bool> cancel = transfer.cancel();
+  final Future<TaskStatusUpdate> result = transfer.result;
 
   // Keep the typed references live so the compiler verifies every API surface.
-  Object.hash(start, getOrStart, rehydrate, pause, resume, cancel);
+  Object.hash(start, getOrStart, rehydrate, pause, resume, cancel, result);
 }

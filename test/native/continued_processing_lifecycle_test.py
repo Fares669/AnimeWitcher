@@ -60,7 +60,11 @@ final class BGTaskScheduler {
 }
 enum DownloadNativeDiagnosticLog {
   static var events: [String] = []
-  static func record(_ event: String, fields: [String: Any] = [:]) { events.append(event) }
+  static var fieldsByEvent: [String: [[String: Any]]] = [:]
+  static func record(_ event: String, fields: [String: Any] = [:]) {
+    events.append(event)
+    fieldsByEvent[event, default: []].append(fields)
+  }
 }
 '''
 
@@ -118,6 +122,12 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
       manager.stop(taskId: "session", endSession: true)
       manager.stop(taskId: "session", endSession: true)
       try check(task.completions == [false], "stop completes the lease exactly once")
+      try check(task.expirationHandler == nil, "explicit stop detaches the expiration callback")
+      try check(scheduler.canceled == [id], "explicit stop withdraws the pending request once")
+      try check(!DownloadNativeDiagnosticLog.events.contains("continued.expired"),
+                "explicit app stop is not an ambiguous expiration")
+      try check(DownloadNativeDiagnosticLog.fieldsByEvent["continued.finished"]?.last?["status"] as? String == "canceled",
+                "explicit app stop records a known canceled status")
     case "duplicate-attach":
       scheduler.deliver(task)
       await drainCallbacks()
@@ -144,10 +154,29 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
       await drainCallbacks()
       manager.stop(taskId: "session", endSession: true)
       try check(task.completions == [false], "rejecting a stale task must preserve the pending current request")
-    case "expiration-and-stop":
+    case "expiration-only":
+      scheduler.deliver(task)
+      await drainCallbacks()
+      task.expirationHandler!()
+      try check(task.completions == [false], "expiration acknowledges the OS before the main-actor cleanup")
+      try check(scheduler.canceled.isEmpty, "ambiguous expiration must not issue an explicit cancellation")
+      await drainCallbacks()
+      try check(!manager.update(taskId: "episode", progress: 0.25, totalBytes: 100),
+                "expiration releases the old presentation lease")
+      try check(scheduler.requests.count == 1, "expiration must not submit a replacement background lease")
+      try check(DownloadNativeDiagnosticLog.events.contains("continued.expired")
+                && !DownloadNativeDiagnosticLog.events.contains("continued.finished"),
+                "expiration is not relabeled as an explicit stop or successful download")
+      let fields = DownloadNativeDiagnosticLog.fieldsByEvent["continued.expired"]!.last!
+      try check(fields["reason"] == nil && fields["status"] == nil,
+                "a reasonless Apple callback must not fabricate a user-cancel reason")
+    case "expiration-and-stop", "stop-and-expiration":
       scheduler.deliver(task)
       await drainCallbacks()
       let expiration = task.expirationHandler!
+      if scenario == "stop-and-expiration" {
+        manager.stop(taskId: "session", endSession: true)
+      }
       expiration()
       manager.stop(taskId: "session", endSession: true)
       await drainCallbacks()
@@ -223,7 +252,8 @@ with tempfile.TemporaryDirectory(prefix="continued-processing-lifecycle-") as di
     for scenario in (
         "cancel-before-attach", "finish-before-attach", "cancel-between-delivery-and-actor-hop",
         "valid-attach-and-stop", "duplicate-attach", "repeat-same-task", "wrong-identifier",
-        "expiration-and-stop", "restart-late-old-first", "restart-late-new-first",
+        "expiration-only", "expiration-and-stop", "stop-and-expiration",
+        "restart-late-old-first", "restart-late-new-first",
         "old-expiration-after-restart", "queued-old-expiration-during-restart",
     ):
         result = subprocess.run([str(executable), scenario], check=False)

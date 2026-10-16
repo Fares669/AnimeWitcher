@@ -71,6 +71,10 @@ void main() {
           }
           if (name == 'lastModified') {
             request.response.headers.set(
+              HttpHeaders.dateHeader,
+              'Wed, 21 Oct 2015 07:29:00 GMT',
+            );
+            request.response.headers.set(
               HttpHeaders.lastModifiedHeader,
               'Wed, 21 Oct 2015 07:28:00 GMT',
             );
@@ -134,6 +138,89 @@ void main() {
           );
         }
         expect(await local.readAsBytes(), original);
+      } finally {
+        await subscription.cancel();
+        await server.close(force: true);
+        await root.delete(recursive: true);
+      }
+    });
+  }
+  for (final entry
+      in <String, ({Map<String, String> headers, String? validator})>{
+        'strong ETag': (
+          headers: {'ETag': '"resource"'},
+          validator: '"resource"',
+        ),
+        'weak ETag with strong date': (
+          headers: {
+            'ETag': 'W/"resource"',
+            'Last-Modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
+            'Date': 'Wed, 21 Oct 2015 07:29:00 GMT',
+          },
+          validator: null,
+        ),
+        'malformed ETag with strong date': (
+          headers: {
+            'ETag': '"invalid space"',
+            'Last-Modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
+            'Date': 'Wed, 21 Oct 2015 07:29:00 GMT',
+          },
+          validator: null,
+        ),
+        'unqualified date': (
+          headers: {
+            'Last-Modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
+            'Date': 'Wed, 21 Oct 2015 07:28:01 GMT',
+          },
+          validator: null,
+        ),
+        'invalid date': (
+          headers: {'Last-Modified': 'not a date'},
+          validator: null,
+        ),
+        'strong date': (
+          headers: {
+            'Last-Modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
+            'Date': 'Wed, 21 Oct 2015 07:29:00 GMT',
+          },
+          validator: 'Wed, 21 Oct 2015 07:28:00 GMT',
+        ),
+      }.entries) {
+    test('full byte verification preserves bytes with ${entry.key}', () async {
+      final root = await Directory.systemTemp.createTemp('aw-range-validator-');
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final local = File(p.join(root.path, 'range.chunk'));
+      final original = [2, 3, 4, 5];
+      await local.writeAsBytes(original);
+      final subscription = server.listen((request) async {
+        request.response.statusCode = HttpStatus.partialContent;
+        request.response.headers.set(
+          HttpHeaders.contentRangeHeader,
+          'bytes 2-5/8',
+        );
+        entry.value.headers.forEach(request.response.headers.set);
+        request.response.add(original);
+        await request.response.close();
+      });
+      try {
+        final task = DownloadTask(
+          taskId: 'unbound-resource-part',
+          url: 'http://${server.address.address}:${server.port}/resource',
+          filename: 'range.chunk',
+          headers: {'Range': 'bytes=2-5'},
+        );
+        expect(await verifySavedRangeSourceV2(task, local, 4, 8), (
+          matches: true,
+          validator: entry.value.validator,
+        ));
+        expect(await local.readAsBytes(), original);
+        final changed = [...original]..last = 99;
+        await local.writeAsBytes(changed);
+        expect(await verifySavedRangeSourceV2(task, local, 4, 8), (
+          matches: false,
+          validator: null,
+        ));
+        expect(await local.readAsBytes(), changed);
       } finally {
         await subscription.cancel();
         await server.close(force: true);

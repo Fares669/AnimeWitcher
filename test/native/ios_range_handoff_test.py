@@ -15,6 +15,10 @@ ROOT = Path(__file__).resolve().parents[2]
 QUEUE = (ROOT / "ios/Runner/DownloadNativeWaitingQueue.swift").read_text()
 COMPAT = (ROOT / "ios/Runner/DownloadCallbackCompatibility.swift").read_text()
 COMPAT = COMPAT[:COMPAT.index("struct DownloadFilePromotionError")].replace("import Darwin", "")
+RETRY_METADATA = QUEUE[QUEUE.index("enum DownloadNativeRetryMetadata"):QUEUE.index("/// Keep the large queue")]
+RETRY_METADATA = RETRY_METADATA.replace("UserDefaults.standard", 'UserDefaults(suiteName: "animewitcher.range-handoff-tests")!')
+COMPAT += "\n" + RETRY_METADATA
+
 
 
 def declaration(marker):
@@ -140,6 +144,7 @@ CHECKS = r'''
   }
   static func reset(_ waiters: [Waiter], claims: [MultipartClaim] = [], width: Int = 2) {
     foreground = false
+    DownloadNativeRetryMetadata.removeParent(parent)
     pendingRangeCompletions = [:]; saveSucceeds = true
     nativeMultipartTasksByClaimId = [:]
     multipartPromotionParents = []; multipartPromotionPendingParents = []; multipartPromotionCompletions = [:]
@@ -159,6 +164,11 @@ CHECKS = r'''
   static func runChecks() {
     let first = waiter(0), second = waiter(1), third = waiter(2)
     reset([first], claims: [claim(first)])
+    let failedIdentity = rangeIdentity(for: first)!
+    DownloadNativeRetryMetadata.record(identity: failedIdentity, httpStatus: 429, headers: ["Retry-After": "120"])
+    precondition(!isImmutableRangeWaiter(first), "A failed attempt cannot refill before Dart persists its retry wait")
+    precondition(isImmutableRangeWaiter(waiter(0, generation: 2)), "Resolved newer attempt keeps ordinary admission")
+    DownloadNativeRetryMetadata.removeParent(parent)
     precondition(dart(first), "Dart atomically revokes the pending native claim")
     precondition(stored.multipartClaims.isEmpty && stored.multipartPlans[0].waiters.isEmpty)
     _ = persist(from: snapshot(plans: plans([first])))
