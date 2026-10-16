@@ -16,10 +16,7 @@ import 'widgets/animewitcher_comment_sort_control.dart';
 import '../../../core/utils/avatar_image.dart';
 
 class AnimeWitcherRepliesScreen extends ConsumerStatefulWidget {
-  const AnimeWitcherRepliesScreen({
-    super.key,
-    required this.parentComment,
-  });
+  const AnimeWitcherRepliesScreen({super.key, required this.parentComment});
 
   final AnimeWitcherComment parentComment;
 
@@ -70,9 +67,6 @@ class _AnimeWitcherRepliesScreenState
     _replyFocusNode.dispose();
     super.dispose();
   }
-
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
   void _onScroll() {
     if (!_scrollController.hasClients ||
@@ -154,19 +148,16 @@ class _AnimeWitcherRepliesScreenState
         _loadError = error;
         _loadingMore = false;
       });
-      _showMessage(_replyErrorText(error, _isArabic(context)), isError: true);
+      _showMessage(_replyErrorText(error), isError: true);
     }
   }
 
   Future<void> _toggleLike(AnimeWitcherComment reply) async {
     if (_pendingLikes.contains(reply.path)) return;
     final service = ref.read(animeWitcherAccountServiceProvider);
-    final isArabic = _isArabic(context);
+
     if (!service.isSignedIn) {
-      _showMessage(
-        isArabic ? 'يجب تسجيل الدخول' : 'Sign in to like replies.',
-        isInfo: true,
-      );
+      _showMessage('يجب تسجيل الدخول', isInfo: true);
       return;
     }
     if (reply.userId == service.snapshot.profile?.documentId) return;
@@ -179,7 +170,7 @@ class _AnimeWitcherRepliesScreenState
       if (index >= 0) setState(() => _replies[index] = updated);
     } catch (error) {
       if (mounted) {
-        _showMessage(_replyErrorText(error, isArabic), isError: true);
+        _showMessage(_replyErrorText(error), isError: true);
       }
     } finally {
       if (mounted) setState(() => _pendingLikes.remove(reply.path));
@@ -190,23 +181,21 @@ class _AnimeWitcherRepliesScreenState
     if (_publishing) return;
     final text = _replyController.text.trim();
     if (text.isEmpty) return;
-    final isArabic = _isArabic(context);
+
     final userTagId = _userTagId;
     setState(() => _publishing = true);
     try {
-      await ref.read(animeWitcherAccountServiceProvider).publishReply(
-            widget.parentComment,
-            text,
-            userTagId: userTagId,
-          );
+      await ref
+          .read(animeWitcherAccountServiceProvider)
+          .publishReply(widget.parentComment, text, userTagId: userTagId);
       if (!mounted) return;
       _replyController.clear();
       setState(() => _userTagId = null);
-      _showMessage(isArabic ? 'تم إرسال الرد.' : 'Reply sent.');
+      _showMessage('تم إرسال الرد.');
       await _loadInitial();
     } catch (error) {
       if (mounted) {
-        _showMessage(_replyErrorText(error, isArabic), isError: true);
+        _showMessage(_replyErrorText(error), isError: true);
       }
     } finally {
       if (mounted) setState(() => _publishing = false);
@@ -225,12 +214,9 @@ class _AnimeWitcherRepliesScreenState
 
   void _mentionReply(AnimeWitcherComment reply) {
     final service = ref.read(animeWitcherAccountServiceProvider);
-    final isArabic = _isArabic(context);
+
     if (!service.isSignedIn) {
-      _showMessage(
-        isArabic ? 'يجب تسجيل الدخول' : 'Sign in to mention a reply.',
-        isInfo: true,
-      );
+      _showMessage('يجب تسجيل الدخول', isInfo: true);
       return;
     }
     if (widget.parentComment.repliesClosed) return;
@@ -246,10 +232,7 @@ class _AnimeWitcherRepliesScreenState
       case AnimeWitcherReplyMentionStatus.ownReply:
         return;
       case AnimeWitcherReplyMentionStatus.alreadyTagged:
-        _showMessage(
-          animeWitcherReplyAlreadyTaggedMessage(isArabic: isArabic),
-          isInfo: true,
-        );
+        _showMessage(animeWitcherReplyAlreadyTaggedMessage(), isInfo: true);
         return;
       case AnimeWitcherReplyMentionStatus.applied:
         _replyController.value = TextEditingValue(
@@ -295,10 +278,10 @@ class _AnimeWitcherRepliesScreenState
 
   @override
   Widget build(BuildContext context) {
-    final isArabic = _isArabic(context);
     final accountState = ref.watch(animeWitcherAccountControllerProvider);
     final service = ref.read(animeWitcherAccountServiceProvider);
-    final isSignedIn = accountState.asData?.value.isSignedIn ?? service.isSignedIn;
+    final isSignedIn =
+        accountState.asData?.value.isSignedIn ?? service.isSignedIn;
 
     if (appleUsesPersistentLiquidGlassHeader) {
       final colors = Theme.of(context).colorScheme;
@@ -313,8 +296,7 @@ class _AnimeWitcherRepliesScreenState
             backFallbackColor: colors.surfaceContainerHigh,
             trailingButtons: AnimeWitcherCommentSortControl.persistentButtons(
               context: context,
-              isArabic: isArabic,
-              tooltip: isArabic ? 'ترتيب الردود' : 'Sort replies',
+              tooltip: 'ترتيب الردود',
               sort: _sort,
               onSelected: (value) {
                 _applyReplySort(_replySortFromValue(value));
@@ -328,14 +310,14 @@ class _AnimeWitcherRepliesScreenState
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: isArabic ? 'الردود' : 'Replies',
+        title: 'الردود',
         onBack: () => Navigator.of(context).pop(),
         actions: appleUsesPersistentLiquidGlassHeader
             ? const <Widget>[]
             : AnimeWitcherCommentSortControl.appBarActions(
-                tooltip: isArabic ? 'ترتيب الردود' : 'Sort replies',
+                tooltip: 'ترتيب الردود',
                 selectedValue: _sort.name,
-                items: AnimeWitcherCommentSortControl.menuItems(isArabic),
+                items: AnimeWitcherCommentSortControl.menuItems(),
                 onSelected: (value) {
                   _applyReplySort(_replySortFromValue(value));
                 },
@@ -343,14 +325,14 @@ class _AnimeWitcherRepliesScreenState
       ),
       body: Column(
         children: [
-          Expanded(child: _buildRepliesBody(context, isArabic)),
-          _buildComposer(context, isArabic, isSignedIn),
+          Expanded(child: _buildRepliesBody(context)),
+          _buildComposer(context, isSignedIn),
         ],
       ),
     );
   }
 
-  Widget _buildRepliesBody(BuildContext context, bool isArabic) {
+  Widget _buildRepliesBody(BuildContext context) {
     if (_loadingInitial) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -363,12 +345,12 @@ class _AnimeWitcherRepliesScreenState
             children: [
               const Icon(Icons.cloud_off_rounded, size: 40),
               const SizedBox(height: 10),
-              Text(isArabic ? 'تعذر تحميل الردود.' : 'Could not load replies.'),
+              Text('تعذر تحميل الردود.'),
               const SizedBox(height: 10),
               FilledButton.tonalIcon(
                 onPressed: _loadInitial,
                 icon: const Icon(Icons.refresh_rounded),
-                label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+                label: Text('إعادة المحاولة'),
               ),
             ],
           ),
@@ -384,11 +366,11 @@ class _AnimeWitcherRepliesScreenState
           children: [
             SizedBox(height: MediaQuery.sizeOf(context).height * 0.24),
             Text(
-              isArabic ? 'لا توجد ردود بعد.' : 'No replies yet.',
+              'لا توجد ردود بعد.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ],
         ),
@@ -401,7 +383,10 @@ class _AnimeWitcherRepliesScreenState
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.fromLTRB(
-          12, appPageHeaderContentTopInset(context) + 12, 12, 24,
+          12,
+          appPageHeaderContentTopInset(context) + 12,
+          12,
+          24,
         ),
         itemCount: _replies.length + (_hasMore || _loadingMore ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -418,17 +403,13 @@ class _AnimeWitcherRepliesScreenState
               ),
             );
           }
-          return _buildReplyCard(context, _replies[index], isArabic);
+          return _buildReplyCard(context, _replies[index]);
         },
       ),
     );
   }
 
-  Widget _buildReplyCard(
-    BuildContext context,
-    AnimeWitcherComment reply,
-    bool isArabic,
-  ) {
+  Widget _buildReplyCard(BuildContext context, AnimeWitcherComment reply) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final photo = reply.userPhotoUrl?.trim() ?? '';
@@ -444,7 +425,7 @@ class _AnimeWitcherRepliesScreenState
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Directionality(
-              textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+              textDirection: TextDirection.rtl,
               child: Row(
                 children: [
                   CircleAvatar(
@@ -452,7 +433,10 @@ class _AnimeWitcherRepliesScreenState
                     backgroundColor: colors.surfaceContainerHighest,
                     backgroundImage: avatarImage(context, photo, radius: 20),
                     child: photo.isEmpty
-                        ? Icon(Icons.person_rounded, color: colors.onSurfaceVariant)
+                        ? Icon(
+                            Icons.person_rounded,
+                            color: colors.onSurfaceVariant,
+                          )
                         : null,
                   ),
                   const SizedBox(width: 10),
@@ -470,7 +454,7 @@ class _AnimeWitcherRepliesScreenState
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          _replyTimeAgo(reply.date, isArabic),
+                          _replyTimeAgo(reply.date),
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: colors.onSurfaceVariant,
                           ),
@@ -483,7 +467,7 @@ class _AnimeWitcherRepliesScreenState
             ),
             const SizedBox(height: 10),
             Directionality(
-              textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+              textDirection: TextDirection.rtl,
               child: Text(
                 reply.text,
                 textAlign: TextAlign.start,
@@ -492,12 +476,12 @@ class _AnimeWitcherRepliesScreenState
             ),
             const SizedBox(height: 8),
             Directionality(
-              textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+              textDirection: TextDirection.rtl,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   Tooltip(
-                    message: isArabic ? 'رد' : 'Reply',
+                    message: 'رد',
                     child: InkWell(
                       key: ValueKey<String>('reply-mention-${reply.path}'),
                       onTap: () => _mentionReply(reply),
@@ -520,7 +504,10 @@ class _AnimeWitcherRepliesScreenState
                     onTap: pending ? null : () => _toggleLike(reply),
                     borderRadius: BorderRadius.circular(20),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 5,
+                      ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -560,11 +547,7 @@ class _AnimeWitcherRepliesScreenState
     );
   }
 
-  Widget _buildComposer(
-    BuildContext context,
-    bool isArabic,
-    bool isSignedIn,
-  ) {
+  Widget _buildComposer(BuildContext context, bool isSignedIn) {
     final colors = Theme.of(context).colorScheme;
     if (widget.parentComment.repliesClosed) {
       return SafeArea(
@@ -574,16 +557,15 @@ class _AnimeWitcherRepliesScreenState
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: colors.surface,
-            border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+            border: Border(
+              top: BorderSide(color: Theme.of(context).dividerColor),
+            ),
           ),
           child: Text(
-            isArabic
-                ? 'تم إيقاف الردود على هذا التعليق.'
-                : 'Replies are disabled for this comment.',
+            'تم إيقاف الردود على هذا التعليق.',
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: colors.onSurfaceVariant,
-                ),
+            style: Theme.of(context).textTheme.bodyMedium
+                ?.copyWith(color: colors.onSurfaceVariant),
           ),
         ),
       );
@@ -595,7 +577,9 @@ class _AnimeWitcherRepliesScreenState
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
         decoration: BoxDecoration(
           color: colors.surface,
-          border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+          border: Border(
+            top: BorderSide(color: Theme.of(context).dividerColor),
+          ),
         ),
         child: isSignedIn
             ? Row(
@@ -608,10 +592,9 @@ class _AnimeWitcherRepliesScreenState
                       minLines: 1,
                       maxLines: 4,
                       maxLength: 500,
-                      textDirection:
-                          isArabic ? TextDirection.rtl : TextDirection.ltr,
+                      textDirection: TextDirection.rtl,
                       decoration: InputDecoration(
-                        hintText: isArabic ? 'اكتب رداً...' : 'Write a reply...',
+                        hintText: 'اكتب رداً...',
                         counterText: '',
                         filled: true,
                         fillColor: colors.surfaceContainerLow,
@@ -635,7 +618,7 @@ class _AnimeWitcherRepliesScreenState
                   ),
                   const SizedBox(width: 8),
                   IconButton.filled(
-                    tooltip: isArabic ? 'إرسال' : 'Send',
+                    tooltip: 'إرسال',
                     onPressed: _publishing ? null : _publishReply,
                     icon: _publishing
                         ? const SizedBox(
@@ -660,13 +643,10 @@ class _AnimeWitcherRepliesScreenState
                     const SizedBox(width: 8),
                     Flexible(
                       child: Text(
-                        isArabic
-                            ? 'سجّل الدخول إلى حساب AnimeWitcher لإضافة رد.'
-                            : 'Sign in to your AnimeWitcher account to reply.',
+                        'سجّل الدخول إلى حساب AnimeWitcher لإضافة رد.',
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: colors.onSurfaceVariant,
-                            ),
+                        style: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(color: colors.onSurfaceVariant),
                       ),
                     ),
                   ],
@@ -677,53 +657,41 @@ class _AnimeWitcherRepliesScreenState
   }
 }
 
-String _replyErrorText(Object error, bool isArabic) {
+String _replyErrorText(Object error) {
   if (error is AnimeWitcherAccountException) {
     return switch (error.code) {
-      'not-signed-in' => isArabic ? 'يجب تسجيل الدخول' : 'Sign in first.',
-      'comment-empty' =>
-        isArabic ? 'يرجى إدخال نص.' : 'Enter some text first.',
-      'comment-too-long' => isArabic
-          ? 'الحد الأعلى للنص 500 حرف.'
-          : 'The maximum length is 500 characters.',
-      'comment-banned' => isArabic
-          ? 'تم حظرك من التعليق.'
-          : 'This account is blocked from commenting.',
-      'comment-account-too-new' => isArabic
-          ? 'يجب أن يمر على إنشاء حسابك 7 أيام قبل أن تتمكن من كتابة الردود.'
-          : 'Your account must be at least 7 days old before replying.',
-      'comment-cooldown' => isArabic
-          ? 'انتظر قليلاً حتى يمكنك الرد مرة أخرى.'
-          : 'Wait a moment before replying again.',
-      'replies-closed' => isArabic
-          ? 'تم إيقاف الردود على هذا التعليق.'
-          : 'Replies are disabled for this comment.',
+      'not-signed-in' => 'يجب تسجيل الدخول',
+      'comment-empty' => 'يرجى إدخال نص.',
+      'comment-too-long' => 'الحد الأعلى للنص 500 حرف.',
+      'comment-banned' => 'تم حظرك من التعليق.',
+      'comment-account-too-new' =>
+        'يجب أن يمر على إنشاء حسابك 7 أيام قبل أن تتمكن من كتابة الردود.',
+      'comment-cooldown' => 'انتظر قليلاً حتى يمكنك الرد مرة أخرى.',
+      'replies-closed' => 'تم إيقاف الردود على هذا التعليق.',
       _ => error.message,
     };
   }
-  return isArabic ? 'حدث خطأ. حاول مرة أخرى.' : 'Something went wrong. Try again.';
+  return 'حدث خطأ. حاول مرة أخرى.';
 }
 
-String _replyTimeAgo(DateTime? date, bool isArabic) {
+String _replyTimeAgo(DateTime? date) {
   if (date == null) return '';
   final raw = DateTime.now().difference(date);
   final elapsed = raw.isNegative ? Duration.zero : raw;
-  if (elapsed.inMinutes < 1) return isArabic ? 'منذ لحظات' : 'just now';
+  if (elapsed.inMinutes < 1) return 'منذ لحظات';
   if (elapsed.inMinutes < 60) {
     final value = elapsed.inMinutes;
-    return isArabic ? 'منذ $value دقيقة' : '$value minutes ago';
+    return 'منذ $value دقيقة';
   }
   if (elapsed.inHours < 24) {
     final value = elapsed.inHours;
-    return isArabic ? 'منذ $value ساعة' : '$value hours ago';
+    return 'منذ $value ساعة';
   }
   if (elapsed.inDays < 30) {
     final value = elapsed.inDays;
-    return isArabic ? 'منذ $value يوم' : '$value days ago';
+    return 'منذ $value يوم';
   }
   final local = date.toLocal();
   String two(int value) => value.toString().padLeft(2, '0');
   return '${two(local.day)}/${two(local.month)}/${local.year}';
 }
-
-

@@ -101,9 +101,6 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     super.dispose();
   }
 
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   AnimeWitcherNativeProvider? _resolveProvider() {
     final active = ref.read(activeProviderProvider);
     if (active is AnimeWitcherNativeProvider) return active;
@@ -315,13 +312,11 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     );
   }
 
-  String _catalogErrorMessage(Object error, bool isArabic) {
+  String _catalogErrorMessage(Object error) {
     if (error is AnimeWitcherSearchDisabledException) {
-      return error.message.isEmpty
-          ? (isArabic ? 'لا يوجد بيانات' : 'No data')
-          : error.message;
+      return error.message.isEmpty ? 'لا يوجد بيانات' : error.message;
     }
-    return isArabic ? 'تعذر تحميل الشخصيات' : 'Could not load characters';
+    return 'تعذر تحميل الشخصيات';
   }
 
   @override
@@ -330,13 +325,11 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
       if (previous == next) return;
       unawaited(_loadFavorites(reset: true));
     });
-    final isArabic = _isArabic(context);
+
     if (widget.favoritesOnly && widget.embedded) {
-      return _buildFavoritesTab(isArabic);
+      return _buildFavoritesTab();
     }
-    final title = widget.favoritesOnly
-        ? (isArabic ? 'الشخصيات المفضلة' : 'Favorite characters')
-        : (isArabic ? 'الشخصيات' : 'Characters');
+    final title = widget.favoritesOnly ? 'الشخصيات المفضلة' : 'الشخصيات';
     final embedded = MorePaneScope.of(context);
     final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
@@ -349,76 +342,69 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
       body: Padding(
         padding: EdgeInsets.only(top: headerTop),
         child: widget.favoritesOnly
-          ? _buildFavoritesTab(isArabic)
-          : Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                  child: _CharacterSearchBar(
-                    controller: _searchController,
-                    focusNode: _searchFocusNode,
-                    searching: _searching,
-                    hintText: isArabic
-                        ? 'من الذي ترغب بالبحث عنه؟'
-                        : 'Who do you want to search for?',
-                    onChanged: _onSearchChanged,
-                    onSubmitted: (value) {
-                      _searchDebounceTimer?.cancel();
-                      unawaited(_applySearch(value));
-                    },
-                    onClear: () {
-                      _searchController.clear();
-                      _searchDebounceTimer?.cancel();
-                      unawaited(_applySearch(''));
-                      _searchFocusNode.requestFocus();
-                    },
+            ? _buildFavoritesTab()
+            : Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                    child: _CharacterSearchBar(
+                      controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      searching: _searching,
+                      hintText: 'من الذي ترغب بالبحث عنه؟',
+                      onChanged: _onSearchChanged,
+                      onSubmitted: (value) {
+                        _searchDebounceTimer?.cancel();
+                        unawaited(_applySearch(value));
+                      },
+                      onClear: () {
+                        _searchController.clear();
+                        _searchDebounceTimer?.cancel();
+                        unawaited(_applySearch(''));
+                        _searchFocusNode.requestFocus();
+                      },
+                    ),
                   ),
-                ),
-                FilterStyleTabBar(
-                  controller: _tabController,
-                  isScrollable: false,
-                  tabs: [
-                    FilterStyleTab(
-                      label: isArabic ? 'الشخصيات' : 'Characters',
-                      icon: Icons.groups_rounded,
-                    ),
-                    FilterStyleTab(
-                      label: isArabic ? 'المفضلة' : 'Favorites',
-                      icon: Icons.favorite_rounded,
-                    ),
-                  ],
-                ),
-                Expanded(
-                  child: TabBarView(
+                  FilterStyleTabBar(
                     controller: _tabController,
-                    children: [
-                      _buildCatalogTab(isArabic),
-                      _buildFavoritesTab(isArabic),
+                    isScrollable: false,
+                    tabs: [
+                      FilterStyleTab(
+                        label: 'الشخصيات',
+                        icon: Icons.groups_rounded,
+                      ),
+                      FilterStyleTab(
+                        label: 'المفضلة',
+                        icon: Icons.favorite_rounded,
+                      ),
                     ],
                   ),
-                ),
-              ],
-            ),
+                  Expanded(
+                    child: TabBarView(
+                      controller: _tabController,
+                      children: [_buildCatalogTab(), _buildFavoritesTab()],
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }
 
-  Widget _buildCatalogTab(bool isArabic) {
+  Widget _buildCatalogTab() {
     if (_catalog.isEmpty && _catalogLoading) {
       return const AnimeCatalogShimmer(characterCaptionSpace: true);
     }
     if (_catalog.isEmpty && _catalogError != null) {
       return _CharactersStatus(
-        message: _catalogErrorMessage(_catalogError!, isArabic),
+        message: _catalogErrorMessage(_catalogError!),
         icon: Icons.cloud_off_rounded,
         onRetry: _refreshVisible,
       );
     }
     if (_catalog.isEmpty) {
       return _CharactersStatus(
-        message: _activeQuery.isEmpty
-            ? (isArabic ? 'لا يوجد بيانات' : 'No data')
-            : (isArabic ? 'لا توجد نتائج' : 'No results'),
+        message: _activeQuery.isEmpty ? 'لا يوجد بيانات' : 'لا توجد نتائج',
         icon: _activeQuery.isEmpty
             ? Icons.person_off_rounded
             : Icons.search_off_rounded,
@@ -473,7 +459,7 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     );
   }
 
-  Widget _buildFavoritesTab(bool isArabic) {
+  Widget _buildFavoritesTab() {
     final signedIn =
         ref
             .watch(animeWitcherAccountControllerProvider)
@@ -483,9 +469,9 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
         ref.read(animeWitcherAccountServiceProvider).isSignedIn;
     if (!signedIn) {
       return _CharactersStatus(
-        message: isArabic ? 'يجب تسجيل الدخول' : 'Sign in first',
+        message: 'يجب تسجيل الدخول',
         icon: Icons.lock_outline_rounded,
-        actionLabel: isArabic ? 'تسجيل الدخول' : 'Sign in',
+        actionLabel: 'تسجيل الدخول',
         onRetry: () async {
           await Navigator.of(context, rootNavigator: true).push(
             MaterialPageRoute<void>(
@@ -501,18 +487,14 @@ class _CharactersScreenState extends ConsumerState<CharactersScreen>
     }
     if (_favorites.isEmpty && _favoritesError != null) {
       return _CharactersStatus(
-        message: isArabic
-            ? 'تعذر تحميل الشخصيات المفضلة'
-            : 'Could not load favorite characters',
+        message: 'تعذر تحميل الشخصيات المفضلة',
         icon: Icons.cloud_off_rounded,
         onRetry: () => _loadFavorites(reset: true),
       );
     }
     if (_favorites.isEmpty) {
       return _CharactersStatus(
-        message: isArabic
-            ? 'لا توجد شخصيات في المفضلة'
-            : 'No favorite characters',
+        message: 'لا توجد شخصيات في المفضلة',
         icon: Icons.favorite_border_rounded,
       );
     }

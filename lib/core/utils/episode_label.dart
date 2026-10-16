@@ -22,8 +22,9 @@ String? rawEpisodeNumberForDisplay(Object? value) {
 bool isGenericEpisodeTitle(String? value) {
   final title = _normalizeEpisodeLabel(value ?? '');
   if (title.isEmpty) return true;
-  return RegExp(r'^(?:ال)?حلق[ةه]\s*\d+(?:[.,٫]\d+)?(?:\s+(?:والأخيرة|والاخيرة))?$')
-          .hasMatch(title) ||
+  return RegExp(
+        r'^(?:ال)?حلق[ةه]\s*\d+(?:[.,٫]\d+)?(?:\s+(?:والأخيرة|والاخيرة))?$',
+      ).hasMatch(title) ||
       RegExp(
         r'^(?:episode|ep\.?)\s*\d+(?:[.,٫]\d+)?(?:\s+(?:final|last))?$',
         caseSensitive: false,
@@ -83,15 +84,8 @@ String realEpisodeTitle(String? title) {
 }
 
 /// Primary episode name line: "حلقة 12" or "حلقة 12 والأخيرة".
-String formatEpisodeNumberLabel({
-  required int episode,
-  required bool isArabic,
-  bool isFinal = false,
-}) {
-  if (isArabic) {
-    return isFinal ? 'حلقة $episode والأخيرة' : 'حلقة $episode';
-  }
-  return isFinal ? 'Episode $episode (Final)' : 'Episode $episode';
+String formatEpisodeNumberLabel({required int episode, bool isFinal = false}) {
+  return isFinal ? 'حلقة $episode والأخيرة' : 'حلقة $episode';
 }
 
 /// How an episode is named, in the two lines the UI shows.
@@ -123,7 +117,6 @@ class EpisodeLabel {
 /// A number is turned into "حلقة N" only when the server sent no name.
 EpisodeLabel resolveEpisodeLabel({
   required int episode,
-  required bool isArabic,
   String? title,
   String? serverName,
   bool isFinal = false,
@@ -141,7 +134,6 @@ EpisodeLabel resolveEpisodeLabel({
   return EpisodeLabel(
     primary: _primaryLine(
       episode: episode,
-      isArabic: isArabic,
       catalogLabel: catalogLabel,
       isFinal:
           isFinal ||
@@ -154,17 +146,12 @@ EpisodeLabel resolveEpisodeLabel({
 
 String _primaryLine({
   required int episode,
-  required bool isArabic,
   required String catalogLabel,
   required bool isFinal,
 }) {
   if (catalogLabel.isNotEmpty) return catalogLabel;
   if (episode <= 0) return '';
-  return formatEpisodeNumberLabel(
-    episode: episode,
-    isArabic: isArabic,
-    isFinal: isFinal,
-  );
+  return formatEpisodeNumberLabel(episode: episode, isFinal: isFinal);
 }
 
 /// Latest-episodes poster badge: the server episode name, unchanged.
@@ -178,13 +165,11 @@ String? latestEpisodesPosterBadge(String? episodeName) {
 /// Primary line only — episode rows, poster badges and player headers.
 String formatEpisodePrimaryLabel({
   required int episode,
-  required bool isArabic,
   bool isFinal = false,
   String? serverName,
 }) {
   return resolveEpisodeLabel(
     episode: episode,
-    isArabic: isArabic,
     serverName: serverName,
     isFinal: isFinal,
   ).primary;
@@ -199,14 +184,12 @@ String? playerHeaderSubtitle(String? episodeName) {
 /// Full display name: primary line plus the creative title when there is one.
 String formatEpisodeLabel({
   required int episode,
-  required bool isArabic,
   String? title,
   bool isFinal = false,
   String? serverName,
 }) {
   return resolveEpisodeLabel(
     episode: episode,
-    isArabic: isArabic,
     title: title,
     serverName: serverName,
     isFinal: isFinal,
@@ -214,7 +197,9 @@ String formatEpisodeLabel({
 }
 
 /// Characters that break or get rewritten on common mobile filesystems.
-final RegExp _illegalDownloadFileChars = RegExp(r'[\x00-\x1f\x7f-\x9f\\/:*?"<>|]');
+final RegExp _illegalDownloadFileChars = RegExp(
+  r'[\x00-\x1f\x7f-\x9f\\/:*?"<>|]',
+);
 
 /// Compose common Arabic NFD sequences (e.g. ا + ٔ → أ) so filenames match
 /// across iOS (often NFD) and Android/Linux (often NFC).
@@ -304,7 +289,6 @@ String formatEpisodeFileName({
 }) {
   final base = formatEpisodeLabel(
     episode: episode,
-    isArabic: true,
     title: title,
     isFinal: isFinal,
     serverName: serverName,
@@ -321,9 +305,14 @@ String formatEpisodeDownloadFileName({
   bool isFinal = false,
   String? serverName,
 }) {
-  final stem = sanitizeDownloadFileName(formatEpisodeFileName(
-    episode: episode, title: title, isFinal: isFinal, serverName: serverName,
-  ));
+  final stem = sanitizeDownloadFileName(
+    formatEpisodeFileName(
+      episode: episode,
+      title: title,
+      isFinal: isFinal,
+      serverName: serverName,
+    ),
+  );
   final qualityLabel = formatDownloadQualityLabel(quality);
   return stem.isEmpty || qualityLabel == null ? stem : '$stem ($qualityLabel)';
 }
@@ -342,7 +331,6 @@ bool usesEpisodeDownloadFileName({
   if (episode > 0) return true;
   return !resolveEpisodeLabel(
     episode: 0,
-    isArabic: true,
     title: title,
     serverName: serverName,
   ).isEmpty;
@@ -364,15 +352,24 @@ bool isDownloadedEpisodeFileName(
       ? fileName.substring(0, fileName.lastIndexOf('.'))
       : fileName;
   final label = formatEpisodeDownloadFileName(
-    episode: episode, title: title, isFinal: isFinal, serverName: serverName,
+    episode: episode,
+    title: title,
+    isFinal: isFinal,
+    serverName: serverName,
   );
   if (label.isEmpty) return false;
   final normalizedLabel = label.toLowerCase();
-  if (sanitizeDownloadFileName(rawStem).toLowerCase() == normalizedLabel) return true;
-  final quality = RegExp(r' \(\d{3,4}p\)$', caseSensitive: false).firstMatch(rawStem);
+  if (sanitizeDownloadFileName(rawStem).toLowerCase() == normalizedLabel)
+    return true;
+  final quality = RegExp(
+    r' \(\d{3,4}p\)$',
+    caseSensitive: false,
+  ).firstMatch(rawStem);
   // Old legal files can have an unbounded base; strip quality before hashing it.
   return quality != null &&
-      sanitizeDownloadFileName(rawStem.substring(0, quality.start)).toLowerCase() == normalizedLabel;
+      sanitizeDownloadFileName(rawStem.substring(0, quality.start))
+              .toLowerCase() ==
+          normalizedLabel;
 }
 
 /// Original display title persisted in history, independently of file names.
@@ -386,11 +383,7 @@ String episodeTitleForStorage({
   if (serverName?.trim().isNotEmpty ?? false) return serverName!;
   // Legacy callers may only know the final marker, with no original text.
   if (isFinal) {
-    return resolveEpisodeLabel(
-      episode: episode,
-      isArabic: true,
-      isFinal: true,
-    ).primary;
+    return resolveEpisodeLabel(episode: episode, isFinal: true).primary;
   }
   return '';
 }
@@ -401,7 +394,6 @@ String episodeTitleForStorage({
 /// previously stored in [episodeTitle], otherwise build "حلقة N".
 String continueWatchingPrimaryLabel({
   required int? episode,
-  required bool isArabic,
   String? episodeTitle,
   String? episodeServerName,
   String? episodeServerNumber,
@@ -424,7 +416,6 @@ String continueWatchingPrimaryLabel({
   if (catalogLabel.isNotEmpty) {
     return _primaryLine(
       episode: number,
-      isArabic: isArabic,
       catalogLabel: catalogLabel,
       isFinal: hasFinalEpisodeSuffix(catalogLabel),
     );
@@ -433,7 +424,7 @@ String continueWatchingPrimaryLabel({
     return episodeServerNumber!;
   }
   if (number > 0) {
-    return formatEpisodeNumberLabel(episode: number, isArabic: isArabic);
+    return formatEpisodeNumberLabel(episode: number);
   }
   return '';
 }
