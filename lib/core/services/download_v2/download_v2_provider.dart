@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -74,6 +75,10 @@ final downloadDiagnosticsFileV2Provider = Provider<FileDownloadDiagnosticsV2>((
   );
   return FileDownloadDiagnosticsV2(
     enabled: settings.getDownloadDiagnosticLog,
+    buildIdentityProvider: () async {
+      final info = await PackageInfo.fromPlatform();
+      return (version: info.version, buildNumber: info.buildNumber);
+    },
     directoryProvider: () async {
       final documents = await getApplicationDocumentsDirectory();
       return Directory(p.join(documents.path, 'log'));

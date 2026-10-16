@@ -12,6 +12,7 @@ import '../download_concurrency.dart';
 import '../download_continued_processing_service.dart';
 import '../download_http_validator.dart';
 import '../download_parallel.dart';
+import '../download_source_verification.dart';
 import '../persistent_parallel_download.dart';
 import '../../utils/local_file_io.dart';
 import '../../utils/download_resume.dart';
@@ -1390,111 +1391,174 @@ Future<bool> promoteCompletedDownloadFileV2(
 }
 
 /// Verifies saved range bytes against the current authorized identity response.
+/// False requires contradictory source evidence; an unavailable probe throws.
 Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
   DownloadTask task,
   File file,
   int bytes,
   int resourceSize, {
   Future<void>? cancelled,
+  Duration verificationTimeout = const Duration(seconds: 20),
 }) async {
   const rejected = (matches: false, validator: null);
+  const invalidResponse = DownloadSourceVerificationException(
+    reason: DownloadSourceVerificationFailure.invalidResponse,
+  );
+  const localFileFailure = DownloadSourceVerificationException(
+    reason: DownloadSourceVerificationFailure.localFile,
+  );
   final range = _diagnosticRangeBoundsV2(task);
   if (range == null ||
       bytes <= 0 ||
       resourceSize <= 0 ||
       range.$2 >= resourceSize ||
       bytes > range.$2 - range.$1 + 1) {
-    return rejected;
+    throw localFileFailure;
   }
   final client = HttpClient()..autoUncompress = false;
   var closed = false;
+  DownloadSourceVerificationException? interruption;
+  void interrupt(DownloadSourceVerificationFailure reason) {
+    if (closed || interruption != null) return;
+    interruption = DownloadSourceVerificationException(reason: reason);
+    // Force-close wakes pending connection, header, and body reads with errors.
+    client.close(force: true);
+  }
+
+  void checkInterrupted() {
+    final failure = interruption;
+    if (failure != null) throw failure;
+  }
+
+  final deadline = Timer(
+    verificationTimeout,
+    () => interrupt(DownloadSourceVerificationFailure.timeout),
+  );
   unawaited(
-    cancelled?.then((_) {
-      if (!closed) client.close(force: true);
-    }),
+    cancelled?.then<void>(
+      (_) => interrupt(DownloadSourceVerificationFailure.cancelled),
+      onError: (Object _, StackTrace _) =>
+          interrupt(DownloadSourceVerificationFailure.cancelled),
+    ),
   );
   RandomAccessFile? saved;
   try {
-    return await (() async {
-      if (await FileSystemEntity.type(file.path, followLinks: false) !=
-              FileSystemEntityType.file ||
-          await file.length() < bytes) {
-        return rejected;
+    if (await FileSystemEntity.type(file.path, followLinks: false) !=
+            FileSystemEntityType.file ||
+        await file.length() < bytes) {
+      checkInterrupted();
+      throw localFileFailure;
+    }
+    checkInterrupted();
+    saved = await file.open();
+    checkInterrupted();
+    final request = await client.getUrl(Uri.parse(task.url));
+    checkInterrupted();
+    for (final header in task.headers.entries) {
+      if (!{'range', 'accept-encoding'}.contains(header.key.toLowerCase())) {
+        request.headers.set(header.key, header.value);
       }
-      saved = await file.open();
-      final request = await client.getUrl(Uri.parse(task.url));
-      for (final header in task.headers.entries) {
-        if (!{'range', 'accept-encoding'}.contains(header.key.toLowerCase())) {
-          request.headers.set(header.key, header.value);
-        }
-      }
-      final from = range.$1;
-      final to = from + bytes - 1;
-      request.headers.set(HttpHeaders.rangeHeader, 'bytes=$from-$to');
-      request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
-      final response = await request.close();
-      final encoding = response.headers.value(
-        HttpHeaders.contentEncodingHeader,
+    }
+    final from = range.$1;
+    final to = from + bytes - 1;
+    request.headers.set(HttpHeaders.rangeHeader, 'bytes=$from-$to');
+    request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+    final response = await request.close();
+    checkInterrupted();
+    if (response.statusCode != HttpStatus.partialContent &&
+        response.statusCode != HttpStatus.ok) {
+      throw DownloadSourceVerificationException(
+        reason: DownloadSourceVerificationFailure.http,
+        httpStatus: response.statusCode,
       );
-      if (encoding != null && encoding.toLowerCase().trim() != 'identity')
+    }
+    final encoding = response.headers.value(HttpHeaders.contentEncodingHeader);
+    if (encoding != null && encoding.toLowerCase().trim() != 'identity') {
+      throw invalidResponse;
+    }
+    if (response.contentLength >= 0 && response.contentLength != bytes) {
+      throw invalidResponse;
+    }
+    if (response.statusCode == HttpStatus.partialContent) {
+      final match = RegExp(
+        r'^bytes\s+(\d+)\s*-\s*(\d+)\s*/\s*(\d+)$',
+        caseSensitive: false,
+      ).firstMatch(
+        response.headers.value(HttpHeaders.contentRangeHeader)?.trim() ?? '',
+      );
+      if (match == null) throw invalidResponse;
+      final actualFrom = int.tryParse(match[1]!);
+      final actualTo = int.tryParse(match[2]!);
+      final actualSize = int.tryParse(match[3]!);
+      if (actualFrom == null || actualTo == null || actualSize == null) {
+        throw invalidResponse;
+      }
+      if (actualFrom != from || actualTo != to || actualSize != resourceSize) {
         return rejected;
-      if (response.contentLength >= 0 && response.contentLength != bytes)
-        return rejected;
-      if (response.statusCode == HttpStatus.partialContent) {
-        final match =
-            RegExp(
-              r'^bytes\s+(\d+)\s*-\s*(\d+)\s*/\s*(\d+)$',
-              caseSensitive: false,
-            ).firstMatch(
-              response.headers.value(HttpHeaders.contentRangeHeader)?.trim() ??
-                  '',
-            );
-        if (match == null ||
-            int.tryParse(match[1]!) != from ||
-            int.tryParse(match[2]!) != to ||
-            int.tryParse(match[3]!) != resourceSize) {
-          return rejected;
+      }
+    } else if (from != 0 ||
+        to != resourceSize - 1 ||
+        bytes != resourceSize ||
+        response.headers.value(HttpHeaders.contentRangeHeader) != null) {
+      throw invalidResponse;
+    }
+    final responseHeaders = <String, String>{};
+    response.headers.forEach((name, values) {
+      responseHeaders[name] = values.join(', ');
+    });
+    final validator = downloadIfRangeValidator(responseHeaders);
+    for (final header in task.headers.entries) {
+      if (header.key.toLowerCase() != 'if-range') continue;
+      if (validator == null) throw invalidResponse;
+      if (header.value != validator) return rejected;
+    }
+    var received = 0;
+    await for (final chunk in response) {
+      checkInterrupted();
+      if (received + chunk.length > bytes) throw invalidResponse;
+      for (var offset = 0; offset < chunk.length;) {
+        final end = offset + 65536 < chunk.length
+            ? offset + 65536
+            : chunk.length;
+        final local = await saved.read(end - offset);
+        checkInterrupted();
+        if (local.length != end - offset) throw localFileFailure;
+        for (var index = 0; index < local.length; index++) {
+          if (local[index] != chunk[offset + index]) return rejected;
         }
-      } else if (response.statusCode != HttpStatus.ok ||
-          from != 0 ||
-          to != resourceSize - 1 ||
-          bytes != resourceSize ||
-          response.headers.value(HttpHeaders.contentRangeHeader) != null) {
-        return rejected;
+        offset = end;
       }
-      final responseHeaders = <String, String>{};
-      response.headers.forEach((name, values) {
-        responseHeaders[name] = values.join(', ');
-      });
-      final validator = downloadIfRangeValidator(responseHeaders);
-      for (final header in task.headers.entries) {
-        if (header.key.toLowerCase() == 'if-range' && header.value != validator)
-          return rejected;
-      }
-      var received = 0;
-      await for (final chunk in response) {
-        if (received + chunk.length > bytes) return rejected;
-        for (var offset = 0; offset < chunk.length;) {
-          final end = offset + 65536 < chunk.length
-              ? offset + 65536
-              : chunk.length;
-          final local = await saved!.read(end - offset);
-          if (local.length != end - offset) return rejected;
-          for (var index = 0; index < local.length; index++) {
-            if (local[index] != chunk[offset + index]) return rejected;
-          }
-          offset = end;
-        }
-        received += chunk.length;
-      }
-      return (matches: received == bytes, validator: validator);
-    })().timeout(const Duration(seconds: 20));
-  } catch (_) {
-    return rejected;
+      received += chunk.length;
+    }
+    checkInterrupted();
+    if (received != bytes) throw invalidResponse;
+    return (matches: true, validator: validator);
+  } catch (error) {
+    checkInterrupted();
+    if (error is DownloadSourceVerificationException) rethrow;
+    if (error is FileSystemException) throw localFileFailure;
+    if (error is TimeoutException) {
+      throw const DownloadSourceVerificationException(
+        reason: DownloadSourceVerificationFailure.timeout,
+      );
+    }
+    if (error is SocketException ||
+        error is HttpException ||
+        error is TlsException) {
+      throw const DownloadSourceVerificationException(
+        reason: DownloadSourceVerificationFailure.network,
+      );
+    }
+    rethrow;
   } finally {
     closed = true;
+    deadline.cancel();
     client.close(force: true);
-    await saved?.close();
+    try {
+      await saved?.close();
+    } on FileSystemException {
+      if (interruption == null) throw localFileFailure;
+    }
   }
 }
 
