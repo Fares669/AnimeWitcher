@@ -2,12 +2,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
+import 'package:animewitcher/core/services/download_source_verification.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
-  final cases = <String, bool>{
+  final cases = <String, bool?>{
     'exact206': true,
     'formatted206': true,
     'prefix206': true,
@@ -17,11 +18,14 @@ void main() {
     'wrongTotal': false,
     'changedETag': false,
     'wrongBody': false,
-    'encoded': false,
-    'rangeIgnored': false,
-    'truncated': false,
-    'oversized': false,
-    'weakETag': false,
+    'encoded': null,
+    'rangeIgnored': null,
+    'truncated': null,
+    'oversized': null,
+    'weakETag': null,
+    'missingETag': null,
+    'missingContentRange': null,
+    'malformedContentRange': null,
     'lastModified': true,
   };
   for (final entry in cases.entries) {
@@ -61,10 +65,13 @@ void main() {
           request.response.statusCode = whole || name == 'rangeIgnored'
               ? HttpStatus.ok
               : HttpStatus.partialContent;
-          if (request.response.statusCode == HttpStatus.partialContent) {
+          if (request.response.statusCode == HttpStatus.partialContent &&
+              name != 'missingContentRange') {
             request.response.headers.set(
               HttpHeaders.contentRangeHeader,
-              name == 'formatted206'
+              name == 'malformedContentRange'
+                  ? 'not a range'
+                  : name == 'formatted206'
                   ? 'Bytes $from - $to / 8'
                   : 'bytes ${name == 'wrongStart' ? from + 1 : from}-${name == 'wrongEnd' ? to + 1 : to}/${name == 'wrongTotal' ? 9 : 8}',
             );
@@ -78,7 +85,7 @@ void main() {
               HttpHeaders.lastModifiedHeader,
               'Wed, 21 Oct 2015 07:28:00 GMT',
             );
-          } else {
+          } else if (name != 'missingETag') {
             request.response.headers.set(
               HttpHeaders.etagHeader,
               name == 'changedETag'
@@ -88,18 +95,20 @@ void main() {
                   : '"resource"',
             );
           }
-          if (name == 'encoded')
+          if (name == 'encoded') {
             request.response.headers.set(
               HttpHeaders.contentEncodingHeader,
               'gzip',
             );
+          }
           final body = [...original];
           if (name == 'wrongBody') body[body.length - 1] = 99;
           if (name == 'truncated') body.removeLast();
           if (name == 'oversized') body.add(99);
           // Chunked responses exercise streamed byte-count validation as well.
-          if (body.length == original.length)
+          if (body.length == original.length) {
             request.response.contentLength = body.length;
+          }
           request.response.add(body);
           await request.response.close();
           requestObserved.complete();
@@ -121,17 +130,24 @@ void main() {
                 : '"resource"',
           },
         );
-        final result = await verifySavedRangeSourceV2(
+        final verification = verifySavedRangeSourceV2(
           task,
           local,
           requestedBytes,
           8,
         );
+        final result = entry.value == null ? null : await verification;
+        if (entry.value == null) {
+          await expectLater(
+            verification,
+            throwsA(_failure('invalidResponse', retryable: true)),
+          );
+        }
         await requestObserved.future.timeout(const Duration(seconds: 5));
-        expect(result.matches, entry.value);
-        if (entry.value) {
+        if (entry.value != null) expect(result!.matches, entry.value);
+        if (entry.value == true) {
           expect(
-            result.validator,
+            result!.validator,
             name == 'lastModified'
                 ? 'Wed, 21 Oct 2015 07:28:00 GMT'
                 : '"resource"',
@@ -278,10 +294,13 @@ void main() {
       socket.add(original.take(1).toList());
       await socket.flush();
 
+      final failure = expectLater(
+        verification.timeout(const Duration(seconds: 2)),
+        throwsA(_failure('cancelled', retryable: false)),
+      );
       cancellation.complete();
-      final result = await verification.timeout(const Duration(seconds: 2));
+      await failure;
       await disconnected.future.timeout(const Duration(seconds: 2));
-      expect(result, (matches: false, validator: null));
       expect(await local.readAsBytes(), original);
     } finally {
       socket?.destroy();
@@ -291,6 +310,96 @@ void main() {
       await root.delete(recursive: true);
     }
   });
+
+  test('cancelling before response headers closes the peer promptly', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'aw-range-header-cancel-',
+    );
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final local = File(p.join(root.path, 'range.chunk'));
+    final original = [2, 3, 4, 5];
+    await local.writeAsBytes(original);
+    final requestReceived = Completer<HttpRequest>();
+    final disconnected = Completer<void>();
+    final cancellation = Completer<void>();
+    final subscription = server.listen(requestReceived.complete);
+    Socket? socket;
+    StreamSubscription<List<int>>? socketSubscription;
+    try {
+      final verification = verifySavedRangeSourceV2(
+        _task(server),
+        local,
+        4,
+        8,
+        cancelled: cancellation.future,
+      );
+      final failure = expectLater(
+        verification.timeout(const Duration(seconds: 2)),
+        throwsA(_failure('cancelled', retryable: false)),
+      );
+      final request = await requestReceived.future.timeout(
+        const Duration(seconds: 2),
+      );
+      socket = await request.response.detachSocket(writeHeaders: false);
+      socketSubscription = socket.listen(
+        (_) {},
+        onDone: () {
+          if (!disconnected.isCompleted) disconnected.complete();
+        },
+        onError: (Object _) {
+          if (!disconnected.isCompleted) disconnected.complete();
+        },
+      );
+      cancellation.complete();
+      await failure;
+      await disconnected.future.timeout(const Duration(seconds: 2));
+      expect(await local.readAsBytes(), original);
+    } finally {
+      socket?.destroy();
+      await socketSubscription?.cancel();
+      await subscription.cancel();
+      await server.close(force: true);
+      await root.delete(recursive: true);
+    }
+  });
+
+  test(
+    'an already cancelled probe sends no request and preserves the file',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'aw-range-pre-cancel-',
+      );
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final local = File(p.join(root.path, 'range.chunk'));
+      final original = [2, 3, 4, 5];
+      await local.writeAsBytes(original);
+      var requests = 0;
+      final subscription = server.listen((request) async {
+        requests++;
+        await request.response.close();
+      });
+      try {
+        for (var attempt = 0; attempt < 8; attempt++) {
+          await expectLater(
+            verifySavedRangeSourceV2(
+              _task(server),
+              local,
+              4,
+              8,
+              cancelled: Future<void>.value(),
+            ).timeout(const Duration(seconds: 2)),
+            throwsA(_failure('cancelled', retryable: false)),
+          );
+        }
+        expect(requests, 0);
+        expect(await local.readAsBytes(), original);
+      } finally {
+        await subscription.cancel();
+        await server.close(force: true);
+        await root.delete(recursive: true);
+      }
+    },
+  );
   test(
     'unavailable source parks saved bytes without authorizing reuse',
     () async {
@@ -307,12 +416,187 @@ void main() {
           filename: 'range.chunk',
           headers: {'Range': 'bytes=2-5'},
         );
-        final result = await verifySavedRangeSourceV2(task, local, 4, 8);
-        expect(result.matches, isFalse);
+        await expectLater(
+          verifySavedRangeSourceV2(task, local, 4, 8),
+          throwsA(_failure('network', retryable: true)),
+        );
         expect(await local.readAsBytes(), [2, 3, 4, 5]);
       } finally {
         await root.delete(recursive: true);
       }
     },
   );
+  for (final status in [408, 425, 429, 500, 503, 403, 404]) {
+    test(
+      'HTTP $status remains a typed failure despite a short encoded body',
+      () async {
+        final root = await Directory.systemTemp.createTemp('aw-range-http-');
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final local = File(p.join(root.path, 'range.chunk'));
+        final original = [2, 3, 4, 5];
+        await local.writeAsBytes(original);
+        final subscription = server.listen((request) async {
+          request.response.statusCode = status;
+          request.response.contentLength = 1;
+          request.response.headers.set(
+            HttpHeaders.contentEncodingHeader,
+            'gzip',
+          );
+          request.response.add([9]);
+          await request.response.close();
+        });
+        try {
+          final task = _task(server);
+          await expectLater(
+            verifySavedRangeSourceV2(task, local, 4, 8),
+            throwsA(
+              _failure(
+                'http',
+                retryable: status != 403 && status != 404,
+              ).having((error) => error.httpStatus, 'HTTP status', status),
+            ),
+          );
+          expect(await local.readAsBytes(), original);
+        } finally {
+          await subscription.cancel();
+          await server.close(force: true);
+          await root.delete(recursive: true);
+        }
+      },
+    );
+  }
+
+  for (final localState in ['missing', 'short', 'directory']) {
+    test(
+      '$localState saved file is a local failure, not a source mismatch',
+      () async {
+        final root = await Directory.systemTemp.createTemp('aw-range-local-');
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final local = File(p.join(root.path, 'range.chunk'));
+        if (localState == 'short') await local.writeAsBytes([2, 3]);
+        if (localState == 'directory') await Directory(local.path).create();
+        try {
+          await expectLater(
+            verifySavedRangeSourceV2(_task(server), local, 4, 8),
+            throwsA(_failure('localFile', retryable: false)),
+          );
+          if (localState == 'missing') {
+            expect(await local.exists(), isFalse);
+          }
+          if (localState == 'short') {
+            expect(await local.readAsBytes(), [2, 3]);
+          }
+          if (localState == 'directory') {
+            expect(await Directory(local.path).exists(), isTrue);
+          }
+        } finally {
+          await server.close(force: true);
+          await root.delete(recursive: true);
+        }
+      },
+    );
+  }
+
+  test(
+    'truncated HTTP transport is a network failure, not a body mismatch',
+    () async {
+      final root = await Directory.systemTemp.createTemp('aw-range-truncated-');
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final local = File(p.join(root.path, 'range.chunk'));
+      final original = [2, 3, 4, 5];
+      await local.writeAsBytes(original);
+      final subscription = server.listen((request) async {
+        request.response.statusCode = HttpStatus.partialContent;
+        request.response.contentLength = original.length;
+        request.response.headers.set(
+          HttpHeaders.contentRangeHeader,
+          'bytes 2-5/8',
+        );
+        final socket = await request.response.detachSocket();
+        socket.add(original.take(2).toList());
+        await socket.flush();
+        await socket.close();
+      });
+      try {
+        await expectLater(
+          verifySavedRangeSourceV2(_task(server), local, 4, 8),
+          throwsA(_failure('network', retryable: true)),
+        );
+        expect(await local.readAsBytes(), original);
+      } finally {
+        await subscription.cancel();
+        await server.close(force: true);
+        await root.delete(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'verification deadline is a typed timeout and closes the peer',
+    () async {
+      final root = await Directory.systemTemp.createTemp('aw-range-timeout-');
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final local = File(p.join(root.path, 'range.chunk'));
+      final original = [2, 3, 4, 5];
+      await local.writeAsBytes(original);
+      final requestReceived = Completer<HttpRequest>();
+      final disconnected = Completer<void>();
+      final subscription = server.listen(requestReceived.complete);
+      Socket? socket;
+      StreamSubscription<List<int>>? socketSubscription;
+      try {
+        final verification = verifySavedRangeSourceV2(
+          _task(server),
+          local,
+          4,
+          8,
+          verificationTimeout: const Duration(seconds: 1),
+        );
+        final result = expectLater(
+          verification,
+          throwsA(_failure('timeout', retryable: true)),
+        );
+        final request = await requestReceived.future.timeout(
+          const Duration(seconds: 2),
+        );
+        socket = await request.response.detachSocket(writeHeaders: false);
+        socketSubscription = socket.listen(
+          (_) {},
+          onDone: () {
+            if (!disconnected.isCompleted) disconnected.complete();
+          },
+          onError: (Object _) {
+            if (!disconnected.isCompleted) disconnected.complete();
+          },
+        );
+        await result;
+        await disconnected.future.timeout(const Duration(seconds: 2));
+        expect(await local.readAsBytes(), original);
+      } finally {
+        socket?.destroy();
+        await socketSubscription?.cancel();
+        await subscription.cancel();
+        await server.close(force: true);
+        await root.delete(recursive: true);
+      }
+    },
+  );
 }
+
+TypeMatcher<DownloadSourceVerificationException> _failure(
+  String reason, {
+  required bool retryable,
+}) => isA<DownloadSourceVerificationException>()
+    .having(
+      (error) => error.reason.toString(),
+      'failure reason',
+      'DownloadSourceVerificationFailure.$reason',
+    )
+    .having((error) => error.retryable, 'retryable', retryable);
+
+DownloadTask _task(HttpServer server) => DownloadTask(
+  taskId: 'classified-resource-part',
+  url: 'http://${server.address.address}:${server.port}/resource',
+  filename: 'range.chunk',
+  headers: {'Range': 'bytes=2-5'},
+);

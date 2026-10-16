@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:animewitcher/core/services/persistent_parallel_download.dart';
+import 'package:animewitcher/core/services/download_source_verification.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -11,6 +12,11 @@ import '../../support/parallel_download_fixtures.dart';
 Future<bool> settlesSoon(Future<void> work) => Future.any([
   work.then((_) => true),
   Future<bool>.delayed(const Duration(milliseconds: 300), () => false),
+]);
+
+Future<bool> settlesSoonAfterGrace(Future<void> work) => Future.any([
+  work.then((_) => true),
+  Future<bool>.delayed(const Duration(milliseconds: 1600), () => false),
 ]);
 
 void main() {
@@ -412,6 +418,499 @@ void main() {
     },
   );
 
+  test(
+    'a validator pinned by another probe makes missing evidence retryable',
+    () async {
+      final fixture = await SavedRangesFixture.create(chunks: 3);
+      await fixture.files.last.delete();
+      final first = Completer<({bool matches, String? validator})>();
+      final second = Completer<({bool matches, String? validator})>();
+      final bothStarted = Completer<void>();
+      final firstAdopted = Completer<void>();
+      final retried = Completer<void>();
+      final complete = Completer<void>();
+      final native = Completer<DownloadTask>();
+      final pauses = <String>[];
+      var calls = 0;
+      final coordinator = fixture.coordinator(
+        sourceVerificationRetryDelay: const Duration(milliseconds: 30),
+        startPart: (task, _, _) async {
+          if (!native.isCompleted) native.complete(task);
+          return true;
+        },
+        pausePart: (task) async => pauses.add(task.taskId),
+        verifyPartSource: (task, _, _, _) async {
+          calls++;
+          if (calls == 2) bothStarted.complete();
+          if (calls <= 2) {
+            return task.taskId == fixture.parts.first.taskId
+                ? first.future
+                : second.future;
+          }
+          expect(task.headers['If-Range'], '"source"');
+          retried.complete();
+          return (matches: true, validator: '"source"');
+        },
+        saveRecord: (record) async {
+          if (record.taskId == fixture.parts.first.taskId &&
+              record.status == TaskStatus.complete &&
+              !firstAdopted.isCompleted) {
+            firstAdopted.complete();
+          }
+        },
+        onUpdate: (update) {
+          if (update is TaskStatusUpdate &&
+              update.status == TaskStatus.complete &&
+              !complete.isCompleted) {
+            complete.complete();
+          }
+        },
+      );
+      try {
+        await coordinator.start(fixture.parent, 30);
+        final sibling = await native.future.timeout(const Duration(seconds: 2));
+        coordinator.handleUpdate(TaskStatusUpdate(sibling, TaskStatus.running));
+        await bothStarted.future.timeout(const Duration(seconds: 2));
+        first.complete((matches: true, validator: '"source"'));
+        await firstAdopted.future.timeout(const Duration(seconds: 2));
+        second.complete((matches: true, validator: null));
+        await retried.future.timeout(const Duration(seconds: 2));
+        expect(pauses, isEmpty);
+        expect(coordinator.isActive(fixture.parent.taskId), isTrue);
+        await File(await sibling.filePath()).writeAsBytes(List.filled(10, 1));
+        coordinator.handleUpdate(
+          TaskStatusUpdate(sibling, TaskStatus.complete, null, null, {
+            'content-range': 'bytes 20-29/30',
+            'etag': '"source"',
+          }, 206),
+        );
+        await complete.future.timeout(const Duration(seconds: 2));
+        expect(
+          await File(await fixture.parent.filePath()).readAsBytes(),
+          List.filled(30, 1),
+        );
+      } finally {
+        if (!first.isCompleted) {
+          first.complete((matches: false, validator: null));
+        }
+        if (!second.isCompleted) {
+          second.complete((matches: false, validator: null));
+        }
+        await coordinator.dispose();
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'verification concurrency has a separate two-probe global ceiling',
+    () async {
+      final fixture = await SavedRangesFixture.create(chunks: 4);
+      final release = Completer<({bool matches, String? validator})>();
+      final twoStarted = Completer<void>();
+      var calls = 0;
+      final coordinator = fixture.coordinator(
+        verifyPartSource: (_, _, _, _) {
+          calls++;
+          if (calls == 2) twoStarted.complete();
+          return release.future;
+        },
+      );
+      try {
+        await coordinator.start(fixture.parent, 40);
+        await twoStarted.future.timeout(const Duration(seconds: 2));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(
+          calls,
+          2,
+          reason: 'verification must not consume every native connection slot',
+        );
+        expect(
+          await settlesSoon(coordinator.pause(fixture.parent).then((_) {})),
+          isTrue,
+        );
+        release.complete((matches: true, validator: null));
+        await coordinator.reconcile(() async => <String>{});
+        expect(
+          calls,
+          2,
+          reason: 'canceling queued probes must not launch them',
+        );
+      } finally {
+        if (!release.isCompleted) {
+          release.complete((matches: false, validator: null));
+        }
+        await coordinator.dispose();
+        await fixture.dispose();
+      }
+    },
+  );
+
+  for (final failure in [
+    const DownloadSourceVerificationException(
+      reason: DownloadSourceVerificationFailure.timeout,
+    ),
+    const DownloadSourceVerificationException(
+      reason: DownloadSourceVerificationFailure.network,
+    ),
+    const DownloadSourceVerificationException(
+      reason: DownloadSourceVerificationFailure.http,
+      httpStatus: 503,
+    ),
+    const DownloadSourceVerificationException(
+      reason: DownloadSourceVerificationFailure.invalidResponse,
+    ),
+  ]) {
+    test(
+      '${failure.reason.name} records a bounded retry without declaring source mismatch',
+      () async {
+        final fixture = await SavedRangesFixture.create();
+        final retry = Completer<Map<String, Object?>>();
+        final events = <Map<String, Object?>>[];
+        final coordinator = fixture.coordinator(
+          verifyPartSource: (_, _, _, _) async => throw failure,
+          diagnosticEvent: (event, fields) {
+            if (event == 'parallel.sourceVerificationSettled') {
+              events.add(fields);
+            }
+            if (event == 'parallel.sourceVerificationRetryScheduled' &&
+                !retry.isCompleted) {
+              retry.complete(fields);
+            }
+          },
+        );
+        try {
+          await coordinator.start(fixture.parent, 20);
+          final scheduled = await retry.future.timeout(
+            const Duration(seconds: 2),
+          );
+          expect(scheduled['reason'], failure.reason.name);
+          expect(scheduled['retryAttempt'], 2);
+          expect(scheduled['delayMs'], 2000);
+          expect(events.first['retryable'], isTrue);
+          expect(events.first['reason'], failure.reason.name);
+          if (failure.httpStatus != null) {
+            expect(events.first['httpStatus'], failure.httpStatus);
+          }
+          expect(coordinator.isActive(fixture.parent.taskId), isTrue);
+          expect(await File(await fixture.parent.filePath()).exists(), isFalse);
+        } finally {
+          await coordinator.dispose();
+          await fixture.dispose();
+        }
+      },
+    );
+  }
+
+  test(
+    'a slow probe cannot block another saved range within the global budget',
+    () async {
+      final fixture = await SavedRangesFixture.create();
+      final release = Completer<({bool matches, String? validator})>();
+      final bothStarted = Completer<void>();
+      var probes = 0;
+      final coordinator = fixture.coordinator(
+        verifyPartSource: (_, _, _, _) {
+          probes++;
+          if (probes == 2) bothStarted.complete();
+          return release.future;
+        },
+      );
+      try {
+        await coordinator.start(fixture.parent, 20);
+        expect(
+          await settlesSoonAfterGrace(bothStarted.future),
+          isTrue,
+          reason:
+              'one slow origin response must not serialize all saved ranges',
+        );
+        expect(probes, 2);
+      } finally {
+        await coordinator.pause(fixture.parent);
+        release.complete((matches: false, validator: null));
+        await coordinator.dispose();
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test(
+    'transient probe timeout keeps the parent and healthy sibling running',
+    () async {
+      final fixture = await SavedRangesFixture.create();
+      await fixture.files.last.delete();
+      final failed = Completer<void>();
+      final probe = Completer<({bool matches, String? validator})>();
+      final started = Completer<void>();
+      final nativeStarted = Completer<DownloadTask>();
+      final pauses = <String>[];
+      final coordinator = fixture.coordinator(
+        startPart: (task, _, _) async {
+          if (!nativeStarted.isCompleted) nativeStarted.complete(task);
+          return true;
+        },
+        pausePart: (task) async => pauses.add(task.taskId),
+        verifyPartSource: (_, _, _, _) {
+          if (!started.isCompleted) started.complete();
+          return probe.future;
+        },
+        diagnosticEvent: (event, _) {
+          if (event == 'parallel.sourceVerificationSettled' &&
+              !failed.isCompleted) {
+            failed.complete();
+          }
+        },
+      );
+      try {
+        await coordinator.start(fixture.parent, 20);
+        await started.future.timeout(const Duration(seconds: 2));
+        final sibling = await nativeStarted.future.timeout(
+          const Duration(seconds: 2),
+        );
+        coordinator.handleUpdate(TaskStatusUpdate(sibling, TaskStatus.running));
+        probe.completeError(
+          TimeoutException('controlled 20-second probe deadline'),
+        );
+        await failed.future.timeout(const Duration(seconds: 2));
+        await coordinator.reconcile(() async => {sibling.taskId});
+        expect(
+          coordinator.isActive(fixture.parent.taskId),
+          isTrue,
+          reason: 'a timeout is not proof the saved source bytes changed',
+        );
+        expect(
+          pauses,
+          isEmpty,
+          reason: 'healthy siblings must not be canceled',
+        );
+        expect(await fixture.files.first.readAsBytes(), List.filled(10, 1));
+        expect(await File(await fixture.parent.filePath()).exists(), isFalse);
+      } finally {
+        if (!probe.isCompleted) {
+          probe.complete((matches: false, validator: null));
+        }
+        await coordinator.dispose();
+        await fixture.dispose();
+      }
+    },
+  );
+
+  test('transient retry releases capacity for a sibling then verifies without refetch', () async {
+    final fixture = await SavedRangesFixture.create();
+    final completed = Completer<void>();
+    final siblingVerified = Completer<void>();
+    final calls = <String, int>{};
+    final starts = <String>[];
+    final pauses = <String>[];
+    final coordinator = fixture.coordinator(
+      maxActiveConnections: 1,
+      sourceVerificationRetryDelay: const Duration(milliseconds: 100),
+      startPart: (task, _, _) async {
+        starts.add(task.taskId);
+        return true;
+      },
+      pausePart: (task) async => pauses.add(task.taskId),
+      verifyPartSource: (task, _, _, _) async {
+        calls.update(task.taskId, (value) => value + 1, ifAbsent: () => 1);
+        if (task.taskId == fixture.parts.first.taskId &&
+            calls[task.taskId] == 1) {
+          throw TimeoutException('controlled deadline');
+        }
+        return (matches: true, validator: null);
+      },
+      saveRecord: (record) async {
+        if (record.taskId == fixture.parts.last.taskId &&
+            record.status == TaskStatus.complete &&
+            !siblingVerified.isCompleted) {
+          siblingVerified.complete();
+        }
+      },
+      onUpdate: (update) {
+        if (update is TaskStatusUpdate &&
+            update.status == TaskStatus.complete &&
+            !completed.isCompleted) {
+          completed.complete();
+        }
+      },
+    );
+    try {
+      await coordinator.start(fixture.parent, 20);
+      await siblingVerified.future.timeout(const Duration(seconds: 2));
+      expect(
+        calls[fixture.parts.first.taskId],
+        1,
+        reason: 'another range uses the released slot during backoff',
+      );
+      expect(coordinator.isActive(fixture.parent.taskId), isTrue);
+      await completed.future.timeout(const Duration(seconds: 2));
+      expect(calls[fixture.parts.first.taskId], 2);
+      expect(calls[fixture.parts.last.taskId], 1);
+      expect(starts, isEmpty);
+      expect(pauses, isEmpty);
+      expect(
+        await File(await fixture.parent.filePath()).readAsBytes(),
+        List.filled(20, 1),
+      );
+    } finally {
+      await coordinator.dispose();
+      await fixture.dispose();
+    }
+  });
+
+  test(
+    'exhausted probes let healthy work finish then pause and restart safely',
+    () async {
+      final fixture = await SavedRangesFixture.create();
+      await fixture.files.last.delete();
+      final exhausted = Completer<void>();
+      final nativeStarted = Completer<DownloadTask>();
+      final paused = Completer<void>();
+      final pauses = <String>[];
+      var calls = 0;
+      var coordinator = fixture.coordinator(
+        sourceVerificationRetryDelay: const Duration(milliseconds: 20),
+        startPart: (task, _, _) async {
+          if (!nativeStarted.isCompleted) nativeStarted.complete(task);
+          return true;
+        },
+        pausePart: (task) async => pauses.add(task.taskId),
+        verifyPartSource: (_, _, _, _) async {
+          calls++;
+          throw TimeoutException('controlled deadline');
+        },
+        diagnosticEvent: (event, _) {
+          if (event == 'parallel.sourceVerificationExhausted' &&
+              !exhausted.isCompleted) {
+            exhausted.complete();
+          }
+        },
+        onUpdate: (update) {
+          if (update is TaskStatusUpdate &&
+              update.status == TaskStatus.paused &&
+              !paused.isCompleted) {
+            paused.complete();
+          }
+        },
+      );
+      try {
+        await coordinator.start(fixture.parent, 20);
+        final sibling = await nativeStarted.future.timeout(
+          const Duration(seconds: 2),
+        );
+        coordinator.handleUpdate(TaskStatusUpdate(sibling, TaskStatus.running));
+        await exhausted.future.timeout(const Duration(seconds: 2));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(
+          calls,
+          3,
+          reason: 'retries are bounded; an unavailable origin cannot create a hot loop',
+        );
+        expect(pauses, isEmpty);
+        expect(coordinator.isActive(fixture.parent.taskId), isTrue);
+        await File(await sibling.filePath()).writeAsBytes(List.filled(10, 1));
+        coordinator.handleUpdate(
+          TaskStatusUpdate(sibling, TaskStatus.complete, null, null, {
+            'content-range': 'bytes 10-19/20',
+          }, 206),
+        );
+        await paused.future.timeout(const Duration(seconds: 2));
+        expect(
+          pauses,
+          isEmpty,
+          reason: 'pause happens only after useful transfers finish',
+        );
+        expect(await File(await fixture.parent.filePath()).exists(), isFalse);
+        final manifest = jsonDecode(
+          await File('${await fixture.parent.filePath()}.parts/manifest.json')
+              .readAsString(),
+        ) as Map;
+        expect((manifest['parts'] as List).first['complete'], isFalse);
+        expect((manifest['parts'] as List).last['complete'], isTrue);
+        expect(await fixture.files.first.readAsBytes(), List.filled(10, 1));
+        await coordinator.dispose();
+        final completed = Completer<void>();
+        var rechecks = 0;
+        coordinator = fixture.coordinator(
+          startPart: (_, _, _) async {
+            fail('saved ranges must not be fetched again');
+          },
+          verifyPartSource: (_, _, _, _) async {
+            rechecks++;
+            return (matches: true, validator: null);
+          },
+          onUpdate: (update) {
+            if (update is TaskStatusUpdate &&
+                update.status == TaskStatus.complete &&
+                !completed.isCompleted) {
+              completed.complete();
+            }
+          },
+        );
+        expect(await coordinator.start(fixture.parent, 20), isTrue);
+        await completed.future.timeout(const Duration(seconds: 2));
+        expect(
+          rechecks,
+          1,
+          reason: 'the completed healthy sibling remains authoritative',
+        );
+        expect(
+          await File(await fixture.parent.filePath()).readAsBytes(),
+          List.filled(20, 1),
+        );
+      } finally {
+        await coordinator.dispose();
+        await fixture.dispose();
+      }
+    },
+  );
+
+  for (final control in ['pause', 'delete']) {
+    test(
+      '$control during verification backoff settles promptly and cancels retries',
+      () async {
+        final fixture = await SavedRangesFixture.create();
+        final backoff = Completer<void>();
+        var calls = 0;
+        final coordinator = fixture.coordinator(
+          sourceVerificationRetryDelay: const Duration(milliseconds: 100),
+          verifyPartSource: (_, _, _, _) async {
+            calls++;
+            throw TimeoutException('controlled deadline');
+          },
+          diagnosticEvent: (event, _) {
+            if (event == 'parallel.sourceVerificationRetryScheduled' &&
+                !backoff.isCompleted) {
+              backoff.complete();
+            }
+          },
+        );
+        try {
+          await coordinator.start(fixture.parent, 20);
+          await backoff.future.timeout(const Duration(seconds: 2));
+          expect(
+            await settlesSoon(
+              control == 'pause'
+                  ? coordinator.pause(fixture.parent).then((_) {})
+                  : coordinator.cancel(fixture.parent),
+            ),
+            isTrue,
+          );
+          final stoppedCalls = calls;
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          expect(calls, stoppedCalls);
+          expect(coordinator.isActive(fixture.parent.taskId), isFalse);
+          expect(await File(await fixture.parent.filePath()).exists(), isFalse);
+          if (control == 'pause') {
+            expect(await fixture.files.first.length(), 10);
+          }
+        } finally {
+          await coordinator.dispose();
+          await fixture.dispose();
+        }
+      },
+    );
+  }
+
   test('failed probe retries an uncertain pause inventory and preserves saved bytes', () async {
     final fixture = await SavedRangesFixture.create();
     final verification = Completer<({bool matches, String? validator})>();
@@ -605,7 +1104,7 @@ class SavedRangesFixture {
   final List<DownloadTask> parts;
   final List<File> files;
 
-  static Future<SavedRangesFixture> create() async {
+  static Future<SavedRangesFixture> create({int chunks = 2}) async {
     final root = await Directory.systemTemp.createTemp('saved-range-probes-');
     final parent = ParallelDownloadTask(
       taskId: 'aw_v2_saved_probes_g1',
@@ -613,7 +1112,7 @@ class SavedRangesFixture {
       filename: 'video.mp4',
       directory: root.path,
       baseDirectory: BaseDirectory.root,
-      chunks: 2,
+      chunks: chunks,
       allowPause: true,
     );
     final seed = PersistentParallelDownload(
@@ -626,7 +1125,7 @@ class SavedRangesFixture {
       onPartProgress: (_, _, _) {},
       diskProgressPollInterval: const Duration(hours: 1),
     );
-    await seed.start(parent, 20);
+    await seed.start(parent, chunks * 10);
     await seed.dispose();
     final manifest = jsonDecode(
       await File('${await parent.filePath()}.parts/manifest.json')
@@ -661,6 +1160,8 @@ class SavedRangesFixture {
     verifyPartSource,
     void Function(String)? cancelPartSourceVerification,
     int maxActiveConnections = 16,
+    void Function(String, Map<String, Object?>)? diagnosticEvent,
+    Duration sourceVerificationRetryDelay = const Duration(seconds: 2),
   }) => PersistentParallelDownload(
     startPart: startPart ?? (_, _, _) async => true,
     pausePart: pausePart ?? (_) async {},
@@ -673,6 +1174,8 @@ class SavedRangesFixture {
     verifyPartSource: verifyPartSource,
     cancelPartSourceVerification: cancelPartSourceVerification,
     maxActiveConnections: maxActiveConnections,
+    diagnosticEvent: diagnosticEvent,
+    sourceVerificationRetryDelay: sourceVerificationRetryDelay,
     recoveryDelay: Duration.zero,
     promoteFile: publishCompletedTestFile,
     diskProgressPollInterval: const Duration(hours: 1),
