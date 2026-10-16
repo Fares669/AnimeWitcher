@@ -2319,7 +2319,6 @@ private final class AppleSearchGlassActionsPlatformView: NSObject, FlutterPlatfo
     }
 
     let selectedValue = values["sortValue"] as? String
-    let isRtl = values["isArabic"] as? Bool == true
     let items = values["sortItems"] as? [[String: Any]] ?? []
     let actions: [UIAction] = items.compactMap { item in
       guard let value = item["value"] as? String,
@@ -2329,7 +2328,7 @@ private final class AppleSearchGlassActionsPlatformView: NSObject, FlutterPlatfo
         animeWitcherMenuImage(named: name, tintColor: tintColor)
       }
       return UIAction(
-        title: animeWitcherMenuTitle(label, isRtl: isRtl),
+        title: animeWitcherMenuTitle(label, isRtl: true),
         image: image,
         state: value == selectedValue ? .on : .off
       ) { [weak self] _ in
@@ -2375,7 +2374,6 @@ private struct AppleSearchSortItem: Identifiable {
 @available(iOS 26.0, *)
 private struct AppleSearchSortOverlay: View {
   let items: [AppleSearchSortItem]
-  let isArabic: Bool
   let tintColor: Color
   let onCancel: () -> Void
   let onApply: (String) -> Void
@@ -2384,13 +2382,11 @@ private struct AppleSearchSortOverlay: View {
   init(
     items: [AppleSearchSortItem],
     initialValue: String,
-    isArabic: Bool,
     tintColor: Color,
     onCancel: @escaping () -> Void,
     onApply: @escaping (String) -> Void
   ) {
     self.items = items
-    self.isArabic = isArabic
     self.tintColor = tintColor
     self.onCancel = onCancel
     self.onApply = onApply
@@ -2406,7 +2402,7 @@ private struct AppleSearchSortOverlay: View {
           Image(systemName: "arrow.up.arrow.down")
             .font(.system(size: 20, weight: .semibold))
             .foregroundStyle(.tint)
-          Text(isArabic ? "الترتيب حسب" : "Sort by")
+          Text("الترتيب حسب")
             .font(.title2.weight(.bold))
           Spacer()
           Button(action: onCancel) {
@@ -2450,10 +2446,10 @@ private struct AppleSearchSortOverlay: View {
         Divider()
 
         HStack(spacing: 12) {
-          Button(isArabic ? "إلغاء" : "Cancel", action: onCancel)
+          Button("إلغاء", action: onCancel)
             .buttonStyle(.plain)
           Spacer()
-          Button(isArabic ? "تطبيق" : "Apply") {
+          Button("تطبيق") {
             onApply(selected)
           }
           .buttonStyle(.borderedProminent)
@@ -2466,7 +2462,7 @@ private struct AppleSearchSortOverlay: View {
       .padding(.horizontal, 18)
     }
     .tint(tintColor)
-    .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
+    .environment(\.layoutDirection, .rightToLeft)
   }
 }
 
@@ -2490,7 +2486,6 @@ private struct AppleSearchFilterOverlay: View {
   let years: [String]
   let seasons: [String]
   let genres: [String]
-  let isArabic: Bool
   let tintColor: Color
   let onCancel: () -> Void
   let onApply: ([String: Any]) -> Void
@@ -2506,7 +2501,6 @@ private struct AppleSearchFilterOverlay: View {
   init(
     options: [String: Any],
     initialValue: [String: Any],
-    isArabic: Bool,
     tintColor: Color,
     onCancel: @escaping () -> Void,
     onApply: @escaping ([String: Any]) -> Void
@@ -2517,7 +2511,6 @@ private struct AppleSearchFilterOverlay: View {
     years = animeWitcherStrings(options["years"])
     seasons = animeWitcherStrings(options["seasons"])
     genres = animeWitcherStrings(options["genres"])
-    self.isArabic = isArabic
     self.tintColor = tintColor
     self.onCancel = onCancel
     self.onApply = onApply
@@ -2540,11 +2533,11 @@ private struct AppleSearchFilterOverlay: View {
 
   private func tabLabel(_ value: AppleSearchFilterTab) -> String {
     switch value {
-    case .genres: return isArabic ? "التصنيفات" : "Genres"
-    case .year: return isArabic ? "السنة" : "Year"
-    case .age: return isArabic ? "العمر" : "Age"
-    case .type: return isArabic ? "النوع" : "Type"
-    case .status: return isArabic ? "الحالة" : "Status"
+    case .genres: return "التصنيفات"
+    case .year: return "السنة"
+    case .age: return "العمر"
+    case .type: return "النوع"
+    case .status: return "الحالة"
     }
   }
 
@@ -2672,7 +2665,7 @@ private struct AppleSearchFilterOverlay: View {
             Image(systemName: "slider.horizontal.3")
               .font(.system(size: 21, weight: .semibold))
               .foregroundStyle(.tint)
-            Text(isArabic ? "فلاتر البحث" : "Search filters")
+            Text("فلاتر البحث")
               .font(.title2.weight(.bold))
             if selectedCount > 0 {
               Text("\(selectedCount)")
@@ -2731,7 +2724,7 @@ private struct AppleSearchFilterOverlay: View {
           VStack(spacing: 10) {
             if seasonRequiresYear {
               Label(
-                isArabic ? "اختر سنة مع الموسم" : "Choose a year with the season",
+                "اختر سنة مع الموسم",
                 systemImage: "info.circle"
               )
               .font(.footnote.weight(.semibold))
@@ -2742,14 +2735,14 @@ private struct AppleSearchFilterOverlay: View {
               Button {
                 clearAll()
               } label: {
-                Label(isArabic ? "مسح الكل" : "Clear all", systemImage: "arrow.counterclockwise")
+                Label("مسح الكل", systemImage: "arrow.counterclockwise")
               }
               .buttonStyle(.plain)
               .disabled(selectedCount == 0)
 
               Spacer()
 
-              Button(isArabic ? "تطبيق" : "Apply") {
+              Button("تطبيق") {
                 onApply(payload())
               }
               .buttonStyle(.borderedProminent)
@@ -2772,7 +2765,7 @@ private struct AppleSearchFilterOverlay: View {
       }
     }
     .tint(tintColor)
-    .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
+    .environment(\.layoutDirection, .rightToLeft)
   }
 }
 
@@ -2789,7 +2782,6 @@ private func presentAppleSearchSort(
     return AppleSearchSortItem(id: value, label: label)
   }
   let initialValue = arguments["initialValue"] as? String ?? ""
-  let isArabic = arguments["isArabic"] as? Bool ?? false
   let tintColor = Color(
     uiColor: animeWitcherUIColor(arguments["tintColor"], fallback: .systemBlue)
   )
@@ -2797,7 +2789,6 @@ private func presentAppleSearchSort(
   let overlay = AppleSearchSortOverlay(
     items: items,
     initialValue: initialValue,
-    isArabic: isArabic,
     tintColor: tintColor,
     onCancel: {
       hostingController?.dismiss(animated: true) { result(nil) }
@@ -2822,7 +2813,6 @@ private func presentAppleSearchFilters(
 ) {
   let options = arguments["options"] as? [String: Any] ?? [:]
   let initialValue = arguments["initialValue"] as? [String: Any] ?? [:]
-  let isArabic = arguments["isArabic"] as? Bool ?? false
   let tintColor = Color(
     uiColor: animeWitcherUIColor(arguments["tintColor"], fallback: .systemBlue)
   )
@@ -2830,7 +2820,6 @@ private func presentAppleSearchFilters(
   let overlay = AppleSearchFilterOverlay(
     options: options,
     initialValue: initialValue,
-    isArabic: isArabic,
     tintColor: tintColor,
     onCancel: {
       hostingController?.dismiss(animated: true) { result(nil) }
