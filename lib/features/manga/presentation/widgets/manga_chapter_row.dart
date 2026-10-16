@@ -36,8 +36,7 @@ class MangaChapterRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final isRead = progress?.isRead == true;
     final accent = colors.primary;
     final foreground = colors.onSurface.withValues(alpha: isRead ? 0.52 : 1);
@@ -52,13 +51,11 @@ class MangaChapterRow extends StatelessWidget {
         state.pagesRead > 0;
 
     return Directionality(
-      textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+      textDirection: TextDirection.rtl,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
         decoration: BoxDecoration(
-          color: selected
-              ? accent.withValues(alpha: 0.15)
-              : Colors.transparent,
+          color: selected ? accent.withValues(alpha: 0.15) : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
         ),
         child: InkWell(

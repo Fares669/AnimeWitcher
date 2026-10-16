@@ -86,10 +86,7 @@ class LibrarySideList extends StatelessWidget {
             trailing: listKind == LibraryMediaKind.values.first
                 ? IconButton(
                     key: const ValueKey<String>('library-side-filter'),
-                    tooltip:
-                        Localizations.localeOf(context).languageCode == 'ar'
-                        ? 'تصفية'
-                        : 'Filter',
+                    tooltip: 'تصفية',
                     icon: Icon(Icons.tune_rounded, color: colors.primary),
                     onPressed: onFilter,
                   )
