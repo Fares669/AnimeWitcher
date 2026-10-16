@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,6 +8,202 @@ import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('verification timeout diagnostics retain bounded byte and phase evidence', () {
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    diagnostics.recordTransport('parallel.sourceVerificationSettled', {
+      'verifiedBytes': 4096,
+      'verificationPhase': 'body',
+      'timeoutKind': 'inactivity',
+      'headers': {'Authorization': 'Bearer secret'},
+    });
+    expect(diagnostics.transportEvents.single, {
+      'event': 'parallel.sourceVerificationSettled',
+      'verifiedBytes': 4096,
+      'verificationPhase': 'body',
+      'timeoutKind': 'inactivity',
+    });
+    diagnostics.recordTransport('parallel.sourceVerificationSettled', {
+      'verifiedBytes': -1,
+      'verificationPhase': 'https://private.invalid/token',
+      'timeoutKind': 'token=secret',
+    });
+    expect(diagnostics.transportEvents.last, {
+      'event': 'parallel.sourceVerificationSettled',
+    });
+  });
+
+  test(
+    'transport diagnostics retain probe retries and stale callback state',
+    () {
+      final diagnostics = InMemoryDownloadDiagnosticsV2();
+      diagnostics.recordTransport('parallel.probeRetry', {
+        'reason': 'connectTimeout',
+        'retryable': true,
+        'httpStatus': 503,
+        'retryAttempt': 2,
+        'delayMs': 400,
+        'callbackAttempt': 3,
+        'currentAttempt': 4,
+        'draining': 2,
+        'url': 'https://private.invalid/file?token=secret',
+        'headers': {'Authorization': 'Bearer secret'},
+        'error': 'token=secret',
+      });
+
+      expect(diagnostics.transportEvents.single, {
+        'event': 'parallel.probeRetry',
+        'reason': 'connectTimeout',
+        'retryable': true,
+        'httpStatus': 503,
+        'retryAttempt': 2,
+        'delayMs': 400,
+        'callbackAttempt': 3,
+        'currentAttempt': 4,
+        'draining': 2,
+      });
+    },
+  );
+
+  test('transport diagnostics reject unsafe and unbounded retry values', () {
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    diagnostics.recordTransport('parallel.probeRetry', {
+      'reason': 'https://private.invalid/file?token=secret',
+      'retryable': 'Bearer secret',
+      'httpStatus': double.infinity,
+      'retryAttempt': 'token=secret',
+      'delayMs': double.nan,
+      'callbackAttempt': List.filled(161, 'x').join(),
+      'currentAttempt': {'Authorization': 'Bearer secret'},
+      'draining': ['secret'],
+    });
+
+    expect(diagnostics.transportEvents.single, {
+      'event': 'parallel.probeRetry',
+    });
+  });
+
+  test('file diagnostics identify schema and unknown build honestly', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-v2-build-log-');
+    addTearDown(() => directory.delete(recursive: true));
+    final diagnostics = FileDownloadDiagnosticsV2(
+      directoryProvider: () async => directory,
+      enabled: () => true,
+    );
+
+    diagnostics.recordTransport('parallel.heartbeat', {'taskId': 'episode'});
+    await diagnostics.flush();
+
+    final row = jsonDecode(
+      await (await diagnostics.listFiles()).single.readAsString(),
+    ) as Map<String, dynamic>;
+    expect(row['schemaVersion'], 1);
+    expect(row['appVersion'], 'unknown');
+    expect(row['appBuildNumber'], 'unknown');
+    expect(row['buildFingerprint'], 'unknown+unknown');
+    expect(row.keys, isNot(contains('commit')));
+  });
+
+  test('pause diagnostics retain the actual nonnegative drain count', () {
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    diagnostics.recordTransport('parallel.pauseCommitted', {'draining': 2});
+    expect(diagnostics.transportEvents.single, {
+      'event': 'parallel.pauseCommitted',
+      'draining': 2,
+    });
+
+    for (final invalid in <Object>[-1, 1.5, true]) {
+      diagnostics.recordTransport('parallel.pauseCommitted', {'draining': invalid});
+      expect(diagnostics.transportEvents.last, {
+        'event': 'parallel.pauseCommitted',
+      });
+    }
+  });
+
+  test('retry state rejects wrong types and negative counters', () {
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    diagnostics.recordTransport('parallel.probeRetry', {
+      'retryable': 'secret',
+      'retryAttempt': -1,
+      'delayMs': 1.5,
+      'callbackAttempt': 'secret',
+      'currentAttempt': -1,
+      'draining': 'secret',
+    });
+
+    expect(diagnostics.transportEvents.single, {
+      'event': 'parallel.probeRetry',
+    });
+  });
+
+  test('missing platform metadata never prevents JSONL output', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-v2-build-error-');
+    addTearDown(() => directory.delete(recursive: true));
+    var calls = 0;
+    final diagnostics = FileDownloadDiagnosticsV2(
+      directoryProvider: () async => directory,
+      enabled: () => true,
+      buildIdentityProvider: () async {
+        calls++;
+        throw StateError('https://private.invalid/?token=secret');
+      },
+    );
+
+    diagnostics.recordTransport('parallel.heartbeat', {'taskId': 'episode'});
+    diagnostics.recordTransport('parallel.heartbeat', {'taskId': 'episode'});
+    await diagnostics.flush();
+
+    final text = await (await diagnostics.listFiles()).single.readAsString();
+    final rows = const LineSplitter().convert(text)
+        .map((line) => jsonDecode(line) as Map<String, dynamic>);
+    expect(rows, hasLength(2));
+    expect(rows.every((row) => row['buildFingerprint'] == 'unknown+unknown'), isTrue);
+    expect(text, isNot(contains('secret')));
+    expect(calls, 1);
+    expect(diagnostics.lastError, isNull);
+  });
+
+  test('stalled build metadata cannot stall the diagnostic write queue', () async {
+    final directory = await Directory.systemTemp.createTemp('aw-v2-build-stall-');
+    addTearDown(() => directory.delete(recursive: true));
+    final pending = Completer<({String version, String buildNumber})>();
+    final diagnostics = FileDownloadDiagnosticsV2(
+      directoryProvider: () async => directory,
+      enabled: () => true,
+      buildIdentityProvider: () => pending.future,
+    );
+
+    diagnostics.recordTransport('parallel.heartbeat', {'taskId': 'episode'});
+    var stalled = false;
+    await diagnostics.flush().timeout(const Duration(seconds: 2), onTimeout: () {
+      stalled = true;
+    });
+
+    expect(stalled, isFalse);
+    final row = jsonDecode(await (await diagnostics.listFiles()).single.readAsString())
+        as Map<String, dynamic>;
+    expect(row['buildFingerprint'], 'unknown+unknown');
+    expect(diagnostics.lastError, isNull);
+  });
+
+  test('control diagnostics preserve safe timing and identity fields', () {
+    final diagnostics = InMemoryDownloadDiagnosticsV2();
+    diagnostics.recordTransport('command.timedOut', {
+      'logicalId': 'dl_123',
+      'taskId': 'aw_v2_dl_123_g1',
+      'action': 'pause',
+      'durationMs': 30000,
+      'url': 'https://secret.invalid',
+      'error': 'token=private',
+    });
+    expect(diagnostics.transportEvents.single, {
+      'event': 'command.timedOut',
+      'logicalId': 'dl_123',
+      'taskId': 'aw_v2_dl_123_g1',
+      'action': 'pause',
+      'durationMs': 30000,
+    });
+  });
+
   test('diagnostic event serializes only allowlisted non-secret fields', () {
     final event = DownloadDiagnosticEventV2(
       logicalId: const DownloadLogicalId('logical-episode'),

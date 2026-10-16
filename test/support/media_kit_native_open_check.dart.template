@@ -1,0 +1,236 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit/src/player/native/utils/temp_file.dart';
+import 'package:safe_local_storage/safe_local_storage.dart';
+import 'package:synchronized/synchronized.dart';
+import 'package:uri_parser/uri_parser.dart';
+
+class ReproPlayer {
+  ReproPlayer() {
+    playlistController.stream.listen(emittedPlaylists.add);
+  }
+  final emittedPlaylists = <Playlist>[];
+  static final lock = Lock();
+  var disposed = false;
+  Future<void> get waitForPlayerInitialization => Future.value();
+  Future<void> get waitForVideoControllerInitializationIfAttached =>
+      Future.value();
+  List<Media> current = [];
+  PlayerState state = PlayerState();
+  final playlistController = StreamController<Playlist>.broadcast(sync: true);
+  final playingController = StreamController<bool>.broadcast();
+  bool isPlayingStateChangeAllowed = false;
+  final commands = <List<String>>[];
+  final properties = <String, Object>{};
+  int stops = 0;
+  Future<void> stop({bool open = false, bool synchronized = true}) async {
+    stops++;
+    state = PlayerState();
+    isPlayingStateChangeAllowed = false;
+  }
+
+  Future<void> _setPropertyFlag(String name, bool value) async {
+    properties[name] = value;
+  }
+
+  Future<void> _setPropertyInt64(String name, int value) async {
+    properties[name] = value;
+  }
+
+  final lists = <String>[];
+  final tempFiles = <File>[];
+  Future<void> _command(List<String> args) async {
+    commands.add(args);
+    if (args.first == 'loadlist') {
+      final file = File(args[1]);
+      tempFiles.add(file);
+      lists.add(file.readAsStringSync());
+    }
+  }
+
+  // PRODUCTION_OPEN
+  // PRODUCTION_SANITIZE
+}
+
+void check(bool condition, String message) {
+  if (!condition) throw StateError(message);
+}
+
+Future<void> main(List<String> args) async {
+  final root = Directory.systemTemp.createTempSync('native-open-check-');
+  final players = <ReproPlayer>[];
+  Future<void> behavior() async {
+    final special = '${root.path}/حلقة 1 # [x]; &.mp4';
+    for (final play in [true, false]) {
+      final p = ReproPlayer();
+      players.add(p);
+      final media = Media(Uri.file(special).toString());
+      await p.open(media, play: play);
+      check(
+        p.commands.length == 1 && p.commands.single[0] == 'loadfile',
+        'single local media must use loadfile',
+      );
+      check(
+        p.commands.single[1] == addPrefix(special),
+        'special local path must remain one exact command argument',
+      );
+      check(
+        p.current.single == media &&
+            p.emittedPlaylists.single.medias.single == media,
+        'current and emitted playlist must retain Media',
+      );
+      check(
+        p.stops == 1 && p.properties['playlist-pos'] == 0,
+        'normal reset and index selection must remain',
+      );
+      check(
+        p.properties['pause'] == !play &&
+            p.isPlayingStateChangeAllowed == play &&
+            p.state.playing == play,
+        'play/pause and public playing state must remain',
+      );
+    }
+    for (final url in [
+      'https://example.invalid/video.mp4',
+      'https://example.invalid/a.m3u8?token=private',
+    ]) {
+      final p = ReproPlayer();
+      players.add(p);
+      final remote = Media(
+        url,
+        httpHeaders: {'Authorization': 'Bearer test'},
+        start: Duration(seconds: 3),
+        end: Duration(seconds: 9),
+      );
+      await p.open(remote);
+      check(
+        p.commands.single[0] == 'loadfile' && p.commands.single[1] == url,
+        'remote and HLS single-media URL must remain exact',
+      );
+      check(
+        p.current.single == remote &&
+            p.current.single.httpHeaders?['Authorization'] == 'Bearer test' &&
+            p.current.single.start == Duration(seconds: 3) &&
+            p.current.single.end == Duration(seconds: 9),
+        'remote headers and trim metadata must remain attached',
+      );
+      check(
+        p.current.single.uri == url &&
+            p.properties['playlist-pos'] == 0 &&
+            p.state.playing,
+        'remote state and index must remain unchanged',
+      );
+    }
+    final extensionless = ReproPlayer();
+    players.add(extensionless);
+    await extensionless.open(
+      Media(Uri.file('${root.path}/episode').toString()),
+    );
+    check(
+      extensionless.commands.single[0] == 'loadfile' &&
+          extensionless.commands.single[1] == addPrefix('${root.path}/episode'),
+      'extensionless local file must not need a temp playlist',
+    );
+    final multiple = ReproPlayer();
+    players.add(multiple);
+    final list = Playlist([
+      Media('${root.path}/one.mp4'),
+      Media('${root.path}/two.mp4'),
+    ], index: 1);
+    await multiple.open(list, play: false);
+    check(
+      multiple.commands.single[0] == 'loadlist' &&
+          multiple.current.length == 2 &&
+          multiple.properties['playlist-pos'] == 1,
+      'multiple-media playlist behavior must remain unchanged',
+    );
+    final one = ReproPlayer();
+    players.add(one);
+    await one.open(Playlist([Media('${root.path}/one.mp4')]));
+    check(
+      one.commands.single[0] == 'loadfile',
+      'one-item Playlist must also bypass temporary file',
+    );
+    final empty = ReproPlayer();
+    players.add(empty);
+    await empty.open(Playlist([]), play: false);
+    check(
+      empty.commands.single[0] == 'loadlist' && empty.current.isEmpty,
+      'empty playlist must retain upstream path',
+    );
+    final disposed = ReproPlayer()..disposed = true;
+    players.add(disposed);
+    var rejected = false;
+    try {
+      await disposed.open(Media(special));
+    } on AssertionError {
+      rejected = true;
+    }
+    check(
+      rejected && disposed.commands.isEmpty,
+      'disposed player must reject before commands',
+    );
+    final fd = ReproPlayer();
+    players.add(fd);
+    await fd.open(Media('fd://42'));
+    check(
+      fd.commands.single[0] == 'loadfile',
+      'existing fd URI path must remain unchanged',
+    );
+    print(
+      'PASS: local, remote, HLS, multiple media, fd URI, exact paths and playback state',
+    );
+  }
+
+  Future<void> starvation() async {
+    final file = File('${root.path}/video.mp4')..writeAsBytesSync([1, 2, 3, 4]);
+    final pending = List.generate(
+      32,
+      (i) =>
+          InternetAddress.lookup('native-open-$i.invalid')
+              .then<Object?>((_) => null, onError: (Object _) => null),
+    );
+    try {
+      await Future<void>.delayed(Duration(milliseconds: 300));
+      var blocked = false;
+      try {
+        await file.exists().timeout(Duration(milliseconds: 300));
+      } on TimeoutException {
+        blocked = true;
+      }
+      check(blocked, 'control async file operation must be blocked by DNS');
+      final p = ReproPlayer();
+      players.add(p);
+      final opening = p.open(Media(file.path));
+      final next = ReproPlayer.lock.synchronized(() {});
+      await Future.wait([opening, next]).timeout(Duration(seconds: 2));
+      check(
+        p.commands.single[0] == 'loadfile',
+        'local open must not create a temporary playlist',
+      );
+      print('PASS: production native open and shared lock survive stalled DNS');
+    } finally {
+      await Future.wait(pending);
+    }
+  }
+
+  try {
+    if (args.single == 'behavior') {
+      await behavior();
+    } else {
+      await starvation();
+    }
+  } finally {
+    for (final p in players) {
+      for (final f in p.tempFiles) {
+        if (f.existsSync()) f.deleteSync();
+      }
+      await p.playlistController.close();
+      await p.playingController.close();
+    }
+    root.deleteSync(recursive: true);
+  }
+  exit(0);
+}

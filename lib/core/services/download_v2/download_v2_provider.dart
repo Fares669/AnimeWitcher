@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -74,6 +75,10 @@ final downloadDiagnosticsFileV2Provider = Provider<FileDownloadDiagnosticsV2>((
   );
   return FileDownloadDiagnosticsV2(
     enabled: settings.getDownloadDiagnosticLog,
+    buildIdentityProvider: () async {
+      final info = await PackageInfo.fromPlatform();
+      return (version: info.version, buildNumber: info.buildNumber);
+    },
     directoryProvider: () async {
       final documents = await getApplicationDocumentsDirectory();
       return Directory(p.join(documents.path, 'log'));
@@ -125,6 +130,10 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
   final packageGateway = ref.read(packageBackgroundDownloaderGatewayV2Provider);
   final continuedProcessing = IosDownloadContinuedProcessingObserverV2(
     pauseReadiness: pauseReadiness,
+    onNativeChunkUpdate: packageGateway.observeNativeChunkUpdateV2,
+    diagnostics: diagnostics,
+    reconcileNativeBackgroundTransfers:
+        packageGateway.reconcileNativeBackgroundTransfersV2,
     nativeBackgroundPlans: packageGateway.nativeBackgroundPlansV2,
     releaseNativeBackgroundOffers:
         packageGateway.releaseNativeBackgroundOffersV2,
@@ -136,23 +145,30 @@ final downloadManagerV2Provider = Provider<DownloadManagerV2>((ref) {
           );
         },
   );
-  final artwork = DownloadArtworkObserverV2(sourceFor: (record) async {
-    final storage = ref.read(storageServiceProvider);
-    var metadata = await storage.getDownloadMetadata(record.logicalId.value);
-    if (metadata == null || !downloadArtworkMetadataMatchesRecordV2(metadata, record)) {
-      metadata = await storage.getDownloadMetadata(record.taskId);
-      if (metadata == null || !downloadArtworkMetadataMatchesRecordV2(metadata, record)) return null;
-    }
-    final item = metadata['item'];
-    final episode = metadata['episode'];
-    final poster = item is Map ? item['posterUrl'] : null;
-    final thumbnail = episode is Map ? episode['posterUrl'] : null;
-    return DownloadArtworkSourceV2(
-      posterUrl: poster is String ? poster : null,
-      episodeUrl: thumbnail is String ? thumbnail : null,
-      legacyTaskId: record.taskId,
-    );
-  });
+  final artwork = DownloadArtworkObserverV2(
+    sourceFor: (record) async {
+      final storage = ref.read(storageServiceProvider);
+      var metadata = await storage.getDownloadMetadata(record.logicalId.value);
+      if (metadata == null ||
+          !downloadArtworkMetadataMatchesRecordV2(metadata, record)) {
+        metadata = await storage.getDownloadMetadata(record.taskId);
+        if (metadata == null ||
+            !downloadArtworkMetadataMatchesRecordV2(metadata, record))
+          return null;
+      }
+      final item = metadata['item'];
+      final episode = metadata['episode'];
+      final poster = item is Map ? item['posterUrl'] : null;
+      final thumbnail = episode is Map ? episode['posterUrl'] : null;
+      final banner = item is Map ? item['bannerUrl'] : null;
+      return DownloadArtworkSourceV2(
+        posterUrl: poster is String ? poster : null,
+        bannerUrl: banner is String ? banner : null,
+        episodeUrl: thumbnail is String ? thumbnail : null,
+        legacyTaskId: record.taskId,
+      );
+    },
+  );
   manager = DownloadManagerV2(
     store: ref.read(logicalDownloadStoreV2Provider),
     gateway: ref.read(backgroundDownloaderGatewayV2Provider),

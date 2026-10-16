@@ -58,8 +58,11 @@ class _CompletedDownloadEpisodeCardState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.item.id != widget.item.id ||
         oldWidget.item.logicalId != widget.item.logicalId ||
-        oldWidget.item.artworkMetadataVerified != widget.item.artworkMetadataVerified ||
-        oldWidget.item.episode?.posterUrl != widget.item.episode?.posterUrl) {
+        oldWidget.item.artworkMetadataVerified !=
+            widget.item.artworkMetadataVerified ||
+        oldWidget.item.episode?.posterUrl != widget.item.episode?.posterUrl ||
+        oldWidget.item.item.bannerUrl != widget.item.item.bannerUrl ||
+        oldWidget.item.item.posterUrl != widget.item.item.posterUrl) {
       _artwork = _loadArtwork();
     }
   }
@@ -68,6 +71,7 @@ class _CompletedDownloadEpisodeCardState
     taskId: widget.item.id,
     logicalId: widget.item.logicalId,
     episode: widget.item.episode,
+    item: widget.item.item,
     allowMetadataBackfill: widget.item.artworkMetadataVerified,
   );
 

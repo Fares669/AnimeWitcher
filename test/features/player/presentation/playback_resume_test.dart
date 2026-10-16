@@ -5,17 +5,16 @@ import 'package:animewitcher/features/player/presentation/playback_resume.dart';
 
 void main() {
   group('PlaybackResume.openWhenReady', () {
-    test('exiting a fresh download during cloud lookup prevents autoplay', () async {
+    test('exiting during startup position lookup prevents autoplay', () async {
       final cloud = Completer<int>();
       var active = true;
       var opens = 0;
       final startup = PlaybackResume.openWhenReady(
         isActive: () => active,
-        resolvePosition: () => PlaybackResume.resolveStartupPosition(
-          localPositionMs: 0,
-          cloudPositionMs: () => cloud.future,
-        ),
-        open: (_) async { opens++; },
+        resolvePosition: () => cloud.future,
+        open: (_) async {
+          opens++;
+        },
       );
 
       // Back stops the engine while the no-bookmark path is still waiting.
@@ -33,7 +32,9 @@ void main() {
       final startup = PlaybackResume.openWhenReady(
         isActive: () => currentSession == requestedSession,
         resolvePosition: () => cloud.future,
-        open: (_) async { opens++; },
+        open: (_) async {
+          opens++;
+        },
       );
       currentSession = 2;
       cloud.complete(90000);
@@ -41,17 +42,16 @@ void main() {
       expect(opens, 0);
     });
 
-    test('cloud failure after leaving cannot fall back to autoplay', () async {
+    test('position lookup fallback cannot autoplay after leaving', () async {
       final cloud = Completer<int>();
       var active = true;
       var opens = 0;
       final startup = PlaybackResume.openWhenReady(
         isActive: () => active,
-        resolvePosition: () => PlaybackResume.resolveStartupPosition(
-          localPositionMs: 0,
-          cloudPositionMs: () => cloud.future,
-        ),
-        open: (_) async { opens++; },
+        resolvePosition: () => cloud.future.catchError((_) => 0),
+        open: (_) async {
+          opens++;
+        },
       );
       active = false;
       cloud.completeError(StateError('offline'));
@@ -63,11 +63,10 @@ void main() {
       int? openedAt;
       final opened = await PlaybackResume.openWhenReady(
         isActive: () => true,
-        resolvePosition: () => PlaybackResume.resolveStartupPosition(
-          localPositionMs: 120000,
-          cloudPositionMs: () async => throw StateError('must use local bookmark'),
-        ),
-        open: (position) async { openedAt = position; },
+        resolvePosition: () async => 120000,
+        open: (position) async {
+          openedAt = position;
+        },
       );
       expect(opened, isTrue);
       expect(openedAt, 120000);
@@ -158,71 +157,6 @@ void main() {
         ),
         isTrue,
       );
-    });
-  });
-
-  group('PlaybackResume.shouldAwaitCloudResume', () {
-    test('skips the cloud when a local bookmark is already usable', () {
-      expect(PlaybackResume.shouldAwaitCloudResume(15000), isFalse);
-      expect(PlaybackResume.shouldAwaitCloudResume(180000), isFalse);
-    });
-
-    test('asks the cloud for downloaded and streaming starts with no bookmark',
-        () {
-      expect(PlaybackResume.shouldAwaitCloudResume(0), isTrue);
-      expect(PlaybackResume.shouldAwaitCloudResume(500), isTrue);
-    });
-  });
-
-  group('PlaybackResume.resolveStartupPosition', () {
-    test('opens immediately when a local bookmark already exists', () async {
-      final never = Completer<int>();
-      final stopwatch = Stopwatch()..start();
-      final position = await PlaybackResume.resolveStartupPosition(
-        localPositionMs: 12000,
-        cloudPositionMs: () => never.future,
-        cloudTimeout: const Duration(seconds: 5),
-      );
-      stopwatch.stop();
-
-      expect(position, 12000);
-      expect(stopwatch.elapsedMilliseconds, lessThan(200));
-    });
-
-    test('uses a fast cloud bookmark for downloaded and streaming starts',
-        () async {
-      final downloaded = await PlaybackResume.resolveStartupPosition(
-        localPositionMs: 0,
-        cloudPositionMs: () async => 90000,
-      );
-      final streamed = await PlaybackResume.resolveStartupPosition(
-        localPositionMs: 0,
-        cloudPositionMs: () async => 45000,
-      );
-      expect(downloaded, 90000);
-      expect(streamed, 45000);
-    });
-
-    test('caps downloaded and streaming cloud resume at two seconds', () {
-      expect(
-        PlaybackResume.cloudResumeTimeout,
-        const Duration(seconds: 2),
-      );
-    });
-
-    test('fails open to local progress when cloud resume times out', () async {
-      final never = Completer<int>();
-      final stopwatch = Stopwatch()..start();
-      final position = await PlaybackResume.resolveStartupPosition(
-        localPositionMs: 0,
-        cloudPositionMs: () => never.future,
-        cloudTimeout: const Duration(milliseconds: 40),
-      );
-      stopwatch.stop();
-
-      expect(position, 0);
-      expect(stopwatch.elapsedMilliseconds, lessThan(1000));
-      expect(stopwatch.elapsedMilliseconds, greaterThanOrEqualTo(40));
     });
   });
 }

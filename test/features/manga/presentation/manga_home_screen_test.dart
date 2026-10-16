@@ -4,6 +4,7 @@ import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
+import 'package:animewitcher/core/router/app_router.dart';
 import 'package:animewitcher/core/storage/settings_repository.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/home/presentation/widgets/home_section_header.dart';
@@ -15,6 +16,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 final class _Storage extends StorageService {
   @override
@@ -112,17 +114,31 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final source = _MangaSource();
+    final router = GoRouter(
+      routes: [
+        GoRoute(path: '/', builder: (_, _) => const MangaHomeScreen()),
+        GoRoute(
+          path: '/manga-details',
+          builder: (_, state) => Scaffold(
+            body: Text(
+              'Opened ${(state.extra! as MangaDetailsRouteExtra).item.title}',
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
 
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           extensionManagerProvider.overrideWith(() => _Manager(source)),
         ],
-        child: MaterialApp(
+        child: MaterialApp.router(
+          routerConfig: router,
           locale: const Locale('ar'),
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
-          home: const MangaHomeScreen(),
         ),
       ),
     );
@@ -181,10 +197,7 @@ void main() {
     await tester.tap(find.byType(HomeViewAllButton).first);
     await tester.pumpAndSettle();
 
-    expect(
-      find.byType(MangaViewAllScreen<MangaLatestChapter>),
-      findsOneWidget,
-    );
+    expect(find.byType(MangaViewAllScreen<MangaLatestChapter>), findsOneWidget);
     expect(find.text('Fresh Chapter Manga'), findsWidgets);
     expect(
       tester.getCenter(find.text('فصول جديدة')).dx,
@@ -192,4 +205,27 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
   });
+
+  for (final popular in [false, true]) {
+    testWidgets(
+      '${popular ? 'most read' : 'new chapters'} View all opens one manga with rapid card taps',
+      (tester) async {
+        await pumpPage(tester);
+        await tester.tap(find.byType(HomeViewAllButton).at(popular ? 1 : 0));
+        await tester.pumpAndSettle();
+        final first = popular ? 'Popular 0' : 'Fresh Chapter Manga';
+        final second = popular ? 'Popular 1' : first;
+        await tester.tap(find.text(first).first);
+        await tester.tap(find.text(second).first);
+        await tester.pumpAndSettle();
+        expect(find.text('Opened $first'), findsOneWidget);
+        if (popular) expect(find.text('Opened $second'), findsNothing);
+        GoRouter.of(tester.element(find.text('Opened $first'))).pop();
+        await tester.pumpAndSettle();
+        expect(find.text(first), findsWidgets);
+        expect(find.byType(MangaHomeScreen), findsNothing);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
 }

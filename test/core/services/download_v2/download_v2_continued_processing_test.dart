@@ -8,6 +8,7 @@ import 'package:animewitcher/core/services/download_v2/download_continued_proces
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -20,6 +21,195 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
   });
+
+  test('terminal observation clears an uncertain native start even without its ACK', () async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'start') return null;
+          return true;
+        });
+    final observer = IosDownloadContinuedProcessingObserverV2(
+      forceAvailableForTesting: true,
+    );
+    final record = _terminalProgressRecord();
+    try {
+      await observer.observe(record, DownloadTransportSnapshot(
+        taskId: record.taskId,
+        status: DownloadTransportStatus.running,
+        progress: .25,
+      ));
+      await observer.observe(record, DownloadTransportSnapshot(
+        taskId: record.taskId,
+        status: DownloadTransportStatus.canceled,
+        progress: .25,
+      ));
+      expect(calls.where((call) => call.method == 'stop'), hasLength(1),
+        reason: 'a missing start ACK is not proof that iOS did not attach a lease');
+    } finally {
+      await observer.dispose();
+    }
+  });
+
+  testWidgets('terminal cleanup coalesces queued progress behind a missing update ACK', (tester) async {
+    final calls = <MethodCall>[];
+    final lostUpdate = Completer<bool>();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          if (call.method == 'start') return true;
+          if (call.method == 'update') return lostUpdate.future;
+          return true;
+        });
+    final observer = IosDownloadContinuedProcessingObserverV2(
+      forceAvailableForTesting: true,
+    );
+    final record = _terminalProgressRecord();
+    DownloadTransportSnapshot sample(double progress,
+        [DownloadTransportStatus status = DownloadTransportStatus.running]) =>
+        DownloadTransportSnapshot(taskId: record.taskId, status: status, progress: progress);
+    final pending = <Future<void>>[];
+    var boundedStop = false;
+    try {
+      await observer.observe(record, sample(.1));
+      pending.add(observer.observe(record, sample(.2)));
+      await tester.pump();
+      for (var index = 0; index < 20; index++) {
+        pending.add(observer.observe(record, sample(.3 + index / 100)));
+      }
+      pending.add(observer.observe(record, sample(.5, DownloadTransportStatus.canceled)));
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pump();
+      boundedStop = calls.any((call) => call.method == 'stop');
+    } finally {
+      if (!lostUpdate.isCompleted) lostUpdate.complete(true);
+      await Future.wait(pending);
+      await observer.dispose();
+    }
+    expect(boundedStop, isTrue,
+      reason: 'terminal cleanup cannot wait one native timeout per stale progress sample');
+    expect(calls.where((call) => call.method == 'update').length, lessThan(4));
+  });
+
+  testWidgets(
+    'lost background lease waits for foreground before requesting another',
+    (tester) async {
+      final calls = <MethodCall>[];
+      var allowUpdate = false;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            if (call.method == 'start') return true;
+            if (call.method == 'update') return allowUpdate;
+            return true;
+          });
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final observer = IosDownloadContinuedProcessingObserverV2(
+        service: DownloadContinuedProcessingService(
+          onSystemCancel: (_) async {},
+          forceAvailableForTesting: true,
+        ),
+      );
+      final record = _terminalProgressRecord();
+      DownloadTransportSnapshot running(double progress) =>
+          DownloadTransportSnapshot(
+            taskId: record.taskId,
+            status: DownloadTransportStatus.running,
+            progress: progress,
+            totalBytes: 1000,
+          );
+      try {
+        await observer.observe(record, running(.25));
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        await observer.observe(record, running(.35));
+        await tester.pump(const Duration(seconds: 2));
+        await tester.pump();
+        await observer.observe(record, running(.45));
+        expect(calls.where((call) => call.method == 'update'), isNotEmpty);
+        expect(calls.where((call) => call.method == 'start'), hasLength(1));
+        expect(calls.where((call) => call.method == 'stop'), isEmpty);
+        allowUpdate = true;
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.pump();
+        await observer.observe(record, running(.55));
+        expect(calls.where((call) => call.method == 'start'), hasLength(2));
+      } finally {
+        await observer.dispose();
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+      }
+    },
+  );
+
+  test(
+    'native chunk bridge preserves attempt token for the range coordinator',
+    () async {
+      final updates = <Map<String, Object?>>[];
+      final observer = IosDownloadContinuedProcessingObserverV2(
+        forceAvailableForTesting: true,
+        onNativeChunkUpdate:
+            ({
+              required parentTaskId,
+              required chunkTaskId,
+              progress,
+              statusOrdinal,
+              writtenBytes,
+              expectedBytes,
+              attemptGeneration,
+              speedBytesPerSecond,
+              required completed,
+            }) {
+              updates.add({
+                'parentTaskId': parentTaskId,
+                'childTaskId': chunkTaskId,
+                'attemptGeneration': attemptGeneration,
+                'writtenBytes': writtenBytes,
+                'status': statusOrdinal,
+                'completed': completed,
+              });
+            },
+      );
+      try {
+        final completer = Completer<void>();
+        await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .handlePlatformMessage(
+              channel.name,
+              const StandardMethodCodec().encodeMethodCall(
+                const MethodCall('chunkUpdate', {
+                  'parentTaskId': 'aw_v2_claim_g1',
+                  'chunkTaskId': 'aw_v2_claim_g1.part.7',
+                  'attemptGeneration': 3,
+                  'writtenBytes': 42,
+                  'status': 2,
+                  'completed': true,
+                }),
+              ),
+              (_) => completer.complete(),
+            );
+        await completer.future;
+        expect(updates, [
+          {
+            'parentTaskId': 'aw_v2_claim_g1',
+            'childTaskId': 'aw_v2_claim_g1.part.7',
+            'attemptGeneration': 3,
+            'writtenBytes': 42,
+            'status': 2,
+            'completed': true,
+          },
+        ]);
+      } finally {
+        await observer.dispose();
+      }
+    },
+  );
 
   testWidgets('Manga page counts reach start, updates, checkpoint and verified finish', (tester) async {
     final calls = <MethodCall>[];
@@ -64,6 +254,39 @@ void main() {
       expect(finalUpdate['totalPages'], 23);
       expect(finalUpdate['progress'], 1);
       expect(calls.last.method, 'finish');
+    } finally {
+      await observer.dispose();
+    }
+  });
+
+  test('withdrawal invalidates an identical cached native plan after rejected pause', () async {
+    final checkpoints = <Map<Object?, Object?>>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'persistNativeQueue') {
+            final args = call.arguments as Map;
+            checkpoints.add(args);
+            return {'acceptedVersion': args['snapshotVersion'], 'nativePromotionAvailable': true};
+          }
+          return true;
+        });
+    final observer = IosDownloadContinuedProcessingObserverV2(
+      service: DownloadContinuedProcessingService(onSystemCancel: (_) async {}, forceAvailableForTesting: true),
+      nativeBackgroundPlans: () => const [],
+    );
+    final record = _terminalProgressRecord();
+    final running = DownloadTransportSnapshot(
+      taskId: record.taskId, status: DownloadTransportStatus.running, progress: .3,
+    );
+    try {
+      await observer.observe(record, running);
+      await observer.observe(record, running);
+      expect(checkpoints, hasLength(1));
+      final withdrawalTime = DateTime.now().microsecondsSinceEpoch;
+      DownloadContinuedProcessingService.invalidateNativeQueueCheckpoint();
+      await observer.observe(record, running);
+      expect(checkpoints, hasLength(2), reason: 'running truth after a rejected pause must restore native authority');
+      expect(checkpoints.last['snapshotCreatedAtMicros'] as int, greaterThanOrEqualTo(withdrawalTime));
     } finally {
       await observer.dispose();
     }

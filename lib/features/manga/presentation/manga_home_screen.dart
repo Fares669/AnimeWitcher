@@ -114,7 +114,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
             entry: entry,
             heroTag:
                 'manga_latest_all_${entry.manga.url}_${entry.chapter.id}_$index',
-            onTap: () => _open(entry.manga),
+            onTap: () => _open(context, entry.manga),
           ),
         ),
       ),
@@ -146,14 +146,14 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
             key: ValueKey<String>('manga-popular-all-${item.url}'),
             item: item,
             heroTag: 'manga_popular_all_${item.url}_$index',
-            onTap: () => _open(item),
+            onTap: () => _open(context, item),
           ),
         ),
       ),
     );
   }
 
-  void _open(MultimediaItem item) {
+  void _open(BuildContext context, MultimediaItem item) {
     MangaDetailsRoute($extra: MangaDetailsRouteExtra(item: item))
         .push<void>(context);
   }
@@ -206,7 +206,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
                 child: LatestMangaChaptersSection(
                   title: _arabic ? 'فصول جديدة' : 'New chapters',
                   items: _latest,
-                  onTap: (latest) => _open(latest.manga),
+                  onTap: (latest) => _open(context, latest.manga),
                   onViewAll: _openLatest,
                 ),
               ),
@@ -259,12 +259,10 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
                             final item = _popular[index];
                             return CatalogDirection(
                               child: MultimediaCard.fromItem(
-                                key: ValueKey<String>(
-                                  'manga-home-${item.url}',
-                                ),
+                                key: ValueKey<String>('manga-home-${item.url}'),
                                 item: item,
                                 heroTag: 'manga_home_${item.url}_$index',
-                                onTap: () => _open(item),
+                                onTap: () => _open(context, item),
                               ),
                             );
                           }, childCount: count),

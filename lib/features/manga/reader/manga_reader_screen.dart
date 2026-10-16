@@ -489,7 +489,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     Size size,
     MangaReaderSettings settings,
   ) {
-    if (!settings.usePageTapZones || settings.navigationLayout == 5) return;
+    if (!settings.usePageTapZones || settings.navigationLayout == 5) {
+      _toggleControls();
+      return;
+    }
 
     final x = size.width <= 0 ? 0.5 : details.localPosition.dx / size.width;
     final y = size.height <= 0 ? 0.5 : details.localPosition.dy / size.height;
@@ -510,19 +513,31 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
           previous();
         } else if (y > .75 && x > 2 / 3) {
           next();
+        } else {
+          _toggleControls();
         }
       case 2:
         if (y >= .25) {
           x < .5 ? previous() : next();
+        } else {
+          _toggleControls();
         }
       case 3:
         if (x < 1 / 7) {
           previous();
         } else if (x > 6 / 7) {
           next();
+        } else {
+          _toggleControls();
         }
       case 4:
-        x < .5 ? previous() : next();
+        if (x < 1 / 3) {
+          previous();
+        } else if (x > 2 / 3) {
+          next();
+        } else {
+          _toggleControls();
+        }
       default:
         if (y < 2 / 9) {
           top();
@@ -532,6 +547,8 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
           previous();
         } else if (x > 2 / 3) {
           next();
+        } else {
+          _toggleControls();
         }
     }
   }
@@ -918,7 +935,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         doublePage: doublePage,
         settings: settings,
         navigationController: _zoomNavigationController,
-        onDoubleTap: _toggleControls,
         trailingPage: _chapterTransitionPage(),
         onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
@@ -931,7 +947,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         doublePage: doublePage,
         settings: settings,
         navigationController: _zoomNavigationController,
-        onDoubleTap: _toggleControls,
         trailingPage: _chapterTransitionPage(),
         onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
@@ -944,7 +959,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         doublePage: doublePage,
         settings: settings,
         navigationController: _zoomNavigationController,
-        onDoubleTap: _toggleControls,
         trailingPage: _chapterTransitionPage(),
         onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
@@ -958,7 +972,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         doublePage: doublePage,
         settings: settings,
         controller: _continuousController,
-        onDoubleTap: _toggleControls,
         trailingPage: _chapterTransitionPage(),
         onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
@@ -970,7 +983,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         settings: settings,
         doublePage: doublePage,
         controller: _continuousController,
-        onDoubleTap: _toggleControls,
         trailingPage: _chapterTransitionPage(),
         onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
@@ -983,7 +995,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         reverse: false,
         settings: settings,
         controller: _continuousController,
-        onDoubleTap: _toggleControls,
         trailingPage: _chapterTransitionPage(),
         onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
@@ -996,7 +1007,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         reverse: true,
         settings: settings,
         controller: _continuousController,
-        onDoubleTap: _toggleControls,
         trailingPage: _chapterTransitionPage(),
         onTrailingAdvance: _controller.canNext ? _openNextChapter : null,
         onPageChanged: (value) => _onPageChanged(value, settings),
@@ -1480,10 +1490,11 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
                           Size(constraints.maxWidth, constraints.maxHeight),
                           settings,
                         ),
-                        onDoubleTap: _toggleControls,
-                        onLongPress: settings.showActionsOnLongTap
-                            ? _showImageActions
-                            : _toggleControls,
+                        // The page owns double-tap zoom. Absorb double taps
+                        // outside it (or with zoom disabled) and holds so they
+                        // cannot become single taps when released.
+                        onDoubleTap: () {},
+                        onLongPress: () {},
                         onSecondaryTap: _showImageActions,
                         child: MangaReaderFilterLayer(
                           settings: settings,

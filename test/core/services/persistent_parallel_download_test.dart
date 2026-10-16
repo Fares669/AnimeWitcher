@@ -92,7 +92,7 @@ void main() {
   });
 
   Future<void> waitUntil(bool Function() predicate) async {
-    for (var i = 0; i < 200; i++) {
+    for (var i = 0; i < 600; i++) {
       if (predicate()) return;
       await Future<void>.delayed(const Duration(milliseconds: 5));
     }
@@ -130,11 +130,25 @@ void main() {
     }
   }
 
-  Future<void> completePart(DownloadTask task, List<int> bytes) async {
+  Future<void> completePart(
+    DownloadTask task,
+    List<int> bytes, {
+    int? resourceSize,
+  }) async {
     final file = File(await task.filePath());
     await file.parent.create(recursive: true);
     await file.writeAsBytes(bytes, flush: true);
-    coordinator.handleUpdate(TaskStatusUpdate(task, TaskStatus.complete));
+    var update = TaskStatusUpdate(task, TaskStatus.complete);
+    if (resourceSize != null) {
+      update = update.copyWith(
+        responseStatusCode: 206,
+        responseHeaders: <String, String>{
+          'content-range':
+              '${task.headers['Range']!.replaceFirst('=', ' ')}/$resourceSize',
+        },
+      );
+    }
+    coordinator.handleUpdate(update);
     await Future<void>.delayed(Duration.zero);
   }
 
@@ -356,7 +370,7 @@ void main() {
     }, probes);
   });
 
-  test('fresh native completion bytes still allow immediate disk adoption', () async {
+  test('fresh native completion bytes allow verified disk adoption', () async {
     await coordinator.dispose();
     coordinator = create(diskProgressPollInterval: const Duration(milliseconds: 10));
     expect(await coordinator.start(parent, 100), isTrue);
@@ -657,7 +671,7 @@ void main() {
       completed: true,
     );
 
-    expect(records[first.taskId]?.status, TaskStatus.complete);
+    await waitUntil(() => records[first.taskId]?.status == TaskStatus.complete);
     expect(coordinator.progressFor(parent.taskId), greaterThanOrEqualTo(.2));
     await waitUntil(() => starts.length >= 3);
   });
@@ -710,7 +724,7 @@ void main() {
       expect(coordinator.activeConnectionCount, 1);
       expect(statuses.last, TaskStatus.paused);
 
-      await completePart(first, <int>[0, 1, 2, 3, 4]);
+      await completePart(first, <int>[0, 1, 2, 3, 4], resourceSize: 25);
       await waitUntil(() => coordinator.activeConnectionCount == 0);
       await waitUntil(() => settled.contains(parent.taskId));
       expect(records[first.taskId]?.status, TaskStatus.complete);
@@ -953,7 +967,10 @@ void main() {
       expect(await coordinator.start(parent, 25), isTrue);
       await expandFreshTo(5);
       final original = List<DownloadTask>.from(starts);
-      await completePart(original.first, [0, 1, 2, 3, 4]);
+      await completePart(original.first, [0, 1, 2, 3, 4], resourceSize: 25);
+      await waitUntil(
+        () => records[original.first.taskId]?.status == TaskStatus.complete,
+      );
       await coordinator.pause(parent);
       expect(pauses, isNot(contains(original.first.taskId)));
       starts.clear();
@@ -1169,6 +1186,7 @@ void main() {
         },
       );
       expect(await coordinator.start(parent, 25), isTrue);
+      await waitUntil(() => statuses.contains(TaskStatus.complete));
       expect(checkedHeadroom, isTrue);
       expect(starts, isEmpty);
       expect(await target.readAsBytes(), List<int>.generate(25, (i) => i));

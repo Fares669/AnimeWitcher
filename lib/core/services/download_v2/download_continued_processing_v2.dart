@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../download_continued_processing_service.dart';
 import 'download_v2_models.dart';
+import 'download_v2_diagnostics.dart';
 
 /// Presentation-only observer for V2 transport snapshots.
 ///
@@ -175,9 +176,14 @@ DownloadContinuedProcessingService _newV2ContinuedProcessingService(
     required double bytesPerSecond,
   })? onNativeNetworkSpeed,
   NativeParallelPauseReadinessV2? pauseReadiness,
+  SystemDownloadChunkUpdate? onNativeChunkUpdate,
+  bool forceAvailableForTesting,
 ) {
   final speeds = NativeParallelSpeedAccumulatorV2();
   return DownloadContinuedProcessingService(
+    // Test-only observer construction passes this through to the real bridge.
+    // ignore: invalid_use_of_visible_for_testing_member
+    forceAvailableForTesting: forceAvailableForTesting,
     // V2 system UI is observation-only. A native overlay callback must not
     // become a second cancel/transport control path.
     onSystemCancel: (_) async {},
@@ -193,6 +199,17 @@ DownloadContinuedProcessingService _newV2ContinuedProcessingService(
           speedBytesPerSecond,
           required completed,
         }) {
+          onNativeChunkUpdate?.call(
+            parentTaskId: parentTaskId,
+            chunkTaskId: chunkTaskId,
+            progress: progress,
+            statusOrdinal: statusOrdinal,
+            writtenBytes: writtenBytes,
+            expectedBytes: expectedBytes,
+            attemptGeneration: attemptGeneration,
+            speedBytesPerSecond: speedBytesPerSecond,
+            completed: completed,
+          );
           pauseReadiness?.observe(
             parentTaskId: parentTaskId,
             childTaskId: chunkTaskId,
@@ -229,30 +246,55 @@ final class IosDownloadContinuedProcessingObserverV2
       required double bytesPerSecond,
     })? onNativeNetworkSpeed,
     NativeParallelPauseReadinessV2? pauseReadiness,
+    SystemDownloadChunkUpdate? onNativeChunkUpdate,
     List<Map<String, Object>> Function()? nativeBackgroundPlans,
     void Function()? releaseNativeBackgroundOffers,
+    Future<void> Function()? reconcileNativeBackgroundTransfers,
+    DownloadDiagnosticsV2? diagnostics,
+    bool forceAvailableForTesting = false,
   }) : _service =
            service ??
            _newV2ContinuedProcessingService(
              onNativeNetworkSpeed,
              pauseReadiness,
+             onNativeChunkUpdate,
+             forceAvailableForTesting,
            ),
        _nativeBackgroundPlans = nativeBackgroundPlans,
-       _releaseNativeBackgroundOffers = releaseNativeBackgroundOffers {
+       _releaseNativeBackgroundOffers = releaseNativeBackgroundOffers,
+       _reconcileNativeBackgroundTransfers = reconcileNativeBackgroundTransfers,
+       _diagnostics = diagnostics ?? const NoopDownloadDiagnosticsV2() {
     // A BGContinuedProcessing lease can expire while URLSession keeps writing.
     // Do not let the old Dart _sessionActive flag suppress the new system task.
     _service.onSessionLost ??= _recoverLostSystemSession;
     _lifecycleListener = AppLifecycleListener(
       onResume: _refreshSystemSessionOnForeground,
+      onStateChange: (state) {
+        _diagnostics.recordTransport('background.lifecycle', {
+          'status': state.name,
+          'count': _outstanding.length,
+          'result': _sessionActive,
+        });
+      },
     );
   }
 
   final DownloadContinuedProcessingService _service;
+  final DownloadDiagnosticsV2 _diagnostics;
   late final AppLifecycleListener _lifecycleListener;
 
   void _recoverLostSystemSession() {
     if (_disposed || !_sessionActive) return;
     _sessionActive = false;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _deferSystemRequestUntilForeground =
+        lifecycle != null && lifecycle != AppLifecycleState.resumed;
+    _diagnostics.recordTransport('background.leaseLost', {
+      'status': lifecycle?.name ?? 'unknown',
+      'count': _outstanding.length,
+      'result': !_deferSystemRequestUntilForeground,
+    });
+    if (_deferSystemRequestUntilForeground) return;
     final active = _outstanding.values.where(_isPackageOwnedActive).firstOrNull;
     if (active != null) {
       unawaited(observe(active.record, active.snapshot));
@@ -261,20 +303,39 @@ final class IosDownloadContinuedProcessingObserverV2
 
   void _refreshSystemSessionOnForeground() {
     if (_disposed) return;
+    _deferSystemRequestUntilForeground = false;
+    unawaited(_reconcileForegroundThenRefresh());
+  }
+
+  Future<void> _reconcileForegroundThenRefresh() async {
+    try {
+      await _reconcileNativeBackgroundTransfers?.call();
+    } catch (error) {
+      _diagnostics.recordTransport('background.reconcileRejected', {
+        'errorType': error.runtimeType.toString(),
+      });
+    }
+    if (_disposed) return;
+    _nativeQueueSignature = null;
     final active = _outstanding.values.where(_isPackageOwnedActive).firstOrNull;
     if (active != null) {
       unawaited(observe(active.record, active.snapshot));
     }
   }
+
   final List<Map<String, Object>> Function()? _nativeBackgroundPlans;
   final void Function()? _releaseNativeBackgroundOffers;
+  final Future<void> Function()? _reconcileNativeBackgroundTransfers;
   final Map<String, _ContinuedEntryV2> _outstanding =
       <String, _ContinuedEntryV2>{};
   final Set<String> _sessionMembers = <String>{};
   final Set<String> _completedMembers = <String>{};
 
   Future<void> _tail = Future<void>.value();
+  final Map<String, _PendingContinuedEntryV2> _pendingObservations = {};
+  bool _drainingObservations = false;
   bool _sessionActive = false;
+  bool _deferSystemRequestUntilForeground = false;
   bool _disposed = false;
   String? _nativeQueueSignature;
 
@@ -284,14 +345,37 @@ final class IosDownloadContinuedProcessingObserverV2
     DownloadTransportSnapshot snapshot,
   ) {
     if (_disposed) return Future<void>.value();
-    final result = _tail
-        .catchError((Object _) {})
-        .then((_) => _observeNow(record, snapshot));
-    _tail = result.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace __) {},
+    final result = Completer<void>();
+    final key = record.logicalId.value;
+    final pending = _pendingObservations[key];
+    // One newest sample per logical item, so a slow native ACK cannot make
+    // deletion wait for a timeout for every obsolete progress observation.
+    _pendingObservations[key] = _PendingContinuedEntryV2(
+      _ContinuedEntryV2(record, snapshot),
+      [...?pending?.waiters, result],
     );
-    return result;
+    if (!_drainingObservations) {
+      _drainingObservations = true;
+      _tail = Future<void>.microtask(_drainObservations);
+    }
+    return result.future;
+  }
+
+  Future<void> _drainObservations() async {
+    try {
+      while (_pendingObservations.isNotEmpty) {
+        final key = _pendingObservations.keys.first;
+        final pending = _pendingObservations.remove(key)!;
+        try {
+          await _observeNow(pending.entry.record, pending.entry.snapshot);
+          for (final waiter in pending.waiters) { waiter.complete(); }
+        } catch (error, stack) {
+          for (final waiter in pending.waiters) { waiter.completeError(error, stack); }
+        }
+      }
+    } finally {
+      _drainingObservations = false;
+    }
   }
 
   Future<void> _observeNow(
@@ -337,10 +421,12 @@ final class IosDownloadContinuedProcessingObserverV2
         .where(_isPackageOwnedActive)
         .toList(growable: false);
 
-    if (snapshot.status == DownloadTransportStatus.complete && _sessionActive) {
+    if (snapshot.status == DownloadTransportStatus.complete &&
+        (_sessionActive || _sessionMembers.contains(logicalId))) {
       // Update the native snapshot to an unequivocal final value before asking
       // the completion guard to close the session.
       await _service.update(
+        immediate: true,
         taskId: snapshot.taskId,
         displayName: _displayName(record),
         progress: 1,
@@ -390,6 +476,9 @@ final class IosDownloadContinuedProcessingObserverV2
       );
 
       if (!_sessionActive) {
+        // URLSession remains independent after lease expiration. New continued
+        // processing requests require foreground user intent; retry on resume.
+        if (_deferSystemRequestUntilForeground) return;
         _sessionActive = await _service.start(
           taskId: currentSnapshot.taskId,
           displayName: _displayName(currentRecord),
@@ -405,6 +494,7 @@ final class IosDownloadContinuedProcessingObserverV2
         );
       } else {
         await _service.update(
+          immediate: true,
           taskId: currentSnapshot.taskId,
           displayName: _displayName(currentRecord),
           progress: currentSnapshot.progress,
@@ -421,7 +511,9 @@ final class IosDownloadContinuedProcessingObserverV2
       return;
     }
 
-    if (!_sessionActive || _outstanding.isNotEmpty) return;
+    // A lost start ACK does not prove the OS never attached its task.
+    if (_outstanding.isNotEmpty ||
+        (!_sessionActive && _sessionMembers.isEmpty)) return;
 
     await _checkpointNativeQueue(
       activeEntries: const <_ContinuedEntryV2>[],
@@ -475,7 +567,7 @@ final class IosDownloadContinuedProcessingObserverV2
       ];
       final signature = activeEntries.isEmpty
           ? 'clear:${current.snapshot.taskId}:${paused ? 'paused' : 'idle'}'
-          : 'active:${_nativePlanSignature(plans)}:${activeTaskIds.join(',')}';
+          : 'active:${_nativePlanSignature(plans)}:${activeTaskIds.join(',')}:control${DownloadContinuedProcessingService.nativeQueueControlGeneration}';
       final pageSignature = current.record.mediaKind == DownloadMediaKind.mangaChapter
           ? '$signature:${current.snapshot.taskId}:${current.snapshot.completedPages}:${current.snapshot.totalPages}'
           : signature;
@@ -514,6 +606,18 @@ final class IosDownloadContinuedProcessingObserverV2
         sessionCurrentIndex: currentIndex,
         multipartPlans: plans,
       );
+
+      _diagnostics.recordTransport('background.checkpoint', {
+        'taskId': snapshot.taskId,
+        'count': plans.length,
+        'manifestPartCount': plans.fold<int>(0, (count, plan) {
+          final waiters = plan['waiters'];
+          return count + (waiters is List ? waiters.length : 0);
+        }),
+        'result': accepted != null,
+        'nativeLive': _service.nativePromotionAvailable,
+        'configuredConnections': maxConcurrent,
+      });
 
       // A durable ACK with an unavailable native hook is not proof that iOS can
       // refill. Leave the signature unset so the next foreground sample retries
@@ -600,6 +704,7 @@ final class IosDownloadContinuedProcessingObserverV2
       snapshot.networkSpeedMBps > 0 ? snapshot.networkSpeedMBps * 1000000 : 0;
 
   void _resetSession() {
+    _deferSystemRequestUntilForeground = false;
     _sessionActive = false;
     _nativeQueueSignature = null;
     _sessionMembers.clear();
@@ -623,4 +728,11 @@ final class _ContinuedEntryV2 {
 
   final LogicalDownloadRecordV2 record;
   final DownloadTransportSnapshot snapshot;
+}
+
+final class _PendingContinuedEntryV2 {
+  const _PendingContinuedEntryV2(this.entry, this.waiters);
+
+  final _ContinuedEntryV2 entry;
+  final List<Completer<void>> waiters;
 }

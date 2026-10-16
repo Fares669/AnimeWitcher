@@ -6,8 +6,11 @@ void main() {
   final queue = File('ios/Runner/DownloadNativeWaitingQueue.swift')
       .readAsStringSync();
   final manager = File('ios/Runner/DownloadContinuedProcessingManager.swift')
-      .readAsStringSync();
-  final delegate = File('ios/Runner/AppDelegate.swift').readAsStringSync();
+      .readAsStringSync()
+      .replaceAll('\r\n', '\n');
+  final delegate = File('ios/Runner/AppDelegate.swift')
+      .readAsStringSync()
+      .replaceAll('\r\n', '\n');
 
   test('foreground byte callbacks use a locked lifecycle cache', () {
     final start = queue.indexOf('private static func isAppInForeground()');
@@ -34,6 +37,16 @@ void main() {
       lessThan(handler.indexOf('Task { @MainActor')),
     );
     expect(handler, contains('self.activeTask === task'));
+    final identityFence = handler.indexOf('self.activeTask === task');
+    for (final reset in [
+      'self.activeTask = nil',
+      'self.activeTaskCompletion = nil',
+      'self.snapshot = nil',
+      'self.identifier = nil',
+      'self.resetNativeAggregateBaseline()',
+    ]) {
+      expect(handler.indexOf(reset), greaterThan(identityFence));
+    }
     expect(
       handler,
       contains('completion.finish { task.setTaskCompleted(success: false) }'),
@@ -45,6 +58,26 @@ void main() {
       ),
     );
     expect(handler, isNot(contains('cancellationHandler?')));
+  });
+
+  test('explicit app stop stays a separate end-session bridge', () {
+    final start = manager.indexOf('  func stop(');
+    final end = manager.indexOf('\n  private func completeSession(', start);
+    final stop = manager.substring(start, end);
+    expect(stop, contains('guard endSession else { return }'));
+    expect(
+      stop,
+      contains('completeSession(success: false, status: "canceled")'),
+    );
+
+    final bridgeStart = delegate.indexOf('case "stop":');
+    final bridgeEnd = delegate.indexOf('\n          default:', bridgeStart);
+    final bridge = delegate.substring(bridgeStart, bridgeEnd);
+    expect(bridge, contains('manager.stop('));
+    expect(
+      bridge,
+      contains('endSession: arguments["endSession"] as? Bool ?? false'),
+    );
   });
 
   test('native queue protects complete payloads with a Keychain key', () {
@@ -70,7 +103,10 @@ void main() {
 
   test('native V2 parent background samples include measured speed', () {
     final start = queue.indexOf('if id.hasPrefix("aw_v2_") {');
-    final end = queue.indexOf('guard nativePromotionAvailable else { return }', start);
+    final end = queue.indexOf(
+      'guard nativePromotionAvailable else { return }',
+      start,
+    );
     expect(start, greaterThanOrEqualTo(0));
     expect(end, greaterThan(start));
     final parent = queue.substring(start, end);

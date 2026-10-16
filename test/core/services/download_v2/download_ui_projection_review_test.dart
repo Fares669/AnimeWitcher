@@ -1,12 +1,15 @@
 import '../../../support/widget_completion.dart';
 import 'dart:async';
+import 'dart:io';
 
+import 'package:collection/collection.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
 import 'package:animewitcher/core/services/download_v2/download_manager_v2.dart';
+import 'package:animewitcher/core/services/download_v2/download_continued_processing_v2.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 
@@ -18,8 +21,145 @@ import 'package:animewitcher/features/library/presentation/download_progress_v2_
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:background_downloader/background_downloader.dart' show TaskStatus, DownloadTask;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  test('tracking cleanup failure stays visible and retry deletes without restarting iOS', () async {
+    const channel = MethodChannel('com.animewitcher.app/download_continued_processing');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return true;
+        });
+    final root = await Directory.systemTemp.createTemp('aw-ui-cleanup-retry-');
+    final file = File('${root.path}/episode.mp4');
+    await file.writeAsBytes([1, 2, 3]);
+    final store = _CountingStore();
+    final logical = logicalDownloadIdFor(animeId: 'cleanup', episodeKey: '1', variantKey: '480p');
+    final gateway = _ReaddGateway();
+    final manager = DownloadManagerV2(
+      store: store, gateway: gateway, sourceResolver: StaticSourceResolverV2(),
+      presentationObservers: [IosDownloadContinuedProcessingObserverV2(forceAvailableForTesting: true)],
+    );
+    final storage = _DownloadMetadataStorage();
+    storage.metadata[logical.value] = {
+      'logicalId': logical.value,
+      'item': MultimediaItem(title: 'Show', url: 'show://cleanup', posterUrl: '').toJson(),
+    };
+    final container = ProviderContainer(overrides: [
+      downloadManagerV2Provider.overrideWithValue(manager),
+      logicalDownloadStoreV2Provider.overrideWithValue(store),
+      storageServiceProvider.overrideWithValue(storage),
+    ]);
+    try {
+      final record = await manager.start(DownloadStartRequestV2(
+        logicalId: logical, mediaId: 'show', unitKey: 'episode://cleanup',
+        variantKey: '480p', destinationPath: file.path, sourceDescriptor: const {},
+        allowPause: true, retries: 0, parallelChunks: 1,
+      ));
+      container.listen(downloadsProvider, (_, __) {});
+      await container.read(downloadsProvider.future);
+      for (var i = 0; i < 20; i++) { await Future<void>.delayed(Duration.zero); }
+      expect(calls.where((call) => call.method == 'start'), isNotEmpty);
+      calls.clear();
+      gateway.removeTrackingError = StateError('raw owner inventory failed');
+
+      await expectLater(
+        container.read(downloadsProvider.notifier).removeDownload(container.read(downloadsProvider).requireValue.single),
+        throwsStateError,
+      );
+      for (var i = 0; i < 20; i++) { await Future<void>.delayed(Duration.zero); }
+      final pending = (await store.get(logical))!;
+      expect(pending.intent, DownloadUserIntent.canceled);
+      expect(pending.failureCategory, DownloadFailureCategory.filesystem);
+      expect(manager.snapshotFor(logical)?.status, DownloadTransportStatus.failed);
+      final visible = container.read(downloadsProvider).requireValue.single;
+      expect(visible.id, record.taskId);
+      expect(visible.status, TaskStatus.failed);
+      expect(await file.exists(), isTrue);
+      expect(storage.metadata, isNotEmpty);
+      expect(calls.where((call) => call.method == 'start'), isEmpty);
+      expect(calls.where((call) => call.method == 'stop'), isNotEmpty);
+
+      calls.clear();
+      gateway.removeTrackingError = null;
+      await container.read(downloadsProvider.notifier).retryDownload(visible.id);
+      for (var i = 0; i < 20; i++) { await Future<void>.delayed(Duration.zero); }
+      expect(await store.get(logical), isNull);
+      expect(await file.exists(), isFalse);
+      expect(storage.metadata, isEmpty);
+      expect(container.read(downloadsProvider).requireValue, isEmpty);
+      expect(calls.where((call) => call.method == 'start'), isEmpty);
+      expect(gateway.starts, 1, reason: 'Retry must finish deletion instead of starting another generation');
+    } finally {
+      container.dispose();
+      await manager.dispose();
+      await root.delete(recursive: true);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+    }
+  });
+
+  for (final lateNativeSettlement in [false, true]) {
+  test('cancel timeout keeps the exact live writer visible until ${lateNativeSettlement ? 'native settlement' : 'delete retry succeeds'}', () async {
+    final store = _CountingStore();
+    const logical = DownloadLogicalId('cancel-timeout-live-writer');
+    final gateway = _ReaddGateway();
+    final manager = DownloadManagerV2(
+      store: store, gateway: gateway, sourceResolver: StaticSourceResolverV2(),
+    );
+    final storage = _DownloadMetadataStorage();
+    storage.metadata[logical.value] = {
+      'logicalId': logical.value,
+      'item': MultimediaItem(title: 'Show', url: 'show://1', posterUrl: '').toJson(),
+    };
+    final container = ProviderContainer(overrides: [
+      downloadManagerV2Provider.overrideWithValue(manager),
+      logicalDownloadStoreV2Provider.overrideWithValue(store),
+      storageServiceProvider.overrideWithValue(storage),
+    ]);
+    try {
+      final record = await manager.start(DownloadStartRequestV2(
+        logicalId: logical, mediaId: 'show', unitKey: 'episode://cancel-timeout',
+        variantKey: '480p', destinationPath: '/tmp/cancel-timeout-live-writer.mp4',
+        sourceDescriptor: const {}, allowPause: true, retries: 0, parallelChunks: 1,
+      ));
+      container.listen(downloadsProvider, (_, __) {});
+      await container.read(downloadsProvider.future);
+      final handle = gateway.handles[record.taskId]!;
+      handle.onCancel = () async => throw TimeoutException('native acknowledgement');
+
+      final original = container.read(downloadsProvider).requireValue.single;
+      await expectLater(
+        container.read(downloadsProvider.notifier).removeDownload(original),
+        throwsA(isA<TimeoutException>()),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect((await store.get(logical))?.intent, DownloadUserIntent.canceled);
+      final live = container.read(downloadsProvider).requireValue.single;
+      expect(live.id, record.taskId);
+      expect(live.status, TaskStatus.running);
+
+      if (lateNativeSettlement) {
+        handle.setSnapshot(DownloadTransportSnapshot(
+          taskId: record.taskId, status: DownloadTransportStatus.canceled, progress: 0,
+        ));
+      } else {
+        handle.onCancel = null;
+        await container.read(downloadsProvider.notifier).removeDownload(live);
+        expect(await store.get(logical), isNull);
+        expect(storage.metadata, isEmpty);
+      }
+      await Future<void>.delayed(Duration.zero);
+      expect(container.read(downloadsProvider).requireValue, isEmpty);
+    } finally {
+      container.dispose();
+      await manager.dispose();
+    }
+  });
+  }
+
   testWidgets('paused intent exposes a live writer and refreshes progress without durable reads', (tester) async {
     final store = _CountingStore();
     const logical = DownloadLogicalId('paused-live-writer');
@@ -48,6 +188,7 @@ void main() {
       storageServiceProvider.overrideWithValue(storage),
     ]);
     try {
+      await pumpUntilFuture(tester, manager.initialize(), 'paused writer transport startup');
       container.listen(downloadsProvider, (_, __) {});
       await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'paused writer downloads projection');
       await tester.pump();
@@ -94,6 +235,7 @@ void main() {
         storageServiceProvider.overrideWithValue(storage),
       ]);
       try {
+        await pumpUntilFuture(tester, manager.initialize(), 'idle paused transport startup');
         var publications = 0;
         container.listen(downloadsProvider, (_, next) { if (next.hasValue) publications++; });
         await pumpUntilFuture(tester, container.read(downloadsProvider.future), 'acceptance downloads projection');
@@ -334,16 +476,26 @@ final class _DownloadMetadataStorage extends MemoryStorageService {
   Future<void> removeDownloadMetadata(String taskId) async {
     metadata.remove(taskId);
   }
+
+  @override
+  Future<bool> removeDownloadMetadataIfUnchanged(String taskId, Map<String, dynamic> expected) async {
+    if (!const DeepCollectionEquality().equals(metadata[taskId], expected)) return false;
+    metadata.remove(taskId);
+    return true;
+  }
 }
 
 final class _ReaddGateway implements BackgroundDownloaderGateway {
   final Map<String, _ReaddHandle> handles = {};
+  Object? removeTrackingError;
+  int starts = 0;
 
   @override
   Future<void> initialize() async {}
 
   @override
   Future<DownloadTransportHandle> start(DownloadTaskSpecV2 spec) async {
+    starts++;
     final handle = _ReaddHandle(spec.taskId);
     handles[spec.taskId] = handle;
     return handle;
@@ -357,6 +509,8 @@ final class _ReaddGateway implements BackgroundDownloaderGateway {
 
   @override
   Future<void> removeTracking(String taskId) async {
+    final error = removeTrackingError;
+    if (error != null) throw error;
     handles.remove(taskId);
   }
 }
@@ -382,6 +536,7 @@ final class _ReaddHandle implements DownloadTransportHandle {
   Stream<DownloadTransportSnapshot> get snapshots => _changes.stream;
 
   bool rejectPause = false;
+  Future<bool> Function()? onCancel;
 
   void setSnapshot(DownloadTransportSnapshot snapshot) {
     _current = snapshot;
@@ -409,6 +564,8 @@ final class _ReaddHandle implements DownloadTransportHandle {
 
   @override
   Future<bool> cancel() async {
+    final action = onCancel;
+    if (action != null) return action();
     _current = DownloadTransportSnapshot(
       taskId: taskId,
       status: DownloadTransportStatus.canceled,

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/services/download_v2/download_persistent_storage_v2.dart';
 import '../../../core/storage/settings_repository.dart';
 import '../../skip/data/aniskip_service.dart';
 import '../../skip/data/mal_id_resolver.dart';
@@ -19,7 +20,7 @@ Future<void> requestDownloadPermissionsV2({
   bool requestNotifications = true,
 }) async {
   if (requestNotifications && (Platform.isIOS || Platform.isAndroid)) {
-    final downloader = bd.FileDownloader();
+    final downloader = configuredFileDownloaderV2();
     final status = await downloader.permissions.status(
       bd.PermissionType.notifications,
     );

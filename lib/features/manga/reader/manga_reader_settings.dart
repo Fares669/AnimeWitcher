@@ -196,8 +196,8 @@ class MangaReaderSettings {
   /// percent.
   final int verticalBarHeight;
 
-  /// A long press opens the page's actions — save, share, set as cover —
-  /// rather than showing or hiding the bars.
+  /// Legacy preference kept for stored settings compatibility. Long presses
+  /// no longer open page actions or toggle the reader bars.
   final bool showActionsOnLongTap;
 
   bool usesVerticalBar(MangaReaderMode mode) => verticalBarModes.contains(mode);

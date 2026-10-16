@@ -8,14 +8,16 @@ void main() {
   group('DM-14 canonical download containment regressions', () {
     test('lookalike download roots are not treated as app-owned', () {
       expect(
-        pathIsInsideAppDownloads(
+        pathIsInsideConfiguredAppDownloads(
           '/tmp/AnimeWitcher/Downloads-Backup/unknown-user-file.mp4',
+          ['/tmp/AnimeWitcher/Downloads'],
         ),
         isFalse,
       );
       expect(
-        pathIsInsideAppDownloads(
+        pathIsInsideConfiguredAppDownloads(
           '/tmp/PrefixAnimeWitcher/Downloads/user-file.mp4',
+          ['/tmp/AnimeWitcher/Downloads'],
         ),
         isFalse,
       );
@@ -23,8 +25,9 @@ void main() {
 
     test('dot-dot escape is not treated as contained', () {
       expect(
-        pathIsInsideAppDownloads(
+        pathIsInsideConfiguredAppDownloads(
           '/tmp/AnimeWitcher/Downloads/Series/../../outside/user-file.mp4',
+          ['/tmp/AnimeWitcher/Downloads'],
         ),
         isFalse,
       );
@@ -32,8 +35,9 @@ void main() {
 
     test('mixed separators cannot disguise a dot-dot escape', () {
       expect(
-        pathIsInsideAppDownloads(
+        pathIsInsideConfiguredAppDownloads(
           r'C:\Users\me\AnimeWitcher\Downloads\Series\..\..\outside\user-file.mp4',
+          [r'C:\Users\me\AnimeWitcher\Downloads'],
         ),
         isFalse,
       );
@@ -60,7 +64,10 @@ void main() {
         p.join(downloadsLink.path, 'Series', 'episode.mp4'),
       );
 
-      await deleteSeriesFolderIfNoVideosRemain(lexicalDeletedVideo);
+      await deleteSeriesFolderIfNoVideosRemain(
+        lexicalDeletedVideo,
+        appDownloadRoots: [downloadsLink.path],
+      );
 
       expect(
         await unknown.exists(),
@@ -85,7 +92,10 @@ void main() {
       await unknown.writeAsString('keep', flush: true);
       final deletedVideo = File(p.join(series.path, 'episode.mp4'));
 
-      await deleteSeriesFolderIfNoVideosRemain(deletedVideo);
+      await deleteSeriesFolderIfNoVideosRemain(
+        deletedVideo,
+        appDownloadRoots: [series.parent.path],
+      );
 
       expect(
         await unknown.exists(),

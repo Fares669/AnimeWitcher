@@ -14,16 +14,19 @@ Future<File?> ensureDownloadedEpisodeArtwork({
   required String taskId,
   required Episode? episode,
   String? logicalId,
+  MultimediaItem? item,
   bool allowMetadataBackfill = true,
 }) async {
   final logical = logicalId?.trim() ?? '';
   if (!allowMetadataBackfill) {
     // Reading an already-owned copy needs no live metadata. Unknown task-key
     // metadata never imports a legacy file into a logical variant's ownership.
-    return logical.isEmpty ? await existingDownloadedEpisodeArtwork(taskId)
+    return logical.isEmpty
+        ? await existingDownloadedEpisodeArtwork(taskId)
         : await downloadArtworkStoreV2.existing(
-      logical, DownloadArtworkKindV2.episode,
-    );
+            logical,
+            DownloadArtworkKindV2.episode,
+          );
   }
   if (logical.isEmpty) {
     // Old callers may have lost remote metadata after an offline restart.
@@ -34,6 +37,7 @@ Future<File?> ensureDownloadedEpisodeArtwork({
     logicalId: logical.isEmpty ? taskId : logical,
     kind: DownloadArtworkKindV2.episode,
     url: episode?.posterUrl,
+    fallbackUrls: [item?.bannerUrl, item?.posterUrl],
     legacyTaskId: taskId,
   );
 }
@@ -45,7 +49,9 @@ Future<File?> ensureDownloadedPosterArtwork({
   required String logicalId,
   required String? posterUrl,
 }) => downloadArtworkStoreV2.ensure(
-  logicalId: logicalId, kind: DownloadArtworkKindV2.poster, url: posterUrl,
+  logicalId: logicalId,
+  kind: DownloadArtworkKindV2.poster,
+  url: posterUrl,
 );
 
 Future<void> retainDownloadedArtwork({
@@ -55,8 +61,16 @@ Future<void> retainDownloadedArtwork({
   required Episode? episode,
 }) async {
   await Future.wait([
-    ensureDownloadedEpisodeArtwork(taskId: taskId, logicalId: logicalId, episode: episode),
-    ensureDownloadedPosterArtwork(logicalId: logicalId, posterUrl: item.posterUrl),
+    ensureDownloadedEpisodeArtwork(
+      taskId: taskId,
+      logicalId: logicalId,
+      episode: episode,
+      item: item,
+    ),
+    ensureDownloadedPosterArtwork(
+      logicalId: logicalId,
+      posterUrl: item.posterUrl,
+    ),
   ]);
 }
 

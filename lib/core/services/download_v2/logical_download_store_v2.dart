@@ -1,4 +1,4 @@
-import 'package:hive_flutter/hive_flutter.dart';
+import '../../storage/download_persistence_worker.dart';
 
 import 'download_v2_identity.dart';
 import 'download_v2_models.dart';
@@ -85,24 +85,32 @@ final class InMemoryLogicalDownloadStoreV2 implements LogicalDownloadStoreV2 {
 /// from background_downloader's database. Values contain only
 /// [LogicalDownloadRecordV2.toJson] application metadata.
 final class HiveLogicalDownloadStoreV2 implements LogicalDownloadStoreV2 {
-  HiveLogicalDownloadStoreV2({this.boxName = kLogicalDownloadStoreV2Box});
+  HiveLogicalDownloadStoreV2({
+    this.boxName = kLogicalDownloadStoreV2Box,
+    DownloadPersistenceWorker? worker,
+  }) : _worker = worker == null ? null : Future.value(worker);
 
   final String boxName;
   final _mutations = _LogicalMutationQueue();
 
-  Future<Box<dynamic>> _box() => Hive.openBox<dynamic>(boxName);
+  Future<DownloadPersistenceWorker>? _worker;
+
+  Future<dynamic> _run(String operation, List<Object?> arguments) async {
+    final worker = await (_worker ??= DownloadPersistenceWorker.application());
+    return worker.run(operation, <Object?>[boxName, ...arguments]);
+  }
 
   @override
   Future<LogicalDownloadRecordV2?> get(DownloadLogicalId id) async {
-    final raw = (await _box()).get(id.value);
+    final raw = await _run('hive.get', [id.value]);
     return LogicalDownloadRecordV2.fromJson(raw);
   }
 
   @override
   Future<List<LogicalDownloadRecordV2>> all() async {
-    final box = await _box();
+    final rows = await _run('hive.all', []) as Map;
     final records = <LogicalDownloadRecordV2>[];
-    for (final raw in box.values) {
+    for (final raw in rows.values) {
       final record = LogicalDownloadRecordV2.fromJson(raw);
       if (record != null) records.add(record);
     }
@@ -111,15 +119,15 @@ final class HiveLogicalDownloadStoreV2 implements LogicalDownloadStoreV2 {
 
   @override
   Future<void> put(LogicalDownloadRecordV2 record) async {
-    await (await _box()).put(
+    await _run('hive.put', [
       record.logicalId.value,
       Map<String, Object?>.from(record.toJson()),
-    );
+    ]);
   }
 
   @override
   Future<void> remove(DownloadLogicalId id) async {
-    await (await _box()).delete(id.value);
+    await _run('hive.delete', [id.value]);
   }
 
   @override

@@ -326,6 +326,123 @@ void main() {
   });
 
   test(
+    'assembly clears fresh network speed without declaring completion',
+    () async {
+      final id = logicalDownloadIdFor(
+        animeId: 'anime:1',
+        episodeKey: 'assembly-speed',
+        variantKey: 'sub:1080p',
+      );
+      final taskId = taskIdForGeneration(id, 1);
+      final store = InMemoryLogicalDownloadStoreV2();
+      await store.put(
+        _record(
+          id: id,
+          destinationPath: 'downloads/assembly-speed.mp4',
+          expectedBytes: 100,
+          parallelChunks: 16,
+        ),
+      );
+      final handle = _Handle(
+        taskId,
+        initial: DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.running,
+          progress: .99,
+          transferredBytes: 99,
+          totalBytes: 100,
+          networkSpeedMBps: 2,
+          timeRemaining: const Duration(seconds: 1),
+          configuredConnections: 16,
+          activeConnections: 1,
+        ),
+      );
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: _Gateway(rehydrated: [handle]),
+        sourceResolver: StaticSourceResolverV2(),
+        nowMillis: () => 1000,
+      );
+      addTearDown(manager.dispose);
+      await manager.initialize();
+
+      handle.emit(
+        DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.running,
+          progress: 1,
+          transferredBytes: 100,
+          totalBytes: 100,
+          networkSpeedMBps: 0,
+          configuredConnections: 16,
+          activeConnections: 0,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final snapshot = manager.snapshotFor(id)!;
+      expect(snapshot.networkSpeedMBps, 0);
+      expect(snapshot.timeRemaining, Duration.zero);
+      expect(snapshot.activeConnections, 0);
+      expect(snapshot.status, DownloadTransportStatus.running);
+      expect((await store.get(id))!.completedAtMillis, isNull);
+    },
+  );
+
+  test(
+    'late native child speed cannot restart speed during assembly',
+    () async {
+      var now = 1000;
+      final id = logicalDownloadIdFor(
+        animeId: 'anime:1',
+        episodeKey: 'assembly-late-native-speed',
+        variantKey: 'sub:1080p',
+      );
+      final taskId = taskIdForGeneration(id, 1);
+      final store = InMemoryLogicalDownloadStoreV2();
+      await store.put(
+        _record(
+          id: id,
+          destinationPath: 'downloads/assembly-late-native-speed.mp4',
+          expectedBytes: 100,
+          parallelChunks: 16,
+        ),
+      );
+      final handle = _Handle(
+        taskId,
+        initial: DownloadTransportSnapshot(
+          taskId: taskId,
+          status: DownloadTransportStatus.running,
+          progress: 1,
+          transferredBytes: 100,
+          totalBytes: 100,
+          networkSpeedMBps: 0,
+          configuredConnections: 16,
+          activeConnections: 0,
+        ),
+      );
+      final manager = DownloadManagerV2(
+        store: store,
+        gateway: _Gateway(rehydrated: [handle]),
+        sourceResolver: StaticSourceResolverV2(),
+        nowMillis: () => now,
+      );
+      addTearDown(manager.dispose);
+      await manager.initialize();
+
+      now += 10000;
+      manager.observeNativeNetworkSpeed(
+        taskId: taskId,
+        bytesPerSecond: 2000000,
+      );
+
+      expect(manager.snapshotFor(id)!.networkSpeedMBps, 0);
+      expect(manager.snapshotFor(id)!.timeRemaining, Duration.zero);
+      expect(manager.snapshotFor(id)!.status, DownloadTransportStatus.running);
+    },
+  );
+
+  test(
     'parallel zero-speed handoff keeps the last fresh positive speed',
     () async {
       var now = 1000;

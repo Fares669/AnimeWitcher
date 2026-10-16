@@ -1,7 +1,8 @@
 import Foundation
+import CoreFoundation
 import Darwin
 
-/// 9.6.1 emits supported status synchronously inside the delegate invocation.
+/// Validated 9.6.1/9.6.2/9.6.4 emit supported status inside the delegate invocation.
 /// Task.taskId is NOT an execution ID; no observation survives that invocation.
 final class DownloadTerminalObservation {
   private final class Frame {
@@ -41,6 +42,7 @@ final class DownloadExecutionCallbacks {
   private var retired = false
   private var finished = false
   private var completed = false
+  private var completionSettled = false
 
   func retire() {
     lock.lock()
@@ -63,6 +65,68 @@ final class DownloadExecutionCallbacks {
     completed = true
     return true
   }
+
+  func markCompletionSettled() {
+    lock.lock()
+    completionSettled = true
+    lock.unlock()
+  }
+
+  var hasSettledCompletion: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return completionSettled
+  }
+}
+
+/// A reusable child ID is insufficient: every mutation also fences its parent
+/// and positive attempt generation. Invalid/plugin-owned chunks fail closed.
+struct DownloadRangeIdentity: Hashable, Sendable {
+  let taskId: String
+  let parentTaskId: String
+  let generation: Int
+
+  init?(taskId: String, parentTaskId: String, generation: Int) {
+    let prefix = parentTaskId + ".part."
+    guard parentTaskId.hasPrefix("aw_v2_"), parentTaskId.count > "aw_v2_".count,
+          taskId.hasPrefix(prefix), generation > 0 else { return nil }
+    let index = taskId.dropFirst(prefix.count)
+    guard !index.isEmpty, index.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+    self.taskId = taskId
+    self.parentTaskId = parentTaskId
+    self.generation = generation
+  }
+
+  static func from(taskJson: String) -> DownloadRangeIdentity? {
+    guard let data = taskJson.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          object["group"] as? String == "animewitcher_parts",
+          let taskId = object["taskId"] as? String,
+          let raw = object["metaData"] as? String,
+          let metadataData = raw.data(using: .utf8),
+          let metadata = try? JSONSerialization.jsonObject(with: metadataData) as? [String: Any],
+          let parent = metadata["parentTaskId"] as? String,
+          let generation = positiveInteger(metadata["attemptGeneration"])
+    else { return nil }
+    return DownloadRangeIdentity(taskId: taskId, parentTaskId: parent, generation: generation)
+  }
+
+  static func positiveInteger(_ value: Any?) -> Int? {
+    guard let number = value as? NSNumber,
+          CFGetTypeID(number) != CFBooleanGetTypeID(),
+          number.doubleValue.isFinite,
+          number.doubleValue > 0,
+          number.doubleValue < Double(Int.max),
+          number.doubleValue.rounded(.down) == number.doubleValue
+    else { return nil }
+    return number.intValue
+  }
+
+  /// An older Dart attempt must never revoke a newer offer or native writer.
+  func canRevoke(_ other: DownloadRangeIdentity) -> Bool {
+    taskId == other.taskId && parentTaskId == other.parentTaskId
+      && generation >= other.generation
+  }
 }
 
 /// Installs only compatible delegate observation hooks. After the V2 cutover
@@ -70,6 +134,7 @@ final class DownloadExecutionCallbacks {
 /// background_downloader. The dormant legacy source remains until Task 14.
 final class DownloadHookInstallation {
   private(set) var isInstalled = false
+  private(set) var rangePromotionAvailable = false
   private let transportOwnershipEnabled: Bool
 
   init(transportOwnershipEnabled: Bool = false) {
@@ -81,10 +146,11 @@ final class DownloadHookInstallation {
     // observation-vs-ownership result; never turn an installed observer into
     // transport ownership on the second call.
     if isInstalled { return transportOwnershipEnabled }
-    guard version == "9.6.1", available.count == 3,
+    guard ["9.6.1", "9.6.2", "9.6.4"].contains(version ?? ""), available.count == 3,
           available.allSatisfy({ $0 }) else { return false }
     apply()
     isInstalled = true
+    rangePromotionAvailable = true
     return transportOwnershipEnabled
   }
 }

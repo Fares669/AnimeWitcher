@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../core/services/notification_service.dart';
 import 'downloads_provider.dart';
 
 Future<void> confirmAndRemoveDownload(
@@ -22,15 +23,27 @@ Future<void> confirmAndRemoveDownload(
         ),
         TextButton(
           onPressed: () => Navigator.pop(dialogContext, true),
-          child: Text(
-            l10n.delete,
-            style: const TextStyle(color: Colors.red),
-          ),
+          child: Text(l10n.delete, style: const TextStyle(color: Colors.red)),
         ),
       ],
     ),
   );
-  if (confirmed == true) {
-    await ref.read(downloadsProvider.notifier).removeDownload(item);
+  if (confirmed == true && context.mounted) {
+    final notifications = ref.read(notificationServiceProvider);
+    try {
+      await ref.read(downloadsProvider.notifier).removeDownload(item);
+    } catch (error) {
+      showDownloadActionError(notifications, error);
+    }
   }
+}
+
+void showDownloadActionError(NotificationService notifications, Object error) {
+  var message = error.toString().trim();
+  const stateErrorPrefix = 'Bad state: ';
+  if (message.startsWith(stateErrorPrefix)) {
+    message = message.substring(stateErrorPrefix.length).trim();
+  }
+  if (message.isEmpty) message = 'Unable to control download';
+  notifications.showError(message);
 }

@@ -98,7 +98,9 @@ void main() {
     final loggerSection = swift.substring(loggerStart, loggerEnd);
     expect(
       loggerSection,
-      contains('if event != "progress" { try handle.synchronize() }'),
+      contains(
+        'if event != "progress" && event != "progress.plugin" { try handle.synchronize() }',
+      ),
     );
   });
 

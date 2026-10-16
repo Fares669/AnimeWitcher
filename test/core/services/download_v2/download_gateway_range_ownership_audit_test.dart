@@ -34,11 +34,130 @@ void main() {
       addTearDown(f.dispose);
       f.downloader.cancelAccepted = unknown;
       f.downloader.unknownLiveness = unknown;
-      await expectLater(f.handle.cancel(), throwsA(isA<StateError>()));
+      await expectLater(f.handle.cancel(), throwsA(unknown ? isA<TimeoutException>() : isA<StateError>()));
       expect(f.handle.current.status, isNot(DownloadTransportStatus.canceled));
       expect(await f.manifest.exists(), isTrue);
       expect(await f.part.readAsBytes(), [1, 2]);
       if (!unknown) expect(f.downloader.native.map((task) => task.taskId), contains(f.child.taskId));
+    });
+  }
+
+  test('missing native cancel ACK releases the coordinator without deleting owned bytes', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    final lostAck = Completer<bool>();
+    f.downloader.cancelAck = lostAck.future;
+    Object? failure;
+    var finished = false;
+    final cancellation = f.handle.cancel().then<void>((_) {
+      finished = true;
+    }, onError: (Object error, StackTrace _) {
+      failure = error;
+      finished = true;
+    });
+    await f.downloader.cancelEntered.future;
+    await Future<void>.delayed(const Duration(milliseconds: 5200));
+    final bounded = finished;
+    if (!lostAck.isCompleted) lostAck.complete(false);
+    await cancellation;
+    f.downloader.cancelAck = null;
+    expect(bounded, isTrue, reason: 'a lost command ACK must not occupy the per-parent FIFO indefinitely');
+    expect(failure, isA<TimeoutException>());
+    expect(f.handle.current.status, isNot(DownloadTransportStatus.canceled));
+    expect(await f.manifest.exists(), isTrue);
+    expect(await f.part.readAsBytes(), [1, 2]);
+    expect(await f.handle.cancel(), isTrue, reason: 'delete/cancel remains retryable after an uncertain ACK');
+    expect(await f.manifest.exists(), isFalse);
+  });
+
+  for (final committed in [false, true]) {
+    for (final accepted in [false, true]) {
+    test('uncertain native enqueue ${committed ? 'with' : 'without'} commit proof and late ACK=$accepted retains writer ownership', () async {
+      final f = await _Fixture.create();
+      addTearDown(f.dispose);
+      final enqueueAck = Completer<bool>();
+      addTearDown(() { if (!enqueueAck.isCompleted) enqueueAck.complete(accepted); });
+      f.downloader.enqueueAck = enqueueAck.future;
+      f.downloader.commitBeforeEnqueueAck = committed;
+      var resumed = false;
+      final resume = f.handle.resume().then((_) { resumed = true; });
+      await f.downloader.enqueueEntered.future.timeout(const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(milliseconds: 5200));
+      final bounded = resumed;
+      if (!bounded) enqueueAck.complete(accepted);
+      await resume;
+      expect(bounded, isTrue, reason: 'a lost enqueue ACK cannot hold the per-parent control queue');
+      if (committed) {
+        expect(await f.handle.cancel(), isTrue,
+          reason: 'exact raw native ownership proves the already-submitted enqueue committed');
+        expect(await f.manifest.exists(), isFalse);
+      } else {
+        await expectLater(f.handle.cancel(), throwsA(isA<TimeoutException>()));
+        expect(await f.manifest.exists(), isTrue);
+        expect(await f.part.readAsBytes(), [1, 2]);
+      }
+      if (!enqueueAck.isCompleted) enqueueAck.complete(accepted);
+      await Future<void>.delayed(Duration.zero);
+      f.downloader.enqueueAck = null;
+      expect(await f.handle.cancel(), isTrue);
+      expect(f.downloader.native, isEmpty);
+    });
+    }
+  }
+
+  test('pause during package resume-state read prevents a subsequent native enqueue', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    final resumeState = Completer<bool>();
+    f.downloader.canResumeAck = resumeState.future;
+    final resume = f.handle.resume();
+    await f.downloader.resumeStateEntered.future.timeout(const Duration(seconds: 2));
+    final pause = f.handle.pause();
+    await Future<void>.delayed(Duration.zero);
+    resumeState.complete(false);
+    await resume;
+    await pause;
+    expect(f.downloader.enqueueCalls, 0,
+      reason: 'native admission must recheck control intent after package IO');
+  });
+
+  test('uncertain range resume uses new running occurrence as commit proof', () async {
+    final f = await _Fixture.create();
+    addTearDown(f.dispose);
+    final acknowledgement = Completer<bool>();
+    addTearDown(() { if (!acknowledgement.isCompleted) acknowledgement.complete(false); });
+    f.downloader.canResumeAck = Future<bool>.value(true);
+    f.downloader.enqueueAck = acknowledgement.future;
+    f.downloader.commitBeforeEnqueueAck = true;
+    expect(await f.handle.resume().timeout(const Duration(seconds: 7)), isTrue);
+    expect(f.downloader.resumeCalls, 1);
+    expect(f.downloader.native, hasLength(2));
+    expect(await f.handle.cancel(), isTrue);
+    acknowledgement.complete(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(f.downloader.native, isEmpty);
+    expect(await f.manifest.exists(), isFalse);
+  });
+
+  for (final childRecordPresent in [false, true]) {
+    test('terminal cleanup keeps live native ownership with child record=$childRecordPresent', () async {
+      final f = await _Fixture.create();
+      addTearDown(f.dispose);
+      final parent = (await f.downloader.database.recordForId(f.handle.taskId))!;
+      await f.downloader.database.updateRecord(TaskRecord(parent.task, TaskStatus.complete, 1, 8));
+      if (childRecordPresent) {
+        await f.downloader.database.updateRecord(TaskRecord(f.child, TaskStatus.complete, 1, 4));
+      }
+      await expectLater(f.gateway.removeTracking(f.handle.taskId), throwsStateError);
+      expect(await f.downloader.database.recordForId(f.handle.taskId), isNotNull);
+      if (childRecordPresent) {
+        expect(await f.downloader.database.recordForId(f.child.taskId), isNotNull);
+      }
+      expect(await f.part.readAsBytes(), [1, 2]);
+      expect(await f.manifest.exists(), isTrue);
+      f.downloader.native.clear();
+      await f.gateway.removeTracking(f.handle.taskId);
+      expect(await f.downloader.database.recordForId(f.handle.taskId), isNull);
     });
   }
 
@@ -292,13 +411,14 @@ ParallelDownloadTask _parent(Directory root) => ParallelDownloadTask(
 );
 
 final class _Fixture {
-  _Fixture(this.root, this.downloader, this.child, this.part, this.manifest, this.handle);
+  _Fixture(this.root, this.downloader, this.child, this.part, this.manifest, this.handle, this.gateway);
   final Directory root;
   final _Downloader downloader;
   final DownloadTask child;
   final File part;
   final File manifest;
   final DownloadTransportHandle handle;
+  final PackageBackgroundDownloaderGateway gateway;
   static Future<_Fixture> create() async {
     final root = await Directory.systemTemp.createTemp('aw-gateway-owned-range-');
     final parent = _parent(root);
@@ -325,9 +445,10 @@ final class _Fixture {
     }));
     final downloader = _Downloader()..native.add(children.first);
     await downloader.database.updateRecord(TaskRecord(parent, TaskStatus.paused, .25, 8));
-    final handle = (await _gateway(downloader).attach(parent.taskId))!;
+    final gateway = _gateway(downloader);
+    final handle = (await gateway.attach(parent.taskId))!;
     final checkpoint = await privateParallelManifestFileV2(parent);
-    return _Fixture(root, downloader, children.first, part, checkpoint, handle);
+    return _Fixture(root, downloader, children.first, part, checkpoint, handle, gateway);
   }
   Future<void> dispose() async {
     downloader.cancelAccepted = true;
@@ -354,6 +475,14 @@ final class _Downloader implements FileDownloader {
   bool cancelAccepted = true;
   bool keepCanceledWriterLive = false;
   bool unknownLiveness = false;
+  Future<bool>? cancelAck;
+  Future<bool>? enqueueAck;
+  bool commitBeforeEnqueueAck = false;
+  final enqueueEntered = Completer<void>();
+  Future<bool>? canResumeAck;
+  final resumeStateEntered = Completer<void>();
+  int enqueueCalls = 0;
+  int resumeCalls = 0;
   int cancelCalls = 0;
   final cancelEntered = Completer<void>();
   final twoNativeStarts = Completer<void>();
@@ -363,13 +492,33 @@ final class _Downloader implements FileDownloader {
   Future<bool> cancelTasksWithIds(Iterable<String> taskIds) async {
     cancelCalls++;
     if (!cancelEntered.isCompleted) cancelEntered.complete();
+    if (cancelAck != null) return cancelAck!;
     if (cancelAccepted && !keepCanceledWriterLive) native.removeWhere((task) => taskIds.contains(task.taskId));
     return cancelAccepted;
   }
   @override
-  Future<bool> taskCanResume(Task task) async => false;
+  Future<bool> taskCanResume(Task task) async {
+    if (!resumeStateEntered.isCompleted) resumeStateEntered.complete();
+    return await canResumeAck ?? false;
+  }
+  @override
+  Future<bool> pause(DownloadTask task) async {
+    native.removeWhere((item) => item.taskId == task.taskId);
+    return true;
+  }
+  @override
+  Future<bool> resume(DownloadTask task) {
+    resumeCalls++;
+    return enqueue(task);
+  }
   @override
   Future<bool> enqueue(Task task) async {
+    enqueueCalls++;
+    if (!enqueueEntered.isCompleted) enqueueEntered.complete();
+    if (commitBeforeEnqueueAck) native.add(task);
+    final ack = await enqueueAck;
+    if (ack == false) return false;
+    if (commitBeforeEnqueueAck) return true;
     native.add(task);
     if (native.length >= 2 && !twoNativeStarts.isCompleted) twoNativeStarts.complete();
     return true;

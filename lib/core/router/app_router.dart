@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter/foundation.dart';
+
 import '../../features/home/presentation/home_screen.dart';
 import '../../features/search/presentation/search_screen.dart';
 import '../../features/library/presentation/library_screen.dart';
@@ -28,7 +29,9 @@ part 'app_router.g.dart';
       routes: <TypedRoute<RouteData>>[TypedGoRoute<HomeRoute>(path: '/home')],
     ),
     TypedStatefulShellBranch<SearchBranchData>(
-      routes: <TypedRoute<RouteData>>[TypedGoRoute<SearchRoute>(path: '/search')],
+      routes: <TypedRoute<RouteData>>[
+        TypedGoRoute<SearchRoute>(path: '/search'),
+      ],
     ),
     TypedStatefulShellBranch<LibraryBranchData>(
       routes: <TypedRoute<RouteData>>[
@@ -118,8 +121,7 @@ class SettingsBranchData extends StatefulShellBranchData {
 class SettingsRoute extends GoRouteData with $SettingsRoute {
   const SettingsRoute();
   @override
-  Widget build(BuildContext context, GoRouterState state) =>
-      const MoreScreen();
+  Widget build(BuildContext context, GoRouterState state) => const MoreScreen();
 }
 
 class MangaBranchData extends StatefulShellBranchData {
@@ -205,36 +207,48 @@ class ViewAllRouteExtra {
 
 // --- Full Screen Routes ---
 
+final _pendingDetailOrigins = Expando<bool>();
+
+Future<T?> _pushDetailsOnce<T>(
+  BuildContext context, {
+  required String location,
+  required Object extra,
+  required WidgetBuilder builder,
+}) async {
+  if (!context.mounted) return null;
+  final navigator = Navigator.of(context, rootNavigator: true);
+  final origin = ModalRoute.of(context) ?? navigator;
+  if (_pendingDetailOrigins[origin] == true ||
+      (origin is ModalRoute && !origin.isCurrent)) {
+    return null;
+  }
+  // Lock before parsing: cards share their page's origin, while related items
+  // on the new details page have their own origin and can still be opened.
+  _pendingDetailOrigins[origin] = true;
+  try {
+    final router = GoRouter.maybeOf(context);
+    final result = router != null
+        ? router.push<T>(location, extra: extra)
+        : navigator.push<T>(MaterialPageRoute<T>(builder: builder));
+    WidgetsBinding.instance.ensureVisualUpdate();
+    return await result;
+  } finally {
+    _pendingDetailOrigins[origin] = null;
+  }
+}
+
 @TypedGoRoute<DetailsRoute>(path: '/details')
 class DetailsRoute extends GoRouteData with $DetailsRoute {
   const DetailsRoute({required this.$extra});
   final DetailsRouteExtra $extra;
 
-  static final _pendingOrigins = Expando<bool>();
-
   @override
-  Future<T?> push<T>(BuildContext context) async {
-    if (!context.mounted) return null;
-    final navigator = Navigator.of(context, rootNavigator: true);
-    final origin = ModalRoute.of(context) ?? navigator;
-    if (_pendingOrigins[origin] == true ||
-        (origin is ModalRoute && !origin.isCurrent)) {
-      return null;
-    }
-    // Lock before GoRouter starts parsing. Two cards on the same page share
-    // this origin; a related anime on the new details page has its own origin.
-    _pendingOrigins[origin] = true;
-    try {
-      final router = GoRouter.maybeOf(context);
-      final result = router != null
-          ? router.push<T>(location, extra: $extra)
-          : navigator.push<T>(MaterialPageRoute<T>(builder: (_) => _screen()));
-      WidgetsBinding.instance.ensureVisualUpdate();
-      return await result;
-    } finally {
-      _pendingOrigins[origin] = null;
-    }
-  }
+  Future<T?> push<T>(BuildContext context) => _pushDetailsOnce<T>(
+    context,
+    location: location,
+    extra: $extra,
+    builder: (_) => _screen(),
+  );
 
   @override
   Widget build(BuildContext context, GoRouterState state) => _screen();
@@ -255,6 +269,14 @@ class MangaDetailsRoute extends GoRouteData with $MangaDetailsRoute {
   const MangaDetailsRoute({required this.$extra});
 
   final MangaDetailsRouteExtra $extra;
+
+  @override
+  Future<T?> push<T>(BuildContext context) => _pushDetailsOnce<T>(
+    context,
+    location: location,
+    extra: $extra,
+    builder: (_) => MangaDetailsScreen(item: $extra.item),
+  );
 
   @override
   Widget build(BuildContext context, GoRouterState state) {

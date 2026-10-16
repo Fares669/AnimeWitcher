@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:collection/collection.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_identity.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_models.dart';
@@ -87,14 +88,17 @@ void main() {
       subscription.close(); container.dispose(); await manager.dispose(); await temp.delete(recursive: true);
     });
     await container.read(downloadsProvider.future);
-    final removed = await container.read(downloadsProvider.notifier).removeDownloads([
-      DownloadItem(task: DownloadTask(url: 'https://cdn.test/episode.mp4', taskId: 'legacy-row'),
-        status: TaskStatus.complete, progress: 1, item: media, timestamp: 1, destinationPath: file.path),
-    ]);
+    final legacy = DownloadItem(task: DownloadTask(url: 'https://cdn.test/episode.mp4', taskId: 'legacy-row'),
+      status: TaskStatus.complete, progress: 1, item: media, timestamp: 1, destinationPath: file.path);
+    final removed = await container.read(downloadsProvider.notifier).removeDownloads([legacy]);
     expect(removed, isFalse);
     expect(storage.metadata.containsKey('legacy-row'), isTrue);
     expect(await file.readAsBytes(), [1, 2, 3]);
     expect((await store.get(id))!.intent, DownloadUserIntent.paused);
+    await expectLater(
+      container.read(downloadsProvider.notifier).removeDownload(legacy),
+      throwsStateError,
+    );
   });
 
   test('a re-downloaded episode is visible without rebuilding the downloads provider', () async {
@@ -189,6 +193,71 @@ void main() {
 
     expect(container.read(downloadProgressProvider), isEmpty);
   });
+
+  test('deletion cannot erase replacement metadata after the logical queue releases', () async {
+    final temp = await Directory.systemTemp.createTemp('aw-v2-delete-readd-');
+    final store = InMemoryLogicalDownloadStoreV2();
+    final storage = _DownloadMetadataStorage();
+    final manager = DownloadManagerV2(
+      store: store,
+      gateway: _ReaddGateway(),
+      sourceResolver: StaticSourceResolverV2(),
+    );
+    final container = ProviderContainer(overrides: [
+      downloadManagerV2Provider.overrideWithValue(manager),
+      logicalDownloadStoreV2Provider.overrideWithValue(store),
+      storageServiceProvider.overrideWithValue(storage),
+    ]);
+    final subscription = container.listen(downloadsProvider, (_, __) {});
+    addTearDown(() async {
+      subscription.close();
+      container.dispose();
+      await manager.dispose();
+      await temp.delete(recursive: true);
+    });
+    await container.read(downloadsProvider.future);
+    final logicalId = logicalDownloadIdFor(animeId: 'delete-readd', episodeKey: '1', variantKey: 'original');
+    final request = DownloadStartRequestV2(
+      logicalId: logicalId,
+      mediaId: 'delete-readd',
+      unitKey: '1',
+      variantKey: 'original',
+      destinationPath: '${temp.path}/episode.mp4',
+      sourceDescriptor: const {},
+      allowPause: true,
+      retries: 0,
+      parallelChunks: 1,
+    );
+    final media = MultimediaItem(title: 'Replacement', url: '/delete-readd', posterUrl: '');
+    Map<String, dynamic> metadata(int timestamp) => {
+      'logicalId': logicalId.value,
+      'item': media.toJson(),
+      'timestamp': timestamp,
+    };
+    storage.metadata[logicalId.value] = metadata(1);
+    await manager.start(request);
+    await _waitForDownloadCount(container, 1);
+    final previous = container.read(downloadsProvider).requireValue.single;
+
+    Future<void>? replacement;
+    storage.beforeRead = () async {
+      if (replacement != null) return replacement;
+      if (await store.get(logicalId) != null) return;
+      // The launcher saves fresh metadata after start returns. Both occur
+      // after manager.delete releases its queue, before the UI cleanup read.
+      replacement = () async {
+        await manager.start(request);
+        storage.metadata[logicalId.value] = metadata(2);
+      }();
+      await replacement;
+    };
+    await container.read(downloadsProvider.notifier).removeDownload(previous);
+    await replacement;
+
+    expect(await store.get(logicalId), isNotNull);
+    expect(storage.metadata[logicalId.value]?['timestamp'], 2);
+    await _waitForDownloadCount(container, 1);
+  });
 }
 
 final class _EmptyGateway implements BackgroundDownloaderGateway {
@@ -231,14 +300,24 @@ Future<void> _waitForDownloadCount(ProviderContainer container, int expected) as
 
 final class _DownloadMetadataStorage extends MemoryStorageService {
   final Map<String, Map<String, dynamic>> metadata = {};
+  Future<void> Function()? beforeRead;
 
   @override
-  Future<Map<String, Map<String, dynamic>>> getAllDownloadMetadata() async =>
-      Map<String, Map<String, dynamic>>.from(metadata);
+  Future<Map<String, Map<String, dynamic>>> getAllDownloadMetadata() async {
+    await beforeRead?.call();
+    return Map<String, Map<String, dynamic>>.from(metadata);
+  }
 
   @override
   Future<void> removeDownloadMetadata(String taskId) async {
     metadata.remove(taskId);
+  }
+
+  @override
+  Future<bool> removeDownloadMetadataIfUnchanged(String taskId, Map<String, dynamic> expected) async {
+    if (!const DeepCollectionEquality().equals(metadata[taskId], expected)) return false;
+    metadata.remove(taskId);
+    return true;
   }
 }
 

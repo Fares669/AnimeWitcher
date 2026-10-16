@@ -1,10 +1,15 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
+import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/details/presentation/details_controller.dart';
 import 'package:animewitcher/features/details/presentation/details_screen.dart';
+import 'package:animewitcher/features/details/presentation/widgets/anime_information_section.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_hero_actions.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_layout_widgets.dart';
+import 'package:animewitcher/features/details/presentation/widgets/episode_card.dart';
+import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_state.dart';
@@ -16,6 +21,10 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../../support/memory_storage_service.dart';
 
 final class _Storage extends MemoryStorageService {
+  @override
+  Future<Map<String, Map<String, dynamic>>> getAllDownloadMetadata() async =>
+      const <String, Map<String, dynamic>>{};
+
   @override
   String? getString(String key) => settings[key] as String?;
 
@@ -54,8 +63,13 @@ final class _EmptyLibrary extends Library {
   LibraryCategory? itemCategory(String url) => null;
 }
 
-final class _MovieController extends DetailsController {
-  _MovieController(this.item);
+final class _EmptyDownloads extends DownloadsNotifier {
+  @override
+  Future<List<DownloadItem>> build() async => const <DownloadItem>[];
+}
+
+final class _ReadyDetailsController extends DetailsController {
+  _ReadyDetailsController(this.item);
 
   final MultimediaItem item;
 
@@ -71,7 +85,7 @@ final class _MovieController extends DetailsController {
       1: item.episodes ?? const <Episode>[],
     },
     item: item,
-    isMovie: true,
+    isMovie: item.contentType == MultimediaContentType.movie,
     basicDetailsResolved: true,
     nextAiringResolved: true,
   );
@@ -87,6 +101,117 @@ final class _MovieController extends DetailsController {
 }
 
 void main() {
+  for (final desktop in <bool>[false, true]) {
+    testWidgets(
+      '${desktop ? 'desktop' : 'phone'} selection preserves the episode-to-information gap',
+      (tester) async {
+        await tester.binding.setSurfaceSize(Size(desktop ? 1100 : 390, 1800));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final item = MultimediaItem(
+          title: 'Anime',
+          url: 'https://example.test/selection-spacing',
+          posterUrl: '',
+          contentType: MultimediaContentType.anime,
+          duration: 23,
+          episodes: <Episode>[
+            for (var i = 1; i <= 4; i++)
+              Episode(name: 'Episode $i', url: 'episode://$i', episode: i),
+          ],
+        );
+        final container = ProviderContainer(
+          overrides: [
+            storageServiceProvider.overrideWithValue(_Storage()),
+            downloadsProvider.overrideWith(_EmptyDownloads.new),
+            logicalDownloadStoreV2Provider.overrideWithValue(
+              InMemoryLogicalDownloadStoreV2(),
+            ),
+            detailsControllerProvider(item.url)
+                .overrideWith(() => _ReadyDetailsController(item)),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              locale: const Locale('ar'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              theme: ThemeData.dark(),
+              home: Consumer(
+                builder: (context, ref, _) {
+                  final selected = ref.watch(
+                    detailsControllerProvider(
+                      item.url,
+                    ).select((state) => state.selectedEpisodeKeys.isNotEmpty),
+                  );
+                  return Scaffold(
+                    bottomNavigationBar: selected
+                        ? const SizedBox(height: 112)
+                        : null,
+                    body: CustomScrollView(
+                      slivers: <Widget>[
+                        if (desktop)
+                          SliverToBoxAdapter(
+                            child: DetailsDesktopEpisodeColumn(
+                              parentItem: item,
+                              itemUrl: item.url,
+                              isMovie: false,
+                            ),
+                          )
+                        else
+                          SliverDetailsEpisodeList(
+                            parentItem: item,
+                            itemUrl: item.url,
+                            isMovie: false,
+                          ),
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 32),
+                            child: AnimeInformationSection(item: item),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        void expectNormalGap() {
+          expect(find.byType(EpisodeCard), findsNWidgets(4));
+          final episodeBottom = tester.getBottomLeft(
+            find.byType(EpisodeCard).last,
+          );
+          final informationTop = tester.getTopLeft(
+            find.byType(AnimeInformationSection),
+          );
+          expect(informationTop.dy - episodeBottom.dy, closeTo(32, 0.01));
+          expect(tester.takeException(), isNull);
+        }
+
+        expectNormalGap();
+        final controller = container.read(
+          detailsControllerProvider(item.url).notifier,
+        );
+        controller.toggleEpisodeSelection(item.episodes!.first);
+        await tester.pumpAndSettle();
+        expectNormalGap();
+        controller.selectAllEpisodes();
+        await tester.pumpAndSettle();
+        expectNormalGap();
+        controller.clearEpisodeSelection();
+        await tester.pumpAndSettle();
+        expectNormalGap();
+      },
+    );
+  }
+
   testWidgets('movie play control lives inside the expanded episodes section', (
     tester,
   ) async {
@@ -107,9 +232,12 @@ void main() {
       ProviderScope(
         overrides: [
           storageServiceProvider.overrideWithValue(_Storage()),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
           libraryProvider.overrideWith(_EmptyLibrary.new),
           detailsControllerProvider(movie.url).overrideWith(
-            () => _MovieController(movie),
+            () => _ReadyDetailsController(movie),
           ),
         ],
         child: MaterialApp(
@@ -176,8 +304,11 @@ void main() {
       ProviderScope(
         overrides: [
           storageServiceProvider.overrideWithValue(_Storage()),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
           detailsControllerProvider(movie.url).overrideWith(
-            () => _MovieController(movie),
+            () => _ReadyDetailsController(movie),
           ),
         ],
         child: MaterialApp(

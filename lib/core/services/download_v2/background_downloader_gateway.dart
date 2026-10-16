@@ -9,8 +9,14 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../download_concurrency.dart';
+import '../download_continued_processing_service.dart';
+import '../download_http_validator.dart';
 import '../download_parallel.dart';
+import '../download_source_verification.dart';
 import '../persistent_parallel_download.dart';
+import '../../utils/local_file_io.dart';
+import '../../utils/download_resume.dart';
+import 'download_persistent_storage_v2.dart';
 import 'download_v2_diagnostics.dart';
 import 'download_v2_models.dart';
 import 'download_v2_identity.dart';
@@ -74,6 +80,30 @@ abstract interface class DownloadTransportHandle {
   Future<bool> cancel();
 }
 
+/// Package terminal-status signal for one ordinary task. Parallel parents keep
+/// their snapshot/child-ownership settlement path.
+abstract interface class CompletingDownloadTransportHandleV2 {
+  Future<void> get completion;
+}
+
+extension DownloadTransportSettlementV2 on DownloadTransportHandle {
+  bool get isSettled => _transportSnapshotSettledV2(current);
+
+  /// Observe before canceling; cancel the iterator when finished.
+  Stream<void> settlement({bool requireNewSnapshot = false}) {
+    if (!requireNewSnapshot) {
+      if (this case CompletingDownloadTransportHandleV2(:final completion)) {
+        return completion.asStream();
+      }
+    }
+    return snapshots.where(_transportSnapshotSettledV2).map<void>((_) {});
+  }
+}
+
+bool _transportSnapshotSettledV2(DownloadTransportSnapshot snapshot) =>
+    (snapshot.isFinal || snapshot.status == DownloadTransportStatus.missing) &&
+    (snapshot.activeConnections ?? 0) == 0;
+
 /// Marker for a handle whose pause/resume settlement is complete at the handle
 /// boundary. This covers both durable ranged
 /// parents and ordinary single package DownloadTasks. Package-managed
@@ -93,6 +123,120 @@ abstract interface class SelfSettlingParallelDownloadTransportHandleV2 {}
 const String kDownloadV2PackageGroup = 'downloads_v2';
 const String kDownloadV2SilentPackageGroup = 'downloads_v2_silent';
 const String kDownloadV2DurableParallelGroup = 'downloads_v2_ranges';
+const _nativeControlAckTimeoutV2 = Duration(seconds: 5);
+
+/// The supported iOS hook captures headers synchronously before the package's
+/// failed callback, whose wire format omits them. Resolve inside coordinator
+/// serialization, before any retry or generation change.
+Future<TaskStatusUpdate> resolveNativeRangeFailureV2(
+  TaskStatusUpdate update, {
+  bool forceAvailableForTesting = false,
+}) async {
+  if ((!forceAvailableForTesting && !Platform.isIOS) ||
+      update.status != TaskStatus.failed ||
+      update.task.group != kPersistentDownloadChunkGroup) {
+    return update;
+  }
+  final task = update.task;
+  final parent = downloadInternalParentTaskId(task);
+  if (parent == null || !parent.startsWith('aw_v2_')) return update;
+  final metadata = jsonDecode(task.metaData);
+  final generation = metadata is Map ? metadata['attemptGeneration'] : null;
+  if (generation is! int || generation <= 0 ||
+      !RegExp('^${RegExp.escape(parent)}\\.part\\.[0-9]+\$').hasMatch(task.taskId)) {
+    throw StateError('Invalid retry metadata identity');
+  }
+  final row = await const MethodChannel(
+    'com.animewitcher.app/download_continued_processing',
+  ).invokeMapMethod<String, dynamic>('retryMetadataForRange', {
+    'taskId': task.taskId,
+    'parentTaskId': parent,
+    'attemptGeneration': generation,
+  }).timeout(_nativeControlAckTimeoutV2);
+  if (row == null) return update;
+  final status = row['httpStatus'];
+  final retryAfter = row['retryAfter'];
+  final responseDate = row['responseDate'];
+  if (row['taskId'] != task.taskId || row['parentTaskId'] != parent ||
+      row['attemptGeneration'] != generation || status is! int ||
+      status < 100 || status > 599 ||
+      (retryAfter != null && retryAfter is! String) ||
+      (responseDate != null && responseDate is! String)) {
+    throw StateError('Native retry metadata identity or response is invalid');
+  }
+  final headers = <String, String>{...?update.responseHeaders};
+  if (retryAfter is String) {
+    headers.removeWhere((name, _) => name.toLowerCase() == 'retry-after');
+    headers['retry-after'] = retryAfter;
+  }
+  if (responseDate is String) {
+    headers.removeWhere((name, _) => name.toLowerCase() == 'date');
+    headers['date'] = responseDate;
+  }
+  return update.copyWith(responseHeaders: headers, responseStatusCode: status);
+}
+
+/// Withdraws a previously exported native offer before Dart starts this range.
+/// The native queue serializes this with its own claim/commit transaction. A
+/// lost or malformed response must never authorize a second URLSession writer.
+Future<bool> claimNativeRangeForDartV2(
+  DownloadTask task, {
+  required int observedAtMillis,
+  bool forceAvailableForTesting = false,
+}) async {
+  if (!forceAvailableForTesting && !Platform.isIOS) return true;
+  final parentId = downloadInternalParentTaskId(task);
+  final metadata = jsonDecode(task.metaData);
+  final generation = metadata is Map ? metadata['attemptGeneration'] : null;
+  if (task.group != kPersistentDownloadChunkGroup ||
+      parentId == null ||
+      !parentId.startsWith('aw_v2_') ||
+      generation is! int ||
+      generation <= 0 ||
+      !task.taskId.startsWith('$parentId.part.')) {
+    throw StateError('Invalid native range claim identity');
+  }
+  try {
+    final granted =
+        await const MethodChannel(
+          'com.animewitcher.app/download_continued_processing',
+        ).invokeMethod<bool>('claimRangeForDart', <String, Object>{
+          'taskId': task.taskId,
+          'parentTaskId': parentId,
+          'attemptGeneration': generation,
+          'nativeOwnerAbsent': true,
+          'observedAtMillis': observedAtMillis,
+        }).timeout(_nativeControlAckTimeoutV2);
+    if (granted == null) {
+      throw StateError('Native range claim not acknowledged');
+    }
+    return granted;
+  } on MissingPluginException {
+    // Older builds cannot refill ranges natively, so they cannot own an offer.
+    return true;
+  }
+}
+
+Future<void> withdrawNativeRangeParentV2(
+  String parentTaskId, {
+  bool forceAvailableForTesting = false,
+}) async {
+  if (!forceAvailableForTesting && !Platform.isIOS) return;
+  DownloadContinuedProcessingService.invalidateNativeQueueCheckpoint();
+  try {
+    final withdrawn = await const MethodChannel(
+      'com.animewitcher.app/download_continued_processing',
+    ).invokeMethod<bool>('withdrawRangeParent', {
+      'parentTaskId': parentTaskId,
+    }).timeout(_nativeControlAckTimeoutV2);
+    if (withdrawn != true) {
+      throw StateError('Native range withdrawal not acknowledged');
+    }
+  } on MissingPluginException {
+    // A pre-refill binary cannot start an exported range autonomously.
+  }
+}
+
 
 /// Selects package child records owned by one durable V2 range parent.
 ///
@@ -198,13 +342,16 @@ final class PackageBackgroundDownloaderGateway
     implements BackgroundDownloaderGateway, MangaChapterGatewayV2 {
   PackageBackgroundDownloaderGateway({
     FileDownloader? downloader,
+    Future<void> Function(String taskId)? retireDurableResumeCheckpoint,
     DownloadNotificationPrefs Function()? notificationPreferences,
     Future<void> Function()? initializePackage,
     bool Function()? isIOS,
     Future<DownloadRangeCapabilityV2> Function(DownloadTaskSpecV2 spec)?
     rangeCapabilityProbe,
     DownloadDiagnosticsV2? diagnostics,
-  }) : _downloader = downloader ?? FileDownloader(),
+  }) : _downloader = downloader ?? configuredFileDownloaderV2(),
+       _retireDurableResumeCheckpoint = retireDurableResumeCheckpoint ??
+           (downloader == null ? retireConfiguredResumeCheckpointV2 : null),
        _notificationPreferences =
            notificationPreferences ?? (() => const DownloadNotificationPrefs()),
        _initializePackage = initializePackage,
@@ -213,6 +360,7 @@ final class PackageBackgroundDownloaderGateway
        _diagnostics = diagnostics ?? const NoopDownloadDiagnosticsV2();
 
   final FileDownloader _downloader;
+  final Future<void> Function(String taskId)? _retireDurableResumeCheckpoint;
   final DownloadNotificationPrefs Function() _notificationPreferences;
   final Future<void> Function()? _initializePackage;
   final bool Function() _isIOS;
@@ -226,7 +374,16 @@ final class PackageBackgroundDownloaderGateway
       <String, _DurableParallelDownloadTransportHandle>{};
   final _mangaHandles = <String, MangaChapterTransportHandleV2>{};
   PersistentParallelDownload? _durableParallel;
+  final Map<String, Future<bool>> _pendingDurableStarts = {};
+  final Map<String, Completer<void>> _durableSourceVerifications = {};
   StreamSubscription<TaskUpdate>? _durableUpdatesSubscription;
+  // Native callbacks can arrive during configure/start, before manifests have
+  // registered their children. Keep their original HTTP and attempt evidence;
+  // the package database stores neither response headers nor response status.
+  final List<TaskStatusUpdate> _durableStartupStatuses = [];
+  static const _maxDurableStartupStatuses = 4096;
+  bool _bufferDurableStartupStatuses = false;
+  bool _startupStatusOverflowReported = false;
 
   Future<void>? _initialization;
 
@@ -248,6 +405,8 @@ final class PackageBackgroundDownloaderGateway
   }
 
   Future<void> _initializeOnce() async {
+    _bufferDurableStartupStatuses = true;
+    final coordinator = _ensureDurableParallelCoordinator();
     await _downloader.configure(
       globalConfig: const <(String, dynamic)>[(Config.holdingQueue, false)],
       iOSConfig: const <(String, dynamic)>[
@@ -258,11 +417,53 @@ final class PackageBackgroundDownloaderGateway
       _downloader,
       _notificationPreferences(),
     );
-    // start() replays native updates. Subscribe first and retain records until
-    // the V2 store has reconciled old background completions.
-    _ensureDurableParallelCoordinator();
+    // Subscribe before even configure(): live URLSession callbacks need not
+    // wait for start(). A listener alone cannot consume them until restoration.
     await _downloader.start(autoCleanDatabase: false);
+    if (_isIOS()) await _discoverDurableCheckpointRecordsV2();
+    for (final record in await _downloader.database.allRecords()) {
+      if (record.task is ParallelDownloadTask &&
+          record.task.group == kDownloadV2DurableParallelGroup) {
+        await coordinator.restore(record.task as ParallelDownloadTask);
+      }
+    }
+    // Enqueue retained statuses in arrival order before enabling live delivery.
+    // Unknown parents/old attempts still go through the coordinator's fences.
+    // On an initialization failure the bounded buffer survives the retry.
+    for (final update in _durableStartupStatuses) {
+      coordinator.handleUpdate(update);
+    }
+    _durableStartupStatuses.clear();
+    _bufferDurableStartupStatuses = false;
+    // Inactive sessions do not start source probes or range assembly. Allow
+    // normal local adoption to reach the initial snapshot, but a full-body
+    // fallback/native settlement must not block access to local downloads.
+    await coordinator.flushPendingUpdates().timeout(
+      const Duration(milliseconds: 250),
+      onTimeout: () {},
+    );
     await _recordStartupInventory();
+  }
+
+  void _acceptDurableUpdate(TaskUpdate update) {
+    if (update.task.group != kPersistentDownloadChunkGroup) return;
+    if (!_bufferDurableStartupStatuses) {
+      _durableParallel?.handleUpdate(update);
+      return;
+    }
+    // Startup progress is transient; restore obtains current writer ownership.
+    // Retain only ordered status evidence and bound it even if startup fails.
+    if (update is! TaskStatusUpdate) return;
+    if (_durableStartupStatuses.length < _maxDurableStartupStatuses) {
+      _durableStartupStatuses.add(update);
+    } else if (!_startupStatusOverflowReported) {
+      _startupStatusOverflowReported = true;
+      _diagnostics.recordTransport('startup.statusBufferFull', {
+        'count': _maxDurableStartupStatuses,
+      });
+      // Overflow loses an optimization, never verification authority: orphaned
+      // exact-size files continue through the existing source verifier.
+    }
   }
 
   /// Generation-fenced zero-byte Range candidates that iOS may start on the
@@ -297,6 +498,55 @@ final class PackageBackgroundDownloaderGateway
   /// native queue independently filters children that already exist in URLSession.
   void releaseNativeBackgroundOffersV2() {
     _durableParallel?.releaseNativeBackgroundOffers();
+  }
+
+  Future<void> reconcileNativeBackgroundTransfersV2() async {
+    final coordinator = _durableParallel;
+    if (coordinator == null) return;
+    await coordinator.reconcile(
+      _durablePartOwnershipIds,
+    );
+    coordinator.releaseNativeBackgroundOffers();
+  }
+
+  /// Exact-generation observations may adopt a range started by native refill.
+  /// Package/native callbacks still have to prove the final file on disk.
+  void observeNativeChunkUpdateV2({
+    required String parentTaskId,
+    required String chunkTaskId,
+    double? progress,
+    int? statusOrdinal,
+    int? writtenBytes,
+    int? expectedBytes,
+    int? attemptGeneration,
+    double? speedBytesPerSecond,
+    required bool completed,
+  }) {
+    final coordinator = _durableParallel;
+    if (coordinator == null || attemptGeneration == null) return;
+    unawaited(
+      coordinator
+          .handleNativeChunkUpdate(
+            parentTaskId: parentTaskId,
+            chunkTaskId: chunkTaskId,
+            progress: progress,
+            writtenBytes: writtenBytes,
+            expectedBytes: expectedBytes,
+            attemptGeneration: attemptGeneration,
+            speedBytesPerSecond: speedBytesPerSecond,
+            // The UI bridge uses `completed` for all inactive speed samples,
+            // including failures and pauses. Only package success closes a range.
+            completed: completed && statusOrdinal == TaskStatus.complete.index,
+          )
+          .catchError((Object error, StackTrace _) {
+            _diagnostics.recordTransport('background.observationRejected', {
+              'taskId': parentTaskId,
+              'childTaskId': chunkTaskId,
+              'attemptGeneration': attemptGeneration,
+              'errorType': error.runtimeType.toString(),
+            });
+          }),
+    );
   }
 
   @override
@@ -497,10 +747,7 @@ final class PackageBackgroundDownloaderGateway
     final roots = <Directory>[await _privateParallelCheckpointRootV2()];
     final documents = await getApplicationDocumentsDirectory();
     final legacyRoot = Directory(p.join(documents.path, 'Downloads'));
-    final legacyType = await FileSystemEntity.type(
-      legacyRoot.path,
-      followLinks: false,
-    );
+    final legacyType = await localPathType(legacyRoot.path);
     if (legacyType != FileSystemEntityType.notFound &&
         legacyType != FileSystemEntityType.directory) {
       throw FileSystemException(
@@ -565,6 +812,7 @@ final class PackageBackgroundDownloaderGateway
   @override
   Future<void> removeTracking(String taskId) async {
     await initialize();
+    await _ensureDurableTrackingSettled(taskId);
     await _cleanupMangaChildTracking(taskId);
     await _mangaHandles.remove(taskId)?.dispose();
     final durable = _durableHandles.remove(taskId);
@@ -575,6 +823,25 @@ final class PackageBackgroundDownloaderGateway
     _downloader.transfers.remove(taskId);
     _handles.remove(taskId)?.dispose();
     await _downloader.database.deleteRecordWithId(taskId);
+  }
+
+  Future<void> _ensureDurableTrackingSettled(String parentTaskId) async {
+    final parent = await _downloader.database.recordForId(parentTaskId);
+    var durable = _durableHandles.containsKey(parentTaskId) ||
+        parent?.task.group == kDownloadV2DurableParallelGroup ||
+        _pendingDurableStarts.keys.any((id) => id.startsWith('$parentTaskId.part.'));
+    if (!durable) {
+      final records = await _downloader.database.allRecords(group: kPersistentDownloadChunkGroup);
+      durable = durableChildTaskIdsForParentV2(records, parentTaskId).isNotEmpty;
+    }
+    // Already-cleaned ordinary tracking must stay locally idempotent; its
+    // logical completed artifact remains independently verified by the manager.
+    if (!durable) return;
+    final owners = await _durablePartOwnershipIds();
+    if ((_durableParallel?.isActive(parentTaskId) ?? false) ||
+        owners.any((id) => id.startsWith('$parentTaskId.part.'))) {
+      throw StateError('Native range ownership has not settled: $parentTaskId');
+    }
   }
 
   Future<void> _cleanupMangaChildTracking(String parentTaskId) async {
@@ -591,7 +858,7 @@ final class PackageBackgroundDownloaderGateway
       final transfer = _downloader.transfers.forId(record.taskId);
       final status = transfer?.status ?? record.status;
       if (nativeIds.contains(record.taskId) ||
-          !{TaskStatus.complete, TaskStatus.failed, TaskStatus.canceled, TaskStatus.notFound}.contains(status)) {
+          status.isNotFinalState) {
         throw StateError('Manga page ownership has not settled: ${record.taskId}');
       }
     }
@@ -609,6 +876,17 @@ final class PackageBackgroundDownloaderGateway
   }
 
   Future<void> _cleanupDurableChildTracking(String parentTaskId) async {
+    if (_isIOS()) {
+      try {
+        await const MethodChannel(
+          'com.animewitcher.app/download_continued_processing',
+        ).invokeMethod<void>('forgetRangeRetryMetadata', {
+          'parentTaskId': parentTaskId,
+        }).timeout(_nativeControlAckTimeoutV2);
+      } catch (_) {
+        // Exact generation fences make retained metadata harmless.
+      }
+    }
     final records = await _downloader.database.allRecords(
       group: kPersistentDownloadChunkGroup,
     );
@@ -630,13 +908,15 @@ final class PackageBackgroundDownloaderGateway
   }
 
   Future<Set<String>> _activeDurablePartTaskIds() async {
-    final packageTasks = await _downloader.allTasks(allGroups: true);
+    final packageTasks = await _downloader
+        .allTasks(allGroups: true)
+        .timeout(_nativeControlAckTimeoutV2);
     // background_downloader includes stored paused tasks in allTasks().
     // Keep that package detail inside this adapter: paused children must not
     // reserve a native-writer slot after an app relaunch.
     // ignore: invalid_use_of_visible_for_testing_member
     final pausedTasks = await _downloader.database.storage
-        .retrieveAllPausedTasks();
+        .retrieveAllPausedTasks().timeout(_nativeControlAckTimeoutV2);
     final active = activeDurablePartTaskIdsV2(
       packageTasks: packageTasks,
       pausedTasks: pausedTasks,
@@ -665,6 +945,58 @@ final class PackageBackgroundDownloaderGateway
     return active;
   }
 
+  Future<Set<String>> _durablePartOwnershipIds() async => {
+    ...await _activeDurablePartTaskIds(),
+    ..._pendingDurableStarts.keys,
+  };
+
+  Future<bool> _awaitDurableStart(DownloadTask task, Future<bool> acknowledgement) async {
+    _pendingDurableStarts[task.taskId] = acknowledgement;
+    void release() {
+      if (identical(_pendingDurableStarts[task.taskId], acknowledgement)) {
+        unawaited(_pendingDurableStarts.remove(task.taskId));
+      }
+    }
+    unawaited(acknowledgement.then<void>((_) => release(),
+      onError: (Object _, StackTrace _) => release()));
+    try {
+      return await acknowledgement.timeout(_nativeControlAckTimeoutV2);
+    } on TimeoutException {
+      // Native may commit after a lost ACK. Retain the writer reservation;
+      // neither retry nor delete may treat this attempt as an absent worker.
+      _diagnostics.recordTransport('recovery.anomaly', {
+        'taskId': downloadInternalParentTaskId(task),
+        'childTaskId': task.taskId,
+        'anomaly': 'nativeStartAckUnknown',
+      });
+      return true;
+    }
+  }
+
+  Future<void> _settlePendingDurableStarts(List<String> ids) async {
+    final pending = {
+      for (final id in ids)
+        id: ?_pendingDurableStarts[id],
+    };
+    if (pending.isEmpty) return;
+    final live = await _activeDurablePartTaskIds();
+    final uncommitted = <Future<bool>>[];
+    for (final entry in pending.entries) {
+      // Every tracked start began after a raw absence check and native claim.
+      // A running occurrence, unlike a persisted paused row, proves commit.
+      if (live.contains(entry.key)) {
+        if (identical(_pendingDurableStarts[entry.key], entry.value)) {
+          unawaited(_pendingDurableStarts.remove(entry.key));
+        }
+        continue;
+      }
+      // A completed failed call has no pending commit; cancellation below
+      // still settles any existing worker. Wait all ACKs in one time budget.
+      uncommitted.add(entry.value.catchError((Object _) => false));
+    }
+    await Future.wait(uncommitted).timeout(_nativeControlAckTimeoutV2);
+  }
+
   bool _isDurableInternalTask(Task task) =>
       task.group == kDownloadV2DurableParallelGroup ||
       task.group == kPersistentDownloadChunkGroup;
@@ -686,25 +1018,27 @@ final class PackageBackgroundDownloaderGateway
     final coordinator = PersistentParallelDownload(
       startPart: _startDurablePart,
       pausePart: (task) async {
-        if (!await _downloader.pause(task)) {
+        if (!await _downloader.pause(task).timeout(_nativeControlAckTimeoutV2)) {
           throw StateError('Native range did not pause safely');
         }
       },
       cancelParts: (ids) async {
-        if (!await _downloader.cancelTasksWithIds(ids)) {
+        await _settlePendingDurableStarts(ids);
+        if (!await _downloader.cancelTasksWithIds(ids)
+            .timeout(_nativeControlAckTimeoutV2)) {
           throw StateError('Native ranges rejected cancellation');
         }
         final deadline = DateTime.now().add(const Duration(seconds: 10));
         while (true) {
           final remaining = deadline.difference(DateTime.now());
           if (remaining <= Duration.zero) {
-            throw StateError('Native ranges did not settle after cancellation');
+            throw TimeoutException('Native ranges did not settle after cancellation');
           }
           Set<String> live;
           try {
             live = await _activeDurablePartTaskIds().timeout(remaining);
-          } on TimeoutException {
-            throw StateError('Native range ownership could not be established');
+          } catch (_) {
+            throw TimeoutException('Native range ownership could not be established');
           }
           if (!live.any(ids.contains)) return;
           await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -712,9 +1046,37 @@ final class PackageBackgroundDownloaderGateway
       },
       saveRecord: _saveDurableRecord,
       recordForId: _downloader.database.recordForId,
-      livePartIds: _activeDurablePartTaskIds,
+      failureMetadataResolver: _isIOS()
+          ? (update) => resolveNativeRangeFailureV2(update, forceAvailableForTesting: true)
+          : null,
+      livePartIds: _durablePartOwnershipIds,
       availableStorageBytes: availableDownloadStorageBytesV2,
-      verifyPartSource: verifySavedRangeSourceV2,
+      verifyPartSource: (task, file, bytes, resourceSize) async {
+        final cancellation = Completer<void>();
+        _durableSourceVerifications[task.taskId] = cancellation;
+        try {
+          return await verifySavedRangeSourceV2(
+            task,
+            file,
+            bytes,
+            resourceSize,
+            cancelled: cancellation.future,
+          );
+        } finally {
+          if (identical(
+            _durableSourceVerifications[task.taskId],
+            cancellation,
+          )) {
+            _durableSourceVerifications.remove(task.taskId);
+          }
+        }
+      },
+      cancelPartSourceVerification: (taskId) {
+        final cancellation = _durableSourceVerifications.remove(taskId);
+        if (cancellation != null && !cancellation.isCompleted) {
+          cancellation.complete();
+        }
+      },
       manifestFileResolver: privateParallelManifestFileV2,
       promoteFile: promoteCompletedDownloadFileV2,
       shouldDrainPartOnPause: (_) => _isIOS(),
@@ -735,9 +1097,7 @@ final class PackageBackgroundDownloaderGateway
       diagnosticEvent: _diagnostics.recordTransport,
     );
     _durableParallel = coordinator;
-    _durableUpdatesSubscription ??= _downloader.updates.listen((update) {
-      coordinator.handleUpdate(update);
-    });
+    _durableUpdatesSubscription ??= _downloader.updates.listen(_acceptDurableUpdate);
     return coordinator;
   }
 
@@ -747,12 +1107,28 @@ final class PackageBackgroundDownloaderGateway
     int size,
   ) async {
     final range = _diagnosticRangeBoundsV2(task);
+    final nativeInventoryStartedAtMillis = DateTime.now().millisecondsSinceEpoch;
     final liveTaskIds = await _activeDurablePartTaskIds();
-    if (liveTaskIds.contains(task.taskId)) {
+    if (liveTaskIds.contains(task.taskId) || _pendingDurableStarts.containsKey(task.taskId)) {
       _diagnostics.recordTransport('recovery.decision', <String, Object?>{
         'taskId': downloadInternalParentTaskId(task),
         'childTaskId': task.taskId,
         'reason': 'nativeOwnerPresent',
+        'nativeLive': true,
+        'rangeStart': range?.$1,
+        'rangeEnd': range?.$2,
+      });
+      return true;
+    }
+
+    if (!await claimNativeRangeForDartV2(
+      task,
+      observedAtMillis: nativeInventoryStartedAtMillis,
+    )) {
+      _diagnostics.recordTransport('recovery.decision', <String, Object?>{
+        'taskId': downloadInternalParentTaskId(task),
+        'childTaskId': task.taskId,
+        'reason': 'nativeClaimCommitted',
         'nativeLive': true,
         'rangeStart': range?.$1,
         'rangeEnd': range?.$2,
@@ -765,17 +1141,21 @@ final class PackageBackgroundDownloaderGateway
     // ignore: invalid_use_of_visible_for_testing_member
     final resumeData = await _downloader.database.storage.retrieveResumeData(
       task.taskId,
-    );
+    ).timeout(_nativeControlAckTimeoutV2);
     // ignore: invalid_use_of_visible_for_testing_member
     final pausedTask = await _downloader.database.storage.retrievePausedTask(
       task.taskId,
-    );
+    ).timeout(_nativeControlAckTimeoutV2);
     final resumeDataPresent = resumeData != null;
     final packagePaused = pausedTask != null;
+    final sourceValidationRequired = downloadInternalSourceValidationRequired(task);
 
     try {
-      if (await _downloader.taskCanResume(task) &&
-          await _downloader.resume(task)) {
+      final canResume = !sourceValidationRequired &&
+          await _downloader.taskCanResume(task).timeout(_nativeControlAckTimeoutV2);
+      if (!_ensureDurableParallelCoordinator().canStartPart(task.taskId)) return false;
+      if (canResume &&
+          await _awaitDurableStart(task, _downloader.resume(task))) {
         _diagnostics.recordTransport('recovery.decision', <String, Object?>{
           'taskId': downloadInternalParentTaskId(task),
           'childTaskId': task.taskId,
@@ -803,6 +1183,17 @@ final class PackageBackgroundDownloaderGateway
       // authority for the logical episode.
     }
 
+    final durableBytes = await _preserveDurablePartPrefix(task, size);
+    if (sourceValidationRequired) {
+      // Fresh enqueue does not retire package resumeData. Remove the old source
+      // checkpoint before admitting a replacement that may later be resumed.
+      final retireCheckpoint = _retireDurableResumeCheckpoint;
+      if (retireCheckpoint == null) {
+        throw StateError('Injected downloader requires its checkpoint retirement callback');
+      }
+      await retireCheckpoint(task.taskId).timeout(_nativeControlAckTimeoutV2);
+    }
+
     if (progress > 0) {
       _diagnostics.recordTransport('recovery.anomaly', <String, Object?>{
         'taskId': downloadInternalParentTaskId(task),
@@ -816,18 +1207,26 @@ final class PackageBackgroundDownloaderGateway
       });
       _ensureDurableParallelCoordinator().resetUndurablePartProgress(
         task.taskId,
-        durableBytes: 0,
+        durableBytes: durableBytes,
       );
       await _downloader.database.updateRecord(
-        TaskRecord(task, TaskStatus.paused, 0, size),
+        TaskRecord(task, TaskStatus.paused, size > 0 ? durableBytes / size : 0, size),
       );
     }
 
-    final enqueued = await _downloader.enqueue(task);
+    if (!_ensureDurableParallelCoordinator().canStartPart(task.taskId)) return false;
+    final enqueued = await _awaitDurableStart(task, _downloader.enqueue(task));
+    if (enqueued && sourceValidationRequired &&
+        !_pendingDurableStarts.containsKey(task.taskId)) {
+      // A timed-out ACK retains the fence and writer reservation. Only a
+      // confirmed fresh request may authorize subsequent package resumeData.
+      await _ensureDurableParallelCoordinator().markPartSourceValidated(task.taskId);
+    }
     _diagnostics.recordTransport('recovery.decision', <String, Object?>{
       'taskId': downloadInternalParentTaskId(task),
       'childTaskId': task.taskId,
-      'reason': progress > 0 ? 'rangeRestart' : 'freshEnqueue',
+      'reason': sourceValidationRequired ? 'sourceValidatedRestart' :
+          (progress > 0 ? 'rangeRestart' : 'freshEnqueue'),
       'resumeDataPresent': resumeDataPresent,
       'packagePaused': packagePaused,
       'rangeStart': range?.$1,
@@ -835,6 +1234,36 @@ final class PackageBackgroundDownloaderGateway
       'result': enqueued,
     });
     return enqueued;
+  }
+
+  Future<int> _preserveDurablePartPrefix(DownloadTask task, int size) async {
+    final destinationPath = await task.filePath();
+    final saved = await findPartialDownloadFile(destinationPath: destinationPath);
+    if (saved == null) return 0;
+    final bytes = await saved.length();
+    if (bytes <= 0 || bytes >= size ||
+        await FileSystemEntity.type(saved.path, followLinks: false) !=
+            FileSystemEntityType.file) {
+      throw FileSystemException('Unsafe range replacement prefix', saved.path);
+    }
+    // iOS 9.6.4 removes the destination before its final move. A recognized
+    // sibling survives failed publication and is recovered by the coordinator.
+    final backup = File('$destinationPath.download');
+    final type = await FileSystemEntity.type(backup.path, followLinks: false);
+    if (type != FileSystemEntityType.file && type != FileSystemEntityType.notFound) {
+      throw FileSystemException('Unsafe range replacement backup', backup.path);
+    }
+    if (saved.path != backup.path) await saved.copy(backup.path);
+    if (await backup.length() != bytes) {
+      throw FileSystemException('Incomplete range replacement backup', backup.path);
+    }
+    final writer = await backup.open(mode: FileMode.writeOnlyAppend);
+    try {
+      await writer.flush();
+    } finally {
+      await writer.close();
+    }
+    return bytes;
   }
 
   Future<void> _saveDurableRecord(TaskRecord record) async {
@@ -922,7 +1351,7 @@ Future<Directory> _privateParallelCheckpointRootV2() async {
     p.join(support.path, 'download_v2'),
     root.path,
   ]) {
-    final type = await FileSystemEntity.type(path, followLinks: false);
+    final type = await localPathType(path);
     if (type != FileSystemEntityType.notFound &&
         type != FileSystemEntityType.directory) {
       throw FileSystemException(
@@ -940,7 +1369,7 @@ Future<File> privateParallelManifestFileV2(DownloadTask task) async {
   final directory = Directory(
     p.join(root.path, sha256.convert(utf8.encode(task.taskId)).toString()),
   );
-  final type = await FileSystemEntity.type(directory.path, followLinks: false);
+  final type = await localPathType(directory.path);
   if (type != FileSystemEntityType.notFound &&
       type != FileSystemEntityType.directory) {
     throw FileSystemException(
@@ -950,7 +1379,7 @@ Future<File> privateParallelManifestFileV2(DownloadTask task) async {
   }
   final manifest = File(p.join(directory.path, 'manifest.json'));
   for (final path in [manifest.path, '${manifest.path}.tmp']) {
-    final type = await FileSystemEntity.type(path, followLinks: false);
+    final type = await localPathType(path);
     if (type != FileSystemEntityType.notFound &&
         type != FileSystemEntityType.file) {
       throw FileSystemException(
@@ -1011,113 +1440,211 @@ Future<bool> promoteCompletedDownloadFileV2(
 }
 
 /// Verifies saved range bytes against the current authorized identity response.
+/// False requires contradictory source evidence; an unavailable probe throws.
+/// [verificationTimeout] bounds inactivity, including connection/headers. Only
+/// bytes compared successfully with the saved file renew it. The independent
+/// ten-minute cap permits a 6 MiB range at roughly 10 KiB/s while bounding a
+/// trickling response even when it continually makes small valid progress.
 Future<({bool matches, String? validator})> verifySavedRangeSourceV2(
   DownloadTask task,
   File file,
   int bytes,
-  int resourceSize,
-) async {
+  int resourceSize, {
+  Future<void>? cancelled,
+  Duration verificationTimeout = const Duration(seconds: 20),
+  Duration verificationDeadline = const Duration(minutes: 10),
+}) async {
   const rejected = (matches: false, validator: null);
+  const invalidResponse = DownloadSourceVerificationException(
+    reason: DownloadSourceVerificationFailure.invalidResponse,
+  );
+  const localFileFailure = DownloadSourceVerificationException(
+    reason: DownloadSourceVerificationFailure.localFile,
+  );
   final range = _diagnosticRangeBoundsV2(task);
   if (range == null ||
       bytes <= 0 ||
       resourceSize <= 0 ||
       range.$2 >= resourceSize ||
       bytes > range.$2 - range.$1 + 1) {
-    return rejected;
+    throw localFileFailure;
   }
   final client = HttpClient()..autoUncompress = false;
+  var closed = false;
+  var verifiedBytes = 0;
+  var phase = DownloadSourceVerificationPhase.connecting;
+  DownloadSourceVerificationException? interruption;
+  void interrupt(
+    DownloadSourceVerificationFailure reason, {
+    DownloadSourceVerificationTimeout? timeoutKind,
+  }) {
+    if (closed || interruption != null) return;
+    interruption = DownloadSourceVerificationException(
+      reason: reason,
+      verifiedBytes: verifiedBytes,
+      phase: phase,
+      timeoutKind: timeoutKind,
+    );
+    // Force-close wakes pending connection, header, and body reads with errors.
+    client.close(force: true);
+  }
+
+  void checkInterrupted() {
+    final failure = interruption;
+    if (failure != null) throw failure;
+  }
+
+  Timer? inactivity;
+  void renewInactivity() {
+    inactivity?.cancel();
+    inactivity = Timer(
+      verificationTimeout,
+      () => interrupt(
+        DownloadSourceVerificationFailure.timeout,
+        timeoutKind: DownloadSourceVerificationTimeout.inactivity,
+      ),
+    );
+  }
+  renewInactivity();
+  final deadline = Timer(
+    verificationDeadline,
+    () => interrupt(
+      DownloadSourceVerificationFailure.timeout,
+      timeoutKind: DownloadSourceVerificationTimeout.deadline,
+    ),
+  );
+  unawaited(
+    cancelled?.then<void>(
+      (_) => interrupt(DownloadSourceVerificationFailure.cancelled),
+      onError: (Object _, StackTrace _) =>
+          interrupt(DownloadSourceVerificationFailure.cancelled),
+    ),
+  );
   RandomAccessFile? saved;
   try {
-    return await (() async {
-      if (await FileSystemEntity.type(file.path, followLinks: false) !=
-              FileSystemEntityType.file ||
-          await file.length() < bytes) {
-        return rejected;
+    if (await FileSystemEntity.type(file.path, followLinks: false) !=
+            FileSystemEntityType.file ||
+        await file.length() < bytes) {
+      checkInterrupted();
+      throw localFileFailure;
+    }
+    checkInterrupted();
+    saved = await file.open();
+    checkInterrupted();
+    final request = await client.getUrl(Uri.parse(task.url));
+    checkInterrupted();
+    for (final header in task.headers.entries) {
+      if (!{'range', 'accept-encoding'}.contains(header.key.toLowerCase())) {
+        request.headers.set(header.key, header.value);
       }
-      saved = await file.open();
-      final request = await client.getUrl(Uri.parse(task.url));
-      for (final header in task.headers.entries) {
-        if (!{'range', 'accept-encoding'}.contains(header.key.toLowerCase())) {
-          request.headers.set(header.key, header.value);
-        }
-      }
-      final from = range.$1;
-      final to = from + bytes - 1;
-      request.headers.set(HttpHeaders.rangeHeader, 'bytes=$from-$to');
-      request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
-      final response = await request.close();
-      final encoding = response.headers.value(
-        HttpHeaders.contentEncodingHeader,
+    }
+    final from = range.$1;
+    final to = from + bytes - 1;
+    request.headers.set(HttpHeaders.rangeHeader, 'bytes=$from-$to');
+    request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+    phase = DownloadSourceVerificationPhase.responseHeaders;
+    final response = await request.close();
+    checkInterrupted();
+    if (response.statusCode != HttpStatus.partialContent &&
+        response.statusCode != HttpStatus.ok) {
+      throw DownloadSourceVerificationException(
+        reason: DownloadSourceVerificationFailure.http,
+        httpStatus: response.statusCode,
       );
-      if (encoding != null && encoding.toLowerCase().trim() != 'identity')
+    }
+    final encoding = response.headers.value(HttpHeaders.contentEncodingHeader);
+    if (encoding != null && encoding.toLowerCase().trim() != 'identity') {
+      throw invalidResponse;
+    }
+    if (response.contentLength >= 0 && response.contentLength != bytes) {
+      throw invalidResponse;
+    }
+    if (response.statusCode == HttpStatus.partialContent) {
+      final match = RegExp(
+        r'^bytes\s+(\d+)\s*-\s*(\d+)\s*/\s*(\d+)$',
+        caseSensitive: false,
+      ).firstMatch(
+        response.headers.value(HttpHeaders.contentRangeHeader)?.trim() ?? '',
+      );
+      if (match == null) throw invalidResponse;
+      final actualFrom = int.tryParse(match[1]!);
+      final actualTo = int.tryParse(match[2]!);
+      final actualSize = int.tryParse(match[3]!);
+      if (actualFrom == null || actualTo == null || actualSize == null) {
+        throw invalidResponse;
+      }
+      if (actualFrom != from || actualTo != to || actualSize != resourceSize) {
         return rejected;
-      if (response.contentLength >= 0 && response.contentLength != bytes)
-        return rejected;
-      if (response.statusCode == HttpStatus.partialContent) {
-        final match =
-            RegExp(
-              r'^bytes\s+(\d+)\s*-\s*(\d+)\s*/\s*(\d+)$',
-              caseSensitive: false,
-            ).firstMatch(
-              response.headers.value(HttpHeaders.contentRangeHeader)?.trim() ??
-                  '',
-            );
-        if (match == null ||
-            int.tryParse(match[1]!) != from ||
-            int.tryParse(match[2]!) != to ||
-            int.tryParse(match[3]!) != resourceSize) {
-          return rejected;
+      }
+    } else if (from != 0 ||
+        to != resourceSize - 1 ||
+        bytes != resourceSize ||
+        response.headers.value(HttpHeaders.contentRangeHeader) != null) {
+      throw invalidResponse;
+    }
+    final responseHeaders = <String, String>{};
+    response.headers.forEach((name, values) {
+      responseHeaders[name] = values.join(', ');
+    });
+    final validator = downloadIfRangeValidator(responseHeaders);
+    for (final header in task.headers.entries) {
+      if (header.key.toLowerCase() != 'if-range') continue;
+      if (validator == null) throw invalidResponse;
+      if (header.value != validator) return rejected;
+    }
+    phase = DownloadSourceVerificationPhase.body;
+    var received = 0;
+    await for (final chunk in response) {
+      checkInterrupted();
+      if (received + chunk.length > bytes) throw invalidResponse;
+      for (var offset = 0; offset < chunk.length;) {
+        final end = offset + 65536 < chunk.length
+            ? offset + 65536
+            : chunk.length;
+        final local = await saved.read(end - offset);
+        checkInterrupted();
+        if (local.length != end - offset) throw localFileFailure;
+        for (var index = 0; index < local.length; index++) {
+          if (local[index] != chunk[offset + index]) return rejected;
         }
-      } else if (response.statusCode != HttpStatus.ok ||
-          from != 0 ||
-          to != resourceSize - 1 ||
-          bytes != resourceSize ||
-          response.headers.value(HttpHeaders.contentRangeHeader) != null) {
-        return rejected;
+        verifiedBytes += local.length;
+        renewInactivity();
+        offset = end;
       }
-      String? validator;
-      final etag = response.headers.value(HttpHeaders.etagHeader)?.trim();
-      if (etag != null && RegExp(r'^"[^"\r\n]*"$').hasMatch(etag)) {
-        validator = etag;
-      } else {
-        final modified = response.headers.value(HttpHeaders.lastModifiedHeader);
-        if (modified != null) {
-          try {
-            HttpDate.parse(modified);
-            validator = modified;
-          } on FormatException {
-            /* Unknown validator. */
-          }
-        }
-      }
-      for (final header in task.headers.entries) {
-        if (header.key.toLowerCase() == 'if-range' && header.value != validator)
-          return rejected;
-      }
-      var received = 0;
-      await for (final chunk in response) {
-        if (received + chunk.length > bytes) return rejected;
-        for (var offset = 0; offset < chunk.length;) {
-          final end = offset + 65536 < chunk.length
-              ? offset + 65536
-              : chunk.length;
-          final local = await saved!.read(end - offset);
-          if (local.length != end - offset) return rejected;
-          for (var index = 0; index < local.length; index++) {
-            if (local[index] != chunk[offset + index]) return rejected;
-          }
-          offset = end;
-        }
-        received += chunk.length;
-      }
-      return (matches: received == bytes, validator: validator);
-    })().timeout(const Duration(seconds: 20));
-  } catch (_) {
-    return rejected;
+      received += chunk.length;
+    }
+    checkInterrupted();
+    if (received != bytes) throw invalidResponse;
+    return (matches: true, validator: validator);
+  } catch (error) {
+    checkInterrupted();
+    if (error is DownloadSourceVerificationException) rethrow;
+    if (error is FileSystemException) throw localFileFailure;
+    if (error is TimeoutException) {
+      throw const DownloadSourceVerificationException(
+        reason: DownloadSourceVerificationFailure.timeout,
+      );
+    }
+    if (error is SocketException ||
+        error is HttpException ||
+        error is TlsException) {
+      throw DownloadSourceVerificationException(
+        reason: DownloadSourceVerificationFailure.network,
+        verifiedBytes: verifiedBytes,
+        phase: phase,
+      );
+    }
+    rethrow;
   } finally {
+    closed = true;
+    inactivity?.cancel();
+    deadline.cancel();
     client.close(force: true);
-    await saved?.close();
+    try {
+      await saved?.close();
+    } on FileSystemException {
+      if (interruption == null) throw localFileFailure;
+    }
   }
 }
 
@@ -1127,10 +1654,13 @@ Future<int?> availableDownloadStorageBytesV2(String path) async {
   try {
     return await const MethodChannel(
       'com.animewitcher.app/download_continued_processing',
-    ).invokeMethod<int>('availableDiskBytes', <String, Object>{'path': path});
+    ).invokeMethod<int>('availableDiskBytes', <String, Object>{'path': path})
+        .timeout(_nativeControlAckTimeoutV2);
   } on MissingPluginException {
     return null;
   } on PlatformException {
+    return null;
+  } on TimeoutException {
     return null;
   }
 }
@@ -1168,25 +1698,23 @@ Future<DownloadTransportHandle?> reusableMangaPageHandleV2({
     if (resumed) return existing;
 
     // Cancel acceptance does not release the exact native writer's ownership.
-    final settled = Completer<void>();
-    final subscription = existing.snapshots.listen((snapshot) {
-      if ((snapshot.isFinal || snapshot.status == DownloadTransportStatus.missing) &&
-          !settled.isCompleted) settled.complete();
-    });
+    final settlement = StreamIterator(existing.settlement());
+    final settled = settlement.moveNext()..ignore();
     try {
       if (!await existing.cancel()) {
         throw StateError('Could not stop unresumable manga page ${existing.taskId}');
       }
-      if (!existing.current.isFinal &&
-          existing.current.status != DownloadTransportStatus.missing) {
+      if (!existing.isSettled) {
         try {
-          await settled.future.timeout(const Duration(seconds: 10));
+          if (!await settled.timeout(const Duration(seconds: 10))) {
+            throw StateError('Manga page ${existing.taskId} closed before settling');
+          }
         } on TimeoutException {
           throw StateError('Manga page ${existing.taskId} did not settle after cancel');
         }
       }
     } finally {
-      await subscription.cancel();
+      await settlement.cancel();
     }
     await removeTracking();
     return null;
@@ -1551,14 +2079,21 @@ final class _DurableParallelDownloadTransportHandle
 
   @override
   Future<bool> pause() =>
-      coordinator.pause(parent, preserveLiveParts: Platform.isIOS);
+      coordinator.pause(
+        parent,
+        preserveLiveParts: Platform.isIOS,
+        beforePause: () => withdrawNativeRangeParentV2(taskId),
+      );
 
   @override
   Future<bool> resume() => coordinator.start(parent, totalBytes);
 
   @override
   Future<bool> cancel() async {
-    await coordinator.cancel(parent);
+    await coordinator.cancel(
+      parent,
+      beforeCancel: () => withdrawNativeRangeParentV2(taskId),
+    );
     if (_current.status != DownloadTransportStatus.canceled) {
       _emit(
         DownloadTransportSnapshot(
@@ -1843,12 +2378,17 @@ class _PackageDownloadTransportHandle implements DownloadTransportHandle {
 
 final class _SelfSettlingPackageDownloadTransportHandle
     extends _PackageDownloadTransportHandle
-    implements SelfSettlingParallelDownloadTransportHandleV2 {
+    implements
+        SelfSettlingParallelDownloadTransportHandleV2,
+        CompletingDownloadTransportHandleV2 {
   _SelfSettlingPackageDownloadTransportHandle(
     Transfer transfer,
     FileDownloader downloader, {
     required bool isIOS,
   }) : super(transfer, downloader, isIOS: isIOS);
+
+  @override
+  Future<void> get completion => transfer.result.then<void>((_) {});
 }
 
 /// Projects one package Transfer into V2 without maintaining a second metric

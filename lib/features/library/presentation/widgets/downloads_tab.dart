@@ -59,6 +59,19 @@ MultimediaItem _savedPlaybackItem(DownloadItem selected, Iterable<DownloadItem> 
   );
 }
 
+Future<String?> _resolveLocalPlaybackUrl(WidgetRef ref, DownloadItem item) async {
+  final file = await ref.read(downloadedFilesProvider.notifier)
+      .resolveFile(item.item, episode: item.episode, logicalId: item.logicalId);
+  return file?.path;
+}
+
+Future<void> _removeMissingDownload(BuildContext context, WidgetRef ref,
+    DownloadItem item, AppLocalizations l10n) async {
+  if (!context.mounted) return;
+  ref.read(notificationServiceProvider).showError(l10n.fileNotFoundRemoving);
+  await ref.read(downloadsProvider.notifier).removeDownload(item);
+}
+
 class DownloadsTab extends ConsumerStatefulWidget {
   const DownloadsTab({super.key});
 
@@ -92,75 +105,77 @@ class _DownloadsTabState extends ConsumerState<DownloadsTab>
     final activeProgress = ref.watch(downloadProgressProvider);
     final l10n = AppLocalizations.of(context)!;
 
-    return downloadsAsync.when(
-      data: (downloads) {
-        // Collapse leftover complete records for the same episode/file so a
-        // re-download cannot render الحلقة 9 twice.
-        final visibleDownloads = collapseDuplicateDownloads(downloads).visible;
-        final active = visibleDownloads
-            .where((item) => isActiveDownloadStatus(item.status))
-            .toList();
-        final completed = visibleDownloads
-            .where((item) => !isActiveDownloadStatus(item.status))
-            .toList();
+    // Keep local completed rows available through refreshes and transport errors.
+    final visibleDownloads = collapseDuplicateDownloads(
+      downloadsAsync.hasValue
+          ? downloadsAsync.value ?? const <DownloadItem>[]
+          : const <DownloadItem>[],
+    ).visible;
+    final completed = visibleDownloads
+        .where((item) => !isActiveDownloadStatus(item.status))
+        .toList();
 
-        // RTL only for the tab strip + pager swipe (like المواسم). Each
-        // pane is LTR so cards stay poster-left — do not mirror the page.
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Directionality(
-              textDirection: TextDirection.rtl,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: FilterStyleTabBar(
-                      controller: _tabs,
-                      isScrollable: false,
-                      tabs: [
-                        FilterStyleTab(label: l10n.downloads),
-                        FilterStyleTab(label: l10n.downloadsTabCompleted),
-                      ],
-                    ),
-                  ),
-                  // The side menu's button, in the corner it comes from.
-                  const AppSideMenuButton(
-                    padding: EdgeInsetsDirectional.only(start: 4, end: 12),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Directionality(
-                textDirection: TextDirection.rtl,
-                child: TabBarView(
+    // RTL only for the tab strip + pager swipe (like المواسم). Each
+    // pane is LTR so cards stay poster-left — do not mirror the page.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Directionality(
+          textDirection: TextDirection.rtl,
+          child: Row(
+            children: [
+              Expanded(
+                child: FilterStyleTabBar(
                   controller: _tabs,
-                  children: [
-                    Directionality(
-                      textDirection: TextDirection.ltr,
-                      child: _ActiveDownloadsList(
-                        items: active,
-                        activeProgress: activeProgress,
-                        emptyMessage: l10n.noDownloadsYet,
-                      ),
-                    ),
-                    Directionality(
-                      textDirection: TextDirection.ltr,
-                      child: _CompletedDownloadsList(
-                        items: completed,
-                        emptyMessage: l10n.noCompletedDownloadsYet,
-                      ),
-                    ),
+                  isScrollable: false,
+                  tabs: [
+                    FilterStyleTab(label: l10n.downloads),
+                    FilterStyleTab(label: l10n.downloadsTabCompleted),
                   ],
                 ),
               ),
+              // The side menu's button, in the corner it comes from.
+              const AppSideMenuButton(
+                padding: EdgeInsetsDirectional.only(start: 4, end: 12),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: TabBarView(
+              controller: _tabs,
+              children: [
+                Directionality(
+                  textDirection: TextDirection.ltr,
+                  child: downloadsAsync.when(
+                    skipLoadingOnRefresh: false,
+                    skipLoadingOnReload: false,
+                    data: (_) => _ActiveDownloadsList(
+                      items: visibleDownloads
+                          .where((item) => isActiveDownloadStatus(item.status))
+                          .toList(),
+                      activeProgress: activeProgress,
+                      emptyMessage: l10n.noDownloadsYet,
+                    ),
+                    loading: () => const Center(child: AppLoadingIndicator()),
+                    error: (err, stack) =>
+                        Center(child: Text(l10n.errorPrefix(err.toString()))),
+                  ),
+                ),
+                Directionality(
+                  textDirection: TextDirection.ltr,
+                  child: _CompletedDownloadsList(
+                    items: completed,
+                    emptyMessage: l10n.noCompletedDownloadsYet,
+                  ),
+                ),
+              ],
             ),
-          ],
-        );
-      },
-      loading: () => const Center(child: AppLoadingIndicator()),
-      error: (err, stack) =>
-          Center(child: Text(l10n.errorPrefix(err.toString()))),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -227,6 +242,7 @@ class _ActiveDownloadsList extends StatelessWidget {
               progressData?.status ?? download.status;
 
           return _DownloadItemTile(
+            key: ValueKey(download.id),
             item: download,
             progress: displayProgress,
             status: displayStatus,
@@ -277,7 +293,7 @@ class _CompletedDownloadsList extends StatelessWidget {
         separatorBuilder: (context, index) => const SizedBox(height: 16),
         itemBuilder: (context, index) {
           final key = keys[index];
-          return _GroupedDownloadTile(items: grouped[key]!);
+          return _GroupedDownloadTile(key: ValueKey(key), items: grouped[key]!);
         },
       ),
     );
@@ -287,7 +303,7 @@ class _CompletedDownloadsList extends StatelessWidget {
 class _GroupedDownloadTile extends ConsumerStatefulWidget {
   final List<DownloadItem> items;
 
-  const _GroupedDownloadTile({required this.items});
+  const _GroupedDownloadTile({super.key, required this.items});
 
   @override
   ConsumerState<_GroupedDownloadTile> createState() => _GroupedDownloadTileState();
@@ -295,6 +311,7 @@ class _GroupedDownloadTile extends ConsumerStatefulWidget {
 
 class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   late Future<File?> _poster;
+  bool _deleteInFlight = false;
   List<DownloadItem> get items => widget.items;
 
   String _artworkId(DownloadItem item) {
@@ -457,7 +474,9 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
             const SizedBox(width: LayoutConstants.spacingSm),
             IconButton(
               icon: const Icon(Icons.delete_outline_rounded),
-              onPressed: () => _confirmDeleteAll(context, ref),
+              onPressed: _deleteInFlight
+                  ? null
+                  : () => _confirmDeleteAll(context, ref),
               color: theme.colorScheme.error.withValues(alpha: 0.8),
               visualDensity: VisualDensity.compact,
             ),
@@ -539,72 +558,69 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     WidgetRef ref,
     DownloadItem item,
     AppLocalizations l10n,
-  ) async {
-    final file = await ref
-        .read(downloadedFilesProvider.notifier)
-        .resolveFile(item.item, episode: item.episode, logicalId: item.logicalId);
-
-    if (file == null || !await file.exists()) {
-      if (context.mounted) {
-        ref
-            .read(notificationServiceProvider)
-            .showError(l10n.fileNotFoundRemoving);
-      }
-      await ref.read(downloadsProvider.notifier).removeDownload(item);
-      return;
-    }
-
-    if (context.mounted) {
-      unawaited(
-        ref
-            .read(playbackLauncherProvider)
-            .play(
-              context,
-              file.path,
-              baseItem: _savedPlaybackItem(item, items),
-              episode: item.episode,
-            ),
+  ) => ref
+      .read(playbackLauncherProvider)
+      .play(
+        context,
+        item.trackingUrl,
+        baseItem: _savedPlaybackItem(item, items),
+        episode: item.episode,
+        resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
+        onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
       );
-    }
-  }
 
-  void _confirmDeleteAll(BuildContext context, WidgetRef ref) {
+  Future<void> _confirmDeleteAll(BuildContext context, WidgetRef ref) async {
+    if (_deleteInFlight) return;
+    setState(() => _deleteInFlight = true);
     final l10n = AppLocalizations.of(context)!;
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(l10n.deleteAllEpisodes),
-        content: Text(
-          l10n.confirmDeleteAllEpisodes(items.length, items.first.item.title),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(l10n.cancel),
+    final selected = List<DownloadItem>.of(items);
+    final notifications = ref.read(notificationServiceProvider);
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(l10n.deleteAllEpisodes),
+          content: Text(
+            l10n.confirmDeleteAllEpisodes(items.length, items.first.item.title),
           ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              ref.read(downloadsProvider.notifier).removeDownloads(items);
-            },
-            child: Text(
-              l10n.deleteAll,
-              style: const TextStyle(color: Colors.red),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(l10n.cancel),
             ),
-          ),
-        ],
-      ),
-    );
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(
+                l10n.deleteAll,
+                style: const TextStyle(color: Colors.red),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+      final removed = await ref
+          .read(downloadsProvider.notifier)
+          .removeDownloads(selected);
+      if (!removed) {
+        throw StateError('Unable to delete download while it is in use');
+      }
+    } catch (error) {
+      showDownloadActionError(notifications, error);
+    } finally {
+      if (mounted) setState(() => _deleteInFlight = false);
+    }
   }
 }
 
-class _DownloadItemTile extends ConsumerWidget {
+class _DownloadItemTile extends ConsumerStatefulWidget {
   final DownloadItem item;
   final double progress;
   final TaskStatus status;
   final DownloadProgressData? progressData;
 
   const _DownloadItemTile({
+    super.key,
     required this.item,
     required this.progress,
     required this.status,
@@ -612,7 +628,20 @@ class _DownloadItemTile extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_DownloadItemTile> createState() => _DownloadItemTileState();
+}
+
+class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
+  bool _controlInFlight = false;
+  bool _deleteInFlight = false;
+
+  DownloadItem get item => widget.item;
+  double get progress => widget.progress;
+  TaskStatus get status => widget.status;
+  DownloadProgressData? get progressData => widget.progressData;
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
     final chunkProgress = ref.watch(
@@ -798,9 +827,9 @@ class _DownloadItemTile extends ConsumerWidget {
                   if (isWorking)
                     IconButton(
                       icon: const Icon(Icons.pause_rounded),
-                      onPressed: () => ref
-                          .read(downloadsProvider.notifier)
-                          .pauseDownload(item.task.taskId),
+                      onPressed: _controlInFlight || _deleteInFlight
+                          ? null
+                          : _controlDownload,
                       visualDensity: VisualDensity.compact,
                     ),
                   if (isPaused || isFailed)
@@ -817,9 +846,9 @@ class _DownloadItemTile extends ConsumerWidget {
                             ? Icons.refresh_rounded
                             : Icons.play_arrow_rounded,
                       ),
-                      onPressed: () {
-                        unawaited(_resumeDownload(context, ref));
-                      },
+                      onPressed: _controlInFlight || _deleteInFlight
+                          ? null
+                          : _controlDownload,
                       visualDensity: VisualDensity.compact,
                     ),
                   if (isDone)
@@ -833,7 +862,7 @@ class _DownloadItemTile extends ConsumerWidget {
                     ),
                   IconButton(
                     icon: const Icon(Icons.delete_outline_rounded),
-                    onPressed: () => _confirmDelete(context, ref, l10n),
+                    onPressed: _deleteInFlight ? null : _confirmDelete,
                     color: theme.colorScheme.error.withValues(alpha: 0.8),
                     visualDensity: VisualDensity.compact,
                   ),
@@ -867,23 +896,23 @@ class _DownloadItemTile extends ConsumerWidget {
     );
   }
 
-  Future<void> _resumeDownload(BuildContext context, WidgetRef ref) async {
+  Future<void> _controlDownload() async {
+    if (_controlInFlight || _deleteInFlight) return;
+    setState(() => _controlInFlight = true);
+    final notifications = ref.read(notificationServiceProvider);
     try {
       final notifier = ref.read(downloadsProvider.notifier);
       if (status == TaskStatus.failed || status == TaskStatus.notFound) {
         await notifier.retryDownload(item.task.taskId);
-      } else {
+      } else if (status == TaskStatus.paused) {
         await notifier.resumeDownload(item.task.taskId);
+      } else {
+        await notifier.pauseDownload(item.task.taskId);
       }
     } catch (error) {
-      if (!context.mounted) return;
-      var message = error.toString().trim();
-      const stateErrorPrefix = 'Bad state: ';
-      if (message.startsWith(stateErrorPrefix)) {
-        message = message.substring(stateErrorPrefix.length).trim();
-      }
-      if (message.isEmpty) message = 'Unable to continue download';
-      ref.read(notificationServiceProvider).showError(message);
+      showDownloadActionError(notifications, error);
+    } finally {
+      if (mounted) setState(() => _controlInFlight = false);
     }
   }
 
@@ -934,59 +963,28 @@ class _DownloadItemTile extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     AppLocalizations l10n,
-  ) async {
-    final file = await ref
-        .read(downloadedFilesProvider.notifier)
-        .resolveFile(item.item, episode: item.episode, logicalId: item.logicalId);
-
-    if (file == null || !await file.exists()) {
-      if (context.mounted) {
-        ref
-            .read(notificationServiceProvider)
-            .showError(l10n.fileNotFoundRemoving);
-      }
-      await ref.read(downloadsProvider.notifier).removeDownload(item);
-      return;
-    }
-
-    if (context.mounted) {
-      unawaited(
-        ref
-            .read(playbackLauncherProvider)
-            .play(
-              context,
-              file.path,
-              baseItem: _savedPlaybackItem(item, ref.read(downloadsProvider).value ?? [item]),
-              episode: item.episode,
-            ),
+  ) => ref
+      .read(playbackLauncherProvider)
+      .play(
+        context,
+        item.trackingUrl,
+        baseItem: _savedPlaybackItem(
+          item,
+          ref.read(downloadsProvider).value ?? [item],
+        ),
+        episode: item.episode,
+        resolveUrl: () => _resolveLocalPlaybackUrl(ref, item),
+        onMissingFile: () => _removeMissingDownload(context, ref, item, l10n),
       );
-    }
-  }
 
-  void _confirmDelete(
-    BuildContext context,
-    WidgetRef ref,
-    AppLocalizations l10n,
-  ) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(l10n.deleteDownload),
-        content: Text(l10n.confirmDeleteDownload),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(l10n.cancel),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              ref.read(downloadsProvider.notifier).removeDownload(item);
-            },
-            child: Text(l10n.delete, style: const TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
+  Future<void> _confirmDelete() async {
+    if (_deleteInFlight) return;
+    // A pending pause must never trap the user without a delete control.
+    setState(() => _deleteInFlight = true);
+    try {
+      await confirmAndRemoveDownload(context, ref, item);
+    } finally {
+      if (mounted) setState(() => _deleteInFlight = false);
+    }
   }
 }

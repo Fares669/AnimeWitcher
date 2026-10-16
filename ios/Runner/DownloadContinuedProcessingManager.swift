@@ -81,11 +81,6 @@ final class DownloadContinuedProcessingManager {
     var currentIndex: Int
   }
 
-  /// Reserved for a real explicit cancel action. BGContinuedProcessingTask
-  /// expiration is only the end of the OS processing lease and must never be
-  /// translated into pausing the independent background URLSession transfer.
-  var cancellationHandler: ((String) -> Void)?
-
   private let scheduler = BGTaskScheduler.shared
   private var activeTask: BGContinuedProcessingTask?
   private var activeTaskCompletion: DownloadContinuedProcessingCompletion?
@@ -93,6 +88,8 @@ final class DownloadContinuedProcessingManager {
   private var identifier: String?
   private var didRegisterIdentifier = false
   private var currentEpisodeTaskId = ""
+  private var requestSubmittedAt: Date?
+  private var leaseStartedAt: Date?
   // V2 ranged children report a subtotal of child bytes, not a whole-file
   // absolute byte count. Capture that subtotal at the foreground -> background
   // handoff and advance the system UI by its delta over the latest Dart parent
@@ -107,6 +104,27 @@ final class DownloadContinuedProcessingManager {
     nativeAggregateBaselineTaskId = ""
     nativeAggregateBaselineBytes = -1
     nativeParentBaselineBytes = -1
+  }
+
+  /// Keep lifecycle evidence separate from display text, source URLs and errors.
+  private func recordLifecycle(_ event: String, fields: [String: Any] = [:]) {
+    var metadata = fields
+    if let identifier { metadata["leaseIdentifier"] = identifier }
+    if !currentEpisodeTaskId.isEmpty { metadata["taskId"] = currentEpisodeTaskId }
+    if let requestSubmittedAt {
+      metadata["requestAgeMillis"] = max(Int(Date().timeIntervalSince(requestSubmittedAt) * 1000), 0)
+    }
+    if let leaseStartedAt {
+      metadata["leaseAgeMillis"] = max(Int(Date().timeIntervalSince(leaseStartedAt) * 1000), 0)
+    }
+    if let snapshot {
+      metadata["progress"] = snapshot.progress
+      metadata["transferredBytes"] = snapshot.transferredBytes
+      metadata["totalBytes"] = snapshot.totalBytes
+      metadata["completedCount"] = snapshot.completedCount
+      metadata["batchTotal"] = snapshot.batchTotal
+    }
+    DownloadNativeDiagnosticLog.record(event, fields: metadata)
   }
 
   func start(
@@ -177,6 +195,7 @@ final class DownloadContinuedProcessingManager {
     identifier = sessionId
 
     guard isPermittedTaskIdentifier(sessionId) else {
+      recordLifecycle("continued.submit.failed", fields: ["failure": "identifierNotPermitted"])
       identifier = nil
       throw DownloadContinuedProcessingError.identifierNotPermitted(sessionId)
     }
@@ -199,6 +218,7 @@ final class DownloadContinuedProcessingManager {
       }
 
       guard accepted else {
+        recordLifecycle("continued.submit.failed", fields: ["failure": "registrationRejected"])
         identifier = nil
         throw DownloadContinuedProcessingError.registrationRejected(sessionId)
       }
@@ -211,10 +231,18 @@ final class DownloadContinuedProcessingManager {
       subtitle: subtitle(for: snapshot)
     )
     request.strategy = .queue
+    requestSubmittedAt = Date()
+    recordLifecycle("continued.submit.requested")
     do {
       try scheduler.submit(request)
+      recordLifecycle("continued.submit.accepted")
     } catch {
+      recordLifecycle("continued.submit.failed", fields: [
+        "failure": "schedulerSubmission",
+        "errorCode": (error as NSError).code,
+      ])
       identifier = nil
+      requestSubmittedAt = nil
       throw error
     }
     return sessionId
@@ -416,6 +444,14 @@ final class DownloadContinuedProcessingManager {
     }
     let verifiedSuccess = success && snapshotLooksComplete
 
+    if activeTask != nil || identifier != nil {
+      recordLifecycle("continued.finished", fields: [
+        "activeLease": activeTask != nil,
+        "success": verifiedSuccess,
+        "status": verifiedSuccess ? "completed" : (status == "canceled" ? "canceled" : "paused"),
+      ])
+    }
+
     if let task = activeTask {
       activeTask = nil
       let completion = activeTaskCompletion
@@ -450,35 +486,71 @@ final class DownloadContinuedProcessingManager {
 
     snapshot = nil
     identifier = nil
+    requestSubmittedAt = nil
+    leaseStartedAt = nil
     currentEpisodeTaskId = ""
     resetNativeAggregateBaseline()
   }
 
   private func attach(_ task: BGContinuedProcessingTask) {
+    // Canceling a request cannot retract an already-delivered launch callback.
+    guard identifier == task.identifier, snapshot != nil else {
+      recordLifecycle("continued.attach.rejected", fields: [
+        "leaseIdentifier": task.identifier, "failure": "inactiveSession",
+      ])
+      task.setTaskCompleted(success: false)
+      return
+    }
+    if let activeTask {
+      if activeTask !== task {
+        recordLifecycle("continued.attach.rejected", fields: [
+          "leaseIdentifier": task.identifier, "failure": "duplicateLease",
+        ])
+        task.setTaskCompleted(success: false)
+      }
+      return
+    }
+
     activeTask = task
     let completion = DownloadContinuedProcessingCompletion()
     activeTaskCompletion = completion
+    let attachedAt = Date()
+    leaseStartedAt = attachedAt
+    let leaseIdentifier = task.identifier
 
     task.expirationHandler = { [weak self, weak task] in
       guard let task else { return }
+      // Log synchronously before relinquishing runtime. Expiration does not
+      // expose a reason, and must not be labelled as a user cancellation.
+      DownloadNativeDiagnosticLog.record("continued.expired", fields: [
+        "leaseIdentifier": leaseIdentifier,
+        "leaseAgeMillis": max(Int(Date().timeIntervalSince(attachedAt) * 1000), 0),
+        "completedUnits": task.progress.completedUnitCount,
+        "totalUnits": task.progress.totalUnitCount,
+      ])
       completion.finish { task.setTaskCompleted(success: false) }
       Task { @MainActor in
         guard let self, self.activeTask === task else { return }
 
-        // Expiration only revokes the BGContinuedProcessingTask lease / system
-        // overlay. The actual episode is owned by background URLSession (or by
-        // PersistentParallelDownload's child URLSession tasks), which is
-        // intentionally independent and must keep transferring. Mapping this
-        // callback to `cancellationHandler` used to mark the logical parent
-        // paused and promote the next episode while its parts were still live.
+        // Apple uses this reasonless callback for both OS expiration and a
+        // person stopping the task in the system UI. Our continuity policy
+        // releases this lease without canceling independent URLSession work;
+        // treating every callback as app cancellation would also stop downloads
+        // on ordinary OS expiry. System UI stop therefore cannot be a reliable
+        // download cancel action here. Explicit in-app cancellation remains
+        // owned by the download coordinator. See download_background_lifecycle.md.
         self.activeTask = nil
         self.activeTaskCompletion = nil
         self.snapshot = nil
         self.identifier = nil
+        self.requestSubmittedAt = nil
+        self.leaseStartedAt = nil
         self.currentEpisodeTaskId = ""
         self.resetNativeAggregateBaseline()
       }
     }
+
+    recordLifecycle("continued.attached")
 
     if let snapshot {
       apply(snapshot, to: task)
@@ -532,6 +604,7 @@ final class DownloadContinuedProcessingManager {
 
   private func sessionIdentifier() throws -> String {
     guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else {
+      recordLifecycle("continued.submit.failed", fields: ["failure": "missingBundleIdentifier"])
       throw DownloadContinuedProcessingError.missingBundleIdentifier
     }
     return "\(bundleId).download.\(Self.sessionKey)"

@@ -7,13 +7,14 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/domain/stream_source_preferences.dart';
 import '../../../core/router/app_router.dart';
-import '../../../core/providers/anime_data_source_settings_provider.dart';
 import '../../../core/services/external_player_service.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../../../core/extensions/base_provider.dart';
 import '../../settings/presentation/player_settings_provider.dart';
 import '../../settings/presentation/general_settings_provider.dart';
+
 import 'package:collection/collection.dart';
+
 import 'details_controller.dart';
 import 'source_picker.dart';
 import 'downloaded_file_provider.dart';
@@ -21,7 +22,9 @@ import '../../../shared/widgets/loading_dialog.dart';
 import '../../../core/utils/app_utils.dart';
 import '../../../core/utils/episode_label.dart';
 import '../../../core/utils/resume_episode.dart';
+
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+
 import '../../../core/services/notification_service.dart';
 import '../../library/presentation/history_provider.dart';
 
@@ -32,10 +35,59 @@ PlaybackLauncher playbackLauncher(Ref ref) {
   return PlaybackLauncher(ref);
 }
 
+class _PlaybackLaunch {
+  _PlaybackLaunch(this.context, this.origin);
+
+  final BuildContext context;
+  final Object origin;
+
+  bool get isCurrent =>
+      context.mounted &&
+      (origin is! ModalRoute || (origin as ModalRoute).isCurrent);
+
+  Future<T> wait<T>(Future<T> Function() action) =>
+      action().timeout(const Duration(seconds: 10));
+
+  Future<void> push(PlayerRoute route) async {
+    if (!isCurrent) {
+      return;
+    }
+    await route.push<void>(context);
+  }
+}
+
 class PlaybackLauncher {
   final Ref _ref;
+  static final _pendingOrigins = Expando<bool>();
 
   PlaybackLauncher(this._ref);
+
+  Future<void> _guardLaunch(
+    BuildContext context,
+    Future<void> Function(_PlaybackLaunch launch) action,
+  ) async {
+    if (!context.mounted) return;
+    final origin =
+        ModalRoute.of(context) ?? Navigator.of(context, rootNavigator: true);
+    if (_pendingOrigins[origin] == true ||
+        (origin is ModalRoute && !origin.isCurrent)) {
+      return;
+    }
+    // All episode cards on a page share the lock, acquired before any IO.
+    _pendingOrigins[origin] = true;
+    final launch = _PlaybackLaunch(context, origin);
+    try {
+      await action(launch);
+    } on TimeoutException {
+      if (launch.isCurrent) {
+        _ref
+            .read(notificationServiceProvider)
+            .showError('تعذر بدء التشغيل الآن. حاول مرة أخرى.');
+      }
+    } finally {
+      _pendingOrigins[origin] = null;
+    }
+  }
 
   AnimeWitcherProvider? _resolveProvider(MultimediaItem item) {
     final manager = _ref.read(extensionManagerProvider.notifier);
@@ -51,67 +103,6 @@ class PlaybackLauncher {
       }
     }
     return provider ?? _ref.read(activeProviderProvider);
-  }
-
-  bool _needsPlayerEpisodes(MultimediaItem item) {
-    return item.contentType == MultimediaContentType.series ||
-        item.contentType == MultimediaContentType.anime;
-  }
-
-  /// Continue-watching storage intentionally keeps a lightweight media item,
-  /// so series/anime entries usually reach this launcher without `episodes`.
-  /// Hydrate them before opening the internal player so its episode drawer,
-  /// next/previous navigation and next-episode overlay all have the catalog.
-  /// Failure is non-fatal: playback must still work when the catalog is
-  /// temporarily unavailable (especially for an already downloaded episode).
-  Future<MultimediaItem> _hydratePlayerEpisodes(
-    MultimediaItem item, {
-    AnimeWitcherProvider? provider,
-    bool loadArtwork = false,
-  }) async {
-    if (((item.episodes?.isNotEmpty ?? false) && !loadArtwork) ||
-        !_needsPlayerEpisodes(item) ||
-        item.url.trim().isEmpty) {
-      return item;
-    }
-
-    final resolvedProvider = provider ?? _resolveProvider(item);
-    if (resolvedProvider == null) return item;
-
-    var hydrated = item;
-    try {
-      if (!(hydrated.episodes?.isNotEmpty ?? false)) {
-        final episodes = await resolvedProvider.getEpisodes(item.url);
-        if (episodes.isEmpty) return item;
-        hydrated = item.copyWith(
-          episodes: episodes,
-          provider: item.provider ?? resolvedProvider.packageName,
-        );
-      }
-      if (loadArtwork &&
-          _ref.read(animeDataSourceSettingsProvider).episodeImagesFromAniZip) {
-        // History omits sync IDs. The provider resolves AniZip using the anime
-        // URL, just as it does for the details page's episode artwork.
-        final metadata = await resolvedProvider.getEpisodeMetadata(item.url);
-        final posters = <String, String>{
-          for (final episode in metadata)
-            if (episode.url.isNotEmpty &&
-                (episode.posterUrl?.trim().isNotEmpty ?? false))
-              episode.url: episode.posterUrl!.trim(),
-        };
-        hydrated = hydrated.copyWith(
-          episodes: hydrated.episodes!.map((episode) {
-            final poster = posters[episode.url];
-            return poster == null ? episode : episode.copyWith(posterUrl: poster);
-          }).toList(growable: false),
-        );
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('PlaybackLauncher._hydratePlayerEpisodes: $e');
-      }
-    }
-    return hydrated;
   }
 
   Episode? _canonicalEpisode(
@@ -189,9 +180,8 @@ class PlaybackLauncher {
           _ref
               .read(notificationServiceProvider)
               .showError(
-                AppLocalizations.of(
-                  context,
-                )!.usingInternalPlayerError(error.toString()),
+                AppLocalizations.of(context)!
+                    .usingInternalPlayerError(error.toString()),
               );
         }
         return null;
@@ -224,31 +214,42 @@ class PlaybackLauncher {
   /// Opens Continue Watching directly on Home. A completed download is looked
   /// up by the canonical episode tracking URL first, so it bypasses the server
   /// picker and use saved episode context offline. Online entries still use
-  /// normal source selection and hydrate the catalog before opening the player.
+  /// normal source selection; the player fills its catalog in the background.
   Future<void> playFromContinueWatching(
     BuildContext context,
     HistoryItem history,
+  ) => _guardLaunch(
+    context,
+    (launch) => _playFromContinueWatching(context, history, launch),
+  );
+
+  Future<void> _playFromContinueWatching(
+    BuildContext context,
+    HistoryItem history,
+    _PlaybackLaunch launch,
   ) async {
     final item = history.item;
     final savedUrl = history.lastEpisodeUrl?.trim() ?? '';
     final hintEpisode = episodeFromContinueWatching(history);
 
     if (savedUrl.isNotEmpty) {
-      final localFile = await _ref
-          .read(downloadedFilesProvider.notifier)
-          .resolveFileForTrackingUrl(
-            savedUrl,
-            item: item,
-            episode: hintEpisode,
-          );
-      if (!context.mounted) return;
+      final localFile = await launch.wait(
+        () => _ref
+            .read(downloadedFilesProvider.notifier)
+            .resolveFileForTrackingUrl(
+              savedUrl,
+              item: item,
+              episode: hintEpisode,
+            ),
+      );
+      if (!context.mounted || !launch.isCurrent) return;
 
-      await play(
+      await _play(
         context,
         localFile?.path ?? savedUrl,
         baseItem: item,
         episode: hintEpisode,
-        loadEpisodeArtwork: true,
+        launch: launch,
       );
       return;
     }
@@ -300,14 +301,14 @@ class PlaybackLauncher {
             provider: item.provider ?? provider.packageName,
           );
 
-    await play(
+    await _play(
       context,
       resolvedUrl,
       baseItem: item,
       detailedItem: detailedItem,
       episode: resolvedEpisode,
       preselectedSource: selected,
-      loadEpisodeArtwork: true,
+      launch: launch,
     );
   }
 
@@ -383,20 +384,20 @@ class PlaybackLauncher {
         _ref
             .read(notificationServiceProvider)
             .showError(
-              AppLocalizations.of(
-                context,
-              )!.usingInternalPlayerError(e.toString()),
+              AppLocalizations.of(context)!
+                  .usingInternalPlayerError(e.toString()),
             );
       }
       return null;
     }
   }
 
-  Future<void> _recordEpisodeOpened(
-    MultimediaItem item,
-    Episode? episode,
-  ) async {
+  void _recordEpisodeOpened(MultimediaItem item, Episode? episode) {
     if (episode == null) return;
+    _saveEpisodeOpened(item, episode).ignore();
+  }
+
+  Future<void> _saveEpisodeOpened(MultimediaItem item, Episode episode) async {
     await _ref
         .read(watchHistoryProvider.notifier)
         .recordOpened(
@@ -423,10 +424,41 @@ class PlaybackLauncher {
     MultimediaItem? detailedItem,
     Episode? episode,
     StreamResult? preselectedSource,
-    bool loadEpisodeArtwork = false,
+    Future<String?> Function()? resolveUrl,
+    Future<void> Function()? onMissingFile,
+  }) => _guardLaunch(context, (launch) async {
+    final resolvedUrl = resolveUrl == null
+        ? url
+        : await launch.wait(resolveUrl);
+    if (!context.mounted || !launch.isCurrent) return;
+    if (resolvedUrl == null) {
+      await onMissingFile?.call();
+      return;
+    }
+    await _play(
+      context,
+      resolvedUrl,
+      baseItem: baseItem,
+      detailedItem: detailedItem,
+      episode: episode,
+      preselectedSource: preselectedSource,
+      launch: launch,
+    );
+  });
+
+  Future<void> _play(
+    BuildContext context,
+    String url, {
+    required MultimediaItem baseItem,
+    MultimediaItem? detailedItem,
+    Episode? episode,
+    StreamResult? preselectedSource,
+    required _PlaybackLaunch launch,
   }) async {
-    final settings = await _ref.read(playerSettingsProvider.future);
-    if (!context.mounted) return;
+    final settings = await launch.wait(
+      () => _ref.read(playerSettingsProvider.future),
+    );
+    if (!context.mounted || !launch.isCurrent) return;
 
     final item = detailedItem ?? baseItem;
     final resolvedEpisode =
@@ -437,12 +469,12 @@ class PlaybackLauncher {
         : url;
     String? downloadedPath;
     if (!AppUtils.isLocalFile(url)) {
-      downloadedPath =
-          (await _ref
-                  .read(downloadedFilesProvider.notifier)
-                  .resolveFile(item, episode: resolvedEpisode))
-              ?.path;
-      if (!context.mounted) return;
+      downloadedPath = (await launch.wait(
+        () => _ref
+            .read(downloadedFilesProvider.notifier)
+            .resolveFile(item, episode: resolvedEpisode),
+      ))?.path;
+      if (!context.mounted || !launch.isCurrent) return;
     }
 
     final localOrEpisodeUrl = AppUtils.resolvePlayableUrl(
@@ -450,25 +482,25 @@ class PlaybackLauncher {
       downloadedPath: downloadedPath,
     );
 
+    // A provider or artwork request must never gate an already saved video.
+    final savedEpisodes = <Episode>[...?item.episodes];
+    if (resolvedEpisode != null &&
+        !savedEpisodes.any((value) => value.url == resolvedEpisode.url)) {
+      savedEpisodes.add(resolvedEpisode);
+    }
+    final playerItem = savedEpisodes.isEmpty
+        ? item
+        : item.copyWith(episodes: savedEpisodes);
+    final playerEpisode = _canonicalEpisode(
+      playerItem,
+      resolvedEpisode,
+      canonicalProgressUrl,
+    );
+
     // Downloaded files are already playable and do not need a source list.
     if (AppUtils.isLocalFile(localOrEpisodeUrl)) {
-      // A provider or artwork request must never gate an already saved video.
-      final savedEpisodes = <Episode>[...?item.episodes];
-      if (resolvedEpisode != null &&
-          !savedEpisodes.any((value) => value.url == resolvedEpisode.url)) {
-        savedEpisodes.add(resolvedEpisode);
-      }
-      final playerItem = savedEpisodes.isEmpty
-          ? item
-          : item.copyWith(episodes: savedEpisodes);
-      final playerEpisode = _canonicalEpisode(
-        playerItem,
-        resolvedEpisode,
-        canonicalProgressUrl,
-      );
-
-      await _recordEpisodeOpened(playerItem, playerEpisode);
-      if (!context.mounted) return;
+      _recordEpisodeOpened(playerItem, playerEpisode);
+      if (!context.mounted || !launch.isCurrent) return;
       if (settings.preferredPlayer != null) {
         final stream = StreamResult(url: localOrEpisodeUrl, source: 'محلي');
         await _launchStream(
@@ -479,25 +511,23 @@ class PlaybackLauncher {
           settings.preferredPlayer!,
           episode: playerEpisode,
           progressUrl: canonicalProgressUrl,
+          launch: launch,
         );
       } else {
-        await PlayerRoute(
-          $extra: PlayerRouteExtra(
-            item: playerItem,
-            videoUrl: localOrEpisodeUrl,
-            progressUrl: canonicalProgressUrl,
-            episode: playerEpisode,
+        await launch.push(
+          PlayerRoute(
+            $extra: PlayerRouteExtra(
+              item: playerItem,
+              videoUrl: localOrEpisodeUrl,
+              progressUrl: canonicalProgressUrl,
+              episode: playerEpisode,
+            ),
           ),
-        ).push<void>(context);
+        );
       }
       return;
     }
 
-    // Remote playback can enrich metadata in parallel with source selection.
-    final playerItemFuture = _hydratePlayerEpisodes(
-      item,
-      loadArtwork: loadEpisodeArtwork,
-    );
     final provider = _resolveProvider(item);
     if (provider == null) {
       _ref
@@ -518,63 +548,56 @@ class PlaybackLauncher {
           localOrEpisodeUrl,
           episode: resolvedEpisode,
         );
-    if (selected == null || !context.mounted) return;
-
-    final playerItem = await playerItemFuture;
-    if (!context.mounted) return;
-    final playerEpisode = _canonicalEpisode(
-      playerItem,
-      resolvedEpisode,
-      canonicalProgressUrl,
-    );
+    if (selected == null || !context.mounted || !launch.isCurrent) return;
 
     if (settings.preferredPlayer == null) {
-      await _recordEpisodeOpened(playerItem, playerEpisode);
-      if (!context.mounted) return;
-      await PlayerRoute(
-        $extra: PlayerRouteExtra(
-          item: playerItem,
-          videoUrl: localOrEpisodeUrl,
-          progressUrl: canonicalProgressUrl,
-          episode: playerEpisode,
-          selectedSource: selected,
+      _recordEpisodeOpened(playerItem, playerEpisode);
+      if (!context.mounted || !launch.isCurrent) return;
+      await launch.push(
+        PlayerRoute(
+          $extra: PlayerRouteExtra(
+            item: playerItem,
+            videoUrl: localOrEpisodeUrl,
+            progressUrl: canonicalProgressUrl,
+            episode: playerEpisode,
+            selectedSource: selected,
+          ),
         ),
-      ).push<void>(context);
+      );
       return;
     }
 
     // External players still need a concrete resolved stream before launch.
-    if (settings.preferredPlayer != null) {
+    if (baseItem.url.isNotEmpty) {
+      _ref
+          .read(detailsControllerProvider(baseItem.url).notifier)
+          .setLaunching(true);
+    }
+    try {
+      final resolved = await _resolveSelectedSource(
+        context,
+        provider,
+        selected,
+      );
+      if (resolved == null || !context.mounted || !launch.isCurrent) return;
+      _recordEpisodeOpened(playerItem, playerEpisode);
+      if (!context.mounted || !launch.isCurrent) return;
+      await _launchStream(
+        context,
+        resolved,
+        playerItem,
+        selected.url,
+        settings.preferredPlayer!,
+        episode: playerEpisode,
+        progressUrl: canonicalProgressUrl,
+        launch: launch,
+      );
+    } finally {
       if (baseItem.url.isNotEmpty) {
         _ref
             .read(detailsControllerProvider(baseItem.url).notifier)
-            .setLaunching(true);
+            .setLaunching(false);
       }
-      try {
-        final resolved = await _resolveSelectedSource(
-          context,
-          provider,
-          selected,
-        );
-        if (resolved == null || !context.mounted) return;
-        await _recordEpisodeOpened(playerItem, playerEpisode);
-        await _launchStream(
-          context,
-          resolved,
-          playerItem,
-          selected.url,
-          settings.preferredPlayer!,
-          episode: playerEpisode,
-          progressUrl: canonicalProgressUrl,
-        );
-      } finally {
-        if (baseItem.url.isNotEmpty) {
-          _ref
-              .read(detailsControllerProvider(baseItem.url).notifier)
-              .setLaunching(false);
-        }
-      }
-      return;
     }
   }
 
@@ -586,6 +609,7 @@ class PlaybackLauncher {
     String playerId, {
     Episode? episode,
     String? progressUrl,
+    required _PlaybackLaunch launch,
   }) async {
     final success = await ExternalPlayerService.instance.launch(
       stream.url,
@@ -594,7 +618,7 @@ class PlaybackLauncher {
       title: item.title,
     );
 
-    if (!success && context.mounted) {
+    if (!success && context.mounted && launch.isCurrent) {
       final playerName =
           ExternalPlayerService.instance.getPlayerById(playerId)?.displayName ??
           playerId;
@@ -603,7 +627,7 @@ class PlaybackLauncher {
           .showError(
             AppLocalizations.of(context)!.playerNotDetected(playerName),
           );
-      unawaited(
+      await launch.push(
         PlayerRoute(
           $extra: PlayerRouteExtra(
             item: item,
@@ -611,7 +635,7 @@ class PlaybackLauncher {
             progressUrl: progressUrl,
             episode: episode,
           ),
-        ).push<void>(context),
+        ),
       );
     }
   }

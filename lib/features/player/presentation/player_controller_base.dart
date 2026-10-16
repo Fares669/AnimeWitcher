@@ -15,7 +15,7 @@ import 'package:video_view/video_view.dart'
 
 import '../../../../core/logger/app_logger.dart';
 
-import 'package:animewitcher/core/account/account_providers.dart';
+import '../../../../core/providers/anime_data_source_settings_provider.dart';
 
 import '../../details/presentation/downloaded_file_provider.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
@@ -26,6 +26,7 @@ import '../../../../core/storage/episode_watch_repository.dart';
 import '../../library/presentation/history_provider.dart';
 import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/utils/app_utils.dart';
+import '../../../../core/utils/local_video_payload_probe.dart';
 import '../../../core/utils/episode_label.dart';
 import 'episode_navigation.dart';
 import '../../details/presentation/stream_source_prefetch.dart';
@@ -128,6 +129,7 @@ class PlayerState {
   final int sourceSessionId;
 
   final List<SkipSegment> skipSegments;
+  final List<Episode> episodes;
 
   const PlayerState({
     this.errorMessage,
@@ -164,6 +166,7 @@ class PlayerState {
     this.sourceAttempts = const [],
     this.sourceSessionId = 0,
     this.skipSegments = const [],
+    this.episodes = const [],
   });
 
   // Derived from uiPhase — no separate field needed.
@@ -216,6 +219,7 @@ class PlayerState {
     List<SourceAttemptEntry>? sourceAttempts,
     int? sourceSessionId,
     List<SkipSegment>? skipSegments,
+    List<Episode>? episodes,
   }) {
     return PlayerState(
       errorMessage: errorMessage ?? this.errorMessage,
@@ -253,6 +257,7 @@ class PlayerState {
       sourceAttempts: sourceAttempts ?? this.sourceAttempts,
       sourceSessionId: sourceSessionId ?? this.sourceSessionId,
       skipSegments: skipSegments ?? this.skipSegments,
+      episodes: episodes ?? this.episodes,
     );
   }
 }
@@ -268,9 +273,10 @@ class PlayerController extends Notifier<PlayerState> {
   bool _isInitialized = false;
   bool _isDisposed = false;
   int _sourceSessionSerial = 0;
+  Future<void>? _localPlaybackReady;
 
   bool _hasMarkedWatched = false;
-  bool _hasRefreshedCloudProgress = false;
+  int _catalogGeneration = 0;
 
   Player get player => _player;
   VideoController? get videoViewController => _videoViewController;
@@ -299,7 +305,6 @@ class PlayerController extends Notifier<PlayerState> {
   bool _isDashStreamUrl(String url) {
     final lower = url.toLowerCase();
     return lower.contains('.mpd') ||
-        lower.contains('manifest.mpd') ||
         lower.contains('/dash/') ||
         lower.contains('format=mpd') ||
         lower.contains('type=mpd');
@@ -380,6 +385,9 @@ class PlayerController extends Notifier<PlayerState> {
   StreamSubscription<dynamic>? _rateSub;
   StreamSubscription<dynamic>? _logSub;
   StreamSubscription<dynamic>? _trackSub;
+  StreamSubscription<dynamic>? _autoSubtitleSub;
+  Timer? _autoSubtitleTimer;
+  int _autoSubtitleGeneration = 0;
 
   // Stall Watchdog state
   Duration? _lastPosition;
@@ -419,13 +427,16 @@ class PlayerController extends Notifier<PlayerState> {
   /// next legitimate retry for 10 s). The backstop only fires if perform
   /// hangs (rare, but possible if changeStream gets wedged on a dead host).
   void _beginStallRecovery({Future<void>? perform}) {
+    final sourceSessionId = state.sourceSessionId;
     _isRecoveringFromStall = true;
     _stallRecoveryGuardTimer?.cancel();
     _stallRecoveryGuardTimer = Timer(const Duration(seconds: 10), () {
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       _isRecoveringFromStall = false;
     });
     if (perform != null) {
       perform.whenComplete(() {
+        if (!_isCurrentSourceSession(sourceSessionId)) return;
         _stallRecoveryGuardTimer?.cancel();
         _stallRecoveryGuardTimer = null;
         _isRecoveringFromStall = false;
@@ -519,7 +530,7 @@ class PlayerController extends Notifier<PlayerState> {
 
   void _setIdlePhase() {
     if (!state.uiPhase.isIdle) {
-      state = state.copyWith(uiPhase: const PlaybackUiPhase.idle());
+      _setUiPhase(const PlaybackUiPhase.idle());
     }
   }
 
@@ -541,6 +552,7 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   int _beginSourceSession({bool resetAttempts = false}) {
+    _cancelAutoSubtitleSelection();
     final nextSessionId = ++_sourceSessionSerial;
     _userDismissedOverlay = false;
     state = state.copyWith(
@@ -580,6 +592,7 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   void _confirmPlaybackStarted() {
+    // Position advancing confirms the timeline, not that a frame was rendered.
     _hasConfirmedPlaybackFrame = true;
     _manualSelectionPending = false; // source played — no longer pending
     // Do NOT reset _suppressNextEpisodeDetection here. At the moment position
@@ -589,7 +602,7 @@ class PlayerController extends Notifier<PlayerState> {
     // overlay for the newly loaded episode. It is reset in _setupDurationListener
     // once a valid non-zero duration for the new episode arrives.
     _markSourceAttempt(state.currentStreamIndex, SourceAttemptStatus.playing);
-    state = state.copyWith(uiPhase: const PlaybackUiPhase.idle());
+    _setUiPhase(const PlaybackUiPhase.idle());
   }
 
   void _maybeConfirmPlaybackStarted(int positionMs) {
@@ -611,6 +624,7 @@ class PlayerController extends Notifier<PlayerState> {
     // disposeController() being called, clean up subscriptions.
     ref.onDispose(() {
       _isDisposed = true;
+      _cancelAutoSubtitleSelection();
       _disableAnime4kMetal();
       ++_sourceSessionSerial;
       _stallTimer?.cancel();
@@ -676,10 +690,6 @@ class PlayerController extends Notifier<PlayerState> {
     );
   }
 
-  /// The player header keeps the series title on its primary line. The player
-  /// controls render the active episode's label and creative title beneath it.
-  String _titleWithEpisode(Episode _) => _item.title;
-
   Future<void> init({
     required Player player,
     required MultimediaItem item,
@@ -688,7 +698,10 @@ class PlayerController extends Notifier<PlayerState> {
     Episode? episode,
     StreamResult? selectedSource,
     VideoController? videoViewController,
+    Future<void>? localPlaybackReady,
   }) async {
+    _localPlaybackReady = localPlaybackReady;
+    _cancelAutoSubtitleSelection();
     _isDisposed = false;
     // The provider survives routes. Never reuse a previous route's source ID.
     state = PlayerState(sourceSessionId: ++_sourceSessionSerial);
@@ -702,6 +715,9 @@ class PlayerController extends Notifier<PlayerState> {
     _isAppBackgrounded = false;
     _midPlaybackRetryCount = 0;
     _isReconnectingCurrentStream = false;
+    _isRecoveringFromStall = false;
+    _stallRecoveryGuardTimer?.cancel();
+    _stallRecoveryGuardTimer = null;
     _midPlaybackRetryTimer?.cancel();
     _midPlaybackRetryTimer = null;
     _pausedAt = null;
@@ -721,22 +737,17 @@ class PlayerController extends Notifier<PlayerState> {
     _pendingResumeSeekPosition = null;
     _isApplyingPendingResumeSeek = false;
     _hasMarkedWatched = false;
-    _hasRefreshedCloudProgress = false;
+    ++_catalogGeneration;
     _item = item;
-
-    String initialTitle = item.title;
-    final activeEpisode =
-        episode ?? item.episodes?.firstWhereOrNull((e) => e.url == videoUrl);
-    if (activeEpisode != null) {
-      initialTitle = _titleWithEpisode(activeEpisode);
-    }
 
     final imdbId =
         item.imdbId ?? item.syncData?['imdbId'] ?? item.syncData?['imdb_id'];
     final tmdbId = item.tmdbId;
 
     state = state.copyWith(
-      playerTitle: initialTitle,
+      // The header shows the series title; controls show the episode beneath it.
+      playerTitle: item.title,
+      episodes: item.episodes ?? const [],
       activeEpisodeUrl: _progressUrl,
       imdbId: imdbId,
       tmdbId: tmdbId,
@@ -758,6 +769,7 @@ class PlayerController extends Notifier<PlayerState> {
     );
 
     _isInitialized = true;
+    _refreshEpisodeCatalog();
     _maybeFetchSkipSegments();
 
     if (selectedSource != null && !selectedSource.requiresResolution) {
@@ -777,7 +789,11 @@ class PlayerController extends Notifier<PlayerState> {
       }
       await _initStream();
     }
-    if (_isDisposed || !identical(_player, player)) return;
+    if (_isDisposed ||
+        !identical(_player, player) ||
+        state.uiPhase.kind == PlaybackUiPhaseKind.error) {
+      return;
+    }
     await applySubtitleSettings();
     if (_isDisposed || !identical(_player, player)) return;
 
@@ -788,6 +804,86 @@ class PlayerController extends Notifier<PlayerState> {
     final defaultSpeed = settings?.defaultPlaybackSpeed ?? 1.0;
     if (defaultSpeed != 1.0 && !state.isLive) {
       await setPlaybackSpeed(defaultSpeed);
+    }
+  }
+
+  void _refreshEpisodeCatalog() {
+    if (_item.url.trim().isEmpty ||
+        _item.provider == 'Local' ||
+        _item.provider == 'Remote' ||
+        _item.contentType == MultimediaContentType.livestream ||
+        _item.contentType == MultimediaContentType.manga) {
+      return;
+    }
+    final provider = _resolveProvider();
+    if (provider == null) return;
+    final generation = _catalogGeneration;
+    final url = _item.url;
+    var episodes = _item.episodes ?? const <Episode>[];
+    final posters = <String, String>{};
+    bool isCurrent() => !_isDisposed && generation == _catalogGeneration;
+
+    void publish() {
+      if (!isCurrent()) return;
+      final updated = episodes
+          .map((episode) {
+            final poster = posters[episode.url];
+            return poster == null
+                ? episode
+                : episode.copyWith(posterUrl: poster);
+          })
+          .toList(growable: false);
+      _item = _item.copyWith(episodes: updated);
+      // Reconcile the episode that is active now, never the one that started
+      // this request or a same-number entry from a different dub/server.
+      _episode =
+          updated.firstWhereOrNull((e) => e.url == _currentProgressUrl) ??
+          _episode;
+      // Item/episode equality omits artwork; a new list notifies the drawer.
+      state = state.copyWith(episodes: updated);
+    }
+
+    Future<void> loadCatalog() async {
+      try {
+        final fetched = await provider.getEpisodes(url);
+        if (!isCurrent() || fetched.isEmpty) return;
+        final saved = {for (final episode in episodes) episode.url: episode};
+        final merged = <String, Episode>{
+          for (final episode in fetched)
+            episode.url: episode.copyWith(
+              posterUrl: episode.posterUrl ?? saved[episode.url]?.posterUrl,
+            ),
+        };
+        // An unavailable server entry must not hide its saved offline variant.
+        for (final episode in episodes) {
+          merged.putIfAbsent(episode.url, () => episode);
+        }
+        episodes = merged.values.toList(growable: false);
+        publish();
+      } catch (error) {
+        if (kDebugMode) debugPrint('Player catalog refresh skipped: $error');
+      }
+    }
+
+    Future<void> loadArtwork() async {
+      try {
+        final metadata = await provider.getEpisodeMetadata(url);
+        if (!isCurrent()) return;
+        for (final episode in metadata) {
+          final poster = episode.posterUrl?.trim() ?? '';
+          if (episode.url.isNotEmpty && poster.isNotEmpty) {
+            posters[episode.url] = poster;
+          }
+        }
+        if (posters.isNotEmpty) publish();
+      } catch (error) {
+        if (kDebugMode) debugPrint('Player artwork refresh skipped: $error');
+      }
+    }
+
+    unawaited(loadCatalog());
+    if (ref.read(animeDataSourceSettingsProvider).episodeImagesFromAniZip) {
+      unawaited(loadArtwork());
     }
   }
 
@@ -1545,8 +1641,10 @@ class PlayerController extends Notifier<PlayerState> {
       if (kDebugMode) {
         debugPrint('Watchdog: buffering 12s — re-issuing seek to $position');
       }
+      final sourceSessionId = state.sourceSessionId;
       unawaited(() async {
         await _safeSeekTo(position.inMilliseconds);
+        if (!_isCurrentSourceSession(sourceSessionId)) return;
         await play();
       }());
       return;
@@ -1846,6 +1944,7 @@ class PlayerController extends Notifier<PlayerState> {
 
   void _requestMidPlaybackReconnect({bool preferImmediate = false}) {
     if (_isDisposed || state.currentStream == null) return;
+    if (AppUtils.isLocalFile(state.currentStream!.url)) return;
     if (state.isLive) return;
     if (_isReconnectingCurrentStream) return;
     if (preferImmediate) {
@@ -1876,7 +1975,12 @@ class PlayerController extends Notifier<PlayerState> {
   Future<void> _triggerMidPlaybackReconnect({
     bool consumeRetryBudget = true,
   }) async {
-    if (state.currentStream == null || _isDisposed) return;
+    final sourceSessionId = state.sourceSessionId;
+    if (!_isCurrentSourceSession(sourceSessionId) ||
+        state.currentStream == null ||
+        AppUtils.isLocalFile(state.currentStream!.url)) {
+      return;
+    }
     if (_isReconnectingCurrentStream) return;
 
     if (consumeRetryBudget &&
@@ -1886,6 +1990,7 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     _isReconnectingCurrentStream = true;
+
     if (consumeRetryBudget) {
       _midPlaybackRetryCount++;
     }
@@ -1899,6 +2004,9 @@ class PlayerController extends Notifier<PlayerState> {
       hasConnection = true;
     }
 
+    if (!_isCurrentSourceSession(sourceSessionId)) {
+      return;
+    }
     if (!hasConnection) {
       if (kDebugMode) {
         debugPrint(
@@ -1923,7 +2031,7 @@ class PlayerController extends Notifier<PlayerState> {
       final stream = state.currentStream!;
       final playUrl = await _resolveStreamUrl(stream, forceRefresh: true);
       if (playUrl == null) throw Exception("Failed to re-resolve stream URL");
-      if (_isDisposed) return;
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
 
       final current = state.currentStream ?? stream;
       final headers = _buildPlaybackHeaders(current);
@@ -1934,12 +2042,14 @@ class PlayerController extends Notifier<PlayerState> {
         isLive: resolvedIsLive,
       );
 
+      await _checkLocalVideoPayload(playUrl);
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       await _applyPlaybackProperties(
         headers,
         current,
         useVideoView: useVideoView,
       );
-      if (_isDisposed) return;
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
 
       final holdPosition = oldPos > Duration.zero;
       await _openResolvedStream(
@@ -1947,13 +2057,15 @@ class PlayerController extends Notifier<PlayerState> {
         current,
         headers,
         useVideoView: useVideoView,
+        sourceSessionId: sourceSessionId,
         play: !holdPosition,
       );
-      if (_isDisposed) return;
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
 
       if (holdPosition) {
         await _seekThenPlay(oldPos.inMilliseconds);
       }
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       if (kDebugMode) {
         debugPrint(
           '[Player] Reconnect successful at position ${oldPos.inSeconds}s.',
@@ -1961,6 +2073,13 @@ class PlayerController extends Notifier<PlayerState> {
       }
       _isReconnectingCurrentStream = false;
     } catch (e) {
+      if (!_isCurrentSourceSession(sourceSessionId)) {
+        return;
+      }
+      if (e is LocalVideoPayloadProblem) {
+        _showLocalVideoPayloadError(e);
+        return;
+      }
       if (kDebugMode) {
         debugPrint(
           '[Player] Reconnect attempt $_midPlaybackRetryCount failed: $e',
@@ -1982,7 +2101,8 @@ class PlayerController extends Notifier<PlayerState> {
       }
       _midPlaybackRetryTimer?.cancel();
       _midPlaybackRetryTimer = Timer(delay, () {
-        if (!_isDisposed && state.currentStream != null) {
+        if (_isCurrentSourceSession(sourceSessionId) &&
+            state.currentStream != null) {
           unawaited(_triggerMidPlaybackReconnect());
         }
       });
@@ -2324,16 +2444,24 @@ class PlayerController extends Notifier<PlayerState> {
   /// position. A source that is only a server link is resolved to a playable
   /// stream first, the same way the picker does when one is chosen.
   Future<bool> switchToSource(StreamResult source) async {
+    var sourceSessionId = state.sourceSessionId;
+    if (!_isCurrentSourceSession(sourceSessionId)) return false;
     var playable = source;
     if (source.requiresResolution) {
       final provider = _resolveProvider();
       if (provider == null) return false;
       final streams = await provider.loadStreams(source.url);
-      if (streams.isEmpty) return false;
+      if (!_isCurrentSourceSession(sourceSessionId) || streams.isEmpty) {
+        return false;
+      }
       playable = streams.first;
     }
+    // A manual choice must invalidate an initial open still waiting at entry.
+    if (!_hasConfirmedPlaybackFrame) {
+      sourceSessionId = _beginSourceSession();
+    }
     await _changeStream(playable, manualSelection: true);
-    return true;
+    return _isCurrentSourceSession(sourceSessionId);
   }
 
   AnimeWitcherProvider? _resolveProvider() {
@@ -2435,24 +2563,78 @@ class PlayerController extends Notifier<PlayerState> {
         .toList();
   }
 
+  Future<void> _checkLocalVideoPayload(String url) async {
+    if (!AppUtils.isLocalFile(url)) return;
+
+    final file = url.startsWith('file:')
+        ? File.fromUri(Uri.parse(url))
+        : File(url);
+    final problem = await probeLocalVideoPayload(file);
+    if (problem != null) throw problem;
+  }
+
+  void _showLocalVideoPayloadError(LocalVideoPayloadProblem problem) {
+    _manualSelectionPending = false;
+    _pendingResumeSeekPosition = null;
+    _resetBufferWatchdog();
+    _resetMidPlaybackReconnect();
+    state = state.copyWith(
+      errorMessage: _playerText(
+        english: problem.message,
+        arabic:
+            'الملف المحفوظ قائمة تشغيل أو صفحة ويب وليس فيديو كاملاً يمكن تشغيله دون إنترنت. '
+            'أعد تنزيل الحلقة من مصدر فيديو مباشر. لم يُحذف الملف المحفوظ.',
+      ),
+    );
+    _enterAllSourcesFailedPhase();
+  }
+
+  Future<bool> _waitForNativePlayerReady(
+    Player player,
+    int sourceSessionId,
+  ) async {
+    bool isActive() =>
+        _isCurrentSourceSession(sourceSessionId) && identical(_player, player);
+    if (!isActive()) return false;
+    final native = player.platform;
+    if (native is NativePlayer) {
+      // Native public operations wait for the renderer inside a shared lock.
+
+      await native.waitForPlayerInitialization;
+      if (!isActive()) {
+        return false;
+      }
+
+      await native.waitForVideoControllerInitializationIfAttached;
+    }
+    return isActive();
+  }
+
+  bool _shouldPauseLocalStartup(String url) =>
+      !_hasConfirmedPlaybackFrame &&
+      AppUtils.isLocalFile(url) &&
+      _isAppBackgrounded &&
+      !_isInPip;
+
   Future<void> _openResolvedStream(
     String playUrl,
     StreamResult stream,
     Map<String, String> headers, {
     required bool useVideoView,
+    required int sourceSessionId,
     bool play = true,
   }) async {
-    final sourceSessionId = state.sourceSessionId;
     if (!_isCurrentSourceSession(sourceSessionId)) return;
+    _cancelAutoSubtitleSelection();
+    final player = _player;
     if (useVideoView) {
       // Pause media_kit so it stops consuming bandwidth while video_view plays.
       // (media_kit.open() will replace it if the user switches back.)
       if (!state.useExoPlayer) {
-        await _player.pause();
+        if (!await _waitForNativePlayerReady(player, sourceSessionId)) return;
+        await player.pause();
         if (!_isCurrentSourceSession(sourceSessionId)) return;
       }
-      _videoViewController?.setAutoPlay(play);
-
       String finalUrl = playUrl;
       if (finalUrl.contains('play.php') || finalUrl.contains('index.php')) {
         finalUrl = LocalProxyService.instance.getProxyUrl(
@@ -2482,7 +2664,15 @@ class PlayerController extends Notifier<PlayerState> {
         }
       }
 
+      if (AppUtils.isLocalFile(playUrl)) {
+        await _localPlaybackReady;
+        if (!_isCurrentSourceSession(sourceSessionId)) return;
+      }
+      _videoViewController?.setAutoPlay(
+        play && !_shouldPauseLocalStartup(playUrl),
+      );
       final subs = state.externalSubtitles;
+
       if (subs.isNotEmpty && _videoViewSupportsMergedExternalSubtitles) {
         _videoViewController!.openWithSubtitles(
           finalUrl,
@@ -2499,6 +2689,7 @@ class PlayerController extends Notifier<PlayerState> {
           drmKid: stream.drmKid,
         );
       }
+      // This backend dispatches open; position is the later readiness signal.
       final isLivePlayback = state.isLive || _detectResolvedLiveState(playUrl);
       state = state.copyWith(useExoPlayer: true, isSeekable: !isLivePlayback);
       _scheduleAutoSubtitleSelection();
@@ -2566,8 +2757,19 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     if (!_isCurrentSourceSession(sourceSessionId)) return;
-    await _player.open(Media(mediaKitUrl, httpHeaders: headers), play: play);
-    if (!_isCurrentSourceSession(sourceSessionId)) return;
+    if (!await _waitForNativePlayerReady(player, sourceSessionId)) return;
+    if (AppUtils.isLocalFile(playUrl)) {
+      await _localPlaybackReady;
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
+    }
+
+    await player.open(
+      Media(mediaKitUrl, httpHeaders: headers),
+      play: play && !_shouldPauseLocalStartup(playUrl),
+    );
+    if (!_isCurrentSourceSession(sourceSessionId)) {
+      return;
+    }
     state = state.copyWith(useExoPlayer: false, isSeekable: true);
     unawaited(applyAnime4kShaders());
     _scheduleAutoSubtitleSelection();
@@ -2841,6 +3043,7 @@ class PlayerController extends Notifier<PlayerState> {
   Future<void> play() async {
     final sourceSessionId = state.sourceSessionId;
     if (!_isCurrentSourceSession(sourceSessionId)) return;
+    final player = _player;
     if (_shouldRefreshSignedUrl() && !_isReconnectingCurrentStream) {
       _pausedAt = null;
       await _triggerMidPlaybackReconnect(consumeRetryBudget: false);
@@ -2852,16 +3055,26 @@ class PlayerController extends Notifier<PlayerState> {
     if (state.useExoPlayer && _videoViewController != null) {
       _videoViewController!.play();
     } else {
-      await _player.play();
+      if (!await _waitForNativePlayerReady(player, sourceSessionId)) return;
+      await player.play();
     }
   }
 
-  Future<void> pause() async {
-    _pausedAt = DateTime.now();
+  Future<void> pause({bool onlyWhileBackgrounded = false}) async {
+    final sourceSessionId = state.sourceSessionId;
+    if (!_isCurrentSourceSession(sourceSessionId) ||
+        (onlyWhileBackgrounded && !_isAppBackgrounded)) {
+      return;
+    }
+    final player = _player;
     if (state.useExoPlayer && _videoViewController != null) {
+      _pausedAt = DateTime.now();
       _videoViewController!.pause();
     } else {
-      await _player.pause();
+      if (!await _waitForNativePlayerReady(player, sourceSessionId)) return;
+      if (onlyWhileBackgrounded && !_isAppBackgrounded) return;
+      _pausedAt = DateTime.now();
+      await player.pause();
     }
   }
 
@@ -2894,7 +3107,8 @@ class PlayerController extends Notifier<PlayerState> {
     }
   }
 
-  Future<void> _selectSubtitleTrack(String? id) async {
+  Future<void> _selectSubtitleTrack(String? id, Player player) async {
+    if (_isDisposed || !identical(_player, player)) return;
     if (state.useExoPlayer && _videoViewController != null) {
       if (id == null) {
         _videoViewController!.setShowSubtitle(false);
@@ -2910,7 +3124,7 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     if (id == null) {
-      await _player.setSubtitleTrack(SubtitleTrack.no());
+      await player.setSubtitleTrack(SubtitleTrack.no());
       return;
     }
 
@@ -2920,7 +3134,7 @@ class PlayerController extends Notifier<PlayerState> {
         (sub) => sub.url == url,
       );
       if (subtitle != null) {
-        await _player.setSubtitleTrack(
+        await player.setSubtitleTrack(
           SubtitleTrack.uri(
             subtitle.url,
             title: subtitle.label,
@@ -2934,14 +3148,14 @@ class PlayerController extends Notifier<PlayerState> {
     final embeddedKey = id.startsWith('embedded:')
         ? id.substring('embedded:'.length)
         : id;
-    final track = _findEmbeddedSubtitleTrack(embeddedKey);
+    final track = _findEmbeddedSubtitleTrack(embeddedKey, player);
     if (track != null) {
-      await _player.setSubtitleTrack(track);
+      await player.setSubtitleTrack(track);
     }
   }
 
-  SubtitleTrack? _findEmbeddedSubtitleTrack(String key) {
-    final tracks = _player.state.tracks.subtitle;
+  SubtitleTrack? _findEmbeddedSubtitleTrack(String key, Player player) {
+    final tracks = player.state.tracks.subtitle;
     if (tracks.isEmpty) return null;
     final byId = tracks.firstWhereOrNull((t) => t.id == key);
     if (byId != null) return byId;
@@ -2953,43 +3167,71 @@ class PlayerController extends Notifier<PlayerState> {
     });
   }
 
-  void _scheduleAutoSubtitleSelection() {
-    if (state.useExoPlayer) {
-      Future.delayed(const Duration(milliseconds: 800), () {
-        unawaited(_autoSelectFirstSubtitleIfNeeded());
-      });
-      return;
-    }
-    StreamSubscription<dynamic>? sub;
-    sub = _player.stream.track.listen((_) {
-      sub?.cancel();
-      unawaited(_autoSelectFirstSubtitleIfNeeded());
-    });
-    Future.delayed(const Duration(milliseconds: 2000), () {
-      sub?.cancel();
-      unawaited(_autoSelectFirstSubtitleIfNeeded());
-    });
+  void _cancelAutoSubtitleSelection() {
+    ++_autoSubtitleGeneration;
+    _autoSubtitleTimer?.cancel();
+    _autoSubtitleTimer = null;
+    unawaited(_autoSubtitleSub?.cancel());
+    _autoSubtitleSub = null;
   }
 
-  Future<void> _autoSelectFirstSubtitleIfNeeded() async {
-    final currentId = state.useExoPlayer
-        ? _videoViewController?.overrideSubtitle.value
-        : _player.state.track.subtitle.id;
-    final hasSelection =
-        currentId != null && currentId != 'no' && currentId != 'auto';
-    if (hasSelection) return;
+  void _scheduleAutoSubtitleSelection() {
+    _cancelAutoSubtitleSelection();
+    final sourceSessionId = state.sourceSessionId;
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
+    final generation = _autoSubtitleGeneration;
+    final player = _player;
+    bool isActive() =>
+        _isCurrentSourceSession(sourceSessionId) &&
+        identical(_player, player) &&
+        generation == _autoSubtitleGeneration;
 
-    final external = state.externalSubtitles;
-    if (external.isNotEmpty) {
-      await _selectSubtitleTrack('external:${external.first.url}');
-      return;
+    void select() {
+      if (!isActive()) return;
+      _autoSubtitleTimer?.cancel();
+      _autoSubtitleTimer = null;
+      unawaited(_autoSubtitleSub?.cancel());
+      _autoSubtitleSub = null;
+      unawaited(_autoSelectFirstSubtitleIfNeeded(player, isActive: isActive));
     }
 
-    if (!state.useExoPlayer) {
-      final embedded = _player.state.tracks.subtitle;
-      if (embedded.isNotEmpty) {
-        await _selectSubtitleTrack(embedded.first.id);
+    if (state.useExoPlayer) {
+      _autoSubtitleTimer = Timer(const Duration(milliseconds: 800), select);
+      return;
+    }
+    _autoSubtitleSub = player.stream.track.listen((_) => select());
+    _autoSubtitleTimer = Timer(const Duration(seconds: 2), select);
+  }
+
+  Future<void> _autoSelectFirstSubtitleIfNeeded(
+    Player player, {
+    required bool Function() isActive,
+  }) async {
+    if (!isActive()) return;
+    try {
+      final currentId = state.useExoPlayer
+          ? _videoViewController?.overrideSubtitle.value
+          : player.state.track.subtitle.id;
+      final hasSelection =
+          currentId != null && currentId != 'no' && currentId != 'auto';
+      if (hasSelection) return;
+
+      final external = state.externalSubtitles;
+      if (external.isNotEmpty) {
+        await _selectSubtitleTrack('external:${external.first.url}', player);
+        return;
       }
+
+      if (!state.useExoPlayer) {
+        final embedded = player.state.tracks.subtitle;
+        if (embedded.isNotEmpty) {
+          await _selectSubtitleTrack(embedded.first.id, player);
+        }
+      }
+    } catch (error) {
+      // A native selection already in flight can finish after teardown.
+      if (!isActive()) return;
+      if (kDebugMode) debugPrint('Auto subtitle selection failed: $error');
     }
   }
 
@@ -3059,6 +3301,7 @@ class PlayerController extends Notifier<PlayerState> {
     if (!_isCurrentSourceSession(sourceSessionId)) {
       return;
     }
+    _cancelAutoSubtitleSelection();
 
     final stream = state.streams[index];
     final subtitles = _effectiveExternalSubtitles(stream.subtitles);
@@ -3110,6 +3353,8 @@ class PlayerController extends Notifier<PlayerState> {
       }
 
       final headers = _buildPlaybackHeaders(stream);
+      await _checkLocalVideoPayload(playUrl);
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       await _applyPlaybackProperties(
         headers,
         stream,
@@ -3131,6 +3376,7 @@ class PlayerController extends Notifier<PlayerState> {
             stream,
             headers,
             useVideoView: useVideoView,
+            sourceSessionId: sourceSessionId!,
             play: !holdForResume,
           );
         },
@@ -3148,6 +3394,10 @@ class PlayerController extends Notifier<PlayerState> {
       }
       if (kDebugMode) debugPrint("Stream $index failed: $e");
       _markSourceAttempt(index, SourceAttemptStatus.failed);
+      if (e is LocalVideoPayloadProblem) {
+        _showLocalVideoPayloadError(e);
+        return;
+      }
       if (manualSelection) {
         // Issue 2: Don't show "all sources failed" for a manual pick — revert
         // silently to the previously playing source instead.
@@ -3169,6 +3419,9 @@ class PlayerController extends Notifier<PlayerState> {
     bool resetPosition = false,
     bool manualSelection = false,
   }) async {
+    final sourceSessionId = state.sourceSessionId;
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
+    _cancelAutoSubtitleSelection();
     final matchingIndex = state.streams.indexWhere(
       (candidate) =>
           candidate.url == stream.url && candidate.source == stream.source,
@@ -3199,6 +3452,7 @@ class PlayerController extends Notifier<PlayerState> {
 
     try {
       final playUrl = await _resolveStreamUrl(stream);
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       if (playUrl == null) throw Exception("Failed to resolve stream URL");
       final subtitles = _effectiveExternalSubtitles(stream.subtitles);
 
@@ -3219,25 +3473,35 @@ class PlayerController extends Notifier<PlayerState> {
       );
 
       final headers = _buildPlaybackHeaders(stream);
+      await _checkLocalVideoPayload(playUrl);
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       await _applyPlaybackProperties(
         headers,
         stream,
         useVideoView: useVideoView,
       );
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       await _openResolvedStream(
         playUrl,
         stream,
         headers,
         useVideoView: useVideoView,
+        sourceSessionId: sourceSessionId,
         play: !holdPosition,
       );
 
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
       if (holdPosition) {
         await _seekThenPlay(oldPos.inMilliseconds);
       } else if (resetPosition) {
         await seekTo(Duration.zero, fast: true);
       }
     } catch (e) {
+      if (!_isCurrentSourceSession(sourceSessionId)) return;
+      if (e is LocalVideoPayloadProblem) {
+        _showLocalVideoPayloadError(e);
+        return;
+      }
       _manualSelectionPending = false;
       if (kDebugMode) debugPrint("Change stream failed: $e");
       if (isRevert) {
@@ -3259,11 +3523,11 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   Future<void> _retryNextStream({int? sourceSessionId}) async {
-    _resetBufferWatchdog();
-    _resetMidPlaybackReconnect();
     if (sourceSessionId != null && !_isCurrentSourceSession(sourceSessionId)) {
       return;
     }
+    _resetBufferWatchdog();
+    _resetMidPlaybackReconnect();
 
     // Find the next index that isn't already failed
     int nextIndex = state.currentStreamIndex + 1;
@@ -3429,6 +3693,8 @@ class PlayerController extends Notifier<PlayerState> {
   }
 
   Future<void> playNextEpisode({StreamResult? selectedSource}) async {
+    final sourceSessionId = state.sourceSessionId;
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
     // Filler is stepped over only when the viewer asked for that, and only
     // when a story episode actually follows — a season that ends in filler
     // still plays on rather than stopping dead.
@@ -3452,6 +3718,7 @@ class PlayerController extends Notifier<PlayerState> {
         .read(downloadedFilesProvider.notifier)
         .resolveFile(_item, episode: nextEpisode);
 
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
     final bool isLocal = localFile != null;
     final bool useDirectSelectedSource =
         !isLocal &&
@@ -3466,6 +3733,7 @@ class PlayerController extends Notifier<PlayerState> {
     // Save current episode's progress BEFORE updating _episode/_videoUrl.
     saveProgress();
     await pause();
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
 
     _suppressNextEpisodeDetection = true;
     _hasConfirmedPlaybackFrame = false;
@@ -3473,11 +3741,12 @@ class PlayerController extends Notifier<PlayerState> {
     _episode = nextEpisode;
     _progressUrl = nextEpisode.url;
     await _recordEpisodeOpened(nextEpisode);
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
     _resetPerEpisodeState();
     _maybeFetchSkipSegments();
 
     state = state.copyWith(
-      playerTitle: _titleWithEpisode(nextEpisode),
+      playerTitle: _item.title,
       activeEpisodeUrl: nextEpisode.url,
       showNextEpisodeOverlay: false,
     );
@@ -3518,7 +3787,8 @@ class PlayerController extends Notifier<PlayerState> {
     Episode episode, {
     StreamResult? selectedSource,
   }) async {
-    if (state.isLoading) return;
+    final sourceSessionId = state.sourceSessionId;
+    if (!_isCurrentSourceSession(sourceSessionId) || state.isLoading) return;
     state = state.copyWith(showEpisodeList: false);
 
     saveProgress();
@@ -3527,6 +3797,7 @@ class PlayerController extends Notifier<PlayerState> {
         .read(downloadedFilesProvider.notifier)
         .resolveFile(_item, episode: episode);
 
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
     final bool isLocal = localFile != null;
     final bool useDirectSelectedSource =
         !isLocal &&
@@ -3539,18 +3810,20 @@ class PlayerController extends Notifier<PlayerState> {
             : episode.url);
 
     await pause();
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
 
     _episode = episode;
     _videoUrl = finalUrl;
     _progressUrl = episode.url;
     await _recordEpisodeOpened(episode);
+    if (!_isCurrentSourceSession(sourceSessionId)) return;
     _hasConfirmedPlaybackFrame = false;
     _suppressNextEpisodeDetection = true;
     _resetPerEpisodeState();
     _maybeFetchSkipSegments();
 
     state = state.copyWith(
-      playerTitle: _titleWithEpisode(episode),
+      playerTitle: _item.title,
       activeEpisodeUrl: episode.url,
       showNextEpisodeOverlay: false,
     );
@@ -3731,6 +4004,7 @@ class PlayerController extends Notifier<PlayerState> {
     if (player != null && _isInitialized && !identical(_player, player)) return;
     if (_isDisposed) return;
     _isDisposed = true;
+    _cancelAutoSubtitleSelection();
     _disableAnime4kMetal();
     final closingSession = ++_sourceSessionSerial;
     _pendingResumeSeekPosition = null;
@@ -3895,12 +4169,14 @@ class PlayerController extends Notifier<PlayerState> {
     StreamResult stream, {
     bool forceRefresh = false,
   }) async {
+    final sourceSessionId = state.sourceSessionId;
     final token = stream.refreshUrl;
     final shouldRefresh = forceRefresh && token != null && token.isNotEmpty;
     if (shouldRefresh) {
       final provider = _resolveProvider();
       if (provider != null) {
         final fresh = await provider.loadStreams(token);
+        if (!_isCurrentSourceSession(sourceSessionId)) return null;
         if (fresh.isEmpty) {
           throw StateError('Failed to re-resolve stream URL');
         }
@@ -4232,25 +4508,29 @@ class PlayerController extends Notifier<PlayerState> {
         await native.setProperty('demuxer-lavf-o', demuxerLavfOpts.join(','));
       }
 
-      try {
-        final tempDir = await getTemporaryDirectory();
-        // Use p.join to produce a platform-correct path; on Windows the mixed
-        // forward/back-slash path produced by string concatenation can confuse
-        // libmpv's internal path parser.
-        final cookieFile = File(p.join(tempDir.path, 'mpv_cookies.txt'));
-        if (!await cookieFile.exists()) {
-          await cookieFile.create();
-        }
-        await native.setProperty('cookies-file', cookieFile.path);
+      // Local playback must not wait on network-cookie filesystem work.
+      if (!AppUtils.isLocalFile(stream.url)) {
+        try {
+          final tempDir = await getTemporaryDirectory();
+          // Use p.join to produce a platform-correct path; on Windows the mixed
+          // forward/back-slash path produced by string concatenation can confuse
+          // libmpv's internal path parser.
+          final cookieFile = File(p.join(tempDir.path, 'mpv_cookies.txt'));
+          if (!await cookieFile.exists()) {
+            await cookieFile.create();
+          }
+          await native.setProperty('cookies-file', cookieFile.path);
 
-        // Set a writable cache dir so mpv can persist its seek-backward and
-        // init-segment cache to disk. Without this, mpv logs "Failed to create
-        // file cache" and must re-fetch EXT-X-MAP init segments every time they
-        // are needed; if the CDN expires the init segment URL (404) before the
-        // next re-fetch, audio/video stops (typically ~20 s into playback).
-        await native.setProperty('cache-dir', tempDir.path);
-      } catch (e) {
-        if (kDebugMode) debugPrint('Failed to set cache-dir/cookies-file: $e');
+          // Set a writable cache dir so mpv can persist its seek-backward and
+          // init-segment cache to disk. Without this, mpv logs "Failed to create
+          // file cache" and must re-fetch EXT-X-MAP init segments every time they
+          // are needed; if the CDN expires the init segment URL (404) before the
+          // next re-fetch, audio/video stops (typically ~20 s into playback).
+          await native.setProperty('cache-dir', tempDir.path);
+        } catch (e) {
+          if (kDebugMode)
+            debugPrint('Failed to set cache-dir/cookies-file: $e');
+        }
       }
 
       // Re-assert: disable native MPV subtitle rendering on the video
@@ -4497,9 +4777,9 @@ class PlayerController extends Notifier<PlayerState> {
     return false;
   }
 
-  Future<void> _safeSeekTo(int position) async {
+  Future<int?> _safeSeekTo(int position) async {
     final sourceSessionId = state.sourceSessionId;
-    if (position <= 0 || !_isCurrentSourceSession(sourceSessionId)) return;
+    if (position <= 0 || !_isCurrentSourceSession(sourceSessionId)) return null;
 
     // ExoPlayer path: wait until the item reports a duration, then seek.
     if (state.useExoPlayer && _videoViewController != null) {
@@ -4526,15 +4806,16 @@ class PlayerController extends Notifier<PlayerState> {
           }
           durationMs = controller.mediaInfo.value?.duration ?? 0;
         }
-        if (!_isCurrentSourceSession(sourceSessionId)) return;
+        if (!_isCurrentSourceSession(sourceSessionId)) return null;
         final targetMs = durationMs > 0
             ? position.clamp(0, durationMs)
             : position;
         controller.seekTo(targetMs);
+        return targetMs;
       } catch (e) {
         if (kDebugMode) debugPrint("ExoPlayer seek failed: $e");
       }
-      return;
+      return null;
     }
 
     // media_kit path: wait for duration to be known before seeking.
@@ -4546,12 +4827,13 @@ class PlayerController extends Notifier<PlayerState> {
             .timeout(const Duration(seconds: 8));
       }
 
-      if (!_isCurrentSourceSession(sourceSessionId)) return;
+      if (!_isCurrentSourceSession(sourceSessionId)) return null;
       final maxMs = duration.inMilliseconds;
-      if (maxMs <= 0) return;
+      if (maxMs <= 0) return null;
 
       final targetMs = position.clamp(0, maxMs);
       await _player.seek(Duration(milliseconds: targetMs));
+      return targetMs;
     } on TimeoutException catch (e) {
       if (kDebugMode) {
         debugPrint("Timeout waiting for duration: $e");
@@ -4559,8 +4841,9 @@ class PlayerController extends Notifier<PlayerState> {
 
       // Best-effort fallback: some streams can seek before duration is reported.
       try {
-        if (!_isCurrentSourceSession(sourceSessionId)) return;
+        if (!_isCurrentSourceSession(sourceSessionId)) return null;
         await _player.seek(Duration(milliseconds: position));
+        return position;
       } catch (seekError) {
         if (kDebugMode) {
           debugPrint("Fallback seek failed: $seekError");
@@ -4571,6 +4854,7 @@ class PlayerController extends Notifier<PlayerState> {
         debugPrint("Seek failed: $e");
       }
     }
+    return null;
   }
 
   Future<void> _seekThenPlay(int positionMs) async {
@@ -4578,13 +4862,15 @@ class PlayerController extends Notifier<PlayerState> {
     if (positionMs <= 0 || !_isCurrentSourceSession(sourceSessionId)) return;
     await pause();
     if (!_isCurrentSourceSession(sourceSessionId)) return;
-    await _safeSeekTo(positionMs);
+    final targetMs = await _safeSeekTo(positionMs) ?? positionMs;
     if (!_isCurrentSourceSession(sourceSessionId)) return;
-    await _waitUntilNearResumePosition(positionMs);
+    await _waitUntilNearResumePosition(targetMs);
     if (!_isCurrentSourceSession(sourceSessionId)) return;
-    await play();
+    if (!_shouldPauseLocalStartup(state.currentStream?.url ?? _videoUrl)) {
+      await play();
+    }
     if (!_isCurrentSourceSession(sourceSessionId)) return;
-    await _waitUntilNearResumePosition(positionMs);
+    await _waitUntilNearResumePosition(targetMs);
   }
 
   Future<void> _flushPendingResumeSeek() async {
@@ -4598,6 +4884,7 @@ class PlayerController extends Notifier<PlayerState> {
     }
 
     _isApplyingPendingResumeSeek = true;
+
     try {
       await _seekThenPlay(pos);
     } catch (e) {
@@ -4625,77 +4912,25 @@ class PlayerController extends Notifier<PlayerState> {
     while (_isCurrentSourceSession(sourceSessionId) &&
         DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      if (near()) return;
+      if (!_isCurrentSourceSession(sourceSessionId) || near()) return;
     }
   }
 
   Future<int> _resolveResumePosition({required bool isLive}) async {
     if (isLive) return 0;
-
-    final historyRepo = ref.read(historyRepositoryProvider);
-    final account = ref.read(animeWitcherAccountServiceProvider);
-    final mainUrl = _item.url;
-    final progressUrl = _currentProgressUrl;
+    // Account sync already restores local history. Importing cloud progress
+    // here delays playback and can overwrite progress saved after opening.
+    final history = ref.read(historyRepositoryProvider);
     final episode = _resolveCurrentEpisode();
-    final isSeries =
-        _item.contentType == MultimediaContentType.series ||
-        _item.contentType == MultimediaContentType.anime;
-
-    int localPosition() {
-      if (isSeries) {
-        return historyRepo.getEpisodePosition(
-          progressUrl,
-          mainUrl: mainUrl,
-          season: episode?.season,
-          episode: episode?.episode,
-        );
-      }
-      return historyRepo.getPosition(mainUrl);
+    if (isSeries) {
+      return history.getEpisodePosition(
+        _currentProgressUrl,
+        mainUrl: _item.url,
+        season: episode?.season,
+        episode: episode?.episode,
+      );
     }
-
-    final local = localPosition();
-    if (!_hasRefreshedCloudProgress &&
-        PlaybackResume.shouldHoldUntilSeeked(local)) {
-      _hasRefreshedCloudProgress = true;
-      unawaited(_syncContinueWatchingInBackground());
-    }
-    return PlaybackResume.resolveStartupPosition(
-      localPositionMs: local,
-      cloudPositionMs: () async {
-        _hasRefreshedCloudProgress = true;
-        try {
-          await account.syncContinueWatchingItem(mainUrl);
-        } catch (error) {
-          if (kDebugMode) {
-            debugPrint('[Player] Cloud progress sync deferred: $error');
-          }
-        }
-        final afterSync = localPosition();
-        if (PlaybackResume.shouldHoldUntilSeeked(afterSync)) {
-          return afterSync;
-        }
-        if (isSeries && episode != null) {
-          return account.remoteEpisodePosition(
-            mainUrl: mainUrl,
-            episodeUrl: progressUrl,
-            refresh: true,
-          );
-        }
-        return afterSync;
-      },
-    );
-  }
-
-  Future<void> _syncContinueWatchingInBackground() async {
-    try {
-      await ref
-          .read(animeWitcherAccountServiceProvider)
-          .syncContinueWatchingItem(_item.url);
-    } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[Player] Cloud progress sync deferred: $error');
-      }
-    }
+    return history.getPosition(_item.url);
   }
 
   /// [persist] = true marks this as a user-driven speed change that should

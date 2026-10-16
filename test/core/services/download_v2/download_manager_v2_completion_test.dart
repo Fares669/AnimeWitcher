@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:animewitcher/core/services/download_v2/background_downloader_gateway.dart';
@@ -85,6 +86,88 @@ void main() {
         expect(record?.failureMessage, 'size-mismatch');
       },
     );
+
+    final textArtifacts = <String, String>{
+      'hls-playlist': '#EXTM3U\nhttps://example.invalid/segment.ts\n',
+      'dash-manifest': '<?xml version="1.0"?><MPD><Period/></MPD>',
+      'html-page': '<!doctype html><html><body>Login</body></html>',
+    };
+
+    for (final entry in textArtifacts.entries) {
+      test('fresh ${entry.key} cannot commit completion', () async {
+        final file = File('${temp.path}/fresh.mp4');
+        final bytes = utf8.encode(entry.value);
+        await file.writeAsBytes(bytes, flush: true);
+        final f = _fixture(file.path, expectedBytes: bytes.length);
+        addTearDown(f.manager.dispose);
+        await f.manager.start(f.request);
+
+        f.gateway.emitComplete(f.gateway.startedSpecs.single.taskId);
+        final record = await _waitForRecord(
+          f.store,
+          f.request.logicalId,
+          (value) =>
+              value?.failureCategory == DownloadFailureCategory.integrity,
+        );
+
+        expect(record?.completedAtMillis, isNull);
+        expect(record?.intent, DownloadUserIntent.failed);
+        expect(record?.failureMessage, entry.key);
+        expect(
+          f.manager.snapshotFor(f.request.logicalId)?.status,
+          DownloadTransportStatus.failed,
+        );
+      });
+
+      test(
+        'startup preserves existing completed ${entry.key} record and bytes',
+        () async {
+          final file = File('${temp.path}/existing.mp4');
+          final bytes = utf8.encode(entry.value);
+          await file.writeAsBytes(bytes, flush: true);
+          final f = _fixture(file.path, expectedBytes: bytes.length);
+          addTearDown(f.manager.dispose);
+          final original = LogicalDownloadRecordV2(
+            schemaVersion: kLogicalDownloadSchemaVersionV2,
+            logicalId: f.request.logicalId,
+            mediaId: f.request.mediaId,
+            unitKey: f.request.unitKey,
+            variantKey: f.request.variantKey,
+            generation: 1,
+            taskId: taskIdForGeneration(f.request.logicalId, 1),
+            intent: DownloadUserIntent.active,
+            destinationPath: file.path,
+            sourceDescriptor: f.request.sourceDescriptor,
+            expectedBytes: bytes.length,
+            completedAtMillis: 777,
+            updatedAtMillis: 777,
+          );
+          await f.store.put(original);
+
+          await f.manager.initialize();
+
+          expect(
+            (await f.store.get(f.request.logicalId))?.toJson(),
+            original.toJson(),
+          );
+          expect(await file.readAsBytes(), bytes);
+          expect(f.gateway.startedSpecs, isEmpty);
+          expect(
+            f.manager.snapshotFor(f.request.logicalId)?.status,
+            DownloadTransportStatus.complete,
+          );
+          expect(
+            await f.manager.hasCompletedDownload(f.request.logicalId),
+            isTrue,
+          );
+          expect(
+            (await f.store.get(f.request.logicalId))?.toJson(),
+            original.toJson(),
+          );
+          expect(await file.readAsBytes(), bytes);
+        },
+      );
+    }
 
     test('verified completion cleans transport metadata but keeps the file', () async {
       final file = File('${temp.path}/cleaned.mp4');

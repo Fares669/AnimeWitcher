@@ -134,6 +134,8 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
     required Future<Directory> Function() directoryProvider,
     required bool Function() enabled,
     int Function()? nowMillis,
+    Future<({String version, String buildNumber})> Function()?
+    buildIdentityProvider,
     String? sessionId,
     this.fileName = 'download_v2.jsonl',
     this.maxBytes = 5 * 1024 * 1024,
@@ -142,12 +144,16 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
        assert(maxFiles > 0),
        _directoryProvider = directoryProvider,
        _enabled = enabled,
+       _buildIdentityProvider = buildIdentityProvider,
        _nowMillis = nowMillis ?? (() => DateTime.now().millisecondsSinceEpoch),
        _sessionId =
            sessionId ?? '${DateTime.now().microsecondsSinceEpoch}-$pid';
 
   final Future<Directory> Function() _directoryProvider;
   final bool Function() _enabled;
+  final Future<({String version, String buildNumber})> Function()?
+  _buildIdentityProvider;
+  Future<Map<String, Object>>? _buildIdentity;
   final int Function() _nowMillis;
   final String _sessionId;
   final String fileName;
@@ -214,12 +220,10 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
         final file = File(
           '${logDirectory.path}${Platform.pathSeparator}$fileName',
         );
-        final encoded = '${jsonEncode(payload)}\n';
-        await _rotateIfNeeded(
-          logDirectory,
-          file,
-          utf8.encode(encoded).length,
-        );
+        final identity = await (_buildIdentity ??= _loadBuildIdentity());
+        final encoded =
+            '${jsonEncode(<String, Object?>{'schemaVersion': 1, ...identity, ...payload})}\n';
+        await _rotateIfNeeded(logDirectory, file, utf8.encode(encoded).length);
         await file.writeAsString(
           encoded,
           mode: FileMode.append,
@@ -236,6 +240,27 @@ final class FileDownloadDiagnosticsV2 implements DownloadDiagnosticsV2 {
         // Diagnostics are observability only and never transport authority.
       }
     });
+  }
+
+  Future<Map<String, Object>> _loadBuildIdentity() async {
+    var version = 'unknown';
+    var buildNumber = 'unknown';
+    try {
+      final identity = await _buildIdentityProvider
+          ?.call()
+          .timeout(const Duration(seconds: 1));
+      if (identity != null) {
+        version = _safeBuildComponent(identity.version);
+        buildNumber = _safeBuildComponent(identity.buildNumber);
+      }
+    } catch (_) {
+      // Missing platform metadata must not disable download diagnostics.
+    }
+    return <String, Object>{
+      'appVersion': version,
+      'appBuildNumber': buildNumber,
+      'buildFingerprint': '$version+$buildNumber',
+    };
   }
 
   Future<void> _rotateIfNeeded(
@@ -287,6 +312,9 @@ bool _shouldFlushDiagnosticRecord(Map<String, Object?> body) {
 }
 
 const Set<String> _transportFieldAllowlist = <String>{
+  'logicalId',
+  'action',
+  'durationMs',
   'taskId',
   'parentTaskId',
   'childTaskId',
@@ -332,6 +360,15 @@ const Set<String> _transportFieldAllowlist = <String>{
   'result',
   'parentActive',
   'pauseRequested',
+  'retryable',
+  'retryAttempt',
+  'delayMs',
+  'callbackAttempt',
+  'currentAttempt',
+  'draining',
+  'verifiedBytes',
+  'verificationPhase',
+  'timeoutKind',
 };
 
 Map<String, Object?> _sanitizeTransportFields(Map<String, Object?> fields) {
@@ -339,6 +376,13 @@ Map<String, Object?> _sanitizeTransportFields(Map<String, Object?> fields) {
   for (final entry in fields.entries) {
     if (!_transportFieldAllowlist.contains(entry.key)) continue;
     final value = entry.value;
+    if (entry.key == 'retryable' && value is! bool) {
+      continue;
+    }
+    if (const {'retryAttempt', 'delayMs', 'callbackAttempt', 'currentAttempt', 'draining', 'verifiedBytes'}
+        .contains(entry.key) && (value is! int || value < 0)) {
+      continue;
+    }
     if (value is num) {
       if (value.isFinite) result[entry.key] = value;
     } else if (value is bool || value == null) {
@@ -355,3 +399,8 @@ bool _safeDiagnosticToken(String value) =>
     value.length <= 160 &&
     RegExp(r'^[a-zA-Z0-9_.:+-]+$').hasMatch(value) &&
     !value.contains('://');
+
+String _safeBuildComponent(String value) =>
+    value.length <= 64 && RegExp(r'^[0-9][a-zA-Z0-9_.+-]*$').hasMatch(value)
+    ? value
+    : 'unknown';

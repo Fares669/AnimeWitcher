@@ -60,7 +60,8 @@ Future<void> configureNativeDownloadDiagnosticLog(
   try {
     await const MethodChannel(
       'com.animewitcher.app/download_continued_processing',
-    ).invokeMethod<void>('configureDiagnosticLog', {'enabled': enabled});
+    ).invokeMethod<void>('configureDiagnosticLog', {'enabled': enabled})
+        .timeout(const Duration(seconds: 5));
   } on MissingPluginException {
     // Older/non-iOS builds may not include the native diagnostics bridge.
   } on PlatformException catch (error) {
@@ -85,6 +86,16 @@ Future<void> configureNativeDownloadDiagnosticLog(
 /// no-ops unless [endSession] is true — finishing ep1's overlay is what
 /// suspended the process and broke ep2 promotion.
 class DownloadContinuedProcessingService {
+  static int _nativeQueueControlGeneration = 0;
+
+  static int get nativeQueueControlGeneration => _nativeQueueControlGeneration;
+
+  /// A withdrawal can succeed even when its ACK is lost. Invalidate any cached
+  /// observer signature before dispatch so the next truth sample republishes.
+  static void invalidateNativeQueueCheckpoint() {
+    _nativeQueueControlGeneration++;
+  }
+
   static const MethodChannel _channel = MethodChannel(
     'com.animewitcher.app/download_continued_processing',
   );
@@ -102,6 +113,9 @@ class DownloadContinuedProcessingService {
   /// checkpoint is not proof that native background promotion is available.
   bool nativePromotionAvailable = false;
   DownloadGlobalHandlerLease? _handlerLease;
+  // Presentation ACKs must never indefinitely hold terminal cleanup. A timeout
+  // is unknown acknowledgement, not proof that native execution was canceled.
+  static const Duration _bridgeTimeout = Duration(seconds: 5);
   static const Duration _updateSampleInterval = Duration(seconds: 1);
   Timer? _updateTimer;
   DateTime? _lastUpdateAt;
@@ -146,6 +160,7 @@ class DownloadContinuedProcessingService {
     int currentIndex = 0,
   }) async {
     _cancelPendingUpdate();
+    final epoch = _updateEpoch;
     final result = await _invokeForResult<Object?>('start', <String, Object>{
       'taskId': taskId,
       'displayName': displayName,
@@ -159,6 +174,7 @@ class DownloadContinuedProcessingService {
       'speedBytesPerSecond': speedBytesPerSecond,
       'currentIndex': currentIndex,
     });
+    if (!ownsCurrentHandler || epoch != _updateEpoch) return false;
     final accepted = switch (result) {
       final String identifier => identifier.trim().isNotEmpty,
       final bool value => value,
@@ -180,6 +196,7 @@ class DownloadContinuedProcessingService {
     double speedBytesPerSecond = 0,
     String displayName = '',
     int currentIndex = 0,
+    bool immediate = false,
   }) async {
     await _queueUpdate(<String, Object>{
       'taskId': taskId,
@@ -193,11 +210,24 @@ class DownloadContinuedProcessingService {
       'speedBytesPerSecond': speedBytesPerSecond,
       if (displayName.isNotEmpty) 'displayName': displayName,
       'currentIndex': currentIndex,
-    });
+    }, immediate: immediate);
   }
 
-  Future<void> _queueUpdate(Map<String, Object> arguments) async {
+  Future<void> _queueUpdate(
+    Map<String, Object> arguments, {
+    bool immediate = false,
+  }) async {
     if (!_isAvailable) return;
+    // V2 already coalesces the sample used by its in-app projection. Avoid a
+    // second independent timer that would show older speed in the system UI.
+    if (immediate) {
+      _updateTimer?.cancel();
+      _updateTimer = null;
+      _pendingUpdate = null;
+      _lastUpdateAt = DateTime.now();
+      await _sendUpdate(arguments);
+      return;
+    }
     _pendingUpdate = arguments;
     final now = DateTime.now();
     final last = _lastUpdateAt;
@@ -306,6 +336,9 @@ class DownloadContinuedProcessingService {
     int sessionCurrentIndex = 0,
     List<Map<String, Object>> multipartPlans = const [],
   }) async {
+    // Preserve creation time across ACK/version retries so a pre-pause plan
+    // can never become fresh permission merely because its ACK was delayed.
+    final snapshotCreatedAtMicros = DateTime.now().microsecondsSinceEpoch;
     int nextVersion() {
       final wallClock = DateTime.now().microsecondsSinceEpoch;
       final next = _nativeQueueSnapshotVersion + 1;
@@ -318,6 +351,7 @@ class DownloadContinuedProcessingService {
         'persistNativeQueue',
         <String, Object>{
           'snapshotVersion': snapshotVersion,
+          'snapshotCreatedAtMicros': snapshotCreatedAtMicros,
           'maxConcurrent': maxConcurrent,
           'waiters': waiters,
           'transferringTaskIds': transferringTaskIds,
@@ -441,7 +475,9 @@ class DownloadContinuedProcessingService {
     if (!_isAvailable || !ownsCurrentHandler) return null;
 
     try {
-      return await _channel.invokeMethod<T>(method, arguments);
+      final result = await _channel.invokeMethod<T>(method, arguments)
+          .timeout(_bridgeTimeout);
+      return ownsCurrentHandler ? result : null;
     } on MissingPluginException {
       return null;
     } on PlatformException catch (error) {
@@ -464,7 +500,8 @@ class DownloadContinuedProcessingService {
     if (!_isAvailable || !ownsCurrentHandler) return;
 
     try {
-      await _channel.invokeMethod<void>(method, arguments);
+      await _channel.invokeMethod<void>(method, arguments)
+          .timeout(_bridgeTimeout);
     } on MissingPluginException {
       // The current build does not include the iOS 26 bridge.
     } on PlatformException catch (error) {

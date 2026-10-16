@@ -34,9 +34,9 @@ import UserNotifications
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  /// URLSession wakes the process when a background download finishes. Start the
-  /// next waiter on the plugin session (via the swizzled delegate) **before**
-  /// this completion handler runs. Flutter is never what starts the file.
+  /// URLSession wakes the process when a range finishes. The validated delegate
+  /// observer refills only persisted immutable ranges on the existing session.
+  /// Parent assembly and whole-episode scheduling remain with Dart/the plugin.
   override func application(
     _ application: UIApplication,
     handleEventsForBackgroundURLSession identifier: String,
@@ -246,6 +246,29 @@ import UserNotifications
         let arguments = call.arguments as? [String: Any] ?? [:]
         DownloadNativeDiagnosticLog.configure(arguments["enabled"] as? Bool ?? false)
         result(nil)
+        return
+      }
+      if call.method == "retryMetadataForRange" {
+        let arguments = call.arguments as? [String: Any] ?? [:]
+        result(DownloadNativeRetryMetadata.lookup(arguments))
+        return
+      }
+      if call.method == "forgetRangeRetryMetadata" {
+        let arguments = call.arguments as? [String: Any] ?? [:]
+        if let parent = arguments["parentTaskId"] as? String, parent.hasPrefix("aw_v2_") {
+          DownloadNativeRetryMetadata.removeParent(parent)
+        }
+        result(nil)
+        return
+      }
+      if call.method == "withdrawRangeParent" {
+        let arguments = call.arguments as? [String: Any] ?? [:]
+        result(DownloadNativeWaitingQueue.withdrawRangeParent(from: arguments))
+        return
+      }
+      if call.method == "claimRangeForDart" {
+        let arguments = call.arguments as? [String: Any] ?? [:]
+        result(DownloadNativeWaitingQueue.claimRangeForDart(from: arguments))
         return
       }
       if call.method == "persistNativeQueue" || call.method == "persistWaitingQueue" {
@@ -468,18 +491,6 @@ import UserNotifications
         arguments["speedBytesPerSecond"] = speed.doubleValue
       }
       channel?.invokeMethod("taskUpdate", arguments: arguments)
-    }
-#endif
-
-#if os(iOS)
-    if #available(iOS 26.0, *) {
-      DownloadContinuedProcessingManager.shared.cancellationHandler = {
-        [weak channel] taskId in
-        channel?.invokeMethod(
-          "cancel",
-          arguments: ["taskId": taskId]
-        )
-      }
     }
 #endif
 

@@ -1,15 +1,9 @@
 import 'dart:io';
 
-import 'package:background_downloader/background_downloader.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import '../domain/entity/multimedia_item.dart';
-
-/// Video extensions that count as remaining episode files.
-const Set<String> kDownloadVideoExtensions = {'.mp4', '.mkv', '.webm', '.avi'};
-
-const String kAppDownloadsRootMarker = 'AnimeWitcher/Downloads';
+import 'local_file_io.dart';
 
 const List<String> kDownloadTempSuffixes = [
   '.part',
@@ -17,113 +11,6 @@ const List<String> kDownloadTempSuffixes = [
   '.download',
   '.assembling',
 ];
-
-/// Canonical episode identity: [DownloadTask.metaData], which is set to
-/// `episode.url` (not `taskId`).
-String downloadTrackingUrl(Task task) {
-  final meta = task.metaData.trim();
-  if (meta.isNotEmpty) return meta;
-  return task.url.trim();
-}
-
-/// Identity for one downloaded episode (or a movie with no episode).
-///
-/// Canonical key is `episode.url`, which is stored on the task as
-/// [Task.metaData]. `taskId` is not an identity.
-String downloadIdentityKey(MultimediaItem item, Episode? episode) {
-  final episodeUrl = episode?.url.trim() ?? '';
-  if (episodeUrl.isNotEmpty) return episodeUrl;
-  return item.url.trim();
-}
-
-/// Directory + filename as stored on the task, independent of Unicode form.
-String downloadTaskFileKey(Task task) {
-  final directory = task.directory.replaceAll('\\', '/').trim();
-  final filename = task.filename.trim();
-  if (filename.isEmpty) return '';
-  return '$directory|$filename';
-}
-
-bool metadataMatchesDownload({
-  required MultimediaItem item,
-  Episode? episode,
-  required MultimediaItem candidateItem,
-  Episode? candidateEpisode,
-}) {
-  return downloadIdentityKey(item, episode) ==
-      downloadIdentityKey(candidateItem, candidateEpisode);
-}
-
-bool taskMatchesDownloadFile({
-  required Task task,
-  required String filename,
-  required String directory,
-}) {
-  if (task.filename.trim().isEmpty) return false;
-  if (task.filename.trim() != filename.trim()) return false;
-  final a = task.directory.replaceAll('\\', '/').trim();
-  final b = directory.replaceAll('\\', '/').trim();
-  if (a == b) return true;
-  if (a.isEmpty || b.isEmpty) return false;
-  return p.normalize(a) == p.normalize(b) || a.endsWith(b) || b.endsWith(a);
-}
-
-bool shouldCancelDownload(TaskStatus status) {
-  switch (status) {
-    case TaskStatus.running:
-    case TaskStatus.enqueued:
-    case TaskStatus.paused:
-    case TaskStatus.waitingToRetry:
-      return true;
-    case TaskStatus.complete:
-    case TaskStatus.canceled:
-    case TaskStatus.failed:
-    case TaskStatus.notFound:
-      return false;
-  }
-}
-
-enum CompleteDownloadAction { reuse, dropAndEnqueue, enqueue }
-
-/// How a download start should treat an existing complete record.
-CompleteDownloadAction decideCompleteDownloadAction({
-  required bool hasCompleteRecord,
-  required bool fileExists,
-}) {
-  if (!hasCompleteRecord) return CompleteDownloadAction.enqueue;
-  if (fileExists) return CompleteDownloadAction.reuse;
-  return CompleteDownloadAction.dropAndEnqueue;
-}
-
-/// Prefer the task's own path; fall back to label reconstruction.
-///
-/// Order: existing task file, then [File] from `task.filePath()` when that
-/// path exists (or `exists()` throws), then reconstructed labels, then the
-/// path [File] even if `exists()` was false so delete can still retry.
-Future<File?> resolveDownloadFileToDelete({
-  required Future<File?> Function() fromTask,
-  required Future<String?> Function() taskFilePath,
-  required Future<File?> Function() fromLabels,
-}) async {
-  final taskFile = await fromTask();
-  if (taskFile != null) return taskFile;
-  final path = await taskFilePath();
-  File? pathFile;
-  if (path != null && path.isNotEmpty) {
-    pathFile = File(path);
-    try {
-      if (await pathFile.exists()) return pathFile;
-    } catch (_) {
-      return pathFile;
-    }
-  }
-  final labels = await fromLabels();
-  if (labels != null) return labels;
-  return pathFile;
-}
-
-bool _downloadPathSegmentEquals(String a, String b) =>
-    Platform.isWindows ? a.toLowerCase() == b.toLowerCase() : a == b;
 
 String _normalizedAbsoluteDownloadPath(String value) =>
     p.normalize(p.absolute(value));
@@ -141,36 +28,6 @@ bool _downloadPathIsWithin(String root, String candidate) {
   final normalizedCandidate = _downloadPathComparisonKey(candidate);
   return normalizedCandidate == normalizedRoot ||
       p.isWithin(normalizedRoot, normalizedCandidate);
-}
-
-String? _appDownloadsRootForPath(String value) {
-  final normalized = _normalizedAbsoluteDownloadPath(value);
-  final segments = p.split(normalized);
-  for (var i = 0; i + 1 < segments.length; i++) {
-    if (_downloadPathSegmentEquals(segments[i], 'AnimeWitcher') &&
-        _downloadPathSegmentEquals(segments[i + 1], 'Downloads')) {
-      return p.normalize(p.joinAll(segments.take(i + 2)));
-    }
-  }
-  return null;
-}
-
-/// Lexical marker check retained for non-destructive compatibility.
-///
-/// Never use this as proof of filesystem ownership: any external directory can
-/// be named `AnimeWitcher/Downloads`. Destructive cleanup must use the
-/// configured-root helpers below.
-bool pathIsInsideAppDownloads(String path) {
-  final normalized = _normalizedAbsoluteDownloadPath(path);
-  final root = _appDownloadsRootForPath(normalized);
-  if (root == null) return false;
-  return normalized == root || p.isWithin(root, normalized);
-}
-
-bool pathIsAppDownloadsRoot(String path) {
-  final normalized = _normalizedAbsoluteDownloadPath(path);
-  final root = _appDownloadsRootForPath(normalized);
-  return root != null && normalized == root;
 }
 
 bool pathIsInsideConfiguredAppDownloads(
@@ -253,8 +110,15 @@ Future<List<String>> _effectiveAppDownloadRoots(
 
 Future<bool> _resolvesInsideConfiguredAppDownloads(
   Directory directory,
+  List<String> roots,
+) => runLocalFileIo(
+  () => _resolvesInsideConfiguredAppDownloadsSync(directory, roots),
+);
+
+bool _resolvesInsideConfiguredAppDownloadsSync(
+  Directory directory,
   Iterable<String> appDownloadRoots,
-) async {
+) {
   final lexicalRoot = _configuredAppDownloadsRootForPath(
     directory.path,
     appDownloadRoots,
@@ -271,19 +135,18 @@ Future<bool> _resolvesInsideConfiguredAppDownloads(
       if (segment.isNotEmpty && segment != '.') {
         current = p.join(current, segment);
       }
-      if (await FileSystemEntity.type(current, followLinks: false) !=
+      if (FileSystemEntity.typeSync(current, followLinks: false) !=
           FileSystemEntityType.directory) {
         return false;
       }
     }
     final canonicalRoot = p.normalize(
-      await Directory(lexicalRoot).resolveSymbolicLinks(),
+      Directory(lexicalRoot).resolveSymbolicLinksSync(),
     );
     final canonicalDirectory = p.normalize(
-      await directory.resolveSymbolicLinks(),
+      directory.resolveSymbolicLinksSync(),
     );
-    return _downloadPathsEqual(canonicalDirectory, canonicalRoot) ||
-        _downloadPathIsWithin(canonicalRoot, canonicalDirectory);
+    return _downloadPathIsWithin(canonicalRoot, canonicalDirectory);
   } catch (_) {
     return false;
   }
@@ -308,29 +171,6 @@ Directory? seriesFolderForDownloadedFile(
   }
 }
 
-bool isDownloadVideoFileName(String name) {
-  final lower = name.toLowerCase();
-  if (lower.startsWith('.')) return false;
-  return kDownloadVideoExtensions.any(lower.endsWith);
-}
-
-Future<bool> directoryContainsVideoFiles(Directory directory) async {
-  if (!await directory.exists()) return false;
-  await for (final entity in directory.list(
-    recursive: true,
-    followLinks: false,
-  )) {
-    if (entity is! File) continue;
-    if (!isDownloadVideoFileName(p.basename(entity.path))) continue;
-    try {
-      if (await entity.length() > 0) return true;
-    } catch (_) {
-      continue;
-    }
-  }
-  return false;
-}
-
 /// Prune only the deleted artifact's empty ancestors, up to its title folder.
 /// Nonrecursive deletes preserve files arriving between the checks and rmdir.
 Future<void> deleteSeriesFolderIfNoVideosRemain(
@@ -349,17 +189,15 @@ Future<void> deleteSeriesFolderIfNoVideosRemain(
   var directory = deletedFile.parent;
   while (_downloadPathIsWithin(series.path, directory.path)) {
     try {
-      final type = await FileSystemEntity.type(
-        directory.path,
-        followLinks: false,
-      );
+      final candidate = directory;
+      final type = await localPathType(candidate.path);
       if (type != FileSystemEntityType.notFound) {
         if (type != FileSystemEntityType.directory ||
-            !await _resolvesInsideConfiguredAppDownloads(directory, roots) ||
+            !await _resolvesInsideConfiguredAppDownloads(candidate, roots) ||
             isProtected?.call(directory.path) == true) {
           return;
         }
-        await directory.delete();
+        await localDelete(candidate);
       }
     } on FileSystemException {
       // A nonempty directory, permission error, or concurrent writer stays put.
@@ -377,20 +215,20 @@ Future<void> deleteSiblingTempFiles(
   Iterable<String>? appDownloadRoots,
 }) async {
   final roots = await _effectiveAppDownloadRoots(appDownloadRoots);
-  if (roots.isEmpty ||
-      !pathIsInsideConfiguredAppDownloads(file.path, roots) ||
-      !await _resolvesInsideConfiguredAppDownloads(file.parent, roots)) {
-    return;
-  }
-
-  final dir = file.parent;
-  final name = p.basename(file.path);
-  for (final suffix in kDownloadTempSuffixes) {
-    final temp = File(p.join(dir.path, '$name$suffix'));
-    try {
-      if (await temp.exists()) await temp.delete();
-    } catch (_) {}
-  }
+  await runLocalFileIo(() {
+    if (roots.isEmpty ||
+        !pathIsInsideConfiguredAppDownloads(file.path, roots) ||
+        !_resolvesInsideConfiguredAppDownloadsSync(file.parent, roots)) {
+      return;
+    }
+    final name = p.basename(file.path);
+    for (final suffix in kDownloadTempSuffixes) {
+      final temp = File(p.join(file.parent.path, '$name$suffix'));
+      try {
+        if (temp.existsSync()) temp.deleteSync();
+      } catch (_) {}
+    }
+  });
 }
 
 /// Retry `file.delete()` — Android public Downloads can fail once on
@@ -398,16 +236,20 @@ Future<void> deleteSiblingTempFiles(
 Future<bool> deleteFileWithRetry(File file, {int attempts = 3}) async {
   for (var i = 0; i < attempts; i++) {
     try {
-      if (!await file.exists()) return true;
-      await file.delete();
-      if (!await file.exists()) return true;
+      if (await runLocalFileIo(() {
+        if (!file.existsSync()) return true;
+        file.deleteSync();
+        return !file.existsSync();
+      })) {
+        return true;
+      }
     } catch (_) {}
     if (i < attempts - 1) {
       await Future<void>.delayed(Duration(milliseconds: 40 * (i + 1)));
     }
   }
   try {
-    return !await file.exists();
+    return !await runLocalFileIo(file.existsSync);
   } catch (_) {
     return false;
   }
@@ -423,7 +265,7 @@ Future<bool> deleteDownloadedVideo(
 }) async {
   try {
     final roots = await _effectiveAppDownloadRoots(appDownloadRoots);
-    if (!await file.exists()) {
+    if (!await runLocalFileIo(file.existsSync)) {
       await deleteSeriesFolderIfNoVideosRemain(
         file,
         appDownloadRoots: roots,

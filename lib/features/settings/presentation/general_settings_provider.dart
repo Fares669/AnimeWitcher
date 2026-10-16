@@ -1,4 +1,3 @@
-import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -8,6 +7,7 @@ import '../../../core/services/download_concurrency.dart';
 import '../../../core/services/download_continued_processing_service.dart';
 import '../../../core/services/download_parallel.dart';
 import '../../../core/services/download_v2/background_downloader_gateway.dart';
+import '../../../core/services/download_v2/download_persistent_storage_v2.dart';
 import '../../../core/storage/settings_repository.dart';
 
 part 'general_settings_provider.g.dart';
@@ -66,8 +66,7 @@ class GeneralSettings {
           downloadNotifications ?? this.downloadNotifications,
       autoSelectStreamSource:
           autoSelectStreamSource ?? this.autoSelectStreamSource,
-      streamServerPriority:
-          streamServerPriority ?? this.streamServerPriority,
+      streamServerPriority: streamServerPriority ?? this.streamServerPriority,
       streamQualityPriority:
           streamQualityPriority ?? this.streamQualityPriority,
     );
@@ -124,7 +123,9 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
   }
 
   Future<void> setDownloadDiagnosticLog(bool enabled) async {
-    await ref.read(settingsRepositoryProvider).setDownloadDiagnosticLog(enabled);
+    await ref
+        .read(settingsRepositoryProvider)
+        .setDownloadDiagnosticLog(enabled);
     await configureNativeDownloadDiagnosticLog(enabled);
     state = state.copyWith(downloadDiagnosticLog: enabled);
   }
@@ -260,7 +261,7 @@ class GeneralSettingsNotifier extends _$GeneralSettingsNotifier {
     await ref
         .read(settingsRepositoryProvider)
         .setDownloadNotificationPrefs(prefs);
-    await configurePackageNotificationsV2(FileDownloader(), prefs);
+    await configurePackageNotificationsV2(configuredFileDownloaderV2(), prefs);
     state = state.copyWith(downloadNotifications: prefs);
   }
 }

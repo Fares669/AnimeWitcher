@@ -50,6 +50,9 @@ class MangaReaderController extends ChangeNotifier {
   final Map<String, List<MangaPage>> _preloadedChapterPages =
       <String, List<MangaPage>>{};
   final Set<String> _preloadingChapterIds = <String>{};
+  final Set<Future<void>> _cacheOperations = <Future<void>>{};
+  bool _disposed = false;
+  Future<void>? _closing;
   bool _autoReadDuplicateChapters = false;
   String? _lastLoadChapterId;
 
@@ -96,6 +99,7 @@ class MangaReaderController extends ChangeNotifier {
   }
 
   Future<void> load() async {
+    if (_disposed) return;
     _progressTimer?.cancel();
     final chapterId = _chapter.id;
     final forceSourceReload = _lastLoadChapterId == chapterId;
@@ -107,27 +111,32 @@ class MangaReaderController extends ChangeNotifier {
 
     try {
       final localPages = await _loadLocalPages(_chapter);
+      if (_disposed) return;
       if (forceSourceReload && localPages.isEmpty) {
         _preloadedChapterPages.remove(chapterId);
-        await _pageCache.remove(_mangaId, _chapter);
+        await _trackCacheOperation(_pageCache.remove(_mangaId, _chapter));
+        if (_disposed) return;
       }
       final preloaded = localPages.isEmpty && !forceSourceReload
           ? _preloadedChapterPages.remove(chapterId)
           : null;
       final cached =
           localPages.isEmpty && !forceSourceReload && preloaded == null
-          ? await _pageCache.get(_mangaId, _chapter)
+          ? await _trackCacheOperation(_pageCache.get(_mangaId, _chapter))
           : null;
+      if (_disposed) return;
       final remote =
           localPages.isEmpty &&
               (forceSourceReload || (preloaded == null && cached == null))
           ? await provider.getMangaChapterPages(manga.url, _chapter)
           : null;
+      if (_disposed) return;
       final pages = localPages.isNotEmpty
           ? localPages
           : preloaded ?? cached ?? remote ?? const <MangaPage>[];
       if (remote != null && remote.isNotEmpty) {
-        await _pageCache.put(_mangaId, _chapter, remote);
+        await _trackCacheOperation(_pageCache.put(_mangaId, _chapter, remote));
+        if (_disposed) return;
       }
       _pages = pages;
       final saved = progressRepository.get(_mangaId, _chapter.id);
@@ -138,6 +147,7 @@ class MangaReaderController extends ChangeNotifier {
       notifyListeners();
       unawaited(_preloadAdjacentChapters());
     } catch (error) {
+      if (_disposed) return;
       _loading = false;
       _error = error;
       notifyListeners();
@@ -145,6 +155,7 @@ class MangaReaderController extends ChangeNotifier {
   }
 
   Future<void> _preloadAdjacentChapters() async {
+    if (_disposed) return;
     final index = currentChapterIndex;
     if (index < 0 || chapters.isEmpty) return;
 
@@ -156,7 +167,8 @@ class MangaReaderController extends ChangeNotifier {
     await Future.wait<void>(
       adjacent.map((chapter) async {
         final id = chapter.id;
-        if (id.isEmpty ||
+        if (_disposed ||
+            id.isEmpty ||
             id == _chapter.id ||
             _preloadedChapterPages.containsKey(id) ||
             !_preloadingChapterIds.add(id)) {
@@ -164,16 +176,21 @@ class MangaReaderController extends ChangeNotifier {
         }
         try {
           final local = await _loadLocalPages(chapter);
+          if (_disposed) return;
           final mangaId = _mangaIdFor(chapter);
-          final cached = local.isEmpty ? await _pageCache.get(mangaId, chapter) : null;
+          final cached = local.isEmpty
+              ? await _trackCacheOperation(_pageCache.get(mangaId, chapter))
+              : null;
+          if (_disposed) return;
           final pages = local.isNotEmpty
               ? local
               : cached ?? await provider.getMangaChapterPages(manga.url, chapter);
+          if (_disposed) return;
           // Local pages must be validated again when actually navigating.
           if (pages.isNotEmpty && local.isEmpty) {
             _preloadedChapterPages[id] = List<MangaPage>.unmodifiable(pages);
             if (local.isEmpty && cached == null) {
-              await _pageCache.put(mangaId, chapter, pages);
+              await _trackCacheOperation(_pageCache.put(mangaId, chapter, pages));
             }
           }
         } catch (_) {
@@ -186,12 +203,14 @@ class MangaReaderController extends ChangeNotifier {
   }
 
   Future<List<MangaPage>> _loadLocalPages(MangaChapter chapter) async {
+    if (_disposed) return const <MangaPage>[];
     String? resolvedDirectory;
     try {
       resolvedDirectory = await localChapterDirectoryFor?.call(chapter);
     } catch (_) {
       // An unavailable downloads projection must not hide the initial directory.
     }
+    if (_disposed) return const <MangaPage>[];
     final initial = chapter.id == _initialLocalChapter.id &&
         _mangaIdFor(chapter) == _mangaIdFor(_initialLocalChapter);
     final rawDirectory = (resolvedDirectory?.trim().isNotEmpty ?? false)
@@ -317,8 +336,10 @@ class MangaReaderController extends ChangeNotifier {
   }
 
   Future<void> openChapter(MangaChapter value) async {
+    if (_disposed) return;
     if (value.id == _chapter.id && value.url == _chapter.url) return;
     await flushProgress();
+    if (_disposed) return;
     _chapter = value;
     _pageIndex = 0;
     await load();
@@ -338,10 +359,32 @@ class MangaReaderController extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _progressTimer?.cancel();
     _preloadedChapterPages.clear();
     _preloadingChapterIds.clear();
-    unawaited(flushProgress());
+    _closing = Future.wait<void>([..._cacheOperations, flushProgress()]);
+    // Widgets dispose synchronously; close() still exposes a flush failure to
+    // callers that explicitly await shutdown.
+    _closing!.ignore();
     super.dispose();
+  }
+
+  /// Stops loading/preloading and drains accepted cache I/O and the final
+  /// progress flush. Closing never waits for an extension page request.
+  Future<void> close() {
+    dispose();
+    return _closing!;
+  }
+
+  Future<T> _trackCacheOperation<T>(Future<T> operation) {
+    final settled = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    _cacheOperations.add(settled);
+    unawaited(settled.whenComplete(() => _cacheOperations.remove(settled)));
+    return operation;
   }
 }

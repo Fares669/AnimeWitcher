@@ -94,11 +94,15 @@ void main() {
           flush: true,
         );
         coordinator.handleUpdate(
-          TaskStatusUpdate(first, TaskStatus.complete),
+          TaskStatusUpdate(first, TaskStatus.complete).copyWith(
+            responseStatusCode: 206,
+            responseHeaders: <String, String>{
+              'content-range': 'bytes 0-524287/${4 * mib}',
+            },
+          ),
         );
         await waitUntil(
-          () => records[parent.taskId]?.progress != null &&
-              File('${directory.path}/video.mp4.parts/manifest.json').existsSync(),
+          () => records[first.taskId]?.status == TaskStatus.complete,
         );
 
         await coordinator.pause(parent);

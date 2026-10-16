@@ -590,28 +590,21 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   Future<void> _cancelPageAndWaitForSettlement(
     DownloadTransportHandle handle,
   ) async {
-    bool settled() =>
-        handle.current.isFinal ||
-        handle.current.status == DownloadTransportStatus.missing;
-    if (settled()) return;
+    if (handle.isSettled) return;
 
-    final done = Completer<void>();
-    final subscription = handle.snapshots.listen((snapshot) {
-      if ((snapshot.isFinal ||
-              snapshot.status == DownloadTransportStatus.missing) &&
-          !done.isCompleted) {
-        done.complete();
-      }
-    });
+    final settlement = StreamIterator(handle.settlement());
+    final done = settlement.moveNext()..ignore();
     try {
       try {
         await handle.cancel();
       } catch (_) {
         // Rejection is not proof that the page writer has stopped.
       }
-      if (!settled()) await done.future;
+      if (!handle.isSettled && !await done) {
+        throw StateError('Manga page ${handle.taskId} closed before settling');
+      }
     } finally {
-      await subscription.cancel();
+      await settlement.cancel();
     }
   }
 
@@ -698,19 +691,10 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
   }
 
   Future<bool> _cancelPageWithSettlement(DownloadTransportHandle handle) async {
-    bool settled() =>
-        handle.current.isFinal ||
-        handle.current.status == DownloadTransportStatus.missing;
-    if (settled()) return true;
+    if (handle.isSettled) return true;
 
-    final stopped = Completer<void>();
-    final subscription = handle.snapshots.listen((snapshot) {
-      if ((snapshot.isFinal ||
-              snapshot.status == DownloadTransportStatus.missing) &&
-          !stopped.isCompleted) {
-        stopped.complete();
-      }
-    });
+    final settlement = StreamIterator(handle.settlement());
+    final stopped = settlement.moveNext()..ignore();
     try {
       bool accepted;
       try {
@@ -719,15 +703,14 @@ final class _MangaChapterTransportHandle implements MangaChapterTransportHandleV
         return false;
       }
       if (!accepted) return false;
-      if (settled()) return true;
+      if (handle.isSettled) return true;
       try {
-        await stopped.future.timeout(const Duration(seconds: 10));
-        return true;
+        return await stopped.timeout(const Duration(seconds: 10));
       } on TimeoutException {
         return false;
       }
     } finally {
-      await subscription.cancel();
+      await settlement.cancel();
     }
   }
 

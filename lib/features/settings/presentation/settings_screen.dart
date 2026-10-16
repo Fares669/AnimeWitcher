@@ -5,7 +5,6 @@ import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 
 import 'widgets/download_log_dialog.dart';
 
-import 'package:animewitcher/shared/widgets/apple_liquid_glass.dart';
 import 'package:animewitcher/shared/widgets/app_page_header.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -63,7 +62,6 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final profile = ref.watch(deviceProfileProvider).asData?.value;
     final isTv = profile?.isTv == true || context.isTv;
-    final isWidescreen = isTv || context.isTabletOrLarger;
     final canPop = Navigator.of(context).canPop();
     final l10n = AppLocalizations.of(context)!;
     return Scaffold(

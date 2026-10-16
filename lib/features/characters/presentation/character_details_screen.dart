@@ -15,7 +15,6 @@ import '../../../core/extensions/providers/animewitcher_native_provider.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/utils/artwork_quality.dart';
 import '../../../core/utils/responsive_breakpoints.dart';
-import '../../../core/utils/window_controls_inset.dart';
 import '../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../shared/widgets/app_page_header.dart';
 import '../../../shared/widgets/loading_indicator.dart';

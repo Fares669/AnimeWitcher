@@ -28,10 +28,16 @@ void main() {
         launcher,
         downloads,
         progressDialog,
-        completed,
       ]) {
         expect(source, contains('downloadManagerV2Provider'));
       }
+
+      // Completed playback uses the same V2 durable and integrity authorities
+      // without waiting for transport recovery to publish its first snapshot.
+      expect(completed, contains('logicalDownloadStoreV2Provider'));
+      expect(completed, contains('downloadIntegrityVerifierV2Provider'));
+      expect(completed, contains('verifier.verify('));
+      expect(completed, isNot(contains('manager.records.first')));
 
       expect(
         provider,

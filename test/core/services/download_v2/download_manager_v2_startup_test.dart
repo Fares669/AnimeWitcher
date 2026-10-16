@@ -619,7 +619,7 @@ Future<_StartupFixture> _startupFixture({
     sourceResolver: resolver,
     maxConcurrentDownloads: maxConcurrentDownloads == null
         ? null
-        : () => maxConcurrentDownloads!,
+        : () => maxConcurrentDownloads,
   );
   return _StartupFixture(
     logicalId: logicalId,

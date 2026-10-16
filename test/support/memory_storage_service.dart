@@ -1,3 +1,4 @@
+import 'package:animewitcher/core/storage/download_persistence_worker.dart';
 import 'package:animewitcher/core/services/download_concurrency.dart';
 import 'package:animewitcher/core/services/download_parallel.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
@@ -5,6 +6,8 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 /// In-memory settings box for download-queue tests. Only settings getters
 /// used by Settings / DownloadService wiring are implemented.
 class MemoryStorageService extends StorageService {
+  MemoryStorageService({DownloadPersistenceWorker? downloadPersistenceWorker})
+    : super(downloadPersistenceWorker: downloadPersistenceWorker);
   final Map<String, dynamic> settings = <String, dynamic>{};
 
   @override
