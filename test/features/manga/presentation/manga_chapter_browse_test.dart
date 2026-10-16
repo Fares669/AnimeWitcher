@@ -98,7 +98,7 @@ void main() {
     ) async {
       await tester.pumpWidget(_app(await _readUpTo(0)));
 
-      expect(find.text('All chapters'), findsOneWidget);
+      expect(find.text('كل الفصول'), findsOneWidget);
       expect(find.text('Chapter 120'), findsOneWidget);
     });
 
@@ -109,10 +109,10 @@ void main() {
         find.byKey(const ValueKey<String>('manga-chapter-range-menu')),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Chapters 51–100').last);
+      await tester.tap(find.text('الفصول 51–100').last);
       await tester.pumpAndSettle();
 
-      expect(find.text('Chapters 51–100'), findsOneWidget);
+      expect(find.text('الفصول 51–100'), findsOneWidget);
       expect(find.text('Chapter 120'), findsNothing);
       expect(find.text('Chapter 100'), findsOneWidget);
     });
@@ -209,7 +209,7 @@ void main() {
         find.byKey(const ValueKey<String>('manga-chapter-row-c120')),
       );
       await tester.pumpAndSettle();
-      expect(find.text('1 selected'), findsOneWidget);
+      expect(find.text('تم تحديد 1'), findsOneWidget);
 
       final navigator = tester.state<NavigatorState>(find.byType(Navigator));
       navigator.push<void>(
@@ -221,7 +221,7 @@ void main() {
       navigator.pop();
       await tester.pumpAndSettle();
 
-      expect(find.text('1 selected'), findsNothing);
+      expect(find.text('تم تحديد 1'), findsNothing);
     });
 
     testWidgets('the current chapter is not tinted differently', (tester) async {

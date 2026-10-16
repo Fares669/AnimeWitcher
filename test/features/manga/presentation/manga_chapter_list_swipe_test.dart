@@ -159,20 +159,20 @@ void main() {
     await tester.longPress(find.text('Chapter 2'));
     await tester.pump();
 
-    expect(find.text('1 selected'), findsOneWidget);
-    expect(find.text('Read'), findsOneWidget);
-    expect(find.text('Unread'), findsOneWidget);
+    expect(find.text('تم تحديد 1'), findsOneWidget);
+    expect(find.text('تمت قراءته'), findsOneWidget);
+    expect(find.text('غير مقروء'), findsOneWidget);
 
     await tester.tap(find.text('Chapter 1'));
     await tester.pump();
-    expect(find.text('2 selected'), findsOneWidget);
+    expect(find.text('تم تحديد 2'), findsOneWidget);
 
-    await tester.tap(find.text('Read'));
+    await tester.tap(find.text('تمت قراءته'));
     await tester.pumpAndSettle();
 
     expect(repository.get('m1', 'c1')?.isRead, isTrue);
     expect(repository.get('m1', 'c2')?.isRead, isTrue);
-    expect(find.textContaining('selected'), findsNothing);
+    expect(find.textContaining('تم تحديد'), findsNothing);
   });
 
   testWidgets('idle chapter uses the same download icon as anime episodes', (
@@ -392,7 +392,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Chapters'), findsOneWidget);
+    expect(find.text('الفصول'), findsOneWidget);
     expect(find.byIcon(Icons.arrow_downward_rounded), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Chapter 2')).dy,
@@ -540,13 +540,13 @@ void main() {
 
     await tester.longPress(find.text('Chapter 1'));
     await tester.pump();
-    expect(find.text('1 selected'), findsOneWidget);
+    expect(find.text('تم تحديد 1'), findsOneWidget);
 
-    await tester.tap(find.text('Read'));
+    await tester.tap(find.text('تمت قراءته'));
     await tester.pump();
     await syncStarted.future;
 
-    expect(find.textContaining('selected'), findsNothing);
+    expect(find.textContaining('تم تحديد'), findsNothing);
     expect(repository.get('m1', 'c1')?.isRead, isTrue);
 
     releaseSync.complete();

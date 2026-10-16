@@ -48,17 +48,17 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Reading'), findsOneWidget);
-    expect(find.text('General'), findsOneWidget);
-    expect(find.text('Disable zoom out'), findsOneWidget);
-    expect(find.text('Double-tap zoom'), findsOneWidget);
+    expect(find.text('القراءة'), findsOneWidget);
+    expect(find.text('عام'), findsOneWidget);
+    expect(find.text('تعطيل التصغير'), findsOneWidget);
+    expect(find.text('تكبير بالنقر المزدوج'), findsOneWidget);
 
     final readingScrollable = find.descendant(
       of: find.byType(ListView).first,
       matching: find.byType(Scrollable),
     ).first;
 
-    await tester.tap(find.text('Disable zoom out'));
+    await tester.tap(find.text('تعطيل التصغير'));
     await tester.pump();
 
     final container = ProviderScope.containerOf(
@@ -70,38 +70,38 @@ void main() {
     );
 
     await tester.scrollUntilVisible(
-      find.text('Show page gaps'),
+      find.text('إظهار الفواصل بين الصفحات'),
       240,
       scrollable: readingScrollable,
     );
-    expect(find.text('Show page gaps'), findsOneWidget);
+    expect(find.text('إظهار الفواصل بين الصفحات'), findsOneWidget);
     await tester.scrollUntilVisible(
-      find.text('Auto scroll'),
+      find.text('التمرير التلقائي'),
       240,
       scrollable: readingScrollable,
     );
-    expect(find.text('Auto scroll'), findsOneWidget);
-    await tester.tap(find.text('Auto scroll'));
+    expect(find.text('التمرير التلقائي'), findsOneWidget);
+    await tester.tap(find.text('التمرير التلقائي'));
     await tester.pump();
     expect(autoScrollEnabled, isTrue);
     expect(autoScrollSpeed, 10);
 
-    await tester.tap(find.text('General'));
+    await tester.tap(find.text('عام'));
     await tester.pumpAndSettle();
-    expect(find.text('Background color'), findsOneWidget);
-    expect(find.text('Scale type'), findsOneWidget);
-    expect(find.text('Flash on page change'), findsOneWidget);
+    expect(find.text('لون الخلفية'), findsOneWidget);
+    expect(find.text('طريقة الملاءمة'), findsOneWidget);
+    expect(find.text('وميض عند تغيير الصفحة'), findsOneWidget);
 
     final generalScrollable = find.descendant(
       of: find.byType(ListView).hitTestable(),
       matching: find.byType(Scrollable),
     ).first;
     await tester.scrollUntilVisible(
-      find.text('All reader settings'),
+      find.text('كل إعدادات القارئ'),
       240,
       scrollable: generalScrollable,
     );
-    expect(find.text('All reader settings'), findsOneWidget);
+    expect(find.text('كل إعدادات القارئ'), findsOneWidget);
 
     expect(find.text('Filter'), findsNothing);
     expect(find.text('Invert colors'), findsNothing);
@@ -136,8 +136,8 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Navigate while zoomed'), findsOneWidget);
-    expect(find.text('Disable zoom out'), findsNothing);
-    expect(find.text('Auto scroll'), findsNothing);
+    expect(find.text('التنقل أثناء التكبير'), findsOneWidget);
+    expect(find.text('تعطيل التصغير'), findsNothing);
+    expect(find.text('التمرير التلقائي'), findsNothing);
   });
 }
