@@ -1,19 +1,25 @@
-import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
 import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:collection/collection.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
+
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../../../core/account/account_providers.dart';
-import '../../../../core/utils/download_time_remaining.dart' show DownloadProgressData;
+import '../../../../core/services/notification_service.dart';
+import '../../../../core/utils/download_time_remaining.dart'
+    show DownloadProgressData;
+import '../../../library/presentation/download_delete_confirmation.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
 import '../../../library/presentation/downloads_provider.dart';
 
@@ -346,7 +352,9 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
         ref.watch(playerControllerProvider.select((s) => s.activeEpisodeUrl)) ??
         ref.read(playerControllerProvider.notifier).currentEpisodeUrl;
     var episodes = widget.item.episodes ?? const <Episode>[];
-    final currentEpisode = episodes.firstWhereOrNull((e) => e.url == currentUrl);
+    final currentEpisode = episodes.firstWhereOrNull(
+      (e) => e.url == currentUrl,
+    );
     final isSeries =
         widget.item.contentType == MultimediaContentType.series ||
         widget.item.contentType == MultimediaContentType.anime;
@@ -360,9 +368,8 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
     episodes = episodesInDisplayOrder(
       episodes,
       ascending: ref.watch(
-        detailsControllerProvider(
-          widget.item.url,
-        ).select((state) => state.isAscending),
+        detailsControllerProvider(widget.item.url)
+            .select((state) => state.isAscending),
       ),
     );
     final historyRepo = ref.read(historyRepositoryProvider);
@@ -463,7 +470,8 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
                   ),
                   IconButton(
                     onPressed: widget.onClose,
-                    tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
+                    tooltip: MaterialLocalizations.of(context)
+                        .closeButtonTooltip,
                     visualDensity: VisualDensity.compact,
                     constraints: const BoxConstraints(
                       minWidth: 38,
@@ -518,6 +526,7 @@ class _EpisodeRow extends ConsumerStatefulWidget {
 class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
   bool _focused = false;
   bool _hovered = false;
+  bool _deletingDownload = false;
 
   @override
   void initState() {
@@ -546,9 +555,27 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     });
   }
 
+  Future<void> _deleteCompletedDownload(DownloadItem item) async {
+    if (_deletingDownload) return;
+    _deletingDownload = true;
+    try {
+      await confirmAndRemoveDownload(context, ref, item);
+      if (!mounted) return;
+      await ref
+          .read(downloadedFilesProvider.notifier)
+          .checkFile(widget.parentItem, episode: widget.episode);
+    } catch (error) {
+      if (mounted) {
+        showDownloadActionError(ref.read(notificationServiceProvider), error);
+      }
+    } finally {
+      _deletingDownload = false;
+    }
+  }
+
   Widget _buildDownloadAction(
     BuildContext context, {
-    required File? downloadedFile,
+    required bool isDownloaded,
     required bool isDownloading,
     required double downloadProgress,
     required DownloadProgressData? progressData,
@@ -557,11 +584,11 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     final isArabic =
         Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
-    if (downloadedFile != null && !isDownloading) {
+    if (isDownloaded && !isDownloading) {
       return EpisodeActionChip(
-        tooltip: isArabic ? 'تم التنزيل' : 'Downloaded',
-        icon: Icons.download_done_rounded,
-        color: const Color(0xFF4CAF50),
+        tooltip: isArabic ? 'حذف الحلقة' : 'Delete episode',
+        icon: Icons.delete_outline_rounded,
+        color: Theme.of(context).colorScheme.error,
         onPressed: onPressed,
       );
     }
@@ -610,6 +637,11 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     final ep = widget.episode;
     final downloads =
         ref.watch(downloadsProvider).value ?? const <DownloadItem>[];
+    final completedDownload = completedEpisodeDownload(
+      downloads,
+      widget.parentItem,
+      ep,
+    );
     final activeDownload = _activeEpisodeDownload(downloads, ep.url);
     final isDownloading = activeDownload != null;
     final progressMap = ref.watch(downloadProgressProvider);
@@ -621,12 +653,14 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
         progressData?.progress ?? activeDownload?.progress ?? 0.0;
     final downloadedFile = ref.watch(downloadedFilesProvider)[ep.url];
     ref.listen(downloadsProvider, (previous, next) {
-      final wasDownloading = _activeEpisodeDownload(
+      final wasDownloading =
+          _activeEpisodeDownload(
             previous?.value ?? const <DownloadItem>[],
             ep.url,
           ) !=
           null;
-      final isStillDownloading = _activeEpisodeDownload(
+      final isStillDownloading =
+          _activeEpisodeDownload(
             next.value ?? const <DownloadItem>[],
             ep.url,
           ) !=
@@ -637,7 +671,10 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     });
 
     void triggerDownload() {
-      if (downloadedFile != null && !isDownloading) {
+      if (_deletingDownload) return;
+      if (completedDownload != null && !isDownloading) {
+        unawaited(_deleteCompletedDownload(completedDownload));
+      } else if (downloadedFile != null && !isDownloading) {
         DownloadManagementDialog.show(
           context,
           widget.parentItem,
@@ -651,12 +688,14 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
           logicalId != null && logicalId.isNotEmpty ? logicalId : ep.url,
         );
       } else {
-        ref.read(downloadLauncherProvider).launch(
-          context,
-          widget.parentItem,
-          episodeUrl: ep.url,
-          episode: ep,
-        );
+        ref
+            .read(downloadLauncherProvider)
+            .launch(
+              context,
+              widget.parentItem,
+              episodeUrl: ep.url,
+              episode: ep,
+            );
       }
     }
 
@@ -784,7 +823,9 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
                       child: ExcludeFocus(
                         child: _buildDownloadAction(
                           context,
-                          downloadedFile: downloadedFile,
+                          isDownloaded:
+                              completedDownload != null ||
+                              downloadedFile != null,
                           isDownloading: isDownloading,
                           downloadProgress: downloadProgress,
                           progressData: progressData,

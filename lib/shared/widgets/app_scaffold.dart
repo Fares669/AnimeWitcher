@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:animewitcher/core/navigation/app_layout_style.dart';
+import 'package:animewitcher/core/navigation/home_tab_reselection.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
 import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/news/presentation/open_news.dart';
@@ -56,6 +57,10 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
   void _onItemTapped(int index, BuildContext context) {
     if (appleUsesPersistentLiquidGlassHeader) {
       applePersistentGlassHeaderController.setActiveBranch(index);
+    }
+    if (index == TaskbarDestination.home.branchIndex &&
+        index == widget.navigationShell.currentIndex) {
+      ref.read(homeTabReselectionProvider.notifier).reselect();
     }
     widget.navigationShell.goBranch(
       index,

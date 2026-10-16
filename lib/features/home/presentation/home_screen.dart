@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:animewitcher/shared/widgets/app_side_menu.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
+import 'package:animewitcher/core/navigation/home_tab_reselection.dart';
 
 import '../../settings/presentation/general_settings_provider.dart';
 
@@ -82,6 +83,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     with AutomaticKeepAliveClientMixin {
   final ScrollController _scrollController = ScrollController();
   final ValueNotifier<bool> _showBottomFade = ValueNotifier(false);
+  Future<void>? _refreshFuture;
 
   @override
   bool get wantKeepAlive => true;
@@ -126,6 +128,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     super.dispose();
   }
 
+  Future<void> _refresh() {
+    return _refreshFuture ??= Future.wait<void>([
+      ref.read(continueWatchingProvider.notifier).refreshFromServer(),
+      ref.read(homeDataProvider.notifier).fetch(keepCurrent: true),
+    ]).then<void>((_) {}).whenComplete(() => _refreshFuture = null);
+  }
+
+  void _onHomeTabReselected() {
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(_scrollController.position.minScrollExtent);
+    }
+    _refresh().ignore();
+  }
+
   void _openNewsArticle(NewsItem item) {
     openNewsUrl(item);
   }
@@ -154,6 +170,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    ref.listen(homeTabReselectionProvider, (_, _) => _onHomeTabReselected());
     final homeDataAsync = ref.watch(homeDataProvider);
     final continueWatching = ref.watch(continueWatchingProvider);
     final profile = ref.watch(deviceProfileProvider).asData?.value;
@@ -289,7 +306,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
     if (entries.isEmpty) sections.addAll(_malRankingRails(context));
 
-
     return sections;
   }
 
@@ -389,12 +405,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       HomeSuccess(:final data, news: final homeNews, :final latestManga) =>
         _withGradientEdgeHint(
           MouseDragRefreshIndicator(
-            onRefresh: () async {
-              await Future.wait<void>([
-                ref.read(continueWatchingProvider.notifier).refreshFromServer(),
-                ref.read(homeDataProvider.notifier).fetch(keepCurrent: true),
-              ]);
-            },
+            onRefresh: _refresh,
             child: CustomScrollView(
               controller: _scrollController,
               slivers: [
