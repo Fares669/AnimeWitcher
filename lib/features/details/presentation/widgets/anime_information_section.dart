@@ -86,9 +86,8 @@ class AnimeInformationSection extends StatelessWidget {
     }
     if (minutes == null || minutes <= 0) minutes = item.duration;
     if (minutes == null || minutes <= 0) return null;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    return isArabic ? '$minutes دقيقة' : '$minutes minutes';
+
+    return '$minutes دقيقة';
   }
 
   void _openStudioResults(BuildContext context, String studio) {
@@ -123,8 +122,6 @@ class AnimeInformationSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final data = item.syncData ?? const <String, String>{};
     final colors = Theme.of(context).colorScheme;
 
@@ -137,7 +134,7 @@ class AnimeInformationSection extends StatelessWidget {
       final cleaned = cleanAnimeInfoValue(value);
       if (cleaned == null) return null;
       return _AnimeInfoEntry(
-        label: isArabic ? ar : en,
+        label: ar,
         value: cleaned,
         showFullValue: showFullValue,
       );
@@ -155,18 +152,12 @@ class AnimeInformationSection extends StatelessWidget {
       entry('المصدر', 'Source', source),
       entry('مدة الحلقة', 'Episode duration', _durationLabel(context, data)),
       if (startDate != null || endDate != null) ...[
-        _AnimeInfoEntry(
-          label: isArabic ? 'بداية العرض' : 'Start date',
-          value: startDate ?? '?',
-        ),
-        _AnimeInfoEntry(
-          label: isArabic ? 'نهاية العرض' : 'End date',
-          value: endDate ?? '?',
-        ),
+        _AnimeInfoEntry(label: 'بداية العرض', value: startDate ?? '?'),
+        _AnimeInfoEntry(label: 'نهاية العرض', value: endDate ?? '?'),
       ],
       if (studios.isNotEmpty)
         _AnimeInfoEntry(
-          label: isArabic ? 'الاستديو' : 'Studio',
+          label: 'الاستديو',
           value: studios.join(', '),
           actionValues: studios,
           onValueTap: (studio) => _openStudioResults(context, studio),

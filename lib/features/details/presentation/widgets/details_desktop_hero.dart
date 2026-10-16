@@ -481,10 +481,13 @@ class DetailsDesktopHero extends ConsumerWidget {
     );
   }
 
-  /// The name and its details, with the poster beside them at the start
-  /// edge when [showPoster] asks for it, their bottoms lined up.
+  /// Keep the poster physically left and the title/metadata LTR without
+  /// changing the reading direction of the page's actions or synopsis.
   Widget _withPoster(BuildContext context, String? posterUrl, Widget title) {
-    if (!showPoster) return title;
+    final info = Directionality(textDirection: TextDirection.ltr, child: title);
+    if (!showPoster) {
+      return Align(alignment: Alignment.centerLeft, child: info);
+    }
     final colors = Theme.of(context).colorScheme;
     final size = MediaQuery.sizeOf(context);
     final isPortraitPhone = compact && size.height > size.width;
@@ -529,16 +532,14 @@ class DetailsDesktopHero extends ConsumerWidget {
       ),
     );
     return Row(
+      textDirection: TextDirection.ltr,
       crossAxisAlignment: isPortraitPhone
           ? CrossAxisAlignment.center
           : CrossAxisAlignment.end,
       children: [
         poster,
         SizedBox(width: compact ? 14 : 28),
-        Expanded(
-          key: const ValueKey<String>('details-hero-info'),
-          child: title,
-        ),
+        Expanded(key: const ValueKey<String>('details-hero-info'), child: info),
       ],
     );
   }

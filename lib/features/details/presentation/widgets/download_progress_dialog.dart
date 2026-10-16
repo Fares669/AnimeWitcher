@@ -15,6 +15,7 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 
 class DownloadProgressDialog extends ConsumerStatefulWidget {
   final String title;
+
   /// Logical download identity, with tracking URL compatibility for old rows.
   final String trackingUrl;
 
@@ -93,7 +94,8 @@ class _DownloadProgressDialogState
     setState(() => _commandInFlight = true);
     try {
       final notifier = ref.read(downloadsProvider.notifier);
-      if (data.status == TaskStatus.failed || data.status == TaskStatus.notFound) {
+      if (data.status == TaskStatus.failed ||
+          data.status == TaskStatus.notFound) {
         await notifier.retryDownload(data.taskId);
       } else if (data.status == TaskStatus.paused) {
         await notifier.resumeDownload(data.taskId);
@@ -113,7 +115,7 @@ class _DownloadProgressDialogState
     if (message.startsWith(stateErrorPrefix)) {
       message = message.substring(stateErrorPrefix.length).trim();
     }
-    if (message.isEmpty) message = 'Unable to control download';
+    if (message.isEmpty) message = 'تعذر التحكم في التنزيل';
     ref.read(notificationServiceProvider).showError(message);
   }
 
@@ -147,7 +149,9 @@ class _DownloadProgressDialogState
                 Text(
                   switch (data.status) {
                     TaskStatus.failed || TaskStatus.notFound => appText(
-                      context, english: 'Download failed', arabic: 'فشل التنزيل',
+                      context,
+                      english: 'Download failed',
+                      arabic: 'فشل التنزيل',
                     ),
                     TaskStatus.paused => l10n.downloadPaused,
                     TaskStatus.complete => l10n.statusFinished,
@@ -201,13 +205,17 @@ class _DownloadProgressDialogState
                           ? formatDownloadPageCount(
                               completedPages: data.completedPages,
                               totalPages: data.totalPages,
-                              pageLabel: appText(context, english: 'pages', arabic: 'صفحة'),
+                              pageLabel: appText(
+                                context,
+                                english: 'pages',
+                                arabic: 'صفحة',
+                              ),
                             )
                           : formatDownloadSizePair(
-                        totalBytes: data.totalSize,
-                        progress: data.progress,
-                        fractionDigits: 2,
-                      ),
+                              totalBytes: data.totalSize,
+                              progress: data.progress,
+                              fractionDigits: 2,
+                            ),
                       textDirection: TextDirection.ltr,
                     ),
                   ],
@@ -228,10 +236,7 @@ class _DownloadProgressDialogState
                       Icons.timer_outlined,
                       l10n.remaining,
                       formatDownloadTimeRemaining(data, l10n),
-                      valueTextDirection:
-                          Localizations.localeOf(context).languageCode == 'ar'
-                          ? TextDirection.rtl
-                          : TextDirection.ltr,
+                      valueTextDirection: TextDirection.rtl,
                     ),
                   ],
                 ),
@@ -242,7 +247,9 @@ class _DownloadProgressDialogState
                     if (data.status != TaskStatus.complete &&
                         data.status != TaskStatus.canceled) ...[
                       TextButton(
-                        onPressed: _commandInFlight ? null : () => _cancelDownload(data),
+                        onPressed: _commandInFlight
+                            ? null
+                            : () => _cancelDownload(data),
                         style: TextButton.styleFrom(
                           foregroundColor: theme.colorScheme.error,
                         ),
@@ -250,14 +257,15 @@ class _DownloadProgressDialogState
                       ),
                       const SizedBox(width: 8),
                       TextButton(
-                        onPressed: _commandInFlight ? null : () => _togglePause(data),
-                        child: Text(
-                          switch (data.status) {
-                            TaskStatus.failed || TaskStatus.notFound => l10n.retry,
-                            TaskStatus.paused => l10n.resume,
-                            _ => l10n.pause,
-                          },
-                        ),
+                        onPressed: _commandInFlight
+                            ? null
+                            : () => _togglePause(data),
+                        child: Text(switch (data.status) {
+                          TaskStatus.failed ||
+                          TaskStatus.notFound => l10n.retry,
+                          TaskStatus.paused => l10n.resume,
+                          _ => l10n.pause,
+                        }),
                       ),
                       const SizedBox(width: 8),
                     ],
@@ -291,10 +299,7 @@ class _DownloadProgressDialogState
             const SizedBox(width: 4),
             Text(
               label,
-              textDirection:
-                  Localizations.localeOf(context).languageCode == 'ar'
-                  ? TextDirection.rtl
-                  : TextDirection.ltr,
+              textDirection: TextDirection.rtl,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
