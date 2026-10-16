@@ -486,7 +486,7 @@ void main() {
     expect(scroll.scrollDirection, Axis.vertical);
   });
 
-  testWidgets('reader chrome uses double-tap and long-press gestures', (
+  testWidgets('reader reserves holds, doubles and right-click actions', (
     tester,
   ) async {
     final provider = _ReaderProvider(emptyPages: true);
@@ -531,6 +531,7 @@ void main() {
     );
     expect(actionsGesture, findsOneWidget);
     final gesture = tester.widget<GestureDetector>(actionsGesture);
+    expect(gesture.onTapUp, isNotNull);
     expect(gesture.onDoubleTap, isNotNull);
     expect(gesture.onLongPress, isNotNull);
     expect(gesture.onSecondaryTap, isNotNull);

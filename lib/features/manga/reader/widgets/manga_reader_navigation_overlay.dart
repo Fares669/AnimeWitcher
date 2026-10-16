@@ -146,6 +146,7 @@ class MangaReaderNavigationOverlay extends StatelessWidget {
   Widget _rightAndLeft() => Row(
     children: <Widget>[
       Expanded(child: _zone(_left.$1, _left.$2)),
+      Expanded(child: _zone(_menuColor, 'MENU')),
       Expanded(child: _zone(_right.$1, _right.$2)),
     ],
   );

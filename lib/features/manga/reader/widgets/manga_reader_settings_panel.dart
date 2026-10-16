@@ -638,16 +638,6 @@ class _MangaReaderSettingsPanelState extends State<MangaReaderSettingsPanel> {
             onChanged: (value) =>
                 _update((s) => s.copyWith(keepScreenOn: value)),
           ),
-          _check(
-            keyName: 'long-tap-actions',
-            label: _t(
-              'Show actions on long tap',
-              'إظهار الإجراءات عند الضغط المطول',
-            ),
-            value: settings.showActionsOnLongTap,
-            onChanged: (value) =>
-                _update((s) => s.copyWith(showActionsOnLongTap: value)),
-          ),
         ],
         _check(
           keyName: 'show-mode',
