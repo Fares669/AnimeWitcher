@@ -59,7 +59,6 @@ DownloadItem? _activeEpisodeDownload(
 String _playerEpisodeDownloadTitle(MultimediaItem item, Episode episode) {
   final label = formatEpisodeLabel(
     episode: episode.episode,
-    isArabic: true,
     title: episode.name,
     isFinal: episode.isFinal,
     serverName: episode.serverName,
@@ -345,9 +344,8 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
     });
 
     final l10n = AppLocalizations.of(context)!;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final panelDirection = isArabic ? TextDirection.rtl : TextDirection.ltr;
+
+    final panelDirection = TextDirection.rtl;
     final currentUrl =
         ref.watch(playerControllerProvider.select((s) => s.activeEpisodeUrl)) ??
         ref.read(playerControllerProvider.notifier).currentEpisodeUrl;
@@ -440,9 +438,7 @@ class _PlayerEpisodesPanelState extends ConsumerState<PlayerEpisodesPanel> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: isArabic
-                ? const EdgeInsets.fromLTRB(4, 12, 20, 12)
-                : const EdgeInsets.fromLTRB(20, 12, 4, 12),
+            padding: const EdgeInsets.fromLTRB(4, 12, 20, 12),
             child: Directionality(
               textDirection: panelDirection,
               child: Row(
@@ -581,12 +577,9 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     required DownloadProgressData? progressData,
     required VoidCallback onPressed,
   }) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
     if (isDownloaded && !isDownloading) {
       return EpisodeActionChip(
-        tooltip: isArabic ? 'حذف الحلقة' : 'Delete episode',
+        tooltip: 'حذف الحلقة',
         icon: Icons.delete_outline_rounded,
         color: Theme.of(context).colorScheme.error,
         onPressed: onPressed,
@@ -595,7 +588,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
 
     if (isDownloading) {
       return EpisodeActionChip(
-        tooltip: isArabic ? 'جارٍ التنزيل' : 'Downloading',
+        tooltip: 'جارٍ التنزيل',
         onPressed: onPressed,
         child: Padding(
           padding: const EdgeInsets.all(4),
@@ -626,7 +619,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     }
 
     return EpisodeActionChip(
-      tooltip: isArabic ? 'تنزيل الحلقة' : 'Download episode',
+      tooltip: 'تنزيل الحلقة',
       icon: Icons.save_alt_rounded,
       onPressed: onPressed,
     );
@@ -702,9 +695,8 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     final showHighlight = _focused || _hovered;
     final ring = _focused && widget.isTv;
     final accent = Theme.of(context).colorScheme.primary;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final rowDirection = isArabic ? TextDirection.rtl : TextDirection.ltr;
+
+    final rowDirection = TextDirection.rtl;
     return Semantics(
       button: true,
       selected: widget.isCurrent,
@@ -764,7 +756,6 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
                                 child: Text(
                                   formatEpisodePrimaryLabel(
                                     episode: ep.episode,
-                                    isArabic: isArabic,
                                     isFinal: ep.isFinal,
                                     serverName: ep.serverName,
                                   ),
@@ -849,7 +840,6 @@ class _FillerBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -857,7 +847,7 @@ class _FillerBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        isArabic ? 'فلر' : 'FILLER',
+        'فلر',
         style: const TextStyle(
           color: Colors.white,
           fontSize: 9,
@@ -1068,10 +1058,8 @@ class _EmptyHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     return Directionality(
-      textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+      textDirection: TextDirection.rtl,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
         child: Text(
@@ -1125,10 +1113,8 @@ class _PanelSubheader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     return Directionality(
-      textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+      textDirection: TextDirection.rtl,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
         child: Text(

@@ -23,8 +23,7 @@ class AccountAvatarButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = Theme.of(context).colorScheme;
-    final arabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final profile = ref
         .watch(animeWitcherAccountControllerProvider)
         .asData
@@ -55,12 +54,10 @@ class AccountAvatarButton extends ConsumerWidget {
           );
 
     return Tooltip(
-      message: signedIn
-          ? (name.isEmpty ? (arabic ? 'الحساب' : 'Account') : name)
-          : (arabic ? 'تسجيل الدخول' : 'Sign in'),
+      message: signedIn ? (name.isEmpty ? 'الحساب' : name) : 'تسجيل الدخول',
       child: Semantics(
         button: true,
-        label: arabic ? 'الحساب' : 'Account',
+        label: 'الحساب',
         child: Material(
           key: const ValueKey<String>('account-avatar-button'),
           color: signedIn && photo.isEmpty

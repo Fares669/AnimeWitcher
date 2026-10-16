@@ -15,8 +15,8 @@ class DownloadLogDialog extends ConsumerStatefulWidget {
 class _DownloadLogDialogState extends ConsumerState<DownloadLogDialog> {
   bool _busy = false;
   String? _error;
-  bool get _ar => Localizations.localeOf(context).languageCode == 'ar';
-  String text(String ar, String en) => _ar ? ar : en;
+
+  String text(String ar, String en) => ar;
 
   Future<void> run(Future<void> Function() action) async {
     setState(() {
