@@ -1,4 +1,5 @@
 import 'more_sidebar_shell.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -18,12 +19,11 @@ import '../../../shared/widgets/catalog_direction.dart';
 import '../../../shared/widgets/multimedia_card.dart';
 import '../../../core/router/app_router.dart';
 
-typedef _RankingPageLoader =
-    Future<ProviderMediaPage> Function(
-      AnimeWitcherGlobalRanking ranking, {
-      required int offset,
-      required int limit,
-    });
+typedef _RankingPageLoader = Future<ProviderMediaPage> Function(
+  AnimeWitcherGlobalRanking ranking, {
+  required int offset,
+  required int limit,
+});
 
 class GlobalStatisticsScreen extends ConsumerStatefulWidget {
   const GlobalStatisticsScreen({super.key});
@@ -75,55 +75,51 @@ class _GlobalStatisticsScreenState extends ConsumerState<GlobalStatisticsScreen>
     return provider.getGlobalRankingPage(ranking, offset: offset, limit: limit);
   }
 
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   @override
   Widget build(BuildContext context) {
     final accountRevision = ref.watch(accountDataRevisionProvider);
-    final isArabic = _isArabic(context);
+
     final embedded = MorePaneScope.of(context);
     final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: isArabic ? 'الإحصائيات العالمية' : 'Global statistics',
+        title: 'الإحصائيات العالمية',
         canPop: !embedded && Navigator.of(context).canPop(),
         onBack: () => Navigator.of(context).pop(),
       ),
       body: Padding(
         padding: EdgeInsets.only(top: headerTop),
         child: Column(
-        children: [
-          _RankingTabs(controller: _tabController, isArabic: isArabic),
-          Expanded(
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                for (
-                  var index = 0;
-                  index < AnimeWitcherGlobalRanking.values.length;
-                  index++
-                )
-                  LazyTabChild(
-                    controller: _tabController,
-                    index: index,
-                    builder: (context) {
-                      final ranking = AnimeWitcherGlobalRanking.values[index];
-                      return _RankingPage(
-                        key: ValueKey<String>(
-                          'global-ranking-page-${ranking.queryType}-$accountRevision',
-                        ),
-                        ranking: ranking,
-                        isArabic: isArabic,
-                        loadPage: _loadPage,
-                      );
-                    },
-                  ),
-              ],
+          children: [
+            _RankingTabs(controller: _tabController),
+            Expanded(
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  for (
+                    var index = 0;
+                    index < AnimeWitcherGlobalRanking.values.length;
+                    index++
+                  )
+                    LazyTabChild(
+                      controller: _tabController,
+                      index: index,
+                      builder: (context) {
+                        final ranking = AnimeWitcherGlobalRanking.values[index];
+                        return _RankingPage(
+                          key: ValueKey<String>(
+                            'global-ranking-page-${ranking.queryType}-$accountRevision',
+                          ),
+                          ranking: ranking,
+                          loadPage: _loadPage,
+                        );
+                      },
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
         ),
       ),
     );
@@ -134,12 +130,11 @@ class _RankingPage extends StatefulWidget {
   const _RankingPage({
     super.key,
     required this.ranking,
-    required this.isArabic,
     required this.loadPage,
   });
 
   final AnimeWitcherGlobalRanking ranking;
-  final bool isArabic;
+
   final _RankingPageLoader loadPage;
 
   @override
@@ -290,7 +285,7 @@ class _RankingPageState extends State<_RankingPage>
       return const AnimeCatalogShimmer();
     }
     if (_initialError != null && _items.isEmpty) {
-      return _RankingError(isArabic: widget.isArabic, onRetry: _loadInitial);
+      return _RankingError(onRetry: _loadInitial);
     }
     if (_items.isEmpty) {
       return MouseDragRefreshIndicator(
@@ -300,13 +295,7 @@ class _RankingPageState extends State<_RankingPage>
           children: [
             SizedBox(
               height: MediaQuery.sizeOf(context).height * 0.55,
-              child: Center(
-                child: Text(
-                  widget.isArabic
-                      ? 'لا توجد نتائج في هذا التصنيف حاليًا'
-                      : 'No results in this ranking right now',
-                ),
-              ),
+              child: Center(child: Text('لا توجد نتائج في هذا التصنيف حاليًا')),
             ),
           ],
         ),
@@ -317,7 +306,6 @@ class _RankingPageState extends State<_RankingPage>
       controller: _scrollController,
       items: _items,
       ranking: widget.ranking,
-      isArabic: widget.isArabic,
       loadingMore: _loadingMore,
       loadMoreError: _loadMoreError != null,
       onLoadMoreRetry: _loadMore,
@@ -327,10 +315,9 @@ class _RankingPageState extends State<_RankingPage>
 }
 
 class _RankingTabs extends StatelessWidget {
-  const _RankingTabs({required this.controller, required this.isArabic});
+  const _RankingTabs({required this.controller});
 
   final TabController controller;
-  final bool isArabic;
 
   @override
   Widget build(BuildContext context) {
@@ -339,9 +326,7 @@ class _RankingTabs extends StatelessWidget {
       controller: controller,
       tabs: [
         for (final ranking in rankings)
-          FilterStyleTab(
-            label: isArabic ? ranking.arabicTitle : ranking.englishTitle,
-          ),
+          FilterStyleTab(label: ranking.arabicTitle),
       ],
     );
   }
@@ -352,7 +337,6 @@ class _RankingGrid extends StatelessWidget {
     required this.controller,
     required this.items,
     required this.ranking,
-    required this.isArabic,
     required this.loadingMore,
     required this.loadMoreError,
     required this.onLoadMoreRetry,
@@ -362,7 +346,7 @@ class _RankingGrid extends StatelessWidget {
   final ScrollController controller;
   final List<MultimediaItem> items;
   final AnimeWitcherGlobalRanking ranking;
-  final bool isArabic;
+
   final bool loadingMore;
   final bool loadMoreError;
   final Future<void> Function() onLoadMoreRetry;
@@ -413,7 +397,7 @@ class _RankingGrid extends StatelessWidget {
                 child: TextButton.icon(
                   onPressed: () => onLoadMoreRetry(),
                   icon: const Icon(Icons.refresh_rounded),
-                  label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+                  label: Text('إعادة المحاولة'),
                 ),
               );
             }
@@ -422,9 +406,9 @@ class _RankingGrid extends StatelessWidget {
               key: ValueKey('${ranking.queryType}-${item.url}'),
               item: item,
               heroTag: 'global-ranking-${ranking.queryType}-${item.id}-$index',
-              onTap: () => DetailsRoute(
-                $extra: DetailsRouteExtra(item: item),
-              ).push<void>(context),
+              onTap: () =>
+                  DetailsRoute($extra: DetailsRouteExtra(item: item))
+                      .push<void>(context),
             );
           },
         ),
@@ -434,9 +418,8 @@ class _RankingGrid extends StatelessWidget {
 }
 
 class _RankingError extends StatelessWidget {
-  const _RankingError({required this.isArabic, required this.onRetry});
+  const _RankingError({required this.onRetry});
 
-  final bool isArabic;
   final Future<void> Function() onRetry;
 
   @override
@@ -449,17 +432,12 @@ class _RankingError extends StatelessWidget {
           children: [
             const Icon(Icons.cloud_off_rounded, size: 42),
             const SizedBox(height: 12),
-            Text(
-              isArabic
-                  ? 'تعذر تحميل هذا التصنيف'
-                  : 'Could not load this ranking',
-              textAlign: TextAlign.center,
-            ),
+            Text('تعذر تحميل هذا التصنيف', textAlign: TextAlign.center),
             const SizedBox(height: 12),
             FilledButton.tonalIcon(
               onPressed: () => onRetry(),
               icon: const Icon(Icons.refresh_rounded),
-              label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+              label: Text('إعادة المحاولة'),
             ),
           ],
         ),
@@ -467,4 +445,3 @@ class _RankingError extends StatelessWidget {
     );
   }
 }
-

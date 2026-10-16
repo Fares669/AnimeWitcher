@@ -1,4 +1,5 @@
 import 'more_sidebar_shell.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -39,9 +40,6 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     _controller.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadNext());
   }
-
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
   AnimeWitcherNativeProvider? _resolveProvider() {
     final active = ref.read(activeProviderProvider);
@@ -122,21 +120,21 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
       if (previous == next) return;
       unawaited(_refresh());
     });
-    final isArabic = _isArabic(context);
+
     final embedded = MorePaneScope.of(context);
     final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: isArabic ? 'القادم قريبًا' : 'Coming soon',
+        title: 'القادم قريبًا',
         canPop: !embedded && Navigator.of(context).canPop(),
         onBack: () => Navigator.of(context).pop(),
       ),
-      body: _buildBody(isArabic, headerTop),
+      body: _buildBody(headerTop),
     );
   }
 
-  Widget _buildBody(bool isArabic, double headerTop) {
+  Widget _buildBody(double headerTop) {
     if (_items.isEmpty && _loading) {
       return const AnimeCatalogShimmer();
     }
@@ -144,9 +142,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
       return Padding(
         padding: EdgeInsets.only(top: headerTop),
         child: _LoadError(
-        message: isArabic
-            ? 'تعذر تحميل الأعمال القادمة'
-            : 'Could not load upcoming titles',
+          message: 'تعذر تحميل الأعمال القادمة',
           onRetry: _refresh,
         ),
       );
@@ -154,11 +150,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
     if (_items.isEmpty) {
       return Padding(
         padding: EdgeInsets.only(top: headerTop),
-        child: Center(
-          child: Text(
-            isArabic ? 'لا توجد أعمال قادمة حاليًا' : 'No upcoming titles',
-          ),
-        ),
+        child: Center(child: Text('لا توجد أعمال قادمة حاليًا')),
       );
     }
 
@@ -199,7 +191,7 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
             if (index >= _items.length) {
               if (_error != null) {
                 return IconButton(
-                  tooltip: isArabic ? 'إعادة المحاولة' : 'Retry',
+                  tooltip: 'إعادة المحاولة',
                   onPressed: _loadNext,
                   icon: const Icon(Icons.refresh_rounded),
                 );
@@ -211,9 +203,9 @@ class _ComingSoonScreenState extends ConsumerState<ComingSoonScreen> {
               key: ValueKey('coming-${item.url}'),
               item: item,
               heroTag: 'coming-${item.id}-$index',
-              onTap: () => DetailsRoute(
-                $extra: DetailsRouteExtra(item: item),
-              ).push<void>(context),
+              onTap: () =>
+                  DetailsRoute($extra: DetailsRouteExtra(item: item))
+                      .push<void>(context),
             );
           },
         ),
@@ -251,5 +243,3 @@ class _LoadError extends StatelessWidget {
     );
   }
 }
-
-
