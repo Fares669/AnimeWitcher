@@ -6,9 +6,51 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = (ROOT / "ios/Runner/DownloadContinuedProcessingManager.swift").read_text()
+QUEUE = (ROOT / "ios/Runner/DownloadNativeWaitingQueue.swift").read_text()
 
 
 class ContinuedProcessingDiagnosticsTests(unittest.TestCase):
+    def test_supported_progress_is_recorded_before_multipart_early_return(self):
+        start = QUEUE.index("private static func handleSupportedPluginProgress(")
+        end = QUEUE.index("\n  static func handleBytesWritten(", start)
+        callback = QUEUE[start:end]
+        self.assertIn("DownloadNativeDiagnosticLog.recordPluginProgress(", callback)
+        journal = callback.index("DownloadNativeDiagnosticLog.recordPluginProgress(")
+        self.assertLess(journal, callback.index("if postV2ParallelChunkMetric("))
+        for field in ("parentTaskId(fromPluginTask: task)", "attemptGeneration(fromPluginTask: task)",
+                      "progress: normalized", "inForeground: isAppInForeground()"):
+            self.assertIn(field, callback[:callback.index("if postV2ParallelChunkMetric(")])
+
+    def test_progress_throttle_is_per_child_attempt_bounded_and_does_not_fsync(self):
+        self.assertIn("static func recordPluginProgress(", QUEUE)
+        start = QUEUE.index("static func recordPluginProgress(")
+        end = QUEUE.index("static func recordSessionConfiguration(", start)
+        progress = QUEUE[start:end]
+        self.assertIn("taskId", progress)
+        self.assertIn("attemptGeneration", progress)
+        self.assertNotIn("progressOwnerKey", progress)
+        self.assertTrue("now - previous < 5.0" in progress, "Progress diagnostics need a five-second cadence")
+        self.assertTrue("progress < 1" in progress, "Final plugin progress must bypass throttling")
+        self.assertIn("lastProgress.count > 256", progress)
+        self.assertIn('recordLocked("progress.plugin"', progress)
+        self.assertIn('event != "progress" && event != "progress.plugin"', QUEUE)
+        status = QUEUE[QUEUE.index("private static func handleSupportedPluginStatus("):QUEUE.index("private static func handleSupportedPluginProgress(")]
+        self.assertIn("DownloadNativeDiagnosticLog.clearPluginProgress(", status)
+        self.assertIn("attemptGeneration: attemptGeneration(fromPluginTask: task)", status)
+
+    def test_scene_and_actual_configuration_are_observed_without_transport_changes(self):
+        refresh = QUEUE[QUEUE.index("private static func refreshForegroundState("):QUEUE.index("/// Scene visibility")]
+        self.assertIn('record("application.visibility"', refresh)
+        remember = QUEUE[QUEUE.index("private static func rememberDownloadSession("):QUEUE.index("static func acceptsDartOverlayUpdates(")]
+        self.assertIn("DownloadNativeDiagnosticLog.recordSessionConfiguration(session)", remember)
+        logger = QUEUE[:QUEUE.index("import ObjectiveC")]
+        self.assertIn('recordLocked("urlsession.configuration"', logger)
+        for private_field in ('"url"', '"headers"', '"displayName"', '"responseBody"',
+                              '"sessionIdentifier"', '"Authorization"', '"Cookie"'):
+            self.assertNotIn(private_field, logger)
+        for mutation in (".resume()", ".cancel()", ".suspend()", "class_addMethod", "method_setImplementation"):
+            self.assertNotIn(mutation, logger)
+
     def test_submission_and_attachment_are_distinct_events(self):
         request = SOURCE.index('recordLifecycle("continued.submit.requested")')
         submit = SOURCE.index("try scheduler.submit(request)", request)

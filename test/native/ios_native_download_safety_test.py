@@ -11,6 +11,7 @@ if sys.platform != "darwin":
     raise SystemExit(0)
 
 root = Path(__file__).resolve().parents[2]
+subprocess.run([sys.executable, str(root / "test/native/ios_download_diagnostics_test.py")], check=True)
 privacy = plistlib.loads((root / "ios/Runner/PrivacyInfo.xcprivacy").read_bytes())
 reasons = {entry["NSPrivacyAccessedAPIType"]: entry["NSPrivacyAccessedAPITypeReasons"]
            for entry in privacy["NSPrivacyAccessedAPITypes"]}

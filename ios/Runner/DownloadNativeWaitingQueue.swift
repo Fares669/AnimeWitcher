@@ -10,6 +10,7 @@ enum DownloadNativeDiagnosticLog {
   private static var size = 0
   private static var sequence = 0
   private static var lastProgress: [String: TimeInterval] = [:]
+  private static weak var loggedSession: URLSession?
   private static let session = String(Int64(Date().timeIntervalSince1970 * 1000000))
 
   static func configure(_ value: Bool) {
@@ -17,6 +18,7 @@ enum DownloadNativeDiagnosticLog {
       enabled = value
       UserDefaults.standard.set(value, forKey: key)
       lastProgress.removeAll()
+      loggedSession = nil
     }
   }
 
@@ -53,25 +55,73 @@ enum DownloadNativeDiagnosticLog {
     }
   }
 
+  /// These are throttled plugin fractions, not exact wire bytes. A silent
+  /// callback interval alone does not establish that background transport stopped.
+  static func recordPluginProgress(
+    taskId: String, parentTaskId: String?, attemptGeneration: Int?,
+    progress: Double, inForeground: Bool
+  ) {
+    queue.sync {
+      guard enabled, !taskId.isEmpty, progress.isFinite, (0...1).contains(progress) else { return }
+      let progressKey = "\(taskId):\(attemptGeneration ?? 0)"
+      let now = Date().timeIntervalSince1970
+      if let previous = lastProgress[progressKey], now - previous < 5.0, progress < 1 { return }
+      lastProgress[progressKey] = now
+      if lastProgress.count > 256, let oldest = lastProgress.min(by: { $0.value < $1.value })?.key {
+        lastProgress.removeValue(forKey: oldest)
+      }
+      var fields: [String: Any] = ["taskId": taskId, "progress": progress, "inForeground": inForeground]
+      if let parentTaskId { fields["parentTaskId"] = parentTaskId }
+      if let attemptGeneration { fields["attemptGeneration"] = attemptGeneration }
+      recordLocked("progress.plugin", fields: fields)
+    }
+  }
+
+  static func clearPluginProgress(taskId: String, attemptGeneration: Int?) {
+    queue.sync { _ = lastProgress.removeValue(forKey: "\(taskId):\(attemptGeneration ?? 0)") }
+  }
+
+  /// Observe the actual session without changing its scheduling policy.
+  static func recordSessionConfiguration(_ session: URLSession) {
+    queue.sync {
+      guard enabled, loggedSession !== session else { return }
+      loggedSession = session
+      let config = session.configuration
+      recordLocked("urlsession.configuration", fields: [
+        "backgroundSession": config.identifier != nil,
+        "isDiscretionary": config.isDiscretionary,
+        "sessionSendsLaunchEvents": config.sessionSendsLaunchEvents,
+        "requestTimeoutSeconds": config.timeoutIntervalForRequest,
+        "resourceTimeoutSeconds": config.timeoutIntervalForResource,
+      ])
+    }
+  }
+
   /// Lifecycle diagnostics use a closed field vocabulary. Never persist URLs,
   /// credentials, display names or arbitrary error descriptions from callers.
   static func record(_ event: String, fields: [String: Any] = [:]) {
     queue.sync {
       guard enabled else { return }
-      let allowed: Set<String> = ["taskId", "parentTaskId", "leaseIdentifier",
-        "requestAgeMillis", "leaseAgeMillis", "elapsedMillis", "progress",
-        "transferredBytes", "totalBytes", "completedCount", "batchTotal",
-        "activeLease", "success", "status", "failure", "errorCode", "errorKind",
-        "completedUnits", "totalUnits", "attemptGeneration", "nativeTaskId"]
-      sequence += 1
-      var row = fields.filter { allowed.contains($0.key) }
-      row["time"] = ISO8601DateFormatter().string(from: Date())
-      row["session"] = session
-      row["sequence"] = sequence
-      row["source"] = "ios"
-      row["event"] = event
-      appendLocked(row, event: event)
+      recordLocked(event, fields: fields)
     }
+  }
+
+  private static func recordLocked(_ event: String, fields: [String: Any]) {
+    let allowed: Set<String> = ["taskId", "parentTaskId", "leaseIdentifier",
+      "requestAgeMillis", "leaseAgeMillis", "elapsedMillis", "progress",
+      "transferredBytes", "totalBytes", "completedCount", "batchTotal",
+      "activeLease", "success", "status", "failure", "errorCode", "errorKind",
+      "completedUnits", "totalUnits", "attemptGeneration", "nativeTaskId",
+      "inForeground", "backgroundSession", "isDiscretionary", "sessionSendsLaunchEvents",
+      "requestTimeoutSeconds", "resourceTimeoutSeconds"]
+    sequence += 1
+    var row = fields.filter { allowed.contains($0.key) }
+    row["time"] = ISO8601DateFormatter().string(from: Date())
+    row["session"] = session
+    row["sequence"] = sequence
+    row["source"] = "ios"
+    row["event"] = event
+    appendLocked(row, event: event)
   }
 
   private static func appendLocked(_ row: [String: Any], event: String) {
@@ -94,7 +144,7 @@ enum DownloadNativeDiagnosticLog {
       defer { try? handle.close() }
       try handle.seekToEnd()
       try handle.write(contentsOf: data)
-      if event != "progress" { try handle.synchronize() }
+      if event != "progress" && event != "progress.plugin" { try handle.synchronize() }
       size += data.count
     } catch {
       // Logging must never fail or interrupt URLSession delegate handling.
@@ -1528,8 +1578,12 @@ enum DownloadNativeWaitingQueue {
       ? UIApplication.shared.applicationState == .active
       : scenes.contains { $0 !== resigningScene && $0.activationState == .foregroundActive })
     foregroundStateLock.lock()
+    let changed = cachedForegroundState != active
     cachedForegroundState = active
     foregroundStateLock.unlock()
+    if changed {
+      DownloadNativeDiagnosticLog.record("application.visibility", fields: ["inForeground": active])
+    }
   }
 
   /// Scene visibility is authoritative: BGContinuedProcessing can keep the
@@ -2167,6 +2221,7 @@ enum DownloadNativeWaitingQueue {
     lock.lock()
     latestDownloadSession = session
     lock.unlock()
+    DownloadNativeDiagnosticLog.recordSessionConfiguration(session)
   }
 
   static func acceptsDartOverlayUpdates() -> Bool {
@@ -2589,6 +2644,11 @@ enum DownloadNativeWaitingQueue {
     default:
       inactiveForSpeed = false
     }
+    if inactiveForSpeed {
+      DownloadNativeDiagnosticLog.clearPluginProgress(
+        taskId: task.taskId, attemptGeneration: attemptGeneration(fromPluginTask: task)
+      )
+    }
 
     // V2 uses child status only as observation. In particular, every paused
     // child must be observed before Dart attempts a parallel resume.
@@ -2631,6 +2691,13 @@ enum DownloadNativeWaitingQueue {
     let normalized = min(max(progress, 0), 1)
     let id = task.taskId
     guard !id.isEmpty else { return }
+    DownloadNativeDiagnosticLog.recordPluginProgress(
+      taskId: id,
+      parentTaskId: parentTaskId(fromPluginTask: task),
+      attemptGeneration: attemptGeneration(fromPluginTask: task),
+      progress: normalized,
+      inForeground: isAppInForeground()
+    )
 
     // Observation is independent from native promotion capability.
     // V2 child metrics leave background_downloader as the sole transport owner.
