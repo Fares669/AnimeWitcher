@@ -7,6 +7,7 @@ from production so concurrency regressions exercise the actual implementation.
 """
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -87,9 +88,13 @@ enum DownloadUrlSessionHook {
 }
 enum DownloadNativeDiagnosticLog {
   static func record(_ event: String, task: URLSessionTask) {}
+  static func recordSessionConfiguration(_ session: URLSession) {}
 }
 enum DownloadNativeQueueEncryption { static let keyMissing = false }
 '''
+
+for method in set(re.findall(r"DownloadNativeDiagnosticLog\.(\w+)\(", FUNCTIONS)):
+    assert f"static func {method}(" in FAKES, f"Missing diagnostic logger fake method: {method}"
 
 STATE = r'''
   private static let lock = NSLock()
