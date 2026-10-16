@@ -1069,6 +1069,16 @@ class PersistentParallelDownload {
     _refreshPartAttemptMetadata(session, part);
   }
 
+  /// Captures a barrier behind the current session queues, without draining
+  /// later updates, timers or background work. Callers should bound the wait
+  /// when an existing operation could still be awaiting native settlement.
+  Future<void> flushPendingUpdates() async {
+    await Future.wait<void>([
+      for (final session in List<_ParallelSession>.of(_sessions.values))
+        session.serialize(() async {}),
+    ]);
+  }
+
   Future<void> dispose() async {
     if (_disposed) {
       final pump = _pumpFuture;
@@ -2424,6 +2434,12 @@ class PersistentParallelDownload {
           try {
             before = await file.stat();
             if (!current()) return rejected;
+            await session.serialize(() async {
+              if (current() && !session.parentRunningReported) {
+                await _status(session, TaskStatus.running);
+              }
+            });
+            if (!current()) return rejected;
             _recordDiagnostic('parallel.sourceVerificationStarted', {
               'taskId': session.task.taskId,
               'childTaskId': task.taskId,
@@ -2487,6 +2503,14 @@ class PersistentParallelDownload {
               if (error is DownloadSourceVerificationException &&
                   error.httpStatus != null)
                 'httpStatus': error.httpStatus,
+              if (error is DownloadSourceVerificationException) ...{
+                if (error.verifiedBytes != null)
+                  'verifiedBytes': error.verifiedBytes,
+                if (error.phase != null)
+                  'verificationPhase': error.phase!.name,
+                if (error.timeoutKind != null)
+                  'timeoutKind': error.timeoutKind!.name,
+              },
             });
             retry = retryable && probeAttempt < 3;
             if (retry) {
@@ -2673,6 +2697,9 @@ class PersistentParallelDownload {
     _markConnectionReady(session, part);
     _releaseConnection(part);
     _cancelSourceVerification(part);
+    // Crediting an existing file is not newly received native traffic. Start a
+    // fresh speed window so this local adoption cannot inflate throughput/ETA.
+    if (verifiedSource) _speedTelemetry.resetSpeed(session.task.taskId);
     part.complete = true;
     part.progress = 1;
     part.credibleProgress = 1;
@@ -3746,7 +3773,12 @@ class PersistentParallelDownload {
       rethrow;
     }
     return session.serialize(
-      () => _pause(session, preserveLiveParts: preserveLiveParts),
+      () async {
+        // Publication may have completed while this pause waited for the
+        // session queue. Its terminal record and removed checkpoint must win.
+        if (!identical(_sessions[task.taskId], session)) return true;
+        return _pause(session, preserveLiveParts: preserveLiveParts);
+      },
     );
   }
 
@@ -4010,6 +4042,9 @@ class PersistentParallelDownload {
     bool preserveLiveParts = false,
     _DownloadPart? retryMetadataResolvedPart,
   }) async {
+    // A successful publication/terminal record is irreversible here, even if
+    // deleting an obsolete child or checkpoint failed afterward.
+    if (session.completed) return true;
     // Exported native ranges may have started while Dart was suspended. Adopt
     // their actual ownership before selecting pause/drain candidates.
     final lookupNativeOwners = livePartIds;
@@ -4756,6 +4791,7 @@ class PersistentParallelDownload {
       TaskProgressUpdate(session.task, 1, session.size, 0, Duration.zero),
     );
     await _status(session, TaskStatus.complete);
+    session.completed = true;
     await _clearOwnedPromotion(session);
 
     for (final part in session.parts) {
@@ -5063,9 +5099,10 @@ class PersistentParallelDownload {
       await _recoverReadyPublication(session);
       return;
     }
+    final assemblyWatch = Stopwatch()..start();
     _recordDiagnostic('assembly.begin', {
       'taskId': session.task.taskId,
-      'total': session.size,
+      'totalBytes': session.size,
       'count': session.parts.length,
     });
     final target = File(await session.task.filePath());
@@ -5115,6 +5152,16 @@ class PersistentParallelDownload {
       await _handleAssemblyStorageFailure(session, staging);
       return;
     }
+
+    // All received bytes are durable, but publication is still active work.
+    // Clear the prior network estimate rather than freezing the UI just below
+    // 100% with a one-second ETA while the local file is assembled and hashed.
+    session.cancelAggregateProgress();
+    _speedTelemetry.resetSpeed(session.task.taskId);
+    if (!session.parentRunningReported) {
+      await _status(session, TaskStatus.running);
+    }
+    onUpdate(TaskProgressUpdate(session.task, 1, session.size, 0, Duration.zero));
 
     RandomAccessFile? output;
     try {
@@ -5172,6 +5219,12 @@ class PersistentParallelDownload {
     }
     if (!await _promoteCompletedFile(session, staging, target)) return;
     await _finishCompleteSession(session);
+    _recordDiagnostic('assembly.complete', {
+      'taskId': session.task.taskId,
+      'totalBytes': session.size,
+      'count': session.parts.length,
+      'durationMs': assemblyWatch.elapsedMilliseconds,
+    });
   }
 }
 
@@ -5198,6 +5251,7 @@ class _ParallelSession {
   final List<_DownloadPart> parts;
   final Map<String, _DownloadPart> partsByTaskId;
   bool active = false;
+  bool completed = false;
   // Synchronous intent fence: true from the instant pause() is requested until
   // an explicit start/resume begins a new generation.
   bool pauseRequested = false;
