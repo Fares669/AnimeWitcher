@@ -21,42 +21,58 @@ class _Paths extends PathProviderPlatform {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('storage startup recovers unreadable download metadata in its worker', () async {
-    final directory = Directory.systemTemp.createTempSync('aw-metadata-recovery-');
-    final paths = PathProviderPlatform.instance;
-    PathProviderPlatform.instance = _Paths(directory.path);
-    final worker = DownloadPersistenceWorker.forDirectory(
-      directory.path,
-      documentsDirectory: directory.path,
-    );
-    try {
-      Hive.init(directory.path);
-      Hive.registerAdapter(_UnreadableMetadataAdapter());
-      final existing = await Hive.openBox<dynamic>(StorageService.kDownloadMetadataBox);
-      await existing.put('obsolete-adapter', _UnreadableMetadata());
-      await existing.close();
-
-      final metadataFile = File('${directory.path}/${StorageService.kDownloadMetadataBox}.hive');
-      final originalBytes = metadataFile.readAsBytesSync();
-      await expectLater(
-        worker.run('hive.open', [StorageService.kDownloadMetadataBox]),
-        throwsA(isA<HiveError>()),
+  test(
+    'storage startup recovers unreadable download metadata in its worker',
+    () async {
+      final directory = Directory.systemTemp.createTempSync(
+        'aw-metadata-recovery-',
       );
-      expect(metadataFile.readAsBytesSync(), originalBytes);
-      final storage = StorageService(downloadPersistenceWorker: worker);
-      await storage.init();
-      expect(await storage.getAllDownloadMetadata(), isEmpty);
-      final item = MultimediaItem(title: 'Recovered', url: 'show', posterUrl: '');
-      await storage.saveDownloadMetadata('new-download', item);
-      expect((await storage.getDownloadMetadata('new-download'))?['item'], item.toJson());
-    } finally {
-      await worker.close();
-      await Hive.close();
-      Hive.resetAdapters();
-      PathProviderPlatform.instance = paths;
-      directory.deleteSync(recursive: true);
-    }
-  });
+      final paths = PathProviderPlatform.instance;
+      PathProviderPlatform.instance = _Paths(directory.path);
+      final worker = DownloadPersistenceWorker.forDirectory(
+        directory.path,
+        documentsDirectory: directory.path,
+      );
+      try {
+        Hive.init(directory.path);
+        Hive.registerAdapter(_UnreadableMetadataAdapter());
+        final existing = await Hive.openBox<dynamic>(
+          StorageService.kDownloadMetadataBox,
+        );
+        await existing.put('obsolete-adapter', _UnreadableMetadata());
+        await existing.close();
+
+        final metadataFile = File(
+          '${directory.path}/${StorageService.kDownloadMetadataBox}.hive',
+        );
+        final originalBytes = metadataFile.readAsBytesSync();
+        await expectLater(
+          worker.run('hive.open', [StorageService.kDownloadMetadataBox]),
+          throwsA(isA<HiveError>()),
+        );
+        expect(metadataFile.readAsBytesSync(), originalBytes);
+        final storage = StorageService(downloadPersistenceWorker: worker);
+        await storage.init();
+        expect(await storage.getAllDownloadMetadata(), isEmpty);
+        final item = MultimediaItem(
+          title: 'Recovered',
+          url: 'show',
+          posterUrl: '',
+        );
+        await storage.saveDownloadMetadata('new-download', item);
+        expect(
+          (await storage.getDownloadMetadata('new-download'))?['item'],
+          item.toJson(),
+        );
+      } finally {
+        await worker.close();
+        await Hive.close();
+        Hive.resetAdapters();
+        PathProviderPlatform.instance = paths;
+        directory.deleteSync(recursive: true);
+      }
+    },
+  );
 
   test('actual saved download metadata and Hive history roundtrip original labels and raw numbers', () async {
     final directory = await Directory.systemTemp.createTemp(
@@ -123,7 +139,6 @@ void main() {
           expect(
             continueWatchingPrimaryLabel(
               episode: history.episode,
-              isArabic: true,
               episodeServerName: history.episodeServerName,
               episodeServerNumber: history.episodeServerNumber,
             ),
@@ -151,11 +166,7 @@ void main() {
   test('raw number fallback retains supplied digits and never invents missing metadata', () {
     for (final raw in ['٢', '٢.٥', '02.50']) {
       expect(
-        continueWatchingPrimaryLabel(
-          episode: 2,
-          isArabic: true,
-          episodeServerNumber: raw,
-        ),
+        continueWatchingPrimaryLabel(episode: 2, episodeServerNumber: raw),
         raw,
       );
     }
@@ -177,7 +188,8 @@ void main() {
 
 final class _UnreadableMetadata {}
 
-final class _UnreadableMetadataAdapter extends TypeAdapter<_UnreadableMetadata> {
+final class _UnreadableMetadataAdapter
+    extends TypeAdapter<_UnreadableMetadata> {
   @override
   int get typeId => 223;
 

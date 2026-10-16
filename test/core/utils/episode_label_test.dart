@@ -10,39 +10,101 @@ void main() {
   test('matches bounded Unicode episode base with visible quality suffix', () {
     final title = List<String>.filled(100, '🧙').join();
     for (final quality in <String>['720p', '1080p', '1234p']) {
-      final boundedBase = sanitizeDownloadFileName(formatEpisodeFileName(
-        episode: 12, serverName: 'الحلقة 12', title: title,
-      ));
+      final boundedBase = sanitizeDownloadFileName(
+        formatEpisodeFileName(
+          episode: 12,
+          serverName: 'الحلقة 12',
+          title: title,
+        ),
+      );
       final produced = formatEpisodeDownloadFileName(
-        episode: 12, serverName: 'الحلقة 12', title: title, quality: quality,
+        episode: 12,
+        serverName: 'الحلقة 12',
+        title: title,
+        quality: quality,
       );
       expect(produced, '$boundedBase ($quality)');
       final filename = '$produced.mp4';
       expect(utf8.encode(filename).length, lessThanOrEqualTo(212));
-      expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'الحلقة 12', title: title), isTrue);
-      expect(isDownloadedEpisodeFileName(filename, 13, serverName: 'الحلقة 13', title: title), isFalse);
+      expect(
+        isDownloadedEpisodeFileName(
+          filename,
+          12,
+          serverName: 'الحلقة 12',
+          title: title,
+        ),
+        isTrue,
+      );
+      expect(
+        isDownloadedEpisodeFileName(
+          filename,
+          13,
+          serverName: 'الحلقة 13',
+          title: title,
+        ),
+        isFalse,
+      );
     }
   });
 
   test('keeps exact creative titles that themselves end with a quality-like suffix', () {
     final base = formatEpisodeDownloadFileName(
-      episode: 12, serverName: 'الحلقة 12', title: 'Story (720p)',
+      episode: 12,
+      serverName: 'الحلقة 12',
+      title: 'Story (720p)',
     );
-    expect(isDownloadedEpisodeFileName('$base.mp4', 12,
-        serverName: 'الحلقة 12', title: 'Story (720p)'), isTrue);
-    expect(isDownloadedEpisodeFileName('$base (1080p).mp4', 12,
-        serverName: 'الحلقة 12', title: 'Story (720p)'), isTrue);
+    expect(
+      isDownloadedEpisodeFileName(
+        '$base.mp4',
+        12,
+        serverName: 'الحلقة 12',
+        title: 'Story (720p)',
+      ),
+      isTrue,
+    );
+    expect(
+      isDownloadedEpisodeFileName(
+        '$base (1080p).mp4',
+        12,
+        serverName: 'الحلقة 12',
+        title: 'Story (720p)',
+      ),
+      isTrue,
+    );
   });
 
-  test('matches a legal old long episode filename without rewriting its quality', () {
-    final title = List<String>.filled(100, 'ش').join();
-    final label = formatEpisodeFileName(episode: 12, serverName: 'الحلقة 12', title: title);
-    final filename = '${label.replaceAll(':', '_')} (720p).mp4';
-    expect(utf8.encode(filename).length, greaterThan(200));
-    expect(utf8.encode(filename).length, lessThanOrEqualTo(255));
-    expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'الحلقة 12', title: title), isTrue);
-    expect(isDownloadedEpisodeFileName(filename, 12, serverName: 'حلقة 12', title: title), isFalse);
-  });
+  test(
+    'matches a legal old long episode filename without rewriting its quality',
+    () {
+      final title = List<String>.filled(100, 'ش').join();
+      final label = formatEpisodeFileName(
+        episode: 12,
+        serverName: 'الحلقة 12',
+        title: title,
+      );
+      final filename = '${label.replaceAll(':', '_')} (720p).mp4';
+      expect(utf8.encode(filename).length, greaterThan(200));
+      expect(utf8.encode(filename).length, lessThanOrEqualTo(255));
+      expect(
+        isDownloadedEpisodeFileName(
+          filename,
+          12,
+          serverName: 'الحلقة 12',
+          title: title,
+        ),
+        isTrue,
+      );
+      expect(
+        isDownloadedEpisodeFileName(
+          filename,
+          12,
+          serverName: 'حلقة 12',
+          title: title,
+        ),
+        isFalse,
+      );
+    },
+  );
 
   group('portable download filename stems', () {
     test('dot-only and empty stems leave fallback choice to the caller', () {
@@ -51,15 +113,25 @@ void main() {
       }
     });
 
-    test('replaces control characters and removes terminal dots and spaces', () {
-      expect(sanitizeDownloadFileName('chapter\u0000\u001f\u007fend.  '), 'chapter___end');
-      expect(sanitizeDownloadFileName('chapter. .. '), 'chapter');
-      expect(sanitizeDownloadFileName(' chapter\t  name '), 'chapter_ name');
-    });
+    test(
+      'replaces control characters and removes terminal dots and spaces',
+      () {
+        expect(
+          sanitizeDownloadFileName('chapter\u0000\u001f\u007fend.  '),
+          'chapter___end',
+        );
+        expect(sanitizeDownloadFileName('chapter. .. '), 'chapter');
+        expect(sanitizeDownloadFileName(' chapter\t  name '), 'chapter_ name');
+      },
+    );
 
     test('protects Windows device stems with optional extensions', () {
       for (final value in <String>[
-        'CON', 'con.jpg', 'PRN', 'aux.txt', 'NUL',
+        'CON',
+        'con.jpg',
+        'PRN',
+        'aux.txt',
+        'NUL',
         for (var index = 1; index <= 9; index++) 'COM$index',
         for (var index = 1; index <= 9; index++) 'lpt$index.webp',
       ]) {
@@ -82,10 +154,18 @@ void main() {
         final first = sanitizeDownloadFileName(firstLabel);
         final second = sanitizeDownloadFileName(secondLabel);
         expect(first, isNot(second));
-        for (final entry in <String, String>{firstLabel: first, secondLabel: second}.entries) {
+        for (final entry in <String, String>{
+          firstLabel: first,
+          secondLabel: second,
+        }.entries) {
           final stem = entry.value;
           expect(utf8.encode(stem).length, lessThanOrEqualTo(200));
-          expect(stem, endsWith('-${sha256.convert(utf8.encode(entry.key)).toString().substring(0, 12)}'));
+          expect(
+            stem,
+            endsWith(
+              '-${sha256.convert(utf8.encode(entry.key)).toString().substring(0, 12)}',
+            ),
+          );
           expect(stem.runes, isNot(contains(0xfffd)));
           expect(utf8.decode(utf8.encode(stem)), stem);
         }
@@ -95,9 +175,15 @@ void main() {
     test('truncation hashes the full normalized sanitized stem', () {
       final raw = '${List<String>.filled(128, 'ا\u0654').join()}/tail. ';
       final normalized = '${List<String>.filled(128, 'أ').join()}_tail';
-      final expectedHash = sha256.convert(utf8.encode(normalized)).toString().substring(0, 12);
+      final expectedHash = sha256
+          .convert(utf8.encode(normalized))
+          .toString()
+          .substring(0, 12);
       expect(sanitizeDownloadFileName(raw), endsWith('-$expectedHash'));
-      expect(utf8.encode(sanitizeDownloadFileName(raw)).length, lessThanOrEqualTo(200));
+      expect(
+        utf8.encode(sanitizeDownloadFileName(raw)).length,
+        lessThanOrEqualTo(200),
+      );
     });
   });
 
@@ -220,60 +306,39 @@ void main() {
       expect(
         formatEpisodePrimaryLabel(
           episode: 12,
-          isArabic: true,
           serverName: 'الحلقة 12 والأخيرة',
           isFinal: true,
         ),
         'الحلقة 12 والأخيرة',
       );
       expect(
-        formatEpisodePrimaryLabel(
-          episode: 11,
-          isArabic: true,
-          serverName: 'الحلقة 11',
-        ),
+        formatEpisodePrimaryLabel(episode: 11, serverName: 'الحلقة 11'),
         'الحلقة 11',
       );
       expect(
-        formatEpisodePrimaryLabel(
-          episode: 1,
-          isArabic: true,
-          serverName: 'الفيلم',
-        ),
+        formatEpisodePrimaryLabel(episode: 1, serverName: 'الفيلم'),
         'الفيلم',
       );
       expect(
-        formatEpisodePrimaryLabel(
-          episode: 5,
-          isArabic: true,
-          serverName: 'حلقة 5',
-        ),
+        formatEpisodePrimaryLabel(episode: 5, serverName: 'حلقة 5'),
         'حلقة 5',
       );
     });
 
     test('keeps مترجم/مدبلج exactly like AnimeWitcher', () {
       expect(
-        formatEpisodePrimaryLabel(
-          episode: 1,
-          isArabic: true,
-          serverName: 'مترجم',
-        ),
+        formatEpisodePrimaryLabel(episode: 1, serverName: 'مترجم'),
         'مترجم',
       );
       expect(
-        formatEpisodePrimaryLabel(
-          episode: 2,
-          isArabic: true,
-          serverName: 'مدبلج',
-        ),
+        formatEpisodePrimaryLabel(episode: 2, serverName: 'مدبلج'),
         'مدبلج',
       );
     });
 
     test('keeps والأخيرة from isFinal even without serverName', () {
       expect(
-        formatEpisodePrimaryLabel(episode: 12, isArabic: true, isFinal: true),
+        formatEpisodePrimaryLabel(episode: 12, isFinal: true),
         'حلقة 12 والأخيرة',
       );
     });
@@ -282,20 +347,16 @@ void main() {
   group('formatEpisodeLabel', () {
     test('formats Arabic episode with title', () {
       expect(
-        formatEpisodeLabel(episode: 2, isArabic: true, title: 'بداية جديدة'),
+        formatEpisodeLabel(episode: 2, title: 'بداية جديدة'),
         'حلقة 2: بداية جديدة',
       );
     });
 
     test('omits generic title', () {
-      expect(
-        formatEpisodeLabel(episode: 2, isArabic: true, title: 'الحلقة 2'),
-        'الحلقة 2',
-      );
+      expect(formatEpisodeLabel(episode: 2, title: 'الحلقة 2'), 'الحلقة 2');
       expect(
         formatEpisodeLabel(
           episode: 12,
-          isArabic: true,
           title: 'الحلقة 12 والأخيرة',
           serverName: 'الحلقة 12 والأخيرة',
         ),
@@ -305,12 +366,7 @@ void main() {
 
     test('keeps final marker with creative title', () {
       expect(
-        formatEpisodeLabel(
-          episode: 12,
-          isArabic: true,
-          title: 'نهاية الرحلة',
-          isFinal: true,
-        ),
+        formatEpisodeLabel(episode: 12, title: 'نهاية الرحلة', isFinal: true),
         'حلقة 12 والأخيرة: نهاية الرحلة',
       );
     });
@@ -319,7 +375,6 @@ void main() {
       expect(
         formatEpisodeLabel(
           episode: 9,
-          isArabic: true,
           serverName: 'الحلقة 9',
           title: 'Tsuihou sareta Tensei',
         ),
@@ -328,20 +383,13 @@ void main() {
       expect(
         formatEpisodeLabel(
           episode: 1,
-          isArabic: true,
           serverName: 'الفيلم',
           title: 'بداية المغامرة',
         ),
         'الفيلم: بداية المغامرة',
       );
-      expect(
-        formatEpisodeLabel(episode: 0, isArabic: true, serverName: 'مترجم'),
-        'مترجم',
-      );
-      expect(
-        formatEpisodeLabel(episode: 0, isArabic: true, serverName: 'مدبلج'),
-        'مدبلج',
-      );
+      expect(formatEpisodeLabel(episode: 0, serverName: 'مترجم'), 'مترجم');
+      expect(formatEpisodeLabel(episode: 0, serverName: 'مدبلج'), 'مدبلج');
     });
 
     test('adds quality only when present', () {
@@ -720,19 +768,12 @@ void main() {
   group('resolveEpisodeLabel', () {
     test('keeps numberless names instead of falling back to nothing', () {
       expect(
-        formatEpisodeLabel(
-          episode: 0,
-          isArabic: true,
-          serverName: 'الحلقة الخاصة',
-        ),
+        formatEpisodeLabel(episode: 0, serverName: 'الحلقة الخاصة'),
         'الحلقة الخاصة',
       );
+      expect(formatEpisodeLabel(episode: 0, serverName: 'مترجم'), 'مترجم');
       expect(
-        formatEpisodeLabel(episode: 0, isArabic: true, serverName: 'مترجم'),
-        'مترجم',
-      );
-      expect(
-        formatEpisodeLabel(episode: 0, isArabic: true, title: 'مذكرات نامي'),
+        formatEpisodeLabel(episode: 0, title: 'مذكرات نامي'),
         'مذكرات نامي',
       );
     });
@@ -740,7 +781,6 @@ void main() {
     test('splits the primary line from the creative title', () {
       final label = resolveEpisodeLabel(
         episode: 12,
-        isArabic: true,
         title: 'نهاية الرحلة',
         serverName: 'الحلقة 12 والأخيرة',
       );
@@ -754,30 +794,21 @@ void main() {
       expect(
         formatEpisodeLabel(
           episode: 12,
-          isArabic: true,
           serverName: 'الحلقة 12 والأخيرة',
           isFinal: true,
         ),
         'الحلقة 12 والأخيرة',
       );
       expect(
-        formatEpisodeLabel(episode: 5, isArabic: true, title: 'رفقاء جدد'),
+        formatEpisodeLabel(episode: 5, title: 'رفقاء جدد'),
         'حلقة 5: رفقاء جدد',
       );
     });
 
     test('is empty only when the episode has no name at all', () {
-      expect(formatEpisodeLabel(episode: 0, isArabic: true), '');
-      expect(resolveEpisodeLabel(episode: 0, isArabic: true).isEmpty, isTrue);
-      expect(
-        formatEpisodeLabel(
-          episode: 0,
-          isArabic: true,
-          serverName: '',
-          title: '',
-        ),
-        '',
-      );
+      expect(formatEpisodeLabel(episode: 0), '');
+      expect(resolveEpisodeLabel(episode: 0).isEmpty, isTrue);
+      expect(formatEpisodeLabel(episode: 0, serverName: '', title: ''), '');
     });
   });
 
@@ -801,7 +832,10 @@ void main() {
       );
       expect(episodeTitleForStorage(episode: 1, serverName: 'مترجم'), 'مترجم');
       // The source label is now retained even without a creative/final title.
-      expect(episodeTitleForStorage(episode: 11, title: 'الحلقة 11'), 'الحلقة 11');
+      expect(
+        episodeTitleForStorage(episode: 11, title: 'الحلقة 11'),
+        'الحلقة 11',
+      );
     });
 
     test('keeps the label of numberless episodes', () {
@@ -844,7 +878,6 @@ void main() {
       expect(
         formatEpisodePrimaryLabel(
           episode: enriched.single.episode,
-          isArabic: true,
           isFinal: enriched.single.isFinal,
           serverName: enriched.single.serverName,
         ),
@@ -858,7 +891,6 @@ void main() {
       expect(
         continueWatchingPrimaryLabel(
           episode: 12,
-          isArabic: true,
           episodeTitle: 'تتطور الزنزانة',
         ),
         'حلقة 12',
@@ -874,11 +906,7 @@ void main() {
 
     test('numberless rows show their stored label once', () {
       expect(
-        continueWatchingPrimaryLabel(
-          episode: 0,
-          isArabic: true,
-          episodeTitle: 'الحلقة الخاصة',
-        ),
+        continueWatchingPrimaryLabel(episode: 0, episodeTitle: 'الحلقة الخاصة'),
         'الحلقة الخاصة',
       );
       expect(
@@ -894,7 +922,6 @@ void main() {
       expect(
         continueWatchingPrimaryLabel(
           episode: 12,
-          isArabic: true,
           episodeTitle: 'تتطور الزنزانة',
           episodeServerName: 'الحلقة 12 والأخيرة',
         ),
@@ -911,11 +938,7 @@ void main() {
 
     test('shows مترجم as primary without secondary', () {
       expect(
-        continueWatchingPrimaryLabel(
-          episode: 1,
-          isArabic: true,
-          episodeServerName: 'مترجم',
-        ),
+        continueWatchingPrimaryLabel(episode: 1, episodeServerName: 'مترجم'),
         'مترجم',
       );
       expect(continueWatchingSecondaryTitle(episodeServerName: 'مترجم'), '');

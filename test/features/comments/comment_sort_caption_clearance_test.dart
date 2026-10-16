@@ -29,7 +29,7 @@ void main() {
               actions: AnimeWitcherCommentSortControl.appBarActions(
                 tooltip: 'ترتيب التعليقات',
                 selectedValue: 'commentsDefault',
-                items: AnimeWitcherCommentSortControl.menuItems(true),
+                items: AnimeWitcherCommentSortControl.menuItems(),
                 onSelected: (_) {},
               ),
             ),
@@ -88,7 +88,6 @@ void main() {
             builder: (context) {
               buttons = AnimeWitcherCommentSortControl.persistentButtons(
                 context: context,
-                isArabic: true,
                 tooltip: 'ترتيب التعليقات',
                 sort: AnimeWitcherCommentSort.newest,
                 onSelected: (_) {},
@@ -115,36 +114,40 @@ void main() {
     },
   );
 
-  testWidgets('comment sort shows the active order and animates while opening', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: AnimeWitcherCommentSortControl(
-              tooltip: 'ترتيب التعليقات',
-              selectedValue: AnimeWitcherCommentSort.mostLiked.name,
-              items: AnimeWitcherCommentSortControl.menuItems(true),
-              onSelected: (_) {},
+  testWidgets(
+    'comment sort shows the active order and animates while opening',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: AnimeWitcherCommentSortControl(
+                tooltip: 'ترتيب التعليقات',
+                selectedValue: AnimeWitcherCommentSort.mostLiked.name,
+                items: AnimeWitcherCommentSortControl.menuItems(),
+                onSelected: (_) {},
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
 
-    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
-    expect(find.byIcon(Icons.keyboard_arrow_down_rounded), findsNothing);
-    expect(find.byKey(const ValueKey<String>('animated-sort-glyph')), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.keyboard_arrow_down_rounded), findsNothing);
+      expect(
+        find.byKey(const ValueKey<String>('animated-sort-glyph')),
+        findsOneWidget,
+      );
 
-    await tester.tap(find.byTooltip('ترتيب التعليقات'));
-    await tester.pump(const Duration(milliseconds: 80));
+      await tester.tap(find.byTooltip('ترتيب التعليقات'));
+      await tester.pump(const Duration(milliseconds: 80));
 
-    final opacity = tester.widget<AnimatedOpacity>(
-      find.byKey(const ValueKey<String>('animated-sort-glyph')),
-    );
-    expect(opacity.opacity, 0);
-  });
+      final opacity = tester.widget<AnimatedOpacity>(
+        find.byKey(const ValueKey<String>('animated-sort-glyph')),
+      );
+      expect(opacity.opacity, 0);
+    },
+  );
 
   test('native single-icon toolbar host stays exactly 46pt wide', () {
     final swiftSource = File('ios/Runner/AppDelegate.swift').readAsStringSync();
@@ -152,8 +155,7 @@ void main() {
     expect(
       swiftSource,
       contains('isCompactSingleAction(actions)'),
-      reason:
-          'the native host needs an explicit compact path so its center mirrors Back',
+      reason: 'the native host needs an explicit compact path so its center mirrors Back',
     );
     expect(
       swiftSource,

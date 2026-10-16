@@ -319,7 +319,6 @@ Future<void> _resume(
                     title: player!.item.title,
                     episodeLabel: formatEpisodeLabel(
                       episode: player!.episode!.episode,
-                      isArabic: true,
                       title: player!.episode!.name,
                       serverName: player!.episode!.serverName,
                     ),
