@@ -157,10 +157,28 @@ final _item = MultimediaItem(
 );
 
 void main() {
+  test('missing cloud episode names retain the legacy numeric fallback', () async {
+    final firestore = _Firestore();
+    final service = await _account(_Storage(), firestore);
+    for (final number in <int?>[0, 12, null]) {
+      await service.saveContinueWatchingProgress(
+        item: _item,
+        position: 30000,
+        duration: 100000,
+        episodeNumber: number,
+      );
+      expect(
+        firestore.writes['users/profile/continue_watching/show']!['episode_name'],
+        number == null ? '' : 'حلقة $number',
+      );
+    }
+  });
+
   for (final name in [
     'الحلقة ٢',
     'الحلقة ٢.٥',
     'الحلقة الخاصة: العودة / الجزء؟',
+    '  Episode (002.5) &amp; <special>  ',
   ]) {
     test(
       'offline saved original label uploads unchanged and online import keeps label $name',

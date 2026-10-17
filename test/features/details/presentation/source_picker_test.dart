@@ -36,6 +36,7 @@ void main() {
         expect(sourcePickerHeader('الحلقة 10'), 'الحلقة 10');
         expect(sourcePickerHeader('الفيلم'), 'الفيلم');
         expect(sourcePickerHeader('مترجم'), 'مترجم');
+        expect(sourcePickerHeader('  الحلقة ٠٠٢.٥  '), '  الحلقة ٠٠٢.٥  ');
       },
     );
 

@@ -265,22 +265,7 @@ void main() {
 
     test('keeps creative titles', () {
       expect(realEpisodeTitle('رفقاء جدد'), 'رفقاء جدد');
-    });
-  });
-
-  group('playerHeaderSubtitle', () {
-    test('shows a creative title under the server label', () {
-      expect(playerHeaderSubtitle('نهاية الرحلة'), 'نهاية الرحلة');
-      expect(playerHeaderSubtitle('رفقاء جدد'), 'رفقاء جدد');
-    });
-
-    test('hides placeholders and standalone catalog labels', () {
-      expect(playerHeaderSubtitle(null), isNull);
-      expect(playerHeaderSubtitle(''), isNull);
-      expect(playerHeaderSubtitle('الحلقة 10'), isNull);
-      expect(playerHeaderSubtitle('الحلقة 12 والأخيرة'), isNull);
-      expect(playerHeaderSubtitle('مترجم'), isNull);
-      expect(playerHeaderSubtitle('مدبلج'), isNull);
+      expect(realEpisodeTitle('  رفقاء جدد  '), '  رفقاء جدد  ');
     });
   });
 
@@ -371,14 +356,14 @@ void main() {
       );
     });
 
-    test('keeps server labels and creative titles for player headers', () {
+    test('keeps only the exact server name in combined display labels', () {
       expect(
         formatEpisodeLabel(
           episode: 9,
           serverName: 'الحلقة 9',
           title: 'Tsuihou sareta Tensei',
         ),
-        'الحلقة 9: Tsuihou sareta Tensei',
+        'الحلقة 9',
       );
       expect(
         formatEpisodeLabel(
@@ -386,7 +371,7 @@ void main() {
           serverName: 'الفيلم',
           title: 'بداية المغامرة',
         ),
-        'الفيلم: بداية المغامرة',
+        'الفيلم',
       );
       expect(formatEpisodeLabel(episode: 0, serverName: 'مترجم'), 'مترجم');
       expect(formatEpisodeLabel(episode: 0, serverName: 'مدبلج'), 'مدبلج');

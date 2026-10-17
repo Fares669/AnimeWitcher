@@ -4,6 +4,8 @@ import 'package:animewitcher/core/utils/file_size_formatter.dart';
 void main() {
   test('page counts use localized units and honest unknown totals', () {
     expect(formatDownloadPageCount(completedPages: 12, totalPages: 23, pageLabel: 'صفحة'), '12/23 صفحة');
+    expect(formatDownloadPageCount(completedPages: 5, totalPages: null, pageLabel: 'pages'), '5/? pages');
+    expect(formatDownloadPageCount(completedPages: -2, totalPages: null, pageLabel: 'pages'), '0/? pages');
     expect(formatDownloadPageCount(completedPages: null, totalPages: null, pageLabel: 'pages'), '0/? pages');
     expect(formatDownloadPageCount(completedPages: 24, totalPages: 23, pageLabel: 'pages'), '23/23 pages');
   });

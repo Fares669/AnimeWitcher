@@ -187,7 +187,7 @@ void main() {
     }
   }
   for (final local in [false, true]) {
-    for (final label in ['الحلقة ٢.٥', 'الحلقة الخاصة: العودة / الجزء؟']) {
+    for (final label in ['الحلقة ٢.٥', 'الحلقة الخاصة: العودة / الجزء؟', '  الحلقة ٠٠٢.٥  ']) {
       testWidgets(
         'history resume renders original server label local=$local label=$label',
         (tester) async {

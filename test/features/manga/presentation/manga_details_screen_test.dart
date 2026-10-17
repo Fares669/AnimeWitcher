@@ -32,10 +32,11 @@ final class _NoArtwork extends ArtworkFallbackService {
 }
 
 final class _MangaProvider extends AnimeWitcherProvider {
-  _MangaProvider({this.chapterCount});
+  _MangaProvider({this.chapterCount, this.chapterName = 'الفصل 12.5'});
 
   /// Serves this many chapters instead of the single 12.5.
   final int? chapterCount;
+  final String chapterName;
 
   int detailsCalls = 0;
   int chaptersCalls = 0;
@@ -115,12 +116,12 @@ final class _MangaProvider extends AnimeWitcherProvider {
           ),
       ];
     }
-    return const <MangaChapter>[
+    return <MangaChapter>[
       MangaChapter(
         id: '12.5',
         mangaId: 'm1',
         url: 'chapter://12.5',
-        name: 'الفصل 12.5',
+        name: chapterName,
         number: 12.5,
       ),
     ];
@@ -178,7 +179,10 @@ final class _Manager extends ExtensionManager {
   List<AnimeWitcherProvider> build() => <AnimeWitcherProvider>[provider];
 }
 
-Widget _app(AnimeWitcherProvider provider) => ProviderScope(
+Widget _app(
+  AnimeWitcherProvider provider, {
+  MangaReadingRepository? progressRepository,
+}) => ProviderScope(
   overrides: [
     extensionManagerProvider.overrideWith(() => _Manager(provider)),
     artworkFallbackServiceProvider.overrideWithValue(_NoArtwork()),
@@ -190,7 +194,7 @@ Widget _app(AnimeWitcherProvider provider) => ProviderScope(
       _MangaDetailsEmptyCoverNotifier.new,
     ),
     mangaReadingRepositoryProvider.overrideWithValue(
-      MangaReadingRepository(_MangaDetailsReadingStorage()),
+      progressRepository ?? MangaReadingRepository(_MangaDetailsReadingStorage()),
     ),
   ],
   child: MaterialApp(
@@ -428,7 +432,21 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(_app(_MangaProvider()));
+      const chapterName = '  ٠١٢.٥ &amp; <b>خاص</b>  ';
+      final progressRepository = MangaReadingRepository(
+        _MangaDetailsReadingStorage(),
+      );
+      await progressRepository.save(const MangaReadingProgress(
+        mangaId: 'm1',
+        chapterId: '12.5',
+        pageIndex: 2,
+        pageCount: 20,
+        updatedAt: 1,
+      ));
+      await tester.pumpWidget(_app(
+        _MangaProvider(chapterName: chapterName),
+        progressRepository: progressRepository,
+      ));
       await _pumpUntil(
         tester,
         () => find
@@ -470,7 +488,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey<String>('manga-read-pill')),
-          matching: find.text('ابدأ القراءة'),
+          matching: find.text('تابع · $chapterName'),
         ),
         findsOneWidget,
       );
