@@ -1425,6 +1425,8 @@ class AnimeWitcherPlayerControlsState
         : null;
     final storyEpisodeLabel = storyEpisode == null
         ? null
+        : storyEpisode.serverName.trim().isNotEmpty
+        ? storyEpisode.serverName
         : 'الحلقة ${storyEpisode.episode}';
     final hasEpisodePicker = playerNotifier.hasEpisodePicker;
     final episodeLabel = _buildEpisodeLine(

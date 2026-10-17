@@ -10,6 +10,7 @@ import '../../../../core/utils/download_time_remaining.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../shared/widgets/apple_liquid_glass.dart';
 import '../../../details/presentation/widgets/details_hero_actions.dart';
+import '../../../details/presentation/widgets/download_progress_dialog.dart';
 import '../../../details/presentation/widgets/episode_action_chip.dart';
 import '../../../library/presentation/download_progress_v2_provider.dart';
 import '../../../library/presentation/downloads_provider.dart';
@@ -570,6 +571,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
   ) {
     if (widget.onDownload == null) return null;
     DownloadProgressData? data;
+    var progressIdentity = chapter.url;
     final mangaId = chapter.mangaId.trim();
     if (mangaId.isNotEmpty && chapter.id.trim().isNotEmpty) {
       final logicalId = logicalDownloadIdForMangaChapter(
@@ -577,6 +579,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
         chapterId: chapter.id,
       ).value;
       data = progressById[logicalId];
+      if (data != null) progressIdentity = logicalId;
     }
     data ??= progressById[chapter.url];
 
@@ -603,10 +606,16 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
     }
 
     if (data != null && active) {
+      void showProgress() => DownloadProgressDialog.show(
+        context,
+        chapter.displayName,
+        progressIdentity,
+      );
+
       if (status == TaskStatus.paused) {
         return EpisodeActionChip(
           tooltip: 'التنزيل متوقف مؤقتًا',
-          onPressed: () {},
+          onPressed: showProgress,
           child: Icon(
             Icons.pause_rounded,
             size: 18,
@@ -617,7 +626,7 @@ class _MangaChapterListState extends ConsumerState<MangaChapterList> {
       final value = data.progress.clamp(0.0, 1.0);
       return EpisodeActionChip(
         tooltip: 'جارٍ تنزيل الفصل',
-        onPressed: () {},
+        onPressed: showProgress,
         child: Padding(
           padding: const EdgeInsets.all(4),
           child: Stack(

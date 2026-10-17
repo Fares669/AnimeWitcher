@@ -120,7 +120,7 @@ class MoreScreen extends ConsumerWidget {
                 items: <MoreDestination>[
                   MoreDestination(
                     icon: Icons.person_rounded,
-                    label: 'حساب AnimeWitcher',
+                    label: 'الحساب',
                     builder: (_) => const AnimeWitcherAccountScreen(),
                   ),
                 ],
