@@ -230,6 +230,8 @@ class ViewAllRouteExtra {
     required this.category,
     this.onTap,
     this.loadPage,
+    this.initialOffset,
+    this.initialHasMore = true,
     this.forcePortrait = false,
   });
   final String title;
@@ -237,6 +239,8 @@ class ViewAllRouteExtra {
   final ViewAllCategory category;
   final void Function(MultimediaItem item)? onTap;
   final Future<ProviderMediaPage> Function(int offset)? loadPage;
+  final int? initialOffset;
+  final bool initialHasMore;
   final bool forcePortrait;
 }
 
@@ -349,6 +353,8 @@ class ViewAllRoute extends _AppGoRouteData with $ViewAllRoute {
       category: $extra.category,
       onTap: $extra.onTap,
       loadPage: $extra.loadPage,
+      initialOffset: $extra.initialOffset,
+      initialHasMore: $extra.initialHasMore,
       forcePortrait: $extra.forcePortrait,
     );
   }
