@@ -138,7 +138,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _refresh() {
-    return _refreshFuture ??=
+    if (_refreshFuture != null) return _refreshFuture!;
+    for (final ranking in MalRanking.values) {
+      ref.invalidate(homeMalRankingPageProvider(ranking));
+    }
+    return _refreshFuture =
         Future.wait<void>([
               ref.read(continueWatchingProvider.notifier).refreshFromServer(),
               ref.read(homeDataProvider.notifier).fetch(keepCurrent: true),
@@ -379,19 +383,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           (MalRanking.top, 'Top rated', 'الأفضل'),
           (MalRanking.popular, 'Most watched', 'الأكثر مشاهدة'),
         ]) {
-      final items =
-          ref.watch(malRankingProvider(ranking)).value ??
-          const <MultimediaItem>[];
-      if (items.isEmpty) continue;
+      final page = ref.watch(homeMalRankingPageProvider(ranking)).value;
+      if (page == null || (page.items.isEmpty && !page.hasMore)) continue;
+      final items = page.items;
       warmPosters(items.take(12).map((item) => item.posterUrl));
       rails.add(
         MediaHorizontalList(
           key: ValueKey<String>('home-mal-${ranking.name}'),
           title: appText(context, english: english, arabic: arabic),
-          mediaList: items,
+          mediaList: items.take(malRankingPageSize).toList(growable: false),
           category: ViewAllCategory.providerContent,
           showViewAll: true,
           loadViewAllPage: (offset) => load(ranking, offset),
+          initialViewAllOffset: page.nextOffset,
+          initialViewAllHasMore: page.hasMore,
+          showWhenEmpty: page.hasMore,
           onTap: (item) {
             DetailsRoute($extra: DetailsRouteExtra(item: item))
                 .push<void>(context);

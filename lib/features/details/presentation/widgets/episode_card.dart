@@ -559,7 +559,7 @@ class EpisodeCard extends HookConsumerWidget {
 
     final commentsButton = EpisodeActionChip(
       tooltip: 'تعليقات الحلقة',
-      icon: Icons.forum_outlined,
+      icon: Icons.chat_bubble_outline_rounded,
       onPressed: () {
         Navigator.of(context).push(
           MaterialPageRoute<void>(

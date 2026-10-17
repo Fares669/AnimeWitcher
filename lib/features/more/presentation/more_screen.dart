@@ -144,7 +144,7 @@ class MoreScreen extends ConsumerWidget {
                     builder: (_) => const SeasonsScreen(),
                   ),
                   MoreDestination(
-                    icon: Icons.calendar_view_week_rounded,
+                    icon: Icons.calendar_month_rounded,
                     label: 'جدول البث',
                     builder: (_) => const BroadcastScheduleScreen(),
                   ),
@@ -246,7 +246,7 @@ class MoreScreen extends ConsumerWidget {
                 ),
               ),
               _MoreTile(
-                icon: Icons.calendar_view_week_rounded,
+                icon: Icons.calendar_month_rounded,
                 title: 'جدول البث',
                 subtitle: 'الأنميات موزعة على أيام الأسبوع السبعة',
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
