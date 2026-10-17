@@ -1,7 +1,10 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:screen_brightness/screen_brightness.dart';
+
 import '../../settings/presentation/player_settings_provider.dart';
 
 part 'player_gesture_handler.g.dart';
@@ -98,6 +101,11 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
 
   double _boostLevel = 1.0;
   Timer? _osdTimer;
+  int _deviceSession = 0;
+  int _dragSerial = 0;
+  double? _deviceVolume;
+  bool _writingLevel = false;
+  (PlayerGesture, double)? _pendingLevel;
 
   bool get supportsVolumeBoost =>
       getMaxVolumeLevel?.call() != null && getMaxVolumeLevel!() > 1.0;
@@ -105,12 +113,14 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
   @override
   PlayerGestureState build() {
     ref.onDispose(() {
+      _deviceSession++;
+      _pendingLevel = null;
       _osdTimer?.cancel();
     });
     return const PlayerGestureState();
   }
 
-  void init({
+  int init({
     required Future<PlayerSettings> Function() getSettings,
     required bool isTv,
     required bool isDesktop,
@@ -129,6 +139,10 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
     required void Function(bool isLeft, Offset tapPos, int seekSeconds)
     onDoubleTapAnimationStart,
   }) {
+    _deviceSession++;
+    _dragSerial++;
+    _writingLevel = false;
+    _pendingLevel = null;
     this.getSettings = getSettings;
     this.isTv = isTv;
     this.isDesktop = isDesktop;
@@ -145,6 +159,86 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
     this.onVolumeChange = onVolumeChange;
     this.toggleMuteLevel = toggleMuteLevel;
     this.onDoubleTapAnimationStart = onDoubleTapAnimationStart;
+    return _deviceSession;
+  }
+
+  void detachDeviceControls({int? session}) {
+    if (session != null && session != _deviceSession) return;
+    _deviceSession++;
+    _dragSerial++;
+    _writingLevel = false;
+    _pendingLevel = null;
+    _osdTimer?.cancel();
+    final detachedSession = _deviceSession;
+    Future.microtask(() {
+      if (ref.mounted && detachedSession == _deviceSession) {
+        state = const PlayerGestureState();
+      }
+    });
+  }
+
+  void syncDeviceVolume(double value) {
+    if (!value.isFinite) return;
+    _deviceVolume = value.clamp(0.0, 1.0);
+    if (state.activeDragMode == PlayerDragMode.vertical) return;
+    _showVolumeOsd(_deviceVolume!);
+  }
+
+  void syncDeviceBrightness(double value) {
+    if (!value.isFinite ||
+        !state.showOSD ||
+        state.osdLabel != 'Brightness' ||
+        state.activeDragMode == PlayerDragMode.vertical) {
+      return;
+    }
+    state = state.copyWith(osdValue: value.clamp(0.0, 1.0));
+  }
+
+  Future<void> _writeDeviceLevel(PlayerGesture gesture, double value) async {
+    _pendingLevel = (gesture, value);
+    if (_writingLevel) return;
+    _writingLevel = true;
+    final session = _deviceSession;
+    var writingGesture = gesture;
+    try {
+      while (_pendingLevel != null && session == _deviceSession) {
+        final (type, target) = _pendingLevel!;
+        writingGesture = type;
+        _pendingLevel = null;
+        if (type == PlayerGesture.brightness) {
+          await ScreenBrightness().setSystemScreenBrightness(target);
+        } else {
+          await setVolumeLevel?.call(target);
+        }
+      }
+      if (session == _deviceSession &&
+          writingGesture == PlayerGesture.volume &&
+          state.activeDragMode == PlayerDragMode.none &&
+          _deviceVolume != null) {
+        _showVolumeOsd(_deviceVolume!);
+      }
+    } catch (error) {
+      if (session != _deviceSession) return;
+      _pendingLevel = null;
+      state = state.copyWith(activeDragMode: PlayerDragMode.none);
+      var message = writingGesture == PlayerGesture.brightness
+          ? 'تعذّر تغيير سطوع الجهاز'
+          : 'تعذّر تغيير صوت الجهاز';
+      if (writingGesture == PlayerGesture.brightness &&
+          error is PlatformException) {
+        try {
+          if (!await ScreenBrightness().canChangeSystemBrightness) {
+            message =
+                'اسمح بتعديل إعدادات النظام، ثم اسحب لتغيير السطوع مجددًا';
+          }
+        } catch (_) {
+          // An unsupported platform still shows the original failure.
+        }
+      }
+      if (session == _deviceSession) showToast(message, Icons.error_outline);
+    } finally {
+      if (session == _deviceSession) _writingLevel = false;
+    }
   }
 
   void _triggerOSDTimer() {
@@ -195,25 +289,31 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
     }
 
     final isLeftHalf = x < screenWidth / 2;
-    final type = isLeftHalf
-        ? PlayerGesture.brightness
-        : PlayerGesture.volume;
+    final type = isLeftHalf ? PlayerGesture.brightness : PlayerGesture.volume;
     final alignment = isLeftHalf
         ? Alignment.centerRight
         : Alignment.centerLeft; // Opposite side
 
-    double startVal = 0.5;
-    if (type == PlayerGesture.brightness) {
-      try {
-        startVal = await ScreenBrightness().application;
-      } catch (e) {
-        startVal = 0.5;
+    final session = _deviceSession;
+    final drag = ++_dragSerial;
+    double startVal;
+    try {
+      if (type == PlayerGesture.brightness) {
+        // Clear a reader/older-player override before following device brightness.
+        await ScreenBrightness().resetApplicationScreenBrightness();
+        startVal = await ScreenBrightness().system;
+      } else {
+        if (getVolumeLevel == null) return;
+        startVal = await getVolumeLevel!();
+        _deviceVolume = startVal;
       }
-    } else {
-      if (getVolumeLevel == null) return;
-      startVal = await getVolumeLevel!();
-      _boostLevel = supportsVolumeBoost && startVal > 1.0 ? startVal : 1.0;
+    } catch (_) {
+      if (session == _deviceSession) {
+        showToast('تعذّر قراءة مستوى الجهاز', Icons.error_outline);
+      }
+      return;
     }
+    if (session != _deviceSession || drag != _dragSerial) return;
 
     state = state.copyWith(
       activeDragMode: PlayerDragMode.vertical,
@@ -241,48 +341,27 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
     final delta = -(details.primaryDelta ?? 0) / 300;
     if (delta == 0) return;
 
-    final double min = (state.currentGesture == PlayerGesture.brightness)
-        ? -0.05
-        : 0.0;
-    final double max = (state.currentGesture == PlayerGesture.brightness)
-        ? 1.0
-        : (getMaxVolumeLevel?.call() ?? 1.0);
-
-    final double newVal = ((state.osdValue ?? 0.0) + delta).clamp(min, max);
-
-    if (state.currentGesture == PlayerGesture.brightness) {
-      if (newVal <= 0.0) {
-        ScreenBrightness().resetApplicationScreenBrightness();
-        state = state.copyWith(
-          osdValue: newVal,
-          osdIcon: _getIconForValue(state.currentGesture!, newVal),
-          osdLabel: "Auto",
-        );
-      } else {
-        ScreenBrightness().setApplicationScreenBrightness(newVal);
-        state = state.copyWith(
-          osdValue: newVal,
-          osdIcon: _getIconForValue(state.currentGesture!, newVal),
-          osdLabel: "Brightness",
-        );
-      }
-    } else {
-      _boostLevel = supportsVolumeBoost && newVal > 1.0 ? newVal : 1.0;
-      final Future<double>? future = setVolumeLevel?.call(newVal);
-      unawaited(future?.then((_) => null) ?? Future.value());
-      state = state.copyWith(
-        osdValue: newVal,
-        osdIcon: _getIconForValue(state.currentGesture!, newVal),
-      );
-    }
+    final newVal = ((state.osdValue ?? 0.0) + delta).clamp(0.0, 1.0);
+    final type = state.currentGesture!;
+    state = state.copyWith(
+      osdValue: newVal,
+      osdIcon: _getIconForValue(type, newVal),
+      osdLabel: type == PlayerGesture.brightness ? 'Brightness' : 'Volume',
+    );
+    unawaited(_writeDeviceLevel(type, newVal));
   }
 
   void handleDragEnd(DragEndDetails details) {
+    _dragSerial++;
     if (state.activeDragMode != PlayerDragMode.vertical) return;
+    final wasVolume = state.currentGesture == PlayerGesture.volume;
     state = state.copyWith(
       activeDragMode: PlayerDragMode.none,
       currentGesture: null,
     );
+    if (wasVolume && !_writingLevel && _deviceVolume != null) {
+      _showVolumeOsd(_deviceVolume!);
+    }
     _triggerOSDTimer();
   }
 
@@ -376,19 +455,29 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
   }
 
   Future<void> toggleMute() async {
-    final value = await toggleMuteLevel?.call();
-    if (value == null) return;
-    if (value <= 0) {
-      showToast("Mute", Icons.volume_off);
-    } else {
+    final session = _deviceSession;
+    try {
+      final value = await toggleMuteLevel?.call();
+      if (value == null || session != _deviceSession) return;
       _showVolumeOsd(value);
+    } catch (_) {
+      if (session == _deviceSession) {
+        showToast('تعذّر تغيير صوت الجهاز', Icons.error_outline);
+      }
     }
   }
 
   Future<void> changeVolume(double step) async {
-    final value = await onVolumeChange?.call(step);
-    if (value == null) return;
-    _showVolumeOsd(value);
+    final session = _deviceSession;
+    try {
+      final value = await onVolumeChange?.call(step);
+      if (value == null || session != _deviceSession) return;
+      _showVolumeOsd(value);
+    } catch (_) {
+      if (session == _deviceSession) {
+        showToast('تعذّر تغيير صوت الجهاز', Icons.error_outline);
+      }
+    }
   }
 
   void _showVolumeOsd(double value) {
@@ -409,7 +498,7 @@ class PlayerGestureHandler extends _$PlayerGestureHandler {
 
   IconData _getIconForValue(PlayerGesture type, double value) {
     if (type == PlayerGesture.brightness) {
-      if (value <= 0.0) return Icons.brightness_auto;
+      if (value <= 0.0) return Icons.brightness_low;
       if (value < 0.3) return Icons.brightness_low;
       if (value < 0.7) return Icons.brightness_medium;
       return Icons.brightness_high;

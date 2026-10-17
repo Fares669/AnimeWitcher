@@ -45,6 +45,7 @@ import '../../skip/data/skip_service.dart';
 import '../../../../core/storage/settings_repository.dart';
 import 'playback_recovery_policy.dart';
 import 'playback_resume.dart';
+import 'player_platform_service.dart';
 import '../data/anime4k.dart';
 import '../data/anime4k_shader_library.dart';
 import '../data/anime4k_performance.dart';
@@ -183,7 +184,8 @@ class PlayerState {
   bool get canSeek => !useExoPlayer || isSeekable;
   bool get supportsPlaybackSpeed => !isLive;
   double get maxPlaybackSpeed => useExoPlayer ? 2.0 : 3.0;
-  bool get supportsVolumeBoost => !useExoPlayer;
+  // Device media volume has the same 0–100% range on both engines.
+  bool get supportsVolumeBoost => false;
   bool get supportsSubtitleDelay => !useExoPlayer;
   bool get supportsSubtitleStyling => !useExoPlayer;
 
@@ -447,6 +449,7 @@ class PlayerController extends Notifier<PlayerState> {
   int? _pendingResumeSeekPosition;
   bool _isApplyingPendingResumeSeek = false;
   double _lastNonZeroVolumeLevel = 1.0;
+  final _platformService = PlayerPlatformService();
 
   /// MyAnimeList id for the anime being played, resolved from the catalog or
   /// from the title. Needed to submit a viewer's marks back to AniSkip.
@@ -5015,51 +5018,34 @@ class PlayerController extends Notifier<PlayerState> {
     }
   }
 
-  double _getEngineVolumeLevel() {
-    if (state.useExoPlayer && _videoViewController != null) {
-      return _videoViewController!.volume.value.clamp(0.0, 1.0);
-    }
-
-    return (_player.state.volume / 100).clamp(0.0, 2.0);
-  }
-
   Future<void> _setEngineVolumeLevel(double value) async {
-    if (state.useExoPlayer && _videoViewController != null) {
-      _videoViewController!.setVolume(value.clamp(0.0, 1.0));
-      return;
-    }
-
-    await _player.setVolume((value * 100).clamp(0.0, 200.0));
+    // Reset both engines so switching sources cannot restore app attenuation.
+    _videoViewController?.setVolume(value);
+    await _player.setVolume(value * 100);
   }
 
-  // Volume lives entirely in the player engine (mpv/ExoPlayer's own gain),
-  // never the OS output level — muting or turning volume down in-app must
-  // not touch system volume, which would affect every other app too.
   Future<double> getVolumeLevel() async {
-    final value = _getEngineVolumeLevel();
-    if (value > 0) {
-      _lastNonZeroVolumeLevel = value;
-    }
+    final value = await _platformService.getVolumeLevel();
+    if (value > 0) _lastNonZeroVolumeLevel = value;
     return value;
   }
 
   Future<double> setVolumeLevel(double value) async {
-    final target = value.clamp(0.0, state.supportsVolumeBoost ? 2.0 : 1.0);
-
-    if (target > 0) {
-      _lastNonZeroVolumeLevel = target;
-    }
-
-    await _setEngineVolumeLevel(target);
+    final target = await _platformService.setVolumeLevel(
+      value,
+      setEngineVolume: _setEngineVolumeLevel,
+    );
+    if (target > 0) _lastNonZeroVolumeLevel = target;
     return target;
   }
 
   Future<double> changeVolume(double step) async {
-    final current = await getVolumeLevel();
-    final boostStep = state.supportsVolumeBoost && current >= 1.0
-        ? step * 2
-        : step;
-    return setVolumeLevel(current + boostStep);
+    final value = await _platformService.changeVolume(
+      step,
+      setEngineVolume: _setEngineVolumeLevel,
+    );
+    if (value > 0) _lastNonZeroVolumeLevel = value;
+    return value;
   }
 
   Future<double> toggleMute() async {

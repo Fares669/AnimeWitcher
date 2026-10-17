@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- User grants special access before player gestures change device brightness. -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <!-- Legacy public storage access: API ≤ 28 (WRITE), ≤ 32 (READ).
          New downloads fall back to app-specific scoped storage when public
          Downloads is not writable. -->

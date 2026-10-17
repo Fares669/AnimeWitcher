@@ -144,6 +144,7 @@ class AnimeWitcherPlayerControlsState
   final List<StreamSubscription<dynamic>> _subscriptions = [];
 
   late final PlayerPlatformService _platformService;
+  late final int _deviceControlSession;
   Offset? _tapPosition;
 
   /// Double taps are told apart by hand. A double-tap recognizer holds every
@@ -195,7 +196,7 @@ class AnimeWitcherPlayerControlsState
     _isIpad = Platform.isIOS && (deviceProfile?.isTablet ?? false);
 
     _platformService = PlayerPlatformService();
-    ref
+    _deviceControlSession = ref
         .read(playerGestureHandlerProvider.notifier)
         .init(
           getSettings: () async =>
@@ -250,12 +251,38 @@ class AnimeWitcherPlayerControlsState
     _scrubFocusNode = FocusNode(debugLabel: 'controls_scrubber');
     _nextEpFocusNode = FocusNode(debugLabel: 'next_episode_prompt');
     _skipFocusNode = FocusNode(debugLabel: 'skip_segment_prompt');
-    try {
-      FlutterVolumeController.updateShowSystemUI(false);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint("VolumeUI Error: $e");
-      }
+    unawaited(
+      FlutterVolumeController.updateShowSystemUI(false)
+          .catchError((Object error) {
+            if (kDebugMode) debugPrint('Volume UI: $error');
+          }),
+    );
+    final volumeChanges = FlutterVolumeController.addListener(
+      (value) {
+        if (!mounted) return;
+        ref.read(playerGestureHandlerProvider.notifier).syncDeviceVolume(value);
+      },
+      category: AudioSessionCategory.playback,
+      emitOnStart: false,
+    );
+    volumeChanges.onError((Object error) {
+      if (kDebugMode) debugPrint('Device volume listener: $error');
+    });
+    _subscriptions.add(volumeChanges);
+    if (Platform.isAndroid || Platform.isIOS) {
+      _subscriptions.add(
+        ScreenBrightness().onSystemScreenBrightnessChanged.listen(
+          (value) {
+            if (!mounted) return;
+            ref
+                .read(playerGestureHandlerProvider.notifier)
+                .syncDeviceBrightness(value);
+          },
+          onError: (Object error) {
+            if (kDebugMode) debugPrint('Device brightness listener: $error');
+          },
+        ),
+      );
     }
     _isPlaying = widget.player.state.playing;
     _position = widget.player.state.position;
@@ -428,6 +455,9 @@ class AnimeWitcherPlayerControlsState
       s.cancel();
     }
     _subscriptions.clear();
+    ref
+        .read(playerGestureHandlerProvider.notifier)
+        .detachDeviceControls(session: _deviceControlSession);
     _syncPipSession(active: false);
     _pipSettingsSub?.close();
     _revertMessageSub?.close();
@@ -439,18 +469,12 @@ class AnimeWitcherPlayerControlsState
     _hideTimer?.cancel();
     _seekOverlayTimer?.cancel();
     _seekAnimController.dispose();
-    try {
-      ScreenBrightness().resetApplicationScreenBrightness();
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('Failed to reset brightness: $e');
-      }
-    }
-    try {
-      FlutterVolumeController.updateShowSystemUI(true);
-    } catch (e) {
-      if (kDebugMode) debugPrint('Failed to restore volume UI: $e');
-    }
+    unawaited(
+      FlutterVolumeController.updateShowSystemUI(true)
+          .catchError((Object error) {
+            if (kDebugMode) debugPrint('Failed to restore volume UI: $error');
+          }),
+    );
     SystemChrome.setPreferredOrientations([]); // Reset to system default
     // Clear the PiP method channel handler to prevent a stale handler from
     // accessing the disposed provider after the player exits.

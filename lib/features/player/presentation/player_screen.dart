@@ -10,7 +10,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:media_kit/media_kit.dart' hide PlayerState;
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:screen_brightness/screen_brightness.dart';
 import 'package:video_view/video_view.dart' as vv;
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
@@ -384,11 +383,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     WakelockPlus.disable();
 
-    // Restore brightness if the user adjusted it via the gesture handler.
-    // Without this, exiting the player leaves the device at whatever dim
-    // value the user set, until they manually adjust again (audit H4).
-    // Idempotent and safe on platforms without an override active.
-    unawaited(ScreenBrightness().resetApplicationScreenBrightness());
     _spaceHoldTimer?.cancel();
     if (_spaceHeldForSpeed) {
       // The long-press boost is intentionally non-persistent. Both engines
