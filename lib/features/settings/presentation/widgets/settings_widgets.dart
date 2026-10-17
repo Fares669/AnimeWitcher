@@ -131,6 +131,10 @@ class SettingsTile extends StatefulWidget {
   final Widget? leading;
   final String title;
   final String? subtitle;
+
+  /// Keeps explanatory text under the title, even when it is short enough to
+  /// otherwise be treated as a current value in a trailing pill.
+  final bool subtitleIsDescription;
   final Widget? trailing;
   final VoidCallback? onTap;
   final bool isLast;
@@ -147,6 +151,7 @@ class SettingsTile extends StatefulWidget {
     this.leading,
     required this.title,
     this.subtitle,
+    this.subtitleIsDescription = false,
     this.trailing,
     this.onTap,
     this.isLast = false,
@@ -171,6 +176,7 @@ class _SettingsTileState extends State<SettingsTile> {
   static const int _valueLengthLimit = 28;
 
   bool get _showsValuePill {
+    if (widget.subtitleIsDescription) return false;
     final subtitle = widget.subtitle?.trim();
     if (subtitle == null || subtitle.isEmpty) return false;
     // A row with its own control has its answer there already.

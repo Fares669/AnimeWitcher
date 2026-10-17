@@ -700,7 +700,7 @@ class _EpisodeRowState extends ConsumerState<_EpisodeRow> {
     return Semantics(
       button: true,
       selected: widget.isCurrent,
-      label: ep.name,
+      label: ep.serverName.trim().isNotEmpty ? ep.serverName : ep.name,
       child: Focus(
         focusNode: widget.focusNode,
         onFocusChange: (v) => setState(() => _focused = v),
