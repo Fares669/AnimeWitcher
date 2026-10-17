@@ -3385,12 +3385,7 @@ class AnimeWitcherAccountService {
     final episodeName =
         _originalEpisodeText(episodeServerName) ??
         episodeTitle ??
-        (episodeNumber == null
-            ? ''
-            : formatEpisodeNumberLabel(
-                episode: episodeNumber,
-                isFinal: hasFinalEpisodeSuffix(episodeTitle),
-              ));
+        (episodeNumber == null ? '' : 'حلقة $episodeNumber');
     final operations = <Future<void>>[];
 
     if (episodeId != null) {
