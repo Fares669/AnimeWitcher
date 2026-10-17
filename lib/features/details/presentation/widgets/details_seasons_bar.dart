@@ -12,7 +12,6 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/core/utils/catalog_label.dart';
 import 'package:animewitcher/shared/widgets/fallback_poster_image.dart';
 
-
 /// Relations that are part of the same story: the seasons before and after,
 /// the work they branch from, and its side stories. Spin-offs, alternative
 /// versions and recaps stay in the related tab — they are other shows.
@@ -431,14 +430,12 @@ _walkChain({
   );
 }
 
-
 int? _aniListMalIdFromUrl(String url) {
   const prefix = 'anilist-mal:';
   if (!url.startsWith(prefix)) return null;
   final id = int.tryParse(url.substring(prefix.length));
   return id != null && id > 0 ? id : null;
 }
-
 
 /// How the bar is drawn; chosen in settings.
 enum SeasonsBarStyle {
@@ -455,9 +452,9 @@ enum SeasonsBarStyle {
     return SeasonsBarStyle.cards;
   }
 
-  String label({required bool arabic}) => switch (this) {
-    SeasonsBarStyle.cards => arabic ? 'بطاقات بالصور' : 'Picture cards',
-    SeasonsBarStyle.pills => arabic ? 'أزرار قصيرة' : 'Short buttons',
+  String label() => switch (this) {
+    SeasonsBarStyle.cards => 'بطاقات بالصور',
+    SeasonsBarStyle.pills => 'أزرار قصيرة',
   };
 }
 
@@ -590,10 +587,9 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
             sync?['anilistId'] ?? sync?['anilist_id'] ?? '',
           );
           if (aniListId == null || aniListId <= 0) return null;
-          final mapping = await aniZip.fetchSeasonMapping(aniListId).timeout(
-            const Duration(seconds: 2),
-            onTimeout: () => null,
-          );
+          final mapping = await aniZip
+              .fetchSeasonMapping(aniListId)
+              .timeout(const Duration(seconds: 2), onTimeout: () => null);
           return mapping == null
               ? null
               : (url: entry.item.url, season: mapping.seasonNumber);
@@ -636,16 +632,14 @@ class _DetailsSeasonsBarState extends ConsumerState<DetailsSeasonsBar> {
 
       if (!mounted || generation != _loadGeneration) return;
       setState(
-        () => _walked = matched.length < 2
-            ? const <SeasonsBarEntry>[]
-            : matched,
+        () =>
+            _walked = matched.length < 2 ? const <SeasonsBarEntry>[] : matched,
       );
     } catch (_) {
       if (!mounted || generation != _loadGeneration) return;
       setState(() => _walked = const <SeasonsBarEntry>[]);
     }
   }
-
 
   @override
   Widget build(BuildContext context) {

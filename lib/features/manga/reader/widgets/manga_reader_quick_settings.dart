@@ -33,57 +33,59 @@ class _MangaReaderQuickSettingsState
 
   bool get _continuous => _mode.isContinuous;
 
-  String _t(String en, String ar) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
-          ? ar
-          : en;
+  String _t(String en, String ar) => ar;
 
   String _modeLabel(MangaReaderMode mode) => switch (mode) {
-        MangaReaderMode.vertical => _t('Vertical', 'عمودي'),
-        MangaReaderMode.pagedLtr => _t('Left to right', 'من اليسار لليمين'),
-        MangaReaderMode.pagedRtl => _t('Right to left', 'من اليمين لليسار'),
-        MangaReaderMode.verticalContinuous =>
-          _t('Vertical continuous', 'عمودي مستمر'),
-        MangaReaderMode.webtoon => _t('Webtoon', 'ويب تون'),
-        MangaReaderMode.horizontalContinuous =>
-          _t('Horizontal continuous', 'أفقي مستمر'),
-        MangaReaderMode.horizontalContinuousRtl =>
-          _t('Horizontal continuous (RTL)', 'أفقي مستمر (RTL)'),
-      };
+    MangaReaderMode.vertical => _t('Vertical', 'عمودي'),
+    MangaReaderMode.pagedLtr => _t('Left to right', 'من اليسار لليمين'),
+    MangaReaderMode.pagedRtl => _t('Right to left', 'من اليمين لليسار'),
+    MangaReaderMode.verticalContinuous => _t(
+      'Vertical continuous',
+      'عمودي مستمر',
+    ),
+    MangaReaderMode.webtoon => _t('Webtoon', 'ويب تون'),
+    MangaReaderMode.horizontalContinuous => _t(
+      'Horizontal continuous',
+      'أفقي مستمر',
+    ),
+    MangaReaderMode.horizontalContinuousRtl => _t(
+      'Horizontal continuous (RTL)',
+      'أفقي مستمر (RTL)',
+    ),
+  };
 
   String _scaleLabel(MangaReaderScaleType value) => switch (value) {
-        MangaReaderScaleType.fitScreen => _t('Fit screen', 'ملاءمة الشاشة'),
-        MangaReaderScaleType.stretch => _t('Stretch', 'تمديد'),
-        MangaReaderScaleType.fitWidth => _t('Fit width', 'ملاءمة العرض'),
-        MangaReaderScaleType.fitHeight => _t('Fit height', 'ملاءمة الارتفاع'),
-        MangaReaderScaleType.originalSize => _t('Original size', 'الحجم الأصلي'),
-        MangaReaderScaleType.smartFit => _t('Smart fit', 'ملاءمة ذكية'),
-      };
+    MangaReaderScaleType.fitScreen => _t('Fit screen', 'ملاءمة الشاشة'),
+    MangaReaderScaleType.stretch => _t('Stretch', 'تمديد'),
+    MangaReaderScaleType.fitWidth => _t('Fit width', 'ملاءمة العرض'),
+    MangaReaderScaleType.fitHeight => _t('Fit height', 'ملاءمة الارتفاع'),
+    MangaReaderScaleType.originalSize => _t('Original size', 'الحجم الأصلي'),
+    MangaReaderScaleType.smartFit => _t('Smart fit', 'ملاءمة ذكية'),
+  };
 
   String _backgroundLabel(MangaReaderBackground value) => switch (value) {
-        MangaReaderBackground.black => _t('Black', 'أسود'),
-        MangaReaderBackground.grey => _t('Grey', 'رمادي'),
-        MangaReaderBackground.white => _t('White', 'أبيض'),
-        MangaReaderBackground.automatic => _t('Automatic', 'تلقائي'),
-      };
+    MangaReaderBackground.black => _t('Black', 'أسود'),
+    MangaReaderBackground.grey => _t('Grey', 'رمادي'),
+    MangaReaderBackground.white => _t('White', 'أبيض'),
+    MangaReaderBackground.automatic => _t('Automatic', 'تلقائي'),
+  };
 
   String _tapInversionLabel(int value) => switch (value) {
-        1 => _t('Horizontal', 'أفقي'),
-        2 => _t('Vertical', 'عمودي'),
-        3 => _t('Both', 'كلاهما'),
-        _ => _t('None', 'بدون'),
-      };
+    1 => _t('Horizontal', 'أفقي'),
+    2 => _t('Vertical', 'عمودي'),
+    3 => _t('Both', 'كلاهما'),
+    _ => _t('None', 'بدون'),
+  };
 
   String _zoomStartLabel(int value) => switch (value) {
-        0 => _t('Left', 'يسار'),
-        1 => _t('Right', 'يمين'),
-        _ => _t('Center', 'وسط'),
-      };
+    0 => _t('Left', 'يسار'),
+    1 => _t('Right', 'يمين'),
+    _ => _t('Center', 'وسط'),
+  };
 
   Future<void> _update(
     MangaReaderSettings Function(MangaReaderSettings value) transform,
-  ) =>
-      ref.read(mangaReaderSettingsProvider.notifier).update(transform);
+  ) => ref.read(mangaReaderSettingsProvider.notifier).update(transform);
 
   @override
   Widget build(BuildContext context) {
@@ -125,10 +127,7 @@ class _MangaReaderQuickSettingsState
             value: _mode,
             items: <DropdownMenuItem<MangaReaderMode>>[
               for (final mode in MangaReaderMode.values)
-                DropdownMenuItem(
-                  value: mode,
-                  child: Text(_modeLabel(mode)),
-                ),
+                DropdownMenuItem(value: mode, child: Text(_modeLabel(mode))),
             ],
             onChanged: (mode) {
               if (mode == null || mode == _mode) return;
@@ -140,8 +139,7 @@ class _MangaReaderQuickSettingsState
         SwitchListTile(
           title: Text(_t('Crop borders', 'قص الحواف')),
           value: settings.cropBorders,
-          onChanged: (value) =>
-              _update((s) => s.copyWith(cropBorders: value)),
+          onChanged: (value) => _update((s) => s.copyWith(cropBorders: value)),
         ),
         if (_continuous) ...<Widget>[
           SwitchListTile(
@@ -153,9 +151,8 @@ class _MangaReaderQuickSettingsState
           SwitchListTile(
             title: Text(_t('Double-tap zoom', 'تكبير بالنقر المزدوج')),
             value: settings.webtoonDoubleTapZoomEnabled,
-            onChanged: (value) => _update(
-              (s) => s.copyWith(webtoonDoubleTapZoomEnabled: value),
-            ),
+            onChanged: (value) =>
+                _update((s) => s.copyWith(webtoonDoubleTapZoomEnabled: value)),
           ),
         ] else
           SwitchListTile(
@@ -193,16 +190,14 @@ class _MangaReaderQuickSettingsState
           SwitchListTile(
             title: Text(_t('Invert rotation', 'عكس اتجاه التدوير')),
             value: settings.dualPageRotateToFitInvert,
-            onChanged: (value) => _update(
-              (s) => s.copyWith(dualPageRotateToFitInvert: value),
-            ),
+            onChanged: (value) =>
+                _update((s) => s.copyWith(dualPageRotateToFitInvert: value)),
           ),
         SwitchListTile(
           title: Text(_t('Single first page', 'الصفحة الأولى منفردة')),
           value: settings.doublePageSingleFirstPage,
-          onChanged: (value) => _update(
-            (s) => s.copyWith(doublePageSingleFirstPage: value),
-          ),
+          onChanged: (value) =>
+              _update((s) => s.copyWith(doublePageSingleFirstPage: value)),
         ),
         SwitchListTile(
           title: Text(_t('Automatic double page', 'صفحتان تلقائيًا')),
@@ -247,8 +242,7 @@ class _MangaReaderQuickSettingsState
         SwitchListTile(
           title: Text(_t('Keep screen on', 'إبقاء الشاشة مضاءة')),
           value: settings.keepScreenOn,
-          onChanged: (value) =>
-              _update((s) => s.copyWith(keepScreenOn: value)),
+          onChanged: (value) => _update((s) => s.copyWith(keepScreenOn: value)),
         ),
         if (_continuous)
           SwitchListTile(
@@ -269,9 +263,7 @@ class _MangaReaderQuickSettingsState
               divisions: 50,
               value: settings.webtoonSidePadding.toDouble(),
               onChanged: (value) => unawaited(
-                _update(
-                  (s) => s.copyWith(webtoonSidePadding: value.round()),
-                ),
+                _update((s) => s.copyWith(webtoonSidePadding: value.round())),
               ),
             ),
           ),
@@ -296,8 +288,7 @@ class _MangaReaderQuickSettingsState
               max: 30,
               divisions: 28,
               value: auto.speed.clamp(2, 30).toDouble(),
-              onChanged: (speed) =>
-                  widget.onAutoScrollChanged(true, speed),
+              onChanged: (speed) => widget.onAutoScrollChanged(true, speed),
             ),
           ),
       ],
@@ -332,10 +323,7 @@ class _MangaReaderQuickSettingsState
             value: settings.scaleType,
             items: <DropdownMenuItem<MangaReaderScaleType>>[
               for (final value in MangaReaderScaleType.values)
-                DropdownMenuItem(
-                  value: value,
-                  child: Text(_scaleLabel(value)),
-                ),
+                DropdownMenuItem(value: value, child: Text(_scaleLabel(value))),
             ],
             onChanged: (value) {
               if (value != null) {
@@ -372,9 +360,7 @@ class _MangaReaderQuickSettingsState
             ],
             onChanged: (value) {
               if (value != null) {
-                unawaited(
-                  _update((s) => s.copyWith(tappingInversion: value)),
-                );
+                unawaited(_update((s) => s.copyWith(tappingInversion: value)));
               }
             },
           ),
@@ -444,9 +430,8 @@ class _MangaReaderQuickSettingsState
             ),
           ),
           value: settings.showNavigationOverlayOnStart,
-          onChanged: (value) => _update(
-            (s) => s.copyWith(showNavigationOverlayOnStart: value),
-          ),
+          onChanged: (value) =>
+              _update((s) => s.copyWith(showNavigationOverlayOnStart: value)),
         ),
         ListTile(
           title: Text(
@@ -466,8 +451,7 @@ class _MangaReaderQuickSettingsState
         SwitchListTile(
           title: Text(_t('Full screen', 'ملء الشاشة')),
           value: settings.fullScreen,
-          onChanged: (value) =>
-              _update((s) => s.copyWith(fullScreen: value)),
+          onChanged: (value) => _update((s) => s.copyWith(fullScreen: value)),
         ),
         SwitchListTile(
           title: Text(_t('Show page number', 'إظهار رقم الصفحة')),
@@ -476,13 +460,10 @@ class _MangaReaderQuickSettingsState
               _update((s) => s.copyWith(showPageNumber: value)),
         ),
         SwitchListTile(
-          title: Text(
-            _t('Animate page transitions', 'تحريك انتقال الصفحات'),
-          ),
+          title: Text(_t('Animate page transitions', 'تحريك انتقال الصفحات')),
           value: settings.animatePageTransitions,
-          onChanged: (value) => _update(
-            (s) => s.copyWith(animatePageTransitions: value),
-          ),
+          onChanged: (value) =>
+              _update((s) => s.copyWith(animatePageTransitions: value)),
         ),
         const Divider(),
         ListTile(
@@ -493,5 +474,4 @@ class _MangaReaderQuickSettingsState
       ],
     );
   }
-
 }

@@ -85,19 +85,15 @@ MangaReaderMode? mangaReaderModeWithDirection(
 };
 
 /// A mode's name, as the reader has always called it.
-String mangaReaderModeName(MangaReaderMode mode, {required bool arabic}) =>
-    switch (mode) {
-      MangaReaderMode.vertical => arabic ? 'عمودي' : 'Vertical',
-      MangaReaderMode.pagedLtr => arabic ? 'من اليسار لليمين' : 'Left to right',
-      MangaReaderMode.pagedRtl => arabic ? 'من اليمين لليسار' : 'Right to left',
-      MangaReaderMode.verticalContinuous =>
-        arabic ? 'عمودي مستمر' : 'Vertical continuous',
-      MangaReaderMode.webtoon => arabic ? 'ويب تون' : 'Webtoon',
-      MangaReaderMode.horizontalContinuous =>
-        arabic ? 'أفقي مستمر' : 'Horizontal continuous',
-      MangaReaderMode.horizontalContinuousRtl =>
-        arabic ? 'أفقي مستمر (RTL)' : 'Horizontal continuous (RTL)',
-    };
+String mangaReaderModeName(MangaReaderMode mode) => switch (mode) {
+  MangaReaderMode.vertical => 'عمودي',
+  MangaReaderMode.pagedLtr => 'من اليسار لليمين',
+  MangaReaderMode.pagedRtl => 'من اليمين لليسار',
+  MangaReaderMode.verticalContinuous => 'عمودي مستمر',
+  MangaReaderMode.webtoon => 'ويب تون',
+  MangaReaderMode.horizontalContinuous => 'أفقي مستمر',
+  MangaReaderMode.horizontalContinuousRtl => 'أفقي مستمر (RTL)',
+};
 
 class _MangaReaderSettingsPanelState extends State<MangaReaderSettingsPanel> {
   late MangaReaderPanelTab _tab = widget.initialTab;
@@ -110,9 +106,7 @@ class _MangaReaderSettingsPanelState extends State<MangaReaderSettingsPanel> {
 
   ColorScheme get _colors => Theme.of(context).colorScheme;
 
-  bool get _ar =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-  String _t(String en, String ar) => _ar ? ar : en;
+  String _t(String en, String ar) => ar;
 
   void _update(MangaReaderSettings Function(MangaReaderSettings) change) =>
       widget.onUpdate(change);
@@ -333,7 +327,7 @@ class _MangaReaderSettingsPanelState extends State<MangaReaderSettingsPanel> {
             if (widget.onDefaultMode != null)
               (null, _t('Default', 'الافتراضي')),
             for (final value in MangaReaderMode.values)
-              (value, mangaReaderModeName(value, arabic: _ar)),
+              (value, mangaReaderModeName(value)),
           ],
           isSelected: (value) => value == null
               ? widget.modeIsDefault
@@ -591,7 +585,7 @@ class _MangaReaderSettingsPanelState extends State<MangaReaderSettingsPanel> {
         _chips<MangaReaderMode>(
           options: <(MangaReaderMode, String)>[
             for (final value in navigatorModes)
-              (value, mangaReaderModeName(value, arabic: _ar)),
+              (value, mangaReaderModeName(value)),
           ],
           isSelected: settings.usesVerticalBar,
           keyPrefix: 'vertical-bar',

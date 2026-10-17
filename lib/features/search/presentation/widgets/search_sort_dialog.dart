@@ -80,8 +80,7 @@ class _SearchSortDialogState extends State<SearchSortDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final radius = BorderRadius.circular(30);
 
     return Dialog(
@@ -102,7 +101,7 @@ class _SearchSortDialogState extends State<SearchSortDialog> {
           child: Material(
             color: Colors.transparent,
             child: Directionality(
-              textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+              textDirection: TextDirection.rtl,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -110,7 +109,11 @@ class _SearchSortDialogState extends State<SearchSortDialog> {
                     padding: const EdgeInsets.fromLTRB(18, 14, 14, 14),
                     child: Row(
                       children: [
-                        Icon(Icons.sort_rounded, color: colors.primary, size: 28),
+                        Icon(
+                          Icons.sort_rounded,
+                          color: colors.primary,
+                          size: 28,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -161,7 +164,8 @@ class _SearchSortDialogState extends State<SearchSortDialog> {
                                   ),
                                 ),
                                 activeColor: colors.primary,
-                                controlAffinity: ListTileControlAffinity.leading,
+                                controlAffinity:
+                                    ListTileControlAffinity.leading,
                                 contentPadding: const EdgeInsets.symmetric(
                                   horizontal: 20,
                                 ),
@@ -198,11 +202,7 @@ class _SearchSortDialogState extends State<SearchSortDialog> {
                           onPressed: () =>
                               Navigator.of(context).pop(_selected.value),
                           child: Text(
-                            appText(
-                              context,
-                              english: 'Apply',
-                              arabic: 'تطبيق',
-                            ),
+                            appText(context, english: 'Apply', arabic: 'تطبيق'),
                           ),
                         ),
                       ],

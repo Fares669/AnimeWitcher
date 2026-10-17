@@ -51,8 +51,6 @@ Future<void> _showStreamPriorityDialog(
   required Future<void> Function(List<String>) onSave,
 }) async {
   final order = List<String>.of(current);
-  final isArabic =
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
   await showGlassDialog<void>(
     context: context,
@@ -69,9 +67,7 @@ Future<void> _showStreamPriorityDialog(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  isArabic
-                      ? 'اسحب لترتيب الأولوية من الأعلى إلى الأسفل.'
-                      : 'Drag to order priority from highest to lowest.',
+                  'اسحب لترتيب الأولوية من الأعلى إلى الأسفل.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 12),
@@ -108,14 +104,14 @@ Future<void> _showStreamPriorityDialog(
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text(isArabic ? 'إلغاء' : 'Cancel'),
+              child: Text('إلغاء'),
             ),
             FilledButton(
               onPressed: () async {
                 await onSave(order);
                 if (dialogContext.mounted) Navigator.of(dialogContext).pop();
               },
-              child: Text(isArabic ? 'حفظ' : 'Save'),
+              child: Text('حفظ'),
             ),
           ],
         );

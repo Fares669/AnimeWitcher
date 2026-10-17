@@ -76,10 +76,7 @@ class _ProviderSearchFilterDialogState
   /// Years shown before "more": the list runs back decades.
   static const int _yearsShown = 5;
 
-  bool get _isArabic =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
-  String _t(String english, String arabic) => _isArabic ? arabic : english;
+  String _t(String english, String arabic) => arabic;
 
   bool get _seasonRequiresYear => _seasons.isNotEmpty && _years.isEmpty;
 
@@ -642,8 +639,7 @@ class _FilterCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final arabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
@@ -676,7 +672,7 @@ class _FilterCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(50),
                   ),
                   child: Text(
-                    arabic ? 'متعدد' : 'Multiple',
+                    'متعدد',
                     style: TextStyle(
                       fontSize: 11,
                       color: colors.primary,

@@ -187,7 +187,7 @@ void main() {
     }
   }
   for (final local in [false, true]) {
-    for (final label in ['الحلقة ٢.٥', 'الحلقة الخاصة: العودة / الجزء؟']) {
+    for (final label in ['الحلقة ٢.٥', 'الحلقة الخاصة: العودة / الجزء؟', '  الحلقة ٠٠٢.٥  ']) {
       testWidgets(
         'history resume renders original server label local=$local label=$label',
         (tester) async {
@@ -319,7 +319,6 @@ Future<void> _resume(
                     title: player!.item.title,
                     episodeLabel: formatEpisodeLabel(
                       episode: player!.episode!.episode,
-                      isArabic: true,
                       title: player!.episode!.name,
                       serverName: player!.episode!.serverName,
                     ),

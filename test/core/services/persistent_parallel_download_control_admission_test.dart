@@ -40,6 +40,47 @@ void main() {
     }
   });
 
+  test('uncertain pause ACK keeps new ranges fenced until explicit resume', () async {
+    final directory = await Directory.systemTemp.createTemp('parallel-uncertain-pause-');
+    final records = <String, TaskRecord>{};
+    final starts = <DownloadTask>[];
+    final parent = ParallelDownloadTask(
+      taskId: 'uncertain-pause', url: 'https://example.test/video',
+      filename: 'video.mp4', directory: directory.path,
+      baseDirectory: BaseDirectory.root, chunks: 2, allowPause: true,
+    );
+    var pauseCalls = 0;
+    final coordinator = PersistentParallelDownload(
+      startPart: (task, progress, size) async { starts.add(task); return true; },
+      pausePart: (_) async { pauseCalls++; throw TimeoutException('native pause ACK unknown'); },
+      tailStallDelay: const Duration(milliseconds: 5),
+      cancelParts: (_) async {},
+      saveRecord: (record) async { records[record.taskId] = record; },
+      recordForId: (id) async => records[id],
+      onUpdate: (_) {}, onPartProgress: (_, _, _) {},
+      livePartIds: () async => starts.map((task) => task.taskId).toSet(),
+    );
+    try {
+      expect(await coordinator.start(parent, 8), isTrue);
+      coordinator.handleUpdate(TaskProgressUpdate(starts.single, .999, 4));
+      await coordinator.flushPendingUpdates();
+      await expectLater(coordinator.pause(parent), throwsA(isA<TimeoutException>()));
+      expect(coordinator.nativeBackgroundPlans(), isEmpty);
+      expect(coordinator.canStartPart(starts.single.taskId), isFalse);
+      coordinator.handleUpdate(TaskStatusUpdate(starts.single, TaskStatus.running));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(starts, hasLength(1));
+      expect(pauseCalls, 2,
+        reason: 'a held pause must not arm the tail watchdog and touch its native checkpoint');
+      expect(await coordinator.start(parent, 8), isTrue);
+      expect(coordinator.canStartPart(starts.first.taskId), isTrue,
+        reason: 'explicit Resume releases the uncertainty hold after gateway readiness');
+    } finally {
+      await coordinator.dispose();
+      await directory.delete(recursive: true);
+    }
+  });
+
   for (final cancel in [false, true]) {
     test('${cancel ? 'cancel' : 'pause'} fences a range awaiting its pre-enqueue record', () async {
       final directory = await Directory.systemTemp.createTemp('parallel-control-admission-');

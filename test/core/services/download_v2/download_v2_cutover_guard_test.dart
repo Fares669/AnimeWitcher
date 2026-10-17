@@ -163,18 +163,18 @@ void main() {
       );
     });
 
-    test('iOS durable parallel pause drains only launched immutable ranges', () {
+    test('user pause never opts into continued native range draining', () {
       final gateway = _read(
         'lib/core/services/download_v2/background_downloader_gateway.dart',
       );
 
       expect(
         gateway,
-        contains('shouldDrainPartOnPause: (_) => _isIOS()'),
+        isNot(contains('shouldDrainPartOnPause: (_) => _isIOS()')),
       );
       expect(
         gateway,
-        contains('preserveLiveParts: Platform.isIOS'),
+        isNot(contains('preserveLiveParts: Platform.isIOS')),
       );
     });
 

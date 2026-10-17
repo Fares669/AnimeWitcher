@@ -38,9 +38,6 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
   /// Rows of the most read shown here; "عرض الكل" has the rest.
   static const int _popularRows = 2;
 
-  bool get _arabic =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   @override
   void initState() {
     super.initState();
@@ -97,7 +94,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => MangaViewAllScreen<MangaLatestChapter>(
-          title: _arabic ? 'فصول جديدة' : 'New chapters',
+          title: 'فصول جديدة',
           load: (offset) async {
             final page = await provider.getLatestMangaPage(
               offset: offset,
@@ -127,7 +124,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => MangaViewAllScreen<MultimediaItem>(
-          title: _arabic ? 'الأكثر قراءة' : 'Most read',
+          title: 'الأكثر قراءة',
           load: (offset) async {
             final page = await provider.searchMangaPage(
               '',
@@ -189,7 +186,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        _arabic ? 'المانجا' : 'Manga',
+                        'المانجا',
                         style: theme.textTheme.headlineSmall?.copyWith(
                           fontWeight: FontWeight.bold,
                         ),
@@ -204,7 +201,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
             if (_latest.isNotEmpty)
               SliverToBoxAdapter(
                 child: LatestMangaChaptersSection(
-                  title: _arabic ? 'فصول جديدة' : 'New chapters',
+                  title: 'فصول جديدة',
                   items: _latest,
                   onTap: (latest) => _open(context, latest.manga),
                   onViewAll: _openLatest,
@@ -213,7 +210,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
             SliverToBoxAdapter(
               child: HomeSectionHeader(
                 key: const ValueKey<String>('manga-popular-header'),
-                title: _arabic ? 'الأكثر قراءة' : 'Most read',
+                title: 'الأكثر قراءة',
                 action: _popular.isEmpty
                     ? null
                     : HomeViewAllButton(onTap: _openPopular),
@@ -232,7 +229,7 @@ class _MangaHomeScreenState extends ConsumerState<MangaHomeScreen> {
                         child: FilledButton.tonalIcon(
                           onPressed: _reload,
                           icon: const Icon(Icons.refresh_rounded),
-                          label: Text(_arabic ? 'إعادة المحاولة' : 'Retry'),
+                          label: Text('إعادة المحاولة'),
                         ),
                       ),
                     )

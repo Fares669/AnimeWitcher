@@ -238,11 +238,10 @@ class MultimediaCard extends StatelessWidget {
       context,
       isPortrait: isPortrait,
     );
-    final normalizedEpisodeBadge = episodeBadge?.trim();
     final badgeText =
-        normalizedEpisodeBadge == null || normalizedEpisodeBadge.isEmpty
+        episodeBadge == null || episodeBadge!.trim().isEmpty
         ? null
-        : normalizedEpisodeBadge;
+        : episodeBadge;
     final normalizedPosterBadge = posterBadge?.trim();
     final cornerBadge =
         normalizedPosterBadge == null || normalizedPosterBadge.isEmpty

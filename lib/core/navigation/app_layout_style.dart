@@ -30,33 +30,23 @@ enum AppLayoutStyle {
     return null;
   }
 
-  String label({required bool arabic}) => switch (this) {
-    AppLayoutStyle.dock => arabic ? 'الشريط السفلي' : 'Bottom bar',
-    AppLayoutStyle.sideRail => arabic ? 'شريط جانبي' : 'Side rail',
-    AppLayoutStyle.topBar => arabic ? 'شريط علوي' : 'Top bar',
+  String label() => switch (this) {
+    AppLayoutStyle.dock => 'الشريط السفلي',
+    AppLayoutStyle.sideRail => 'شريط جانبي',
+    AppLayoutStyle.topBar => 'شريط علوي',
   };
 
-  String description({required bool arabic}) => switch (this) {
-    AppLayoutStyle.dock =>
-      arabic
-          ? 'الشكل الافتراضي: شريط عائم أسفل الشاشة'
-          : 'The default: a floating bar at the bottom',
-    AppLayoutStyle.sideRail =>
-      arabic
-          ? 'أيقونات على جانب الشاشة، والمساحة كلها للمحتوى'
-          : 'Icons down the side, the full width for content',
-    AppLayoutStyle.topBar =>
-      arabic
-          ? 'أسماء الصفحات في شريط أعلى الشاشة'
-          : 'Named pages in a bar across the top',
+  String description() => switch (this) {
+    AppLayoutStyle.dock => 'الشكل الافتراضي: شريط عائم أسفل الشاشة',
+    AppLayoutStyle.sideRail => 'أيقونات على جانب الشاشة، والمساحة كلها للمحتوى',
+    AppLayoutStyle.topBar => 'أسماء الصفحات في شريط أعلى الشاشة',
   };
 }
 
 /// The layouts offered: the three for a desktop or a tablet ([wide]); a
 /// phone has only its own.
-List<AppLayoutStyle> appLayoutChoices({required bool wide}) => wide
-    ? AppLayoutStyle.values
-    : const <AppLayoutStyle>[AppLayoutStyle.dock];
+List<AppLayoutStyle> appLayoutChoices({required bool wide}) =>
+    wide ? AppLayoutStyle.values : const <AppLayoutStyle>[AppLayoutStyle.dock];
 
 /// The style actually drawn: the stored choice when this kind of screen
 /// offers it ([isDesktopPlatform] for a desktop or a tablet), the dock

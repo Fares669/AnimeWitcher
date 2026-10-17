@@ -15,7 +15,7 @@ void main() {
 
   test('uses Arabic copy for the sign-in requirement', () {
     expect(
-      librarySignInRequiredMessage(isArabic: true),
+      librarySignInRequiredMessage(),
       'سجل الدخول لإضافة الأعمال إلى المفضلة والقوائم',
     );
   });

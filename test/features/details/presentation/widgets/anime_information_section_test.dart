@@ -245,12 +245,11 @@ void main() {
       final artifacts = debugShotDirectory();
       if (artifacts != null) {
         final loaded = await tester.runAsync(() async {
-          final arabic = await TestFonts.loadWalkthroughFonts();
           await TestFonts.loadFamily('NotoSans', const [
             '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
             '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
           ]);
-          return arabic;
+          return true;
         });
         if (loaded == true) {
           await tester.pumpWidget(
@@ -281,9 +280,8 @@ void main() {
             final bytes = await image.toByteData(
               format: ui.ImageByteFormat.png,
             );
-            File(
-              '${artifacts.path}/details_english_title_rtl.png',
-            ).writeAsBytesSync(bytes!.buffer.asUint8List());
+            File('${artifacts.path}/details_english_title_rtl.png')
+                .writeAsBytesSync(bytes!.buffer.asUint8List());
           });
         }
       }
@@ -311,9 +309,9 @@ void main() {
       await (FontLoader('NotoSansArabic')
             ..addFont(File(arabic).readAsBytes().then(ByteData.sublistView))
             ..addFont(
-              File(
-                '/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf',
-              ).readAsBytes().then(ByteData.sublistView),
+              File('/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf')
+                  .readAsBytes()
+                  .then(ByteData.sublistView),
             ))
           .load();
     });
@@ -338,9 +336,8 @@ void main() {
         );
         final image = await boundary.toImage(pixelRatio: 2);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        File(
-          '${artifacts.path}/$name.png',
-        ).writeAsBytesSync(bytes!.buffer.asUint8List());
+        File('${artifacts.path}/$name.png')
+            .writeAsBytesSync(bytes!.buffer.asUint8List());
       });
     }
 

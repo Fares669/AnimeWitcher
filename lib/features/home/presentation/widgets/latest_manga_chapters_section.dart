@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/utils/image_fallbacks.dart';
 import '../../../../core/utils/layout_constants.dart';
-import '../../../../core/utils/manga_chapter_label.dart';
 import '../../../../core/utils/responsive_breakpoints.dart';
 import '../../../../shared/widgets/multimedia_card.dart';
 import '../../../../shared/widgets/paged_rail.dart';
@@ -45,7 +44,7 @@ class LatestMangaChapterCard extends StatelessWidget {
     return MultimediaCard(
       imageUrl: AppImageFallbacks.poster(manga.posterUrl),
       title: manga.title,
-      episodeBadge: mangaChapterDisplayName(entry.chapter),
+      episodeBadge: entry.chapter.displayName,
       subtitle: mangaChapterReleaseTime(entry.chapter.publishedAt),
       heroTag: heroTag,
       lookupTitle: manga.artworkLookupTitle,

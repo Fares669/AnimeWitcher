@@ -63,13 +63,13 @@ void main() {
     // Anime opens on its own filters.
     expect(find.byKey(const ValueKey('filterCategory-anime')), findsOneWidget);
     expect(find.text('Action'), findsOneWidget);
-    expect(find.text('This section has no filters'), findsNothing);
+    expect(find.text('لا توجد فلاتر لهذا القسم'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('filterCategory-manga')));
     await tester.pumpAndSettle();
 
     expect(find.text('Action'), findsNothing);
-    expect(find.text('This section has no filters'), findsOneWidget);
+    expect(find.text('لا توجد فلاتر لهذا القسم'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('filterApply')));
     await tester.pumpAndSettle();
@@ -172,7 +172,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Search characters by name.'), findsOneWidget);
-    expect(find.text('This section has no filters'), findsNothing);
+    expect(find.text('لا توجد فلاتر لهذا القسم'), findsNothing);
   });
 
   testWidgets('on a narrow phone every category is in view and years go '
@@ -253,7 +253,7 @@ void main() {
       expect(tester.getRect(find.byKey(ValueKey('filterChip-$y'))).top, top);
     }
     expect(find.byKey(const ValueKey('filterChip-2023')), findsNothing);
-    await tester.tap(find.text('Show more'));
+    await tester.tap(find.text('عرض المزيد'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('filterChip-2023')), findsOneWidget);
   });
@@ -288,7 +288,7 @@ void main() {
 
     final yearCard = find.byKey(const ValueKey('filterCard-year'));
     final collapsed = tester.getSize(yearCard).height;
-    await tester.tap(find.text('Show more'));
+    await tester.tap(find.text('عرض المزيد'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
     final midway = tester.getSize(yearCard).height;

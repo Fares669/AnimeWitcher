@@ -3,17 +3,15 @@ import '../../../core/services/download_v2/download_v2_models.dart';
 String completedDownloadUnitCountLabel({
   required DownloadMediaKind kind,
   required int count,
-  required bool isArabic,
 }) {
+  final few = count % 100 >= 3 && count % 100 <= 10;
   if (kind == DownloadMediaKind.mangaChapter) {
-    if (!isArabic) return count == 1 ? '1 chapter' : '$count chapters';
     if (count == 1) return 'فصل';
     if (count == 2) return 'فصلان';
-    return '$count فصول';
+    return few ? '$count فصول' : '$count فصل';
   }
 
-  if (!isArabic) return count == 1 ? '1 episode' : '$count episodes';
   if (count == 1) return 'حلقة';
   if (count == 2) return 'حلقتان';
-  return '$count حلقات';
+  return few ? '$count حلقات' : '$count حلقة';
 }

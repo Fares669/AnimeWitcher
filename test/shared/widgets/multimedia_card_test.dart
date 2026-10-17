@@ -17,6 +17,35 @@ Widget _cardApp({required MultimediaCard card, ThemeData? theme}) {
 }
 
 void main() {
+  for (final badge in ['  الحلقة ٠٠٢.٥  ', '  Chapter 0002.50  ']) {
+    testWidgets('preserves the complete episode/chapter badge $badge', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _cardApp(
+          card: MultimediaCard(
+            imageUrl: null,
+            title: 'Show',
+            episodeBadge: badge,
+            heroTag: 'raw-name-card',
+            onTap: () {},
+          ),
+        ),
+      );
+
+      expect(find.text(badge), findsOneWidget);
+      expect(
+        tester.getSemantics(find.bySemanticsLabel('Show، $badge')),
+        matchesSemantics(
+          label: 'Show، $badge',
+          hint: 'عرض التفاصيل',
+          isButton: true,
+          hasTapAction: true,
+        ),
+      );
+    });
+  }
+
   test('home rail height uses the same aspect ratio as catalog grids', () {
     expect(
       MultimediaCardLayout.listHeight(130, isPortrait: true),

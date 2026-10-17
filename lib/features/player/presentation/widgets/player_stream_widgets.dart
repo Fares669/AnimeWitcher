@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons_200.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -518,7 +518,7 @@ class PlayerPlayPauseButton extends StatelessWidget {
           child: isSpinning
               ? const _PlayerSpinner()
               : _HoverTintedIcon(
-                  icon: isPlaying ? LucideIcons.pause200 : LucideIcons.play200,
+                  icon: isPlaying ? LucideIcons200.pause : LucideIcons200.play,
                   color: foregroundColor ?? Colors.white,
                   hoverColor: hoverColor,
                   size: iconSize ?? size * 0.88,
@@ -654,7 +654,7 @@ class _PlayerVolumeControlState extends ConsumerState<PlayerVolumeControl> {
   }
 
   IconData _iconFor(double value) =>
-      value <= 0.0 ? LucideIcons.volumeX200 : LucideIcons.volume2200;
+      value <= 0.0 ? LucideIcons200.volumeX : LucideIcons200.volume2;
 
   /// Where on the track the recording's own level sits.
   ///

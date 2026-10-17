@@ -17,6 +17,8 @@ import 'package:animewitcher/features/details/presentation/downloaded_file_provi
 import 'package:animewitcher/features/details/presentation/playback_launcher.dart';
 import 'package:animewitcher/features/details/presentation/widgets/download_progress_dialog.dart';
 import 'package:animewitcher/features/details/presentation/widgets/episode_card.dart';
+import 'package:animewitcher/features/details/presentation/widgets/details_layout_widgets.dart';
+import 'package:animewitcher/features/details/presentation/widgets/details_hero_actions.dart';
 import 'package:animewitcher/features/library/presentation/download_progress_v2_provider.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:animewitcher/features/library/presentation/widgets/downloads_tab.dart';
@@ -45,7 +47,11 @@ class _Details extends DetailsController {
   _Details(this.item);
   final MultimediaItem item;
   @override
-  DetailsState build(String itemUrl) => DetailsState(item: item);
+  DetailsState build(String itemUrl) => DetailsState(
+    item: item,
+    targetEpisode: item.episodes?.first,
+    seasonMap: {1: item.episodes ?? []},
+  );
 }
 
 class _Player extends PlayerController {
@@ -56,12 +62,15 @@ class _Player extends PlayerController {
 }
 
 class _History implements HistoryRepository {
+  _History({this.position = 0, this.duration = 0});
+  final int position;
+  final int duration;
   @override
   List<HistoryItem> getWatchHistory() => const [];
   @override
-  int getEpisodePosition(String url, {String? mainUrl, int? season, int? episode}) => 0;
+  int getEpisodePosition(String url, {String? mainUrl, int? season, int? episode}) => position;
   @override
-  int getEpisodeDuration(String url, {String? mainUrl, int? season, int? episode}) => 0;
+  int getEpisodeDuration(String url, {String? mainUrl, int? season, int? episode}) => duration;
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -116,7 +125,14 @@ class _Playback extends PlaybackLauncher {
   }
 }
 
-final _episode = Episode(name: 'Episode 1', url: 'episode://1', episode: 1);
+const _serverEpisodeName = '  الحلقة ٠٠١.٥ (خاص)  ';
+final _episode = Episode(
+  name: 'A separate creative title',
+  serverName: _serverEpisodeName,
+  isFinal: true,
+  url: 'episode://1',
+  episode: 1,
+);
 final _show = MultimediaItem(
   title: 'Variant show', url: 'anime://variants', posterUrl: '',
   contentType: MultimediaContentType.anime, episodes: [_episode],
@@ -143,6 +159,42 @@ void main() {
   setUp(() { PathProviderPlatform.instance = _Paths(cacheRoot.path); });
   tearDown(() { PathProviderPlatform.instance = originalPaths; });
   tearDownAll(() => cacheRoot.delete(recursive: true));
+
+  for (final hero in [false, true]) {
+    testWidgets('detail resume action keeps long server names hero=$hero', (
+      tester,
+    ) async {
+      final label =
+          '  الحلقة ٠٠١.٥ (خاص) ${List.filled(15, 'اسم الحلقة').join(' ')}  ';
+      final show = _show.copyWith(
+        episodes: [_episode.copyWith(serverName: label)],
+      );
+      final container = ProviderContainer(overrides: [
+        detailsControllerProvider(show.url).overrideWith(() => _Details(show)),
+        historyRepositoryProvider.overrideWithValue(
+          _History(position: 40000, duration: 100000),
+        ),
+      ]);
+      addTearDown(container.dispose);
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: _app(SizedBox(
+          width: 300,
+          child: hero
+              ? DetailsHeroPlayPill(
+                  item: show, details: show, itemUrl: show.url,
+                )
+              : DetailsActionButtons(
+                  item: show, details: show, itemUrl: show.url,
+                ),
+        )),
+      ));
+      await tester.pump();
+      expect(find.textContaining(label), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
 
   for (final manga in [true, false]) {
     testWidgets('${manga ? 'Manga pages' : 'video bytes'} agree with the downloads tile bar', (tester) async {
@@ -210,6 +262,8 @@ void main() {
               : PlayerEpisodesPanel(item: _show, onClose: () {})),
         ));
         await pumpUntil(tester, () => find.byTooltip('جارٍ التنزيل').evaluate().isNotEmpty, '$caller active download control');
+        expect(find.text(_serverEpisodeName), findsOneWidget);
+        expect(find.text('A separate creative title'), findsOneWidget);
         if (caller == 'episode-key') {
           final bodyFocus = tester.widget<Focus>(find.byWidgetPredicate(
             (widget) => widget is Focus && widget.focusNode?.debugLabel == 'ep_body',

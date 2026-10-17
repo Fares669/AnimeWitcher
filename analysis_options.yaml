@@ -14,8 +14,6 @@ analyzer:
     strict-casts: true
     strict-inference: true
     strict-raw-types: true
-  plugins:
-    - custom_lint
   exclude:
     - "**/*.g.dart"
     - "**/*.freezed.dart"
@@ -47,10 +45,6 @@ linter:
     # discarded_futures: true  # 147 info-level sites; fix with unawaited() or await incrementally
 #
 
-custom_lint:
-  rules:
-    - riverpod_avoid_global_provider
-    - riverpod_avoid_read_inside_build
-    - riverpod_avoid_watch_outside_build
-    - riverpod_notifier_parameters
-    - riverpod_async_notifier_error_handling
+# Riverpod 3.1+ uses the Dart analysis-server plugin directly.
+plugins:
+  riverpod_lint: ^3.1.9

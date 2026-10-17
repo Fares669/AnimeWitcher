@@ -18,10 +18,7 @@ import 'widgets/animewitcher_comment_sort_control.dart';
 import '../../../core/utils/avatar_image.dart';
 
 class AnimeWitcherCommentsScreen extends ConsumerStatefulWidget {
-  const AnimeWitcherCommentsScreen({
-    super.key,
-    required this.target,
-  });
+  const AnimeWitcherCommentsScreen({super.key, required this.target});
 
   final AnimeWitcherCommentTarget target;
 
@@ -32,54 +29,33 @@ class AnimeWitcherCommentsScreen extends ConsumerStatefulWidget {
 
 class _AnimeWitcherCommentsScreenState
     extends ConsumerState<AnimeWitcherCommentsScreen> {
-  int get _pageSize =>
-      _isReviews ? kAnimeWitcherReviewsPageSize : 20;
+  int get _pageSize => _isReviews ? kAnimeWitcherReviewsPageSize : 20;
 
   bool get _isReviews => widget.target.isReviews;
 
-  String _screenTitle(bool isArabic) => _isReviews
-      ? (isArabic ? 'المراجعات' : 'Reviews')
-      : (isArabic ? 'التعليقات' : 'Comments');
+  String _screenTitle() => _isReviews ? 'المراجعات' : 'التعليقات';
 
-  String _sortTooltip(bool isArabic) => _isReviews
-      ? (isArabic ? 'ترتيب المراجعات' : 'Sort reviews')
-      : (isArabic ? 'ترتيب التعليقات' : 'Sort comments');
+  String _sortTooltip() => _isReviews ? 'ترتيب المراجعات' : 'ترتيب التعليقات';
 
-  String _emptyListText(bool isArabic) => _isReviews
-      ? (isArabic ? 'لا توجد مراجعات منشورة بعد.' : 'No published reviews yet.')
-      : (isArabic
-          ? 'لا توجد تعليقات منشورة بعد.'
-          : 'No published comments yet.');
+  String _emptyListText() => _isReviews
+      ? 'لا توجد مراجعات منشورة بعد.'
+      : 'لا توجد تعليقات منشورة بعد.';
 
-  String _composerHint(bool isArabic) => _isReviews
-      ? (isArabic ? 'اكتب مراجعة...' : 'Write a review...')
-      : (isArabic ? 'اكتب تعليقًا...' : 'Write a comment...');
+  String _composerHint() => _isReviews ? 'اكتب مراجعة...' : 'اكتب تعليقًا...';
 
-  String _signInComposerText(bool isArabic) => _isReviews
-      ? (isArabic
-          ? 'سجّل الدخول إلى حساب AnimeWitcher لإضافة مراجعة.'
-          : 'Sign in to your AnimeWitcher account to review.')
-      : (isArabic
-          ? 'سجّل الدخول إلى حساب AnimeWitcher لإضافة تعليق.'
-          : 'Sign in to your AnimeWitcher account to comment.');
+  String _signInComposerText() => _isReviews
+      ? 'سجّل الدخول إلى حساب AnimeWitcher لإضافة مراجعة.'
+      : 'سجّل الدخول إلى حساب AnimeWitcher لإضافة تعليق.';
 
-  String _publishedMessage(bool isArabic) => _isReviews
-      ? (isArabic ? 'جاري مراجعته.' : 'Your review is pending moderation.')
-      : (isArabic
-          ? 'تم نشر تعليقك وهو قيد المراجعة.'
-          : 'Your comment was submitted and is under review.');
+  String _publishedMessage() =>
+      _isReviews ? 'جاري مراجعته.' : 'تم نشر تعليقك وهو قيد المراجعة.';
 
-  String _editDialogTitle(bool isArabic) => _isReviews
-      ? (isArabic ? 'تعديل المراجعة' : 'Edit review')
-      : (isArabic ? 'تعديل التعليق' : 'Edit comment');
+  String _editDialogTitle() => _isReviews ? 'تعديل المراجعة' : 'تعديل التعليق';
 
-  String _editHint(bool isArabic) => _isReviews
-      ? (isArabic ? 'اكتب مراجعة...' : 'Write your review...')
-      : (isArabic ? 'اكتب التعليق...' : 'Write your comment...');
+  String _editHint() => _isReviews ? 'اكتب مراجعة...' : 'اكتب التعليق...';
 
-  String _editedMessage(bool isArabic) => _isReviews
-      ? (isArabic ? 'تم تعديل المراجعة.' : 'Review updated.')
-      : (isArabic ? 'تم تعديل التعليق.' : 'Comment updated.');
+  String _editedMessage() =>
+      _isReviews ? 'تم تعديل المراجعة.' : 'تم تعديل التعليق.';
 
   final TextEditingController _commentController = TextEditingController();
   final Set<String> _revealedSpoilers = <String>{};
@@ -197,7 +173,7 @@ class _AnimeWitcherCommentsScreenState
         _loadingMore = false;
         _loadError = error;
       });
-      _showMessage(_commentErrorText(error, _isArabic(context)), isError: true);
+      _showMessage(_commentErrorText(error), isError: true);
     }
   }
 
@@ -205,10 +181,12 @@ class _AnimeWitcherCommentsScreenState
     if (_publishing) return;
     final text = _commentController.text.trim();
     if (text.isEmpty) return;
-    final isArabic = _isArabic(context);
+
     setState(() => _publishing = true);
     try {
-      await ref.read(animeWitcherAccountServiceProvider).publishComment(
+      await ref
+          .read(animeWitcherAccountServiceProvider)
+          .publishComment(
             widget.target,
             text,
             spoiler: _isReviews ? false : _spoiler,
@@ -216,11 +194,11 @@ class _AnimeWitcherCommentsScreenState
       if (!mounted) return;
       _commentController.clear();
       setState(() => _spoiler = false);
-      _showMessage(_publishedMessage(isArabic));
+      _showMessage(_publishedMessage());
       await _loadInitial();
     } catch (error) {
       if (!mounted) return;
-      _showMessage(_commentErrorText(error, isArabic), isError: true);
+      _showMessage(_commentErrorText(error), isError: true);
     } finally {
       if (mounted) setState(() => _publishing = false);
     }
@@ -229,12 +207,9 @@ class _AnimeWitcherCommentsScreenState
   Future<void> _toggleLike(AnimeWitcherComment comment) async {
     if (_pendingLikes.contains(comment.path)) return;
     final service = ref.read(animeWitcherAccountServiceProvider);
-    final isArabic = _isArabic(context);
+
     if (!service.isSignedIn) {
-      _showMessage(
-        isArabic ? 'يجب تسجيل الدخول' : 'Sign in to like comments.',
-        isInfo: true,
-      );
+      _showMessage('يجب تسجيل الدخول', isInfo: true);
       return;
     }
     if (service.ownsComment(comment)) {
@@ -251,7 +226,7 @@ class _AnimeWitcherCommentsScreenState
       }
     } catch (error) {
       if (mounted) {
-        _showMessage(_commentErrorText(error, isArabic), isError: true);
+        _showMessage(_commentErrorText(error), isError: true);
       }
     } finally {
       if (mounted) setState(() => _pendingLikes.remove(comment.path));
@@ -264,9 +239,7 @@ class _AnimeWitcherCommentsScreenState
     // jumped scroll position. Match APK: comments stay as they were.
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => AnimeWitcherRepliesScreen(
-          parentComment: comment,
-        ),
+        builder: (_) => AnimeWitcherRepliesScreen(parentComment: comment),
       ),
     );
   }
@@ -298,7 +271,6 @@ class _AnimeWitcherCommentsScreenState
   }
 
   Future<void> _editOwnComment(AnimeWitcherComment comment) async {
-    final isArabic = _isArabic(context);
     final controller = TextEditingController(text: comment.text);
     var spoiler = _isReviews ? false : comment.spoiler;
     try {
@@ -306,7 +278,7 @@ class _AnimeWitcherCommentsScreenState
         context: context,
         builder: (dialogContext) => StatefulBuilder(
           builder: (context, setDialogState) => AlertDialog(
-            title: Text(_editDialogTitle(isArabic)),
+            title: Text(_editDialogTitle()),
             content: SizedBox(
               width: 520,
               child: Column(
@@ -318,10 +290,9 @@ class _AnimeWitcherCommentsScreenState
                     minLines: 3,
                     maxLines: 7,
                     maxLength: 500,
-                    textDirection:
-                        isArabic ? TextDirection.rtl : TextDirection.ltr,
+                    textDirection: TextDirection.rtl,
                     decoration: InputDecoration(
-                      hintText: _editHint(isArabic),
+                      hintText: _editHint(),
                       border: const OutlineInputBorder(),
                     ),
                   ),
@@ -329,9 +300,7 @@ class _AnimeWitcherCommentsScreenState
                     CheckboxListTile(
                       value: spoiler,
                       contentPadding: EdgeInsets.zero,
-                      title: Text(
-                        isArabic ? 'يحتوي على حرق' : 'Contains spoilers',
-                      ),
+                      title: Text('يحتوي على حرق'),
                       onChanged: (value) {
                         setDialogState(() => spoiler = value == true);
                       },
@@ -342,7 +311,7 @@ class _AnimeWitcherCommentsScreenState
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(dialogContext),
-                child: Text(isArabic ? 'إلغاء' : 'Cancel'),
+                child: Text('إلغاء'),
               ),
               FilledButton(
                 onPressed: () {
@@ -356,7 +325,7 @@ class _AnimeWitcherCommentsScreenState
                     ),
                   );
                 },
-                child: Text(isArabic ? 'حفظ' : 'Save'),
+                child: Text('حفظ'),
               ),
             ],
           ),
@@ -367,17 +336,13 @@ class _AnimeWitcherCommentsScreenState
       try {
         final updated = await ref
             .read(animeWitcherAccountServiceProvider)
-            .updateOwnComment(
-              comment,
-              draft.text,
-              spoiler: draft.spoiler,
-            );
+            .updateOwnComment(comment, draft.text, spoiler: draft.spoiler);
         if (!mounted) return;
         _replaceComment(updated);
-        _showMessage(_editedMessage(isArabic));
+        _showMessage(_editedMessage());
       } catch (error) {
         if (mounted) {
-          _showMessage(_commentErrorText(error, isArabic), isError: true);
+          _showMessage(_commentErrorText(error), isError: true);
         }
       } finally {
         if (mounted) _setCommentActionPending(comment.path, false);
@@ -388,20 +353,15 @@ class _AnimeWitcherCommentsScreenState
   }
 
   Future<void> _deleteOwnComment(AnimeWitcherComment comment) async {
-    final isArabic = _isArabic(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(isArabic ? 'حذف التعليق؟' : 'Delete comment?'),
-        content: Text(
-          isArabic
-              ? 'هل أنت متأكد من حذف هذا التعليق؟'
-              : 'Are you sure you want to delete this comment?',
-        ),
+        title: Text('حذف التعليق؟'),
+        content: Text('هل أنت متأكد من حذف هذا التعليق؟'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
-            child: Text(isArabic ? 'إلغاء' : 'Cancel'),
+            child: Text('إلغاء'),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
@@ -409,7 +369,7 @@ class _AnimeWitcherCommentsScreenState
               foregroundColor: Theme.of(dialogContext).colorScheme.onError,
             ),
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(isArabic ? 'حذف' : 'Delete'),
+            child: Text('حذف'),
           ),
         ],
       ),
@@ -425,10 +385,10 @@ class _AnimeWitcherCommentsScreenState
       setState(() {
         _comments.removeWhere((item) => item.path == comment.path);
       });
-      _showMessage(isArabic ? 'تم حذف التعليق.' : 'Comment deleted.');
+      _showMessage('تم حذف التعليق.');
     } catch (error) {
       if (mounted) {
-        _showMessage(_commentErrorText(error, isArabic), isError: true);
+        _showMessage(_commentErrorText(error), isError: true);
       }
     } finally {
       if (mounted) _setCommentActionPending(comment.path, false);
@@ -437,24 +397,20 @@ class _AnimeWitcherCommentsScreenState
 
   Future<void> _closeOwnCommentReplies(AnimeWitcherComment comment) async {
     if (comment.repliesClosed) return;
-    final isArabic = _isArabic(context);
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(isArabic ? 'منع الردود؟' : 'Disable replies?'),
-        content: Text(
-          isArabic
-              ? 'هل أنت متأكد من منع الردود على هذا التعليق؟'
-              : 'Are you sure you want to disable replies for this comment?',
-        ),
+        title: Text('منع الردود؟'),
+        content: Text('هل أنت متأكد من منع الردود على هذا التعليق؟'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
-            child: Text(isArabic ? 'إلغاء' : 'Cancel'),
+            child: Text('إلغاء'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(isArabic ? 'منع' : 'Disable'),
+            child: Text('منع'),
           ),
         ],
       ),
@@ -468,10 +424,10 @@ class _AnimeWitcherCommentsScreenState
           .closeOwnCommentReplies(comment);
       if (!mounted) return;
       _replaceComment(updated);
-      _showMessage(isArabic ? 'تم منع الردود.' : 'Replies disabled.');
+      _showMessage('تم منع الردود.');
     } catch (error) {
       if (mounted) {
-        _showMessage(_commentErrorText(error, isArabic), isError: true);
+        _showMessage(_commentErrorText(error), isError: true);
       }
     } finally {
       if (mounted) _setCommentActionPending(comment.path, false);
@@ -517,15 +473,12 @@ class _AnimeWitcherCommentsScreenState
     }
   }
 
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   @override
   Widget build(BuildContext context) {
-    final isArabic = _isArabic(context);
     final accountState = ref.watch(animeWitcherAccountControllerProvider);
     final service = ref.read(animeWitcherAccountServiceProvider);
-    final isSignedIn = accountState.asData?.value.isSignedIn ?? service.isSignedIn;
+    final isSignedIn =
+        accountState.asData?.value.isSignedIn ?? service.isSignedIn;
 
     if (appleUsesPersistentLiquidGlassHeader) {
       final colors = Theme.of(context).colorScheme;
@@ -543,8 +496,7 @@ class _AnimeWitcherCommentsScreenState
                 AnimeWitcherCommentSortControl.persistentTrailingInset,
             trailingButtons: AnimeWitcherCommentSortControl.persistentButtons(
               context: context,
-              isArabic: isArabic,
-              tooltip: _sortTooltip(isArabic),
+              tooltip: _sortTooltip(),
               sort: _sort,
               onSelected: (value) {
                 _applyCommentSort(_commentSortFromValue(value));
@@ -558,38 +510,34 @@ class _AnimeWitcherCommentsScreenState
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: _screenTitle(isArabic),
+        title: _screenTitle(),
         onBack: () => Navigator.of(context).pop(),
         actions: appleUsesPersistentLiquidGlassHeader
-          ? const <Widget>[]
-          : AnimeWitcherCommentSortControl.appBarActions(
-              tooltip: _sortTooltip(isArabic),
-              selectedValue: _sort.name,
-              items: AnimeWitcherCommentSortControl.menuItems(isArabic),
-              onSelected: (value) {
-                _applyCommentSort(_commentSortFromValue(value));
-              },
-            ),
+            ? const <Widget>[]
+            : AnimeWitcherCommentSortControl.appBarActions(
+                tooltip: _sortTooltip(),
+                selectedValue: _sort.name,
+                items: AnimeWitcherCommentSortControl.menuItems(),
+                onSelected: (value) {
+                  _applyCommentSort(_commentSortFromValue(value));
+                },
+              ),
       ),
       body: Column(
         children: [
-          Expanded(child: _buildCommentsBody(context, isArabic)),
-          _buildComposer(context, isArabic, isSignedIn),
+          Expanded(child: _buildCommentsBody(context)),
+          _buildComposer(context, isSignedIn),
         ],
       ),
     );
   }
 
-  Widget _buildCommentsBody(BuildContext context, bool isArabic) {
+  Widget _buildCommentsBody(BuildContext context) {
     if (_loadingInitial) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_loadError != null && _comments.isEmpty) {
-      return _CommentsLoadError(
-        isArabic: isArabic,
-        isReviews: _isReviews,
-        onRetry: _loadInitial,
-      );
+      return _CommentsLoadError(isReviews: _isReviews, onRetry: _loadInitial);
     }
     if (_comments.isEmpty) {
       return MouseDragRefreshIndicator(
@@ -602,11 +550,11 @@ class _AnimeWitcherCommentsScreenState
             Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                _emptyListText(isArabic),
+                _emptyListText(),
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           ],
@@ -620,7 +568,10 @@ class _AnimeWitcherCommentsScreenState
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.fromLTRB(
-          12, appPageHeaderContentTopInset(context) + 12, 12, 24,
+          12,
+          appPageHeaderContentTopInset(context) + 12,
+          12,
+          24,
         ),
         itemCount: _comments.length + (_hasMore || _loadingMore ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -637,21 +588,18 @@ class _AnimeWitcherCommentsScreenState
               ),
             );
           }
-          return _buildCommentCard(context, _comments[index], isArabic);
+          return _buildCommentCard(context, _comments[index]);
         },
       ),
     );
   }
 
-  Widget _buildCommentCard(
-    BuildContext context,
-    AnimeWitcherComment comment,
-    bool isArabic,
-  ) {
+  Widget _buildCommentCard(BuildContext context, AnimeWitcherComment comment) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final photo = comment.userPhotoUrl?.trim() ?? '';
-    final reveal = _isReviews ||
+    final reveal =
+        _isReviews ||
         !comment.spoiler ||
         _revealedSpoilers.contains(comment.path);
     final likePending = _pendingLikes.contains(comment.path);
@@ -670,7 +618,7 @@ class _AnimeWitcherCommentsScreenState
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Directionality(
-              textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+              textDirection: TextDirection.rtl,
               child: Row(
                 children: [
                   CircleAvatar(
@@ -699,7 +647,7 @@ class _AnimeWitcherCommentsScreenState
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          _commentTimeAgo(comment.date, isArabic),
+                          _commentTimeAgo(comment.date),
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: colors.onSurfaceVariant,
                           ),
@@ -717,9 +665,7 @@ class _AnimeWitcherCommentsScreenState
                             ),
                           )
                         : PopupMenuButton<_OwnCommentAction>(
-                            tooltip: isArabic
-                                ? 'إدارة التعليق'
-                                : 'Manage comment',
+                            tooltip: 'إدارة التعليق',
                             onSelected: (action) {
                               unawaited(
                                 _handleOwnCommentAction(comment, action),
@@ -730,14 +676,14 @@ class _AnimeWitcherCommentsScreenState
                                 value: _OwnCommentAction.edit,
                                 child: _commentActionRow(
                                   Icons.edit_rounded,
-                                  isArabic ? 'تعديل' : 'Edit',
+                                  'تعديل',
                                 ),
                               ),
                               PopupMenuItem<_OwnCommentAction>(
                                 value: _OwnCommentAction.delete,
                                 child: _commentActionRow(
                                   Icons.delete_outline_rounded,
-                                  isArabic ? 'حذف' : 'Delete',
+                                  'حذف',
                                 ),
                               ),
                               PopupMenuItem<_OwnCommentAction>(
@@ -746,12 +692,8 @@ class _AnimeWitcherCommentsScreenState
                                 child: _commentActionRow(
                                   Icons.block_rounded,
                                   comment.repliesClosed
-                                      ? (isArabic
-                                            ? 'الردود متوقفة'
-                                            : 'Replies disabled')
-                                      : (isArabic
-                                            ? 'منع الردود'
-                                            : 'Disable replies'),
+                                      ? 'الردود متوقفة'
+                                      : 'منع الردود',
                                 ),
                               ),
                             ],
@@ -762,7 +704,7 @@ class _AnimeWitcherCommentsScreenState
             const SizedBox(height: 10),
             if (reveal)
               Directionality(
-                textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+                textDirection: TextDirection.rtl,
                 child: Text(
                   comment.text,
                   textAlign: TextAlign.start,
@@ -771,23 +713,18 @@ class _AnimeWitcherCommentsScreenState
               )
             else
               Align(
-                alignment:
-                    isArabic ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: Alignment.centerRight,
                 child: TextButton.icon(
                   onPressed: () {
                     setState(() => _revealedSpoilers.add(comment.path));
                   },
                   icon: const Icon(Icons.local_fire_department_rounded),
-                  label: Text(
-                    isArabic
-                        ? 'تعليق يحتوي على حرق — إظهار'
-                        : 'Spoiler comment — reveal',
-                  ),
+                  label: Text('تعليق يحتوي على حرق — إظهار'),
                 ),
               ),
             const SizedBox(height: 8),
             Directionality(
-              textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+              textDirection: TextDirection.rtl,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -798,14 +735,14 @@ class _AnimeWitcherCommentsScreenState
                     count: comment.likes,
                     active: comment.likedByMe,
                     busy: likePending,
-                    tooltip: isArabic ? 'إعجاب' : 'Like',
+                    tooltip: 'إعجاب',
                     onTap: () => _toggleLike(comment),
                   ),
                   const SizedBox(width: 14),
                   _ReactionButton(
                     icon: Icons.chat_bubble_outline_rounded,
                     count: comment.replies,
-                    tooltip: isArabic ? 'الردود' : 'Replies',
+                    tooltip: 'الردود',
                     onTap: () => _openReplies(comment),
                   ),
                 ],
@@ -819,19 +756,11 @@ class _AnimeWitcherCommentsScreenState
 
   Widget _commentActionRow(IconData icon, String label) {
     return Row(
-      children: [
-        Icon(icon, size: 20),
-        const SizedBox(width: 10),
-        Text(label),
-      ],
+      children: [Icon(icon, size: 20), const SizedBox(width: 10), Text(label)],
     );
   }
 
-  Widget _buildComposer(
-    BuildContext context,
-    bool isArabic,
-    bool isSignedIn,
-  ) {
+  Widget _buildComposer(BuildContext context, bool isSignedIn) {
     final colors = Theme.of(context).colorScheme;
     return SafeArea(
       top: false,
@@ -853,10 +782,9 @@ class _AnimeWitcherCommentsScreenState
                       minLines: 1,
                       maxLines: 4,
                       maxLength: 500,
-                      textDirection:
-                          isArabic ? TextDirection.rtl : TextDirection.ltr,
+                      textDirection: TextDirection.rtl,
                       decoration: InputDecoration(
-                        hintText: _composerHint(isArabic),
+                        hintText: _composerHint(),
                         counterText: '',
                         filled: true,
                         fillColor: colors.surfaceContainerLow,
@@ -881,16 +809,17 @@ class _AnimeWitcherCommentsScreenState
                   const SizedBox(width: 6),
                   if (!_isReviews)
                     IconButton(
-                      tooltip: isArabic ? 'يحتوي على حرق' : 'Contains spoiler',
+                      tooltip: 'يحتوي على حرق',
                       onPressed: () => setState(() => _spoiler = !_spoiler),
                       icon: Icon(
                         Icons.local_fire_department_rounded,
-                        color:
-                            _spoiler ? colors.primary : colors.onSurfaceVariant,
+                        color: _spoiler
+                            ? colors.primary
+                            : colors.onSurfaceVariant,
                       ),
                     ),
                   IconButton.filled(
-                    tooltip: isArabic ? 'نشر' : 'Publish',
+                    tooltip: 'نشر',
                     onPressed: _publishing ? null : _publish,
                     icon: _publishing
                         ? const SizedBox(
@@ -915,11 +844,10 @@ class _AnimeWitcherCommentsScreenState
                     const SizedBox(width: 8),
                     Flexible(
                       child: Text(
-                        _signInComposerText(isArabic),
+                        _signInComposerText(),
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: colors.onSurfaceVariant,
-                            ),
+                        style: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(color: colors.onSurfaceVariant),
                       ),
                     ),
                   ],
@@ -975,9 +903,8 @@ class _ReactionButton extends StatelessWidget {
               const SizedBox(width: 5),
               Text(
                 '$count',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: foreground,
-                    ),
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: foreground),
               ),
             ],
           ),
@@ -988,13 +915,8 @@ class _ReactionButton extends StatelessWidget {
 }
 
 class _CommentsLoadError extends StatelessWidget {
-  const _CommentsLoadError({
-    required this.isArabic,
-    required this.onRetry,
-    this.isReviews = false,
-  });
+  const _CommentsLoadError({required this.onRetry, this.isReviews = false});
 
-  final bool isArabic;
   final bool isReviews;
   final VoidCallback onRetry;
 
@@ -1009,20 +931,14 @@ class _CommentsLoadError extends StatelessWidget {
             const Icon(Icons.cloud_off_rounded, size: 40),
             const SizedBox(height: 10),
             Text(
-              isReviews
-                  ? (isArabic
-                      ? 'تعذر تحميل المراجعات.'
-                      : 'Could not load reviews.')
-                  : (isArabic
-                      ? 'تعذر تحميل التعليقات.'
-                      : 'Could not load comments.'),
+              isReviews ? 'تعذر تحميل المراجعات.' : 'تعذر تحميل التعليقات.',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 10),
             FilledButton.tonalIcon(
               onPressed: onRetry,
               icon: const Icon(Icons.refresh_rounded),
-              label: Text(isArabic ? 'إعادة المحاولة' : 'Retry'),
+              label: Text('إعادة المحاولة'),
             ),
           ],
         ),
@@ -1040,87 +956,46 @@ class _CommentEditDraft {
   final bool spoiler;
 }
 
-String _commentErrorText(Object error, bool isArabic) {
+String _commentErrorText(Object error) {
   if (error is AnimeWitcherAccountException) {
     return switch (error.code) {
-      'not-signed-in' => isArabic
-          ? 'يجب تسجيل الدخول قبل تنفيذ هذه العملية.'
-          : 'Sign in before doing that.',
-      'comment-empty' =>
-        isArabic ? 'يرجى إدخال نص.' : 'Enter some text first.',
-      'comment-too-long' => isArabic
-          ? 'الحد الأعلى للنص 500 حرف.'
-          : 'The maximum length is 500 characters.',
-      'comment-banned' => isArabic
-          ? 'تم حظرك من التعليق.'
-          : 'This account is blocked from commenting.',
-      'comment-account-too-new' => isArabic
-          ? 'يجب أن يمر على إنشاء حسابك 7 أيام قبل أن تتمكن من كتابة التعليقات.'
-          : 'Your account must be at least 7 days old before commenting.',
-      'comment-cooldown' => isArabic
-          ? 'انتظر قليلاً حتى يمكنك التعليق مرة أخرى.'
-          : 'Wait a moment before commenting again.',
-      'comment-limit' => isArabic
-          ? 'لقد وصلت للحد الأقصى لعدد التعليقات على هذا المحتوى.'
-          : 'You reached the comment limit for this item.',
-      'comments-closed' => isArabic
-          ? 'تم إيقاف التعليقات على هذا المحتوى.'
-          : 'Comments are disabled for this item.',
-      'reviews-closed' => isArabic
-          ? 'تم ايقاف المراجعات علي هذا الأنمي'
-          : 'Reviews are disabled for this anime.',
-      'review-exists' => isArabic
-          ? 'لديك مراجعة واحدة فقط على هذا الأنمي.'
-          : 'You already wrote a review for this anime.',
-      'replies-closed' => isArabic
-          ? 'تم إيقاف الردود على هذا التعليق.'
-          : 'Replies are disabled for this comment.',
-      'permission-denied' => isArabic
-          ? 'لا يمكن تعديل هذا التعليق.'
-          : 'This comment cannot be modified.',
+      'not-signed-in' => 'يجب تسجيل الدخول قبل تنفيذ هذه العملية.',
+      'comment-empty' => 'يرجى إدخال نص.',
+      'comment-too-long' => 'الحد الأعلى للنص 500 حرف.',
+      'comment-banned' => 'تم حظرك من التعليق.',
+      'comment-account-too-new' =>
+        'يجب أن يمر على إنشاء حسابك 7 أيام قبل أن تتمكن من كتابة التعليقات.',
+      'comment-cooldown' => 'انتظر قليلاً حتى يمكنك التعليق مرة أخرى.',
+      'comment-limit' => 'لقد وصلت للحد الأقصى لعدد التعليقات على هذا المحتوى.',
+      'comments-closed' => 'تم إيقاف التعليقات على هذا المحتوى.',
+      'reviews-closed' => 'تم ايقاف المراجعات علي هذا الأنمي',
+      'review-exists' => 'لديك مراجعة واحدة فقط على هذا الأنمي.',
+      'replies-closed' => 'تم إيقاف الردود على هذا التعليق.',
+      'permission-denied' => 'لا يمكن تعديل هذا التعليق.',
       _ => error.message,
     };
   }
-  return isArabic ? 'حدث خطأ. حاول مرة أخرى.' : 'Something went wrong. Try again.';
+  return 'حدث خطأ. حاول مرة أخرى.';
 }
 
-String _commentTimeAgo(DateTime? date, bool isArabic) {
+String _commentTimeAgo(DateTime? date) {
   if (date == null) return '';
   final raw = DateTime.now().difference(date);
   final elapsed = raw.isNegative ? Duration.zero : raw;
-  if (elapsed.inMinutes < 1) return isArabic ? 'منذ لحظات' : 'just now';
+  if (elapsed.inMinutes < 1) return 'منذ لحظات';
   if (elapsed.inMinutes < 60) {
     final value = elapsed.inMinutes;
-    return isArabic
-        ? value == 1
-            ? 'منذ دقيقة'
-            : 'منذ $value دقيقة'
-        : value == 1
-            ? '1 minute ago'
-            : '$value minutes ago';
+    return (value == 1 ? 'منذ دقيقة' : 'منذ $value دقيقة');
   }
   if (elapsed.inHours < 24) {
     final value = elapsed.inHours;
-    return isArabic
-        ? value == 1
-            ? 'منذ ساعة'
-            : 'منذ $value ساعة'
-        : value == 1
-            ? '1 hour ago'
-            : '$value hours ago';
+    return (value == 1 ? 'منذ ساعة' : 'منذ $value ساعة');
   }
   if (elapsed.inDays < 30) {
     final value = elapsed.inDays;
-    return isArabic
-        ? value == 1
-            ? 'منذ يوم'
-            : 'منذ $value يوم'
-        : value == 1
-            ? '1 day ago'
-            : '$value days ago';
+    return (value == 1 ? 'منذ يوم' : 'منذ $value يوم');
   }
   final local = date.toLocal();
   String two(int value) => value.toString().padLeft(2, '0');
   return '${two(local.day)}/${two(local.month)}/${local.year}';
 }
-

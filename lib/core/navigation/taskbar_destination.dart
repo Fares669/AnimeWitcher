@@ -56,10 +56,8 @@ enum TaskbarDestination {
     TaskbarDestination.search => l10n.search,
     TaskbarDestination.library => l10n.library,
     TaskbarDestination.downloads => l10n.downloads,
-    TaskbarDestination.settings =>
-      l10n.localeName.toLowerCase().startsWith('ar') ? 'المزيد' : 'More',
-    TaskbarDestination.manga =>
-      l10n.localeName.toLowerCase().startsWith('ar') ? 'المانجا' : 'Manga',
+    TaskbarDestination.settings => 'المزيد',
+    TaskbarDestination.manga => 'المانجا',
   };
 }
 

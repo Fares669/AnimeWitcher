@@ -16,13 +16,10 @@ class LibraryMediaSelector extends StatelessWidget {
 
   String _label(BuildContext context, LibraryMediaKind kind) {
     final l10n = AppLocalizations.of(context);
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     return switch (kind) {
-      LibraryMediaKind.anime =>
-        l10n?.searchDomainAnime ?? (isArabic ? 'أنمي' : 'Anime'),
-      LibraryMediaKind.manga =>
-        l10n?.manga ?? (isArabic ? 'مانجا' : 'Manga'),
+      LibraryMediaKind.anime => l10n?.searchDomainAnime ?? 'أنمي',
+      LibraryMediaKind.manga => l10n?.manga ?? 'مانجا',
     };
   }
 
@@ -39,10 +36,8 @@ class LibraryMediaSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final tooltip =
-        l10n?.mangaLibraryType ?? (isArabic ? 'نوع المكتبة' : 'Library type');
+
+    final tooltip = l10n?.mangaLibraryType ?? 'نوع المكتبة';
     final color = Theme.of(context).colorScheme.primary;
     final items = <AppleNativeMenuItem>[
       for (final kind in LibraryMediaKind.values)
@@ -113,18 +108,11 @@ class LibraryMediaSelector extends StatelessWidget {
                   _label(context, selected),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: TextStyle(color: color, fontWeight: FontWeight.w700),
                 ),
               ),
               const SizedBox(width: 2),
-              Icon(
-                Icons.keyboard_arrow_down_rounded,
-                color: color,
-                size: 20,
-              ),
+              Icon(Icons.keyboard_arrow_down_rounded, color: color, size: 20),
             ],
           ),
         ),

@@ -73,7 +73,7 @@ void main() {
 
     expect(find.byType(AppPageAppBar), findsOneWidget);
     expect(find.byType(AppProgressiveHeaderBackdrop), findsOneWidget);
-    expect(tester.getCenter(find.text('Manga Reader')).dx, closeTo(195, 1));
+    expect(tester.getCenter(find.text('قارئ المانجا')).dx, closeTo(195, 1));
     expect(find.byIcon(Icons.restart_alt_rounded), findsOneWidget);
   });
 
@@ -89,10 +89,10 @@ void main() {
       ),
     );
 
-    expect(find.text('Manga Reader'), findsOneWidget);
-    expect(find.text('Reading mode'), findsOneWidget);
-    expect(find.text('Automatic double page'), findsOneWidget);
-    expect(find.text('Crop borders'), findsOneWidget);
+    expect(find.text('قارئ المانجا'), findsOneWidget);
+    expect(find.text('وضع القراءة'), findsOneWidget);
+    expect(find.text('صفحتان تلقائيًا'), findsOneWidget);
+    expect(find.text('قص الحواف'), findsOneWidget);
 
     Future<void> expectWhileScrolling(String label) async {
       final list = find.byType(ListView);
@@ -110,11 +110,11 @@ void main() {
     // Assert in the same top-to-bottom order as the lazy ListView so an item
     // is verified while it is actually mounted.
     for (final label in <String>[
-      'Keep screen on',
-      'Show page number',
-      'Auto-read duplicate chapters',
-      'Reader hide threshold',
-      'Flash color',
+      'إبقاء الشاشة مضاءة',
+      'إظهار رقم الصفحة',
+      'تعليم الفصول المكررة كمقروءة تلقائيًا',
+      'عتبة إخفاء أدوات القارئ',
+      'لون الوميض',
     ]) {
       await expectWhileScrolling(label);
     }

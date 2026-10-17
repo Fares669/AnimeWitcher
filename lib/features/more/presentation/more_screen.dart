@@ -58,12 +58,8 @@ class MoreScreen extends ConsumerWidget {
     ];
   }
 
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isArabic = _isArabic(context);
     final theme = Theme.of(context);
     final bottomPadding = MediaQuery.viewPaddingOf(context).bottom + 88;
     final accountState = ref.watch(animeWitcherAccountControllerProvider);
@@ -89,7 +85,7 @@ class MoreScreen extends ConsumerWidget {
     const twoPaneMinimumShortestSide = 640.0;
     final size = MediaQuery.sizeOf(context);
     final headerTop = appPageHeaderContentTopInset(context);
-    final pageTitle = isArabic ? 'المزيد' : 'More';
+    final pageTitle = 'المزيد';
     if (size.width >= twoPaneMinimumWidth &&
         size.shortestSide >= twoPaneMinimumShortestSide) {
       return Scaffold(
@@ -98,73 +94,71 @@ class MoreScreen extends ConsumerWidget {
         body: Padding(
           padding: EdgeInsets.only(top: headerTop),
           child: MoreSidebarShell(
-          header: MoreSidebarHeader(
-            name: accountProfile == null
-                ? appText(context, english: 'Sign in', arabic: 'تسجيل الدخول')
-                : _accountDisplayName(accountProfile),
-            // No address here. This card sits on screen the whole time the
-            // More section is open, and the account page is where an address
-            // belongs — behind an eye, at that.
-            subtitle: accountProfile == null
-                ? appText(
-                    context,
-                    english: 'Sync your lists and progress',
-                    arabic: 'مزامنة القوائم والتقدم',
-                  )
-                : appText(
-                    context,
-                    english: 'Signed in',
-                    arabic: 'مسجّل الدخول',
+            header: MoreSidebarHeader(
+              name: accountProfile == null
+                  ? appText(context, english: 'Sign in', arabic: 'تسجيل الدخول')
+                  : _accountDisplayName(accountProfile),
+              // No address here. This card sits on screen the whole time the
+              // More section is open, and the account page is where an address
+              // belongs — behind an eye, at that.
+              subtitle: accountProfile == null
+                  ? appText(
+                      context,
+                      english: 'Sync your lists and progress',
+                      arabic: 'مزامنة القوائم والتقدم',
+                    )
+                  : appText(
+                      context,
+                      english: 'Signed in',
+                      arabic: 'مسجّل الدخول',
+                    ),
+              photoUrl: accountPhotoUrl,
+            ),
+            groups: <MoreDestinationGroup>[
+              MoreDestinationGroup(
+                heading: moreHeadingSetup(context),
+                items: <MoreDestination>[
+                  MoreDestination(
+                    icon: Icons.person_rounded,
+                    label: 'الحساب',
+                    builder: (_) => const AnimeWitcherAccountScreen(),
                   ),
-            photoUrl: accountPhotoUrl,
-          ),
-          groups: <MoreDestinationGroup>[
-            MoreDestinationGroup(
-              heading: moreHeadingSetup(context),
-              items: <MoreDestination>[
-                MoreDestination(
-                  icon: Icons.person_rounded,
-                  label: isArabic
-                      ? 'حساب AnimeWitcher'
-                      : 'AnimeWitcher account',
-                  builder: (_) => const AnimeWitcherAccountScreen(),
-                ),
-              ],
-            ),
-            MoreDestinationGroup(
-              heading: moreHeadingBrowse(context),
-              items: <MoreDestination>[
-                MoreDestination(
-                  icon: Icons.upcoming_rounded,
-                  label: isArabic ? 'القادم قريبًا' : 'Coming soon',
-                  builder: (_) => const ComingSoonScreen(),
-                ),
-                MoreDestination(
-                  icon: Icons.query_stats_rounded,
-                  label: isArabic ? 'الإحصائيات العالمية' : 'Global statistics',
-                  builder: (_) => const GlobalStatisticsScreen(),
-                ),
-                MoreDestination(
-                  icon: Icons.calendar_month_rounded,
-                  label: isArabic ? 'المواسم' : 'Seasons',
-                  builder: (_) => const SeasonsScreen(),
-                ),
-                MoreDestination(
-                  icon: Icons.calendar_view_week_rounded,
-                  label: isArabic ? 'جدول البث' : 'Broadcast schedule',
-                  builder: (_) => const BroadcastScheduleScreen(),
-                ),
-              ],
-            ),
-            // Settings arrive as their own rows rather than as one row that
-            // opens a page of six groups: the sidebar is the place a viewer
-            // looks for "player" or "downloads", and a list of names is what
-            // it is for.
-            MoreDestinationGroup(
-              heading: moreHeadingApp(context),
-              items: _settingsDestinations(context, ref),
-            ),
-          ],
+                ],
+              ),
+              MoreDestinationGroup(
+                heading: moreHeadingBrowse(context),
+                items: <MoreDestination>[
+                  MoreDestination(
+                    icon: Icons.upcoming_rounded,
+                    label: 'القادم قريبًا',
+                    builder: (_) => const ComingSoonScreen(),
+                  ),
+                  MoreDestination(
+                    icon: Icons.query_stats_rounded,
+                    label: 'الإحصائيات العالمية',
+                    builder: (_) => const GlobalStatisticsScreen(),
+                  ),
+                  MoreDestination(
+                    icon: Icons.calendar_month_rounded,
+                    label: 'المواسم',
+                    builder: (_) => const SeasonsScreen(),
+                  ),
+                  MoreDestination(
+                    icon: Icons.calendar_month_rounded,
+                    label: 'جدول البث',
+                    builder: (_) => const BroadcastScheduleScreen(),
+                  ),
+                ],
+              ),
+              // Settings arrive as their own rows rather than as one row that
+              // opens a page of six groups: the sidebar is the place a viewer
+              // looks for "player" or "downloads", and a list of names is what
+              // it is for.
+              MoreDestinationGroup(
+                heading: moreHeadingApp(context),
+                items: _settingsDestinations(context, ref),
+              ),
+            ],
           ),
         ),
       );
@@ -180,12 +174,7 @@ class MoreScreen extends ConsumerWidget {
         ],
       ),
       body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          headerTop + 12,
-          16,
-          bottomPadding,
-        ),
+        padding: EdgeInsets.fromLTRB(16, headerTop + 12, 16, bottomPadding),
         children: [
           _MorePanel(
             children: [
@@ -206,23 +195,14 @@ class MoreScreen extends ConsumerWidget {
                         ),
                       ),
                 title: accountProfile == null
-                    ? (isArabic
-                          ? 'تسجيل الدخول أو إنشاء حساب'
-                          : 'Sign in or create an account')
+                    ? 'تسجيل الدخول أو إنشاء حساب'
                     : _accountDisplayName(accountProfile),
                 subtitle: accountState.isLoading
-                    ? (isArabic
-                          ? 'جارٍ التحقق من الحساب...'
-                          : 'Checking account...')
+                    ? 'جارٍ التحقق من الحساب...'
                     : accountProfile == null
-                    ? (isArabic
-                          ? 'مزامنة القوائم والحلقات المشاهدة '
-                                'وتقدم التشغيل'
-                          : 'Sync lists, watched episodes, and playback progress')
-                    : accountProfile.email ??
-                          (isArabic
-                              ? 'المزامنة مفعلة'
-                              : 'Synchronization enabled'),
+                    ? 'مزامنة القوائم والحلقات المشاهدة '
+                          'وتقدم التشغيل'
+                    : accountProfile.email ?? 'المزامنة مفعلة',
                 trailing: accountState.isLoading
                     ? const SizedBox.square(
                         dimension: 20,
@@ -237,10 +217,8 @@ class MoreScreen extends ConsumerWidget {
               ),
               _MoreTile(
                 icon: Icons.upcoming_rounded,
-                title: isArabic ? 'القادم قريبًا' : 'Coming soon',
-                subtitle: isArabic
-                    ? 'أنميات لم يتم بثها بعد حسب بيانات AnimeWitcher'
-                    : 'Anime that has not aired yet, from AnimeWitcher',
+                title: 'القادم قريبًا',
+                subtitle: 'أنميات لم يتم بثها بعد حسب بيانات AnimeWitcher',
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const ComingSoonScreen(),
@@ -249,10 +227,8 @@ class MoreScreen extends ConsumerWidget {
               ),
               _MoreTile(
                 icon: Icons.query_stats_rounded,
-                title: isArabic ? 'الإحصائيات العالمية' : 'Global statistics',
-                subtitle: isArabic
-                    ? 'إحصائيات المشاهدات والحلقات والأفلام'
-                    : 'Global viewing, episode, and movie statistics',
+                title: 'الإحصائيات العالمية',
+                subtitle: 'إحصائيات المشاهدات والحلقات والأفلام',
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const GlobalStatisticsScreen(),
@@ -261,10 +237,8 @@ class MoreScreen extends ConsumerWidget {
               ),
               _MoreTile(
                 icon: Icons.calendar_month_rounded,
-                title: isArabic ? 'المواسم' : 'Seasons',
-                subtitle: isArabic
-                    ? 'الموسم السابق والحالي والقادم وجميع المواسم'
-                    : 'Previous, current, next, and all seasons',
+                title: 'المواسم',
+                subtitle: 'الموسم السابق والحالي والقادم وجميع المواسم',
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const SeasonsScreen(),
@@ -272,11 +246,9 @@ class MoreScreen extends ConsumerWidget {
                 ),
               ),
               _MoreTile(
-                icon: Icons.calendar_view_week_rounded,
-                title: isArabic ? 'جدول البث' : 'Broadcast schedule',
-                subtitle: isArabic
-                    ? 'الأنميات موزعة على أيام الأسبوع السبعة'
-                    : 'Anime grouped across the seven weekdays',
+                icon: Icons.calendar_month_rounded,
+                title: 'جدول البث',
+                subtitle: 'الأنميات موزعة على أيام الأسبوع السبعة',
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const BroadcastScheduleScreen(),
@@ -290,10 +262,8 @@ class MoreScreen extends ConsumerWidget {
             children: [
               _MoreTile(
                 icon: Icons.settings_rounded,
-                title: isArabic ? 'الإعدادات' : 'Settings',
-                subtitle: isArabic
-                    ? 'إعدادات التطبيق والمشغل'
-                    : 'App and player settings',
+                title: 'الإعدادات',
+                subtitle: 'إعدادات التطبيق والمشغل',
                 onTap: () => Navigator.of(context, rootNavigator: true).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const SettingsScreen(),
@@ -535,9 +505,7 @@ class _SettingsGroupPane extends ConsumerWidget {
   /// for the general group. The player is pictured in the first-launch setup
   /// only; its group, like the others, keeps the full width here.
   List<Widget> _previewsFor(BuildContext context, WidgetRef ref, int index) {
-    final arabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final caption = arabic ? 'معاينة مباشرة' : 'Live preview';
+    final caption = 'معاينة مباشرة';
     final theme = ref.watch(appThemeStyleProvider);
     switch (index) {
       case 0:
@@ -548,7 +516,7 @@ class _SettingsGroupPane extends ConsumerWidget {
         return [
           LivePreviewFrame(
             followTheme: true,
-            caption: '$caption · ${arabic ? 'الرئيسية' : 'Home'}',
+            caption: '$caption · ${'الرئيسية'}',
             child: HomeLayoutPreview(
               layout: layout,
               theme: theme,
@@ -557,7 +525,7 @@ class _SettingsGroupPane extends ConsumerWidget {
           ),
           LivePreviewFrame(
             followTheme: true,
-            caption: arabic ? 'صفحة الأنمي' : 'Anime page',
+            caption: 'صفحة الأنمي',
             child: SeasonsBarPagePreview(
               style: ref.watch(seasonsBarStyleProvider),
               theme: theme,

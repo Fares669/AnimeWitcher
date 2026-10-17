@@ -40,7 +40,7 @@ class AppSideRail extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     final accent = Theme.of(context).colorScheme.primary;
-    final arabic = l10n.localeName.toLowerCase().startsWith('ar');
+
     return Container(
       width: width,
       // A step up from the page, in the theme's own colours.
@@ -59,7 +59,7 @@ class AppSideRail extends StatelessWidget {
           const Spacer(),
           _RailItem(
             icon: Icons.newspaper_rounded,
-            label: arabic ? 'الأخبار' : 'News',
+            label: 'الأخبار',
             selected: false,
             accent: accent,
             onTap: onNews,
@@ -238,9 +238,7 @@ class AppTopBar extends StatelessWidget {
                 AccountAvatarButton(onTap: onAccount, size: touch ? 38 : 32),
                 const SizedBox(width: 4),
                 IconButton(
-                  tooltip: l10n.localeName.toLowerCase().startsWith('ar')
-                      ? 'الأخبار'
-                      : 'News',
+                  tooltip: 'الأخبار',
                   onPressed: onNews,
                   icon: Icon(
                     Icons.newspaper_rounded,

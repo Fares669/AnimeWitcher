@@ -122,7 +122,10 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
       localChapterDirectory: widget.localChapterDirectory,
       localChapterDirectoryFor: (chapter) async {
         final downloads = await ref.read(downloadsProvider.future);
-        return completedMangaChapterDownload(downloads, chapter)?.destinationPath;
+        return completedMangaChapterDownload(
+          downloads,
+          chapter,
+        )?.destinationPath;
       },
       initialMode: settings.modeForManga(_readerMangaId),
     );
@@ -259,20 +262,13 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     BuildContext context,
     MangaReaderOrientation orientation,
   ) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     return switch (orientation) {
-      MangaReaderOrientation.free =>
-        isArabic ? 'الشاشة تدور مع الجهاز' : 'Rotates with the device',
-      MangaReaderOrientation.portrait => isArabic ? 'الشاشة طولية' : 'Portrait',
-      MangaReaderOrientation.landscape =>
-        isArabic ? 'الشاشة عرضية' : 'Landscape',
-      MangaReaderOrientation.lockedPortrait =>
-        isArabic ? 'طولية مقفلة' : 'Locked portrait',
-      MangaReaderOrientation.lockedLandscape =>
-        isArabic ? 'عرضية مقفلة' : 'Locked landscape',
-      MangaReaderOrientation.reversePortrait =>
-        isArabic ? 'طولية مقلوبة' : 'Reverse portrait',
+      MangaReaderOrientation.free => 'الشاشة تدور مع الجهاز',
+      MangaReaderOrientation.portrait => 'الشاشة طولية',
+      MangaReaderOrientation.landscape => 'الشاشة عرضية',
+      MangaReaderOrientation.lockedPortrait => 'طولية مقفلة',
+      MangaReaderOrientation.lockedLandscape => 'عرضية مقفلة',
+      MangaReaderOrientation.reversePortrait => 'طولية مقلوبة',
     };
   }
 
@@ -604,11 +600,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   }
 
   String _readerModeLabel(BuildContext context, MangaReaderMode mode) =>
-      mangaReaderModeName(
-        mode,
-        arabic:
-            Localizations.localeOf(context).languageCode.toLowerCase() == 'ar',
-      );
+      mangaReaderModeName(mode);
 
   /// This manga back on the default reading mode.
   void _useDefaultMode() {
@@ -744,14 +736,11 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         .clamp(0, _controller.pages.length - 1)
         .toInt();
     final page = _controller.pages[index];
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
 
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => MangaReaderImageActionsSheet(
-        isArabic: isArabic,
         onSetCover: () {
           Navigator.of(sheetContext).pop();
           unawaited(_setReaderCover(page));
@@ -769,22 +758,18 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
   }
 
   Future<void> _setReaderCover(MangaPage page) async {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        content: Text(
-          isArabic ? 'استخدام هذه الصورة كغلاف؟' : 'Use this as cover art?',
-        ),
+        content: Text('استخدام هذه الصورة كغلاف؟'),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: Text(isArabic ? 'إلغاء' : 'Cancel'),
+            child: Text('إلغاء'),
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: Text(isArabic ? 'موافق' : 'OK'),
+            child: Text('موافق'),
           ),
         ],
       ),
@@ -799,24 +784,16 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
           .read(mangaReaderCustomCoversProvider.notifier)
           .setCover(widget.manga.url, file.uri.toString());
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(isArabic ? 'تم تحديث الغلاف' : 'Cover updated')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('تم تحديث الغلاف')));
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isArabic ? 'تعذر تحديث الغلاف' : 'Could not update cover',
-          ),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('تعذر تحديث الغلاف')));
     }
   }
 
   Future<void> _shareReaderPage(MangaPage page) async {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     try {
       await ref
           .read(mangaReaderImageActionsProvider)
@@ -827,19 +804,12 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
           );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isArabic ? 'تعذرت مشاركة الصورة' : 'Could not share image',
-          ),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('تعذرت مشاركة الصورة')));
     }
   }
 
   Future<void> _saveReaderPage(MangaPage page) async {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     try {
       final file = await ref
           .read(mangaReaderImageActionsProvider)
@@ -849,22 +819,12 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
             chapterName: _controller.currentChapter.name,
           );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isArabic
-                ? 'تم حفظ الصورة: ${file.path}'
-                : 'Image saved: ${file.path}',
-          ),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('تم حفظ الصورة: ${file.path}')));
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(isArabic ? 'تعذر حفظ الصورة' : 'Could not save image'),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('تعذر حفظ الصورة')));
     }
   }
 
@@ -894,10 +854,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
             onPressed: _controller.load,
             icon: const Icon(Icons.refresh_rounded),
             label: Text(
-              AppLocalizations.of(context)?.retry ??
-                  (Localizations.localeOf(context).languageCode == 'ar'
-                      ? 'إعادة المحاولة'
-                      : 'Retry'),
+              AppLocalizations.of(context)?.retry ?? 'إعادة المحاولة',
             ),
           ),
         ),
@@ -906,10 +863,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     if (_controller.pages.isEmpty) {
       return Center(
         child: Text(
-          AppLocalizations.of(context)?.mangaNoPages ??
-              (Localizations.localeOf(context).languageCode == 'ar'
-                  ? 'لا توجد صفحات'
-                  : 'No pages'),
+          AppLocalizations.of(context)?.mangaNoPages ?? 'لا توجد صفحات',
         ),
       );
     }
@@ -1179,9 +1133,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     final previous = IconButton(
       key: const ValueKey<String>('manga-reader-previous-chapter'),
       style: round,
-      tooltip: Localizations.localeOf(context).languageCode == 'ar'
-          ? 'الفصل السابق'
-          : 'Previous chapter',
+      tooltip: 'الفصل السابق',
       onPressed: _controller.canPrevious
           ? () async {
               await _controller.previousChapter();
@@ -1197,9 +1149,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     final next = IconButton(
       key: const ValueKey<String>('manga-reader-next-chapter'),
       style: round,
-      tooltip: Localizations.localeOf(context).languageCode == 'ar'
-          ? 'الفصل التالي'
-          : 'Next chapter',
+      tooltip: 'الفصل التالي',
       onPressed: _controller.canNext
           ? () async {
               await _controller.nextChapter();
@@ -1228,9 +1178,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     // a row of icons of their own.
     final settingsButton = IconButton(
       key: const ValueKey<String>('manga-reader-settings-button'),
-      tooltip: Localizations.localeOf(context).languageCode == 'ar'
-          ? 'إعدادات القارئ'
-          : 'Reader settings',
+      tooltip: 'إعدادات القارئ',
       isSelected: _settingsPanelOpen,
       onPressed: () => _toggleSettingsPanel(),
       icon: const Icon(Icons.settings_outlined),
@@ -1238,14 +1186,13 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
     );
     final labelStyle = TextStyle(color: colors.onSurface, fontSize: 13);
 
-    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
     final orientation = settings.orientationForManga(_readerMangaId);
     // Mihon's row under the slider: the mode, the screen's turning, borders
     // cropped or not, and the rest of the settings.
     final actions = <Widget>[
       PopupMenuButton<MangaReaderMode>(
         key: const ValueKey<String>('manga-reader-bar-mode'),
-        tooltip: isArabic ? 'وضع القراءة' : 'Reading mode',
+        tooltip: 'وضع القراءة',
         icon: const Icon(Icons.auto_stories_outlined),
         initialValue: _controller.mode,
         onSelected: (mode) {
@@ -1272,7 +1219,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen>
         ),
       IconButton(
         key: const ValueKey<String>('manga-reader-bar-crop'),
-        tooltip: isArabic ? 'قص الحواف' : 'Crop borders',
+        tooltip: 'قص الحواف',
         isSelected: settings.cropBorders,
         onPressed: () => ref
             .read(mangaReaderSettingsProvider.notifier)

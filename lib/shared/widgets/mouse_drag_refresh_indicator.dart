@@ -19,11 +19,13 @@ const mouseDragRefreshListenerKey = ValueKey<String>(
 class MouseDragRefreshIndicator extends StatefulWidget {
   const MouseDragRefreshIndicator({
     super.key,
+    this.indicatorKey,
     required this.onRefresh,
     required this.child,
   });
 
   final RefreshCallback onRefresh;
+  final GlobalKey<RefreshIndicatorState>? indicatorKey;
   final Widget child;
 
   @override
@@ -76,7 +78,9 @@ class _MouseDragRefreshIndicatorState extends State<MouseDragRefreshIndicator> {
 
   void _showRefreshIndicator() {
     if (_isRefreshing) return;
-    final refresh = _indicatorKey.currentState?.show(atTop: true);
+    final refresh = (widget.indicatorKey ?? _indicatorKey).currentState?.show(
+      atTop: true,
+    );
     if (refresh == null) return;
     _isRefreshing = true;
     refresh.whenComplete(() {
@@ -102,7 +106,7 @@ class _MouseDragRefreshIndicatorState extends State<MouseDragRefreshIndicator> {
       child: NotificationListener<ScrollNotification>(
         onNotification: _onScrollNotification,
         child: RefreshIndicator(
-          key: _indicatorKey,
+          key: widget.indicatorKey ?? _indicatorKey,
           onRefresh: widget.onRefresh,
           child: widget.child,
         ),

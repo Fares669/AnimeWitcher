@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/domain/entity/manga.dart';
 import '../../../../core/storage/manga_reading_repository.dart';
-import '../../../../core/utils/manga_chapter_label.dart';
 
 class MangaChapterRow extends StatelessWidget {
   const MangaChapterRow({
@@ -36,8 +35,7 @@ class MangaChapterRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final isRead = progress?.isRead == true;
     final accent = colors.primary;
     final foreground = colors.onSurface.withValues(alpha: isRead ? 0.52 : 1);
@@ -52,13 +50,11 @@ class MangaChapterRow extends StatelessWidget {
         state.pagesRead > 0;
 
     return Directionality(
-      textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+      textDirection: TextDirection.rtl,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
         decoration: BoxDecoration(
-          color: selected
-              ? accent.withValues(alpha: 0.15)
-              : Colors.transparent,
+          color: selected ? accent.withValues(alpha: 0.15) : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
         ),
         child: InkWell(
@@ -87,7 +83,7 @@ class MangaChapterRow extends StatelessWidget {
                         TextSpan(
                           children: <InlineSpan>[
                             TextSpan(
-                              text: mangaChapterDisplayName(chapter),
+                              text: chapter.displayName,
                               style: TextStyle(color: foreground),
                             ),
                             if (progressLabel != null)

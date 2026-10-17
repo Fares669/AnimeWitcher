@@ -80,10 +80,14 @@ class _NoScrollbarBehavior extends ScrollBehavior {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   final ScrollController _scrollController = ScrollController();
   final ValueNotifier<bool> _showBottomFade = ValueNotifier(false);
+  final _refreshIndicatorKey = GlobalKey<RefreshIndicatorState>();
   Future<void>? _refreshFuture;
+  Future<void>? _homeReselectionFuture;
+  Future<void>? _refreshIndicatorDismissal;
+  late final AnimationController _refreshDismissalController;
 
   @override
   bool get wantKeepAlive => true;
@@ -91,6 +95,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   @override
   void initState() {
     super.initState();
+    _refreshDismissalController = AnimationController(
+      vsync: this,
+      duration: kThemeAnimationDuration,
+    );
     _scrollController.addListener(_onScroll);
     // The search page's MyAnimeList rows take seconds to gather; started
     // here, they are usually ready by the time search is opened.
@@ -124,22 +132,78 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     _prefetchTimer?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _refreshDismissalController.dispose();
     _showBottomFade.dispose();
     super.dispose();
   }
 
   Future<void> _refresh() {
-    return _refreshFuture ??= Future.wait<void>([
-      ref.read(continueWatchingProvider.notifier).refreshFromServer(),
-      ref.read(homeDataProvider.notifier).fetch(keepCurrent: true),
-    ]).then<void>((_) {}).whenComplete(() => _refreshFuture = null);
+    if (_refreshFuture != null) return _refreshFuture!;
+    for (final ranking in MalRanking.values) {
+      ref.invalidate(homeMalRankingPageProvider(ranking));
+    }
+    return _refreshFuture =
+        Future.wait<void>([
+              ref.read(continueWatchingProvider.notifier).refreshFromServer(),
+              ref.read(homeDataProvider.notifier).fetch(keepCurrent: true),
+            ])
+            .then<void>((_) {})
+            .catchError((Object _) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    appText(
+                      context,
+                      english: 'Unable to refresh. Try again.',
+                      arabic: 'تعذر تحديث الصفحة. حاول مرة أخرى.',
+                    ),
+                  ),
+                ),
+              );
+            })
+            .whenComplete(() {
+              _refreshFuture = null;
+              if (!mounted) return;
+              // Material's show future completes before its scale-out animation.
+              _refreshIndicatorDismissal = _refreshDismissalController
+                  .forward(from: 0)
+                  .orCancel
+                  .then<void>((_) async {
+                    if (mounted) await WidgetsBinding.instance.endOfFrame;
+                  })
+                  .catchError((Object _) {});
+            });
   }
 
   void _onHomeTabReselected() {
+    (_homeReselectionFuture ??= _scrollToTopAndRefresh().whenComplete(
+      () => _homeReselectionFuture = null,
+    )).ignore();
+  }
+
+  Future<void> _scrollToTopAndRefresh() async {
     if (_scrollController.hasClients) {
-      _scrollController.jumpTo(_scrollController.position.minScrollExtent);
+      final top = _scrollController.position.minScrollExtent;
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _scrollController.jumpTo(top);
+      } else if (_scrollController.offset != top) {
+        await _scrollController.animateTo(
+          top,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
     }
-    _refresh().ignore();
+    final dismissal = _refreshIndicatorDismissal;
+    if (dismissal != null) await dismissal;
+    if (!mounted) return;
+    final indicator = _refreshIndicatorKey.currentState;
+    if (indicator != null) {
+      indicator.show().ignore();
+    } else {
+      await _refresh();
+    }
   }
 
   void _openNewsArticle(NewsItem item) {
@@ -238,9 +302,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
     Widget buildNewsSection() {
       return NewsSection(
-        title: Localizations.localeOf(context).languageCode == 'ar'
-            ? 'الأخبار'
-            : 'News',
+        title: 'الأخبار',
         items: news,
         onViewAll: () => _openNewsList(context, provider, news),
         onOpen: _openNewsArticle,
@@ -321,19 +383,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           (MalRanking.top, 'Top rated', 'الأفضل'),
           (MalRanking.popular, 'Most watched', 'الأكثر مشاهدة'),
         ]) {
-      final items =
-          ref.watch(malRankingProvider(ranking)).value ??
-          const <MultimediaItem>[];
-      if (items.isEmpty) continue;
+      final page = ref.watch(homeMalRankingPageProvider(ranking)).value;
+      if (page == null || (page.items.isEmpty && !page.hasMore)) continue;
+      final items = page.items;
       warmPosters(items.take(12).map((item) => item.posterUrl));
       rails.add(
         MediaHorizontalList(
           key: ValueKey<String>('home-mal-${ranking.name}'),
           title: appText(context, english: english, arabic: arabic),
-          mediaList: items,
+          mediaList: items.take(malRankingPageSize).toList(growable: false),
           category: ViewAllCategory.providerContent,
           showViewAll: true,
           loadViewAllPage: (offset) => load(ranking, offset),
+          initialViewAllOffset: page.nextOffset,
+          initialViewAllHasMore: page.hasMore,
+          showWhenEmpty: page.hasMore,
           onTap: (item) {
             DetailsRoute($extra: DetailsRouteExtra(item: item))
                 .push<void>(context);
@@ -405,6 +469,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       HomeSuccess(:final data, news: final homeNews, :final latestManga) =>
         _withGradientEdgeHint(
           MouseDragRefreshIndicator(
+            indicatorKey: _refreshIndicatorKey,
             onRefresh: _refresh,
             child: CustomScrollView(
               controller: _scrollController,

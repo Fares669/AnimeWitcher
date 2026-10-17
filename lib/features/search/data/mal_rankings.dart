@@ -13,7 +13,7 @@ import '../../../core/network/dio_client_provider.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/utils/artwork_host_fallback.dart';
 
-/// MyAnimeList's rankings shown on the search page.
+/// MAL-linked rankings shown on the home and search pages.
 enum MalRanking {
   /// Top airing: what is popular now.
   airing,
@@ -37,10 +37,9 @@ class MalRankingPage {
   final bool hasMore;
 }
 
-/// Entries per ranking page, as Jikan and AniList are asked for.
-const int malRankingPageSize = 25;
+/// Entries requested upstream for each Home rail and subsequent page.
+const int malRankingPageSize = 10;
 
-const String _jikanTopEndpoint = 'https://api.jikan.moe/v4/top/anime';
 const String _aniListEndpoint = 'https://graphql.anilist.co';
 
 /// The MyAnimeList ids in a Jikan list response, in its order.
@@ -76,60 +75,13 @@ List<int> _distinctIds(Iterable<Object?> raw) {
   return ids;
 }
 
-// Jikan allows three requests a second; the rows ask together.
-Future<void> _jikanTurn = Future<void>.value();
-
-Future<T> _inJikanTurn<T>(Future<T> Function() request) {
-  final result = _jikanTurn.then((_) => request());
-  _jikanTurn = result
-      .then((_) {}, onError: (_) {})
-      .then((_) => Future<void>.delayed(const Duration(milliseconds: 400)));
-  return result;
-}
-
-/// Page [page] (from 1) of [ranking]: MyAnimeList's own, through Jikan, or
-/// when Jikan cannot reach MyAnimeList — it often cannot — AniList's
-/// equivalent, which carries the MyAnimeList ids too.
+/// Page [page] (from 1) of AniList's equivalent ranking, carrying MAL ids.
 Future<MalRankingPage> fetchMalRanking(
   Dio dio,
   MalRanking ranking,
   int page,
 ) async {
-  // Films are ranked as AniList ranks them; Jikan is for the other rows.
-  if (ranking != MalRanking.topMovies) {
-    try {
-      final response = await _inJikanTurn(
-        () => dio.get<Map<String, dynamic>>(
-          _jikanTopEndpoint,
-          queryParameters: <String, dynamic>{
-            'page': page,
-            'limit': malRankingPageSize,
-            'sfw': true,
-            if (ranking == MalRanking.airing) 'filter': 'airing',
-            if (ranking == MalRanking.popular) 'filter': 'bypopularity',
-          },
-          // Jikan answers a compressed request with 504 instead of the list.
-          options: Options(
-            headers: const <String, String>{
-              'Accept': 'application/json',
-              'Accept-Encoding': 'identity',
-            },
-          ),
-        ),
-      );
-      final ids = malIdsFromJikanList(response.data);
-      if (ids.isNotEmpty) {
-        final pagination = response.data?['pagination'];
-        final hasMore = pagination is Map
-            ? pagination['has_next_page'] == true
-            : ids.length >= malRankingPageSize;
-        return MalRankingPage(ids, hasMore: hasMore);
-      }
-    } catch (_) {
-      // Falls through to AniList.
-    }
-  }
-
+  // Jikan's public API closed on 2026-10-01; do not queue every page behind it.
   final sort = switch (ranking) {
     MalRanking.airing => 'TRENDING_DESC',
     MalRanking.top || MalRanking.topMovies => 'SCORE_DESC',
@@ -161,12 +113,19 @@ query ($page: Int, $perPage: Int, $sort: [MediaSort], $status: MediaStatus,
   );
   final body = response.data;
   final data = body?['data'];
-  final pageInfo = data is Map && data['Page'] is Map
-      ? (data['Page'] as Map)['pageInfo']
-      : null;
+  final result = data is Map ? data['Page'] : null;
+  final pageInfo = result is Map ? result['pageInfo'] : null;
+  final errors = body?['errors'];
+  if ((errors is List && errors.isNotEmpty) ||
+      result is! Map ||
+      result['media'] is! List ||
+      pageInfo is! Map ||
+      pageInfo['hasNextPage'] is! bool) {
+    throw StateError('Unable to load the anime ranking page.');
+  }
   return MalRankingPage(
     malIdsFromAniListPage(body),
-    hasMore: pageInfo is Map && pageInfo['hasNextPage'] == true,
+    hasMore: pageInfo['hasNextPage'] == true,
   );
 }
 
@@ -207,70 +166,80 @@ Future<ProviderMediaPage> loadMalRankingPage(
   );
 }
 
-/// The first page of each ranking, for the rows on the search page. Empty
-/// when neither ranking service nor the catalogue can be reached.
-///
-/// The last list fetched is kept on disk and shown at once, while a fresh
-/// one is fetched for next time: rankings move slowly, and the two services
-/// and the catalogue together take seconds. With nothing kept yet, it waits
-/// for the network.
-final malRankingProvider =
-    FutureProvider.family<List<MultimediaItem>, MalRanking>((
-      ref,
-      ranking,
-    ) async {
+/// A fresh Home seed with its actual source cursor. Cached pages are used
+/// only offline, so View All cannot skip new titles on the first source page.
+final homeMalRankingPageProvider =
+    FutureProvider.family<ProviderMediaPage, MalRanking>((ref, ranking) async {
       final storage = ref.read(storageServiceProvider);
-      final key = 'mal_ranking_${ranking.name}';
-      var kept = _readKept(storage, key);
-      // Kept before MyAnimeList's CDN was found blocked here: its posters
-      // would only hang, so the list is fetched again with reachable ones.
+      // Older snapshots did not preserve the source cursor after sparse pages.
+      final key = 'mal_ranking_anilist_10_page_${ranking.name}';
+      var kept = _readKeptPage(storage, key);
       if (malArtworkUnreachable.value &&
-          kept.any((item) => isMalArtworkUrl(item.posterUrl))) {
-        kept = const <MultimediaItem>[];
+          kept?.items.any((item) => isMalArtworkUrl(item.posterUrl)) == true) {
+        kept = null;
       }
 
-      Future<List<MultimediaItem>> fetch() async {
-        try {
-          final items = (await loadMalRankingPage(ref, ranking, 0)).items;
-          if (items.isNotEmpty) {
+      try {
+        var offset = 0;
+        for (var attempt = 0; attempt < 3; attempt++) {
+          final page = await loadMalRankingPage(ref, ranking, offset);
+          if (page.items.isNotEmpty || !page.hasMore || attempt == 2) {
             unawaited(
               storage
                   .setString(
                     key,
                     jsonEncode(<String, dynamic>{
-                      'items': items.map((item) => item.toJson()).toList(),
+                      'items': page.items.map((item) => item.toJson()).toList(),
+                      'nextOffset': page.nextOffset,
+                      'hasMore': page.hasMore,
                     }),
                   )
                   .catchError((_) {}),
             );
+            return page;
           }
-          return items;
-        } catch (_) {
-          return const <MultimediaItem>[];
+          offset = page.nextOffset;
         }
+      } catch (_) {
+        if (kept != null) return kept;
       }
-
-      if (kept.isNotEmpty) {
-        unawaited(fetch());
-        return kept;
-      }
-      return fetch();
+      return const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false);
     });
 
-List<MultimediaItem> _readKept(StorageService storage, String key) {
+/// List compatibility for the numbered row on the search page.
+final malRankingProvider =
+    FutureProvider.family<List<MultimediaItem>, MalRanking>(
+      (ref, ranking) async =>
+          (await ref.watch(homeMalRankingPageProvider(ranking).future)).items,
+    );
+
+ProviderMediaPage? _readKeptPage(StorageService storage, String key) {
   try {
     final raw = storage.getString(key);
-    if (raw == null || raw.isEmpty) return const <MultimediaItem>[];
+    if (raw == null || raw.isEmpty) return null;
     final decoded = jsonDecode(raw);
     final items = decoded is Map ? decoded['items'] : null;
-    if (items is! List) return const <MultimediaItem>[];
-    return <MultimediaItem>[
-      for (final item in items)
-        if (item is Map)
-          MultimediaItem.fromJson(Map<String, dynamic>.from(item)),
-    ];
+    if (items is! List ||
+        decoded['nextOffset'] is! int ||
+        decoded['hasMore'] is! bool) {
+      return null;
+    }
+    final nextOffset = decoded['nextOffset'] as int;
+    if (nextOffset < malRankingPageSize ||
+        nextOffset % malRankingPageSize != 0) {
+      return null;
+    }
+    return ProviderMediaPage(
+      items: <MultimediaItem>[
+        for (final item in items)
+          if (item is Map)
+            MultimediaItem.fromJson(Map<String, dynamic>.from(item)),
+      ].take(malRankingPageSize).toList(growable: false),
+      nextOffset: nextOffset,
+      hasMore: decoded['hasMore'] as bool,
+    );
   } catch (_) {
-    return const <MultimediaItem>[];
+    return null;
   }
 }
 
@@ -278,17 +247,22 @@ List<MultimediaItem> _readKept(StorageService storage, String key) {
 /// for the numbered row on the search page: the first page of the ranking,
 /// and the next ones while fewer than ten of it are in the catalogue.
 final malTopTenProvider = FutureProvider<List<MultimediaItem>>((ref) async {
-  final first = await ref.watch(malRankingProvider(MalRanking.airing).future);
+  final firstPage = await ref.watch(
+    homeMalRankingPageProvider(MalRanking.airing).future,
+  );
+  final first = firstPage.items;
   if (first.length >= 10) return first.take(10).toList(growable: false);
   final items = <MultimediaItem>[...first];
   final seen = <String>{for (final item in first) item.url};
   try {
-    for (var page = 1; page <= 3 && items.length < 10; page++) {
-      final more = await loadMalRankingPage(
-        ref,
-        MalRanking.airing,
-        page * malRankingPageSize,
-      );
+    var offset = firstPage.nextOffset;
+    for (
+      var page = 1;
+      page <= 3 && items.length < 10 && firstPage.hasMore;
+      page++
+    ) {
+      final more = await loadMalRankingPage(ref, MalRanking.airing, offset);
+      offset = more.nextOffset;
       for (final item in more.items) {
         if (seen.add(item.url)) items.add(item);
       }

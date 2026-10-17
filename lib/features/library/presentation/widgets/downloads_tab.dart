@@ -37,9 +37,15 @@ import '../../../../core/utils/download_time_remaining.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../../shared/widgets/underline_segment_tabs.dart';
 
-MultimediaItem _savedPlaybackItem(DownloadItem selected, Iterable<DownloadItem> downloads) {
-  String mediaIdentity(MultimediaItem item) => item.tmdbId?.toString() ??
-      ((item.imdbId?.trim().isNotEmpty ?? false) ? item.imdbId!.trim() : item.url.trim());
+MultimediaItem _savedPlaybackItem(
+  DownloadItem selected,
+  Iterable<DownloadItem> downloads,
+) {
+  String mediaIdentity(MultimediaItem item) =>
+      item.tmdbId?.toString() ??
+      ((item.imdbId?.trim().isNotEmpty ?? false)
+          ? item.imdbId!.trim()
+          : item.url.trim());
   final media = mediaIdentity(selected.item);
   final episodes = <String, Episode>{
     for (final episode in selected.item.episodes ?? const <Episode>[])
@@ -47,26 +53,44 @@ MultimediaItem _savedPlaybackItem(DownloadItem selected, Iterable<DownloadItem> 
   };
   for (final download in downloads) {
     final episode = download.episode;
-    if (download.status == TaskStatus.complete && media.isNotEmpty &&
-        mediaIdentity(download.item) == media && episode != null && episode.url.trim().isNotEmpty) {
+    if (download.status == TaskStatus.complete &&
+        media.isNotEmpty &&
+        mediaIdentity(download.item) == media &&
+        episode != null &&
+        episode.url.trim().isNotEmpty) {
       episodes[episode.url.trim()] = episode;
     }
   }
   final current = selected.episode;
-  if (current != null && current.url.trim().isNotEmpty) episodes[current.url.trim()] = current;
-  return episodes.isEmpty ? selected.item : selected.item.copyWith(
-    episodes: episodeItemsInDisplayOrder(episodes.values.toList(), episodeOf: (episode) => episode, ascending: true),
-  );
+  if (current != null && current.url.trim().isNotEmpty)
+    episodes[current.url.trim()] = current;
+  return episodes.isEmpty
+      ? selected.item
+      : selected.item.copyWith(
+          episodes: episodeItemsInDisplayOrder(
+            episodes.values.toList(),
+            episodeOf: (episode) => episode,
+            ascending: true,
+          ),
+        );
 }
 
-Future<String?> _resolveLocalPlaybackUrl(WidgetRef ref, DownloadItem item) async {
-  final file = await ref.read(downloadedFilesProvider.notifier)
+Future<String?> _resolveLocalPlaybackUrl(
+  WidgetRef ref,
+  DownloadItem item,
+) async {
+  final file = await ref
+      .read(downloadedFilesProvider.notifier)
       .resolveFile(item.item, episode: item.episode, logicalId: item.logicalId);
   return file?.path;
 }
 
-Future<void> _removeMissingDownload(BuildContext context, WidgetRef ref,
-    DownloadItem item, AppLocalizations l10n) async {
+Future<void> _removeMissingDownload(
+  BuildContext context,
+  WidgetRef ref,
+  DownloadItem item,
+  AppLocalizations l10n,
+) async {
   if (!context.mounted) return;
   ref.read(notificationServiceProvider).showError(l10n.fileNotFoundRemoving);
   await ref.read(downloadsProvider.notifier).removeDownload(item);
@@ -306,7 +330,8 @@ class _GroupedDownloadTile extends ConsumerStatefulWidget {
   const _GroupedDownloadTile({super.key, required this.items});
 
   @override
-  ConsumerState<_GroupedDownloadTile> createState() => _GroupedDownloadTileState();
+  ConsumerState<_GroupedDownloadTile> createState() =>
+      _GroupedDownloadTileState();
 }
 
 class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
@@ -319,9 +344,12 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     return logical.isEmpty ? item.id : logical;
   }
 
-  String _posterKey(List<DownloadItem> values) => values.map(
-    (item) => '${_artworkId(item)}:${item.artworkMetadataVerified}:${item.item.posterUrl}',
-  ).join('|');
+  String _posterKey(List<DownloadItem> values) => values
+      .map(
+        (item) =>
+            '${_artworkId(item)}:${item.artworkMetadataVerified}:${item.item.posterUrl}',
+      )
+      .join('|');
 
   @override
   void initState() {
@@ -332,7 +360,8 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   @override
   void didUpdateWidget(covariant _GroupedDownloadTile oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_posterKey(oldWidget.items) != _posterKey(items)) _poster = _loadPoster();
+    if (_posterKey(oldWidget.items) != _posterKey(items))
+      _poster = _loadPoster();
   }
 
   Future<File?> _loadPoster() async {
@@ -344,7 +373,8 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     for (final item in items) {
       if (!item.artworkMetadataVerified) continue;
       final saved = await ensureDownloadedPosterArtwork(
-        logicalId: _artworkId(item), posterUrl: item.item.posterUrl,
+        logicalId: _artworkId(item),
+        posterUrl: item.item.posterUrl,
       );
       if (saved != null) return saved;
     }
@@ -352,7 +382,9 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
   }
 
   Widget _posterPlaceholder(ThemeData theme) => Container(
-    width: 80, height: 120, color: theme.dividerColor,
+    width: 80,
+    height: 120,
+    color: theme.dividerColor,
     child: const Icon(Icons.movie_outlined),
   );
 
@@ -363,6 +395,7 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
     final firstItem = items.first;
     final episodeSortAscending = ref.watch(episodeSortAscendingProvider);
     final isManga = firstItem.mediaKind == DownloadMediaKind.mangaChapter;
+
     final orderedItems = isManga
         ? (List<DownloadItem>.from(items)..sort((a, b) {
             final an = a.chapter?.number;
@@ -409,25 +442,38 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
               borderRadius: BorderRadius.circular(LayoutConstants.radiusMd),
               child: ArtworkDecode(
                 paintedWidth: 80,
-                builder: (BuildContext context, int? decodeWidth) => FutureBuilder<File?>(
-                  future: _poster,
-                  builder: (context, snapshot) {
-                    final saved = snapshot.data;
-                    if (saved != null) {
-                      return Image.file(
-                        saved, width: 80, height: 120, fit: BoxFit.cover,
-                        cacheWidth: decodeWidth, filterQuality: FilterQuality.medium,
-                        errorBuilder: (_, _, _) => _posterPlaceholder(theme),
-                      );
-                    }
-                    return CachedNetworkImage(
-                      imageUrl: AppImageFallbacks.poster(firstItem.item.posterUrl) ?? '',
-                      width: 80, height: 120, fit: BoxFit.cover,
-                      memCacheWidth: decodeWidth, filterQuality: FilterQuality.medium,
-                      errorWidget: (_, _, _) => _posterPlaceholder(theme),
-                    );
-                  },
-                ),
+                builder: (BuildContext context, int? decodeWidth) =>
+                    FutureBuilder<File?>(
+                      future: _poster,
+                      builder: (context, snapshot) {
+                        final saved = snapshot.data;
+                        if (saved != null) {
+                          return Image.file(
+                            saved,
+                            width: 80,
+                            height: 120,
+                            fit: BoxFit.cover,
+                            cacheWidth: decodeWidth,
+                            filterQuality: FilterQuality.medium,
+                            errorBuilder: (_, _, _) =>
+                                _posterPlaceholder(theme),
+                          );
+                        }
+                        return CachedNetworkImage(
+                          imageUrl:
+                              AppImageFallbacks.poster(
+                                firstItem.item.posterUrl,
+                              ) ??
+                              '',
+                          width: 80,
+                          height: 120,
+                          fit: BoxFit.cover,
+                          memCacheWidth: decodeWidth,
+                          filterQuality: FilterQuality.medium,
+                          errorWidget: (_, _, _) => _posterPlaceholder(theme),
+                        );
+                      },
+                    ),
               ),
             ),
             const SizedBox(width: LayoutConstants.spacingMd),
@@ -457,11 +503,11 @@ class _GroupedDownloadTileState extends ConsumerState<_GroupedDownloadTile> {
                         completedDownloadUnitCountLabel(
                           kind: firstItem.mediaKind,
                           count: items.length,
-                          isArabic:
-                              Localizations.localeOf(context).languageCode
-                                  .toLowerCase() ==
-                              'ar',
                         ),
+                        // The card stays poster-left, but an Arabic count
+                        // needs its own RTL paragraph for number/noun order.
+                        textDirection: TextDirection.rtl,
+                        textAlign: TextAlign.left,
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -656,14 +702,12 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
     final isPaused = status == TaskStatus.paused;
     final isFailed =
         status == TaskStatus.failed || status == TaskStatus.notFound;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final episodeLabel = item.episode == null
         ? null
         : formatEpisodeLabel(
             episode: item.episode!.episode,
             title: item.episode!.name,
-            isArabic: isArabic,
             isFinal: item.episode!.isFinal,
             serverName: item.episode!.serverName,
           );
@@ -808,9 +852,7 @@ class _DownloadItemTileState extends ConsumerState<_DownloadItemTile> {
                       const SizedBox(width: LayoutConstants.spacingSm),
                       Text(
                         formatDownloadTimeRemaining(progressData!, l10n),
-                        textDirection: isArabic
-                            ? TextDirection.rtl
-                            : TextDirection.ltr,
+                        textDirection: TextDirection.rtl,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodySmall?.copyWith(

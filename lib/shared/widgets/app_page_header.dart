@@ -299,8 +299,6 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final theme = Theme.of(context);
     final appBarTitleStyle =
         (theme.appBarTheme.titleTextStyle ?? theme.textTheme.titleLarge)
@@ -314,7 +312,9 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
     final leadingInset = windowControlsLeadingInset;
     final titleClearance =
         windowControlsSymmetricInset + (actions.isEmpty ? 72.0 : 120.0);
-    final hasWindowControlsGap = actions.any((action) => action is WindowControlsGap);
+    final hasWindowControlsGap = actions.any(
+      (action) => action is WindowControlsGap,
+    );
 
     return Directionality(
       textDirection: TextDirection.ltr,
@@ -329,10 +329,9 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
             elevation: 0,
             scrolledUnderElevation: 0,
             flexibleSpace: const AppProgressiveHeaderBackdrop(),
-            leadingWidth:
-                canPop && !appleUsesPersistentLiquidGlassHeader
-                    ? 56 + leadingInset
-                    : null,
+            leadingWidth: canPop && !appleUsesPersistentLiquidGlassHeader
+                ? 56 + leadingInset
+                : null,
             leading: canPop && !appleUsesPersistentLiquidGlassHeader
                 ? Padding(
                     padding: EdgeInsets.only(left: leadingInset),
@@ -355,8 +354,7 @@ class AppPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                       enabled: canPop,
                       onBack: pop,
                       child: Directionality(
-                        textDirection:
-                            isArabic ? TextDirection.rtl : TextDirection.ltr,
+                        textDirection: TextDirection.rtl,
                         child: Text(
                           title,
                           key: titleKey,

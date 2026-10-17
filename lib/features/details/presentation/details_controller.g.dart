@@ -58,7 +58,7 @@ final class DetailsControllerProvider
   }
 }
 
-String _$detailsControllerHash() => r'ca480883603fc2bad4459c3af8a4db5a0f5923d3';
+String _$detailsControllerHash() => r'920d2c5f5cb93d0898596faf0a77558abc9020aa';
 
 final class DetailsControllerFamily extends $Family
     with
@@ -92,7 +92,7 @@ abstract class _$DetailsController extends $Notifier<DetailsState> {
   DetailsState build(String itemUrl);
   @$mustCallSuper
   @override
-  void runBuild() {
+  WhenComplete runBuild() {
     final ref = this.ref as $Ref<DetailsState, DetailsState>;
     final element =
         ref.element
@@ -102,6 +102,6 @@ abstract class _$DetailsController extends $Notifier<DetailsState> {
               Object?,
               Object?
             >;
-    element.handleCreate(ref, () => build(_$args));
+    return element.handleCreate(ref, () => build(_$args));
   }
 }

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons_200.dart';
 import 'package:animewitcher/shared/widgets/app_back_button.dart';
 import 'package:flutter/services.dart';
 
@@ -32,7 +32,7 @@ class SeekIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final arrow = Icon(
-      forward ? LucideIcons.rotateCw200 : LucideIcons.rotateCcw200,
+      forward ? LucideIcons200.rotateCw : LucideIcons200.rotateCcw,
       size: size,
       color: color,
     );
@@ -92,11 +92,11 @@ class RotateScreenIcon extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          Icon(LucideIcons.rotateCw200, size: size, color: color),
+          Icon(LucideIcons200.rotateCw, size: size, color: color),
           // Half the box: the ring's clear middle is about seven tenths of
           // it, so the phone sits inside without its corners meeting the
           // stroke.
-          Icon(LucideIcons.smartphone200, size: size * 0.5, color: color),
+          Icon(LucideIcons200.smartphone, size: size * 0.5, color: color),
         ],
       ),
     );

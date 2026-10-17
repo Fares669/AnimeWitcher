@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:ui' as ui;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
@@ -8,6 +9,7 @@ import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:animewitcher/core/utils/artwork_quality.dart';
 import 'package:animewitcher/core/utils/episode_label.dart';
 import 'package:animewitcher/shared/widgets/thumbnail_error_placeholder.dart';
+
 import 'hotstar_player_style.dart';
 import 'player_prompt_placement.dart';
 
@@ -398,7 +400,6 @@ class _NextEpisodeOverlayState extends State<NextEpisodeOverlay>
     final hasServerName = episodeTitle.isNotEmpty;
     final episodeNumberLabel = formatEpisodePrimaryLabel(
       episode: episodeNumber,
-      isArabic: true,
       isFinal: widget.nextEpisodeIsFinal,
       serverName: widget.nextEpisodeServerName,
     );
@@ -706,7 +707,8 @@ class _PlayNowButtonState extends State<_PlayNowButton>
             boxShadow: _isActive
                 ? [
                     BoxShadow(
-                      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
+                      color: Theme.of(context).colorScheme.primary
+                          .withValues(alpha: 0.5),
                       blurRadius: 16,
                       spreadRadius: 1,
                     ),

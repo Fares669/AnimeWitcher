@@ -1454,7 +1454,7 @@ class PersistentParallelDownload {
         }
         return _recoverReadyPublication(session);
       }
-      if (session.active) return true;
+      if (session.active && !session.pauseRequested) return true;
       if (!session.resourceValidatorQualified &&
           !await _revalidateLegacyResourceIdentity(session)) {
         await _status(session, TaskStatus.paused);
@@ -1479,6 +1479,14 @@ class PersistentParallelDownload {
           _scheduleCoordinatorRecovery(session);
         }
         return true;
+      }
+      if (session.active && session.pauseRequested) {
+        await _restoreNativeOwnership(session);
+        for (final part in session.parts) {
+          if (!part.complete && !part.launched) {
+            _invalidatePartAttempt(session, part);
+          }
+        }
       }
       session.cancelAggregateProgress();
       session.generation++;
@@ -2090,6 +2098,7 @@ class PersistentParallelDownload {
   void _armTailStallWatch(_ParallelSession session, _DownloadPart part) {
     if (_disposed ||
         !session.active ||
+        session.pauseRequested ||
         session.deleted ||
         part.complete ||
         !part.launched ||
@@ -2114,6 +2123,7 @@ class PersistentParallelDownload {
         session.serialize(() async {
           if (_disposed ||
               !session.active ||
+              session.pauseRequested ||
               session.deleted ||
               session.generation != generation ||
               part.complete ||
@@ -2185,8 +2195,10 @@ class PersistentParallelDownload {
     _ParallelSession session,
     _DownloadPart part,
   ) async {
-    if (_disposed || !session.active || session.deleted || part.complete)
+    if (_disposed || !session.active || session.pauseRequested ||
+        session.deleted || part.complete) {
       return;
+    }
 
     if (await _adoptOrVerifyExactSizePart(
       session,
@@ -2197,6 +2209,7 @@ class PersistentParallelDownload {
       return;
     }
 
+    if (session.pauseRequested) return;
     if (!part.tailRecoveryAttempted) {
       part.tailRecoveryAttempted = true;
       try {
@@ -2273,6 +2286,7 @@ class PersistentParallelDownload {
       savedBytes = 0;
     }
 
+    if (session.pauseRequested) return;
     try {
       await cancelParts(<String>[part.task.taskId]);
     } catch (_) {
@@ -4106,12 +4120,14 @@ class PersistentParallelDownload {
     }
 
     var pauseFailed = false;
+    var pauseAcknowledgementUnknown = false;
     await Future.wait(
       pauseCandidates.map((part) async {
         try {
           await pausePart(part.task);
-        } catch (_) {
+        } catch (error) {
           pauseFailed = true;
+          pauseAcknowledgementUnknown |= error is TimeoutException;
         }
       }),
     );
@@ -4139,8 +4155,9 @@ class PersistentParallelDownload {
         stillUnexpected.map((part) async {
           try {
             await pausePart(part.task);
-          } catch (_) {
+          } catch (error) {
             pauseFailed = true;
+            pauseAcknowledgementUnknown |= error is TimeoutException;
           }
         }),
       );
@@ -4165,7 +4182,9 @@ class PersistentParallelDownload {
     if (unresolved.isNotEmpty) {
       final stillIds = unresolved.map((part) => part.task.taskId).toSet()
         ..addAll(drainIds);
-      session.pauseRequested = false;
+      // A late ACK can still stop this writer. Keep new work fenced until an
+      // explicit control retry resolves that operation and its checkpoint.
+      session.pauseRequested = pauseAcknowledgementUnknown;
       session.active = true;
       for (final part in unfinished) {
         final owns = stillIds.contains(part.task.taskId);
@@ -4186,6 +4205,9 @@ class PersistentParallelDownload {
       }
       await _persist(session);
       await _status(session, TaskStatus.running);
+      if (pauseAcknowledgementUnknown) {
+        throw TimeoutException('Native pause acknowledgement is unresolved');
+      }
       return false;
     }
 

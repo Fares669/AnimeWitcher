@@ -61,8 +61,6 @@ String? animeWitcherReplyUserTagIdAfterTextChange({
 }
 
 /// Toast copied from APK `لا يمكن اضافة اكثر من تاج`.
-String animeWitcherReplyAlreadyTaggedMessage({required bool isArabic}) {
-  return isArabic
-      ? 'لا يمكن اضافة اكثر من تاج'
-      : 'You can only add one tag.';
+String animeWitcherReplyAlreadyTaggedMessage() {
+  return 'لا يمكن اضافة اكثر من تاج';
 }

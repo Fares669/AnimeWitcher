@@ -27,8 +27,7 @@ class CompletedDownloadChapterCard extends ConsumerWidget {
 
     final repository = ref.watch(mangaReadingRepositoryProvider);
     final progress = repository.get(chapter.mangaId, chapter.id);
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final l10n = AppLocalizations.of(context);
 
     return MangaChapterRow(
@@ -36,9 +35,7 @@ class CompletedDownloadChapterCard extends ConsumerWidget {
       progress: progress,
       onTap: onOpen,
       action: EpisodeActionChip(
-        tooltip:
-            l10n?.mangaDeleteChapter ??
-            (isArabic ? 'حذف الفصل' : 'Delete chapter'),
+        tooltip: l10n?.mangaDeleteChapter ?? 'حذف الفصل',
         onPressed: onDelete,
         icon: Icons.delete_outline_rounded,
         color: Theme.of(context).colorScheme.error,

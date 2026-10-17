@@ -465,12 +465,7 @@ class _MyAppState extends ConsumerState<MyApp>
     });
 
     return DynamicColorBuilder(
-      builder: (lightDynamic, darkDynamic) {
-        ColorScheme? darkScheme;
-        if (darkDynamic != null) {
-          darkScheme = darkDynamic;
-        }
-
+      builder: (_, _) {
         final materialApp = MaterialApp.router(
           scaffoldMessengerKey: ref
               .read(notificationServiceProvider)
@@ -483,10 +478,8 @@ class _MyAppState extends ConsumerState<MyApp>
           // The chosen theme decides both the mode and which dark theme is
           // drawn; there is no longer a system-following choice.
           themeMode: themeStyle.themeMode,
-          theme: lightDynamic != null
-              ? AppTheme.createLightTheme(lightDynamic)
-              : AppTheme.createLightTheme(null),
-          darkTheme: AppTheme.darkThemeFor(themeStyle, darkScheme),
+          theme: AppTheme.createLightTheme(null),
+          darkTheme: AppTheme.darkThemeFor(themeStyle, null),
           routerConfig: appRouter,
           locale: locale,
           localizationsDelegates: const [

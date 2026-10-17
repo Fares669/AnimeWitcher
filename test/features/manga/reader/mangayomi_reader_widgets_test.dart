@@ -67,7 +67,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Retry'), findsOneWidget);
+    expect(find.text('إعادة المحاولة'), findsOneWidget);
     expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
   });
 
@@ -94,29 +94,19 @@ void main() {
     expect(next.dx, lessThan(previous.dx));
   });
 
-
   test(
     'chapter transition advances only on forward overscroll at the list end',
     () {
       expect(
-        mangaReaderShouldAdvancePastTransition(
-          extentAfter: 0,
-          overscroll: 8,
-        ),
+        mangaReaderShouldAdvancePastTransition(extentAfter: 0, overscroll: 8),
         isTrue,
       );
       expect(
-        mangaReaderShouldAdvancePastTransition(
-          extentAfter: 24,
-          overscroll: 8,
-        ),
+        mangaReaderShouldAdvancePastTransition(extentAfter: 24, overscroll: 8),
         isFalse,
       );
       expect(
-        mangaReaderShouldAdvancePastTransition(
-          extentAfter: 0,
-          overscroll: -8,
-        ),
+        mangaReaderShouldAdvancePastTransition(extentAfter: 0, overscroll: -8),
         isFalse,
       );
     },
@@ -150,10 +140,10 @@ void main() {
       ),
     );
 
-    expect(find.text('End of chapter'), findsOneWidget);
+    expect(find.text('نهاية الفصل'), findsOneWidget);
     expect(find.text('Chapter 1'), findsOneWidget);
     expect(find.text('Chapter 2'), findsOneWidget);
-    expect(find.text('Next chapter'), findsOneWidget);
+    expect(find.text('الفصل التالي'), findsOneWidget);
   });
 
   testWidgets('next chapter transition card continues reading', (tester) async {
@@ -246,19 +236,14 @@ void main() {
           initialPage: 0,
           settings: const MangaReaderSettings(),
           onPageChanged: (_) {},
-          pageBuilder: (_, page) => SizedBox(
-            height: 300,
-            child: Text('page-${page.index}'),
-          ),
+          pageBuilder: (_, page) =>
+              SizedBox(height: 300, child: Text('page-${page.index}')),
           trailingPage: const Text('chapter-transition'),
         ),
       ),
     );
 
-    await tester.drag(
-      find.byType(CustomScrollView),
-      const Offset(0, -1200),
-    );
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -1200));
     await tester.pumpAndSettle();
 
     expect(find.text('chapter-transition'), findsOneWidget);
@@ -282,7 +267,9 @@ void main() {
     expect(view.scrollDirection, Axis.vertical);
   });
 
-  testWidgets('horizontal continuous RTL reader reverses its list', (tester) async {
+  testWidgets('horizontal continuous RTL reader reverses its list', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: MangaContinuousReader(
@@ -299,15 +286,19 @@ void main() {
 
     expect(find.byType(SuperListView), findsOneWidget);
     final scrollable = tester.widget<Scrollable>(
-      find.descendant(
-        of: find.byType(SuperListView),
-        matching: find.byType(Scrollable),
-      ).first,
+      find
+          .descendant(
+            of: find.byType(SuperListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
     );
     expect(scrollable.axisDirection, AxisDirection.left);
   });
 
-  testWidgets('double page renders a pair in one paged viewport', (tester) async {
+  testWidgets('double page renders a pair in one paged viewport', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: MangaPagedReader(
@@ -339,19 +330,15 @@ void main() {
           doublePage: true,
           settings: const MangaReaderSettings(),
           onPageChanged: (_) {},
-          pageBuilder: (_, page) => SizedBox(
-            height: 300,
-            child: Text('page-${page.index}'),
-          ),
+          pageBuilder: (_, page) =>
+              SizedBox(height: 300, child: Text('page-${page.index}')),
         ),
       ),
     );
     await tester.pump();
 
     expect(
-      find.byKey(
-        const ValueKey<String>('manga-reader-continuous-double-page'),
-      ),
+      find.byKey(const ValueKey<String>('manga-reader-continuous-double-page')),
       findsOneWidget,
     );
     expect(find.text('page-0'), findsOneWidget);
@@ -359,7 +346,9 @@ void main() {
     expect(find.byType(SuperListView), findsOneWidget);
   });
 
-  testWidgets('webtoon double page renders one vertical spread', (tester) async {
+  testWidgets('webtoon double page renders one vertical spread', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: MangaWebtoonReader(
@@ -368,10 +357,8 @@ void main() {
           doublePage: true,
           settings: const MangaReaderSettings(),
           onPageChanged: (_) {},
-          pageBuilder: (_, page) => SizedBox(
-            height: 300,
-            child: Text('page-${page.index}'),
-          ),
+          pageBuilder: (_, page) =>
+              SizedBox(height: 300, child: Text('page-${page.index}')),
         ),
       ),
     );
@@ -422,10 +409,8 @@ void main() {
             settings: const MangaReaderSettings(),
             controller: controller,
             onPageChanged: (_) {},
-            pageBuilder: (_, page) => SizedBox(
-              height: 320,
-              child: Text('page-${page.index}'),
-            ),
+            pageBuilder: (_, page) =>
+                SizedBox(height: 320, child: Text('page-${page.index}')),
           ),
         ),
       ),
@@ -458,10 +443,8 @@ void main() {
             settings: const MangaReaderSettings(),
             controller: controller,
             onPageChanged: reported.add,
-            pageBuilder: (_, page) => SizedBox(
-              height: 500,
-              child: Text('page-${page.index}'),
-            ),
+            pageBuilder: (_, page) =>
+                SizedBox(height: 500, child: Text('page-${page.index}')),
           ),
         ),
       ),
@@ -486,11 +469,11 @@ void main() {
             width: 400,
             height: 300,
             child: MangaContinuousReader(
-            pages: _pages,
-            initialPage: 0,
-            scrollDirection: Axis.vertical,
-            reverse: false,
-            settings: MangaReaderSettings(pagePreloadAmount: 6),
+              pages: _pages,
+              initialPage: 0,
+              scrollDirection: Axis.vertical,
+              reverse: false,
+              settings: MangaReaderSettings(pagePreloadAmount: 6),
               onPageChanged: _ignorePage,
             ),
           ),
@@ -509,9 +492,7 @@ void main() {
     );
   });
 
-  testWidgets('webtoon applies Mangayomi preload cache extent', (
-    tester,
-  ) async {
+  testWidgets('webtoon applies Mangayomi preload cache extent', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: MediaQuery(
@@ -520,9 +501,9 @@ void main() {
             width: 400,
             height: 300,
             child: MangaWebtoonReader(
-            pages: _pages,
-            initialPage: 0,
-            settings: MangaReaderSettings(pagePreloadAmount: 6),
+              pages: _pages,
+              initialPage: 0,
+              settings: MangaReaderSettings(pagePreloadAmount: 6),
               onPageChanged: _ignorePage,
             ),
           ),
@@ -578,10 +559,8 @@ void main() {
           reverse: false,
           settings: const MangaReaderSettings(),
           onPageChanged: (_) {},
-          pageBuilder: (_, page) => SizedBox(
-            height: 300,
-            child: Text('page-${page.index}'),
-          ),
+          pageBuilder: (_, page) =>
+              SizedBox(height: 300, child: Text('page-${page.index}')),
         ),
       ),
     );
@@ -598,10 +577,8 @@ void main() {
           initialPage: 0,
           settings: const MangaReaderSettings(),
           onPageChanged: (_) {},
-          pageBuilder: (_, page) => SizedBox(
-            height: 300,
-            child: Text('page-${page.index}'),
-          ),
+          pageBuilder: (_, page) =>
+              SizedBox(height: 300, child: Text('page-${page.index}')),
         ),
       ),
     );
@@ -610,7 +587,9 @@ void main() {
     expect(find.byType(MangaContinuousZoomSurface), findsOneWidget);
   });
 
-  testWidgets('webtoon applies side padding and optional page gaps', (tester) async {
+  testWidgets('webtoon applies side padding and optional page gaps', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: MangaWebtoonReader(
@@ -621,16 +600,17 @@ void main() {
             showPageGaps: false,
           ),
           onPageChanged: (_) {},
-          pageBuilder: (_, page) => SizedBox(
-            height: 300,
-            child: Text('page-${page.index}'),
-          ),
+          pageBuilder: (_, page) =>
+              SizedBox(height: 300, child: Text('page-${page.index}')),
         ),
       ),
     );
     await tester.pump();
 
-    expect(find.byKey(const ValueKey('manga-reader-webtoon-padding')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('manga-reader-webtoon-padding')),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('manga-reader-page-gap')), findsNothing);
   });
 }

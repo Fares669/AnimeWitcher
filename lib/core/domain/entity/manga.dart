@@ -21,6 +21,13 @@ final class MangaChapter {
   final double? number;
   final DateTime? publishedAt;
 
+  String get displayName {
+    if (name.trim().isNotEmpty) return name;
+    final value = number;
+    if (value == null) return 'الفصل';
+    return 'الفصل ${value == value.truncateToDouble() ? value.toInt() : value}';
+  }
+
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
     'mangaId': mangaId,
@@ -36,8 +43,8 @@ final class MangaChapter {
     final id = map['id']?.toString().trim() ?? '';
     final mangaId = map['mangaId']?.toString().trim() ?? '';
     final url = map['url']?.toString().trim() ?? '';
-    final name = map['name']?.toString().trim() ?? '';
-    if (id.isEmpty || mangaId.isEmpty || url.isEmpty || name.isEmpty) {
+    final name = map['name']?.toString() ?? '';
+    if (id.isEmpty || mangaId.isEmpty || url.isEmpty || name.trim().isEmpty) {
       return null;
     }
     return MangaChapter(

@@ -46,9 +46,6 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
   bool _loading = false;
   bool _failed = false;
 
-  bool get _arabic =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   @override
   void initState() {
     super.initState();
@@ -114,34 +111,33 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
         onBack: () => Navigator.of(context).maybePop(),
       ),
       body: Directionality(
-        textDirection: _arabic ? TextDirection.rtl : TextDirection.ltr,
+        textDirection: TextDirection.rtl,
         child: RefreshIndicator(
           onRefresh: _reload,
           child: CustomScrollView(
-          controller: _scroll,
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: <Widget>[
-            SliverPadding(
-              padding: EdgeInsets.fromLTRB(
-                padding,
-                headerTop + 12,
-                padding,
-                24 + bottom,
-              ),
-              sliver: _failed && _items.isEmpty
-                  ? SliverToBoxAdapter(
-                      child: Center(
-                        child: FilledButton.tonalIcon(
-                          onPressed: _reload,
-                          icon: const Icon(Icons.refresh_rounded),
-                          label: Text(_arabic ? 'إعادة المحاولة' : 'Retry'),
+            controller: _scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: <Widget>[
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  padding,
+                  headerTop + 12,
+                  padding,
+                  24 + bottom,
+                ),
+                sliver: _failed && _items.isEmpty
+                    ? SliverToBoxAdapter(
+                        child: Center(
+                          child: FilledButton.tonalIcon(
+                            onPressed: _reload,
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: Text('إعادة المحاولة'),
+                          ),
                         ),
-                      ),
-                    )
-                  : SliverGrid(
-                      gridDelegate: mangaPosterGridDelegate(context),
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
+                      )
+                    : SliverGrid(
+                        gridDelegate: mangaPosterGridDelegate(context),
+                        delegate: SliverChildBuilderDelegate((context, index) {
                           if (index >= _items.length) {
                             return const AnimePosterShimmer();
                           }
@@ -152,11 +148,9 @@ class _MangaViewAllScreenState<T> extends State<MangaViewAllScreen<T>> {
                               index,
                             ),
                           );
-                        },
-                        childCount: _items.length + (_loading ? 6 : 0),
+                        }, childCount: _items.length + (_loading ? 6 : 0)),
                       ),
-                    ),
-            ),
+              ),
             ],
           ),
         ),

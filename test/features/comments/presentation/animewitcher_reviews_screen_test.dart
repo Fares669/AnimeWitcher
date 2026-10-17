@@ -24,16 +24,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/test_fonts.dart';
+
 import 'package:animewitcher/core/utils/window_controls_inset.dart';
+
 import '../../../support/debug_shots.dart';
 
 class _FakeAccountService extends AnimeWitcherAccountService {
-  _FakeAccountService({
-    required this.reviews,
-  }) : super(
-         storage: StorageService(),
-         secureStorage: SecureTokenStorage(StorageService()),
-       );
+  _FakeAccountService({required this.reviews})
+    : super(
+        storage: StorageService(),
+        secureStorage: SecureTokenStorage(StorageService()),
+      );
 
   final List<AnimeWitcherComment> reviews;
   final bool signedIn = true;
@@ -290,11 +291,8 @@ void main() {
           service: _FakeAccountService(
             reviews: List.generate(
               20,
-              (index) => _review(
-                id: 'r$index',
-                text: 'entry-$index',
-                userId: 'me',
-              ),
+              (index) =>
+                  _review(id: 'r$index', text: 'entry-$index', userId: 'me'),
             ),
           ),
           home: screen.value,
@@ -545,14 +543,12 @@ void main() {
             builder: (context) {
               arabic = AnimeWitcherCommentSortControl.persistentButtons(
                 context: context,
-                isArabic: true,
                 tooltip: 'ترتيب المراجعات',
                 sort: AnimeWitcherCommentSort.newest,
                 onSelected: (_) {},
               );
               english = AnimeWitcherCommentSortControl.persistentButtons(
                 context: context,
-                isArabic: false,
                 tooltip: 'Sort reviews',
                 sort: AnimeWitcherCommentSort.oldest,
                 onSelected: (_) {},
@@ -722,9 +718,8 @@ void main() {
         );
         final image = await boundary.toImage(pixelRatio: 2);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        File(
-          '${artifacts.path}/$name.png',
-        ).writeAsBytesSync(bytes!.buffer.asUint8List());
+        File('${artifacts.path}/$name.png')
+            .writeAsBytesSync(bytes!.buffer.asUint8List());
       });
     }
 
@@ -794,9 +789,8 @@ void main() {
       );
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File(
-        '${artifacts.path}/account_my_reviews_sort_menu.png',
-      ).writeAsBytesSync(bytes!.buffer.asUint8List());
+      File('${artifacts.path}/account_my_reviews_sort_menu.png')
+          .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
 
     const iosKey = ValueKey<String>('sort_control_ios_trailing_fallback');
@@ -841,7 +835,6 @@ void main() {
                               children:
                                   AnimeWitcherCommentSortControl.persistentButtons(
                                     context: context,
-                                    isArabic: true,
                                     tooltip: 'ترتيب المراجعات',
                                     sort: AnimeWitcherCommentSort.newest,
                                     onSelected: (_) {},
@@ -867,9 +860,8 @@ void main() {
       );
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File(
-        '${artifacts.path}/sort_control_ios_trailing_fallback.png',
-      ).writeAsBytesSync(bytes!.buffer.asUint8List());
+      File('${artifacts.path}/sort_control_ios_trailing_fallback.png')
+          .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
 
     const editShot = ValueKey('review_edit_dialog');
@@ -894,9 +886,8 @@ void main() {
       );
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File(
-        '${artifacts.path}/review_edit_dialog.png',
-      ).writeAsBytesSync(bytes!.buffer.asUint8List());
+      File('${artifacts.path}/review_edit_dialog.png')
+          .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
   });
 }

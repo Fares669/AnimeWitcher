@@ -349,11 +349,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         if (animeWitcherAnimeCommentTarget(item) case final target?)
           DetailsHeroIconButton(
             icon: Icons.chat_bubble_outline_rounded,
-            tooltip: appText(
-              context,
-              english: 'Comments',
-              arabic: 'التعليقات',
-            ),
+            tooltip: appText(context, english: 'Comments', arabic: 'التعليقات'),
             foregroundColor: foregroundColor,
             fallbackColor: fallbackColor,
             onPressed: () => _openAnimeComments(context, target),
@@ -425,17 +421,13 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   }
 
   String _libraryCategoryLabel(BuildContext context, LibraryCategory category) {
-    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
     return switch (category) {
-      LibraryCategory.favorite => isArabic ? 'مفضلة' : 'Favorites',
-      LibraryCategory.watching => isArabic ? 'أشاهده حاليًا' : 'Watching',
-      LibraryCategory.continueLater =>
-        isArabic ? 'أكملها لاحقًا' : 'Continue later',
-      LibraryCategory.planToWatch =>
-        isArabic ? 'أرغب بمشاهدته' : 'Plan to watch',
-      LibraryCategory.completed => isArabic ? 'تمت مشاهدته' : 'Completed',
-      LibraryCategory.notInterested =>
-        isArabic ? 'لا أرغب بمشاهدته' : 'Not interested',
+      LibraryCategory.favorite => 'مفضلة',
+      LibraryCategory.watching => 'أشاهده حاليًا',
+      LibraryCategory.continueLater => 'أكملها لاحقًا',
+      LibraryCategory.planToWatch => 'أرغب بمشاهدته',
+      LibraryCategory.completed => 'تمت مشاهدته',
+      LibraryCategory.notInterested => 'لا أرغب بمشاهدته',
     };
   }
 
@@ -479,9 +471,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       items.add(
         AppleNativeMenuItem(
           value: _removeLibraryAction,
-          label: Localizations.localeOf(context).languageCode == 'ar'
-              ? 'إزالة من القائمة'
-              : 'Remove from list',
+          label: 'إزالة من القائمة',
           systemImage: 'trash',
           icon: Icons.delete_outline_rounded,
           destructive: true,
@@ -517,11 +507,11 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     if (ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
       return true;
     }
-    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
+
     ref
         .read(notificationServiceProvider)
         .showInfo(
-          librarySignInRequiredMessage(isArabic: isArabic),
+          librarySignInRequiredMessage(),
           icon: Icons.lock_outline_rounded,
           duration: const Duration(seconds: 3),
         );
@@ -1128,11 +1118,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
   Widget _buildEpisodeSelectionBar(BuildContext context, int selectedCount) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    final selectedLabel = isArabic
-        ? 'تم تحديد $selectedCount'
-        : '$selectedCount selected';
+
+    final selectedLabel = 'تم تحديد $selectedCount';
     final controller = ref.read(
       detailsControllerProvider(widget.item.url).notifier,
     );
@@ -1213,9 +1200,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                             ),
                           ),
                           IconButton(
-                            tooltip: isArabic
-                                ? 'إلغاء التحديد'
-                                : 'Cancel selection',
+                            tooltip: 'إلغاء التحديد',
                             visualDensity: VisualDensity.compact,
                             onPressed: controller.clearEpisodeSelection,
                             icon: const Icon(Icons.close_rounded),
@@ -1227,7 +1212,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                         children: [
                           Expanded(
                             child: actionButton(
-                              label: isArabic ? 'تمت مشاهدته' : 'Watched',
+                              label: 'تمت مشاهدته',
                               icon: Icons.visibility_rounded,
                               outlined: false,
                               onPressed: () async {
@@ -1241,7 +1226,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                           const SizedBox(width: 8),
                           Expanded(
                             child: actionButton(
-                              label: isArabic ? 'غير مشاهدة' : 'Unwatched',
+                              label: 'غير مشاهدة',
                               icon: Icons.visibility_off_rounded,
                               outlined: true,
                               onPressed: () async {
@@ -1254,9 +1239,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
                           ),
                           const SizedBox(width: 8),
                           IconButton.filledTonal(
-                            tooltip: isArabic
-                                ? 'تحديد جميع الحلقات'
-                                : 'Select all episodes',
+                            tooltip: 'تحديد جميع الحلقات',
                             onPressed: controller.selectAllEpisodes,
                             icon: const Icon(Icons.select_all_rounded),
                             style: IconButton.styleFrom(
@@ -1392,14 +1375,12 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
       (value) => _recommendationsWithoutRelatedLists(value, related),
     );
     final relatedHasMore = ref.watch(
-      detailsControllerProvider(
-        widget.item.url,
-      ).select((state) => state.relatedHasMore),
+      detailsControllerProvider(widget.item.url)
+          .select((state) => state.relatedHasMore),
     );
     final similarHasMore = ref.watch(
-      detailsControllerProvider(
-        widget.item.url,
-      ).select((state) => state.similarHasMore),
+      detailsControllerProvider(widget.item.url)
+          .select((state) => state.similarHasMore),
     );
     final controller = ref.read(
       detailsControllerProvider(widget.item.url).notifier,
@@ -1575,9 +1556,6 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
     BuildContext context,
     AsyncValue<List<Episode>> episodesState,
   ) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
     if (episodesState.isLoading) {
       return Column(
         mainAxisSize: MainAxisSize.min,
@@ -1585,10 +1563,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
         children: [
           const AppLoadingIndicator(),
           const SizedBox(height: 12),
-          Text(
-            isArabic ? 'يتم تحميل الحلقات…' : 'Episodes are loading…',
-            textAlign: TextAlign.center,
-          ),
+          Text('يتم تحميل الحلقات…', textAlign: TextAlign.center),
         ],
       );
     }
@@ -1609,10 +1584,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen>
 
     final episodes = episodesState.asData?.value ?? const <Episode>[];
     if (episodes.isEmpty) {
-      return Text(
-        isArabic ? 'لا توجد حلقات متاحة' : 'No episodes available',
-        textAlign: TextAlign.center,
-      );
+      return Text('لا توجد حلقات متاحة', textAlign: TextAlign.center);
     }
 
     return const SizedBox.shrink();

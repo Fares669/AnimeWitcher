@@ -41,11 +41,7 @@ class MangaMinSubsamplingImage extends StatelessWidget {
         child: FilledButton.tonalIcon(
           onPressed: onRetry,
           icon: const Icon(Icons.refresh_rounded),
-          label: Text(
-            Localizations.localeOf(context).languageCode.toLowerCase() == 'ar'
-                ? 'إعادة المحاولة'
-                : 'Retry',
-          ),
+          label: Text('إعادة المحاولة'),
         ),
       ),
     );

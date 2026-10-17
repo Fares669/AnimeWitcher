@@ -204,7 +204,7 @@ final class ProviderMangaChapterPageResolverV2
     final mangaId = descriptor['mangaId']?.toString().trim() ?? '';
     final chapterId = descriptor['chapterId']?.toString().trim() ?? '';
     final chapterUrl = descriptor['chapterUrl']?.toString().trim() ?? '';
-    final chapterName = descriptor['chapterName']?.toString().trim() ?? '';
+    final chapterName = descriptor['chapterName']?.toString() ?? '';
     final chapterNumber = double.tryParse(
       descriptor['chapterNumber']?.toString() ?? '',
     );
@@ -228,7 +228,7 @@ final class ProviderMangaChapterPageResolverV2
         id: chapterId,
         mangaId: mangaId,
         url: chapterUrl,
-        name: chapterName.isEmpty ? chapterId : chapterName,
+        name: chapterName.trim().isEmpty ? chapterId : chapterName,
         number: chapterNumber,
       ),
     );

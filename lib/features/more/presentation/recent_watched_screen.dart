@@ -22,14 +22,12 @@ class RecentWatchedScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final embedded = MorePaneScope.of(context);
     final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: isArabic ? 'آخر المشاهدات' : 'Recently watched',
+        title: 'آخر المشاهدات',
         canPop: !embedded && Navigator.of(context).canPop(),
         onBack: () => Navigator.of(context).pop(),
       ),
@@ -59,9 +57,6 @@ class RecentWatchedBody extends ConsumerStatefulWidget {
 class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
   bool _initialSyncRunning = true;
 
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   @override
   void initState() {
     super.initState();
@@ -81,7 +76,6 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic = _isArabic(context);
     final history = sortLibraryHistory(
       ref.watch(watchHistoryProvider),
       widget.sort,
@@ -99,7 +93,7 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
           children: [
             SizedBox(
               height: MediaQuery.sizeOf(context).height * 0.65,
-              child: _EmptyRecentWatched(isArabic: isArabic),
+              child: _EmptyRecentWatched(),
             ),
           ],
         ),
@@ -121,9 +115,7 @@ class _RecentWatchedBodyState extends ConsumerState<RecentWatchedBody> {
                     ref
                         .read(notificationServiceProvider)
                         .showSuccess(
-                          isArabic
-                              ? 'تم حذف ${historyItem.item.title} من آخر المشاهدات'
-                              : '${historyItem.item.title} removed from recent history',
+                          'تم حذف ${historyItem.item.title} من آخر المشاهدات',
                         );
                   }),
             );
@@ -185,9 +177,9 @@ class _RecentWatchedGrid extends StatelessWidget {
             key: ValueKey('recent-${item.url}'),
             item: item,
             heroTag: 'recent-${item.id}-$index',
-            onTap: () => DetailsRoute(
-              $extra: DetailsRouteExtra(item: item),
-            ).push<void>(context),
+            onTap: () =>
+                DetailsRoute($extra: DetailsRouteExtra(item: item))
+                    .push<void>(context),
             onLongPress: () => onRemove(history),
           );
         },
@@ -197,9 +189,7 @@ class _RecentWatchedGrid extends StatelessWidget {
 }
 
 class _EmptyRecentWatched extends StatelessWidget {
-  const _EmptyRecentWatched({required this.isArabic});
-
-  final bool isArabic;
+  const _EmptyRecentWatched();
 
   @override
   Widget build(BuildContext context) {
@@ -213,7 +203,7 @@ class _EmptyRecentWatched extends StatelessWidget {
             Icon(Icons.history_rounded, size: 52, color: colors.primary),
             const SizedBox(height: 14),
             Text(
-              isArabic ? 'لا توجد مشاهدات حتى الآن' : 'Nothing watched yet',
+              'لا توجد مشاهدات حتى الآن',
               style: Theme.of(context).textTheme.titleMedium,
               textAlign: TextAlign.center,
             ),
@@ -223,5 +213,3 @@ class _EmptyRecentWatched extends StatelessWidget {
     );
   }
 }
-
-

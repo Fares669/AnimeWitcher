@@ -121,15 +121,13 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
   }
 
   String _categoryLabel(BuildContext context, LibraryCategory category) {
-    final ar = Localizations.localeOf(context).languageCode == 'ar';
     return switch (category) {
-      LibraryCategory.favorite => ar ? 'المفضلة' : 'Favorites',
-      LibraryCategory.watching => ar ? 'أقرأها حاليًا' : 'Reading',
-      LibraryCategory.continueLater => ar ? 'أكملها لاحقًا' : 'Continue later',
-      LibraryCategory.planToWatch => ar ? 'أرغب بقراءتها' : 'Plan to read',
-      LibraryCategory.completed => ar ? 'تمت قراءتها' : 'Completed',
-      LibraryCategory.notInterested =>
-        ar ? 'لا أرغب بقراءتها' : 'Not interested',
+      LibraryCategory.favorite => 'المفضلة',
+      LibraryCategory.watching => 'أقرأها حاليًا',
+      LibraryCategory.continueLater => 'أكملها لاحقًا',
+      LibraryCategory.planToWatch => 'أرغب بقراءتها',
+      LibraryCategory.completed => 'تمت قراءتها',
+      LibraryCategory.notInterested => 'لا أرغب بقراءتها',
     };
   }
 
@@ -169,9 +167,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
       items.add(
         AppleNativeMenuItem(
           value: _removeLibraryAction,
-          label: Localizations.localeOf(context).languageCode == 'ar'
-              ? 'إزالة من القائمة'
-              : 'Remove from list',
+          label: 'إزالة من القائمة',
           systemImage: 'trash',
           icon: Icons.delete_outline_rounded,
           destructive: true,
@@ -212,13 +208,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     final foreground = colors.onSurface;
     return <AppleLiquidGlassToolbarButton>[
       AppleLiquidGlassToolbarButton(
-        tooltip: isFavorite
-            ? (Localizations.localeOf(context).languageCode == 'ar'
-                  ? 'إزالة من المفضلة'
-                  : 'Remove favorite')
-            : (Localizations.localeOf(context).languageCode == 'ar'
-                  ? 'إضافة إلى المفضلة'
-                  : 'Add to favorites'),
+        tooltip: isFavorite ? 'إزالة من المفضلة' : 'إضافة إلى المفضلة',
         icon: isFavorite
             ? Icons.favorite_rounded
             : Icons.favorite_border_rounded,
@@ -232,9 +222,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
               },
       ),
       AppleLiquidGlassToolbarButton(
-        tooltip: Localizations.localeOf(context).languageCode == 'ar'
-            ? 'اختر قائمة'
-            : 'Choose list',
+        tooltip: 'اختر قائمة',
         icon: currentCategory == null
             ? Icons.bookmark_border_rounded
             : _categoryIcon(currentCategory),
@@ -327,11 +315,11 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
     if (ref.read(animeWitcherAccountServiceProvider).isSignedIn) {
       return true;
     }
-    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
+
     ref
         .read(notificationServiceProvider)
         .showInfo(
-          librarySignInRequiredMessage(isArabic: isArabic),
+          librarySignInRequiredMessage(),
           icon: Icons.lock_outline_rounded,
           duration: const Duration(seconds: 3),
         );
@@ -347,13 +335,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
   Future<void> _rateManga(MultimediaItem item) async {
     final service = _accountServiceOrNull();
     if (service == null || !service.isSignedIn) {
-      ref
-          .read(notificationServiceProvider)
-          .showInfo(
-            Localizations.localeOf(context).languageCode == 'ar'
-                ? 'يجب تسجيل الدخول'
-                : 'Sign in to rate',
-          );
+      ref.read(notificationServiceProvider).showInfo('يجب تسجيل الدخول');
       return;
     }
 
@@ -388,13 +370,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
         });
       }
     } catch (_) {
-      ref
-          .read(notificationServiceProvider)
-          .showError(
-            Localizations.localeOf(context).languageCode == 'ar'
-                ? 'تعذر حفظ التقييم'
-                : 'Could not save rating',
-          );
+      ref.read(notificationServiceProvider).showError('تعذر حفظ التقييم');
     }
   }
 
@@ -540,11 +516,7 @@ class _MangaDetailsScreenState extends ConsumerState<MangaDetailsScreen>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  Icon(
-                    Icons.menu_book_rounded,
-                    size: 22,
-                    color: foreground,
-                  ),
+                  Icon(Icons.menu_book_rounded, size: 22, color: foreground),
                   const SizedBox(width: 8),
                   ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 320),
@@ -1004,13 +976,12 @@ class _RetryPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     return Center(
       child: FilledButton.tonalIcon(
         onPressed: onRetry,
         icon: const Icon(Icons.refresh_rounded),
-        label: Text(l10n?.retry ?? (isArabic ? 'إعادة المحاولة' : 'Retry')),
+        label: Text(l10n?.retry ?? 'إعادة المحاولة'),
       ),
     );
   }

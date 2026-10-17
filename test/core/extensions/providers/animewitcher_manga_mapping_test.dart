@@ -3,6 +3,30 @@ import 'package:animewitcher/core/extensions/providers/animewitcher_manga_mappin
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('recent manga keeps the exact server chapter name', () {
+    const name = '  ٠١٢.٥ &amp; <b>خاص</b>  ';
+    final latest = mapAnimeWitcherRecentMangaHit(<String, Object?>{
+      'manga_id': 'm1',
+      'manga_name': 'Manga',
+      'chapter_id': 'c12.5',
+      'chapter_name': name,
+    });
+
+    expect(latest?.chapter.name, name);
+  });
+
+  test('recent manga selects the first nonblank localized chapter name', () {
+    const name = '  12.5: Special &amp; <b>Extra</b>  ';
+    final latest = mapAnimeWitcherRecentMangaHit(<String, Object?>{
+      'manga_id': 'm1',
+      'manga_name': 'Manga',
+      'chapter_id': 'c12.5',
+      'chapter_name': <String, Object?>{'ar': '  ', 'en': name},
+    });
+
+    expect(latest?.chapter.name, name);
+  });
+
   test('maps live AnimeWitcher manga hit without episode semantics', () {
     final item = mapAnimeWitcherMangaHit(<String, Object?>{
       'objectID': 'm-42',
@@ -134,6 +158,10 @@ void main() {
 
     expect(chapters, hasLength(2));
     expect(chapters.map((chapter) => chapter.number), <double?>[30, 29]);
+    expect(chapters.map((chapter) => chapter.name), <String>[
+      "!Shadow Of The Reborn Rogue's Dominion الفصل 30 مترجم",
+      "!Shadow Of The Reborn Rogue's Dominion 29 مترجم",
+    ]);
     expect(
       chapters.first.url,
       startsWith(

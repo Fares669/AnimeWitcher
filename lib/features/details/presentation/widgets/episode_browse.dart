@@ -128,9 +128,7 @@ class EpisodeBrowseBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final arabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-    String t(String en, String ar) => arabic ? ar : en;
+    String t(String en, String ar) => ar;
     final colors = Theme.of(context).colorScheme;
     final ranges = episodeRangesApply(episodes.length)
         ? episodeRanges(episodes)
@@ -235,13 +233,11 @@ class EpisodeBrowseEmpty extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final arabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 28),
       child: Center(
         child: Text(
-          arabic ? 'لا توجد حلقات هنا' : 'No episodes here',
+          'لا توجد حلقات هنا',
           key: const ValueKey<String>('episode-browse-empty'),
           style: TextStyle(
             color: Theme.of(context).colorScheme.onSurfaceVariant,

@@ -1,4 +1,5 @@
 import 'more_sidebar_shell.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -90,82 +91,77 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
     await future;
   }
 
-  bool _isArabic(BuildContext context) =>
-      Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
   @override
   Widget build(BuildContext context) {
     ref.listen<int>(accountDataRevisionProvider, (previous, next) {
       if (previous == next) return;
       unawaited(_refreshSeasons());
     });
-    final isArabic = _isArabic(context);
+
     final embedded = MorePaneScope.of(context);
     final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppPageAppBar(
-        title: isArabic ? 'المواسم' : 'Seasons',
+        title: 'المواسم',
         canPop: !embedded && Navigator.of(context).canPop(),
         onBack: () => Navigator.of(context).pop(),
       ),
       body: Padding(
         padding: EdgeInsets.only(top: headerTop),
         child: FutureBuilder<_SeasonsBootstrap>(
-        future: _bootstrapFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
+          future: _bootstrapFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return Column(
+                children: [
+                  _SeasonTabs(controller: _tabController),
+                  Expanded(
+                    child: _SeasonsLoadingBody(
+                      showSeasonTitle: _selectedTab != 3,
+                    ),
+                  ),
+                ],
+              );
+            }
+            if (snapshot.hasError || !snapshot.hasData) {
+              return _LoadError(
+                message: 'تعذر تحميل بيانات المواسم',
+                onRetry: () {
+                  setState(() => _bootstrapFuture = _loadBootstrap());
+                },
+              );
+            }
+
+            final data = snapshot.data!;
             return Column(
               children: [
-                _SeasonTabs(controller: _tabController, isArabic: isArabic),
+                _SeasonTabs(controller: _tabController),
                 Expanded(
-                  child: _SeasonsLoadingBody(
-                    showSeasonTitle: _selectedTab != 3,
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      for (var index = 0; index < 4; index++)
+                        LazyTabChild(
+                          controller: _tabController,
+                          index: index,
+                          builder: (context) => MouseDragRefreshIndicator(
+                            onRefresh: _refreshSeasons,
+                            child: _tabBody(data, index),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],
             );
-          }
-          if (snapshot.hasError || !snapshot.hasData) {
-            return _LoadError(
-              message: isArabic
-                  ? 'تعذر تحميل بيانات المواسم'
-                  : 'Could not load season data',
-              onRetry: () {
-                setState(() => _bootstrapFuture = _loadBootstrap());
-              },
-            );
-          }
-
-          final data = snapshot.data!;
-          return Column(
-            children: [
-              _SeasonTabs(controller: _tabController, isArabic: isArabic),
-              Expanded(
-                child: TabBarView(
-                  controller: _tabController,
-                  children: [
-                    for (var index = 0; index < 4; index++)
-                      LazyTabChild(
-                        controller: _tabController,
-                        index: index,
-                        builder: (context) => MouseDragRefreshIndicator(
-                          onRefresh: _refreshSeasons,
-                          child: _tabBody(data, isArabic, index),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
+          },
         ),
       ),
     );
   }
 
-  Widget _tabBody(_SeasonsBootstrap data, bool isArabic, int index) {
+  Widget _tabBody(_SeasonsBootstrap data, int index) {
     switch (index) {
       case 0:
         return _SeasonGrid(
@@ -173,9 +169,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           provider: data.provider,
           season: data.config.past,
           showSeasonTitle: true,
-          emptyLabel: isArabic
-              ? 'لا توجد أعمال في الموسم السابق'
-              : 'No titles in the previous season',
+          emptyLabel: 'لا توجد أعمال في الموسم السابق',
         );
       case 1:
         return _SeasonGrid(
@@ -183,9 +177,7 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           provider: data.provider,
           season: data.config.current,
           showSeasonTitle: true,
-          emptyLabel: isArabic
-              ? 'لا توجد أعمال في الموسم الحالي'
-              : 'No titles in the current season',
+          emptyLabel: 'لا توجد أعمال في الموسم الحالي',
         );
       case 2:
         return _SeasonGrid(
@@ -193,16 +185,13 @@ class _SeasonsScreenState extends ConsumerState<SeasonsScreen>
           provider: data.provider,
           season: data.config.next,
           showSeasonTitle: true,
-          emptyLabel: isArabic
-              ? 'لا توجد أعمال في الموسم القادم'
-              : 'No titles in the next season',
+          emptyLabel: 'لا توجد أعمال في الموسم القادم',
         );
       default:
         return _OtherSeasonsList(
           key: ValueKey('other-seasons-$_reloadGeneration'),
           provider: data.provider,
           allSeasons: data.allSeasons,
-          isArabic: isArabic,
         );
     }
   }
@@ -223,9 +212,8 @@ class SeasonListTitle extends StatelessWidget {
         child: Text(
           title,
           textAlign: TextAlign.center,
-          style: Theme.of(
-            context,
-          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          style: Theme.of(context).textTheme.titleLarge
+              ?.copyWith(fontWeight: FontWeight.w800),
         ),
       ),
     );
@@ -287,15 +275,17 @@ class _SeasonsBootstrap {
 
 class _SeasonTabs extends StatelessWidget {
   final TabController controller;
-  final bool isArabic;
 
-  const _SeasonTabs({required this.controller, required this.isArabic});
+  const _SeasonTabs({required this.controller});
 
   @override
   Widget build(BuildContext context) {
-    final labels = isArabic
-        ? const <String>['السابق', 'الحالي', 'القادم', 'المواسم الأخرى']
-        : const <String>['Previous', 'Current', 'Next', 'Other seasons'];
+    final labels = const <String>[
+      'السابق',
+      'الحالي',
+      'القادم',
+      'المواسم الأخرى',
+    ];
     const icons = <IconData>[
       Icons.history_rounded,
       Icons.play_circle_outline_rounded,
@@ -315,13 +305,11 @@ class _SeasonTabs extends StatelessWidget {
 class _OtherSeasonsList extends StatelessWidget {
   final AnimeWitcherNativeProvider provider;
   final List<String> allSeasons;
-  final bool isArabic;
 
   const _OtherSeasonsList({
     super.key,
     required this.provider,
     required this.allSeasons,
-    required this.isArabic,
   });
 
   Map<int, Map<String, String>> _grouped() {
@@ -344,20 +332,10 @@ class _OtherSeasonsList extends StatelessWidget {
     final grouped = _grouped();
     final years = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
     if (years.isEmpty) {
-      return Center(
-        child: Text(
-          isArabic ? 'لا توجد مواسم أخرى' : 'No other seasons available',
-        ),
-      );
+      return Center(child: Text('لا توجد مواسم أخرى'));
     }
 
     const seasons = <String>['شتاء', 'ربيع', 'صيف', 'خريف'];
-    final englishSeason = <String, String>{
-      'شتاء': 'Winter',
-      'ربيع': 'Spring',
-      'صيف': 'Summer',
-      'خريف': 'Fall',
-    };
 
     return ListView.separated(
       key: const PageStorageKey<String>('other-seasons'),
@@ -382,9 +360,8 @@ class _OtherSeasonsList extends StatelessWidget {
                   '$year',
                   key: ValueKey('other-season-year-$year'),
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: Theme.of(context).textTheme.headlineSmall
+                      ?.copyWith(fontWeight: FontWeight.w800),
                 ),
               ),
               const SizedBox(height: 14),
@@ -393,9 +370,7 @@ class _OtherSeasonsList extends StatelessWidget {
                   for (var i = 0; i < seasons.length; i++) ...[
                     Expanded(
                       child: _SeasonYearButton(
-                        label: isArabic
-                            ? seasons[i]
-                            : englishSeason[seasons[i]]!,
+                        label: seasons[i],
                         enabled: values.containsKey(seasons[i]),
                         onTap: () {
                           final fullSeason = values[seasons[i]];
@@ -461,8 +436,6 @@ class _SeasonResultsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
     final headerTop = appPageHeaderContentTopInset(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -475,9 +448,7 @@ class _SeasonResultsScreen extends StatelessWidget {
         provider: provider,
         topPadding: headerTop,
         season: season,
-        emptyLabel: isArabic
-            ? 'لا توجد أعمال في هذا الموسم'
-            : 'No titles in this season',
+        emptyLabel: 'لا توجد أعمال في هذا الموسم',
       ),
     );
   }
@@ -630,7 +601,9 @@ class _SeasonGridState extends State<_SeasonGrid>
                   handsetPortraitCrossAxisCount:
                       MultimediaCardLayout.handsetPortraitGridColumns,
                   horizontalPadding:
-                      MultimediaCardLayout.catalogGridHorizontalPadding(context),
+                      MultimediaCardLayout.catalogGridHorizontalPadding(
+                        context,
+                      ),
                 ),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -650,9 +623,9 @@ class _SeasonGridState extends State<_SeasonGrid>
                       key: ValueKey('season-${widget.season}-${item.url}'),
                       item: item,
                       heroTag: 'season-${widget.season}-${item.id}-$index',
-                      onTap: () => DetailsRoute(
-                        $extra: DetailsRouteExtra(item: item),
-                      ).push<void>(context),
+                      onTap: () =>
+                          DetailsRoute($extra: DetailsRouteExtra(item: item))
+                              .push<void>(context),
                     );
                   },
                   childCount: initialLoading
@@ -696,5 +669,3 @@ class _LoadError extends StatelessWidget {
     );
   }
 }
-
-

@@ -22,6 +22,9 @@ class MediaHorizontalList extends StatefulWidget {
   final bool showViewAll;
   final String? heroTagPrefix;
   final Future<ProviderMediaPage> Function(int offset)? loadViewAllPage;
+  final int? initialViewAllOffset;
+  final bool initialViewAllHasMore;
+  final bool showWhenEmpty;
   final bool forcePortrait;
 
   const MediaHorizontalList({
@@ -33,6 +36,9 @@ class MediaHorizontalList extends StatefulWidget {
     this.showViewAll = true,
     this.heroTagPrefix,
     this.loadViewAllPage,
+    this.initialViewAllOffset,
+    this.initialViewAllHasMore = true,
+    this.showWhenEmpty = false,
     this.forcePortrait = false,
   });
 
@@ -130,7 +136,9 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.mediaList.isEmpty) return const SizedBox.shrink();
+    if (widget.mediaList.isEmpty && !widget.showWhenEmpty) {
+      return const SizedBox.shrink();
+    }
     final isDesktop = context.isDesktop;
     final isHandsetLandscape = context.isHandsetLandscape;
     final isPortrait = widget.forcePortrait || _isPortrait;
@@ -176,6 +184,8 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
                           category: widget.category,
                           onTap: widget.onTap,
                           loadPage: widget.loadViewAllPage,
+                          initialOffset: widget.initialViewAllOffset,
+                          initialHasMore: widget.initialViewAllHasMore,
                           forcePortrait: widget.forcePortrait,
                         ),
                       ).push<void>(context);
@@ -183,53 +193,53 @@ class _MediaHorizontalListState extends State<MediaHorizontalList> {
                   )
                 : null,
           ),
-          SizedBox(
-            height: listHeight,
-            child: PagedRail(
-              controller: _scrollController,
-              itemExtent: cardWidth + spacing,
-              clipBehavior: Clip.none,
-              padding: EdgeInsets.symmetric(
-                horizontal: isDesktop
-                    ? LayoutConstants.dashboardContentPadding
-                    : LayoutConstants.spacingMd,
-              ),
-              itemCount: widget.mediaList.length,
-              itemBuilder: (context, index) {
-                final item = widget.mediaList[index];
-                final itemTitle = item.title;
-                final prefix = widget.heroTagPrefix ?? 'list';
-                final uniqueTag =
-                    '${prefix}_${widget.title}_${item.id}_${itemTitle.hashCode}_$index';
+          if (widget.mediaList.isNotEmpty)
+            SizedBox(
+              height: listHeight,
+              child: PagedRail(
+                controller: _scrollController,
+                itemExtent: cardWidth + spacing,
+                clipBehavior: Clip.none,
+                padding: EdgeInsets.symmetric(
+                  horizontal: isDesktop
+                      ? LayoutConstants.dashboardContentPadding
+                      : LayoutConstants.spacingMd,
+                ),
+                itemCount: widget.mediaList.length,
+                itemBuilder: (context, index) {
+                  final item = widget.mediaList[index];
+                  final itemTitle = item.title;
+                  final prefix = widget.heroTagPrefix ?? 'list';
+                  final uniqueTag =
+                      '${prefix}_${widget.title}_${item.id}_${itemTitle.hashCode}_$index';
 
-                // itemExtent hands children TIGHT width constraints, so a
-                // SizedBox(width:) would be overridden and the card would
-                // stretch across the whole stride (losing the inter-card
-                // gap). Padding deflates the constraints instead, keeping
-                // the card at [cardWidth] with [spacing] as the trailing
-                // gap. The ValueKey is load-bearing: home_rails_rtl_test
-                // locates rail items through it.
-                return Padding(
-                  key: ValueKey('${widget.title}-rail-$index'),
-                  padding: EdgeInsetsDirectional.only(end: spacing),
-                  child: MultimediaCard.fromItem(
-                    item: item,
-                    heroTag: uniqueTag,
-                    isPortrait: isPortrait,
-                    onTap: () {
-                      if (widget.onTap != null) {
-                        widget.onTap!(item);
-                      } else {
-                        DetailsRoute(
-                          $extra: DetailsRouteExtra(item: item),
-                        ).push<void>(context);
-                      }
-                    },
-                  ),
-                );
-              },
+                  // itemExtent hands children TIGHT width constraints, so a
+                  // SizedBox(width:) would be overridden and the card would
+                  // stretch across the whole stride (losing the inter-card
+                  // gap). Padding deflates the constraints instead, keeping
+                  // the card at [cardWidth] with [spacing] as the trailing
+                  // gap. The ValueKey is load-bearing: home_rails_rtl_test
+                  // locates rail items through it.
+                  return Padding(
+                    key: ValueKey('${widget.title}-rail-$index'),
+                    padding: EdgeInsetsDirectional.only(end: spacing),
+                    child: MultimediaCard.fromItem(
+                      item: item,
+                      heroTag: uniqueTag,
+                      isPortrait: isPortrait,
+                      onTap: () {
+                        if (widget.onTap != null) {
+                          widget.onTap!(item);
+                        } else {
+                          DetailsRoute($extra: DetailsRouteExtra(item: item))
+                              .push<void>(context);
+                        }
+                      },
+                    ),
+                  );
+                },
+              ),
             ),
-          ),
         ],
       ),
     );

@@ -18,11 +18,7 @@ import '../library_media_kind.dart';
 import '../library_provider.dart';
 import 'bookmarks_tab.dart';
 
-bool _arabic(BuildContext context) =>
-    Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
-
-String _t(BuildContext context, String en, String ar) =>
-    _arabic(context) ? ar : en;
+String _t(BuildContext context, String en, String ar) => ar;
 
 enum LibraryPhoneSection { anime, manga, characters }
 
@@ -30,15 +26,15 @@ String _sectionLabel(BuildContext context, LibraryPhoneSection section) =>
     switch (section) {
       LibraryPhoneSection.anime => _t(context, 'Anime', 'أنمي'),
       LibraryPhoneSection.manga => _t(context, 'Manga', 'مانجا'),
-      LibraryPhoneSection.characters =>
-        _t(context, 'Characters', 'شخصيات'),
+      LibraryPhoneSection.characters => _t(context, 'Characters', 'شخصيات'),
     };
 
-LibraryMediaKind? _sectionKind(LibraryPhoneSection section) => switch (section) {
-  LibraryPhoneSection.anime => LibraryMediaKind.anime,
-  LibraryPhoneSection.manga => LibraryMediaKind.manga,
-  LibraryPhoneSection.characters => null,
-};
+LibraryMediaKind? _sectionKind(LibraryPhoneSection section) =>
+    switch (section) {
+      LibraryPhoneSection.anime => LibraryMediaKind.anime,
+      LibraryPhoneSection.manga => LibraryMediaKind.manga,
+      LibraryPhoneSection.characters => null,
+    };
 
 typedef _LibraryListTab = ({
   String key,
@@ -314,8 +310,7 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
                     key: const ValueKey<String>('library-list-pager'),
                     controller: controller,
                     children: [
-                      for (final tab in tabs)
-                        _listBody(repository, kind!, tab),
+                      for (final tab in tabs) _listBody(repository, kind!, tab),
                     ],
                   ),
                 );
@@ -421,7 +416,6 @@ class _LibraryPhoneShelvesState extends ConsumerState<LibraryPhoneShelves> {
   }
 }
 
-
 /// The library filter. On phone it also chooses Anime, Manga, or favorite
 /// Characters. Desktop passes only [kind] and keeps its existing navigation.
 class LibraryFilterPanel extends StatelessWidget {
@@ -495,9 +489,7 @@ class LibraryFilterPanel extends StatelessWidget {
                       phoneSection!,
                       _sectionLabel(context, section),
                       onPhoneSectionChanged ?? (_) {},
-                      key: ValueKey<String>(
-                        'library-section-${section.name}',
-                      ),
+                      key: ValueKey<String>('library-section-${section.name}'),
                     ),
                 ]),
               ],

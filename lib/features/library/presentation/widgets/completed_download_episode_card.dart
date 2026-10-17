@@ -169,14 +169,12 @@ class _CompletedDownloadEpisodeCardState
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final episode = widget.item.episode;
-    final isArabic =
-        Localizations.localeOf(context).languageCode.toLowerCase() == 'ar';
+
     final episodeTitle = episode == null ? '' : realEpisodeTitle(episode.name);
     final episodeNumberLabel = episode == null
         ? widget.item.item.title
         : formatEpisodePrimaryLabel(
             episode: episode.episode,
-            isArabic: isArabic,
             isFinal: episode.isFinal,
             serverName: episode.serverName,
           );
@@ -197,7 +195,7 @@ class _CompletedDownloadEpisodeCardState
     );
 
     return Directionality(
-      textDirection: isArabic ? TextDirection.rtl : TextDirection.ltr,
+      textDirection: TextDirection.rtl,
       child: InkWell(
         onTap: widget.onPlay,
         borderRadius: BorderRadius.circular(12),
@@ -235,9 +233,7 @@ class _CompletedDownloadEpisodeCardState
                       children: [
                         Row(
                           mainAxisSize: MainAxisSize.min,
-                          textDirection: isArabic
-                              ? TextDirection.rtl
-                              : TextDirection.ltr,
+                          textDirection: TextDirection.rtl,
                           children: [
                             if (episodeNumberLabel.isNotEmpty)
                               Text(
@@ -248,7 +244,7 @@ class _CompletedDownloadEpisodeCardState
                               ),
                             if (episode?.isFiller == true) ...[
                               const SizedBox(width: 8),
-                              _buildFillerBadge(isArabic),
+                              _buildFillerBadge(),
                             ],
                           ],
                         ),
@@ -281,7 +277,7 @@ class _CompletedDownloadEpisodeCardState
                     height: 76,
                     child: Center(
                       child: EpisodeActionChip(
-                        tooltip: isArabic ? 'حذف الحلقة' : 'Delete episode',
+                        tooltip: 'حذف الحلقة',
                         icon: Icons.delete_outline_rounded,
                         color: theme.colorScheme.error,
                         onPressed: widget.onDelete,
@@ -314,7 +310,7 @@ class _CompletedDownloadEpisodeCardState
     );
   }
 
-  Widget _buildFillerBadge(bool isArabic) {
+  Widget _buildFillerBadge() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
@@ -322,7 +318,7 @@ class _CompletedDownloadEpisodeCardState
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        isArabic ? 'فلر' : 'FILLER',
+        'فلر',
         style: const TextStyle(
           color: Colors.white,
           fontSize: 10,
