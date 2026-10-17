@@ -46,6 +46,20 @@ class VideoController : public enable_shared_from_this<VideoController> {
 	static ID3D11DeviceContext* d3dContext;
 	static set<int64_t> keepScreenOnRefs;
 
+	// Decode a UTF-8 std::string into a UTF-16 std::wstring. The Dart side sends
+	// file paths as UTF-8; a naive `wstring(s.begin(), s.end())` widens each byte
+	// individually and corrupts any non-ASCII path, which then produces an invalid
+	// file:// URI and MediaPlayerError::SourceNotSupported. MultiByteToWideChar
+	// with CP_UTF8 decodes the code points correctly.
+	static wstring utf8ToWide(const string& utf8) {
+		if (utf8.empty()) return wstring();
+		const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
+		if (len <= 0) return wstring(utf8.begin(), utf8.end()); // fallback: never worse than before
+		wstring wide(len, L'\0');
+		MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), &wide[0], len);
+		return wide;
+	}
+
 	static void requestKeepScreenOn(const int64_t id, const bool enable) {
 		if (enable) {
 			if (keepScreenOnRefs.insert(id).second && keepScreenOnRefs.size() == 1) {
@@ -718,7 +732,7 @@ public:
 				auto sharedThis = weakThis.lock();
 				if (sharedThis) {
 					sharedThis->seeking = false;
-					if (sharedThis->state == 1) {
+					if (sharedThis->state == 1 && sharedThis->mediaPlayer.PlaybackSession().PlaybackState() > MediaPlaybackState::Opening) {
 						sharedThis->loadEnd();
 					} else if (sharedThis->state > 1 && sharedThis->eventSink) {
 						sharedThis->eventSink->Success(EncodableMap{
@@ -756,12 +770,12 @@ public:
 		playbackSession.BufferedRangesChanged([weakThis](MediaPlaybackSession playbackSession, auto) {
 			queueWork([weakThis, playbackSession]() {
 				auto sharedThis = weakThis.lock();
-				if (sharedThis && sharedThis->state > 0 && sharedThis->networking) {
+				if (sharedThis && sharedThis->state > 0 && sharedThis->networking && playbackSession.PlaybackState() > MediaPlaybackState::None) {
 					auto buffered = playbackSession.GetBufferedRanges();
+					auto pos = playbackSession.Position().count() / 10000;
 					for (uint32_t i = 0; i < buffered.Size(); i++) {
 						auto start = buffered.GetAt(i).Start.count() / 10000;
 						auto end = buffered.GetAt(i).End.count() / 10000;
-						auto pos = playbackSession.Position().count() / 10000;
 						if (start <= pos && end >= pos) {
 							if (sharedThis->bufferPosition != end) {
 								sharedThis->bufferPosition = end;
@@ -798,7 +812,7 @@ public:
 			}
 			queueWork([weakThis, message, err]() {
 				auto sharedThis = weakThis.lock();
-				if (sharedThis && sharedThis->state > 0) {
+				if (sharedThis && sharedThis->state > 0 && sharedThis->mediaPlayer.PlaybackSession().PlaybackState() == MediaPlaybackState::None) {
 					if (err == MediaPlayerError::NetworkError &&
 						sharedThis->retryCount < 3) {
 						sharedThis->retryCount++;
@@ -831,19 +845,21 @@ public:
 				try {
 					auto sharedThis = weakThis.lock();
 					if (sharedThis && sharedThis->state == 1) {
-						sharedThis->mediaPlayer.Volume(sharedThis->volume);
-						sharedThis->retryCount = 0;
 						auto playbackSession = sharedThis->mediaPlayer.PlaybackSession();
-						if (sharedThis->streaming) {
-							playbackSession.PlaybackRate(1);
-							sharedThis->position = 0;
-							sharedThis->loadEnd();
-						} else {
-							playbackSession.PlaybackRate(sharedThis->speed);
-							// seek anyway to ensure media is loaded
-							sharedThis->seeking = true;
-							playbackSession.Position(chrono::milliseconds(sharedThis->position));
-							sharedThis->position = 0;
+						if (playbackSession.PlaybackState() > MediaPlaybackState::Opening) {
+							sharedThis->mediaPlayer.Volume(sharedThis->volume);
+							sharedThis->retryCount = 0;
+							if (sharedThis->streaming) {
+								playbackSession.PlaybackRate(1);
+								sharedThis->position = 0;
+								sharedThis->loadEnd();
+							} else {
+								playbackSession.PlaybackRate(sharedThis->speed);
+								// seek anyway to ensure media is loaded
+								sharedThis->seeking = true;
+								playbackSession.Position(chrono::milliseconds(sharedThis->position));
+								sharedThis->position = 0;
+							}
 						}
 					}
 				} catch (...) {
@@ -885,14 +901,16 @@ public:
 			wstring sourceUrl(L"file://");
 			sourceUrl += path;
 			sourceUrl.replace(sourceUrl.find_last_of(L'\\') + 1, sourceUrl.length(), L"data/flutter_assets/");
-			sourceUrl += wstring(src.begin() + 8, src.end());
+			sourceUrl += utf8ToWide(src.substr(8));
 			replace(sourceUrl.begin(), sourceUrl.end(), L'\\', L'/');
 			uri = Uri(sourceUrl);
 		} else if (src.find("://") == string::npos) {
-			wstring sourceUrl(L"file://");
-			sourceUrl += wstring(src.begin(), src.end());
-			replace(sourceUrl.begin(), sourceUrl.end(), L'\\', L'/');
-			uri = Uri(sourceUrl);
+			// Local file path. Build the URI from a properly decoded UTF-16 path
+			// and let winrt::Uri percent-encode spaces/reserved chars. A naive
+			// byte-widen here corrupts non-ASCII paths -> SourceNotSupported.
+			wstring widePath = utf8ToWide(src);
+			replace(widePath.begin(), widePath.end(), L'\\', L'/');
+			uri = Uri(L"file:///" + widePath);
 		} else {
 			uri = Uri(to_hstring(src));
 			networking = !src._Starts_with("file://");
