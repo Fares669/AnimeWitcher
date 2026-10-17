@@ -626,7 +626,7 @@ void main() {
         id: 'c1',
         mangaId: 'm1',
         url: 'https://example.test/chapter/1',
-        name: 'الفصل 1',
+        name: '  ٠١ &amp; <b>خاص</b>  ',
       );
       final manga = MultimediaItem(
         title: 'Reader Manga',
@@ -667,6 +667,7 @@ void main() {
       expect(find.byIcon(Icons.bookmark_rounded), findsNothing);
       expect(find.byIcon(Icons.bookmark_border_rounded), findsNothing);
       expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
+      expect(find.text('  ٠١ &amp; <b>خاص</b>  '), findsOneWidget);
 
       // The mode's name shows for a moment as the reader opens; let it go.
       await tester.pump(const Duration(seconds: 2));

@@ -4,6 +4,7 @@ import 'package:animewitcher/core/storage/storage_service.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/more/presentation/more_screen.dart';
+import 'package:animewitcher/features/more/presentation/more_sidebar_shell.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -52,6 +53,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+
+    final sidebar = tester.widget<MoreSidebarShell>(
+      find.byType(MoreSidebarShell),
+    );
+    expect(sidebar.groups.first.items.single.label, 'الحساب');
+    expect(find.text('حساب AnimeWitcher'), findsNothing);
 
     await tester.tap(find.text('القارئ').first);
     await tester.pumpAndSettle();
