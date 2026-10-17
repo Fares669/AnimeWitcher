@@ -8,7 +8,7 @@ import Foundation
 import connectivity_plus
 import device_info_plus
 import dynamic_color
-import file_picker
+import file_picker_darwin
 import flutter_secure_storage_darwin
 import flutter_volume_controller
 import media_kit_libs_macos_video

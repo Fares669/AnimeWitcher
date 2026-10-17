@@ -1,3 +1,10 @@
+# 1.3.3
+- prevent calling `MethodChannel` during the player's destruction process.
+- check native playback state in dispatched jobs when necessary.
+
+# 1.3.2
+- support flutter 3.44
+
 # 1.3.1
 - fix `setMaxResolution()` and `setMaxBitrate()` return values on Web platforms.
 
