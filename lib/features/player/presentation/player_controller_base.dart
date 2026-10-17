@@ -1045,6 +1045,8 @@ class PlayerController extends Notifier<PlayerState> {
     final int season = _episode!.season > 0 ? _episode!.season : 1;
     final int episodeNum = _episode!.episode > 0 ? _episode!.episode : 1;
 
+    final isMovie = _item.contentType == MultimediaContentType.movie;
+
     // 1. Fetch from IntroDB (for both Anime and Western TV Shows/Movies).
     // Runs under the master toggle: its own legacy flag had no UI, so it
     // could never be switched on.
@@ -1054,8 +1056,8 @@ class PlayerController extends Notifier<PlayerState> {
         final segments = await introDb.getSkipSegments(
           tmdbId: state.tmdbId,
           imdbId: state.imdbId,
-          season: season,
-          episode: episodeNum,
+          season: isMovie ? null : season,
+          episode: isMovie ? null : episodeNum,
         );
         if (_isDisposed) return;
         introDbSegments = segments;
@@ -1173,8 +1175,8 @@ class PlayerController extends Notifier<PlayerState> {
                 .getSkipSegments(
                   imdbId: ids.imdbId,
                   tmdbId: ids.tmdbId,
-                  season: season,
-                  episode: episodeNum,
+                  season: isMovie ? null : season,
+                  episode: isMovie ? null : episodeNum,
                   duration: durationSec,
                 );
             if (_isDisposed) return;

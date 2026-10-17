@@ -30,15 +30,11 @@ class IntroDbService implements SkipService {
   // instances. Avoids amplifying rate-limits.
   static DateTime? _rateLimitUntil;
 
-  /// v2 of the API. The one this used to call answered with a single object
-  /// per kind and seconds; this one answers with a list per kind and
-  /// milliseconds, and an open-ended span leaves one end null — an intro
-  /// that starts at the first frame, credits that run to the last.
-  static const String _endpoint = 'https://api.theintrodb.org/v2/media';
+  static const String _endpoint = 'https://api.theintrodb.org/v4/media';
 
-  String _key(String id, int season, int episode) => '$id:$season:$episode';
+  String _key(String id, int? season, int? episode) => '$id:$season:$episode';
 
-  /// Reads the spans out of a v2 response.
+  /// Reads v4 segment arrays in milliseconds; a null endpoint is open-ended.
   static List<SkipSegment> parseSegments(Object? body, {double? durationSec}) {
     final root = body is Map ? body : null;
     if (root == null) return const <SkipSegment>[];
@@ -99,12 +95,13 @@ class IntroDbService implements SkipService {
     String? imdbId,
     int? anilistId,
     int? malId,
-    required int season,
-    required int episode,
+    required int? season,
+    required int? episode,
     int? duration,
   }) async {
-    // Either id opens the door: v2 takes a TMDB id as readily as an IMDb
-    // one, and anime reach us with whichever ani.zip happens to carry.
+    // v4 resolves TMDB/IMDb ids to TVDB; no response identity is needed here.
+    // Null coordinates identify a movie; TV requires both coordinates.
+    if ((season == null) != (episode == null)) return [];
     if (imdbId == null && tmdbId == null) {
       return [];
     }
@@ -127,8 +124,8 @@ class IntroDbService implements SkipService {
         _endpoint,
         queryParameters: <String, dynamic>{
           if (tmdbId != null) 'tmdb_id': tmdbId else 'imdb_id': imdbId,
-          'season': season,
-          'episode': episode,
+          if (season != null) 'season': season,
+          if (episode != null) 'episode': episode,
         },
       );
 
