@@ -1,4 +1,5 @@
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
+import 'package:animewitcher/core/account/animewitcher_comment_models.dart';
 import 'package:animewitcher/core/services/download_v2/download_v2_provider.dart';
 import 'package:animewitcher/core/services/download_v2/logical_download_store_v2.dart';
 import 'package:animewitcher/core/storage/library_category.dart';
@@ -9,6 +10,8 @@ import 'package:animewitcher/features/details/presentation/widgets/anime_informa
 import 'package:animewitcher/features/details/presentation/widgets/details_hero_actions.dart';
 import 'package:animewitcher/features/details/presentation/widgets/details_layout_widgets.dart';
 import 'package:animewitcher/features/details/presentation/widgets/episode_card.dart';
+import 'package:animewitcher/features/details/presentation/widgets/episode_action_chip.dart';
+import 'package:animewitcher/features/comments/presentation/animewitcher_comments_screen.dart';
 import 'package:animewitcher/features/library/presentation/downloads_provider.dart';
 import 'package:animewitcher/features/library/presentation/library_media_kind.dart';
 import 'package:animewitcher/features/library/presentation/library_provider.dart';
@@ -68,6 +71,15 @@ final class _EmptyDownloads extends DownloadsNotifier {
   Future<List<DownloadItem>> build() async => const <DownloadItem>[];
 }
 
+final class _RouteObserver extends NavigatorObserver {
+  Route<dynamic>? pushed;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pushed = route;
+  }
+}
+
 final class _ReadyDetailsController extends DetailsController {
   _ReadyDetailsController(this.item);
 
@@ -101,6 +113,71 @@ final class _ReadyDetailsController extends DetailsController {
 }
 
 void main() {
+  testWidgets('episode comments use the anime outline and retain their target', (
+    tester,
+  ) async {
+    final episode = Episode(
+      name: 'Episode 1',
+      url: 'anime|episode-1',
+      episode: 1,
+    );
+    final item = MultimediaItem(
+      title: 'Anime',
+      url: 'https://animewitcher.com/watch/anime',
+      posterUrl: '',
+      provider: animeWitcherNativeProviderId,
+      episodes: [episode],
+    );
+    final observer = _RouteObserver();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          storageServiceProvider.overrideWithValue(_Storage()),
+          downloadsProvider.overrideWith(_EmptyDownloads.new),
+          logicalDownloadStoreV2Provider.overrideWithValue(
+            InMemoryLogicalDownloadStoreV2(),
+          ),
+          detailsControllerProvider(item.url)
+              .overrideWith(() => _ReadyDetailsController(item)),
+        ],
+        child: MaterialApp(
+          navigatorObservers: [observer],
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: EpisodeCard(episode: episode, parentItem: item),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final comments = find.byWidgetPredicate(
+      (widget) =>
+          widget is EpisodeActionChip && widget.tooltip == 'تعليقات الحلقة',
+    );
+    expect(
+      tester.widget<EpisodeActionChip>(comments).icon,
+      Icons.chat_bubble_outline_rounded,
+    );
+    expect(find.byIcon(Icons.forum_outlined), findsNothing);
+    expect(find.byIcon(Icons.save_alt_rounded), findsOneWidget);
+
+    await tester.tap(comments);
+    final route = observer.pushed! as MaterialPageRoute<void>;
+    final screen =
+        route.builder(tester.element(comments)) as AnimeWitcherCommentsScreen;
+    expect(
+      screen.target.collectionPath,
+      'anime_list/anime/episodes/episode-1/comments',
+    );
+    expect(screen.target.isReviews, isFalse);
+    // Inspect the pushed destination without starting its network-backed load.
+    route.navigator!.removeRoute(route);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
   for (final desktop in <bool>[false, true]) {
     testWidgets(
       '${desktop ? 'desktop' : 'phone'} selection preserves the episode-to-information gap',
@@ -227,6 +304,7 @@ void main() {
         Episode(name: 'Movie', url: 'episode://movie', episode: 1),
       ],
     );
+    final observer = _RouteObserver();
 
     await tester.pumpWidget(
       ProviderScope(
@@ -241,6 +319,7 @@ void main() {
           ),
         ],
         child: MaterialApp(
+          navigatorObservers: [observer],
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
           theme: ThemeData.dark(),
@@ -265,6 +344,21 @@ void main() {
     );
 
     expect(find.byType(DetailsHeroPlayPill), findsNothing);
+
+    await tester.tap(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is DetailsHeroIconButton &&
+            widget.icon == Icons.chat_bubble_outline_rounded,
+      ),
+    );
+    final route = observer.pushed! as MaterialPageRoute<void>;
+    final comments = route.builder(
+      tester.element(find.byType(DetailsScreen)),
+    ) as AnimeWitcherCommentsScreen;
+    expect(comments.target.collectionPath, 'anime_list/movie/comments');
+    route.navigator!.removeRoute(route);
+    await tester.pumpAndSettle();
 
     await tester.tap(
       find.byKey(const ValueKey<String>('details-episodes-toggle')),

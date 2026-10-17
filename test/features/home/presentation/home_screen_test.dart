@@ -7,7 +7,9 @@ import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
 import 'package:animewitcher/core/providers/device_info_provider.dart';
 import 'package:animewitcher/features/home/presentation/home_screen.dart';
+import 'package:animewitcher/features/home/presentation/widgets/media_horizontal_list.dart';
 import 'package:animewitcher/features/library/presentation/history_provider.dart';
+import 'package:animewitcher/features/search/data/mal_rankings.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -117,16 +119,33 @@ class _FakeHomeSource extends AnimeWitcherProvider {
 class _EmptyContinueWatching extends ContinueWatchingNotifier {
   @override
   List<HistoryItem> build() => const <HistoryItem>[];
+
+  @override
+  Future<void> refreshFromServer() async {}
 }
 
-Widget _app() {
+Widget _app({
+  bool withRankings = false,
+  bool emptyRankings = false,
+  int rankingOffset = 10,
+  ProviderMediaPage Function(MalRanking)? loadRanking,
+}) {
   return ProviderScope(
     overrides: [
       activeProviderProvider.overrideWithValue(_FakeHomeSource()),
       continueWatchingProvider.overrideWith(_EmptyContinueWatching.new),
-      deviceProfileProvider.overrideWith(
-        (ref) async => const DeviceProfile(),
+      homeMalRankingPageProvider.overrideWith(
+        (ref, ranking) async =>
+            loadRanking?.call(ranking) ??
+            ProviderMediaPage(
+              items: withRankings && !emptyRankings
+                  ? [for (var i = 0; i < 10; i++) _item('${ranking.name} $i')]
+                  : [],
+              nextOffset: rankingOffset,
+              hasMore: withRankings,
+            ),
       ),
+      deviceProfileProvider.overrideWith((ref) async => const DeviceProfile()),
     ],
     child: MaterialApp(
       locale: const Locale('ar'),
@@ -164,6 +183,90 @@ void main() {
   tearDown(() {
     VisibilityDetectorController.instance.notifyNow();
   });
+
+  testWidgets(
+    'each Home anime ranking seeds ten titles and the next source offset',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 3000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(_app(withRankings: true));
+      await tester.pump();
+      await tester.pump();
+      await tester.pumpAndSettle();
+      for (final (ranking, title) in [
+        (MalRanking.airing, 'رائج الآن'),
+        (MalRanking.top, 'الأفضل'),
+        (MalRanking.popular, 'الأكثر مشاهدة'),
+      ]) {
+        final rail = tester.widget<MediaHorizontalList>(
+          find.byKey(ValueKey('home-mal-${ranking.name}')),
+        );
+        expect(rail.title, title);
+        expect(rail.mediaList, hasLength(10));
+        expect(rail.initialViewAllOffset, 10);
+        expect(rail.loadViewAllPage, isNotNull);
+      }
+    },
+  );
+
+  testWidgets('Home refresh replaces the ranking seed in memory', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 3000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var version = 1;
+    await tester.pumpWidget(
+      _app(
+        loadRanking: (ranking) => ProviderMediaPage(
+          items: [_item('${ranking.name} version $version')],
+          nextOffset: 10,
+          hasMore: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final railFinder = find.byKey(const ValueKey('home-mal-top'));
+    expect(
+      tester.widget<MediaHorizontalList>(railFinder).mediaList.single.title,
+      'top version 1',
+    );
+    version = 2;
+    await tester
+        .widget<RefreshIndicator>(find.byType(RefreshIndicator))
+        .onRefresh();
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<MediaHorizontalList>(railFinder).mediaList.single.title,
+      'top version 2',
+    );
+  });
+
+  testWidgets(
+    'empty ranking discovery keeps View all and its actual next cursor',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 3000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        _app(withRankings: true, emptyRankings: true, rankingOffset: 30),
+      );
+      await tester.pumpAndSettle();
+      for (final ranking in [
+        MalRanking.airing,
+        MalRanking.top,
+        MalRanking.popular,
+      ]) {
+        final railFinder = find.byKey(ValueKey('home-mal-${ranking.name}'));
+        final rail = tester.widget<MediaHorizontalList>(railFinder);
+        expect(rail.mediaList, isEmpty);
+        expect(rail.initialViewAllOffset, 30);
+        expect(rail.initialViewAllHasMore, isTrue);
+        expect(
+          find.descendant(of: railFinder, matching: find.text('عرض الكل')),
+          findsOneWidget,
+        );
+      }
+    },
+  );
 
   testWidgets('home renders the new manga rail without legacy broken ids', (
     tester,
@@ -236,9 +339,8 @@ void main() {
       );
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File(
-        '${artifacts.path}/home_without_new_chapters.png',
-      ).writeAsBytesSync(bytes!.buffer.asUint8List());
+      File('${artifacts.path}/home_without_new_chapters.png')
+          .writeAsBytesSync(bytes!.buffer.asUint8List());
     });
   });
 }

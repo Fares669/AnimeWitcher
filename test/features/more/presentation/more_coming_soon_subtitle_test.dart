@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/features/more/presentation/more_screen.dart';
+import 'package:animewitcher/features/more/presentation/broadcast_schedule_screen.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -20,6 +21,15 @@ class _SignedOutAccount extends AnimeWitcherAccountController {
   }
 }
 
+class _RouteObserver extends NavigatorObserver {
+  Route<dynamic>? pushed;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pushed = route;
+  }
+}
+
 Future<void> _loadWalkthroughFonts() => TestFonts.loadWalkthroughFonts();
 
 void main() {
@@ -29,6 +39,7 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.runAsync(_loadWalkthroughFonts);
+    final observer = _RouteObserver();
 
     await tester.pumpWidget(
       ProviderScope(
@@ -38,6 +49,7 @@ void main() {
           ),
         ],
         child: MaterialApp(
+          navigatorObservers: [observer],
           locale: const Locale('ar'),
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
@@ -66,6 +78,35 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('الموسم القادم'), findsNothing);
+
+    final schedule = find.ancestor(
+      of: find.text('جدول البث'),
+      matching: find.byType(InkWell),
+    );
+    final seasons = find.ancestor(
+      of: find.text('المواسم'),
+      matching: find.byType(InkWell),
+    );
+    for (final destination in [seasons, schedule]) {
+      expect(
+        find.descendant(
+          of: destination,
+          matching: find.byIcon(Icons.calendar_month_rounded),
+        ),
+        findsOneWidget,
+      );
+    }
+    expect(find.byIcon(Icons.calendar_view_week_rounded), findsNothing);
+    await tester.ensureVisible(schedule);
+    await tester.pumpAndSettle();
+    await tester.tap(schedule);
+    final route = observer.pushed! as MaterialPageRoute<void>;
+    expect(
+      route.builder(tester.element(schedule)),
+      isA<BroadcastScheduleScreen>(),
+    );
+    route.navigator!.removeRoute(route);
+    await tester.pumpAndSettle();
 
     final artifacts = debugShotDirectory();
     if (artifacts == null) return;

@@ -5,6 +5,7 @@ import 'package:animewitcher/features/manga/reader/manga_reader_settings.dart';
 import 'package:animewitcher/features/manga/reader/manga_reader_settings_provider.dart';
 import 'package:animewitcher/features/more/presentation/more_screen.dart';
 import 'package:animewitcher/features/more/presentation/more_sidebar_shell.dart';
+import 'package:animewitcher/features/more/presentation/broadcast_schedule_screen.dart';
 import 'package:animewitcher/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -59,6 +60,18 @@ void main() {
     );
     expect(sidebar.groups.first.items.single.label, 'الحساب');
     expect(find.text('حساب AnimeWitcher'), findsNothing);
+
+    final destinations = sidebar.groups.expand((group) => group.items);
+    final seasons = destinations.singleWhere((item) => item.label == 'المواسم');
+    final schedule = destinations.singleWhere(
+      (item) => item.label == 'جدول البث',
+    );
+    expect(schedule.icon, seasons.icon);
+    expect(schedule.icon, Icons.calendar_month_rounded);
+    expect(
+      schedule.builder(tester.element(find.byType(MoreSidebarShell))),
+      isA<BroadcastScheduleScreen>(),
+    );
 
     await tester.tap(find.text('القارئ').first);
     await tester.pumpAndSettle();

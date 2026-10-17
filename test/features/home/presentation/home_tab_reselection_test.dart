@@ -4,6 +4,7 @@ import 'package:animewitcher/core/account/account_providers.dart';
 import 'package:animewitcher/core/account/animewitcher_account_models.dart';
 import 'package:animewitcher/core/domain/entity/multimedia_item.dart';
 import 'package:animewitcher/core/extensions/extension_manager.dart';
+import 'package:animewitcher/core/extensions/base_provider.dart';
 import 'package:animewitcher/core/extensions/providers/animewitcher_native_provider.dart';
 import 'package:animewitcher/core/navigation/app_layout_style.dart';
 import 'package:animewitcher/core/navigation/taskbar_destination.dart';
@@ -537,7 +538,10 @@ _pumpHome(
       continueWatchingProvider.overrideWith(() => history),
       animeWitcherAccountControllerProvider.overrideWith(_Account.new),
       deviceProfileProvider.overrideWith((ref) async => const DeviceProfile()),
-      malRankingProvider.overrideWith((ref, ranking) async => []),
+      homeMalRankingPageProvider.overrideWith(
+        (ref, ranking) async =>
+            const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false),
+      ),
     ],
   );
   final router = GoRouter(
