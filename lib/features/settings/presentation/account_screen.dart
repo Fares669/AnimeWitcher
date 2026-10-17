@@ -563,7 +563,7 @@ class _AnimeWitcherAccountScreenState
           onTap: busy ? null : () => _openPrivacySettings(profile),
         ),
         SettingsTile(
-          icon: Icons.forum_rounded,
+          icon: Icons.chat_bubble_outline_rounded,
           title: appText(context, english: 'My comments', arabic: 'تعليقاتي'),
           subtitle: appText(
             context,

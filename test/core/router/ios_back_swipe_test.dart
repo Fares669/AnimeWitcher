@@ -170,7 +170,10 @@ Future<GoRouter> _pumpApp(WidgetTester tester, {bool mangaTab = false}) async {
         downloadsProvider.overrideWith(_EmptyDownloads.new),
         artworkFallbackServiceProvider.overrideWithValue(_NoArtwork()),
         mangaReaderCustomCoversProvider.overrideWith(_EmptyCovers.new),
-        malRankingProvider.overrideWith((ref, ranking) async => []),
+        homeMalRankingPageProvider.overrideWith(
+          (ref, ranking) async =>
+              const ProviderMediaPage(items: [], nextOffset: 0, hasMore: false),
+        ),
         detailsControllerProvider(_anime.url).overrideWith(_ReadyAnime.new),
         mangaDetailsControllerProvider(_manga.url)
             .overrideWith(_ReadyManga.new),

@@ -123,7 +123,7 @@ List<AppSideMenuEntry> phoneFixedSideMenuEntries(
     ),
     AppSideMenuEntry(
       id: 'broadcast-schedule',
-      icon: Icons.calendar_view_week_rounded,
+      icon: Icons.calendar_month_rounded,
       label: 'جدول الحلقات',
       onTap: () => open(const BroadcastScheduleScreen()),
     ),
