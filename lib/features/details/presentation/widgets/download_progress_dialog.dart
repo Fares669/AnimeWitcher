@@ -134,6 +134,10 @@ class _DownloadProgressDialogState
 
     final l10n = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
+    final unknownPageTotal =
+        data.completedPages != null &&
+        (data.totalPages ?? 0) <= 0 &&
+        data.status != TaskStatus.complete;
     return Directionality(
       textDirection: TextDirection.ltr,
       child: Dialog(
@@ -146,20 +150,25 @@ class _DownloadProgressDialogState
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  switch (data.status) {
-                    TaskStatus.failed || TaskStatus.notFound => appText(
-                      context,
-                      english: 'Download failed',
-                      arabic: 'فشل التنزيل',
+                SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    switch (data.status) {
+                      TaskStatus.failed || TaskStatus.notFound => appText(
+                        context,
+                        english: 'Download failed',
+                        arabic: 'فشل التنزيل',
+                      ),
+                      TaskStatus.paused => l10n.downloadPaused,
+                      TaskStatus.complete => l10n.statusFinished,
+                      TaskStatus.canceled => l10n.statusCanceled,
+                      _ => l10n.downloading,
+                    },
+                    textDirection: Directionality.of(context),
+                    textAlign: TextAlign.start,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
                     ),
-                    TaskStatus.paused => l10n.downloadPaused,
-                    TaskStatus.complete => l10n.statusFinished,
-                    TaskStatus.canceled => l10n.statusCanceled,
-                    _ => l10n.downloading,
-                  },
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -176,7 +185,7 @@ class _DownloadProgressDialogState
                   children: [
                     Expanded(
                       child: LinearProgressIndicator(
-                        value: data.progress,
+                        value: unknownPageTotal ? null : data.progress,
                         borderRadius: BorderRadius.circular(4),
                         minHeight: 8,
                         backgroundColor: theme.dividerColor.withValues(
@@ -186,7 +195,9 @@ class _DownloadProgressDialogState
                     ),
                     const SizedBox(width: 16),
                     Text(
-                      '${(data.progress * 100).toInt()}%',
+                      unknownPageTotal
+                          ? '--%'
+                          : '${(data.progress * 100).toInt()}%',
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ],

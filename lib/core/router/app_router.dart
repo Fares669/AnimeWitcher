@@ -23,6 +23,31 @@ import '../navigation/taskbar_destination.dart';
 
 part 'app_router.g.dart';
 
+// GoRouter 18 detects material_ui.MaterialApp, while this app uses Flutter's
+// MaterialApp. Explicit pages retain our themed transitions and iOS back swipe.
+MaterialPage<void> _materialPage(GoRouterState state, Widget child) =>
+    MaterialPage<void>(
+      key: state.pageKey,
+      name: state.name ?? state.path,
+      arguments: <String, String>{
+        ...state.pathParameters,
+        ...state.uri.queryParameters,
+      },
+      restorationId: state.pageKey.value,
+      child: child,
+    );
+
+abstract class _AppGoRouteData extends GoRouteData {
+  const _AppGoRouteData();
+
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      _materialPage(
+        state,
+        Builder(builder: (context) => build(context, state)),
+      );
+}
+
 @TypedStatefulShellRoute<AppShellRouteData>(
   branches: <TypedStatefulShellBranch<StatefulShellBranchData>>[
     TypedStatefulShellBranch<HomeBranchData>(
@@ -62,6 +87,16 @@ class AppShellRouteData extends StatefulShellRouteData {
   static final GlobalKey<NavigatorState> $navigatorKey = rootNavigatorKey;
 
   @override
+  Page<void> pageBuilder(
+    BuildContext context,
+    GoRouterState state,
+    StatefulNavigationShell navigationShell,
+  ) => _materialPage(
+    state,
+    Builder(builder: (context) => builder(context, state, navigationShell)),
+  );
+
+  @override
   Widget builder(
     BuildContext context,
     GoRouterState state,
@@ -75,7 +110,7 @@ class HomeBranchData extends StatefulShellBranchData {
   const HomeBranchData();
 }
 
-class HomeRoute extends GoRouteData with $HomeRoute {
+class HomeRoute extends _AppGoRouteData with $HomeRoute {
   const HomeRoute();
   @override
   Widget build(BuildContext context, GoRouterState state) => const HomeScreen();
@@ -85,7 +120,7 @@ class SearchBranchData extends StatefulShellBranchData {
   const SearchBranchData();
 }
 
-class SearchRoute extends GoRouteData with $SearchRoute {
+class SearchRoute extends _AppGoRouteData with $SearchRoute {
   const SearchRoute();
   @override
   Widget build(BuildContext context, GoRouterState state) =>
@@ -96,7 +131,7 @@ class LibraryBranchData extends StatefulShellBranchData {
   const LibraryBranchData();
 }
 
-class LibraryRoute extends GoRouteData with $LibraryRoute {
+class LibraryRoute extends _AppGoRouteData with $LibraryRoute {
   const LibraryRoute();
   @override
   Widget build(BuildContext context, GoRouterState state) =>
@@ -107,7 +142,7 @@ class DownloadsBranchData extends StatefulShellBranchData {
   const DownloadsBranchData();
 }
 
-class DownloadsRoute extends GoRouteData with $DownloadsRoute {
+class DownloadsRoute extends _AppGoRouteData with $DownloadsRoute {
   const DownloadsRoute();
   @override
   Widget build(BuildContext context, GoRouterState state) =>
@@ -118,7 +153,7 @@ class SettingsBranchData extends StatefulShellBranchData {
   const SettingsBranchData();
 }
 
-class SettingsRoute extends GoRouteData with $SettingsRoute {
+class SettingsRoute extends _AppGoRouteData with $SettingsRoute {
   const SettingsRoute();
   @override
   Widget build(BuildContext context, GoRouterState state) => const MoreScreen();
@@ -128,7 +163,7 @@ class MangaBranchData extends StatefulShellBranchData {
   const MangaBranchData();
 }
 
-class MangaHomeRoute extends GoRouteData with $MangaHomeRoute {
+class MangaHomeRoute extends _AppGoRouteData with $MangaHomeRoute {
   const MangaHomeRoute();
   @override
   Widget build(BuildContext context, GoRouterState state) =>
@@ -238,7 +273,7 @@ Future<T?> _pushDetailsOnce<T>(
 }
 
 @TypedGoRoute<DetailsRoute>(path: '/details')
-class DetailsRoute extends GoRouteData with $DetailsRoute {
+class DetailsRoute extends _AppGoRouteData with $DetailsRoute {
   const DetailsRoute({required this.$extra});
   final DetailsRouteExtra $extra;
 
@@ -265,7 +300,7 @@ class DetailsRoute extends GoRouteData with $DetailsRoute {
 }
 
 @TypedGoRoute<MangaDetailsRoute>(path: '/manga-details')
-class MangaDetailsRoute extends GoRouteData with $MangaDetailsRoute {
+class MangaDetailsRoute extends _AppGoRouteData with $MangaDetailsRoute {
   const MangaDetailsRoute({required this.$extra});
 
   final MangaDetailsRouteExtra $extra;
@@ -285,7 +320,7 @@ class MangaDetailsRoute extends GoRouteData with $MangaDetailsRoute {
 }
 
 @TypedGoRoute<MangaReaderRoute>(path: '/manga-reader')
-class MangaReaderRoute extends GoRouteData with $MangaReaderRoute {
+class MangaReaderRoute extends _AppGoRouteData with $MangaReaderRoute {
   const MangaReaderRoute({required this.$extra});
 
   final MangaReaderRouteExtra $extra;
@@ -302,7 +337,7 @@ class MangaReaderRoute extends GoRouteData with $MangaReaderRoute {
 }
 
 @TypedGoRoute<ViewAllRoute>(path: '/view-all')
-class ViewAllRoute extends GoRouteData with $ViewAllRoute {
+class ViewAllRoute extends _AppGoRouteData with $ViewAllRoute {
   const ViewAllRoute({required this.$extra});
   final ViewAllRouteExtra $extra;
 
@@ -320,7 +355,7 @@ class ViewAllRoute extends GoRouteData with $ViewAllRoute {
 }
 
 @TypedGoRoute<PlayerRoute>(path: '/player')
-class PlayerRoute extends GoRouteData with $PlayerRoute {
+class PlayerRoute extends _AppGoRouteData with $PlayerRoute {
   const PlayerRoute({required this.$extra});
   final PlayerRouteExtra $extra;
 

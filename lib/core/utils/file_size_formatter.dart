@@ -64,6 +64,8 @@ String formatDownloadPageCount({
   required String pageLabel,
 }) {
   final total = totalPages != null && totalPages > 0 ? totalPages : null;
-  final completed = (completedPages ?? 0).clamp(0, total ?? 0);
+  var completed = completedPages ?? 0;
+  if (completed < 0) completed = 0;
+  if (total != null && completed > total) completed = total;
   return '$completed/${total ?? '?'} $pageLabel';
 }

@@ -29,8 +29,8 @@ Future<StreamResult?> showStreamSourcePicker(
 /// Uses the server-provided episode label as the picker title when available.
 /// The generic title remains the safe fallback for non-episode content.
 String sourcePickerHeader(String? episodeLabel) {
-  final label = episodeLabel?.trim() ?? '';
-  if (label.isNotEmpty) return label;
+  final label = episodeLabel ?? '';
+  if (label.trim().isNotEmpty) return label;
   return 'اختر المصدر';
 }
 

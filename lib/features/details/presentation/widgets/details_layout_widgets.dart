@@ -82,6 +82,9 @@ String detailsPlayActionLabel(
 
   final label = position > 5000 ? l10n.resume : l10n.play;
   if (targetEpisode == null || isMovie) return label;
+  if (targetEpisode.serverName.trim().isNotEmpty) {
+    return '$label ${targetEpisode.serverName}';
+  }
 
   return seasonMap.keys.length <= 1
       ? l10n.playEpisodeOnly(label, targetEpisode.episode)
@@ -240,7 +243,13 @@ class DetailsActionButtons extends HookConsumerWidget {
               : [
                   const Icon(Icons.play_arrow_rounded),
                   const SizedBox(width: LayoutConstants.spacingXs),
-                  Text(playLabel),
+                  Flexible(
+                    child: Text(
+                      playLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                 ],
         ),
       ),
