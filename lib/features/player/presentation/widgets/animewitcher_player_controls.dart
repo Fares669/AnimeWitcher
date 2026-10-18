@@ -9,7 +9,6 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:screen_brightness/screen_brightness.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:video_view/video_view.dart' as vv;
 
@@ -44,6 +43,7 @@ import 'anime4k_player_sheet.dart';
 
 class AnimeWitcherPlayerControls extends ConsumerStatefulWidget {
   final Player player;
+  final PlayerPlatformService platformService;
   final vv.VideoController? videoViewController;
   final String? title;
   final VoidCallback? onBackPointer;
@@ -66,6 +66,7 @@ class AnimeWitcherPlayerControls extends ConsumerStatefulWidget {
   const AnimeWitcherPlayerControls({
     super.key,
     required this.player,
+    required this.platformService,
     this.videoViewController,
     this.title,
     this.onBackPointer,
@@ -195,7 +196,7 @@ class AnimeWitcherPlayerControlsState
     );
     _isIpad = Platform.isIOS && (deviceProfile?.isTablet ?? false);
 
-    _platformService = PlayerPlatformService();
+    _platformService = widget.platformService;
     _deviceControlSession = ref
         .read(playerGestureHandlerProvider.notifier)
         .init(
@@ -475,7 +476,6 @@ class AnimeWitcherPlayerControlsState
             if (kDebugMode) debugPrint('Failed to restore volume UI: $error');
           }),
     );
-    SystemChrome.setPreferredOrientations([]); // Reset to system default
     // Clear the PiP method channel handler to prevent a stale handler from
     // accessing the disposed provider after the player exits.
     if (Platform.isAndroid && !_isTv) {
